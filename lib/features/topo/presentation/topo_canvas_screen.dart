@@ -6,7 +6,9 @@ import 'package:image_picker/image_picker.dart';
 
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
+import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 
@@ -60,6 +62,36 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
     _transformationController.dispose();
     super.dispose();
+  }
+
+  /// Invokes [DrawController.commitRoute] and, if it actually committed a
+  /// new route (it no-ops when there are fewer than 2 current points — see
+  /// that method's doc), opens [RouteMetadataSheet] for that route so its
+  /// name/grade/style/description can be filled in right away.
+  ///
+  /// The new route is the last entry in [DrawState.routes]: `commitRoute`
+  /// always appends, never inserts, so "highest number" and "last in the
+  /// list" agree.
+  Future<void> _handleCommitRoute() async {
+    final notifier = ref.read(drawControllerProvider.notifier);
+    final countBefore = ref.read(drawControllerProvider).routes.length;
+    await notifier.commitRoute();
+    if (!mounted) return;
+
+    final routes = ref.read(drawControllerProvider).routes;
+    if (routes.length <= countBefore) return;
+
+    await _openMetadataSheet(routes.last);
+  }
+
+  /// Opens [RouteMetadataSheet] as a modal bottom sheet for [route],
+  /// pre-filling its fields from [route]'s current metadata.
+  Future<void> _openMetadataSheet(TopoRoute route) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => RouteMetadataSheet(routeId: route.id, initial: route),
+    );
   }
 
   Future<void> _pickImage() async {
@@ -203,6 +235,18 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         title: const Text('ClimbTopo'),
         centerTitle: false,
         actions: [
+          if (drawState.selectedRouteId != null)
+            IconButton(
+              key: const Key('topo-edit-metadata-button'),
+              icon: const Icon(Icons.edit_note),
+              tooltip: 'Edit route metadata',
+              onPressed: () {
+                final selected = drawState.routes.firstWhere(
+                  (r) => r.id == drawState.selectedRouteId,
+                );
+                _openMetadataSheet(selected);
+              },
+            ),
           IconButton(
             key: const Key('topo-mode-toggle'),
             icon: Icon(
@@ -246,7 +290,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               key: const Key('topo-commit-button'),
               icon: const Icon(Icons.check),
               tooltip: 'Commit route',
-              onPressed: drawNotifier.commitRoute,
+              onPressed: _handleCommitRoute,
             ),
           ],
         ),

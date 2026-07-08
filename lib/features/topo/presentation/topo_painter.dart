@@ -67,6 +67,7 @@ class TopoPainter extends CustomPainter {
     required this.palette,
     this.currentColor = _defaultCurrentColor,
     this.handleColor = _defaultHandleColor,
+    this.routeColorResolver,
   });
 
   /// The natural size of the underlying topo image, used to convert percent
@@ -98,15 +99,28 @@ class TopoPainter extends CustomPainter {
   /// Fill color for point handles.
   final Color handleColor;
 
+  /// Optional override for a route's stroke/label/symbol color. When
+  /// provided, it takes precedence over [palette]-based coloring for every
+  /// route (e.g. so grade-band coloring, see
+  /// `presentation/grade_colors.dart`'s `colorForRoute`, can be plugged in
+  /// without this painter needing to know anything about grades). When
+  /// null, colors fall back to `palette[route.colorIndex % palette.length]`
+  /// (or [_fallbackRouteColor] if [palette] is empty), preserving this
+  /// painter's pre-existing behavior.
+  final Color Function(TopoRoute route)? routeColorResolver;
+
   @override
   void paint(Canvas canvas, Size size) {
     for (final route in routes) {
       if (!route.visible) continue;
 
       final scenePoints = _toScene(route.points);
-      final color = palette.isEmpty
-          ? _fallbackRouteColor
-          : palette[route.colorIndex % palette.length];
+      final resolver = routeColorResolver;
+      final color = resolver != null
+          ? resolver(route)
+          : (palette.isEmpty
+              ? _fallbackRouteColor
+              : palette[route.colorIndex % palette.length]);
       final isSelected = route.id == selectedRouteId;
 
       if (isSelected) {
@@ -322,6 +336,7 @@ class TopoPainter extends CustomPainter {
         selectedRouteId != oldDelegate.selectedRouteId ||
         currentColor != oldDelegate.currentColor ||
         handleColor != oldDelegate.handleColor ||
+        routeColorResolver != oldDelegate.routeColorResolver ||
         !_pointsEqual(currentPoints, oldDelegate.currentPoints) ||
         !listEquals(palette, oldDelegate.palette) ||
         !listEquals(routes, oldDelegate.routes);

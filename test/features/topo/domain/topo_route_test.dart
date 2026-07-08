@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,6 +15,21 @@ void main() {
 
       expect(route.symbols, isEmpty);
       expect(route.visible, isTrue);
+    });
+
+    test('metadata fields default to null when not specified', () {
+      const route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+      );
+
+      expect(route.name, isNull);
+      expect(route.gradeSystem, isNull);
+      expect(route.gradeRaw, isNull);
+      expect(route.gradeSortKey, isNull);
+      expect(route.style, isNull);
+      expect(route.description, isNull);
     });
   });
 
@@ -103,6 +119,267 @@ void main() {
     });
   });
 
+  group('TopoRoute metadata copyWith (M4 A1)', () {
+    const base = TopoRoute(
+      id: 1,
+      number: 1,
+      points: [Offset(0.1, 0.1)],
+      name: 'Base Route',
+      gradeSystem: GradeSystem.french,
+      gradeRaw: '6a',
+      gradeSortKey: 7.0,
+      style: 'sport',
+      description: 'A nice route.',
+    );
+
+    test('changing only name preserves the rest', () {
+      final updated = base.copyWith(name: 'New Name');
+
+      expect(updated.name, 'New Name');
+      expect(updated.gradeSystem, base.gradeSystem);
+      expect(updated.gradeRaw, base.gradeRaw);
+      expect(updated.gradeSortKey, base.gradeSortKey);
+      expect(updated.style, base.style);
+      expect(updated.description, base.description);
+      expect(updated.id, base.id);
+      expect(updated.number, base.number);
+      expect(updated.points, base.points);
+    });
+
+    test('changing only gradeRaw preserves the rest', () {
+      final updated = base.copyWith(gradeRaw: '7a');
+
+      expect(updated.gradeRaw, '7a');
+      expect(updated.name, base.name);
+      expect(updated.gradeSystem, base.gradeSystem);
+      expect(updated.gradeSortKey, base.gradeSortKey);
+      expect(updated.style, base.style);
+      expect(updated.description, base.description);
+    });
+
+    test('changing only gradeSystem preserves the rest', () {
+      final updated = base.copyWith(gradeSystem: GradeSystem.uiaa);
+
+      expect(updated.gradeSystem, GradeSystem.uiaa);
+      expect(updated.name, base.name);
+      expect(updated.gradeRaw, base.gradeRaw);
+      expect(updated.gradeSortKey, base.gradeSortKey);
+      expect(updated.style, base.style);
+      expect(updated.description, base.description);
+    });
+
+    test('changing only gradeSortKey preserves the rest', () {
+      final updated = base.copyWith(gradeSortKey: 13.0);
+
+      expect(updated.gradeSortKey, 13.0);
+      expect(updated.name, base.name);
+      expect(updated.gradeSystem, base.gradeSystem);
+      expect(updated.gradeRaw, base.gradeRaw);
+      expect(updated.style, base.style);
+      expect(updated.description, base.description);
+    });
+
+    test('changing only style preserves the rest', () {
+      final updated = base.copyWith(style: 'trad');
+
+      expect(updated.style, 'trad');
+      expect(updated.name, base.name);
+      expect(updated.gradeSystem, base.gradeSystem);
+      expect(updated.gradeRaw, base.gradeRaw);
+      expect(updated.gradeSortKey, base.gradeSortKey);
+      expect(updated.description, base.description);
+    });
+
+    test('changing only description preserves the rest', () {
+      final updated = base.copyWith(description: 'Updated description.');
+
+      expect(updated.description, 'Updated description.');
+      expect(updated.name, base.name);
+      expect(updated.gradeSystem, base.gradeSystem);
+      expect(updated.gradeRaw, base.gradeRaw);
+      expect(updated.gradeSortKey, base.gradeSortKey);
+      expect(updated.style, base.style);
+    });
+
+    test('no-arg copyWith returns equal instance', () {
+      final updated = base.copyWith();
+      expect(updated, base);
+    });
+
+    test(
+      'copyWith(gradeSortKey: null, setGradeSortKey: true) explicitly '
+      'clears the sort key',
+      () {
+        final updated = base.copyWith(
+          gradeSortKey: null,
+          setGradeSortKey: true,
+        );
+
+        expect(updated.gradeSortKey, isNull);
+        expect(updated.name, base.name);
+        expect(updated.gradeSystem, base.gradeSystem);
+        expect(updated.gradeRaw, base.gradeRaw);
+        expect(updated.style, base.style);
+        expect(updated.description, base.description);
+      },
+    );
+
+    test(
+      'copyWith(gradeSortKey: null) with setGradeSortKey left at its '
+      'default (false) preserves the existing sort key',
+      () {
+        final updated = base.copyWith(gradeSortKey: null);
+
+        expect(updated.gradeSortKey, base.gradeSortKey);
+      },
+    );
+  });
+
+  group('TopoRoute metadata copyWith set-sentinels (M4 cleanup Fix 2+3)', () {
+    const base = TopoRoute(
+      id: 1,
+      number: 1,
+      points: [Offset(0.1, 0.1)],
+      name: 'Base Route',
+      gradeSystem: GradeSystem.french,
+      gradeRaw: '6a',
+      gradeSortKey: 7.0,
+      style: 'sport',
+      description: 'A nice route.',
+    );
+
+    test(
+      'copyWith(name: null) without nameSet preserves the existing name '
+      '(back-compat default)',
+      () {
+        final updated = base.copyWith(name: null);
+        expect(updated.name, base.name);
+      },
+    );
+
+    test(
+      'copyWith(name: null, nameSet: true) explicitly clears the name',
+      () {
+        final updated = base.copyWith(name: null, nameSet: true);
+        expect(updated.name, isNull);
+        expect(updated.gradeSystem, base.gradeSystem);
+        expect(updated.gradeRaw, base.gradeRaw);
+        expect(updated.style, base.style);
+        expect(updated.description, base.description);
+      },
+    );
+
+    test(
+      'copyWith(gradeSystem: null, gradeSystemSet: true) explicitly clears '
+      'gradeSystem',
+      () {
+        final updated = base.copyWith(gradeSystem: null, gradeSystemSet: true);
+        expect(updated.gradeSystem, isNull);
+        expect(updated.name, base.name);
+      },
+    );
+
+    test(
+      'copyWith(gradeSystem: null) without gradeSystemSet preserves the '
+      'existing gradeSystem',
+      () {
+        final updated = base.copyWith(gradeSystem: null);
+        expect(updated.gradeSystem, base.gradeSystem);
+      },
+    );
+
+    test(
+      'copyWith(gradeRaw: null, gradeRawSet: true) explicitly clears '
+      'gradeRaw',
+      () {
+        final updated = base.copyWith(gradeRaw: null, gradeRawSet: true);
+        expect(updated.gradeRaw, isNull);
+        expect(updated.name, base.name);
+      },
+    );
+
+    test(
+      'copyWith(gradeRaw: null) without gradeRawSet preserves the existing '
+      'gradeRaw',
+      () {
+        final updated = base.copyWith(gradeRaw: null);
+        expect(updated.gradeRaw, base.gradeRaw);
+      },
+    );
+
+    test(
+      'copyWith(style: null, styleSet: true) explicitly clears style',
+      () {
+        final updated = base.copyWith(style: null, styleSet: true);
+        expect(updated.style, isNull);
+        expect(updated.name, base.name);
+      },
+    );
+
+    test(
+      'copyWith(style: null) without styleSet preserves the existing '
+      'style',
+      () {
+        final updated = base.copyWith(style: null);
+        expect(updated.style, base.style);
+      },
+    );
+
+    test(
+      'copyWith(description: null, descriptionSet: true) explicitly '
+      'clears description',
+      () {
+        final updated = base.copyWith(
+          description: null,
+          descriptionSet: true,
+        );
+        expect(updated.description, isNull);
+        expect(updated.name, base.name);
+      },
+    );
+
+    test(
+      'copyWith(description: null) without descriptionSet preserves the '
+      'existing description',
+      () {
+        final updated = base.copyWith(description: null);
+        expect(updated.description, base.description);
+      },
+    );
+
+    test(
+      'all five sentinels together clear every metadata field except '
+      'gradeSortKey, which needs its own sentinel',
+      () {
+        final updated = base.copyWith(
+          name: null,
+          nameSet: true,
+          gradeSystem: null,
+          gradeSystemSet: true,
+          gradeRaw: null,
+          gradeRawSet: true,
+          gradeSortKey: null,
+          setGradeSortKey: true,
+          style: null,
+          styleSet: true,
+          description: null,
+          descriptionSet: true,
+        );
+
+        expect(updated.name, isNull);
+        expect(updated.gradeSystem, isNull);
+        expect(updated.gradeRaw, isNull);
+        expect(updated.gradeSortKey, isNull);
+        expect(updated.style, isNull);
+        expect(updated.description, isNull);
+        // Non-metadata fields untouched.
+        expect(updated.id, base.id);
+        expect(updated.number, base.number);
+        expect(updated.points, base.points);
+      },
+    );
+  });
+
   group('TopoSymbol.copyWith (A2)', () {
     const base = TopoSymbol(type: SymbolType.bolt, position: Offset(0.1, 0.2));
 
@@ -155,6 +432,12 @@ void main() {
       ],
       int colorIndex = 0,
       bool visible = true,
+      String? name,
+      GradeSystem? gradeSystem,
+      String? gradeRaw,
+      double? gradeSortKey,
+      String? style,
+      String? description,
     }) {
       return TopoRoute(
         id: id,
@@ -163,6 +446,12 @@ void main() {
         symbols: symbols,
         colorIndex: colorIndex,
         visible: visible,
+        name: name,
+        gradeSystem: gradeSystem,
+        gradeRaw: gradeRaw,
+        gradeSortKey: gradeSortKey,
+        style: style,
+        description: description,
       );
     }
 
@@ -216,6 +505,70 @@ void main() {
     test('different id makes routes unequal', () {
       final a = makeRoute();
       final b = makeRoute(id: 2);
+
+      expect(a, isNot(b));
+    });
+
+    test('equal metadata field values are == and same hashCode', () {
+      final a = makeRoute(
+        name: 'Route A',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '6a',
+        gradeSortKey: 7.0,
+        style: 'sport',
+        description: 'desc',
+      );
+      final b = makeRoute(
+        name: 'Route A',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '6a',
+        gradeSortKey: 7.0,
+        style: 'sport',
+        description: 'desc',
+      );
+
+      expect(a, b);
+      expect(a.hashCode, b.hashCode);
+    });
+
+    test('different name makes routes unequal', () {
+      final a = makeRoute(name: 'Route A');
+      final b = makeRoute(name: 'Route B');
+
+      expect(a, isNot(b));
+    });
+
+    test('different gradeSystem makes routes unequal', () {
+      final a = makeRoute(gradeSystem: GradeSystem.french);
+      final b = makeRoute(gradeSystem: GradeSystem.uiaa);
+
+      expect(a, isNot(b));
+    });
+
+    test('different gradeRaw makes routes unequal', () {
+      final a = makeRoute(gradeRaw: '6a');
+      final b = makeRoute(gradeRaw: '7a');
+
+      expect(a, isNot(b));
+    });
+
+    test('different gradeSortKey makes routes unequal', () {
+      final a = makeRoute(gradeSortKey: 7.0);
+      final b = makeRoute(gradeSortKey: 13.0);
+
+      expect(a, isNot(b));
+    });
+
+    test('different style makes routes unequal', () {
+      final a = makeRoute(style: 'sport');
+      final b = makeRoute(style: 'trad');
+
+      expect(a, isNot(b));
+    });
+
+    test('different description makes routes unequal', () {
+      final a = makeRoute(description: 'one');
+      final b = makeRoute(description: 'two');
 
       expect(a, isNot(b));
     });

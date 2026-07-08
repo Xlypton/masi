@@ -1,5 +1,6 @@
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:drift/native.dart';
@@ -509,6 +510,42 @@ void main() {
         const Offset(0.5, 0.5),
         const Offset(0.6, 0.6),
       ]);
+    },
+  );
+
+  test(
+    'A9: setRouteMetadata with an active wall persists name/grade; a fresh '
+    'controller loading the same wall sees the metadata',
+    () async {
+      final containerA = makeContainer();
+      final notifierA = containerA.read(drawControllerProvider.notifier);
+      await notifierA.loadForWall(wallId, photoId);
+
+      notifierA.addPoint(const Offset(0.1, 0.1));
+      notifierA.addPoint(const Offset(0.2, 0.2));
+      await notifierA.commitRoute();
+      final routeId = containerA.read(drawControllerProvider).routes.single.id;
+
+      await notifierA.setRouteMetadata(
+        routeId,
+        name: 'Crux',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '6a+',
+        style: 'sport',
+        description: 'Crimpy start, big move at the top.',
+      );
+
+      final containerB = makeContainer();
+      final notifierB = containerB.read(drawControllerProvider.notifier);
+      await notifierB.loadForWall(wallId, photoId);
+
+      final loaded = containerB.read(drawControllerProvider).routes.single;
+      expect(loaded.name, 'Crux');
+      expect(loaded.gradeSystem, GradeSystem.french);
+      expect(loaded.gradeRaw, '6a+');
+      expect(loaded.gradeSortKey, gradeSortKey(GradeSystem.french, '6a+'));
+      expect(loaded.style, 'sport');
+      expect(loaded.description, 'Crimpy start, big move at the top.');
     },
   );
 

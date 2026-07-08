@@ -1,4 +1,5 @@
 import 'package:climbtopo/core/db/app_database.dart';
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/data/route_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:drift/native.dart';
@@ -284,6 +285,164 @@ void main() {
 
       final raw = await db.select(db.routes).get();
       expect(raw, hasLength(1));
+    },
+  );
+
+  test(
+    'M4 A2: upsertRoute(insert path) then loadRoutes round-trips all '
+    'metadata fields',
+    () async {
+      final route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(0, 0)],
+        name: 'Le Toit',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '6a+',
+        gradeSortKey: 8.0,
+        style: 'sport',
+        description: 'Great warm-up.',
+      );
+
+      await repo.upsertRoute(wallId, photoId, route);
+      final loaded = await repo.loadRoutes(wallId);
+
+      expect(loaded, hasLength(1));
+      final result = loaded.single;
+      expect(result.name, 'Le Toit');
+      expect(result.gradeSystem, GradeSystem.french);
+      expect(result.gradeRaw, '6a+');
+      expect(result.gradeSortKey, 8.0);
+      expect(result.style, 'sport');
+      expect(result.description, 'Great warm-up.');
+    },
+  );
+
+  test(
+    'M4 A2: a route with no metadata round-trips as all-null',
+    () async {
+      final route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(0, 0)],
+      );
+
+      await repo.upsertRoute(wallId, photoId, route);
+      final loaded = await repo.loadRoutes(wallId);
+
+      expect(loaded, hasLength(1));
+      final result = loaded.single;
+      expect(result.name, isNull);
+      expect(result.gradeSystem, isNull);
+      expect(result.gradeRaw, isNull);
+      expect(result.gradeSortKey, isNull);
+      expect(result.style, isNull);
+      expect(result.description, isNull);
+    },
+  );
+
+  test(
+    'M4 A3: upserting an existing (wallId,number) route with changed '
+    'metadata updates it (proving the UPDATE branch writes all 6 fields)',
+    () async {
+      final v1 = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(0, 0)],
+        name: 'Old Name',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '5a',
+        gradeSortKey: 4.0,
+        style: 'sport',
+        description: 'Old description.',
+      );
+      await repo.upsertRoute(wallId, photoId, v1);
+
+      final v2 = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(0, 0)],
+        name: 'New Name',
+        gradeSystem: GradeSystem.uiaa,
+        gradeRaw: 'VI+',
+        gradeSortKey: 8.0,
+        style: 'trad',
+        description: 'New description.',
+      );
+      await repo.upsertRoute(wallId, photoId, v2);
+
+      final rows = await db.select(db.routes).get();
+      expect(rows, hasLength(1));
+
+      final loaded = await repo.loadRoutes(wallId);
+      expect(loaded, hasLength(1));
+      final result = loaded.single;
+      expect(result.name, 'New Name');
+      expect(result.gradeSystem, GradeSystem.uiaa);
+      expect(result.gradeRaw, 'VI+');
+      expect(result.gradeSortKey, 8.0);
+      expect(result.style, 'trad');
+      expect(result.description, 'New description.');
+    },
+  );
+
+  test(
+    'M4 A3: upserting an existing route WITHOUT metadata clears prior '
+    'metadata via the standard TopoRoute (?? this.x) semantics is NOT '
+    'expected — copyWith is domain-only; the repository always writes '
+    'exactly what the route carries',
+    () async {
+      final v1 = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(0, 0)],
+        name: 'Has Metadata',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '5a',
+        gradeSortKey: 4.0,
+        style: 'sport',
+        description: 'desc',
+      );
+      await repo.upsertRoute(wallId, photoId, v1);
+
+      final v2 = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(1, 1)],
+      );
+      await repo.upsertRoute(wallId, photoId, v2);
+
+      final loaded = await repo.loadRoutes(wallId);
+      expect(loaded, hasLength(1));
+      final result = loaded.single;
+      expect(result.name, isNull);
+      expect(result.gradeSystem, isNull);
+      expect(result.gradeRaw, isNull);
+      expect(result.gradeSortKey, isNull);
+      expect(result.style, isNull);
+      expect(result.description, isNull);
+    },
+  );
+
+  test(
+    'M4 cleanup coverage: a fractional gradeSortKey (e.g. a UIAA grade '
+    'landing between whole shared-scale indices) round-trips through '
+    'upsertRoute/loadRoutes exactly, without integer truncation',
+    () async {
+      final route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(0, 0)],
+        gradeSystem: GradeSystem.uiaa,
+        gradeRaw: 'VII-',
+        gradeSortKey: 8.5,
+      );
+
+      await repo.upsertRoute(wallId, photoId, route);
+      final loaded = await repo.loadRoutes(wallId);
+
+      expect(loaded, hasLength(1));
+      expect(loaded.single.gradeSortKey, 8.5);
     },
   );
 

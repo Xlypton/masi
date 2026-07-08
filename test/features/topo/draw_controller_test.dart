@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 
@@ -523,6 +524,271 @@ void main() {
     expect(after.routes, before.routes);
     expect(after.selectedRouteId, before.selectedRouteId);
   });
+
+  // --- M4: route metadata / grade-key computation ---------------------
+
+  test(
+    'A1: setRouteMetadata sets name/grade and computes gradeSortKey from '
+    'the grade service; other routes are unchanged',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+
+      notifier.addPoint(const Offset(0.3, 0.3));
+      notifier.addPoint(const Offset(0.4, 0.4));
+      notifier.commitRoute();
+
+      final routes = container.read(drawControllerProvider).routes;
+      final targetId = routes[0].id;
+      final otherBefore = routes[1];
+
+      await notifier.setRouteMetadata(
+        targetId,
+        name: 'Crux',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '6a+',
+      );
+
+      final state = container.read(drawControllerProvider);
+      final target = state.routes.firstWhere((r) => r.id == targetId);
+      final other = state.routes.firstWhere((r) => r.id != targetId);
+
+      expect(target.name, 'Crux');
+      expect(target.gradeSystem, GradeSystem.french);
+      expect(target.gradeRaw, '6a+');
+      expect(
+        target.gradeSortKey,
+        gradeSortKey(GradeSystem.french, '6a+'),
+      );
+      expect(target.gradeSortKey, isNotNull);
+      expect(other, otherBefore);
+    },
+  );
+
+  test(
+    'A2: setRouteMetadata with an invalid grade leaves gradeSortKey null '
+    'without throwing, while still setting other provided fields',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+
+      await notifier.setRouteMetadata(
+        routeId,
+        name: 'Bad Grade Route',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: 'zzz',
+      );
+
+      final route = container.read(drawControllerProvider).routes.single;
+      expect(route.name, 'Bad Grade Route');
+      expect(route.gradeSystem, GradeSystem.french);
+      expect(route.gradeRaw, 'zzz');
+      expect(route.gradeSortKey, isNull);
+    },
+  );
+
+  test(
+    'A4: setRouteMetadata mutates state synchronously before any await '
+    '(un-awaited call still shows the update immediately)',
+    () {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+
+      // Deliberately not awaited.
+      // ignore: unawaited_futures
+      notifier.setRouteMetadata(routeId, name: 'Immediate');
+
+      final route = container.read(drawControllerProvider).routes.single;
+      expect(route.name, 'Immediate');
+    },
+  );
+
+  test('A5: setRouteMetadata with an unknown id is a no-op (no throw)', () async {
+    final notifier = container.read(drawControllerProvider.notifier);
+
+    notifier.addPoint(const Offset(0.1, 0.1));
+    notifier.addPoint(const Offset(0.2, 0.2));
+    notifier.commitRoute();
+    final before = container.read(drawControllerProvider).routes;
+
+    await notifier.setRouteMetadata(
+      9999,
+      name: 'Ghost',
+      gradeSystem: GradeSystem.french,
+      gradeRaw: '6a',
+    );
+
+    expect(container.read(drawControllerProvider).routes, before);
+  });
+
+  test(
+    'A10: setRouteMetadata with a valid grade followed by an invalid grade '
+    'clears the stale gradeSortKey instead of leaving it stale',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+
+      await notifier.setRouteMetadata(
+        routeId,
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '6a+',
+      );
+      final graded = container.read(drawControllerProvider).routes.single;
+      expect(graded.gradeSortKey, isNotNull);
+
+      await notifier.setRouteMetadata(
+        routeId,
+        gradeSystem: GradeSystem.french,
+        gradeRaw: 'zzz',
+      );
+
+      final route = container.read(drawControllerProvider).routes.single;
+      expect(route.gradeRaw, 'zzz');
+      expect(route.gradeSortKey, isNull);
+    },
+  );
+
+  test(
+    'A11: setRouteMetadata is AUTHORITATIVE — a call with only name '
+    'provided (grade args omitted/null) CLEARS a previously-set grade, '
+    'since RouteMetadataSheet always sends the full sheet state and '
+    'omitted now means "cleared", not "unchanged"',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+
+      await notifier.setRouteMetadata(
+        routeId,
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '6a+',
+      );
+      final graded = container.read(drawControllerProvider).routes.single;
+      expect(graded.gradeSortKey, isNotNull);
+
+      // A save with name + grade both provided sets both.
+      await notifier.setRouteMetadata(
+        routeId,
+        name: 'Named And Graded',
+        gradeSystem: GradeSystem.french,
+        gradeRaw: '7a',
+      );
+      final namedAndGraded = container.read(drawControllerProvider).routes.single;
+      expect(namedAndGraded.name, 'Named And Graded');
+      expect(namedAndGraded.gradeRaw, '7a');
+      expect(namedAndGraded.gradeSortKey, gradeSortKey(GradeSystem.french, '7a'));
+
+      // A save with only name (grade args null, as a sheet with the grade
+      // dropdown cleared would send) clears the grade entirely.
+      await notifier.setRouteMetadata(routeId, name: 'Name Only');
+
+      final route = container.read(drawControllerProvider).routes.single;
+      expect(route.name, 'Name Only');
+      expect(route.gradeSystem, isNull);
+      expect(route.gradeRaw, isNull);
+      expect(route.gradeSortKey, isNull);
+    },
+  );
+
+  test(
+    'setRouteMetadata clears the name when name:null is passed (matching '
+    'the sheet\'s name field having been emptied) instead of preserving '
+    'the old name',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+
+      await notifier.setRouteMetadata(routeId, name: 'Has A Name');
+      expect(
+        container.read(drawControllerProvider).routes.single.name,
+        'Has A Name',
+      );
+
+      await notifier.setRouteMetadata(routeId, name: null);
+
+      expect(container.read(drawControllerProvider).routes.single.name, isNull);
+    },
+  );
+
+  test(
+    'setRouteMetadata clears style and description when passed null, '
+    'matching the sheet fields having been emptied',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+
+      await notifier.setRouteMetadata(
+        routeId,
+        style: 'trad',
+        description: 'Some beta notes.',
+      );
+      final withMeta = container.read(drawControllerProvider).routes.single;
+      expect(withMeta.style, 'trad');
+      expect(withMeta.description, 'Some beta notes.');
+
+      await notifier.setRouteMetadata(routeId, style: null, description: null);
+
+      final cleared = container.read(drawControllerProvider).routes.single;
+      expect(cleared.style, isNull);
+      expect(cleared.description, isNull);
+    },
+  );
+
+  test(
+    'setRouteMetadata with no active wall updates in-memory state and does '
+    'not throw (no DB touched)',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+      expect(container.read(drawControllerProvider).activeWallId, isNull);
+
+      await expectLater(
+        notifier.setRouteMetadata(
+          routeId,
+          name: 'No Wall',
+          gradeSystem: GradeSystem.uiaa,
+          gradeRaw: 'VI+',
+        ),
+        completes,
+      );
+
+      final route = container.read(drawControllerProvider).routes.single;
+      expect(route.name, 'No Wall');
+      expect(route.gradeSystem, GradeSystem.uiaa);
+      expect(route.gradeRaw, 'VI+');
+      expect(route.gradeSortKey, gradeSortKey(GradeSystem.uiaa, 'VI+'));
+    },
+  );
 
   test('setActiveSymbol sets and clears the active symbol', () {
     final notifier = container.read(drawControllerProvider.notifier);

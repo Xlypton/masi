@@ -1,6 +1,38 @@
+import 'package:climbtopo/core/db/app_database.dart' as db;
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/data/route_mapper.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+db.Route _row({
+  String? name,
+  String? gradeSystem,
+  String? gradeRaw,
+  double? gradeSortKey,
+  String? style,
+  String? description,
+}) {
+  return db.Route(
+    id: 'route-1',
+    createdAt: 0,
+    updatedAt: 0,
+    dirty: false,
+    wallId: 'wall-1',
+    photoId: 'photo-1',
+    number: 1,
+    name: name,
+    gradeSystem: gradeSystem,
+    gradeRaw: gradeRaw,
+    gradeSortKey: gradeSortKey,
+    style: style,
+    description: description,
+    colorIndex: 0,
+    pointsJson: '[]',
+    symbolsJson: '[]',
+    sortOrder: 1,
+    visible: true,
+  );
+}
 
 void main() {
   group('encodePoints/decodePoints', () {
@@ -41,6 +73,68 @@ void main() {
 
       expect(decoded, symbols);
       expect(decoded.map((s) => s.type).toSet(), SymbolType.values.toSet());
+    });
+  });
+
+  group('rowToDomain metadata (M4 A4)', () {
+    test('reads all 6 metadata columns into the domain object', () {
+      final row = _row(
+        name: 'Le Toit',
+        gradeSystem: 'french',
+        gradeRaw: '6a+',
+        gradeSortKey: 8.0,
+        style: 'sport',
+        description: 'Great warm-up.',
+      );
+
+      final route = rowToDomain(row, 1);
+
+      expect(route.name, 'Le Toit');
+      expect(route.gradeSystem, GradeSystem.french);
+      expect(route.gradeRaw, '6a+');
+      expect(route.gradeSortKey, 8.0);
+      expect(route.style, 'sport');
+      expect(route.description, 'Great warm-up.');
+    });
+
+    test('a row with no metadata maps to all-null metadata fields', () {
+      final row = _row();
+
+      final route = rowToDomain(row, 1);
+
+      expect(route.name, isNull);
+      expect(route.gradeSystem, isNull);
+      expect(route.gradeRaw, isNull);
+      expect(route.gradeSortKey, isNull);
+      expect(route.style, isNull);
+      expect(route.description, isNull);
+    });
+
+    test('a null gradeSystem column loads as null', () {
+      final row = _row(gradeSystem: null, gradeRaw: '6a');
+
+      final route = rowToDomain(row, 1);
+
+      expect(route.gradeSystem, isNull);
+    });
+
+    test(
+      'a corrupt/unknown gradeSystem string loads as null without throwing',
+      () {
+        final row = _row(gradeSystem: 'not-a-real-system');
+
+        expect(() => rowToDomain(row, 1), returnsNormally);
+        expect(rowToDomain(row, 1).gradeSystem, isNull);
+      },
+    );
+
+    test('parses "uiaa" gradeSystem correctly', () {
+      final row = _row(gradeSystem: 'uiaa', gradeRaw: 'VI+');
+
+      final route = rowToDomain(row, 1);
+
+      expect(route.gradeSystem, GradeSystem.uiaa);
+      expect(route.gradeRaw, 'VI+');
     });
   });
 }
