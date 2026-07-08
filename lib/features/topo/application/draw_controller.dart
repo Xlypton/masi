@@ -1,7 +1,9 @@
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 
 /// Whether the topo canvas is in passive viewing mode or active route
@@ -23,11 +25,21 @@ class DrawState {
     this.activeSymbol,
     this.nextId = 1,
     this.nextNumber = 1,
+    this.activeWallId,
+    this.activePhotoId,
   });
 
   final DrawMode mode;
   final List<Offset> currentPoints;
   final List<TopoRoute> routes;
+
+  /// The wall this controller is currently loaded/persisting against, or
+  /// null if [loadForWall] has never been called (in which case all
+  /// persistence write-through is a no-op — see [DrawController]).
+  final String? activeWallId;
+
+  /// The photo (within [activeWallId]) routes are persisted against.
+  final String? activePhotoId;
 
   /// Points popped off [currentPoints] by [undo], available to be replayed
   /// by [redo]. Any new point added via [addPoint] clears this stack.
@@ -58,6 +70,10 @@ class DrawState {
     bool activeSymbolSet = false,
     int? nextId,
     int? nextNumber,
+    String? activeWallId,
+    bool activeWallIdSet = false,
+    String? activePhotoId,
+    bool activePhotoIdSet = false,
   }) {
     return DrawState(
       mode: mode ?? this.mode,
@@ -72,6 +88,12 @@ class DrawState {
           : (activeSymbol ?? this.activeSymbol),
       nextId: nextId ?? this.nextId,
       nextNumber: nextNumber ?? this.nextNumber,
+      activeWallId: activeWallIdSet
+          ? activeWallId
+          : (activeWallId ?? this.activeWallId),
+      activePhotoId: activePhotoIdSet
+          ? activePhotoId
+          : (activePhotoId ?? this.activePhotoId),
     );
   }
 }
@@ -139,7 +161,13 @@ class DrawController extends Notifier<DrawState> {
   /// If there are at least 2 current points, moves them into [DrawState.routes]
   /// as a new [TopoRoute] and empties [DrawState.currentPoints] and the redo
   /// stack. No-op otherwise.
-  void commitRoute() {
+  ///
+  /// Persistence write-through: if [DrawState.activeWallId] is set (i.e.
+  /// [loadForWall] has been called), the new route is also upserted to the
+  /// repository. The in-memory mutation above happens synchronously, before
+  /// any `await`, so callers that don't await this method still observe the
+  /// state change immediately (preserving pre-M3 unit test behavior).
+  Future<void> commitRoute() async {
     if (state.currentPoints.length < 2) return;
 
     final route = TopoRoute(
@@ -156,6 +184,17 @@ class DrawController extends Notifier<DrawState> {
       nextId: state.nextId + 1,
       nextNumber: state.nextNumber + 1,
     );
+
+    final wallId = state.activeWallId;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
+    try {
+      await ref
+          .read(routeRepositoryProvider)
+          .upsertRoute(wallId, photoId, route);
+    } catch (e, st) {
+      debugPrint('commitRoute: persistence write-through failed: $e\n$st');
+    }
   }
 
   /// Empties the in-progress route and the redo stack.
@@ -181,21 +220,41 @@ class DrawController extends Notifier<DrawState> {
 
   /// Flips the `visible` flag on the route with the given [id]. No-op if
   /// [id] does not match any route.
-  void toggleRouteVisibility(int id) {
+  ///
+  /// Persistence write-through: see [commitRoute] doc for the sync-mutation
+  /// / no-op-without-a-wall contract shared by all write-through methods.
+  Future<void> toggleRouteVisibility(int id) async {
     final index = state.routes.indexWhere((r) => r.id == id);
     if (index == -1) return;
 
     final routes = [...state.routes];
     routes[index] = routes[index].copyWith(visible: !routes[index].visible);
     state = state.copyWith(routes: routes);
+
+    final wallId = state.activeWallId;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
+    try {
+      await ref
+          .read(routeRepositoryProvider)
+          .upsertRoute(wallId, photoId, routes[index]);
+    } catch (e, st) {
+      debugPrint(
+        'toggleRouteVisibility: persistence write-through failed: $e\n$st',
+      );
+    }
   }
 
   /// Removes the route with the given [id]. Clears [DrawState.selectedRouteId]
   /// if it pointed at the removed route. No-op if [id] does not match any
   /// route.
-  void removeRoute(int id) {
-    final exists = state.routes.any((r) => r.id == id);
-    if (!exists) return;
+  ///
+  /// Persistence write-through: see [commitRoute] doc for the sync-mutation
+  /// / no-op-without-a-wall contract shared by all write-through methods.
+  Future<void> removeRoute(int id) async {
+    final removedIndex = state.routes.indexWhere((r) => r.id == id);
+    if (removedIndex == -1) return;
+    final removedRoute = state.routes[removedIndex];
 
     final routes = state.routes.where((r) => r.id != id).toList();
     final clearSelection = state.selectedRouteId == id;
@@ -204,6 +263,16 @@ class DrawController extends Notifier<DrawState> {
       selectedRouteIdSet: clearSelection,
       selectedRouteId: clearSelection ? null : state.selectedRouteId,
     );
+
+    final wallId = state.activeWallId;
+    if (wallId == null) return;
+    try {
+      await ref
+          .read(routeRepositoryProvider)
+          .softDeleteRoute(wallId, removedRoute.number);
+    } catch (e, st) {
+      debugPrint('removeRoute: persistence write-through failed: $e\n$st');
+    }
   }
 
   /// Sets the symbol type that will be placed by [placeSymbol]. Passing
@@ -215,7 +284,10 @@ class DrawController extends Notifier<DrawState> {
   /// Appends a [TopoSymbol] of [DrawState.activeSymbol]'s type at [percent]
   /// to the currently selected route. No-op if there is no selected route
   /// or no active symbol.
-  void placeSymbol(Offset percent) {
+  ///
+  /// Persistence write-through: see [commitRoute] doc for the sync-mutation
+  /// / no-op-without-a-wall contract shared by all write-through methods.
+  Future<void> placeSymbol(Offset percent) async {
     final selectedId = state.selectedRouteId;
     final symbolType = state.activeSymbol;
     if (selectedId == null || symbolType == null) return;
@@ -225,10 +297,95 @@ class DrawController extends Notifier<DrawState> {
 
     final route = state.routes[index];
     final routes = [...state.routes];
-    routes[index] = route.copyWith(
-      symbols: [...route.symbols, TopoSymbol(type: symbolType, position: percent)],
+    final updatedRoute = route.copyWith(
+      symbols: [
+        ...route.symbols,
+        TopoSymbol(type: symbolType, position: percent),
+      ],
     );
+    routes[index] = updatedRoute;
     state = state.copyWith(routes: routes);
+
+    final wallId = state.activeWallId;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
+    try {
+      await ref
+          .read(routeRepositoryProvider)
+          .upsertRoute(wallId, photoId, updatedRoute);
+    } catch (e, st) {
+      debugPrint('placeSymbol: persistence write-through failed: $e\n$st');
+    }
+  }
+
+  /// Synchronously clears drawing/persistence state in preparation for
+  /// switching to a new photo. Callers (see [TopoCanvasScreen]) must invoke
+  /// this the MOMENT a new image path is selected — synchronously, before
+  /// the async `ensureDefaultForImage` → [loadForWall] chain for that photo
+  /// even starts — so there is no window where [DrawState] still reflects
+  /// the previous photo while a new one is visible.
+  ///
+  /// Clears [DrawState.routes], [DrawState.currentPoints],
+  /// [DrawState.redoStack], and [DrawState.selectedRouteId], and — crucially
+  /// — nulls out [DrawState.activeWallId]/[DrawState.activePhotoId]. Since
+  /// every write-through method ([commitRoute], [toggleRouteVisibility],
+  /// [removeRoute], [placeSymbol]) no-ops its persistence step when
+  /// [DrawState.activeWallId] is null, this closes the race where a route
+  /// committed after a new photo is shown but before [loadForWall] resolves
+  /// would otherwise persist against the PREVIOUS wall: with
+  /// [activeWallId] null, that commit only mutates in-memory state (which
+  /// [loadForWall] then overwrites once it resolves), and never reaches the
+  /// database.
+  ///
+  /// [DrawState.mode] and [DrawState.activeSymbol] are deliberately left
+  /// as-is: they're tool/UI choices, not per-photo state, so switching
+  /// photos shouldn't reset draw mode or the selected symbol.
+  void beginPhotoSwitch() {
+    state = state.copyWith(
+      routes: const [],
+      currentPoints: const [],
+      redoStack: const [],
+      selectedRouteIdSet: true,
+      selectedRouteId: null,
+      activeWallIdSet: true,
+      activeWallId: null,
+      activePhotoIdSet: true,
+      activePhotoId: null,
+    );
+  }
+
+  /// Loads persisted routes for [wallId]/[photoId] from the repository,
+  /// replacing [DrawState.routes] and resetting in-progress drawing state
+  /// (current points, redo stack, selection). Seeds [DrawState.nextNumber]
+  /// / [DrawState.nextId] from the loaded routes so subsequently committed
+  /// routes continue the existing numbering.
+  ///
+  /// After this call, [DrawState.activeWallId]/[DrawState.activePhotoId] are
+  /// set, which switches on write-through persistence for
+  /// [commitRoute]/[placeSymbol]/[toggleRouteVisibility]/[removeRoute].
+  Future<void> loadForWall(String wallId, String photoId) async {
+    final loaded = await ref.read(routeRepositoryProvider).loadRoutes(wallId);
+
+    final maxNumber = loaded.isEmpty
+        ? 0
+        : loaded.map((r) => r.number).reduce((a, b) => a > b ? a : b);
+    // loadRoutes assigns sequential ids 1..n, so the largest id is always
+    // loaded.length.
+    final nextId = loaded.length + 1;
+
+    state = state.copyWith(
+      routes: loaded,
+      currentPoints: const [],
+      redoStack: const [],
+      selectedRouteIdSet: true,
+      selectedRouteId: null,
+      nextId: nextId,
+      nextNumber: maxNumber + 1,
+      activeWallIdSet: true,
+      activeWallId: wallId,
+      activePhotoIdSet: true,
+      activePhotoId: photoId,
+    );
   }
 }
 
