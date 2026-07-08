@@ -1,9 +1,13 @@
 import 'package:climbtopo/app/app.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
+import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
+import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
@@ -106,15 +110,74 @@ void main() {
         expect(container.read(drawControllerProvider).currentPoints.length, 2);
 
         await tester.tap(find.byKey(const Key('topo-commit-button')));
-        await tester.pump();
+        await tester.pumpAndSettle();
         expect(container.read(drawControllerProvider).currentPoints, isEmpty);
         expect(container.read(drawControllerProvider).routes.length, 1);
+
+        // A real commit opens the route-metadata sheet for the just
+        // -committed route; dismiss it (Cancel) before continuing so the
+        // clear-button interaction below isn't swallowed by the sheet's
+        // modal barrier.
+        expect(find.byKey(const Key('topo-meta-save')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('topo-meta-cancel')));
+        await tester.pumpAndSettle();
 
         // topo-clear-button: start a new current route, then discard it.
         notifier.addPoint(const Offset(0.3, 0.3));
         await tester.tap(find.byKey(const Key('topo-clear-button')));
         await tester.pump();
         expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'M4 cleanup coverage: with a route selected, topo-edit-metadata-button '
+      'appears in the app bar and tapping it opens RouteMetadataSheet',
+      (tester) async {
+        // The edit-metadata button lives in the app bar (see
+        // TopoCanvasScreen.build's AppBar.actions), gated only on
+        // drawState.selectedRouteId — independent of the image-load path —
+        // so this is exercised the same way as A1/A3 above: pumping the
+        // full screen without ever selecting an image.
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+        final routeId = container.read(drawControllerProvider).routes.single.id;
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const MaterialApp(home: TopoCanvasScreen()),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('topo-edit-metadata-button')), findsNothing);
+
+        notifier.selectRoute(routeId);
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('topo-edit-metadata-button')),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const Key('topo-edit-metadata-button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(RouteMetadataSheet), findsOneWidget);
+        expect(find.byKey(const Key('topo-meta-save')), findsOneWidget);
       },
     );
   });
@@ -461,6 +524,56 @@ void main() {
     );
 
     testWidgets(
+      'M4 cleanup Fix 1: the CANVAS itself (not just the legend) colors a '
+      'graded route by its grade band, via TopoPainter.routeColorResolver',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 300));
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+        final routeId = container.read(drawControllerProvider).routes.single.id;
+        // French '7a' -> shared-scale sort key 13.0 -> GradeBand.hard -> red.
+        await notifier.setRouteMetadata(
+          routeId,
+          gradeSystem: GradeSystem.french,
+          gradeRaw: '7a',
+        );
+        final gradedRoute = container.read(drawControllerProvider).routes.single;
+
+        await tester.pumpWidget(
+          buildCanvas(container: container, controller: controller),
+        );
+        await tester.pump();
+
+        final customPaint = tester.widget<CustomPaint>(
+          find.byWidgetPredicate(
+            (widget) => widget is CustomPaint && widget.painter is TopoPainter,
+          ),
+        );
+        final painter = customPaint.painter as TopoPainter;
+
+        expect(
+          painter.routeColorResolver,
+          isNotNull,
+          reason:
+              'topo_canvas.dart must pass routeColorResolver into '
+              'TopoPainter so the canvas (not just the legend) uses '
+              'grade-band coloring',
+        );
+        expect(
+          painter.routeColorResolver!(gradedRoute).toARGB32(),
+          colorForGradeBand(GradeBand.hard).toARGB32(),
+        );
+      },
+    );
+
+    testWidgets(
       'Fix 1: view mode ignores a second finger touching down before the '
       "first lifts (selection reflects only the first finger's tap)",
       (tester) async {
@@ -687,6 +800,219 @@ void main() {
 
       expect(find.byKey(const Key('topo-route-legend')), findsNothing);
     });
+
+    testWidgets(
+      'A4: a graded route shows its grade in the title and its swatch uses '
+      'the grade-band color (colorForRoute), not the palette color',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+        final route = container.read(drawControllerProvider).routes.single;
+
+        // French '7a' -> shared-scale sort key 13.0 -> GradeBand.hard.
+        await notifier.setRouteMetadata(
+          route.id,
+          gradeSystem: GradeSystem.french,
+          gradeRaw: '7a',
+        );
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const MaterialApp(home: Scaffold(body: RouteLegend())),
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('Route ${route.number} • 7a'), findsOneWidget);
+
+        final gradedRoute = container.read(drawControllerProvider).routes.single;
+        final avatar = tester.widget<CircleAvatar>(
+          find.descendant(
+            of: find.byKey(Key('topo-route-legend-item-${route.id}')),
+            matching: find.byType(CircleAvatar),
+          ),
+        );
+        expect(
+          avatar.backgroundColor!.toARGB32(),
+          colorForRoute(gradedRoute, kRoutePalette).toARGB32(),
+        );
+        expect(
+          avatar.backgroundColor!.toARGB32(),
+          colorForGradeBand(GradeBand.hard).toARGB32(),
+        );
+      },
+    );
+  });
+
+  group('RouteMetadataSheet', () {
+    // Pumped directly with a seeded drawControllerProvider (a single
+    // committed route) inside a ProviderScope + MaterialApp, per the class
+    // doc's testability contract: no image decode, no real canvas/photo
+    // path, so these run as plain (non-fake-async) widget tests.
+    Widget buildSheet({
+      required ProviderContainer container,
+      required int routeId,
+      TopoRoute? initial,
+    }) {
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          home: Scaffold(
+            body: RouteMetadataSheet(routeId: routeId, initial: initial),
+          ),
+        ),
+      );
+    }
+
+    testWidgets(
+      'A1: shows the name field, grade-system toggle, grade picker, style '
+      'selector, description field, and save/cancel controls',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+        final routeId = container.read(drawControllerProvider).routes.single.id;
+
+        await tester.pumpWidget(buildSheet(container: container, routeId: routeId));
+        await tester.pump();
+
+        expect(find.byKey(const Key('topo-meta-name')), findsOneWidget);
+        expect(
+          find.byKey(const Key('topo-meta-gradesystem-french')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('topo-meta-gradesystem-uiaa')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('topo-meta-grade')), findsOneWidget);
+        expect(find.byKey(const Key('topo-meta-style-sport')), findsOneWidget);
+        expect(find.byKey(const Key('topo-meta-style-trad')), findsOneWidget);
+        expect(
+          find.byKey(const Key('topo-meta-style-boulder')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('topo-meta-description')), findsOneWidget);
+        expect(find.byKey(const Key('topo-meta-save')), findsOneWidget);
+        expect(find.byKey(const Key('topo-meta-cancel')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'A2: filling name + French + a valid grade + style and tapping save '
+      "updates the controller's route with that metadata and a non-null "
+      'gradeSortKey',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+        final routeId = container.read(drawControllerProvider).routes.single.id;
+
+        await tester.pumpWidget(buildSheet(container: container, routeId: routeId));
+        await tester.pump();
+
+        await tester.enterText(
+          find.byKey(const Key('topo-meta-name')),
+          'Le Toit',
+        );
+        await tester.tap(find.byKey(const Key('topo-meta-gradesystem-french')));
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('topo-meta-grade')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('6a+'));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('topo-meta-style-sport')));
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('topo-meta-save')));
+        await tester.pump();
+
+        final route = container.read(drawControllerProvider).routes.single;
+        expect(route.name, 'Le Toit');
+        expect(route.gradeSystem, GradeSystem.french);
+        expect(route.gradeRaw, '6a+');
+        expect(route.style, 'sport');
+        expect(route.gradeSortKey, isNotNull);
+      },
+    );
+
+    testWidgets(
+      'A3: toggling French<->UIAA repopulates the grade dropdown with that '
+      "system's options",
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+        final routeId = container.read(drawControllerProvider).routes.single.id;
+
+        await tester.pumpWidget(buildSheet(container: container, routeId: routeId));
+        await tester.pump();
+
+        // Default system is French: opening the dropdown should offer '6a'.
+        await tester.tap(find.byKey(const Key('topo-meta-grade')));
+        await tester.pumpAndSettle();
+        expect(find.text('6a'), findsOneWidget);
+        // Close the dropdown without selecting.
+        await tester.tapAt(const Offset(5, 5));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('topo-meta-gradesystem-uiaa')));
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('topo-meta-grade')));
+        await tester.pumpAndSettle();
+        expect(find.text('VI+'), findsOneWidget);
+        expect(find.text('6a'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'pre-fills fields from initial when editing an already-graded route',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+        final routeId = container.read(drawControllerProvider).routes.single.id;
+        await notifier.setRouteMetadata(
+          routeId,
+          name: 'Existing Route',
+          gradeSystem: GradeSystem.uiaa,
+          gradeRaw: 'VII-',
+          style: 'trad',
+          description: 'Crimpy start',
+        );
+        final initial = container.read(drawControllerProvider).routes.single;
+
+        await tester.pumpWidget(
+          buildSheet(container: container, routeId: routeId, initial: initial),
+        );
+        await tester.pump();
+
+        expect(find.text('Existing Route'), findsOneWidget);
+        expect(find.text('VII-'), findsOneWidget);
+        expect(find.text('Crimpy start'), findsOneWidget);
+      },
+    );
   });
 
   group('SymbolPaletteBar + TopoCanvas symbol placement', () {

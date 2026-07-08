@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/route_hit_test.dart';
+import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 
@@ -390,6 +391,13 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                     showHandles: isDrawMode && drawState.activeSymbol == null,
                     selectedRouteId: drawState.selectedRouteId,
                     palette: kRoutePalette,
+                    // Wires grade-band coloring into the canvas itself (not
+                    // just the legend, see route_legend.dart): a stable
+                    // top-level function reference — not a closure allocated
+                    // fresh per build — so TopoPainter.shouldRepaint's
+                    // reference comparison of routeColorResolver stays
+                    // stable across rebuilds (see topoRouteColor's doc).
+                    routeColorResolver: topoRouteColor,
                   ),
                 ),
               ],

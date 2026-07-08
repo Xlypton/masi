@@ -1,6 +1,8 @@
 import 'dart:ui' as ui;
 
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -402,6 +404,88 @@ void main() {
     );
   });
 
+  group('TopoPainter routeColorResolver (grade-band coloring)', () {
+    test(
+      'A4: when routeColorResolver is provided, a graded route strokes in '
+      "its grade band's color (colorForRoute/colorForGradeBand), not the "
+      'palette color',
+      () {
+        final gradedRoute = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          gradeSystem: GradeSystem.french,
+          gradeRaw: '7a',
+          // French '7a' -> shared-scale index 13.0 -> GradeBand.hard.
+          gradeSortKey: gradeSortKey(GradeSystem.french, '7a'),
+          points: const [
+            Offset(0.1, 0.1),
+            Offset(0.4, 0.5),
+            Offset(0.9, 0.8),
+          ],
+        );
+        final painter = TopoPainter(
+          imageSize: imageSize,
+          routes: [gradedRoute],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          routeColorResolver: (route) => colorForRoute(route, palette),
+        );
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, imageSize);
+
+        expect(canvas.paths, hasLength(1));
+        expect(
+          canvas.pathPaints.single.color.toARGB32(),
+          colorForGradeBand(GradeBand.hard).toARGB32(),
+        );
+        // Sanity: the resolver's output must NOT equal the plain
+        // palette-by-colorIndex color, otherwise this test wouldn't
+        // distinguish the resolver path from the pre-existing fallback.
+        expect(
+          canvas.pathPaints.single.color.toARGB32(),
+          isNot(palette[gradedRoute.colorIndex % palette.length].toARGB32()),
+        );
+      },
+    );
+
+    test(
+      'Fractional UIAA sortKey: VII- -> shared-scale 8.5 -> GradeBand.advanced '
+      "(colorForRoute reflects the advanced band's color)",
+      () {
+        final sortKey = gradeSortKey(GradeSystem.uiaa, 'VII-');
+        expect(sortKey, closeTo(8.5, 1e-9));
+        expect(bandForSortKey(sortKey), GradeBand.advanced);
+
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+          gradeSystem: GradeSystem.uiaa,
+          gradeRaw: 'VII-',
+          gradeSortKey: sortKey,
+        );
+
+        expect(
+          colorForRoute(route, palette).toARGB32(),
+          colorForGradeBand(GradeBand.advanced).toARGB32(),
+        );
+      },
+    );
+  });
+
+  group('colorForGradeBand (M4 cleanup coverage: all 5 bands)', () {
+    test('returns the exact spec Color literal for each GradeBand', () {
+      expect(colorForGradeBand(GradeBand.beginner), const Color(0xFF43A047)); // green
+      expect(colorForGradeBand(GradeBand.intermediate), const Color(0xFF1E88E5)); // blue
+      expect(colorForGradeBand(GradeBand.advanced), const Color(0xFFFB8C00)); // orange
+      expect(colorForGradeBand(GradeBand.hard), const Color(0xFFE53935)); // red
+      expect(colorForGradeBand(GradeBand.elite), const Color(0xFF8E24AA)); // purple
+    });
+  });
+
   group('TopoPainter.shouldRepaint', () {
     test('returns false when everything is identical', () {
       final a = buildPainter(
@@ -571,6 +655,45 @@ void main() {
       expect(base.shouldRepaint(differentCurrentColor), isTrue);
       expect(base.shouldRepaint(differentHandleColor), isTrue);
     });
+
+    test(
+      'returns true when routeColorResolver differs (one null, one '
+      'non-null); returns false when both painters share the identical '
+      'resolver reference (Fix 1 coverage)',
+      () {
+        Color resolver(TopoRoute route) => colorForRoute(route, palette);
+
+        const withoutResolver = TopoPainter(
+          imageSize: imageSize,
+          routes: [],
+          currentPoints: [],
+          showHandles: false,
+          palette: palette,
+        );
+        final withResolver = TopoPainter(
+          imageSize: imageSize,
+          routes: const [],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          routeColorResolver: resolver,
+        );
+
+        expect(withoutResolver.shouldRepaint(withResolver), isTrue);
+        expect(withResolver.shouldRepaint(withoutResolver), isTrue);
+
+        final samePaletteReference = TopoPainter(
+          imageSize: imageSize,
+          routes: const [],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          routeColorResolver: resolver,
+        );
+
+        expect(withResolver.shouldRepaint(samePaletteReference), isFalse);
+      },
+    );
   });
 
   group('TopoPainter golden', () {

@@ -5,7 +5,21 @@ import 'dart:convert';
 import 'dart:ui';
 
 import '../../../core/db/app_database.dart' as db;
+import '../../../core/grades/grade_system.dart';
 import '../domain/topo_route.dart';
+
+/// Parses a persisted `gradeSystem` column value (the enum's `.name`
+/// string) back into a [GradeSystem]. Returns null if [raw] is null or
+/// does not match any [GradeSystem] value, rather than throwing — a
+/// corrupt/unknown value should degrade to "no grade system" instead of
+/// crashing the load.
+GradeSystem? _parseGradeSystem(String? raw) {
+  if (raw == null) return null;
+  for (final system in GradeSystem.values) {
+    if (system.name == raw) return system;
+  }
+  return null;
+}
 
 /// Encodes [points] (percent-space coordinates) as a JSON array of
 /// `{"x": .., "y": ..}` objects.
@@ -64,5 +78,11 @@ TopoRoute rowToDomain(db.Route row, int intId) {
     symbols: decodeSymbols(row.symbolsJson),
     colorIndex: row.colorIndex,
     visible: row.visible,
+    name: row.name,
+    gradeSystem: _parseGradeSystem(row.gradeSystem),
+    gradeRaw: row.gradeRaw,
+    gradeSortKey: row.gradeSortKey,
+    style: row.style,
+    description: row.description,
   );
 }

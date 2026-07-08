@@ -2,6 +2,8 @@ import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 
+import '../../../core/grades/grade_system.dart';
+
 /// The kind of marker rendered at a point on a [TopoRoute].
 enum SymbolType { anchor, bolt, top, crux, rest }
 
@@ -45,6 +47,12 @@ class TopoRoute {
     this.symbols = const [],
     this.colorIndex = 0,
     this.visible = true,
+    this.name,
+    this.gradeSystem,
+    this.gradeRaw,
+    this.gradeSortKey,
+    this.style,
+    this.description,
   });
 
   final int id;
@@ -54,6 +62,50 @@ class TopoRoute {
   final int colorIndex;
   final bool visible;
 
+  /// Free-form display name for the route (e.g. "Le Toit"). Null if unset.
+  final String? name;
+
+  /// Which grading ladder [gradeRaw] belongs to. Null if no grade has been
+  /// assigned yet.
+  final GradeSystem? gradeSystem;
+
+  /// The grade token as entered by the user (e.g. `'6a+'`, `'VII-'`), in
+  /// [gradeSystem]'s notation. Null if no grade has been assigned yet.
+  final String? gradeRaw;
+
+  /// Precomputed shared-scale sort key for [gradeRaw] (see
+  /// `core/grades/grade_system.dart`'s `gradeSortKey`), cached here so
+  /// routes can be sorted/filtered by difficulty without recomputing it.
+  /// Null if no grade has been assigned yet.
+  final double? gradeSortKey;
+
+  /// Free-form climbing style label, by convention one of `'sport'`,
+  /// `'trad'`, `'boulder'` — not an enum, so new styles don't require a
+  /// domain change. Null if unset.
+  final String? style;
+
+  /// Free-form route description/beta notes. Null if unset.
+  final String? description;
+
+  /// Returns a copy with the given fields replaced.
+  ///
+  /// Nullable-handling choice: non-metadata fields (`id`, `number`,
+  /// `points`, `symbols`, `colorIndex`, `visible`) use the standard
+  /// `newValue ?? this.field` pattern.
+  ///
+  /// Metadata fields (`name`, `gradeSystem`, `gradeRaw`, `gradeSortKey`,
+  /// `style`, `description`) each have an explicit set-sentinel flag
+  /// (`nameSet`, `gradeSystemSet`, `gradeRawSet`, `setGradeSortKey`,
+  /// `styleSet`, `descriptionSet`), mirroring the original
+  /// `setGradeSortKey` design: when a sentinel is `true`, the corresponding
+  /// value is used verbatim (including `null`, which clears the field).
+  /// When `false` (the default for every sentinel), the usual
+  /// `value ?? this.field` behavior applies, so existing call sites that
+  /// don't pass a sentinel are unaffected. This lets [DrawController
+  /// .setRouteMetadata] treat the metadata sheet's save as authoritative —
+  /// an omitted/cleared field on the sheet actually clears it on the route
+  /// — while every other caller keeps the old "null means unchanged"
+  /// behavior.
   TopoRoute copyWith({
     int? id,
     int? number,
@@ -61,6 +113,18 @@ class TopoRoute {
     List<TopoSymbol>? symbols,
     int? colorIndex,
     bool? visible,
+    String? name,
+    bool nameSet = false,
+    GradeSystem? gradeSystem,
+    bool gradeSystemSet = false,
+    String? gradeRaw,
+    bool gradeRawSet = false,
+    double? gradeSortKey,
+    bool setGradeSortKey = false,
+    String? style,
+    bool styleSet = false,
+    String? description,
+    bool descriptionSet = false,
   }) {
     return TopoRoute(
       id: id ?? this.id,
@@ -69,6 +133,13 @@ class TopoRoute {
       symbols: symbols ?? this.symbols,
       colorIndex: colorIndex ?? this.colorIndex,
       visible: visible ?? this.visible,
+      name: nameSet ? name : (name ?? this.name),
+      gradeSystem: gradeSystemSet ? gradeSystem : (gradeSystem ?? this.gradeSystem),
+      gradeRaw: gradeRawSet ? gradeRaw : (gradeRaw ?? this.gradeRaw),
+      gradeSortKey:
+          setGradeSortKey ? gradeSortKey : (gradeSortKey ?? this.gradeSortKey),
+      style: styleSet ? style : (style ?? this.style),
+      description: descriptionSet ? description : (description ?? this.description),
     );
   }
 
@@ -81,7 +152,13 @@ class TopoRoute {
         listEquals(other.points, points) &&
         listEquals(other.symbols, symbols) &&
         other.colorIndex == colorIndex &&
-        other.visible == visible;
+        other.visible == visible &&
+        other.name == name &&
+        other.gradeSystem == gradeSystem &&
+        other.gradeRaw == gradeRaw &&
+        other.gradeSortKey == gradeSortKey &&
+        other.style == style &&
+        other.description == description;
   }
 
   @override
@@ -92,6 +169,12 @@ class TopoRoute {
         Object.hashAll(symbols),
         colorIndex,
         visible,
+        name,
+        gradeSystem,
+        gradeRaw,
+        gradeSortKey,
+        style,
+        description,
       );
 }
 

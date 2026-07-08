@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 
 /// Whether the topo canvas is in passive viewing mode or active route
@@ -315,6 +316,82 @@ class DrawController extends Notifier<DrawState> {
           .upsertRoute(wallId, photoId, updatedRoute);
     } catch (e, st) {
       debugPrint('placeSymbol: persistence write-through failed: $e\n$st');
+    }
+  }
+
+  /// AUTHORITATIVELY replaces free-form/grade metadata (name, grade, style,
+  /// description) on the route with the given [routeId]: the resulting
+  /// route's name/gradeSystem/gradeRaw/style/description are set to EXACTLY
+  /// the arguments passed here, including `null` — this is a full
+  /// replacement, not a partial patch. No-op if [routeId] does not match
+  /// any route in [DrawState.routes].
+  ///
+  /// This method assumes its only caller is [RouteMetadataSheet], which
+  /// always sends the sheet's complete current state on Save (every field,
+  /// pre-filled from the route being edited and edited in place) — so
+  /// "omitted" and "the user cleared this field" are indistinguishable and
+  /// both correctly mean "clear it". Concretely: passing `name: null`
+  /// clears the route's name even if it previously had one; a caller that
+  /// wants to edit only one field must first read the current route and
+  /// pass its other fields through unchanged (see
+  /// [RouteMetadataSheet._save] for the reference caller).
+  ///
+  /// [TopoRoute.gradeSortKey] is always recomputed to match [gradeSystem]/
+  /// [gradeRaw]: if both are provided (`gradeProvided`) and [gradeRaw] is a
+  /// valid grade for [gradeSystem] (per [isValidGrade] — checked to avoid
+  /// [gradeSortKey]'s `ArgumentError` on invalid input), it's recomputed
+  /// from them; otherwise (grade omitted or invalid) it's cleared to
+  /// `null`. This uses [TopoRoute.copyWith]'s sentinel flags (`nameSet`,
+  /// `gradeSystemSet`, `gradeRawSet`, `setGradeSortKey`, `styleSet`,
+  /// `descriptionSet`, all passed as `true` here) so every field —
+  /// including ones passed as `null` — is written verbatim rather than
+  /// falling back to the route's previous value.
+  ///
+  /// Persistence write-through: see [commitRoute] doc for the sync-mutation
+  /// / no-op-without-a-wall contract shared by all write-through methods.
+  Future<void> setRouteMetadata(
+    int routeId, {
+    String? name,
+    GradeSystem? gradeSystem,
+    String? gradeRaw,
+    String? style,
+    String? description,
+  }) async {
+    final index = state.routes.indexWhere((r) => r.id == routeId);
+    if (index == -1) return;
+
+    final gradeProvided = gradeSystem != null && gradeRaw != null;
+    final newGradeSortKey = (gradeProvided && isValidGrade(gradeSystem, gradeRaw))
+        ? gradeSortKey(gradeSystem, gradeRaw)
+        : null;
+
+    final routes = [...state.routes];
+    final updatedRoute = routes[index].copyWith(
+      name: name,
+      nameSet: true,
+      gradeSystem: gradeSystem,
+      gradeSystemSet: true,
+      gradeRaw: gradeRaw,
+      gradeRawSet: true,
+      gradeSortKey: newGradeSortKey,
+      setGradeSortKey: true,
+      style: style,
+      styleSet: true,
+      description: description,
+      descriptionSet: true,
+    );
+    routes[index] = updatedRoute;
+    state = state.copyWith(routes: routes);
+
+    final wallId = state.activeWallId;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
+    try {
+      await ref
+          .read(routeRepositoryProvider)
+          .upsertRoute(wallId, photoId, updatedRoute);
+    } catch (e, st) {
+      debugPrint('setRouteMetadata: persistence write-through failed: $e\n$st');
     }
   }
 

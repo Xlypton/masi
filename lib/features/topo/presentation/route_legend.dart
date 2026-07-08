@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 
 /// Height of the [RouteLegend] panel when it has at least one route to
@@ -9,10 +10,11 @@ import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 /// route count grows; it scrolls internally instead.
 const double _legendHeight = 140.0;
 
-/// Lists every route in [DrawState.routes]: a color swatch (from
-/// [kRoutePalette]) and number, a visibility toggle
-/// ([DrawController.toggleRouteVisibility]), a delete control
-/// ([DrawController.removeRoute]), and select-on-tap
+/// Lists every route in [DrawState.routes]: a color swatch (see
+/// [colorForRoute] — [kRoutePalette] for an ungraded route, its grade
+/// band's color once graded) plus its number and grade (if set), a
+/// visibility toggle ([DrawController.toggleRouteVisibility]), a delete
+/// control ([DrawController.removeRoute]), and select-on-tap
 /// ([DrawController.selectRoute]). Renders nothing if there are no routes
 /// yet.
 class RouteLegend extends ConsumerWidget {
@@ -35,16 +37,17 @@ class RouteLegend extends ConsumerWidget {
         itemBuilder: (context, index) {
           final route = drawState.routes[index];
           final isSelected = route.id == drawState.selectedRouteId;
-          final color = kRoutePalette.isEmpty
-              ? Theme.of(context).colorScheme.primary
-              : kRoutePalette[route.colorIndex % kRoutePalette.length];
+          final color = colorForRoute(route, kRoutePalette);
+          final grade = route.gradeRaw;
 
           return ListTile(
             key: Key('topo-route-legend-item-${route.id}'),
             selected: isSelected,
             onTap: () => notifier.selectRoute(route.id),
             leading: CircleAvatar(backgroundColor: color, radius: 10),
-            title: Text('Route ${route.number}'),
+            title: Text(
+              grade != null ? 'Route ${route.number} • $grade' : 'Route ${route.number}',
+            ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
