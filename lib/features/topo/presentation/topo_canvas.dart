@@ -5,12 +5,20 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/domain/route_hit_test.dart';
+import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 
 /// Logical-pixel radius (independent of zoom level) within which a tap or
 /// drag-start is considered to have hit an existing point handle rather than
-/// starting a brand new point.
+/// starting a brand new point. Also reused (converted to percent space) as
+/// the route-hit-test threshold for view-mode tap-to-select.
 const double _handleHitRadiusPx = 20.0;
+
+/// Maximum movement (in logical px, between pointer-down and pointer-up)
+/// for a view-mode gesture to be treated as a tap (route select/deselect)
+/// rather than the start of an [InteractiveViewer] pan/zoom drag.
+const double _tapMovementSlopPx = 8.0;
 
 /// The interactive topo image canvas: renders the selected photo with the
 /// current/completed routes painted on top via [TopoPainter], and, while in
@@ -68,6 +76,14 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// manual pan/zoom, so it's guarded both by this flag and by only firing
   /// when the controller is still at identity (see [_applyFitScaleOnce]).
   bool _didApplyInitialFit = false;
+
+  /// The pointer id that started the current view-mode down/up interaction
+  /// (see [_beginViewTap]/[_endViewTap]), or null when none is in progress.
+  int? _viewTapPointer;
+
+  /// The viewport-local position at which [_viewTapPointer] went down, used
+  /// by [_endViewTap] to measure total movement and decide tap vs. drag.
+  Offset? _viewTapDownPosition;
 
   double get _currentScale =>
       widget.transformationController.value.getMaxScaleOnAxis();
@@ -192,11 +208,38 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// [_updateInteraction]/[_endInteraction] rather than being able to
   /// hijack or prematurely end it.
   void _beginInteraction(int pointerId, Offset viewportLocalPosition) {
+    // A pointer is already down/dragging: ignore this second (or later)
+    // finger entirely rather than re-latching onto it. Without this guard,
+    // a second finger's down event would overwrite `_activePointer`,
+    // letting it hijack an in-progress drag or (worse) place an extra
+    // point/symbol of its own — see class-level doc + Fix 1 for the bug
+    // this prevents. The first finger keeps sole ownership of the gesture
+    // until its own up/cancel clears `_activePointer` (see
+    // [_endInteraction]).
+    if (_activePointer != null) return;
     _activePointer = pointerId;
     final scene = widget.transformationController.toScene(
       viewportLocalPosition,
     );
     final drawState = ref.read(drawControllerProvider);
+
+    if (drawState.activeSymbol != null) {
+      // Symbol-placement mode: a tap places a symbol of the active type
+      // onto the selected route (the controller no-ops if none is
+      // selected) rather than adding/dragging a route point. Fires on
+      // pointer-down (mirroring addPoint below) rather than waiting for
+      // pointer-up, so a plain tap (down immediately followed by up with
+      // no movement, as `tester.tapAt` simulates) places exactly one
+      // symbol; dragging isn't a supported symbol-placement gesture.
+      _draggingIndex = null;
+      final percent = CoordinateTransformer.sceneToPercent(
+        scene,
+        widget.imageSize,
+      );
+      ref.read(drawControllerProvider.notifier).placeSymbol(percent);
+      return;
+    }
+
     final hitIndex = _hitTestHandle(scene, drawState.currentPoints);
     if (hitIndex != null) {
       _draggingIndex = hitIndex;
@@ -234,6 +277,68 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     if (pointerId != _activePointer) return;
     _activePointer = null;
     _draggingIndex = null;
+  }
+
+  /// Records the pointer id and position that started a potential
+  /// view-mode tap. Deliberately does nothing else (no hit-testing, no
+  /// state mutation) so [InteractiveViewer]'s own gesture recognizers —
+  /// which also see this same raw pointer event, per the [Listener] doc
+  /// below — remain free to start a pan/zoom drag uninterrupted.
+  void _beginViewTap(int pointerId, Offset viewportLocalPosition) {
+    // Mirror of the guard in [_beginInteraction]: a second finger touching
+    // down while one is already tracked (e.g. the second contact point of
+    // a pinch-zoom gesture) must not re-latch `_viewTapPointer` onto it —
+    // otherwise that second finger's eventual up (which InteractiveViewer
+    // is simultaneously treating as part of a pan/zoom, not a tap) could
+    // be misread by [_endViewTap] as a genuine tap and spuriously
+    // select/deselect a route. The first finger owns the gesture until its
+    // own up/cancel clears `_viewTapPointer`.
+    if (_viewTapPointer != null) return;
+    _viewTapPointer = pointerId;
+    _viewTapDownPosition = viewportLocalPosition;
+  }
+
+  /// Ends a potential view-mode tap: if [pointerId] matches the pointer
+  /// that went down and the total movement since then is within
+  /// [_tapMovementSlopPx], treats it as a genuine tap (as opposed to a
+  /// pan/zoom drag that InteractiveViewer is handling itself) and performs
+  /// route hit-testing + selection at the release position. A tap that
+  /// doesn't land on any visible route (or lands far from all of them)
+  /// clears the selection, matching [hitTestRoute] returning null.
+  void _endViewTap(int pointerId, Offset viewportLocalPosition) {
+    if (pointerId != _viewTapPointer) return;
+    final downPosition = _viewTapDownPosition;
+    _viewTapPointer = null;
+    _viewTapDownPosition = null;
+    if (downPosition == null) return;
+
+    final movement = (viewportLocalPosition - downPosition).distance;
+    if (movement > _tapMovementSlopPx) return;
+
+    final scene = widget.transformationController.toScene(
+      viewportLocalPosition,
+    );
+    final percent = CoordinateTransformer.sceneToPercent(
+      scene,
+      widget.imageSize,
+    );
+    final scale = _currentScale;
+    final thresholdScenePx = _handleHitRadiusPx / (scale == 0 ? 1 : scale);
+    final thresholdPercent = thresholdScenePx /
+        (widget.imageSize.width == 0 ? 1 : widget.imageSize.width);
+
+    final drawState = ref.read(drawControllerProvider);
+    final hitId = hitTestRoute(percent, drawState.routes, thresholdPercent);
+    ref.read(drawControllerProvider.notifier).selectRoute(hitId);
+  }
+
+  /// Clears any in-progress view-mode tap tracking for [pointerId] without
+  /// performing a select — used for pointer-cancel, where there is no
+  /// meaningful release position.
+  void _cancelViewTap(int pointerId) {
+    if (pointerId != _viewTapPointer) return;
+    _viewTapPointer = null;
+    _viewTapDownPosition = null;
   }
 
   @override
@@ -280,9 +385,11 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   size: widget.imageSize,
                   painter: TopoPainter(
                     imageSize: widget.imageSize,
-                    routes: drawState.completedRoutes,
+                    routes: drawState.routes,
                     currentPoints: drawState.currentPoints,
-                    showHandles: isDrawMode,
+                    showHandles: isDrawMode && drawState.activeSymbol == null,
+                    selectedRouteId: drawState.selectedRouteId,
+                    palette: kRoutePalette,
                   ),
                 ),
               ],
@@ -291,7 +398,24 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         );
 
         if (!isDrawMode) {
-          return viewer;
+          // Same rationale as the draw-mode Listener below: wrapping (not
+          // replacing) InteractiveViewer with a raw-pointer Listener lets
+          // this widget observe every down/up to disambiguate a tap from a
+          // pan/zoom drag, without stealing anything from IV's own gesture
+          // recognizers — they still see and act on the same events, so
+          // pan/zoom keeps working exactly as before. Only a genuine tap
+          // (see _endViewTap's movement-slop check) triggers a
+          // select/deselect; a real drag is left entirely to IV.
+          return Listener(
+            key: const Key('topo-view-gesture-detector'),
+            behavior: HitTestBehavior.opaque,
+            onPointerDown: (event) =>
+                _beginViewTap(event.pointer, event.localPosition),
+            onPointerUp: (event) =>
+                _endViewTap(event.pointer, event.localPosition),
+            onPointerCancel: (event) => _cancelViewTap(event.pointer),
+            child: viewer,
+          );
         }
 
         // A plain GestureDetector (onTapUp/onPanStart/onPanUpdate) does NOT
