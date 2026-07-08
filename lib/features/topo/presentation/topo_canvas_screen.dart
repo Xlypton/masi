@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/presentation/route_legend.dart';
+import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 
 /// Holds the path of the currently selected image, or null if none.
@@ -171,7 +173,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       ),
       body: imagePath == null
           ? _buildEmptyState(context)
-          : _buildCanvasArea(imagePath),
+          : _buildCanvasArea(imagePath, drawState),
       bottomNavigationBar: BottomAppBar(
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
@@ -233,7 +235,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     );
   }
 
-  Widget _buildCanvasArea(String imagePath) {
+  Widget _buildCanvasArea(String imagePath, DrawState drawState) {
     if (_imageLoadError) {
       return _buildImageErrorState(context);
     }
@@ -244,9 +246,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         child: CircularProgressIndicator(),
       );
     }
-    return TopoCanvas(
+    return TopoCanvasBody(
       imagePath: imagePath,
       imageSize: imageSize,
+      drawState: drawState,
       transformationController: _transformationController,
     );
   }
@@ -277,6 +280,54 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// The canvas area shown once [imageSize] is resolved: the symbol palette
+/// bar (gated to [DrawMode.draw] — see Fix 2), the interactive [TopoCanvas],
+/// and the [RouteLegend].
+///
+/// Extracted as a standalone public widget (rather than inlined into
+/// [_TopoCanvasScreenState._buildCanvasArea]) so it can be pumped directly
+/// in widget tests with an injected [imageSize] and [drawState] — the same
+/// approach [TopoCanvas] itself uses (see its class doc) — without needing
+/// a real, decodable image file on disk or waiting on the async image
+/// decode that only [TopoCanvasScreen] drives.
+class TopoCanvasBody extends StatelessWidget {
+  const TopoCanvasBody({
+    super.key,
+    required this.imagePath,
+    required this.imageSize,
+    required this.drawState,
+    required this.transformationController,
+  });
+
+  final String imagePath;
+  final Size imageSize;
+  final DrawState drawState;
+  final TransformationController transformationController;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        // Only shown in draw mode: in view mode a canvas tap means "select
+        // a route", not "place a symbol", so showing (and letting the user
+        // activate) the symbol bar there would be misleading. Not clearing
+        // `activeSymbol` on mode switch is deliberate — see fix notes —
+        // so a quick peek at view mode and back to draw mode preserves the
+        // user's chosen symbol.
+        if (drawState.mode == DrawMode.draw) const SymbolPaletteBar(),
+        Expanded(
+          child: TopoCanvas(
+            imagePath: imagePath,
+            imageSize: imageSize,
+            transformationController: transformationController,
+          ),
+        ),
+        const RouteLegend(),
+      ],
     );
   }
 }

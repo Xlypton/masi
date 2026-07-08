@@ -1,36 +1,49 @@
 import 'dart:ui' as ui;
 
+import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A minimal fake [Canvas] that records the drawing calls [TopoPainter]
-/// actually makes (`drawCircle`, `drawLine`, `drawPath`) without needing a
-/// mocking package. `TopoPainter.paint` never calls `save`/`restore`/
-/// `transform`/clip methods, so leaving those to the `noSuchMethod`
-/// fallback is safe: they are never invoked in these tests.
+/// actually makes (`drawCircle`, `drawLine`, `drawPath`, `drawParagraph`)
+/// without needing a mocking package. `TopoPainter.paint` never calls
+/// `save`/`restore`/`transform`/clip methods, so leaving those to the
+/// `noSuchMethod` fallback is safe: they are never invoked in these tests.
 class _RecordingCanvas implements Canvas {
   final List<Offset> circleCenters = [];
   final List<double> circleRadii = [];
   final List<Color> circleColors = [];
+  final List<Paint> circlePaints = [];
   final List<({Offset p1, Offset p2})> lines = [];
+  final List<Paint> linePaints = [];
   final List<Path> paths = [];
+  final List<Paint> pathPaints = [];
+  final List<({ui.Paragraph paragraph, Offset offset})> paragraphs = [];
 
   @override
   void drawCircle(Offset c, double radius, Paint paint) {
     circleCenters.add(c);
     circleRadii.add(radius);
     circleColors.add(paint.color);
+    circlePaints.add(paint);
   }
 
   @override
   void drawLine(Offset p1, Offset p2, Paint paint) {
     lines.add((p1: p1, p2: p2));
+    linePaints.add(paint);
   }
 
   @override
   void drawPath(Path path, Paint paint) {
     paths.add(path);
+    pathPaints.add(paint);
+  }
+
+  @override
+  void drawParagraph(ui.Paragraph paragraph, Offset offset) {
+    paragraphs.add((paragraph: paragraph, offset: offset));
   }
 
   @override
@@ -39,22 +52,31 @@ class _RecordingCanvas implements Canvas {
 
 void main() {
   const imageSize = Size(400, 300);
+  // Plain (non-MaterialColor) Color values: Paint.color always returns a
+  // plain Color (see Paint's color getter in dart:ui, which reconstructs
+  // from raw bytes), so comparing against a MaterialColor like Colors.green
+  // would spuriously fail on runtimeType even with identical channel values.
+  const palette = [Color(0xFF2E7D32), Color(0xFF1565C0), Color(0xFF6A1B9A)];
 
   TopoPainter buildPainter({
-    List<List<Offset>> routes = const [],
+    List<TopoRoute> routes = const [],
     List<Offset> currentPoints = const [],
     bool showHandles = false,
+    int? selectedRouteId,
+    List<Color> palette = palette,
   }) {
     return TopoPainter(
       imageSize: imageSize,
       routes: routes,
       currentPoints: currentPoints,
       showHandles: showHandles,
+      selectedRouteId: selectedRouteId,
+      palette: palette,
     );
   }
 
-  group('TopoPainter drawing behavior', () {
-    test('A1: a single point paints without throwing and draws a dot', () {
+  group('TopoPainter drawing behavior (in-progress route + handles)', () {
+    test('A single point paints without throwing and draws a dot', () {
       final painter = buildPainter(currentPoints: const [Offset(0.5, 0.5)]);
       final canvas = _RecordingCanvas();
 
@@ -66,7 +88,7 @@ void main() {
       expect(canvas.paths, isEmpty);
     });
 
-    test('A2: two points paint a straight line segment without crashing', () {
+    test('Two points paint a straight line segment without crashing', () {
       final painter = buildPainter(
         currentPoints: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
       );
@@ -82,7 +104,7 @@ void main() {
     });
 
     test(
-      'A3: three or more points paint a Catmull-Rom cubic bezier path '
+      'Three or more points paint a Catmull-Rom cubic bezier path '
       'without crashing',
       () {
         final painter = buildPainter(
@@ -111,7 +133,7 @@ void main() {
     );
 
     test(
-      'A3b: catmullRomControlPoints computes the exact Catmull-Rom cubic '
+      'catmullRomControlPoints computes the exact Catmull-Rom cubic '
       'Bezier control points (would catch a /6 -> /3 or p0/p3 swap '
       'regression)',
       () {
@@ -134,7 +156,7 @@ void main() {
       },
     );
 
-    test('A4: showHandles=true draws one handle per current point', () {
+    test('showHandles=true draws one handle per current point', () {
       const points = [Offset(0.1, 0.2), Offset(0.5, 0.5), Offset(0.8, 0.1)];
       final painter = buildPainter(currentPoints: points, showHandles: true);
       final canvas = _RecordingCanvas();
@@ -147,7 +169,7 @@ void main() {
       expect(canvas.circleCenters, hasLength(points.length));
     });
 
-    test('A4: showHandles=false draws no handles', () {
+    test('showHandles=false draws no handles', () {
       const points = [Offset(0.1, 0.2), Offset(0.5, 0.5), Offset(0.8, 0.1)];
       final painter = buildPainter(currentPoints: points, showHandles: false);
       final canvas = _RecordingCanvas();
@@ -158,7 +180,7 @@ void main() {
     });
 
     test(
-      'A4: showHandles=true with a single current point draws the dot '
+      'showHandles=true with a single current point draws the dot '
       'plus one handle (two circles)',
       () {
         final painter = buildPainter(
@@ -175,18 +197,231 @@ void main() {
     );
   });
 
+  group('TopoPainter multi-route + symbols + selection', () {
+    test(
+      'A1: two visible routes with different colorIndex draw two distinct '
+      'spline paths in distinct colors; an invisible route draws no path',
+      () {
+        final routes = [
+          TopoRoute(
+            id: 1,
+            number: 1,
+            colorIndex: 0,
+            points: const [
+              Offset(0.1, 0.1),
+              Offset(0.4, 0.5),
+              Offset(0.6, 0.3),
+              Offset(0.9, 0.8),
+            ],
+          ),
+          TopoRoute(
+            id: 2,
+            number: 2,
+            colorIndex: 1,
+            points: const [
+              Offset(0.2, 0.2),
+              Offset(0.3, 0.6),
+              Offset(0.5, 0.4),
+              Offset(0.8, 0.9),
+            ],
+          ),
+          TopoRoute(
+            id: 3,
+            number: 3,
+            colorIndex: 2,
+            visible: false,
+            points: const [
+              Offset(0.1, 0.9),
+              Offset(0.4, 0.6),
+              Offset(0.6, 0.2),
+              Offset(0.9, 0.1),
+            ],
+          ),
+        ];
+        final painter = buildPainter(routes: routes);
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, imageSize);
+
+        expect(canvas.paths, hasLength(2));
+        // Compare via toARGB32() rather than Color equality: Paint stores
+        // color channels as Float32 internally, so a Color read back from
+        // paint.color loses precision relative to the original Float64
+        // Color and can fail exact `==` even when visually identical.
+        // Quantizing to 8-bit ARGB int sidesteps that precision noise.
+        expect(canvas.pathPaints[0].color.toARGB32(), palette[0].toARGB32());
+        expect(canvas.pathPaints[1].color.toARGB32(), palette[1].toARGB32());
+        expect(canvas.pathPaints[0].color.toARGB32(), isNot(canvas.pathPaints[1].color.toARGB32()));
+      },
+    );
+
+    test('A2: each visible route draws its number label', () {
+      final routes = [
+        TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.4, 0.5), Offset(0.9, 0.8)],
+        ),
+        TopoRoute(
+          id: 2,
+          number: 2,
+          colorIndex: 1,
+          points: const [Offset(0.2, 0.8), Offset(0.7, 0.2)],
+        ),
+        TopoRoute(
+          id: 3,
+          number: 3,
+          colorIndex: 2,
+          visible: false,
+          points: const [Offset(0.1, 0.9), Offset(0.4, 0.6)],
+        ),
+      ];
+      final painter = buildPainter(routes: routes);
+
+      // Use a real ui.PictureRecorder-backed canvas: TextPainter.paint
+      // ultimately calls Canvas.drawParagraph, which our fake canvas can
+      // record, but TextPainter itself requires real text layout to run,
+      // so exercise this against the genuine engine here.
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+
+      expect(() => painter.paint(canvas, imageSize), returnsNormally);
+
+      final picture = recorder.endRecording();
+      expect(picture, isNotNull);
+    });
+
+    test(
+      'A3: each SymbolType renders a distinct glyph; a route with 3 '
+      'symbols draws 3 glyphs worth of draw calls',
+      () {
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: const [
+            TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
+            TopoSymbol(type: SymbolType.bolt, position: Offset(0.5, 0.5)),
+            TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),
+          ],
+        );
+        final painter = buildPainter(routes: [route]);
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, imageSize);
+
+        // anchor -> 1 circle, bolt -> 2 lines, top -> 1 path.
+        // The route itself is a 2-point polyline, so it draws 1 line (no
+        // path, no circle), meaning all recorded paths/extra circles come
+        // from the symbols.
+        expect(canvas.circleCenters, hasLength(1)); // anchor
+        expect(canvas.lines, hasLength(1 + 2)); // route line + bolt's 2 lines
+        expect(canvas.paths, hasLength(1)); // top triangle
+      },
+    );
+
+    test('A3b: each SymbolType renders without throwing on a real canvas', () {
+      for (final type in SymbolType.values) {
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: [TopoSymbol(type: type, position: const Offset(0.5, 0.5))],
+        );
+        final painter = buildPainter(routes: [route]);
+        final recorder = ui.PictureRecorder();
+        final canvas = Canvas(recorder);
+
+        expect(() => painter.paint(canvas, imageSize), returnsNormally);
+        recorder.endRecording();
+      }
+    });
+
+    test(
+      'A4: selectedRouteId set to a route id renders it with a wider '
+      'strokeWidth than when selectedRouteId is null',
+      () {
+        final routes = [
+          TopoRoute(
+            id: 1,
+            number: 1,
+            colorIndex: 0,
+            points: const [
+              Offset(0.1, 0.1),
+              Offset(0.4, 0.5),
+              Offset(0.6, 0.3),
+              Offset(0.9, 0.8),
+            ],
+          ),
+        ];
+
+        final unselectedCanvas = _RecordingCanvas();
+        buildPainter(routes: routes).paint(unselectedCanvas, imageSize);
+
+        final selectedCanvas = _RecordingCanvas();
+        buildPainter(routes: routes, selectedRouteId: 1).paint(selectedCanvas, imageSize);
+
+        expect(unselectedCanvas.paths, hasLength(1));
+        // Selected route draws an extra highlight-outline path in addition
+        // to its normal spline pass.
+        expect(selectedCanvas.paths, hasLength(2));
+
+        final unselectedWidth = unselectedCanvas.pathPaints.single.strokeWidth;
+        final selectedMaxWidth = selectedCanvas.pathPaints.map((p) => p.strokeWidth).reduce((a, b) => a > b ? a : b);
+        expect(selectedMaxWidth, greaterThan(unselectedWidth));
+      },
+    );
+  });
+
+  group('TopoPainter defensive: empty palette', () {
+    test(
+      'Fix P: painting a route with an empty palette does not throw '
+      '(falls back to a hardcoded default color instead of indexing '
+      'palette[colorIndex % palette.length])',
+      () {
+        final routes = [
+          TopoRoute(
+            id: 1,
+            number: 1,
+            colorIndex: 0,
+            points: const [
+              Offset(0.1, 0.1),
+              Offset(0.4, 0.5),
+              Offset(0.9, 0.8),
+            ],
+          ),
+        ];
+        final painter = buildPainter(routes: routes, palette: const []);
+        final canvas = _RecordingCanvas();
+
+        expect(() => painter.paint(canvas, imageSize), returnsNormally);
+      },
+    );
+  });
+
   group('TopoPainter.shouldRepaint', () {
     test('returns false when everything is identical', () {
       final a = buildPainter(
-        routes: const [
-          [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+        routes: [
+          TopoRoute(
+            id: 1,
+            number: 1,
+            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+          ),
         ],
         currentPoints: const [Offset(0.5, 0.5)],
         showHandles: true,
       );
       final b = buildPainter(
-        routes: const [
-          [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+        routes: [
+          TopoRoute(
+            id: 1,
+            number: 1,
+            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+          ),
         ],
         currentPoints: const [Offset(0.5, 0.5)],
         showHandles: true,
@@ -197,11 +432,39 @@ void main() {
 
     test('returns true when routes differ', () {
       final a = buildPainter(
-        routes: const [
-          [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+        routes: [
+          TopoRoute(
+            id: 1,
+            number: 1,
+            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+          ),
         ],
       );
       final b = buildPainter(routes: const []);
+
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('returns true when a route symbol list differs', () {
+      final a = buildPainter(
+        routes: [
+          TopoRoute(
+            id: 1,
+            number: 1,
+            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+            symbols: const [TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1))],
+          ),
+        ],
+      );
+      final b = buildPainter(
+        routes: [
+          TopoRoute(
+            id: 1,
+            number: 1,
+            points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+          ),
+        ],
+      );
 
       expect(a.shouldRepaint(b), isTrue);
     });
@@ -218,13 +481,21 @@ void main() {
       'route count, same point count, one coordinate changed)',
       () {
         final a = buildPainter(
-          routes: const [
-            [Offset(0.1, 0.1), Offset(0.2, 0.2), Offset(0.3, 0.1)],
+          routes: [
+            TopoRoute(
+              id: 1,
+              number: 1,
+              points: const [Offset(0.1, 0.1), Offset(0.2, 0.2), Offset(0.3, 0.1)],
+            ),
           ],
         );
         final b = buildPainter(
-          routes: const [
-            [Offset(0.1, 0.1), Offset(0.25, 0.2), Offset(0.3, 0.1)],
+          routes: [
+            TopoRoute(
+              id: 1,
+              number: 1,
+              points: const [Offset(0.1, 0.1), Offset(0.25, 0.2), Offset(0.3, 0.1)],
+            ),
           ],
         );
 
@@ -239,18 +510,34 @@ void main() {
       expect(a.shouldRepaint(b), isTrue);
     });
 
+    test('returns true when selectedRouteId differs', () {
+      final a = buildPainter(selectedRouteId: 1);
+      final b = buildPainter(selectedRouteId: null);
+
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
+    test('returns true when palette differs', () {
+      final a = buildPainter(palette: const [Colors.red, Colors.blue]);
+      final b = buildPainter(palette: const [Colors.green, Colors.blue]);
+
+      expect(a.shouldRepaint(b), isTrue);
+    });
+
     test('returns true when imageSize differs', () {
       const a = TopoPainter(
         imageSize: Size(400, 300),
         routes: [],
         currentPoints: [],
         showHandles: false,
+        palette: palette,
       );
       const b = TopoPainter(
         imageSize: Size(200, 150),
         routes: [],
         currentPoints: [],
         showHandles: false,
+        palette: palette,
       );
 
       expect(a.shouldRepaint(b), isTrue);
@@ -262,19 +549,14 @@ void main() {
         routes: [],
         currentPoints: [],
         showHandles: false,
-      );
-      const differentRouteColor = TopoPainter(
-        imageSize: imageSize,
-        routes: [],
-        currentPoints: [],
-        showHandles: false,
-        routeColor: Colors.red,
+        palette: palette,
       );
       const differentCurrentColor = TopoPainter(
         imageSize: imageSize,
         routes: [],
         currentPoints: [],
         showHandles: false,
+        palette: palette,
         currentColor: Colors.red,
       );
       const differentHandleColor = TopoPainter(
@@ -282,10 +564,10 @@ void main() {
         routes: [],
         currentPoints: [],
         showHandles: false,
+        palette: palette,
         handleColor: Colors.red,
       );
 
-      expect(base.shouldRepaint(differentRouteColor), isTrue);
       expect(base.shouldRepaint(differentCurrentColor), isTrue);
       expect(base.shouldRepaint(differentHandleColor), isTrue);
     });
@@ -293,7 +575,8 @@ void main() {
 
   group('TopoPainter golden', () {
     testWidgets(
-      'A5: one completed route renders a stable golden image',
+      'A6: two visible routes with symbols and a selection render a '
+      'stable golden image',
       (tester) async {
         // Pin the device pixel ratio *and* physical size so the checked-in
         // golden PNG's dimensions (and pixel content) are deterministic
@@ -310,16 +593,35 @@ void main() {
 
         final painter = TopoPainter(
           imageSize: const Size(400, 300),
-          routes: const [
-            [
-              Offset(0.1, 0.1),
-              Offset(0.4, 0.5),
-              Offset(0.6, 0.3),
-              Offset(0.9, 0.8),
-            ],
+          routes: [
+            TopoRoute(
+              id: 1,
+              number: 1,
+              colorIndex: 0,
+              points: const [
+                Offset(0.1, 0.1),
+                Offset(0.4, 0.5),
+                Offset(0.9, 0.8),
+              ],
+              symbols: const [
+                TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
+                TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),
+              ],
+            ),
+            TopoRoute(
+              id: 2,
+              number: 2,
+              colorIndex: 1,
+              points: const [
+                Offset(0.2, 0.8),
+                Offset(0.7, 0.2),
+              ],
+            ),
           ],
           currentPoints: const [],
           showHandles: false,
+          selectedRouteId: 1,
+          palette: palette,
         );
 
         await tester.pumpWidget(
@@ -338,7 +640,7 @@ void main() {
 
         await expectLater(
           find.byType(RepaintBoundary),
-          matchesGoldenFile('goldens/topo_painter_route.png'),
+          matchesGoldenFile('goldens/topo_painter_multiroute.png'),
         );
       },
     );
@@ -352,16 +654,29 @@ void main() {
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     final painter = buildPainter(
-      routes: const [
-        [
-          Offset(0.1, 0.1),
-          Offset(0.4, 0.5),
-          Offset(0.6, 0.3),
-          Offset(0.9, 0.8),
-        ],
+      routes: [
+        TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [
+            Offset(0.1, 0.1),
+            Offset(0.4, 0.5),
+            Offset(0.6, 0.3),
+            Offset(0.9, 0.8),
+          ],
+          symbols: const [
+            TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
+            TopoSymbol(type: SymbolType.bolt, position: Offset(0.3, 0.4)),
+            TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),
+            TopoSymbol(type: SymbolType.crux, position: Offset(0.5, 0.5)),
+            TopoSymbol(type: SymbolType.rest, position: Offset(0.2, 0.6)),
+          ],
+        ),
       ],
       currentPoints: const [Offset(0.2, 0.2), Offset(0.8, 0.8)],
       showHandles: true,
+      selectedRouteId: 1,
     );
 
     expect(() => painter.paint(canvas, imageSize), returnsNormally);

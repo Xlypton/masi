@@ -1,12 +1,10 @@
 import 'dart:ui';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
-import 'package:flutter/rendering.dart' show CustomPainter;
+import 'package:flutter/foundation.dart' show listEquals, visibleForTesting;
+import 'package:flutter/rendering.dart' show CustomPainter, TextPainter, TextSpan, TextStyle;
 
 import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
-
-/// Default stroke color for completed routes.
-const Color _defaultRouteColor = Color(0xFF2E7D32);
+import 'package:climbtopo/features/topo/domain/topo_route.dart';
 
 /// Default stroke color for the in-progress route.
 const Color _defaultCurrentColor = Color(0xFFE65100);
@@ -23,20 +21,50 @@ const double _handleRadius = 6.0;
 /// Stroke width used for route polylines.
 const double _strokeWidth = 3.0;
 
-/// Paints completed routes and the in-progress route on the topo canvas.
+/// Multiplier applied to [_strokeWidth] for the selected route's emphasis
+/// pass.
+const double _selectedStrokeMultiplier = 2.0;
+
+/// Radius (in scene/pixel units) of symbol glyphs.
+const double _symbolRadius = 7.0;
+
+/// Font size used for route number labels.
+const double _labelFontSize = 14.0;
+
+/// Fallback stroke color used when [TopoPainter.palette] is empty, so a
+/// route can still be painted (rather than throwing
+/// `IntegerDivisionByZeroException` from `palette[i % palette.length]`)
+/// even if the caller passes an empty palette list.
+const Color _fallbackRouteColor = Color(0xFF2E7D32);
+
+/// Paints completed routes (with symbols) and the in-progress route on the
+/// topo canvas.
 ///
 /// All point lists are expressed in percent space (0.0-1.0 fractions of
 /// [imageSize] on each axis) and converted to scene/pixel coordinates via
 /// [CoordinateTransformer.percentToScene] before being drawn. Each polyline
 /// is rendered as a Catmull-Rom spline (converted to cubic Bezier segments)
 /// so routes look smooth rather than faceted.
+///
+/// ## Symbol glyph mapping
+///
+/// Each [TopoSymbol] is rendered as a glyph distinct per [SymbolType], drawn
+/// with plain canvas primitives (no images/fonts):
+///  - [SymbolType.anchor]: a filled circle.
+///  - [SymbolType.bolt]: an "X" made of two crossed lines.
+///  - [SymbolType.top]: a closed, filled/stroked triangle (3-point path).
+///  - [SymbolType.crux]: a star/asterisk made of several crossing lines
+///    (a "+" plus an "X", four spokes total).
+///  - [SymbolType.rest]: a stroked circle outline with a small filled dot at
+///    its center.
 class TopoPainter extends CustomPainter {
   const TopoPainter({
     required this.imageSize,
     required this.routes,
     required this.currentPoints,
     required this.showHandles,
-    this.routeColor = _defaultRouteColor,
+    this.selectedRouteId,
+    required this.palette,
     this.currentColor = _defaultCurrentColor,
     this.handleColor = _defaultHandleColor,
   });
@@ -45,8 +73,9 @@ class TopoPainter extends CustomPainter {
   /// points into scene/pixel coordinates.
   final Size imageSize;
 
-  /// Completed routes, each a list of points in percent space.
-  final List<List<Offset>> routes;
+  /// Completed routes to render. Routes with `visible == false` are skipped
+  /// entirely (no spline, label, or symbols).
+  final List<TopoRoute> routes;
 
   /// The in-progress route being drawn, in percent space.
   final List<Offset> currentPoints;
@@ -54,8 +83,14 @@ class TopoPainter extends CustomPainter {
   /// Whether to draw draggable handles at each [currentPoints] position.
   final bool showHandles;
 
-  /// Stroke color for completed routes.
-  final Color routeColor;
+  /// The id of the currently-selected route, if any. When set, the matching
+  /// route (if visible) is rendered with emphasis (thicker stroke plus an
+  /// extra highlight outline).
+  final int? selectedRouteId;
+
+  /// Maps a route's `colorIndex` to a stroke [Color]. Indices wrap via `%`
+  /// so any non-negative `colorIndex` is safe to use.
+  final List<Color> palette;
 
   /// Stroke color for the in-progress route.
   final Color currentColor;
@@ -66,11 +101,45 @@ class TopoPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     for (final route in routes) {
-      _paintPolyline(canvas, _toScene(route), routeColor);
+      if (!route.visible) continue;
+
+      final scenePoints = _toScene(route.points);
+      final color = palette.isEmpty
+          ? _fallbackRouteColor
+          : palette[route.colorIndex % palette.length];
+      final isSelected = route.id == selectedRouteId;
+
+      if (isSelected) {
+        // Extra highlight outline pass: a wider, translucent stroke drawn
+        // underneath the normal-color spline so the selected route is
+        // unambiguously distinguishable (both by an extra draw call and by
+        // a larger strokeWidth) from unselected routes.
+        _paintPolyline(
+          canvas,
+          scenePoints,
+          color.withAlpha(120),
+          strokeWidth: _strokeWidth * _selectedStrokeMultiplier,
+        );
+      }
+
+      _paintPolyline(
+        canvas,
+        scenePoints,
+        color,
+        strokeWidth: isSelected ? _strokeWidth * _selectedStrokeMultiplier : _strokeWidth,
+      );
+
+      if (scenePoints.isNotEmpty) {
+        _paintLabel(canvas, scenePoints.first, route.number, color);
+      }
+
+      for (final symbol in route.symbols) {
+        _paintSymbol(canvas, CoordinateTransformer.percentToScene(symbol.position, imageSize), symbol.type, color);
+      }
     }
 
     final currentScene = _toScene(currentPoints);
-    _paintPolyline(canvas, currentScene, currentColor);
+    _paintPolyline(canvas, currentScene, currentColor, strokeWidth: _strokeWidth);
 
     if (showHandles) {
       final handlePaint = Paint()
@@ -88,7 +157,98 @@ class TopoPainter extends CustomPainter {
     ];
   }
 
-  void _paintPolyline(Canvas canvas, List<Offset> points, Color color) {
+  void _paintLabel(Canvas canvas, Offset anchor, int number, Color color) {
+    final textPainter = TextPainter(
+      text: TextSpan(
+        text: '$number',
+        style: TextStyle(
+          color: color,
+          fontSize: _labelFontSize,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+
+    // Offset the label up-and-left of the anchor point so it doesn't
+    // obscure the route's starting point.
+    textPainter.paint(canvas, anchor + const Offset(-6, -20));
+  }
+
+  void _paintSymbol(Canvas canvas, Offset center, SymbolType type, Color color) {
+    final strokePaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0
+      ..strokeCap = StrokeCap.round;
+    final fillPaint = Paint()
+      ..color = color
+      ..style = PaintingStyle.fill;
+
+    switch (type) {
+      case SymbolType.anchor:
+        // Filled circle.
+        canvas.drawCircle(center, _symbolRadius, fillPaint);
+        break;
+      case SymbolType.bolt:
+        // An "X": two crossed lines.
+        canvas.drawLine(
+          center + const Offset(-_symbolRadius, -_symbolRadius),
+          center + const Offset(_symbolRadius, _symbolRadius),
+          strokePaint,
+        );
+        canvas.drawLine(
+          center + const Offset(_symbolRadius, -_symbolRadius),
+          center + const Offset(-_symbolRadius, _symbolRadius),
+          strokePaint,
+        );
+        break;
+      case SymbolType.top:
+        // A closed triangle (3-point path).
+        final path = Path()
+          ..moveTo(center.dx, center.dy - _symbolRadius)
+          ..lineTo(center.dx + _symbolRadius, center.dy + _symbolRadius)
+          ..lineTo(center.dx - _symbolRadius, center.dy + _symbolRadius)
+          ..close();
+        canvas.drawPath(path, fillPaint);
+        break;
+      case SymbolType.crux:
+        // A star/asterisk: a "+" plus an "X" (four crossing spokes).
+        canvas.drawLine(
+          center + const Offset(0, -_symbolRadius),
+          center + const Offset(0, _symbolRadius),
+          strokePaint,
+        );
+        canvas.drawLine(
+          center + const Offset(-_symbolRadius, 0),
+          center + const Offset(_symbolRadius, 0),
+          strokePaint,
+        );
+        canvas.drawLine(
+          center + const Offset(-_symbolRadius, -_symbolRadius),
+          center + const Offset(_symbolRadius, _symbolRadius),
+          strokePaint,
+        );
+        canvas.drawLine(
+          center + const Offset(_symbolRadius, -_symbolRadius),
+          center + const Offset(-_symbolRadius, _symbolRadius),
+          strokePaint,
+        );
+        break;
+      case SymbolType.rest:
+        // A stroked circle outline with a small filled center dot.
+        canvas.drawCircle(center, _symbolRadius, strokePaint);
+        canvas.drawCircle(center, _symbolRadius / 3, fillPaint);
+        break;
+    }
+  }
+
+  void _paintPolyline(
+    Canvas canvas,
+    List<Offset> points,
+    Color color, {
+    required double strokeWidth,
+  }) {
     if (points.isEmpty) return;
 
     if (points.length == 1) {
@@ -102,7 +262,7 @@ class TopoPainter extends CustomPainter {
     final linePaint = Paint()
       ..color = color
       ..style = PaintingStyle.stroke
-      ..strokeWidth = _strokeWidth
+      ..strokeWidth = strokeWidth
       ..strokeCap = StrokeCap.round;
 
     if (points.length == 2) {
@@ -159,11 +319,12 @@ class TopoPainter extends CustomPainter {
   bool shouldRepaint(covariant TopoPainter oldDelegate) {
     return imageSize != oldDelegate.imageSize ||
         showHandles != oldDelegate.showHandles ||
-        routeColor != oldDelegate.routeColor ||
+        selectedRouteId != oldDelegate.selectedRouteId ||
         currentColor != oldDelegate.currentColor ||
         handleColor != oldDelegate.handleColor ||
         !_pointsEqual(currentPoints, oldDelegate.currentPoints) ||
-        !_routesEqual(routes, oldDelegate.routes);
+        !listEquals(palette, oldDelegate.palette) ||
+        !listEquals(routes, oldDelegate.routes);
   }
 
   // NOTE: the `identical()` fast path below assumes callers always pass a
@@ -177,18 +338,6 @@ class TopoPainter extends CustomPainter {
     if (a.length != b.length) return false;
     for (var i = 0; i < a.length; i++) {
       if (a[i] != b[i]) return false;
-    }
-    return true;
-  }
-
-  // Same caveat as `_pointsEqual`: the `identical()` fast path assumes
-  // callers pass a new `routes` list instance (and new inner point lists)
-  // on change, rather than mutating an existing list/route in place.
-  static bool _routesEqual(List<List<Offset>> a, List<List<Offset>> b) {
-    if (identical(a, b)) return true;
-    if (a.length != b.length) return false;
-    for (var i = 0; i < a.length; i++) {
-      if (!_pointsEqual(a[i], b[i])) return false;
     }
     return true;
   }
