@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
+import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
@@ -18,8 +19,9 @@ class SelectedImageNotifier extends Notifier<String?> {
   void clear() => state = null;
 }
 
-final selectedImageProvider =
-    NotifierProvider<SelectedImageNotifier, String?>(SelectedImageNotifier.new);
+final selectedImageProvider = NotifierProvider<SelectedImageNotifier, String?>(
+  SelectedImageNotifier.new,
+);
 
 class TopoCanvasScreen extends ConsumerStatefulWidget {
   const TopoCanvasScreen({super.key});
@@ -68,24 +70,52 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
   }
 
-  /// Whenever [selectedImageProvider] changes from one photo to a
-  /// *different* photo, resets [drawControllerProvider] so routes/points
-  /// drawn on the previous photo don't carry over onto the new one.
+  /// Ensures a default Area/Sector/Wall/Photo hierarchy exists for the image
+  /// at [path] (creating one on first sight of that path, reusing it on
+  /// subsequent sights — see [LibraryRepository.ensureDefaultForImage]),
+  /// then loads that wall's persisted routes into [drawControllerProvider]
+  /// via [DrawController.loadForWall].
   ///
-  /// This is wired via [ref.listen] in [build] (invoked from there as
-  /// `_onSelectedImageChanged`) rather than inlined into [_pickImage]
-  /// itself: [_pickImage] can't be driven from a widget test without
-  /// mocking the `image_picker` platform channel, whereas
-  /// [selectedImageProvider] is a plain, already-public provider. Listening
-  /// on the provider instead means the reset fires no matter how the
-  /// selected path changes (today, only [_pickImage] changes it) and — more
-  /// importantly for testing Fix 2 — lets a widget test simulate "picking a
-  /// photo" by calling `selectedImageProvider.notifier.select(path)`
-  /// directly and asserting the draw controller was invalidated, without
-  /// needing a real/mocked image picker.
-  void _onSelectedImageChanged(String? previous, String? next) {
-    if (previous == null || next == null || previous == next) return;
-    ref.invalidate(drawControllerProvider);
+  /// This is what resets/repopulates the draw state for a newly-picked or
+  /// newly-resolved photo: [DrawController.loadForWall] itself clears
+  /// in-progress drawing state (current points, redo stack, selection) and
+  /// replaces [DrawState.routes] with whatever is persisted for this photo's
+  /// wall (empty for a photo never seen before), and marks the controller as
+  /// persistence-backed so subsequent edits write through. This replaces the
+  /// earlier, cruder `ref.invalidate(drawControllerProvider)` reset, which
+  /// only cleared in-memory state and never loaded persisted routes.
+  ///
+  /// Called only once [width]/[height] are known (i.e. from the
+  /// [ImageStreamListener] success callback in [_resolveImageSize]), since
+  /// [LibraryRepository.ensureDefaultForImage] needs the image's natural
+  /// size to create its Photo row. Since that decode is async, there is
+  /// necessarily a window between the photo becoming selected and this
+  /// method's [DrawController.loadForWall] call resolving; the `ref.listen`
+  /// in [build] calls [DrawController.beginPhotoSwitch] synchronously the
+  /// moment the path changes so [DrawState] never shows the previous
+  /// photo's routes/wall during that window (see that method's doc for why
+  /// this also prevents a mid-window commit from persisting to the wrong
+  /// wall). The latest-path guard below additionally drops this call
+  /// entirely if the user has since moved on to yet another photo, so an
+  /// out-of-order resolution can't clobber a newer photo's state.
+  Future<void> _loadWallForImage(String path, int width, int height) async {
+    try {
+      final ids = await ref
+          .read(libraryRepositoryProvider)
+          .ensureDefaultForImage(path, width, height);
+      if (!mounted) return;
+      // Latest-path guard: if the user has already moved on to a different
+      // photo since this call started (e.g. this is a stale/out-of-order
+      // resolution for a photo the user swiped past), bail out instead of
+      // calling loadForWall — otherwise this stale load could clobber the
+      // CURRENT photo's in-memory state with the wrong wall's routes.
+      if (ref.read(selectedImageProvider) != path) return;
+      await ref
+          .read(drawControllerProvider.notifier)
+          .loadForWall(ids.wallId, ids.photoId);
+    } catch (e, st) {
+      debugPrint('Failed to load wall/routes for $path: $e\n$st');
+    }
   }
 
   /// Decodes the image at [path] purely to learn its natural size, which
@@ -113,12 +143,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     final listener = ImageStreamListener(
       (info, _) {
         if (!mounted) return;
+        final width = info.image.width;
+        final height = info.image.height;
         setState(() {
-          _imageSize = Size(
-            info.image.width.toDouble(),
-            info.image.height.toDouble(),
-          );
+          _imageSize = Size(width.toDouble(), height.toDouble());
         });
+        _loadWallForImage(path, width, height);
       },
       onError: (error, stackTrace) {
         // Rather than leaving _imageSize null forever (which previously
@@ -139,7 +169,23 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
   @override
   Widget build(BuildContext context) {
-    ref.listen<String?>(selectedImageProvider, _onSelectedImageChanged);
+    // Fires synchronously, as part of the same state-change notification
+    // triggered by SelectedImageNotifier.select, whenever the selected
+    // image path changes to a new non-null value (including the very
+    // first pick). This is what closes the M3 race: DrawController state
+    // is cleared (activeWallId -> null, routes -> empty, ...) the MOMENT
+    // the new photo is selected, well before the async
+    // ensureDefaultForImage -> loadForWall chain kicked off from
+    // _resolveImageSize's decode callback below even starts, let alone
+    // resolves. See DrawController.beginPhotoSwitch for why nulling
+    // activeWallId is what actually prevents a mid-switch commit from
+    // persisting against the previous photo's wall.
+    ref.listen<String?>(selectedImageProvider, (previous, next) {
+      if (next != null && next != previous) {
+        ref.read(drawControllerProvider.notifier).beginPhotoSwitch();
+      }
+    });
+
     final imagePath = ref.watch(selectedImageProvider);
     final drawState = ref.watch(drawControllerProvider);
     final drawNotifier = ref.read(drawControllerProvider.notifier);
@@ -227,8 +273,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           Text(
             'Pick a photo to start',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.outline,
-                ),
+              color: Theme.of(context).colorScheme.outline,
+            ),
           ),
         ],
       ),
@@ -269,8 +315,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           Text(
             "Couldn't load this photo",
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Theme.of(context).colorScheme.error,
-                ),
+              color: Theme.of(context).colorScheme.error,
+            ),
           ),
           const SizedBox(height: 16),
           OutlinedButton(

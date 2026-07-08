@@ -1,0 +1,68 @@
+/// JSON (de)serialization and row<->domain mapping for [TopoRoute].
+library;
+
+import 'dart:convert';
+import 'dart:ui';
+
+import '../../../core/db/app_database.dart' as db;
+import '../domain/topo_route.dart';
+
+/// Encodes [points] (percent-space coordinates) as a JSON array of
+/// `{"x": .., "y": ..}` objects.
+String encodePoints(List<Offset> points) {
+  return jsonEncode([
+    for (final p in points) {'x': p.dx, 'y': p.dy},
+  ]);
+}
+
+/// Decodes a JSON array produced by [encodePoints] back into a point list.
+List<Offset> decodePoints(String json) {
+  final decoded = jsonDecode(json) as List<dynamic>;
+  return [
+    for (final entry in decoded)
+      Offset(
+        (entry['x'] as num).toDouble(),
+        (entry['y'] as num).toDouble(),
+      ),
+  ];
+}
+
+/// Encodes [symbols] as a JSON array of `{"type": .., "x": .., "y": ..}`
+/// objects. `type` is the [SymbolType] enum name (see [SymbolType.name]).
+String encodeSymbols(List<TopoSymbol> symbols) {
+  return jsonEncode([
+    for (final s in symbols)
+      {'type': s.type.name, 'x': s.position.dx, 'y': s.position.dy},
+  ]);
+}
+
+/// Decodes a JSON array produced by [encodeSymbols] back into a symbol list.
+List<TopoSymbol> decodeSymbols(String json) {
+  final decoded = jsonDecode(json) as List<dynamic>;
+  return [
+    for (final entry in decoded)
+      TopoSymbol(
+        type: SymbolType.values.byName(entry['type'] as String),
+        position: Offset(
+          (entry['x'] as num).toDouble(),
+          (entry['y'] as num).toDouble(),
+        ),
+      ),
+  ];
+}
+
+/// Maps a persisted [db.Route] row to a [TopoRoute] domain object.
+///
+/// [intId] is the caller-assigned, in-memory sequential id (routes have no
+/// stable int id in the database — only a uuid `id` column — so the
+/// repository assigns 1..n on every load; see [rowToDomain] callers).
+TopoRoute rowToDomain(db.Route row, int intId) {
+  return TopoRoute(
+    id: intId,
+    number: row.number,
+    points: decodePoints(row.pointsJson),
+    symbols: decodeSymbols(row.symbolsJson),
+    colorIndex: row.colorIndex,
+    visible: row.visible,
+  );
+}
