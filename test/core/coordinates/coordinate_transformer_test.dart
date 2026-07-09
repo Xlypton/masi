@@ -188,6 +188,26 @@ void main() {
       expect(slice.dy, closeTo(0.7, 1e-9));
     });
 
+    test(
+        'A4: a point outside the crop band maps outside [0,1] in slice '
+        'space', () {
+      // Band is [0.25, 0.75]; original dx=0.9 is well outside it.
+      final outside = CoordinateTransformer.originalPercentToSlicePercent(
+        const Offset(0.9, 0.5),
+        0.25,
+        0.5,
+      );
+      expect(outside.dx, greaterThan(1.0));
+
+      // And a point before the band's left edge maps to a negative slice dx.
+      final before = CoordinateTransformer.originalPercentToSlicePercent(
+        const Offset(0.1, 0.5),
+        0.25,
+        0.5,
+      );
+      expect(before.dx, lessThan(0.0));
+    });
+
     test('slicePercentToOriginalPercent leaves y untouched', () {
       final original = CoordinateTransformer.slicePercentToOriginalPercent(
         const Offset(0.0, 0.9),

@@ -8,6 +8,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'app_database.dart';
 import '../../features/topo/data/library_repository.dart';
+import '../../features/topo/data/photo_repository.dart';
 import '../../features/topo/data/route_repository.dart';
 
 /// Opens the on-device [AppDatabase], deferring the actual file-system/SQLite
@@ -46,6 +47,13 @@ final routeRepositoryProvider = Provider<RouteRepository>(
 
 final libraryRepositoryProvider = Provider<LibraryRepository>(
   (ref) => LibraryRepository(
+    ref.watch(appDatabaseProvider),
+    nowMs: ref.watch(nowMsProvider),
+  ),
+);
+
+final photoRepositoryProvider = Provider<PhotoRepository>(
+  (ref) => PhotoRepository(
     ref.watch(appDatabaseProvider),
     nowMs: ref.watch(nowMsProvider),
   ),

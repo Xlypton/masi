@@ -5,10 +5,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/features/topo/application/active_view_controller.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/application/slice_controller.dart';
+import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:climbtopo/features/topo/presentation/photo_selector.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
+import 'package:climbtopo/features/topo/presentation/slice_tool.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 
@@ -50,6 +55,24 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// (see [_resolveImageSize]'s `onError`).
   bool _imageLoadError = false;
 
+  /// Whether the screen is in slice-creation mode (dragging/tapping vertical
+  /// cuts over the image, see [SliceTool]) rather than its normal draw/view
+  /// modes. Local, UI-only state — not part of [DrawState] — since it's a
+  /// tool choice for this screen, not persisted drawing data. Mutually
+  /// exclusive with the draw/view gesture paths: see [_buildCanvasArea] and
+  /// [SliceTool]'s class doc for how the overlay's opaque gesture detector
+  /// keeps taps from reaching [TopoCanvas] underneath while this is true.
+  bool _sliceMode = false;
+
+  /// The current wall's persisted slices (ordered by cropXpct ascending),
+  /// loaded via [_loadSlicesForOriginal] once the wall/original photo is
+  /// known. Shown as [PhotoSelector] chips above the canvas whenever
+  /// non-empty. Reset to empty in [_resolveImageSize] the moment a new image
+  /// is selected, alongside `_imageSize`, so the canvas area (hidden behind
+  /// a loading spinner while `_imageSize` is null — see [_buildCanvasArea])
+  /// never shows a stale photo's slice chips while a new one is loading.
+  List<PhotoRef> _slices = const [];
+
   ImageStream? _imageStream;
   ImageStreamListener? _imageStreamListener;
 
@@ -82,6 +105,83 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     if (routes.length <= countBefore) return;
 
     await _openMetadataSheet(routes.last);
+  }
+
+  /// Flips [_sliceMode]. Turning slice mode OFF (whether via this toggle or
+  /// after a successful [_handleSliceCommit]) also clears any pending cuts,
+  /// so re-entering slice mode later never starts from stale cuts left over
+  /// from a previous, abandoned session.
+  ///
+  /// Turning slice mode ON (Fix 2) additionally forces [activeViewProvider]
+  /// back to Original when there's a known original photo id. [SliceTool]
+  /// computes each cut's fraction as `dx / viewportWidth`, which is only a
+  /// valid ORIGINAL-image fraction when the canvas is showing the full
+  /// original at its fit transform. If a slice (a zoomed/cropped band) were
+  /// left active while slicing, that same dx/width fraction would be a
+  /// fraction of the BAND, not the original — corrupting the crop rects
+  /// [SliceController.commit] persists. Forcing Original here (which also
+  /// makes [TopoCanvas] reframe to the full-image fit — see
+  /// [_TopoCanvasState._reframeIfNeeded]) guarantees SliceTool's math is
+  /// always against the true original width. [PhotoSelector] is also hidden
+  /// for the duration of slice mode (see [TopoCanvasBody.build]) so the user
+  /// can't switch to a slice mid-slicing and reintroduce the same problem.
+  void _toggleSliceMode() {
+    ref.read(sliceControllerProvider.notifier).clear();
+    final enteringSliceMode = !_sliceMode;
+    if (enteringSliceMode) {
+      final originalPhotoId = ref.read(drawControllerProvider).activePhotoId;
+      if (originalPhotoId != null) {
+        ref.read(activeViewProvider.notifier).showOriginal(originalPhotoId);
+      }
+    }
+    setState(() => _sliceMode = enteringSliceMode);
+  }
+
+  /// Commits the pending cuts in [sliceControllerProvider] as a fresh set of
+  /// slices for the currently loaded wall/original photo, via
+  /// [SliceController.commit] (see that method's doc for why the actual
+  /// persistence call lives there rather than here: it keeps the
+  /// replaceSlices/slicesFromCuts wiring unit-testable without a real image
+  /// decode).
+  ///
+  /// No-ops with a hint snackbar if there are no pending cuts (requiring
+  /// >=1 cut to commit — see [SliceController.commit]'s empty-no-op
+  /// contract), and no-ops silently if no wall/original photo is loaded yet
+  /// ([DrawState.activeWallId]/[activePhotoId] null) or the image's natural
+  /// size hasn't resolved yet ([_imageSize] null) — there is nothing to
+  /// persist against in either case.
+  Future<void> _handleSliceCommit() async {
+    final cuts = ref.read(sliceControllerProvider);
+    if (cuts.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Add at least one cut before committing.'),
+        ),
+      );
+      return;
+    }
+
+    final drawState = ref.read(drawControllerProvider);
+    final wallId = drawState.activeWallId;
+    final photoId = drawState.activePhotoId;
+    final imageSize = _imageSize;
+    final path = ref.read(selectedImageProvider);
+    if (wallId == null || photoId == null || imageSize == null || path == null) {
+      return;
+    }
+
+    final committed = await ref.read(sliceControllerProvider.notifier).commit(
+      ref.read(photoRepositoryProvider),
+      wallId: wallId,
+      originalPhotoId: photoId,
+      originalWidth: imageSize.width.round(),
+      originalHeight: imageSize.height.round(),
+      originalLocalPath: path,
+    );
+    if (!mounted || !committed) return;
+
+    setState(() => _sliceMode = false);
+    await _loadSlicesForOriginal(photoId);
   }
 
   /// Opens [RouteMetadataSheet] as a modal bottom sheet for [route],
@@ -145,8 +245,41 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       await ref
           .read(drawControllerProvider.notifier)
           .loadForWall(ids.wallId, ids.photoId);
+      if (!mounted || ref.read(selectedImageProvider) != path) return;
+      await _loadSlicesForOriginal(ids.photoId);
     } catch (e, st) {
       debugPrint('Failed to load wall/routes for $path: $e\n$st');
+    }
+  }
+
+  /// Loads [originalPhotoId]'s persisted slices into [_slices] (shown by
+  /// [PhotoSelector]) and defaults [activeViewProvider] to viewing the
+  /// original (uncropped) photo.
+  ///
+  /// Called once after [_loadWallForImage]'s `loadForWall` resolves (so the
+  /// selector/canvas default to Original the moment a wall's photo/routes
+  /// are known), and again after a slice-tool commit
+  /// ([_handleSliceCommit]) so newly-created slices show up immediately
+  /// without requiring the user to re-pick the photo.
+  ///
+  /// Guarded the same way as [_loadWallForImage]'s own latest-path check:
+  /// [DrawState.activePhotoId] must still match [originalPhotoId] when this
+  /// resolves, so a stale/out-of-order call (e.g. the user picked a
+  /// different photo while this was in flight) can't clobber the current
+  /// photo's slice list.
+  Future<void> _loadSlicesForOriginal(String originalPhotoId) async {
+    try {
+      final slices = await ref
+          .read(photoRepositoryProvider)
+          .loadSlices(originalPhotoId);
+      if (!mounted) return;
+      if (ref.read(drawControllerProvider).activePhotoId != originalPhotoId) {
+        return;
+      }
+      setState(() => _slices = slices);
+      ref.read(activeViewProvider.notifier).showOriginal(originalPhotoId);
+    } catch (e, st) {
+      debugPrint('Failed to load slices for $originalPhotoId: $e\n$st');
     }
   }
 
@@ -162,6 +295,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       setState(() {
         _imageSize = null;
         _imageLoadError = false;
+        _slices = const [];
       });
     }
 
@@ -215,6 +349,24 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     ref.listen<String?>(selectedImageProvider, (previous, next) {
       if (next != null && next != previous) {
         ref.read(drawControllerProvider.notifier).beginPhotoSwitch();
+        // Fix 1 (M5 hardening): also reset the active view and the shared
+        // transformationController synchronously, right alongside
+        // beginPhotoSwitch above. Without this, a fresh TopoCanvas for the
+        // new photo could see this SAME (screen-owned, never-recreated)
+        // TransformationController still holding the PREVIOUS photo's
+        // non-identity fit/crop matrix; since the new photo's activeView
+        // hasn't loaded yet either (still whatever the old photo left it
+        // at — commonly "Original", i.e. no crop), TopoCanvas's own
+        // pre-seeded-controller escape hatch (see
+        // _TopoCanvasState._reframeIfNeeded) would read that stale
+        // non-identity matrix as "a caller intentionally pre-seeded this"
+        // and leave it alone forever, permanently showing the new photo
+        // through the old one's transform. Resetting both to a known
+        // "nothing framed yet" state here means the next reframe always
+        // computes a fresh, correct fit for whatever photo/crop actually
+        // ends up active.
+        ref.read(activeViewProvider.notifier).clear();
+        _transformationController.value = Matrix4.identity();
       }
     });
 
@@ -247,6 +399,31 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                 _openMetadataSheet(selected);
               },
             ),
+          if (_sliceMode) ...[
+            IconButton(
+              key: const Key('topo-slice-clear'),
+              icon: const Icon(Icons.clear),
+              tooltip: 'Clear pending cuts',
+              onPressed: () =>
+                  ref.read(sliceControllerProvider.notifier).clear(),
+            ),
+            IconButton(
+              key: const Key('topo-slice-commit'),
+              icon: const Icon(Icons.check),
+              tooltip: 'Commit slices',
+              onPressed: _handleSliceCommit,
+            ),
+          ],
+          IconButton(
+            key: const Key('topo-slice-mode-button'),
+            icon: Icon(
+              _sliceMode ? Icons.content_cut : Icons.content_cut_outlined,
+            ),
+            tooltip: _sliceMode
+                ? 'Exit slice mode'
+                : 'Slice this photo into strips',
+            onPressed: _toggleSliceMode,
+          ),
           IconButton(
             key: const Key('topo-mode-toggle'),
             icon: Icon(
@@ -341,6 +518,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       imageSize: imageSize,
       drawState: drawState,
       transformationController: _transformationController,
+      sliceMode: _sliceMode,
+      originalPhotoId: drawState.activePhotoId,
+      slices: _slices,
     );
   }
 
@@ -374,9 +554,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   }
 }
 
-/// The canvas area shown once [imageSize] is resolved: the symbol palette
-/// bar (gated to [DrawMode.draw] — see Fix 2), the interactive [TopoCanvas],
-/// and the [RouteLegend].
+/// The canvas area shown once [imageSize] is resolved: the [PhotoSelector]
+/// (when the wall has slices), the symbol palette bar (gated to
+/// [DrawMode.draw] — see Fix 2), the interactive [TopoCanvas] framed to
+/// whichever view is active, and the [RouteLegend].
 ///
 /// Extracted as a standalone public widget (rather than inlined into
 /// [_TopoCanvasScreenState._buildCanvasArea]) so it can be pumped directly
@@ -384,13 +565,16 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 /// approach [TopoCanvas] itself uses (see its class doc) — without needing
 /// a real, decodable image file on disk or waiting on the async image
 /// decode that only [TopoCanvasScreen] drives.
-class TopoCanvasBody extends StatelessWidget {
+class TopoCanvasBody extends ConsumerWidget {
   const TopoCanvasBody({
     super.key,
     required this.imagePath,
     required this.imageSize,
     required this.drawState,
     required this.transformationController,
+    this.sliceMode = false,
+    this.originalPhotoId,
+    this.slices = const [],
   });
 
   final String imagePath;
@@ -398,22 +582,86 @@ class TopoCanvasBody extends StatelessWidget {
   final DrawState drawState;
   final TransformationController transformationController;
 
+  /// Whether the slice-creation tool overlay ([SliceTool]) is showing over
+  /// the canvas. Defaults to `false` so existing call sites (and the
+  /// pre-M5 widget tests that construct this widget without mentioning
+  /// slicing at all) are unaffected. Exposed as a plain parameter — mirroring
+  /// [drawState] — rather than this widget owning the flag itself, so it can
+  /// be driven directly in widget tests (see the "TopoCanvasBody: slice mode
+  /// overlay" test group) without needing [TopoCanvasScreen]'s real,
+  /// async image-decode gate.
+  final bool sliceMode;
+
+  /// The id of the wall's "original" (unsliced) photo, or null if unknown
+  /// yet (e.g. [TopoCanvasScreen]'s wall/routes load hasn't resolved). Fed
+  /// to [PhotoSelector] (and used as the "Original" chip's target); the
+  /// selector is only shown when both this is non-null AND [slices] is
+  /// non-empty.
+  final String? originalPhotoId;
+
+  /// The wall's persisted slices (ordered by cropXpct ascending). Defaults
+  /// to empty so existing call sites/tests that never mention slicing are
+  /// unaffected — with no slices, [PhotoSelector] is never shown and
+  /// [TopoCanvas] is never framed to a crop.
+  final List<PhotoRef> slices;
+
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final activeView = ref.watch(activeViewProvider);
+    // No crop when nothing is loaded yet (null) or the active view is
+    // explicitly Original — either way TopoCanvas gets nulls and falls back
+    // to its normal fit-to-viewport framing.
+    final cropXpct = (activeView != null && !activeView.isOriginal)
+        ? activeView.cropXpct
+        : null;
+    final cropWidthPct = (activeView != null && !activeView.isOriginal)
+        ? activeView.cropWidthPct
+        : null;
+
     return Column(
       children: [
-        // Only shown in draw mode: in view mode a canvas tap means "select
-        // a route", not "place a symbol", so showing (and letting the user
-        // activate) the symbol bar there would be misleading. Not clearing
-        // `activeSymbol` on mode switch is deliberate — see fix notes —
-        // so a quick peek at view mode and back to draw mode preserves the
-        // user's chosen symbol.
-        if (drawState.mode == DrawMode.draw) const SymbolPaletteBar(),
+        // Hidden during slice mode (Fix 2): the screen forces activeView
+        // back to Original the moment slice mode is entered (see
+        // TopoCanvasScreen._toggleSliceMode's doc for why SliceTool's
+        // dx/viewportWidth cut math requires that), so letting the user
+        // switch to a slice mid-slicing via this selector would silently
+        // reintroduce the same corrupted-crop-rect bug.
+        if (originalPhotoId != null && slices.isNotEmpty && !sliceMode)
+          PhotoSelector(originalPhotoId: originalPhotoId!, slices: slices),
+        // Only shown in draw mode (and never during slice mode, which is
+        // mutually exclusive with drawing): in view mode a canvas tap means
+        // "select a route", not "place a symbol", so showing (and letting
+        // the user activate) the symbol bar there would be misleading. Not
+        // clearing `activeSymbol` on mode switch is deliberate — see fix
+        // notes — so a quick peek at view mode and back to draw mode
+        // preserves the user's chosen symbol.
+        if (drawState.mode == DrawMode.draw && !sliceMode)
+          const SymbolPaletteBar(),
         Expanded(
-          child: TopoCanvas(
-            imagePath: imagePath,
-            imageSize: imageSize,
-            transformationController: transformationController,
+          child: Stack(
+            children: [
+              TopoCanvas(
+                imagePath: imagePath,
+                imageSize: imageSize,
+                transformationController: transformationController,
+                activeCropXpct: cropXpct,
+                activeCropWidthPct: cropWidthPct,
+              ),
+              if (sliceMode)
+                Positioned.fill(
+                  // SliceTool is sized to the actual rendered viewport (via
+                  // LayoutBuilder) rather than the image's natural
+                  // `imageSize`, and its opaque gesture detector sits on top
+                  // of TopoCanvas — see SliceTool's class doc for why that's
+                  // what keeps slice-mode taps from ever reaching
+                  // TopoCanvas's own draw/view gesture handling underneath.
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => SliceTool(
+                      size: Size(constraints.maxWidth, constraints.maxHeight),
+                    ),
+                  ),
+                ),
+            ],
           ),
         ),
         const RouteLegend(),
