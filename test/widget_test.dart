@@ -2,6 +2,8 @@ import 'package:climbtopo/app/app.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
+import 'package:climbtopo/features/library/application/library_providers.dart';
+import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/topo/application/active_view_controller.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/application/slice_controller.dart';
@@ -22,25 +24,71 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-void main() {
-  testWidgets('App renders ClimbTopo title', (WidgetTester tester) async {
-    final db = AppDatabase(NativeDatabase.memory());
-    addTearDown(db.close);
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          appDatabaseProvider.overrideWithValue(db),
-          nowMsProvider.overrideWithValue(() => 1000),
-        ],
-        child: const ClimbTopoApp(),
-      ),
+/// Advances real asynchronous work (Drift's in-memory background executor's
+/// stream re-queries) that would otherwise never make progress under
+/// `testWidgets`' fake-async clock, then pumps to flush the resulting
+/// Riverpod-triggered rebuilds and any in-flight route transitions.
+///
+/// AreasScreen (the M6 library root) watches a Drift-backed StreamProvider and
+/// shows a [CircularProgressIndicator] until that watch stream's first
+/// emission lands. `pumpAndSettle` would spin forever on that unbounded
+/// spinner animation (the stream never emits under the fake clock) and, worse,
+/// leave the Drift subscription open so teardown hangs closing the DB out from
+/// under it ("Cannot add event while adding stream"). Interleaving `runAsync`
+/// (real clock, lets Drift emit) with a fixed-duration `pump` (fake clock,
+/// advances transitions + rebuilds) settles everything deterministically. This
+/// mirrors the `_drain` helper in
+/// test/features/library/presentation/areas_screen_test.dart.
+Future<void> _drain(WidgetTester tester) async {
+  for (var i = 0; i < 6; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
     );
-    // Allow GoRouter and MaterialApp.router to settle.
-    await tester.pumpAndSettle();
+    await tester.pump(const Duration(milliseconds: 30));
+  }
+  // The Drift-backed stream has now emitted (real data on screen), so no
+  // unbounded spinner remains and pumpAndSettle is safe: it flushes any
+  // remaining bounded route/transition motion deterministically.
+  await tester.pumpAndSettle();
+}
 
-    expect(find.text('ClimbTopo'), findsOneWidget);
-  });
+void main() {
+  testWidgets(
+    'App boots to AreasScreen (root route) showing its empty state',
+    (WidgetTester tester) async {
+      // M6: '/' now routes to AreasScreen (the library CRUD root) instead of
+      // the topo canvas, so the old "ClimbTopo" app-bar-title smoke check no
+      // longer applies — TopoCanvasScreen itself is still covered directly
+      // by the draw-mode-controls group below.
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+          child: const ClimbTopoApp(),
+        ),
+      );
+      // Let GoRouter/MaterialApp.router settle AND the Drift-backed
+      // areasProvider watch stream emit its first (empty) value, so the
+      // AreasScreen leaves its loading spinner and renders the empty state.
+      await _drain(tester);
+
+      expect(find.text('Areas'), findsOneWidget);
+      expect(find.text('No areas yet — tap + to add one'), findsOneWidget);
+
+      // Unmount the (owning) ProviderScope inside the test so Riverpod
+      // disposes the StreamProvider and cancels its live Drift watch
+      // subscription now, draining Drift's stream-close cleanup timer instead
+      // of leaving it pending — and so the addTearDown `db.close` later closes
+      // the DB with no watch still attached (which would otherwise hang).
+      await tester.pumpWidget(const SizedBox());
+      await _drain(tester);
+    },
+  );
 
   group('TopoCanvasScreen draw-mode controls', () {
     // These controls (the toggle and the toolbar) live in the app bar /
@@ -64,7 +112,7 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(home: TopoCanvasScreen()),
+          child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
         ),
       );
       await tester.pumpAndSettle();
@@ -96,7 +144,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen()),
+            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
           ),
         );
         await tester.pumpAndSettle();
@@ -155,20 +203,31 @@ void main() {
         addTearDown(container.dispose);
 
         final notifier = container.read(drawControllerProvider.notifier);
-        notifier.addPoint(const Offset(0.1, 0.1));
-        notifier.addPoint(const Offset(0.2, 0.2));
-        notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider).routes.single.id;
 
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen()),
+            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
           ),
         );
         await tester.pumpAndSettle();
 
         expect(find.byKey(const Key('topo-edit-metadata-button')), findsNothing);
+
+        // Drawn/committed AFTER the screen has mounted (and its microtask-
+        // deferred enter-wall reset — see TopoCanvasScreen.initState's doc —
+        // has already run): drawControllerProvider is an app-lifetime
+        // global, and TopoCanvasScreen now unconditionally resets it for
+        // the wall it's mounted for (even when, as here, 'test-wall' has no
+        // persisted photo) — see loadWallOriginalPhoto's doc for the M6
+        // cross-wall-leak fix this closes. A route committed BEFORE mount
+        // would therefore be cleared by that reset; committing here instead
+        // matches how a real user actually creates a route: after opening
+        // the wall's canvas, not before.
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+        final routeId = container.read(drawControllerProvider).routes.single.id;
 
         notifier.selectRoute(routeId);
         await tester.pump();
@@ -892,7 +951,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen()),
+            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
           ),
         );
         await tester.pumpAndSettle();
@@ -930,7 +989,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen()),
+            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
           ),
         );
         await tester.pumpAndSettle();
@@ -965,7 +1024,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen()),
+            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
           ),
         );
         await tester.pumpAndSettle();
@@ -1886,7 +1945,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen()),
+            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
           ),
         );
         await tester.pumpAndSettle();
@@ -1947,7 +2006,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen()),
+            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
           ),
         );
         await tester.pumpAndSettle();
@@ -1988,4 +2047,84 @@ void main() {
       },
     );
   });
+
+  group(
+    'M6 subtask 4: /walls/:wallId hosts TopoCanvasScreen bound to the '
+    'navigated wall',
+    () {
+      testWidgets(
+        'A3/A4: the full Areas -> Sectors -> Walls -> /walls/:wallId nav '
+        'chain is intact, and the wall-detail route renders '
+        "TopoCanvasScreen(wallId: <the tapped wall's id>), showing its "
+        'empty state since no photo is attached yet (decode-free, '
+        'deterministic)',
+        (tester) async {
+          // Owns the container directly (see the "A2: tapping an area
+          // navigates..." test in areas_screen_test.dart for why: disposal
+          // must happen in addTearDown/real-async, not inside the widget
+          // tree's fake-async finalizeTree).
+          final db = AppDatabase(NativeDatabase.memory());
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+            ],
+          );
+          addTearDown(db.close);
+          addTearDown(container.dispose);
+          final repo = container.read(libraryCrudRepositoryProvider);
+          late AreaRef area;
+          late SectorRef sector;
+          late WallRef wall;
+          await tester.runAsync(() async {
+            area = await repo.createArea('Test Area');
+            sector = await repo.createSector(area.id, 'Test Sector');
+            wall = await repo.createWall(sector.id, 'Test Wall');
+          });
+
+          await tester.pumpWidget(
+            UncontrolledProviderScope(
+              container: container,
+              child: const ClimbTopoApp(),
+            ),
+          );
+          await _drain(tester);
+
+          expect(find.text('Test Area'), findsOneWidget);
+
+          await tester.tap(find.byKey(Key('area-item-${area.id}')));
+          await _drain(tester);
+          expect(find.text('Test Sector'), findsOneWidget);
+
+          await tester.tap(find.byKey(Key('sector-item-${sector.id}')));
+          await _drain(tester);
+          expect(find.text('Test Wall'), findsOneWidget);
+
+          await tester.tap(find.byKey(Key('wall-item-${wall.id}')));
+          await _drain(tester);
+
+          expect(find.byType(TopoCanvasScreen), findsOneWidget);
+          final screen = tester.widget<TopoCanvasScreen>(
+            find.byType(TopoCanvasScreen),
+          );
+          expect(screen.wallId, wall.id);
+          // No photo has been attached to this wall, so the empty state
+          // (decode-free — no FileImage/image codec involved) is shown
+          // rather than the canvas.
+          expect(find.byKey(const Key('topo-empty-state')), findsOneWidget);
+          expect(
+            find.text('No photo yet — pick one to start'),
+            findsOneWidget,
+          );
+
+          // Unmount so Riverpod cancels the live Drift watch subscriptions
+          // this real (owning) ProviderScope holds before db.close runs in
+          // addTearDown — see the "App boots to AreasScreen" test's teardown
+          // doc above for why this ordering matters.
+          await tester.pumpWidget(const SizedBox());
+          await _drain(tester);
+        },
+      );
+    },
+  );
 }
