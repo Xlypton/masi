@@ -12,5 +12,14 @@ import UIKit
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
+
+    // Native AR camera + Vision-homography PlatformView (see
+    // ios/Runner/AR/). ArViewFactory threads this registrar's messenger
+    // through to each ArPlatformView it creates; ArPlatformView is where
+    // the "climbtopo/ar" MethodChannel and "climbtopo/ar/alignment"
+    // EventChannel are actually instantiated (via ArChannelHandler),
+    // against this same messenger, matching the Dart contract exactly.
+    let registrar = engineBridge.applicationRegistrar
+    registrar.register(ArViewFactory(messenger: registrar.messenger()), withId: "climbtopo/ar")
   }
 }

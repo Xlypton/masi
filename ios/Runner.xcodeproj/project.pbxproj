@@ -12,6 +12,10 @@
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
+		E4E6E178A162FD3D39045072 /* ArViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCCF5AF57F263533738FB8B7 /* ArViewFactory.swift */; };
+		D364CD7A8890A03935FDA68A /* ArPlatformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D56CB40909A50D2F9337503 /* ArPlatformView.swift */; };
+		66154F26435834793AE1FF92 /* ArVisionPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDB87454FC78A714DE279DF3 /* ArVisionPipeline.swift */; };
+		E9BB2E955FA41D5A317A9D66 /* ArChannelHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA29ED418D1619F5857DBE70 /* ArChannelHandler.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
@@ -59,6 +63,10 @@
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		FCCF5AF57F263533738FB8B7 /* ArViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArViewFactory.swift; sourceTree = "<group>"; };
+		3D56CB40909A50D2F9337503 /* ArPlatformView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArPlatformView.swift; sourceTree = "<group>"; };
+		EDB87454FC78A714DE279DF3 /* ArVisionPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArVisionPipeline.swift; sourceTree = "<group>"; };
+		BA29ED418D1619F5857DBE70 /* ArChannelHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArChannelHandler.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -124,8 +132,20 @@
 				74858FAE1ED2DC5600515810 /* AppDelegate.swift */,
 				7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */,
 				74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */,
+				E34A804DDE2A7AFB6C0F83A4 /* AR */,
 			);
 			path = Runner;
+			sourceTree = "<group>";
+		};
+		E34A804DDE2A7AFB6C0F83A4 /* AR */ = {
+			isa = PBXGroup;
+			children = (
+				FCCF5AF57F263533738FB8B7 /* ArViewFactory.swift */,
+				3D56CB40909A50D2F9337503 /* ArPlatformView.swift */,
+				EDB87454FC78A714DE279DF3 /* ArVisionPipeline.swift */,
+				BA29ED418D1619F5857DBE70 /* ArChannelHandler.swift */,
+			);
+			path = AR;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -284,6 +304,10 @@
 				74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */,
 				1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */,
 				7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */,
+				E4E6E178A162FD3D39045072 /* ArViewFactory.swift in Sources */,
+				D364CD7A8890A03935FDA68A /* ArPlatformView.swift in Sources */,
+				66154F26435834793AE1FF92 /* ArVisionPipeline.swift in Sources */,
+				E9BB2E955FA41D5A317A9D66 /* ArChannelHandler.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

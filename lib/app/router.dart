@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 
+import '../features/ar/presentation/ar_screen.dart';
 import '../features/library/presentation/areas_screen.dart';
 import '../features/library/presentation/sectors_screen.dart';
 import '../features/library/presentation/walls_screen.dart';
@@ -27,6 +28,14 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/walls/:wallId',
       builder: (context, state) => TopoCanvasScreen(
+        wallId: state.pathParameters['wallId']!,
+      ),
+    ),
+    // The AR alignment view for a wall — see ArScreen's class doc for the
+    // native-camera-vs-overlay platform split.
+    GoRoute(
+      path: '/walls/:wallId/ar',
+      builder: (context, state) => ArScreen(
         wallId: state.pathParameters['wallId']!,
       ),
     ),

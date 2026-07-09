@@ -2,12 +2,14 @@ import 'package:climbtopo/app/app.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
+import 'package:climbtopo/features/ar/presentation/ar_screen.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/topo/application/active_view_controller.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/application/slice_controller.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
+import 'package:climbtopo/features/topo/data/route_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/photo_selector.dart';
@@ -23,6 +25,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 
 /// Advances real asynchronous work (Drift's in-memory background executor's
 /// stream re-queries) that would otherwise never make progress under
@@ -1041,6 +1044,205 @@ void main() {
         );
         // Still in slice mode: Commit/Clear remain visible.
         expect(find.byKey(const Key('topo-slice-commit')), findsOneWidget);
+      },
+    );
+  });
+
+  group('TopoCanvasScreen AR entry (v2-ar-viewer)', () {
+    // topo-ar-button is gated purely on drawControllerProvider state
+    // (activePhotoId != null && routes.isNotEmpty) — never on
+    // selectedImageProvider/imagePath — so, like the draw-mode-controls
+    // group at the top of this file, it's exercised without ever selecting
+    // a real image. Seeding is done two ways on purpose:
+    //  - a placeholder `Photos` row (kind: 'slice', NOT 'original') is
+    //    inserted directly so `Routes.photoId`'s FK is satisfiable, WITHOUT
+    //    being discoverable via `photoRepository.loadOriginal` — so the
+    //    screen's own initial-load microtask never selects an image path
+    //    and never triggers the real, undriveable-under-fake-time image
+    //    decode this file's M3 NOTE (above) describes.
+    //  - `drawControllerProvider.notifier.loadForWall(...)` is then called
+    //    directly (exactly like TopoCanvasScreen._loadInitialPhotoForWall
+    //    would for a wall with a real attached original) to seed
+    //    `activePhotoId` + `routes` for the gating check.
+    testWidgets(
+      'A4: topo-ar-button appears only once the wall has a photo + >=1 '
+      'route, and navigates to /walls/:wallId/ar',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final crud = container.read(libraryCrudRepositoryProvider);
+        final area = await crud.createArea('Area');
+        final sector = await crud.createSector(area.id, 'Sector');
+        final wall = await crud.createWall(sector.id, 'Wall');
+
+        const placeholderPhotoId = 'placeholder-photo';
+        await db.into(db.photos).insert(
+              PhotosCompanion.insert(
+                id: placeholderPhotoId,
+                createdAt: 1000,
+                updatedAt: 1000,
+                wallId: wall.id,
+                localPath: '/tmp/placeholder.jpg',
+                kind: 'slice',
+                width: 100,
+                height: 100,
+              ),
+            );
+        final routeRepo = RouteRepository(db, nowMs: () => 1000);
+        await routeRepo.upsertRoute(
+          wall.id,
+          placeholderPhotoId,
+          const TopoRoute(
+            id: 1,
+            number: 1,
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+          ),
+        );
+
+        final router = GoRouter(
+          initialLocation: '/walls/${wall.id}',
+          routes: [
+            GoRoute(
+              path: '/walls/:wallId',
+              builder: (context, state) => TopoCanvasScreen(
+                wallId: state.pathParameters['wallId']!,
+              ),
+            ),
+            GoRoute(
+              path: '/walls/:wallId/ar',
+              builder: (context, state) =>
+                  ArScreen(wallId: state.pathParameters['wallId']!),
+            ),
+          ],
+        );
+        addTearDown(router.dispose);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp.router(routerConfig: router),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // No photo/route wired into drawControllerProvider yet (the
+        // placeholder Photos row above is deliberately NOT the wall's
+        // 'original', so the screen's own load found nothing): the button
+        // must be absent.
+        expect(find.byKey(const Key('topo-ar-button')), findsNothing);
+
+        // Seed activePhotoId + routes exactly as a real attached-original
+        // load would, without ever touching selectedImageProvider.
+        await container
+            .read(drawControllerProvider.notifier)
+            .loadForWall(wall.id, placeholderPhotoId);
+        await tester.pump();
+
+        expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('topo-ar-button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(ArScreen), findsOneWidget);
+        expect(
+          find.byKey(const Key('ar-unsupported-placeholder')),
+          findsOneWidget,
+          reason:
+              'the AR route was reached (this test host is non-iOS, so '
+              "ArScreen's own platform gate renders its placeholder)",
+        );
+      },
+    );
+
+    testWidgets(
+      'Fix 3: topo-ar-button stays hidden when the wall has a photo but its '
+      'only route is invisible, and appears once toggled visible',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final crud = container.read(libraryCrudRepositoryProvider);
+        final area = await crud.createArea('Area');
+        final sector = await crud.createSector(area.id, 'Sector');
+        final wall = await crud.createWall(sector.id, 'Wall');
+
+        const placeholderPhotoId = 'placeholder-photo';
+        await db.into(db.photos).insert(
+              PhotosCompanion.insert(
+                id: placeholderPhotoId,
+                createdAt: 1000,
+                updatedAt: 1000,
+                wallId: wall.id,
+                localPath: '/tmp/placeholder.jpg',
+                kind: 'slice',
+                width: 100,
+                height: 100,
+              ),
+            );
+        final routeRepo = RouteRepository(db, nowMs: () => 1000);
+        await routeRepo.upsertRoute(
+          wall.id,
+          placeholderPhotoId,
+          const TopoRoute(
+            id: 1,
+            number: 1,
+            visible: false,
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+          ),
+        );
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(home: TopoCanvasScreen(wallId: wall.id)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await container
+            .read(drawControllerProvider.notifier)
+            .loadForWall(wall.id, placeholderPhotoId);
+        await tester.pump();
+
+        final routeId =
+            container.read(drawControllerProvider).routes.single.id;
+        expect(
+          container.read(drawControllerProvider).routes.single.visible,
+          isFalse,
+        );
+        expect(
+          find.byKey(const Key('topo-ar-button')),
+          findsNothing,
+          reason:
+              'a wall whose only route is invisible has nothing for AR to '
+              'show, so the button must stay hidden',
+        );
+
+        await container
+            .read(drawControllerProvider.notifier)
+            .toggleRouteVisibility(routeId);
+        await tester.pump();
+
+        expect(
+          container.read(drawControllerProvider).routes.single.visible,
+          isTrue,
+        );
+        expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
       },
     );
   });
