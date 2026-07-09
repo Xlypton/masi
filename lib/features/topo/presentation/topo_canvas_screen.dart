@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:climbtopo/core/db/database_provider.dart';
@@ -575,6 +576,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         title: const Text('ClimbTopo'),
         centerTitle: false,
         actions: [
+          // Only meaningful once the wall has a photo AND at least one
+          // committed, VISIBLE route: with nothing to align (or every route
+          // hidden), AR would show an empty feed.
+          if (drawState.activePhotoId != null &&
+              drawState.routes.any((r) => r.visible))
+            IconButton(
+              key: const Key('topo-ar-button'),
+              icon: const Icon(Icons.view_in_ar_outlined),
+              tooltip: 'View in AR',
+              onPressed: () => context.push('/walls/${widget.wallId}/ar'),
+            ),
           if (drawState.selectedRouteId != null)
             IconButton(
               key: const Key('topo-edit-metadata-button'),
