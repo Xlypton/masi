@@ -3,6 +3,7 @@ import 'dart:ui' as ui;
 import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
+import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -764,6 +765,93 @@ void main() {
         await expectLater(
           find.byType(RepaintBoundary),
           matchesGoldenFile('goldens/topo_painter_multiroute.png'),
+        );
+      },
+    );
+  });
+
+  group('TopoCanvas crop framing golden (M5, A5)', () {
+    testWidgets(
+      'A5: a slice active + a route renders a stable golden of the '
+      'cropped/framed view',
+      (tester) async {
+        // Pin DPR + physical size, same rationale as the multi-route golden
+        // above, so the checked-in PNG is deterministic across machines.
+        tester.view.physicalSize = const Size(400, 400);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        // A 2000x1000 original image, cropped to [0.25, 0.75] (cropWidthPct
+        // 0.5) and framed into a 400x400 viewport — see
+        // TopoCanvas.computeCropTransform's doc for the scale/translate
+        // math this reproduces directly (rather than pumping the full
+        // TopoCanvas widget, which would need a real decodable image file
+        // and a ProviderScope for no benefit here: this golden is only
+        // about the crop-transform + painter composition, exactly what
+        // TopoCanvas wraps its Image.file + CustomPaint stack in).
+        const imageSize = Size(2000, 1000);
+        const viewportSize = Size(400, 400);
+        const cropXpct = 0.25;
+        const cropWidthPct = 0.5;
+
+        final matrix = TopoCanvas.computeCropTransform(
+          viewportSize: viewportSize,
+          imageSize: imageSize,
+          cropXpct: cropXpct,
+          cropWidthPct: cropWidthPct,
+        );
+
+        // A route that spans across (and beyond) the crop band, in ORIGINAL
+        // percent space — proving the painter still draws in original
+        // coordinates while the canvas is merely framed/clipped to the
+        // slice.
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [
+            Offset(0.1, 0.2),
+            Offset(0.4, 0.5),
+            Offset(0.6, 0.4),
+            Offset(0.9, 0.8),
+          ],
+        );
+
+        final painter = TopoPainter(
+          imageSize: imageSize,
+          routes: [route],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+        );
+
+        await tester.pumpWidget(
+          Directionality(
+            textDirection: TextDirection.ltr,
+            child: RepaintBoundary(
+              child: SizedBox(
+                width: viewportSize.width,
+                height: viewportSize.height,
+                child: ClipRect(
+                  child: Transform(
+                    transform: matrix,
+                    child: SizedBox(
+                      width: imageSize.width,
+                      height: imageSize.height,
+                      child: CustomPaint(painter: painter, size: imageSize),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await expectLater(
+          find.byType(RepaintBoundary),
+          matchesGoldenFile('goldens/topo_canvas_crop_framed.png'),
         );
       },
     );
