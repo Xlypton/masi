@@ -93,11 +93,11 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         ),
         centerTitle: false,
         actions: [
-          TextButton(
+          IconButton(
             key: const Key('topos-organize'),
-            style: TextButton.styleFrom(foregroundColor: colors.accent),
+            icon: Icon(Icons.folder_outlined, color: colors.accent),
+            tooltip: 'Organize',
             onPressed: () => context.push('/areas'),
-            child: const Text('Organize'),
           ),
           IconButton(
             key: const Key('home-community-button'),
@@ -685,22 +685,24 @@ class _TopoRow extends ConsumerWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
+                    Wrap(
+                      spacing: MasiSpacing.xs,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         if (topo.topGradeLabel != null &&
-                            topo.topGradeBand != null) ...[
+                            topo.topGradeBand != null)
                           _GradePill(
                             label: topo.topGradeLabel!,
                             band: topo.topGradeBand!,
                           ),
-                          const SizedBox(width: MasiSpacing.xs),
-                        ],
                         Text(
                           '$routeCount route${routeCount == 1 ? '' : 's'}',
                           style: textTheme.titleSmall?.copyWith(
                             color: colors.ink2,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
@@ -863,6 +865,8 @@ class _GradePill extends StatelessWidget {
           color: Colors.white,
           fontWeight: FontWeight.w600,
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }

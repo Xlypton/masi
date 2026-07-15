@@ -315,10 +315,14 @@ class _LogbookRow extends ConsumerWidget {
                       ),
                       if (entry.gradeLabel != null) ...[
                         const SizedBox(width: MasiSpacing.xs),
-                        Text(
-                          entry.gradeLabel!,
-                          style: textTheme.titleSmall?.copyWith(
-                            color: colors.ink2,
+                        Flexible(
+                          child: Text(
+                            entry.gradeLabel!,
+                            style: textTheme.titleSmall?.copyWith(
+                              color: colors.ink2,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                       ],

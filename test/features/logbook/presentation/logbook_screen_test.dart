@@ -788,4 +788,86 @@ void main() {
       },
     );
   });
+
+  group(
+    'layout overflow regression: populated _LogbookRow at phone width '
+    '(regression: the trailing grade Text must not be an unbounded Row '
+    'child)',
+    () {
+      Widget wrapWithScale(
+        ProviderContainer container,
+        Widget screen,
+        double textScale,
+      ) {
+        return UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            ),
+            home: screen,
+          ),
+        );
+      }
+
+      void setViewportSize(WidgetTester tester, Size size) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
+
+      testWidgets(
+        'a populated logbook row (route title + grade label) at 360x800 '
+        '@ 3.0x text scale does not overflow',
+        (tester) async {
+          setViewportSize(tester, const Size(360, 800));
+          final container = _makeContainer();
+          final database = container.read(appDatabaseProvider);
+          final repo = container.read(ascentsRepositoryProvider);
+
+          // A deliberately long route name (so the title's Flexible shrinks
+          // as far as it can) AND a longer-than-usual grade token (written
+          // directly to the DB, bypassing `isValidGrade`'s french/uiaa
+          // ladder -- exactly as a corrupt/legacy/future-grade-system value
+          // could reach this screen) is needed to actually reproduce the
+          // trailing grade Text's unbounded-width overflow: a realistic
+          // short "8c+"-style label alone does not overflow this Row at
+          // this width/scale.
+          final s = await _dbWork(
+            tester,
+            () => _seed(
+              database,
+              '1',
+              wallName: 'Stress Wall',
+              routeNumber: 1,
+              routeName: 'An Extremely Long Route Name For Stress Testing',
+              gradeRaw: '9c+/5.15d (sandbagged)',
+              gradeSortKey: gradeSortKey(GradeSystem.french, '8c+'),
+            ),
+          );
+          await _dbWork(
+            tester,
+            () => repo.logAscent(
+              routeId: s.routeId,
+              wallId: s.wallId,
+              climbedAt: DateTime.utc(2026, 7, 1),
+              style: AscentStyle.redpoint,
+            ),
+          );
+
+          await tester.pumpWidget(
+            wrapWithScale(container, const LogbookScreen(), 3.0),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
 }

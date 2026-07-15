@@ -466,41 +466,52 @@ class _FeedRow extends StatelessWidget {
                       overflow: TextOverflow.ellipsis,
                     ),
                     const SizedBox(height: 2),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
+                    Wrap(
+                      spacing: MasiSpacing.xs,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         if (topo.topGradeLabel != null &&
-                            topo.topGradeBand != null) ...[
+                            topo.topGradeBand != null)
                           _GradePill(
                             label: topo.topGradeLabel!,
                             band: topo.topGradeBand!,
                           ),
-                          const SizedBox(width: MasiSpacing.xs),
-                        ],
                         Text(
                           '${topo.routeCount} route${topo.routeCount == 1 ? '' : 's'}',
                           style: textTheme.titleSmall?.copyWith(
                             color: colors.ink2,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ],
                     ),
                     const SizedBox(height: 2),
                     Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text(
-                          '♥ ${topo.likeCount}',
-                          key: Key('community-topo-row-$wallId-likes'),
-                          style: textTheme.titleSmall?.copyWith(
-                            color: colors.ink2,
+                        Flexible(
+                          child: Text(
+                            '♥ ${topo.likeCount}',
+                            key: Key('community-topo-row-$wallId-likes'),
+                            style: textTheme.titleSmall?.copyWith(
+                              color: colors.ink2,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: MasiSpacing.sm),
-                        Text(
-                          '\u{1F4AC} ${topo.commentCount}',
-                          key: Key('community-topo-row-$wallId-comments'),
-                          style: textTheme.titleSmall?.copyWith(
-                            color: colors.ink2,
+                        Flexible(
+                          child: Text(
+                            '\u{1F4AC} ${topo.commentCount}',
+                            key: Key('community-topo-row-$wallId-comments'),
+                            style: textTheme.titleSmall?.copyWith(
+                              color: colors.ink2,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: MasiSpacing.sm),
@@ -557,6 +568,8 @@ class _GradePill extends StatelessWidget {
           color: Colors.white,
           fontWeight: FontWeight.w600,
         ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
       ),
     );
   }

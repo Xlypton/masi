@@ -1451,8 +1451,8 @@ void main() {
           // `RenderParagraph.didExceedMaxLines` here. `flutter test` never
           // loads the app's real fonts, so glyph metrics (measured with a
           // throwaway debug harness while writing this test) come out
-          // dramatically wider than on a real device -- e.g. the
-          // "Organize" TextButton alone measured ~159px in-test vs. ~90-100
+          // dramatically wider than on a real device -- e.g. a titleMedium
+          // text button label measured meaningfully wider in-test than
           // expected with a real font -- which makes a literal one-line-fit
           // assertion measure a test-harness artifact, not the real defect.
           // The structural checks below (four app-bar actions instead of
@@ -1970,17 +1970,18 @@ void main() {
 
     // NOTE on surface width: `ToposScreen`'s AppBar carries four trailing
     // actions (Organize, Community, Logbook, Account -- the filter trigger
-    // now lives in the body, see the title-truncation fix below) and its
-    // own "Organize" TextButton label can still overflow the AppBar itself
-    // on a narrow phone-width surface (e.g. 320-390px) at these large text
-    // scales -- a real, pre-existing defect, but a DIFFERENT one from the
-    // two filter-sheet bugs this test suite targets, and out of scope here.
-    // 700px keeps that unrelated AppBar overflow out of the picture (see
-    // `_drain`'s exception check below) while still stressing the Filters
-    // sheet itself: `showModalBottomSheet` caps a sheet's content width on
-    // wide/tablet-ish surfaces, so the sheet's available width barely grows
-    // past ~700, and the "Filters"/Clear header row still overflows there
-    // pre-fix exactly as it would on a narrower phone.
+    // now lives in the body, see the title-truncation fix below). Organize
+    // used to be a `TextButton` whose label could overflow the AppBar itself
+    // on a narrow phone-width surface at large text scales -- that has since
+    // been fixed (Organize is now a fixed-size `IconButton`, see the "AppBar
+    // Organize action + _TopoRow" group below, which deliberately does NOT
+    // dodge phone width). 700px is kept here anyway to isolate exactly what
+    // THIS group cares about -- the Filters sheet's own layout, independent
+    // of the AppBar -- and because it still exercises something real:
+    // `showModalBottomSheet` caps a sheet's content width on wide/tablet-ish
+    // surfaces, so the sheet's available width barely grows past ~700, and
+    // the "Filters"/Clear header row still overflows there pre-fix exactly
+    // as it would on a narrower phone.
     const stressWidth = 700.0;
 
     testWidgets(
@@ -2035,4 +2036,93 @@ void main() {
       },
     );
   });
+
+  group(
+    'layout overflow regression: AppBar Organize action + _TopoRow at '
+    'phone width (regression: an unbounded "Organize" TextButton label in '
+    'the AppBar actions, and an unwrapped grade-pill+routes Row in '
+    '_TopoRow, must not overflow at large text)',
+    () {
+      Widget wrapWithScale(
+        ProviderContainer container,
+        Widget screen,
+        double textScale,
+      ) {
+        final router = GoRouter(
+          initialLocation: '/',
+          routes: [
+            GoRoute(path: '/', builder: (context, state) => screen),
+            GoRoute(
+              path: '/walls/:wallId',
+              builder: (context, state) => const SizedBox(),
+            ),
+            GoRoute(
+              path: '/areas',
+              builder: (context, state) => const SizedBox(),
+            ),
+          ],
+        );
+        return UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp.router(
+            theme: MasiTheme.light,
+            routerConfig: router,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            ),
+          ),
+        );
+      }
+
+      void setViewportSize(WidgetTester tester, Size size) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
+
+      testWidgets(
+        'a populated topo list at 360x800 @ 3.0x text scale does not '
+        'overflow -- neither the AppBar (Organize action) nor a _TopoRow '
+        'with a grade pill + route count (regression: unlike the '
+        '"Filters sheet" group above, this case does NOT dodge the AppBar '
+        'via a wide stressWidth -- 360 is a real phone width)',
+        (tester) async {
+          setViewportSize(tester, const Size(360, 800));
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              toposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  TopoRef(
+                    wallId: 'wall-stress',
+                    name: 'Stress Test Wall',
+                    thumbnailPath: null,
+                    routeCount: 12,
+                    createdAt: 1000,
+                    topGradeLabel: '7a',
+                    topGradeBand: GradeBand.hard,
+                  ),
+                ]),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(
+            wrapWithScale(container, const ToposScreen(), 3.0),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
 }

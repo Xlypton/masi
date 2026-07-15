@@ -183,6 +183,7 @@ Future<void> _seedWall(
   int createdAt = 1000,
   double? latitude,
   double? longitude,
+  String? ownerId,
 }) {
   return db
       .into(db.walls)
@@ -197,6 +198,7 @@ Future<void> _seedWall(
           visibility: Value(visibility),
           latitude: Value(latitude),
           longitude: Value(longitude),
+          ownerId: Value(ownerId),
         ),
       );
 }
@@ -1131,4 +1133,240 @@ void main() {
       },
     );
   });
+
+  group(
+    'layout overflow regression: populated _FeedRow at phone width '
+    '(regression: the grade-pill+routes row and the likes/comments/owner '
+    'row must Wrap, not Row, at large text)',
+    () {
+      Widget wrapWithScale(
+        ProviderContainer container,
+        Widget screen,
+        double textScale,
+      ) {
+        final router = GoRouter(
+          initialLocation: '/',
+          routes: [
+            GoRoute(path: '/', builder: (context, state) => screen),
+            GoRoute(
+              path: '/community/topo/:wallId',
+              builder: (context, state) => const SizedBox(),
+            ),
+          ],
+        );
+        return UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp.router(
+            theme: MasiTheme.light,
+            routerConfig: router,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            ),
+          ),
+        );
+      }
+
+      void setViewportSize(WidgetTester tester, Size size) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
+
+      testWidgets(
+        'a populated shared-topo feed row (grade pill + routes, likes/'
+        'comments/owner) at 360x800 @ 3.0x text scale does not overflow '
+        '(regression: the Filters-sheet group above deliberately seeds an '
+        'EMPTY feed to dodge this exact defect)',
+        (tester) async {
+          setViewportSize(tester, const Size(360, 800));
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedFilterScenario(db);
+            await _seedLike(db, id: 'like-stress-1', wallId: 'wall-sport');
+            await _seedLike(db, id: 'like-stress-2', wallId: 'wall-sport');
+            await _seedComment(
+              db,
+              id: 'comment-stress-1',
+              wallId: 'wall-sport',
+              body: 'Nice line!',
+            );
+          });
+
+          await tester.pumpWidget(
+            wrapWithScale(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+              3.0,
+            ),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  group(
+    'A: likes/comments/owner row — single line at normal scale, no '
+    'overflow at large scale with a real owner (regression: RenderWrap '
+    'gives every child the FULL available width, not the remaining space '
+    'on the current run, so the "by <owner>" text — a 36-char Supabase '
+    'auth uid, never shortened — reflows to a second line even at 1.0x)',
+    () {
+      Widget wrapWithScale(
+        ProviderContainer container,
+        Widget screen,
+        double textScale,
+      ) {
+        final router = GoRouter(
+          initialLocation: '/',
+          routes: [
+            GoRoute(path: '/', builder: (context, state) => screen),
+            GoRoute(
+              path: '/community/topo/:wallId',
+              builder: (context, state) => const SizedBox(),
+            ),
+          ],
+        );
+        return UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp.router(
+            theme: MasiTheme.light,
+            routerConfig: router,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            ),
+          ),
+        );
+      }
+
+      void setViewportSize(WidgetTester tester, Size size) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
+
+      // A realistic 36-char Supabase Auth uid -- `SharedTopo.ownerId` is the
+      // raw uid, never shortened, so this is exactly what ships in the "by
+      // <owner>" text.
+      const ownerUid = 'f1e2d3c4-b5a6-4c7d-8e9f-0a1b2c3d4e5f';
+
+      testWidgets(
+        'A1: at 390x800 @ 1.0x text scale, the owner text sits on the SAME '
+        'line as the likes count',
+        (tester) async {
+          setViewportSize(tester, const Size(390, 800));
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-a1', name: 'Area A1');
+            await _seedSector(
+              db,
+              id: 'sector-a1',
+              areaId: 'area-a1',
+              name: 'S',
+            );
+            await _seedWall(
+              db,
+              id: 'wall-a1',
+              sectorId: 'sector-a1',
+              name: 'Wall A1',
+              visibility: 'shared',
+              ownerId: ownerUid,
+            );
+            await _seedLike(db, id: 'like-a1', wallId: 'wall-a1');
+            await _seedComment(
+              db,
+              id: 'comment-a1',
+              wallId: 'wall-a1',
+              body: 'Nice!',
+            );
+          });
+
+          await tester.pumpWidget(
+            wrapWithScale(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+              1.0,
+            ),
+          );
+          await _drain(tester);
+
+          final ownerFinder = find.text('by $ownerUid');
+          final likesFinder = find.byKey(
+            const Key('community-topo-row-wall-a1-likes'),
+          );
+          expect(ownerFinder, findsOneWidget);
+          expect(likesFinder, findsOneWidget);
+
+          final dyDiff =
+              (tester.getTopLeft(ownerFinder).dy -
+                      tester.getTopLeft(likesFinder).dy)
+                  .abs();
+          expect(
+            dyDiff,
+            lessThan(0.5),
+            reason:
+                'owner text must sit on the same line as the likes count '
+                'at normal text scale; observed dy diff was $dyDiff',
+          );
+        },
+      );
+
+      testWidgets(
+        'A2: at 360x800 @ 3.0x text scale with a real non-null owner, the '
+        'likes/comments/owner row does not overflow',
+        (tester) async {
+          setViewportSize(tester, const Size(360, 800));
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-a2', name: 'Area A2');
+            await _seedSector(
+              db,
+              id: 'sector-a2',
+              areaId: 'area-a2',
+              name: 'S',
+            );
+            await _seedWall(
+              db,
+              id: 'wall-a2',
+              sectorId: 'sector-a2',
+              name: 'Wall A2',
+              visibility: 'shared',
+              ownerId: ownerUid,
+            );
+            await _seedLike(db, id: 'like-a2', wallId: 'wall-a2');
+            await _seedComment(
+              db,
+              id: 'comment-a2',
+              wallId: 'wall-a2',
+              body: 'Nice!',
+            );
+          });
+
+          await tester.pumpWidget(
+            wrapWithScale(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+              3.0,
+            ),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
 }
