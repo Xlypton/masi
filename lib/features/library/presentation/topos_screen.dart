@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../../core/location/photo_gps.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
@@ -258,6 +259,28 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       final repo = ref.read(libraryCrudRepositoryProvider);
       final wallId = await repo.createTopo('Topo ${count + 1}');
       await repo.attachPhotoToWall(wallId, xfile.path, width, height);
+
+      // Best-effort GPS capture: reuses the SAME bytes already read above
+      // for the dimension decode (no second file read), so this needs no
+      // extra seam beyond the existing photoPicker injection point — a
+      // test supplies known bytes via photoPicker exactly as it already
+      // does for the dimension-decode assertions. A photo with no EXIF GPS
+      // (or a corrupt/undecodable one) leaves the wall's coordinates null;
+      // extractGpsFromImageBytes never throws. setWallCoordinates is a DB
+      // write, though, and COULD throw -- deliberately isolated in its own
+      // try/catch (mirrors `topo_canvas_screen.dart`'s
+      // `captureWallGpsFromPhoto`, which "never throws") so a coords
+      // failure can NEVER be caught by the outer try/catch below and abort
+      // the topo+photo creation that already committed above, nor block
+      // the navigation that follows.
+      try {
+        final gps = extractGpsFromImageBytes(bytes);
+        if (gps != null) {
+          await repo.setWallCoordinates(wallId, gps.latitude, gps.longitude);
+        }
+      } catch (e, st) {
+        debugPrint('Failed to capture GPS for new topo $wallId: $e\n$st');
+      }
 
       if (!mounted) return;
       context.push('/walls/$wallId');

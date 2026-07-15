@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/location/photo_gps.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/logbook/presentation/log_ascent_sheet.dart';
@@ -153,6 +154,39 @@ Future<String> resolveAttachedPhotoPath(
     selectedImage.select(ownedPath);
   }
   return ownedPath;
+}
+
+/// Reads the file at [path]'s bytes and, if they carry EXIF GPS tags (see
+/// `core/location/photo_gps.dart`'s [extractGpsFromImageBytes]), records
+/// them on [wallId] via [libraryRepo.setWallCoordinates].
+///
+/// Extracted as a standalone function taking [libraryRepo] and a plain file
+/// [path] directly — mirroring [loadWallOriginalPhoto]/
+/// [resolveAttachedPhotoPath]'s own extraction above — so this is directly
+/// testable against a real [LibraryCrudRepository] and a real (or
+/// hand-built fixture) file on disk: no widget pump, no `FileImage`/
+/// `ui.instantiateImageCodec` decode, and no `image_picker` dependency at
+/// all (see `test/features/topo/presentation/topo_canvas_gps_test.dart`).
+///
+/// Never throws: a missing/unreadable file, or bytes with no EXIF GPS, is a
+/// silent no-op — this is deliberately best-effort, exactly like
+/// [extractGpsFromImageBytes] itself, so a photo with no GPS (the common
+/// case: screenshots, downloaded images, GPS-less cameras) never blocks or
+/// breaks the surrounding photo attach/load flow.
+Future<void> captureWallGpsFromPhoto(
+  LibraryCrudRepository libraryRepo,
+  String wallId,
+  String path,
+) async {
+  try {
+    final bytes = await File(path).readAsBytes();
+    final gps = extractGpsFromImageBytes(bytes);
+    if (gps == null) return;
+    await libraryRepo.setWallCoordinates(wallId, gps.latitude, gps.longitude);
+  } catch (_) {
+    // Best-effort: a missing file or decode hiccup must never break the
+    // photo attach/load flow this runs alongside.
+  }
 }
 
 class TopoCanvasScreen extends ConsumerStatefulWidget {
@@ -688,6 +722,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         width,
         height,
       );
+      // Best-effort GPS capture (see captureWallGpsFromPhoto's doc): reads
+      // the same freshly-attached file's EXIF and, if it carries GPS tags,
+      // records them on this wall. Independent of the mounted/latest-path
+      // guards below — it targets the wall, not any in-flight widget/photo
+      // state, so it's safe to run even if the user has since moved on to
+      // a different photo.
+      await captureWallGpsFromPhoto(libraryRepo, widget.wallId, path);
       if (!mounted) return;
       // Latest-path guard: if the user has already moved on to a different
       // photo since this call started (e.g. this is a stale/out-of-order

@@ -43,8 +43,10 @@ class SharedTopo {
   /// while signed out (or before ownership tracking existed).
   final String? ownerId;
 
-  /// Coordinates inherited from this wall's ancestor Area (Wall -> Sector ->
-  /// Area), or `null` if that Area has none recorded. See [hasCoordinates].
+  /// Coordinates captured directly on this wall — see
+  /// `LibraryCrudRepository.setWallCoordinates`, populated automatically
+  /// from a freshly-picked photo's EXIF GPS tags — or `null` if none have
+  /// been recorded. See [hasCoordinates].
   final double? latitude;
   final double? longitude;
 
@@ -195,17 +197,18 @@ class CommunityRepository {
   /// columns — rather than calling `LikesRepository.likeCountForWall` /
   /// `CommentsRepository.commentsForWall` per row, which would mean N+1
   /// queries and a much harder-to-keep-live stream. `readsFrom` lists every
-  /// table the SQL actually touches (including `sectors`/`areas`, joined only
-  /// for coordinates) so the auto-updating stream re-emits on changes to any
-  /// of them.
+  /// table the SQL actually touches (including `sectors`/`areas`, joined to
+  /// reach the wall's ancestor chain — coordinates themselves come straight
+  /// off the wall row, see [SharedTopo.latitude]/[SharedTopo.longitude]'s
+  /// doc) so the auto-updating stream re-emits on changes to any of them.
   Stream<List<SharedTopo>> watchSharedTopos() {
     const sql = '''
       SELECT
         w.id AS wall_id,
         w.name AS wall_name,
         w.owner_id AS owner_id,
-        a.latitude AS latitude,
-        a.longitude AS longitude,
+        w.latitude AS latitude,
+        w.longitude AS longitude,
         (SELECT p.local_path FROM photos p
            WHERE p.wall_id = w.id AND p.kind = 'original' AND p.deleted_at IS NULL
            ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS thumbnail_path,

@@ -53,6 +53,17 @@ class Walls extends Table with SyncColumns {
   TextColumn get visibility =>
       text().withDefault(const Constant('private'))();
 
+  /// GPS coordinates for this wall/topo, captured automatically from a
+  /// freshly-picked photo's EXIF GPS tags (see `core/location/photo_gps.dart`'s
+  /// `extractGpsFromImageBytes` and `LibraryCrudRepository.setWallCoordinates`)
+  /// — `null` until a photo with GPS EXIF has been attached. Unlike
+  /// [Areas.latitude]/[Areas.longitude] (manually set, never actually
+  /// populated by any UI as of v3), these are meant to be populated
+  /// automatically and back the Community map (see `CommunityRepository.
+  /// watchSharedTopos`).
+  RealColumn get latitude => real().nullable()();
+  RealColumn get longitude => real().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

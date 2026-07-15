@@ -12,7 +12,12 @@ void main() {
   late AppDatabase db;
   late CommunityRepository repo;
 
-  Future<void> seedArea(String id, {String name = 'Area'}) {
+  Future<void> seedArea(
+    String id, {
+    String name = 'Area',
+    double? latitude,
+    double? longitude,
+  }) {
     return db
         .into(db.areas)
         .insert(
@@ -21,6 +26,8 @@ void main() {
             createdAt: 1000,
             updatedAt: 1000,
             name: name,
+            latitude: Value(latitude),
+            longitude: Value(longitude),
           ),
         );
   }
@@ -45,6 +52,8 @@ void main() {
     required String sectorId,
     String name = 'Wall',
     String visibility = 'shared',
+    double? latitude,
+    double? longitude,
   }) {
     return db
         .into(db.walls)
@@ -57,6 +66,8 @@ void main() {
             name: name,
             sortOrder: 0,
             visibility: Value(visibility),
+            latitude: Value(latitude),
+            longitude: Value(longitude),
           ),
         );
   }
@@ -286,6 +297,49 @@ void main() {
 
         final topos = await repo.watchSharedTopos().first;
         expect(topos.any((t) => t.wallId == 'wall-private'), isFalse);
+      },
+    );
+  });
+
+  group('B2: SharedTopo coordinates come from the WALL, not the Area', () {
+    test(
+      'a shared wall with its own coordinates exposes those exact '
+      'coordinates, even when its ancestor Area has DIFFERENT coordinates '
+      'set (regression: coordinates must no longer be read off the Area)',
+      () async {
+        await seedArea('area-6', latitude: 1.0, longitude: 2.0);
+        await seedSector('sector-6', areaId: 'area-6');
+        await seedWall(
+          'wall-6',
+          sectorId: 'sector-6',
+          latitude: 47.4979,
+          longitude: 19.0402,
+        );
+
+        final topos = await repo.watchSharedTopos().first;
+        final topo = topos.singleWhere((t) => t.wallId == 'wall-6');
+
+        expect(topo.latitude, 47.4979);
+        expect(topo.longitude, 19.0402);
+        expect(topo.hasCoordinates, isTrue);
+      },
+    );
+
+    test(
+      'a shared wall with no coordinates of its own reports null/null '
+      '(NOT falling back to its ancestor Area\'s coordinates), and '
+      'hasCoordinates is false so the map view can omit it',
+      () async {
+        await seedArea('area-7', latitude: 1.0, longitude: 2.0);
+        await seedSector('sector-7', areaId: 'area-7');
+        await seedWall('wall-7', sectorId: 'sector-7');
+
+        final topos = await repo.watchSharedTopos().first;
+        final topo = topos.singleWhere((t) => t.wallId == 'wall-7');
+
+        expect(topo.latitude, isNull);
+        expect(topo.longitude, isNull);
+        expect(topo.hasCoordinates, isFalse);
       },
     );
   });

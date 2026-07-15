@@ -435,6 +435,35 @@ class LibraryCrudRepository {
     return _db.transaction(() => _setWallVisibility(wallId, 'private'));
   }
 
+  /// Records [latitude]/[longitude] as [wallId]'s GPS coordinates and marks
+  /// the wall dirty for sync, bumping `updatedAt` — the same wall-row update
+  /// shape [_setWallVisibility] uses (rather than [renameWall]'s, which
+  /// leaves `dirty` untouched): coordinates, like visibility, need to reach
+  /// the backend on the next push.
+  ///
+  /// Called automatically after a fresh photo pick that carries EXIF GPS
+  /// (see `core/location/photo_gps.dart`'s `extractGpsFromImageBytes`, wired
+  /// in from `topos_screen.dart`'s `_handleNewTopo` and
+  /// `topo_canvas_screen.dart`'s `captureWallGpsFromPhoto`) — never called
+  /// directly by any UI as of this feature.
+  Future<void> setWallCoordinates(
+    String wallId,
+    double latitude,
+    double longitude,
+  ) async {
+    final now = nowMs();
+    await (_db.update(
+      _db.walls,
+    )..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())).write(
+      db.WallsCompanion(
+        latitude: Value(latitude),
+        longitude: Value(longitude),
+        updatedAt: Value(now),
+        dirty: const Value(true),
+      ),
+    );
+  }
+
   Future<void> _setWallVisibility(String wallId, String visibility) async {
     final now = nowMs();
     await (_db.update(

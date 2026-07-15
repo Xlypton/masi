@@ -464,7 +464,225 @@ void main() {
     );
   });
 
-  group('fresh onCreate (schemaVersion 3)', () {
+  group('P3: v3 -> v4 migration (wall coordinates)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp(
+        'climbtopo_migration_test_',
+      );
+      dbFile = File(p.join(tempDir.path, 'v3.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test(
+      'ADD COLUMN migration adds latitude/longitude to walls without '
+      'losing pre-existing rows: both come back null for a pre-migration '
+      'wall, and a post-migration wall can set/read them',
+      () async {
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute('''
+          CREATE TABLE areas (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            latitude REAL NULL,
+            longitude REAL NULL
+          );
+
+          CREATE TABLE sectors (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            area_id TEXT NOT NULL REFERENCES areas (id),
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL
+          );
+
+          CREATE TABLE walls (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            sector_id TEXT NOT NULL REFERENCES sectors (id),
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            visibility TEXT NOT NULL DEFAULT 'private'
+          );
+
+          CREATE TABLE photos (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            local_path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            parent_photo_id TEXT NULL REFERENCES photos (id),
+            crop_xpct REAL NULL,
+            crop_width_pct REAL NULL
+          );
+
+          CREATE TABLE routes (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            photo_id TEXT NOT NULL REFERENCES photos (id),
+            number INTEGER NOT NULL,
+            name TEXT NULL,
+            grade_system TEXT NULL,
+            grade_raw TEXT NULL,
+            grade_sort_key REAL NULL,
+            style TEXT NULL,
+            description TEXT NULL,
+            color_index INTEGER NOT NULL,
+            points_json TEXT NOT NULL,
+            symbols_json TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            visible INTEGER NOT NULL DEFAULT 1
+          );
+
+          CREATE UNIQUE INDEX idx_routes_wall_number_live
+            ON routes (wall_id, number) WHERE deleted_at IS NULL;
+
+          CREATE TABLE comments (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            body TEXT NOT NULL,
+            author_name TEXT NULL
+          );
+
+          CREATE TABLE likes (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id)
+          );
+
+          CREATE TABLE ascents (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            route_id TEXT NOT NULL REFERENCES routes (id),
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            climbed_at INTEGER NOT NULL,
+            style TEXT NOT NULL,
+            notes TEXT NULL,
+            grade_opinion TEXT NULL
+          );
+
+          INSERT INTO areas (id, created_at, updated_at, name)
+            VALUES ('area-1', 1000, 1000, 'Pre-migration Area');
+
+          INSERT INTO sectors
+            (id, created_at, updated_at, area_id, name, sort_order)
+            VALUES
+            ('sector-1', 1000, 1000, 'area-1', 'Pre-migration Sector', 0);
+
+          INSERT INTO walls
+            (id, created_at, updated_at, sector_id, name, sort_order)
+            VALUES
+            ('wall-1', 1000, 1000, 'sector-1', 'Pre-migration Wall', 0);
+
+          PRAGMA user_version = 3;
+        ''');
+        raw.close();
+
+        // Open the SAME file with the current AppDatabase (schemaVersion
+        // 4). Drift reads the on-disk user_version (3), sees it doesn't
+        // match the target (4), and runs onUpgrade(m, 3, 4) — exercising
+        // only the `if (from < 4)` branch (the earlier branches are no-ops
+        // here since `3 < 2` and `3 < 3` are both false).
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        final wall = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals('wall-1'))).getSingle();
+        expect(
+          wall.name,
+          'Pre-migration Wall',
+          reason: 'pre-existing row must survive the migration',
+        );
+        expect(
+          wall.latitude,
+          isNull,
+          reason:
+              'the new latitude column must ADD COLUMN as null for '
+              'pre-existing rows',
+        );
+        expect(wall.longitude, isNull);
+
+        // Post-migration: the new columns are wired into the generated
+        // Companion/table (not just physically present in SQLite), and a
+        // fresh wall can set + read back real coordinates.
+        await db
+            .into(db.walls)
+            .insert(
+              WallsCompanion.insert(
+                id: 'wall-2',
+                createdAt: 2000,
+                updatedAt: 2000,
+                sectorId: 'sector-1',
+                name: 'Post-migration Wall',
+                sortOrder: 1,
+                latitude: const Value(47.4979),
+                longitude: const Value(19.0402),
+              ),
+            );
+        final newWall = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals('wall-2'))).getSingle();
+        expect(newWall.latitude, 47.4979);
+        expect(newWall.longitude, 19.0402);
+      },
+    );
+  });
+
+  group('fresh onCreate (schemaVersion 4)', () {
     test('builds all 8 tables, each carrying the full SyncColumns set', () async {
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);

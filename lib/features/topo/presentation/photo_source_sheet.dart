@@ -48,5 +48,12 @@ Future<ImageSource?> showPhotoSourceSheet(BuildContext context) {
 /// Thin wrapper around [ImagePicker.pickImage] so callers (and tests) have
 /// a single seam to inject/mock, without depending on `image_picker`
 /// directly.
+///
+/// `requestFullMetadata: true` is passed explicitly (it already defaults to
+/// `true` in `image_picker` ^1.2.2, so this is a no-op today, but pins the
+/// behavior against a future default change) — on iOS, WITHOUT it the
+/// plugin strips the picked file's EXIF metadata, including the GPS tags
+/// `core/location/photo_gps.dart`'s `extractGpsFromImageBytes` reads to
+/// auto-populate a wall's coordinates.
 Future<XFile?> pickPhotoFrom(ImageSource source) =>
-    ImagePicker().pickImage(source: source);
+    ImagePicker().pickImage(source: source, requestFullMetadata: true);

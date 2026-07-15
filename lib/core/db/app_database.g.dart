@@ -1402,6 +1402,28 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     requiredDuringInsert: false,
     defaultValue: const Constant('private'),
   );
+  static const VerificationMeta _latitudeMeta = const VerificationMeta(
+    'latitude',
+  );
+  @override
+  late final GeneratedColumn<double> latitude = GeneratedColumn<double>(
+    'latitude',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _longitudeMeta = const VerificationMeta(
+    'longitude',
+  );
+  @override
+  late final GeneratedColumn<double> longitude = GeneratedColumn<double>(
+    'longitude',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1415,6 +1437,8 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     name,
     sortOrder,
     visibility,
+    latitude,
+    longitude,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1503,6 +1527,18 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
         visibility.isAcceptableOrUnknown(data['visibility']!, _visibilityMeta),
       );
     }
+    if (data.containsKey('latitude')) {
+      context.handle(
+        _latitudeMeta,
+        latitude.isAcceptableOrUnknown(data['latitude']!, _latitudeMeta),
+      );
+    }
+    if (data.containsKey('longitude')) {
+      context.handle(
+        _longitudeMeta,
+        longitude.isAcceptableOrUnknown(data['longitude']!, _longitudeMeta),
+      );
+    }
     return context;
   }
 
@@ -1556,6 +1592,14 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
         DriftSqlType.string,
         data['${effectivePrefix}visibility'],
       )!,
+      latitude: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}latitude'],
+      ),
+      longitude: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}longitude'],
+      ),
     );
   }
 
@@ -1582,6 +1626,17 @@ class Wall extends DataClass implements Insertable<Wall> {
   /// [Routes.visible], which is a per-route render show/hide flag, not a
   /// sharing concept.
   final String visibility;
+
+  /// GPS coordinates for this wall/topo, captured automatically from a
+  /// freshly-picked photo's EXIF GPS tags (see `core/location/photo_gps.dart`'s
+  /// `extractGpsFromImageBytes` and `LibraryCrudRepository.setWallCoordinates`)
+  /// — `null` until a photo with GPS EXIF has been attached. Unlike
+  /// [Areas.latitude]/[Areas.longitude] (manually set, never actually
+  /// populated by any UI as of v3), these are meant to be populated
+  /// automatically and back the Community map (see `CommunityRepository.
+  /// watchSharedTopos`).
+  final double? latitude;
+  final double? longitude;
   const Wall({
     required this.id,
     required this.createdAt,
@@ -1594,6 +1649,8 @@ class Wall extends DataClass implements Insertable<Wall> {
     required this.name,
     required this.sortOrder,
     required this.visibility,
+    this.latitude,
+    this.longitude,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1615,6 +1672,12 @@ class Wall extends DataClass implements Insertable<Wall> {
     map['name'] = Variable<String>(name);
     map['sort_order'] = Variable<int>(sortOrder);
     map['visibility'] = Variable<String>(visibility);
+    if (!nullToAbsent || latitude != null) {
+      map['latitude'] = Variable<double>(latitude);
+    }
+    if (!nullToAbsent || longitude != null) {
+      map['longitude'] = Variable<double>(longitude);
+    }
     return map;
   }
 
@@ -1637,6 +1700,12 @@ class Wall extends DataClass implements Insertable<Wall> {
       name: Value(name),
       sortOrder: Value(sortOrder),
       visibility: Value(visibility),
+      latitude: latitude == null && nullToAbsent
+          ? const Value.absent()
+          : Value(latitude),
+      longitude: longitude == null && nullToAbsent
+          ? const Value.absent()
+          : Value(longitude),
     );
   }
 
@@ -1657,6 +1726,8 @@ class Wall extends DataClass implements Insertable<Wall> {
       name: serializer.fromJson<String>(json['name']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
       visibility: serializer.fromJson<String>(json['visibility']),
+      latitude: serializer.fromJson<double?>(json['latitude']),
+      longitude: serializer.fromJson<double?>(json['longitude']),
     );
   }
   @override
@@ -1674,6 +1745,8 @@ class Wall extends DataClass implements Insertable<Wall> {
       'name': serializer.toJson<String>(name),
       'sortOrder': serializer.toJson<int>(sortOrder),
       'visibility': serializer.toJson<String>(visibility),
+      'latitude': serializer.toJson<double?>(latitude),
+      'longitude': serializer.toJson<double?>(longitude),
     };
   }
 
@@ -1689,6 +1762,8 @@ class Wall extends DataClass implements Insertable<Wall> {
     String? name,
     int? sortOrder,
     String? visibility,
+    Value<double?> latitude = const Value.absent(),
+    Value<double?> longitude = const Value.absent(),
   }) => Wall(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -1701,6 +1776,8 @@ class Wall extends DataClass implements Insertable<Wall> {
     name: name ?? this.name,
     sortOrder: sortOrder ?? this.sortOrder,
     visibility: visibility ?? this.visibility,
+    latitude: latitude.present ? latitude.value : this.latitude,
+    longitude: longitude.present ? longitude.value : this.longitude,
   );
   Wall copyWithCompanion(WallsCompanion data) {
     return Wall(
@@ -1717,6 +1794,8 @@ class Wall extends DataClass implements Insertable<Wall> {
       visibility: data.visibility.present
           ? data.visibility.value
           : this.visibility,
+      latitude: data.latitude.present ? data.latitude.value : this.latitude,
+      longitude: data.longitude.present ? data.longitude.value : this.longitude,
     );
   }
 
@@ -1733,7 +1812,9 @@ class Wall extends DataClass implements Insertable<Wall> {
           ..write('sectorId: $sectorId, ')
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder, ')
-          ..write('visibility: $visibility')
+          ..write('visibility: $visibility, ')
+          ..write('latitude: $latitude, ')
+          ..write('longitude: $longitude')
           ..write(')'))
         .toString();
   }
@@ -1751,6 +1832,8 @@ class Wall extends DataClass implements Insertable<Wall> {
     name,
     sortOrder,
     visibility,
+    latitude,
+    longitude,
   );
   @override
   bool operator ==(Object other) =>
@@ -1766,7 +1849,9 @@ class Wall extends DataClass implements Insertable<Wall> {
           other.sectorId == this.sectorId &&
           other.name == this.name &&
           other.sortOrder == this.sortOrder &&
-          other.visibility == this.visibility);
+          other.visibility == this.visibility &&
+          other.latitude == this.latitude &&
+          other.longitude == this.longitude);
 }
 
 class WallsCompanion extends UpdateCompanion<Wall> {
@@ -1781,6 +1866,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
   final Value<String> name;
   final Value<int> sortOrder;
   final Value<String> visibility;
+  final Value<double?> latitude;
+  final Value<double?> longitude;
   final Value<int> rowid;
   const WallsCompanion({
     this.id = const Value.absent(),
@@ -1794,6 +1881,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     this.name = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.visibility = const Value.absent(),
+    this.latitude = const Value.absent(),
+    this.longitude = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   WallsCompanion.insert({
@@ -1808,6 +1897,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     required String name,
     required int sortOrder,
     this.visibility = const Value.absent(),
+    this.latitude = const Value.absent(),
+    this.longitude = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -1827,6 +1918,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     Expression<String>? name,
     Expression<int>? sortOrder,
     Expression<String>? visibility,
+    Expression<double>? latitude,
+    Expression<double>? longitude,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1841,6 +1934,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
       if (name != null) 'name': name,
       if (sortOrder != null) 'sort_order': sortOrder,
       if (visibility != null) 'visibility': visibility,
+      if (latitude != null) 'latitude': latitude,
+      if (longitude != null) 'longitude': longitude,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1857,6 +1952,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     Value<String>? name,
     Value<int>? sortOrder,
     Value<String>? visibility,
+    Value<double?>? latitude,
+    Value<double?>? longitude,
     Value<int>? rowid,
   }) {
     return WallsCompanion(
@@ -1871,6 +1968,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
       name: name ?? this.name,
       sortOrder: sortOrder ?? this.sortOrder,
       visibility: visibility ?? this.visibility,
+      latitude: latitude ?? this.latitude,
+      longitude: longitude ?? this.longitude,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1911,6 +2010,12 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     if (visibility.present) {
       map['visibility'] = Variable<String>(visibility.value);
     }
+    if (latitude.present) {
+      map['latitude'] = Variable<double>(latitude.value);
+    }
+    if (longitude.present) {
+      map['longitude'] = Variable<double>(longitude.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -1931,6 +2036,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder, ')
           ..write('visibility: $visibility, ')
+          ..write('latitude: $latitude, ')
+          ..write('longitude: $longitude, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -6795,6 +6902,8 @@ typedef $$WallsTableCreateCompanionBuilder =
       required String name,
       required int sortOrder,
       Value<String> visibility,
+      Value<double?> latitude,
+      Value<double?> longitude,
       Value<int> rowid,
     });
 typedef $$WallsTableUpdateCompanionBuilder =
@@ -6810,6 +6919,8 @@ typedef $$WallsTableUpdateCompanionBuilder =
       Value<String> name,
       Value<int> sortOrder,
       Value<String> visibility,
+      Value<double?> latitude,
+      Value<double?> longitude,
       Value<int> rowid,
     });
 
@@ -6985,6 +7096,16 @@ class $$WallsTableFilterComposer extends Composer<_$AppDatabase, $WallsTable> {
 
   ColumnFilters<String> get visibility => $composableBuilder(
     column: $table.visibility,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get latitude => $composableBuilder(
+    column: $table.latitude,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get longitude => $composableBuilder(
+    column: $table.longitude,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -7196,6 +7317,16 @@ class $$WallsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<double> get latitude => $composableBuilder(
+    column: $table.latitude,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get longitude => $composableBuilder(
+    column: $table.longitude,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$SectorsTableOrderingComposer get sectorId {
     final $$SectorsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -7260,6 +7391,12 @@ class $$WallsTableAnnotationComposer
     column: $table.visibility,
     builder: (column) => column,
   );
+
+  GeneratedColumn<double> get latitude =>
+      $composableBuilder(column: $table.latitude, builder: (column) => column);
+
+  GeneratedColumn<double> get longitude =>
+      $composableBuilder(column: $table.longitude, builder: (column) => column);
 
   $$SectorsTableAnnotationComposer get sectorId {
     final $$SectorsTableAnnotationComposer composer = $composerBuilder(
@@ -7456,6 +7593,8 @@ class $$WallsTableTableManager
                 Value<String> name = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<String> visibility = const Value.absent(),
+                Value<double?> latitude = const Value.absent(),
+                Value<double?> longitude = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => WallsCompanion(
                 id: id,
@@ -7469,6 +7608,8 @@ class $$WallsTableTableManager
                 name: name,
                 sortOrder: sortOrder,
                 visibility: visibility,
+                latitude: latitude,
+                longitude: longitude,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -7484,6 +7625,8 @@ class $$WallsTableTableManager
                 required String name,
                 required int sortOrder,
                 Value<String> visibility = const Value.absent(),
+                Value<double?> latitude = const Value.absent(),
+                Value<double?> longitude = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => WallsCompanion.insert(
                 id: id,
@@ -7497,6 +7640,8 @@ class $$WallsTableTableManager
                 name: name,
                 sortOrder: sortOrder,
                 visibility: visibility,
+                latitude: latitude,
+                longitude: longitude,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

@@ -157,6 +157,8 @@ Future<void> _seedWall(
   required String name,
   String visibility = 'private',
   int createdAt = 1000,
+  double? latitude,
+  double? longitude,
 }) {
   return db
       .into(db.walls)
@@ -169,6 +171,8 @@ Future<void> _seedWall(
           name: name,
           sortOrder: 0,
           visibility: Value(visibility),
+          latitude: Value(latitude),
+          longitude: Value(longitude),
         ),
       );
 }
@@ -262,13 +266,11 @@ Future<void> _seedRoute(
 /// "Sport Wall" graded 6a/sport and a "Trad Wall" graded 9a/trad -- used by
 /// the Subtask B (Community filtering) test groups below.
 Future<void> _seedFilterScenario(AppDatabase db) async {
-  await _seedArea(
-    db,
-    id: 'area-filter',
-    name: 'Filter Area',
-    latitude: 45.0,
-    longitude: 7.0,
-  );
+  // Coordinates now live on the WALL itself (see
+  // `LibraryCrudRepository.setWallCoordinates` /
+  // `CommunityRepository.watchSharedTopos`), not its ancestor Area — set
+  // below on `wall-sport`/`wall-trad` directly rather than on `area-filter`.
+  await _seedArea(db, id: 'area-filter', name: 'Filter Area');
   await _seedSector(db, id: 'sector-filter', areaId: 'area-filter', name: 'S');
 
   await _seedWall(
@@ -278,6 +280,8 @@ Future<void> _seedFilterScenario(AppDatabase db) async {
     name: 'Sport Wall',
     visibility: 'shared',
     createdAt: 2000,
+    latitude: 45.0,
+    longitude: 7.0,
   );
   final sportPhoto = await _seedPhoto(db, id: 'photo-sport', wallId: 'wall-sport');
   await _seedRoute(
@@ -298,6 +302,8 @@ Future<void> _seedFilterScenario(AppDatabase db) async {
     name: 'Trad Wall',
     visibility: 'shared',
     createdAt: 1000,
+    latitude: 46.0,
+    longitude: 8.0,
   );
   final tradPhoto = await _seedPhoto(db, id: 'photo-trad', wallId: 'wall-trad');
   await _seedRoute(
@@ -329,13 +335,11 @@ Finder _feedRowFinder() {
 /// with Area coordinates, one without) plus one private wall, which must
 /// never surface anywhere in the Community screen.
 Future<void> _seedStandardScenario(AppDatabase db) async {
-  await _seedArea(
-    db,
-    id: 'area-coords',
-    name: 'Area With Coords',
-    latitude: 45.0,
-    longitude: 7.0,
-  );
+  // Coordinates now live on the WALL itself (see
+  // `LibraryCrudRepository.setWallCoordinates` /
+  // `CommunityRepository.watchSharedTopos`), not its ancestor Area — set
+  // below on `wall-shared-1` directly rather than on `area-coords`.
+  await _seedArea(db, id: 'area-coords', name: 'Area With Coords');
   await _seedSector(db, id: 'sector-coords', areaId: 'area-coords', name: 'S1');
   await _seedWall(
     db,
@@ -344,6 +348,8 @@ Future<void> _seedStandardScenario(AppDatabase db) async {
     name: 'Shared One',
     visibility: 'shared',
     createdAt: 2000,
+    latitude: 45.0,
+    longitude: 7.0,
   );
   await _seedLike(db, id: 'like-1', wallId: 'wall-shared-1');
   await _seedLike(db, id: 'like-2', wallId: 'wall-shared-1');

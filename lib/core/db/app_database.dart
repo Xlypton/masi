@@ -18,7 +18,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -47,6 +47,16 @@ class AppDatabase extends _$AppDatabase {
         await m.createTable(comments);
         await m.createTable(likes);
         await m.createTable(ascents);
+      }
+      // v3 -> v4: adds nullable `latitude`/`longitude` to Walls, captured
+      // automatically from a freshly-picked photo's EXIF GPS tags (see
+      // `core/location/photo_gps.dart` + `LibraryCrudRepository.
+      // setWallCoordinates`) so a topo can be placed on the Community map
+      // without the user ever having to enter coordinates by hand. Plain
+      // ADD COLUMN, so every pre-existing wall comes back with both `null`.
+      if (from < 4) {
+        await m.addColumn(walls, walls.latitude);
+        await m.addColumn(walls, walls.longitude);
       }
     },
     beforeOpen: (details) async {

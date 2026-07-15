@@ -1681,4 +1681,57 @@ void main() {
       await repo.unpublishTopo('does-not-exist');
     });
   });
+
+  group('D6: setWallCoordinates', () {
+    test(
+      'persists latitude/longitude on the wall and marks it dirty with a '
+      'bumped updatedAt — the same wall-row shape _setWallVisibility uses',
+      () async {
+        final wall = await repo.createWall(
+          (await repo.createSector(
+            (await repo.createArea('Area')).id,
+            'Sector',
+          )).id,
+          'Wall',
+        );
+
+        final coordsRepo = LibraryCrudRepository(db, nowMs: () => 2000);
+        await coordsRepo.setWallCoordinates(wall.id, 47.4979, 19.0402);
+
+        final row = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wall.id))).getSingle();
+        expect(row.latitude, 47.4979);
+        expect(row.longitude, 19.0402);
+        expect(row.dirty, isTrue);
+        expect(row.updatedAt, 2000);
+      },
+    );
+
+    test(
+      'a sibling wall is left untouched: no coordinates, not dirty',
+      () async {
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final wall = await repo.createWall(sector.id, 'Wall');
+        final sibling = await repo.createWall(sector.id, 'Sibling');
+
+        await repo.setWallCoordinates(wall.id, 47.4979, 19.0402);
+
+        final siblingRow = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(sibling.id))).getSingle();
+        expect(siblingRow.latitude, isNull);
+        expect(siblingRow.longitude, isNull);
+        expect(siblingRow.dirty, isFalse);
+      },
+    );
+
+    test(
+      'against a nonexistent wallId is a silent no-op (no exception)',
+      () async {
+        await repo.setWallCoordinates('does-not-exist', 47.4979, 19.0402);
+      },
+    );
+  });
 }

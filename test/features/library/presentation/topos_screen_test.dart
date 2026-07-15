@@ -16,6 +16,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image/image.dart' as img;
+// Not exported from package:image's barrel (see photo_gps_test.dart's
+// identical import for why) -- needed here only to hand-build a geotagged
+// JPEG fixture for the A7 GPS-capture test below.
+import 'package:image/src/util/rational.dart';
 import 'package:image_picker/image_picker.dart';
 
 /// A minimal-but-real 1x1 transparent PNG (base64), used to give
@@ -25,6 +30,53 @@ final _tinyPngBytes = base64Decode(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY'
   '42YAAAAASUVORK5CYII=',
 );
+
+/// Builds real JPEG bytes for a tiny image, optionally carrying EXIF GPS
+/// tags for [latitude]/[longitude] (mirrors `photo_gps_test.dart`'s
+/// identical fixture builder). Used by the A7 GPS-capture group below --
+/// unlike the width/height-decode tests above, PNG can't carry EXIF here
+/// (this version of package:image doesn't parse PNG's `eXIf` chunk), so
+/// this fixture is a JPEG instead of `_tinyPngBytes`.
+List<int> _buildJpegBytes({double? latitude, double? longitude}) {
+  final image = img.Image(width: 4, height: 4);
+
+  if (latitude != null && longitude != null) {
+    final gps = image.exif.gpsIfd;
+    _setDms(gps, 'GPSLatitude', latitude, positiveRef: 'N', negativeRef: 'S');
+    _setDms(
+      gps,
+      'GPSLongitude',
+      longitude,
+      positiveRef: 'E',
+      negativeRef: 'W',
+    );
+  }
+
+  return img.encodeJpg(image);
+}
+
+void _setDms(
+  img.IfdDirectory gps,
+  String tagPrefix,
+  double decimal, {
+  required String positiveRef,
+  required String negativeRef,
+}) {
+  final ref = decimal < 0 ? negativeRef : positiveRef;
+  final absolute = decimal.abs();
+  final degrees = absolute.floor();
+  final minutesFull = (absolute - degrees) * 60;
+  final minutes = minutesFull.floor();
+  final secondsFull = (minutesFull - minutes) * 60;
+  final secondsNumerator = (secondsFull * 10000).round();
+
+  gps['${tagPrefix}Ref'] = img.IfdValueAscii(ref);
+  gps[tagPrefix] = img.IfdValueRational.list([
+    Rational(degrees, 1),
+    Rational(minutes, 1),
+    Rational(secondsNumerator, 10000),
+  ]);
+}
 
 /// Builds a [ProviderContainer] wired to a fresh in-memory database and
 /// registers teardown of both the container and the database connection.
@@ -94,6 +146,25 @@ Future<T> _dbWork<T>(WidgetTester tester, Future<T> Function() body) async {
     result = await body();
   });
   return result;
+}
+
+/// A [LibraryCrudRepository] whose [setWallCoordinates] always throws,
+/// leaving every other method (including [createTopo]/[attachPhotoToWall])
+/// backed by the real implementation against [db]. Used to prove that
+/// `_handleNewTopo`'s best-effort GPS capture is isolated: a coords-write
+/// failure must never abort the topo/photo creation that already committed
+/// before it runs, nor block the navigation that follows it.
+class _ThrowingSetCoordinatesRepository extends LibraryCrudRepository {
+  _ThrowingSetCoordinatesRepository(super.db, {required super.nowMs});
+
+  @override
+  Future<void> setWallCoordinates(
+    String wallId,
+    double latitude,
+    double longitude,
+  ) {
+    throw Exception('setWallCoordinates boom (test)');
+  }
 }
 
 void main() {
@@ -413,6 +484,115 @@ void main() {
     });
 
     testWidgets(
+      'a picked photo with EXIF GPS sets the new topo\'s wall coordinates '
+      '(reusing the SAME photoPicker seam, no native picker touched)',
+      (tester) async {
+        final container = _makeContainer();
+        late Directory tempDir;
+        late File jpegFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_gps_test',
+          );
+          jpegFile = File('${tempDir.path}/geotagged.jpg');
+          await jpegFile.writeAsBytes(
+            _buildJpegBytes(latitude: 47.4979, longitude: 19.0402),
+          );
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(jpegFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+        await _drain(tester);
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos.length, 1);
+
+        final wall = await _dbWork(
+          tester,
+          () => (container.read(appDatabaseProvider).select(
+            container.read(appDatabaseProvider).walls,
+          )..where((t) => t.id.equals(topos.single.wallId))).getSingle(),
+        );
+        expect(wall.latitude, closeTo(47.4979, 1e-4));
+        expect(wall.longitude, closeTo(19.0402, 1e-4));
+      },
+    );
+
+    testWidgets(
+      'a picked photo with NO EXIF GPS leaves the new topo\'s wall '
+      'coordinates null, no crash',
+      (tester) async {
+        final container = _makeContainer();
+        late Directory tempDir;
+        late File jpegFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_no_gps_test',
+          );
+          jpegFile = File('${tempDir.path}/no-gps.jpg');
+          await jpegFile.writeAsBytes(_buildJpegBytes());
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(jpegFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos.length, 1);
+
+        final wall = await _dbWork(
+          tester,
+          () => (container.read(appDatabaseProvider).select(
+            container.read(appDatabaseProvider).walls,
+          )..where((t) => t.id.equals(topos.single.wallId))).getSingle(),
+        );
+        expect(wall.latitude, isNull);
+        expect(wall.longitude, isNull);
+      },
+    );
+
+    testWidgets(
       'tapping New topo while toposProvider is still loading is a no-op: '
       'the photo-source picker is never invoked and no topo is created '
       '(regression for the stale/loading topo-count defect)',
@@ -576,6 +756,130 @@ void main() {
       },
     );
   });
+
+  group(
+    'coord-capture isolation: a setWallCoordinates failure must not abort '
+    "the already-committed topo/photo creation or block navigation "
+    '(regression -- the shared outer try/catch used to swallow this AFTER '
+    'unwinding past context.push)',
+    () {
+      testWidgets(
+        'a repo whose setWallCoordinates throws still leaves the topo+photo '
+        "committed AND still navigates to the new wall's canvas",
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final repo = _ThrowingSetCoordinatesRepository(
+            db,
+            nowMs: () => 1000,
+          );
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              libraryCrudRepositoryProvider.overrideWithValue(repo),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          late Directory tempDir;
+          late File jpegFile;
+          await tester.runAsync(() async {
+            tempDir = await Directory.systemTemp.createTemp(
+              'topos_screen_coords_throw_test',
+            );
+            jpegFile = File('${tempDir.path}/geotagged.jpg');
+            // Geotagged so extractGpsFromImageBytes returns non-null and
+            // _handleNewTopo actually calls the throwing setWallCoordinates
+            // -- a photo with no GPS would never exercise this path at all.
+            await jpegFile.writeAsBytes(
+              _buildJpegBytes(latitude: 47.4979, longitude: 19.0402),
+            );
+          });
+          addTearDown(() {
+            if (tempDir.existsSync()) {
+              tempDir.deleteSync(recursive: true);
+            }
+          });
+
+          // A bespoke router (rather than the shared `_wrap`) so the
+          // `/walls/:wallId` destination is independently observable: it
+          // renders a distinctly-keyed screen and records the pushed
+          // wallId, which is the only way to tell "navigation happened"
+          // apart from "navigation was silently skipped" -- the bug this
+          // test targets leaves the user stuck on ToposScreen with no
+          // visible error.
+          String? pushedWallId;
+          final router = GoRouter(
+            initialLocation: '/',
+            routes: [
+              GoRoute(
+                path: '/',
+                builder: (context, state) => ToposScreen(
+                  photoSourcePicker: (context) async => ImageSource.gallery,
+                  photoPicker: (source) async => XFile(jpegFile.path),
+                ),
+              ),
+              GoRoute(
+                path: '/walls/:wallId',
+                builder: (context, state) {
+                  pushedWallId = state.pathParameters['wallId'];
+                  return const Scaffold(
+                    key: Key('fake-walls-screen'),
+                    body: SizedBox(),
+                  );
+                },
+              ),
+              GoRoute(
+                path: '/areas',
+                builder: (context, state) => const SizedBox(),
+              ),
+            ],
+          );
+
+          await tester.pumpWidget(
+            UncontrolledProviderScope(
+              container: container,
+              child: MaterialApp.router(
+                theme: MasiTheme.light,
+                routerConfig: router,
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('topos-new-topo')));
+          await _drain(tester);
+          await _drain(tester);
+
+          // No uncaught exception should ever surface: the throw must be
+          // fully contained.
+          expect(tester.takeException(), isNull);
+
+          // The topo (and its photo) were already committed to the DB
+          // BEFORE setWallCoordinates ran, so they must exist regardless of
+          // whether the throw is isolated -- this alone does not
+          // distinguish pre-fix from post-fix behavior.
+          final topos = await _dbWork(tester, () => repo.watchTopos().first);
+          expect(topos.length, 1);
+          expect(topos.single.thumbnailPath, isNotNull);
+
+          // This DOES distinguish pre-fix from post-fix: pre-fix, the
+          // setWallCoordinates throw propagates out of the shared outer
+          // try, skipping the `context.push` call below it entirely, so
+          // this screen never appears and pushedWallId stays null.
+          expect(
+            find.byKey(const Key('fake-walls-screen')),
+            findsOneWidget,
+            reason:
+                'a coords-capture failure must not prevent navigating to '
+                'the newly-created topo',
+          );
+          expect(pushedWallId, topos.single.wallId);
+        },
+      );
+    },
+  );
 
   group('A2b: singular route-count subtitle', () {
     testWidgets('a topo with exactly one route renders "1 route" (singular)', (

@@ -53,8 +53,31 @@ CREATE TABLE IF NOT EXISTS public.walls (
   "sectorId" TEXT NOT NULL,
   "name" TEXT NOT NULL,
   "sortOrder" INTEGER NOT NULL DEFAULT 0,
-  "visibility" TEXT NOT NULL DEFAULT 'private'
+  "visibility" TEXT NOT NULL DEFAULT 'private',
+  -- Local app schema v4 (see lib/core/db/tables.dart's Walls table):
+  -- captured automatically from a freshly-picked photo's EXIF GPS tags
+  -- (core/location/photo_gps.dart), so a topo can be placed on the
+  -- Community map without the user entering coordinates by hand. `Wall`'s
+  -- drift-generated toJson()/fromJson() already round-trip these two keys
+  -- like every other column, so no sync-payload code change was needed —
+  -- only this schema addition.
+  "latitude" DOUBLE PRECISION,
+  "longitude" DOUBLE PRECISION
 );
+
+-- ---------- LIVE-DATABASE MIGRATION (P0 backend already applied) ----------
+-- The block above is CREATE TABLE IF NOT EXISTS, so it no-ops against the
+-- walls table already applied live (see MEMORY.md: "P0 backend
+-- applied+verified live"). The two new columns above will NOT reach that
+-- live table until this ALTER TABLE is run against it explicitly:
+--
+--   ALTER TABLE public.walls
+--     ADD COLUMN IF NOT EXISTS "latitude" DOUBLE PRECISION,
+--     ADD COLUMN IF NOT EXISTS "longitude" DOUBLE PRECISION;
+--
+-- NOT run here / by any agent — the user must run this against the live
+-- Supabase project (Dashboard -> SQL Editor) themselves before wall
+-- coordinates will sync.
 
 CREATE TABLE IF NOT EXISTS public.photos (
   "id" TEXT PRIMARY KEY NOT NULL,
