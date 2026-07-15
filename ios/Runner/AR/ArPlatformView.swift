@@ -1,37 +1,50 @@
-import AVFoundation
-import CoreMedia
+import ARKit
 import CoreVideo
 import Flutter
+import ImageIO
+import SceneKit
 import UIKit
+import simd
 
 /// Native AR platform view behind `UiKitView(viewType: 'climbtopo/ar')`.
 ///
-/// Shows a live back-camera preview. In `auto` mode it continuously runs
-/// `ArVisionPipeline` against incoming frames and publishes alignment
-/// updates over the `climbtopo/ar/alignment` EventChannel (via
-/// `ArChannelHandler`). In `manual` mode it only shows the camera preview
-/// -- Vision is not run, and Dart owns the manual transform entirely.
+/// Uses ARKit world tracking (`ARWorldTrackingConfiguration` with
+/// `detectionImages`) to detect the reference topo photo in the live camera
+/// feed. The FIRST solid detection is pinned as a fixed world-space
+/// transform (see `pinnedTransform`/`pinnedPhysicalSize` below); every
+/// subsequent frame re-projects that same pinned transform's four corners
+/// (in reference-image pixel order: TL, TR, BR, BL) into current screen
+/// space via `ARSCNView.projectPoint`, and publishes them over the
+/// `climbtopo/ar/alignment` EventChannel (via `ArChannelHandler`) as
+/// `corners` -- Dart derives its own overlay transform from those four
+/// screen points rather than from a homography matrix. Further image
+/// (re-)detections are intentionally ignored once pinned, since on 3D
+/// scenes ARKit can false-match the reference image onto other surfaces,
+/// which otherwise causes the overlay to jump/flicker; `rescanSession()`
+/// clears the pin so the user can redo a bad first lock.
+///
+/// `ArVisionPipeline` (the previous AVFoundation + Vision homography
+/// pipeline) is intentionally left in the target, unused.
 final class ArPlatformView: NSObject, FlutterPlatformView {
 
-    private let containerView: UIView
-    private let previewLayer: AVCaptureVideoPreviewLayer
-    private let captureSession = AVCaptureSession()
-    private let videoOutput = AVCaptureVideoDataOutput()
-    private let sessionQueue = DispatchQueue(label: "climbtopo.ar.session")
-
-    private let visionPipeline = ArVisionPipeline()
+    private let sceneView = ARSCNView()
     private let channelHandler: ArChannelHandler
 
     private var mode: ArMode = .auto
-    private var isSessionGraphConfigured = false
-    private var referenceLoaded = false
+    private var referenceImage: ARReferenceImage?
+    private var wasTracked = false
+    private var frameCounter = 0
+    private var pinnedTransform: simd_float4x4?
+    private var pinnedPhysicalSize: CGSize?
+    /// Manual-mode fixed world-space corners (TL,TR,BR,BL), set by
+    /// `lockManualAlignment(screenCorners:)`. Takes precedence over
+    /// `pinnedTransform`/`pinnedPhysicalSize` when present -- see
+    /// `session(_:didUpdate:)`. Independent of the auto-mode pin so auto
+    /// mode's existing per-frame path is unaffected.
+    private var pinnedManualCorners: [simd_float3]?
 
     init(frame: CGRect, viewId: Int64, messenger: FlutterBinaryMessenger, args: Any?) {
-        containerView = UIView(frame: frame)
-        containerView.backgroundColor = .black
-
-        previewLayer = AVCaptureVideoPreviewLayer(session: captureSession)
-        previewLayer.videoGravity = .resizeAspectFill
+        sceneView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
         // The MethodChannel ("climbtopo/ar") and EventChannel
         // ("climbtopo/ar/alignment") are created here, against the exact
@@ -42,13 +55,14 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
 
         super.init()
 
+        sceneView.session.delegate = self
         channelHandler.sessionController = self
-        containerView.layer.addSublayer(previewLayer)
-        previewLayer.frame = containerView.bounds
+
+        NSLog("AR_DBG ARKit ArPlatformView.init")
     }
 
     func view() -> UIView {
-        containerView
+        sceneView
     }
 }
 
@@ -63,128 +77,302 @@ extension ArPlatformView: ArSessionControlling {
         routesJson: String,
         completion: @escaping (Bool) -> Void
     ) {
+        NSLog("AR_DBG startSession invoked")
         // `routesJson` is accepted for contract completeness -- the native
-        // side does not need route geometry to compute the homography
-        // (Dart applies the returned matrix to its own stored route
-        // points), so it is intentionally unused here.
+        // side does not need route geometry: Dart owns and draws the route
+        // overlay itself, deriving its transform from the tracked corners
+        // this view sends, so `routesJson` is intentionally unused here.
         _ = routesJson
 
-        let referenceOk = visionPipeline.loadReference(path: referenceImagePath, refWidth: refWidth, refHeight: refHeight)
-        referenceLoaded = referenceOk
+        guard let uiImage = UIImage(contentsOfFile: referenceImagePath), let cg = uiImage.cgImage else {
+            NSLog("AR_DBG ref decode FAILED")
+            completion(false)
+            return
+        }
 
-        sessionQueue.async { [weak self] in
+        // 0.3m is a nominal physical width -- ARKit only uses it to scale
+        // the tracked image's pose in world space. Because we read the
+        // corners back out via the anchor's own `physicalSize` (which
+        // ARKit derives from this same value plus the image's pixel aspect
+        // ratio), the corner projection stays self-consistent regardless of
+        // the real-world print size.
+        let ref = ARReferenceImage(cg, orientation: .up, physicalWidth: 0.3)
+        referenceImage = ref
+
+        let config = ARWorldTrackingConfiguration()
+        config.detectionImages = [ref]
+        config.maximumNumberOfTrackedImages = 1
+
+        DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            self.configureCaptureIfNeeded()
-            if !self.captureSession.isRunning {
-                self.captureSession.startRunning()
-            }
-            DispatchQueue.main.async {
-                self.previewLayer.frame = self.containerView.bounds
-                completion(referenceOk)
-            }
+            self.wasTracked = false
+            self.frameCounter = 0
+            self.pinnedTransform = nil
+            self.pinnedPhysicalSize = nil
+            self.pinnedManualCorners = nil
+            self.sceneView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+            NSLog("AR_DBG ARKit world session.run detectionImages=1")
+            completion(true)
         }
     }
 
     func stopSession() {
-        referenceLoaded = false
-        visionPipeline.reset()
-        sessionQueue.async { [weak self] in
-            guard let self else { return }
-            if self.captureSession.isRunning {
-                self.captureSession.stopRunning()
-            }
-        }
+        sceneView.session.pause()
+        NSLog("AR_DBG ARKit session paused")
     }
 
     func setMode(_ newMode: ArMode) {
+        // Mode no longer gates whether tracking runs (ARKit always tracks
+        // once the session is running) -- Dart still reads/writes it via
+        // the `climbtopo/ar` MethodChannel, so it is kept here for contract
+        // completeness. Switching modes resets ALL pins so tracking starts
+        // fresh in the newly-selected mode.
         mode = newMode
-    }
-}
-
-// MARK: - Capture session setup
-
-private extension ArPlatformView {
-
-    func configureCaptureIfNeeded() {
-        guard !isSessionGraphConfigured else { return }
-
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            buildSessionGraph()
-            isSessionGraphConfigured = true
-
-        case .notDetermined:
-            // Block this session-queue call until the permission prompt is
-            // answered, so `startSession`'s completion still reflects the
-            // final state rather than racing ahead with an empty session.
-            let semaphore = DispatchSemaphore(value: 0)
-            var granted = false
-            AVCaptureDevice.requestAccess(for: .video) { result in
-                granted = result
-                semaphore.signal()
-            }
-            semaphore.wait()
-            if granted {
-                buildSessionGraph()
-                isSessionGraphConfigured = true
-            } else {
-                reportPermissionDenied()
-            }
-
-        default:
-            // Denied or restricted: don't crash -- report a benign
-            // "not tracking" state so Dart can surface a permission prompt.
-            reportPermissionDenied()
-        }
+        pinnedTransform = nil
+        pinnedPhysicalSize = nil
+        pinnedManualCorners = nil
+        wasTracked = false
+        frameCounter = 0
     }
 
-    func buildSessionGraph() {
-        captureSession.beginConfiguration()
-        defer { captureSession.commitConfiguration() }
-
-        captureSession.sessionPreset = .hd1280x720
-
-        if
-            let camera = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back),
-            let input = try? AVCaptureDeviceInput(device: camera),
-            captureSession.canAddInput(input)
-        {
-            captureSession.addInput(input)
-        }
-
-        videoOutput.setSampleBufferDelegate(self, queue: sessionQueue)
-        videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA]
-        videoOutput.alwaysDiscardsLateVideoFrames = true
-        if captureSession.canAddOutput(videoOutput) {
-            captureSession.addOutput(videoOutput)
-        }
-    }
-
-    func reportPermissionDenied() {
+    /// Clears the pinned world transform and re-runs image detection from
+    /// scratch, so the user can redo a bad first lock (e.g. one that pinned
+    /// onto the wrong surface). Exposed to Dart via the `rescan` method on
+    /// the `climbtopo/ar` MethodChannel (see `ArChannelHandler`).
+    func rescanSession() {
+        pinnedTransform = nil
+        pinnedPhysicalSize = nil
+        pinnedManualCorners = nil
+        wasTracked = false
+        frameCounter = 0
+        guard let ref = referenceImage else { return }
+        let config = ARWorldTrackingConfiguration()
+        config.detectionImages = [ref]
+        config.maximumNumberOfTrackedImages = 1
         DispatchQueue.main.async { [weak self] in
-            self?.channelHandler.sendAlignment(homography: ArVisionPipeline.identity, confidence: 0, tracking: false)
+            self?.sceneView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
+            NSLog("AR_DBG rescan session.run")
         }
     }
-}
 
-// MARK: - AVCaptureVideoDataOutputSampleBufferDelegate
-
-extension ArPlatformView: AVCaptureVideoDataOutputSampleBufferDelegate {
-
-    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        guard mode == .auto, referenceLoaded, let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+    /// Converts the 4 manually-placed SCREEN corners (TL,TR,BR,BL, in
+    /// Flutter view/logical points) into 4 fixed WORLD points by
+    /// unprojecting each screen point into a ray and intersecting it with a
+    /// plane placed at the current camera-forward distance to the scene
+    /// (estimated via a raycast at the corners' centroid, falling back to a
+    /// nominal 2.5m). Stores the result in `pinnedManualCorners`, which
+    /// `session(_:didUpdate:)` reprojects every frame -- independent of, and
+    /// without touching, `pinnedTransform`/`pinnedPhysicalSize`.
+    ///
+    /// Reports success via `completion` rather than silently no-op'ing: the
+    /// lock is refused (completion(false), pin left untouched) when there is
+    /// no current frame, tracking is not `.normal` (pinning during poor
+    /// tracking bakes in a bad pose), or the computed world points are
+    /// degenerate (non-finite).
+    func lockManualAlignment(screenCorners: [Double], completion: @escaping (Bool) -> Void) {
+        guard screenCorners.count == 8 else {
+            completion(false)
             return
         }
-
-        visionPipeline.processLiveFrame(pixelBuffer) { [weak self] result in
-            guard let self, let result else { return }
-            DispatchQueue.main.async {
-                self.channelHandler.sendAlignment(
-                    homography: result.homography,
-                    confidence: result.confidence,
-                    tracking: result.tracking
-                )
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard let frame = self.sceneView.session.currentFrame else {
+                completion(false)
+                return
             }
+            guard case .normal = frame.camera.trackingState else {
+                NSLog("AR_DBG manual lock refused: trackingState not normal")
+                completion(false)
+                return
+            }
+
+            let cam = frame.camera.transform
+            let camPos = simd_float3(cam.columns.3.x, cam.columns.3.y, cam.columns.3.z)
+            let camForward = -simd_normalize(simd_float3(cam.columns.2.x, cam.columns.2.y, cam.columns.2.z))
+
+            let cx = (screenCorners[0] + screenCorners[2] + screenCorners[4] + screenCorners[6]) / 4
+            let cy = (screenCorners[1] + screenCorners[3] + screenCorners[5] + screenCorners[7]) / 4
+
+            var d: Float = 2.5
+            if let query = self.sceneView.raycastQuery(
+                from: CGPoint(x: cx, y: cy),
+                allowing: .estimatedPlane,
+                alignment: .any
+            ), let hit = self.sceneView.session.raycast(query).first {
+                let hitPos = simd_float3(
+                    hit.worldTransform.columns.3.x,
+                    hit.worldTransform.columns.3.y,
+                    hit.worldTransform.columns.3.z
+                )
+                d = simd_length(hitPos - camPos)
+            }
+            let planePoint = camPos + d * camForward
+
+            var world: [simd_float3] = []
+            world.reserveCapacity(4)
+            for i in 0..<4 {
+                let sx = screenCorners[i * 2]
+                let sy = screenCorners[i * 2 + 1]
+                let near = self.sceneView.unprojectPoint(SCNVector3(Float(sx), Float(sy), 0))
+                let far = self.sceneView.unprojectPoint(SCNVector3(Float(sx), Float(sy), 1))
+                let origin = simd_float3(near)
+                let dir = simd_normalize(simd_float3(far) - simd_float3(near))
+                let denom = simd_dot(dir, camForward)
+                let worldPt: simd_float3
+                if abs(denom) < 1e-5 {
+                    worldPt = planePoint
+                } else {
+                    let t = simd_dot(planePoint - origin, camForward) / denom
+                    worldPt = origin + t * dir
+                }
+                world.append(worldPt)
+            }
+
+            let allFinite = world.allSatisfy { p in
+                p.x.isFinite && p.y.isFinite && p.z.isFinite
+            }
+            guard allFinite else {
+                NSLog("AR_DBG manual lock refused: non-finite world point")
+                completion(false)
+                return
+            }
+
+            self.pinnedManualCorners = world
+            self.wasTracked = false
+            NSLog("AR_DBG manual lock pinned d=%f", d)
+            completion(true)
+        }
+    }
+
+    /// Clears the manual world pin so `session(_:didUpdate:)` falls back to
+    /// the auto path (or not-tracked, if auto has no pin either).
+    func unlockManualAlignment() {
+        pinnedManualCorners = nil
+        wasTracked = false
+        NSLog("AR_DBG manual unlock")
+    }
+}
+
+// MARK: - ARSessionDelegate (per-frame tracking -> screen-space corners)
+
+extension ArPlatformView: ARSessionDelegate {
+
+    /// Whether `projectPoint`'s result [screen] is a usable on-screen
+    /// projection: ARKit/SceneKit's `projectPoint` happily projects points
+    /// BEHIND the camera too (mirrored/flipped into view space), and can
+    /// occasionally produce non-finite output for degenerate inputs. Both
+    /// are silently-wrong-not-crashing failure modes that would otherwise
+    /// ship a garbage overlay to Dart with `tracking: true`. `screen.z` is
+    /// the projected depth in normalized device-coordinate-like space
+    /// (`0` = at the near plane, `1` = at the far plane); requiring it
+    /// strictly within `(0, 1)` is the standard "is this point actually in
+    /// front of the camera and within its clipping range" frustum check.
+    private static func isValidProjection(_ screen: SCNVector3) -> Bool {
+        guard screen.x.isFinite, screen.y.isFinite, screen.z.isFinite else {
+            return false
+        }
+        return screen.z > 0 && screen.z < 1
+    }
+
+    func session(_ session: ARSession, didUpdate frame: ARFrame) {
+        let fw = CVPixelBufferGetWidth(frame.capturedImage)
+        let fh = CVPixelBufferGetHeight(frame.capturedImage)
+
+        // Pin on the FIRST detection, only once tracking is solid. After that we
+        // ride world tracking off the fixed transform and IGNORE further image
+        // (re-)detections, which on 3D scenes false-match onto other surfaces.
+        if mode == .auto, pinnedTransform == nil, case .normal = frame.camera.trackingState,
+           let img = frame.anchors.compactMap({ $0 as? ARImageAnchor }).first {
+            pinnedTransform = img.transform
+            pinnedPhysicalSize = img.referenceImage.physicalSize
+            NSLog("AR_DBG pinned world transform")
+        }
+        let pinned = pinnedTransform
+        let phys = pinnedPhysicalSize
+
+        // `projectPoint` reads current render/view-port state, and the
+        // event sink must be called on the main thread -- ARSessionDelegate
+        // callbacks arrive on ARKit's own background queue, so hop to main
+        // before doing either.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let pts = self.pinnedManualCorners {
+                // Manual world pin takes precedence -- reproject the 4 fixed
+                // world points locked in by `lockManualAlignment`.
+                var out: [Double] = []
+                out.reserveCapacity(8)
+                var allValid = true
+                for p in pts {
+                    let s = self.sceneView.projectPoint(SCNVector3(p.x, p.y, p.z))
+                    if !Self.isValidProjection(s) {
+                        allValid = false
+                        break
+                    }
+                    out.append(Double(s.x)); out.append(Double(s.y))
+                }
+                guard allValid else {
+                    // A corner projected behind the camera (or produced a
+                    // non-finite screen point) -- publishing it would send a
+                    // garbage/flipped overlay for this frame, so fall back to
+                    // the not-tracked payload exactly like the `else` branch.
+                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG manual pin invalid projection, tracking=false") }
+                    self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0)
+                    return
+                }
+                if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG manual pin tracking=true") }
+                self.channelHandler.sendAlignment(corners: out, tracking: true, frameWidth: fw, frameHeight: fh)
+            } else if let t = pinned, let size = phys {
+                // EXISTING auto path -- unchanged.
+                let hw = Float(size.width) / 2
+                let hh = Float(size.height) / 2
+                // KEEP this corrected corner order (fixes the ARImageAnchor axis quarter-turn):
+                let locals: [simd_float4] = [
+                    simd_float4(-hw, 0, hh, 1),   // TL
+                    simd_float4(-hw, 0, -hh, 1),  // TR
+                    simd_float4(hw, 0, -hh, 1),   // BR
+                    simd_float4(hw, 0, hh, 1),    // BL
+                ]
+                var out: [Double] = []
+                out.reserveCapacity(8)
+                var allValid = true
+                for l in locals {
+                    let world = t * l
+                    let screen = self.sceneView.projectPoint(SCNVector3(world.x, world.y, world.z))
+                    if !Self.isValidProjection(screen) {
+                        allValid = false
+                        break
+                    }
+                    out.append(Double(screen.x)); out.append(Double(screen.y))
+                }
+                guard allValid else {
+                    // A pinned corner projected behind the camera (or
+                    // produced a non-finite screen point) -- abandon this
+                    // frame rather than publish a garbage overlay, falling
+                    // back to the same not-tracked payload as the `else`
+                    // branch below.
+                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG ARKit invalid projection, tracking=false") }
+                    self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0)
+                    return
+                }
+                if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG ARKit tracking=true (pinned)") }
+                self.frameCounter += 1
+                if self.frameCounter == 1 || self.frameCounter % 60 == 0 {
+                    NSLog("AR_DBG ARKit pinned corners=%@", out.description)
+                }
+                self.channelHandler.sendAlignment(corners: out, tracking: true, frameWidth: fw, frameHeight: fh)
+            } else {
+                // EXISTING not-tracked path -- unchanged.
+                if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG ARKit tracking=false") }
+                self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0)
+            }
+        }
+    }
+
+    func session(_ session: ARSession, didFailWithError error: Error) {
+        NSLog("AR_DBG ARKit session didFailWithError=%@", error.localizedDescription)
+        DispatchQueue.main.async { [weak self] in
+            self?.wasTracked = false
+            self?.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0)
         }
     }
 }

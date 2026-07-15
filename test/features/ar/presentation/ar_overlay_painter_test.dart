@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:climbtopo/features/ar/domain/homography.dart';
@@ -7,10 +9,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A minimal fake [Canvas] that records the drawing calls
-/// [ArOverlayPainter] actually makes (`drawCircle`, `drawLine`, `drawPath`)
-/// without needing a mocking package. [ArOverlayPainter.paint] never calls
-/// `save`/`restore`/`transform`/clip/text methods, so leaving those to the
-/// `noSuchMethod` fallback is safe: they are never invoked in these tests.
+/// [ArOverlayPainter] actually makes (`drawCircle`, `drawLine`, `drawPath`,
+/// and — when [ArOverlayPainter.outline] is set — `save`/`transform`/
+/// `saveLayer`/`drawImageRect`/`restore`) without needing a mocking package.
+/// [callOrder] records the sequence of method names invoked so tests can
+/// assert ordering (e.g. the outline's `transform` happens before its
+/// `drawImageRect`, which happens before any route polylines).
 class _RecordingCanvas implements Canvas {
   final List<Offset> circleCenters = [];
   final List<Paint> circlePaints = [];
@@ -18,27 +22,86 @@ class _RecordingCanvas implements Canvas {
   final List<Paint> linePaints = [];
   final List<Path> paths = [];
   final List<Paint> pathPaints = [];
+  final List<Float64List> transforms = [];
+  final List<({Rect? bounds, Paint paint})> saveLayers = [];
+  final List<({ui.Image image, Rect src, Rect dst, Paint paint})> imageRects = [];
+  int saveCount = 0;
+  int restoreCount = 0;
+  final List<String> callOrder = [];
 
   @override
   void drawCircle(Offset c, double radius, Paint paint) {
+    callOrder.add('drawCircle');
     circleCenters.add(c);
     circlePaints.add(paint);
   }
 
   @override
   void drawLine(Offset p1, Offset p2, Paint paint) {
+    callOrder.add('drawLine');
     lines.add((p1: p1, p2: p2));
     linePaints.add(paint);
   }
 
   @override
   void drawPath(Path path, Paint paint) {
+    callOrder.add('drawPath');
     paths.add(path);
     pathPaints.add(paint);
   }
 
   @override
+  void save() {
+    callOrder.add('save');
+    saveCount++;
+  }
+
+  @override
+  void restore() {
+    callOrder.add('restore');
+    restoreCount++;
+  }
+
+  @override
+  void transform(Float64List matrix4) {
+    callOrder.add('transform');
+    transforms.add(matrix4);
+  }
+
+  @override
+  void saveLayer(Rect? bounds, Paint paint) {
+    callOrder.add('saveLayer');
+    saveLayers.add((bounds: bounds, paint: paint));
+  }
+
+  @override
+  void drawImageRect(ui.Image image, Rect src, Rect dst, Paint paint) {
+    callOrder.add('drawImageRect');
+    imageRects.add((image: image, src: src, dst: dst, paint: paint));
+  }
+
+  @override
   dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// Decodes a tiny 2x2 RGBA image, for tests that need a real (non-null)
+/// `ui.Image` to pass as [ArOverlayPainter.outline].
+Future<ui.Image> _createTinyImage() {
+  final completer = Completer<ui.Image>();
+  final pixels = Uint8List.fromList(<int>[
+    255, 0, 0, 255, //
+    0, 255, 0, 255, //
+    0, 0, 255, 255, //
+    255, 255, 0, 255, //
+  ]);
+  ui.decodeImageFromPixels(
+    pixels,
+    2,
+    2,
+    ui.PixelFormat.rgba8888,
+    completer.complete,
+  );
+  return completer.future;
 }
 
 void main() {
@@ -239,6 +302,84 @@ void main() {
     );
   });
 
+  group('outline (ghost reference image)', () {
+    test('outline: null (default) draws no image; existing behavior unaffected', () {
+      final route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+      );
+      final painter = buildPainter(routes: [route]); // outline defaults to null.
+      final canvas = _RecordingCanvas();
+
+      painter.paint(canvas, refSize);
+
+      expect(canvas.imageRects, isEmpty);
+      expect(canvas.transforms, isEmpty);
+      expect(canvas.saveLayers, isEmpty);
+      // Existing polyline behavior is unaffected by the absent outline.
+      expect(canvas.lines, hasLength(1));
+      expect(canvas.lines.single.p1, Offset.zero);
+      expect(canvas.lines.single.p2, const Offset(400, 300));
+    });
+
+    test(
+      'outline: non-null draws the image transformed by homography, before '
+      'route polylines',
+      () async {
+        final image = await _createTinyImage();
+        final homography = Homography.translation(20, 10);
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+        );
+
+        final painter = ArOverlayPainter(
+          routes: [route],
+          refSize: refSize,
+          homography: homography,
+          palette: palette,
+          outline: image,
+        );
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, refSize);
+
+        expect(canvas.imageRects, hasLength(1));
+        final rec = canvas.imageRects.single;
+        expect(rec.image, same(image));
+        expect(rec.src, Rect.fromLTWH(0, 0, image.width.toDouble(), image.height.toDouble()));
+        expect(rec.dst, Rect.fromLTWH(0, 0, refSize.width, refSize.height));
+        // The hard binary edge image is scaled up into `dst`; without
+        // high-quality filtering that upscale looks jagged/aliased on
+        // device, so the outline paint must opt into bilinear filtering.
+        expect(rec.paint.filterQuality, FilterQuality.high);
+        expect(rec.paint.isAntiAlias, isTrue);
+
+        expect(canvas.transforms, hasLength(1));
+        final expected = homography.toMatrix4ColumnMajor();
+        final actual = canvas.transforms.single;
+        expect(actual.length, 16);
+        for (var i = 0; i < 16; i++) {
+          expect(actual[i], closeTo(expected[i], 1e-9));
+        }
+
+        // Ordering: transform -> saveLayer -> drawImageRect -> (restore,
+        // restore) -> route polyline drawing, so the outline renders as a
+        // ghost *behind* the routes.
+        final transformIndex = canvas.callOrder.indexOf('transform');
+        final imageIndex = canvas.callOrder.indexOf('drawImageRect');
+        final lineIndex = canvas.callOrder.indexOf('drawLine');
+        expect(transformIndex, lessThan(imageIndex));
+        expect(imageIndex, lessThan(lineIndex));
+
+        expect(canvas.saveCount, 1);
+        expect(canvas.restoreCount, 2); // one for saveLayer, one for save/transform.
+      },
+    );
+  });
+
   group('A5: shouldRepaint', () {
     test('returns false when everything is identical', () {
       final routes = [
@@ -302,6 +443,35 @@ void main() {
 
         final sameResolverReference = buildPainter(routeColorResolver: resolver);
         expect(withResolver.shouldRepaint(sameResolverReference), isFalse);
+      },
+    );
+
+    test(
+      'returns true when outline differs (one null, one non-null); '
+      'returns false when both share the identical outline reference',
+      () async {
+        final image = await _createTinyImage();
+
+        final withoutOutline = buildPainter();
+        final withOutline = ArOverlayPainter(
+          routes: const [],
+          refSize: refSize,
+          homography: Homography.identity(),
+          palette: palette,
+          outline: image,
+        );
+
+        expect(withoutOutline.shouldRepaint(withOutline), isTrue);
+        expect(withOutline.shouldRepaint(withoutOutline), isTrue);
+
+        final sameOutlineReference = ArOverlayPainter(
+          routes: const [],
+          refSize: refSize,
+          homography: Homography.identity(),
+          palette: palette,
+          outline: image,
+        );
+        expect(withOutline.shouldRepaint(sameOutlineReference), isFalse);
       },
     );
   });

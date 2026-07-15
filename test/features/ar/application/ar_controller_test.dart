@@ -1,6 +1,5 @@
 import 'package:climbtopo/features/ar/application/ar_channel.dart';
 import 'package:climbtopo/features/ar/application/ar_controller.dart';
-import 'package:climbtopo/features/ar/domain/homography.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -12,7 +11,6 @@ void main() {
     test('copyWith overrides only the given fields', () {
       const initial = ArState(mode: ArMode.auto, active: false);
       final alignment = ArAlignment(
-        homography: Homography.identity(),
         confidence: 0.5,
         tracking: true,
       );
@@ -30,7 +28,6 @@ void main() {
 
     test('equality/hashCode are value-based', () {
       final alignment = ArAlignment(
-        homography: Homography.identity(),
         confidence: 0.5,
         tracking: true,
       );
@@ -99,9 +96,21 @@ void main() {
       },
     );
 
+    test(
+      'setMode always resets arLockedProvider back to unlocked, so '
+      'switching modes never leaves a stale lock behind',
+      () {
+        container.read(arLockedProvider.notifier).toggle();
+        expect(container.read(arLockedProvider), isTrue);
+
+        container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+        expect(container.read(arLockedProvider), isFalse);
+      },
+    );
+
     test('A4: onAlignment(a) sets state.latest', () {
       final alignment = ArAlignment.fromMap(<String, Object?>{
-        'homography': <double>[1, 0, 0, 0, 1, 0, 0, 0, 1],
         'confidence': 0.7,
         'tracking': true,
       });
@@ -119,6 +128,42 @@ void main() {
       container.read(arControllerProvider.notifier).markActive(false);
 
       expect(container.read(arControllerProvider).active, isFalse);
+    });
+  });
+
+  group('ArLockedController', () {
+    late ProviderContainer container;
+
+    setUp(() {
+      container = ProviderContainer();
+      addTearDown(container.dispose);
+    });
+
+    test('build() starts unlocked', () {
+      expect(container.read(arLockedProvider), isFalse);
+    });
+
+    test('toggle() flips locked <-> unlocked', () {
+      final notifier = container.read(arLockedProvider.notifier);
+
+      notifier.toggle();
+      expect(container.read(arLockedProvider), isTrue);
+
+      notifier.toggle();
+      expect(container.read(arLockedProvider), isFalse);
+    });
+
+    test('reset() returns to unlocked from either state', () {
+      final notifier = container.read(arLockedProvider.notifier);
+
+      notifier.reset();
+      expect(container.read(arLockedProvider), isFalse);
+
+      notifier.toggle();
+      expect(container.read(arLockedProvider), isTrue);
+
+      notifier.reset();
+      expect(container.read(arLockedProvider), isFalse);
     });
   });
 }

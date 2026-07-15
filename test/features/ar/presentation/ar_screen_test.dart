@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:ui' as ui;
+
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/ar/application/ar_channel.dart';
@@ -14,6 +17,61 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
+
+/// Stands in for the real `path_provider` platform channel plugin, which has
+/// no mock/fake registered in this suite's plain `flutter test` host.
+///
+/// `PhotoRepository.loadOriginal` (via `PhotoFiles.resolvePhotoPath`, added
+/// alongside the #17 relative-photo-path batch) awaits
+/// `getApplicationDocumentsDirectory()` for every persisted photo whose
+/// stored `localPath` is relative (the canonical form) — which every photo
+/// `LibraryCrudRepository.attachPhotoToWall` creates now is, since the fake
+/// `/tmp/...` path this suite's A1 test attaches never exists on disk (see
+/// `PhotoFiles.importPhoto`'s doc), so it's stored as-is in relative form.
+///
+/// Left unmocked, that `getApplicationDocumentsDirectory()` call goes out
+/// over the real (unregistered) `plugins.flutter.io/path_provider`
+/// `MethodChannel`. A plain `test()` body rejects such a call promptly with
+/// `MissingPluginException`, but the identical call made from inside a
+/// mounted widget's async lifecycle (as `ArScreen._load` does here) never
+/// settles under this binding's ordinary fake-clock `pump()` — so
+/// `_loading` would stay `true` forever, its `CircularProgressIndicator`'s
+/// indeterminate/repeating animation would keep scheduling frames, and
+/// `pumpAndSettle` would time out (confirmed while diagnosing this suite's
+/// A1 failure). Overriding `PathProviderPlatform.instance` with this fake
+/// bypasses the platform channel entirely — `getApplicationDocumentsPath`
+/// becomes a plain Dart `Future` that resolves on an ordinary microtask —
+/// so `pump()`/`pumpAndSettle()` observe it settle normally, exactly like
+/// every other provider override in this test file.
+class _FakePathProviderPlatform extends PathProviderPlatform {
+  @override
+  Future<String?> getApplicationDocumentsPath() async =>
+      '/tmp/ar_screen_test_docs';
+}
+
+/// Decodes a tiny 2x2 RGBA image, for tests that need a real (non-null)
+/// `ui.Image` to pass as [ArAlignmentStage.outline]. Mirrors
+/// `ar_overlay_painter_test.dart`'s `_createTinyImage`; must be run inside
+/// `tester.runAsync` here since these callers are `testWidgets` (running
+/// under a fake-async zone), unlike that file's plain `test()` callers.
+Future<ui.Image> _decode2x2() {
+  final completer = Completer<ui.Image>();
+  final pixels = Uint8List.fromList(<int>[
+    255, 0, 0, 255, //
+    0, 255, 0, 255, //
+    0, 0, 255, 255, //
+    255, 255, 0, 255, //
+  ]);
+  ui.decodeImageFromPixels(
+    pixels,
+    2,
+    2,
+    ui.PixelFormat.rgba8888,
+    completer.complete,
+  );
+  return completer.future;
+}
 
 /// Covers the v2-ar-viewer AR screen contract:
 ///  - A1: on a non-iOS platform (the host `flutter test` always runs on —
@@ -38,13 +96,36 @@ void main() {
   // ArAlignmentStage group's mode-toggle interactions never hit an
   // unhandled MissingPluginException from the unregistered real channel.
   const arMethodChannel = MethodChannel('climbtopo/ar');
+
+  /// Records every `climbtopo/ar` method call made during a test — used by
+  /// the Re-scan control tests below to assert `rescan` was invoked (with no
+  /// args) without needing a dedicated mock per test.
+  ///
+  /// `lockManual` defaults to returning `true` (a successful native pin) so
+  /// every existing lock-flips-to-true test keeps passing without each one
+  /// having to configure its own handler; the "native declines to lock"
+  /// tests below override this per-test via a fresh
+  /// `setMockMethodCallHandler` call.
+  final List<MethodCall> arCalls = <MethodCall>[];
+
+  // Swapped in for every test in this file (see _FakePathProviderPlatform's
+  // doc) — harmless for every test besides A1/A1b/Fix 1 (the only ones that
+  // mount a real ArScreen), since it's simply never consulted otherwise.
+  final originalPathProviderPlatform = PathProviderPlatform.instance;
   setUp(() {
+    arCalls.clear();
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-        .setMockMethodCallHandler(arMethodChannel, (call) async => null);
+        .setMockMethodCallHandler(arMethodChannel, (call) async {
+          arCalls.add(call);
+          if (call.method == 'lockManual') return true;
+          return null;
+        });
+    PathProviderPlatform.instance = _FakePathProviderPlatform();
   });
   tearDown(() {
     TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
         .setMockMethodCallHandler(arMethodChannel, null);
+    PathProviderPlatform.instance = originalPathProviderPlatform;
   });
 
   group('ArScreen', () {
@@ -67,22 +148,25 @@ void main() {
         final area = await crud.createArea('Area');
         final sector = await crud.createSector(area.id, 'Sector');
         final wall = await crud.createWall(sector.id, 'Wall');
-        final photoId = await crud.attachPhotoToWall(
-          wall.id,
-          '/tmp/wall-photo.jpg',
-          1000,
-          2000,
-        );
-        final routeRepo = RouteRepository(db, nowMs: () => 1000);
-        await routeRepo.upsertRoute(
-          wall.id,
-          photoId,
-          const TopoRoute(
-            id: 1,
-            number: 1,
-            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
-          ),
-        );
+        late String photoId;
+        await tester.runAsync(() async {
+          photoId = await crud.attachPhotoToWall(
+            wall.id,
+            '/tmp/wall-photo.jpg',
+            1000,
+            2000,
+          );
+          final routeRepo = RouteRepository(db, nowMs: () => 1000);
+          await routeRepo.upsertRoute(
+            wall.id,
+            photoId,
+            const TopoRoute(
+              id: 1,
+              number: 1,
+              points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+            ),
+          );
+        });
 
         await tester.pumpWidget(
           UncontrolledProviderScope(
@@ -103,8 +187,9 @@ void main() {
 
     testWidgets(
       'Fix 1: entering AR for a different wall resets arControllerProvider '
-      'back to ArMode.auto and manualAlignProvider back to identity, even '
-      'though both are app-lifetime singletons never scoped to a wall',
+      'back to the auto (ARKit-tracking) default, manualAlignProvider back '
+      'to identity, and arLockedProvider back to unlocked, even though all '
+      'three are app-lifetime singletons never scoped to a wall',
       (tester) async {
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
@@ -133,15 +218,23 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // Simulate the user switching to Manual and hand-adjusting the
-        // overlay, as if this were a real wall-A AR session.
+        // Every AR entry now defaults to auto (ARKit tracking is the
+        // primary alignment mode).
+        expect(container.read(arControllerProvider).mode, ArMode.auto);
+        expect(container.read(arLockedProvider), isFalse);
+
+        // Simulate the user having switched to manual (e.g. ARKit tracking
+        // never locked on) and hand-adjusted/locked the overlay, as if this
+        // were a real wall-A AR session.
         container.read(arControllerProvider.notifier).setMode(ArMode.manual);
         container.read(manualAlignProvider.notifier).pan(const Offset(9, 9));
+        container.read(arLockedProvider.notifier).toggle();
         expect(container.read(arControllerProvider).mode, ArMode.manual);
         expect(
           container.read(manualAlignProvider),
           isNot(Homography.identity()),
         );
+        expect(container.read(arLockedProvider), isTrue);
 
         // "Back out": unmount wall A's ArScreen entirely — mirroring what a
         // real Navigator.pop does (destroys the whole route's widget
@@ -159,7 +252,8 @@ void main() {
 
         // Enter AR for a DIFFERENT wall: a genuinely fresh ArScreen widget
         // (a new wallId means a new route/widget in the real app), but the
-        // SAME app-lifetime arControllerProvider/manualAlignProvider.
+        // SAME app-lifetime arControllerProvider/manualAlignProvider/
+        // arLockedProvider.
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
@@ -171,7 +265,10 @@ void main() {
         expect(
           container.read(arControllerProvider).mode,
           ArMode.auto,
-          reason: "wall B's AR entry must not inherit wall A's Manual mode",
+          reason:
+              "wall B's AR entry must land on the auto default, same as "
+              "wall A's did — even though wall A's session had switched to "
+              'manual and locked before backing out',
         );
         expect(
           container.read(manualAlignProvider),
@@ -179,6 +276,11 @@ void main() {
           reason:
               "wall B's AR entry must not inherit wall A's leftover "
               'hand-adjusted homography',
+        );
+        expect(
+          container.read(arLockedProvider),
+          isFalse,
+          reason: "wall B's AR entry must not inherit wall A's lock",
         );
       },
     );
@@ -217,29 +319,56 @@ void main() {
 
   group('ArAlignmentStage (platform-agnostic overlay/toggle/gesture core)', () {
     const refSize = Size(1000, 2000);
+    // A fixed-size view so the composite fit/fill homography is
+    // deterministic: fitInto(refSize=1000x2000, viewSize=400x800) scales by
+    // exactly 0.4 (both axes hit their limit at once, no letterboxing), so
+    // the route-space center (0.5, 0.5) always lands exactly on the view
+    // center (200, 400).
+    const viewSize = Size(400, 800);
     const route = TopoRoute(
       id: 1,
       number: 1,
       points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
     );
 
-    Widget buildStage(ProviderContainer container) {
+    Widget buildStage(ProviderContainer container, {ui.Image? outline}) {
       return UncontrolledProviderScope(
         container: container,
         child: MaterialApp(
           home: Scaffold(
-            body: ArAlignmentStage(
-              // Stand-in for the native camera surface — ArAlignmentStage
-              // never inspects this widget, so a plain Container exercises
-              // exactly the same overlay/toggle/gesture code path a real
-              // UiKitView would sit underneath on-device.
-              cameraView: Container(key: const Key('fake-camera-view')),
-              routes: [route],
-              refSize: refSize,
+            body: SizedBox(
+              width: viewSize.width,
+              height: viewSize.height,
+              child: ArAlignmentStage(
+                // Stand-in for the native camera surface — ArAlignmentStage
+                // never inspects this widget, so a plain Container exercises
+                // exactly the same overlay/toggle/gesture code path a real
+                // UiKitView would sit underneath on-device.
+                cameraView: Container(key: const Key('fake-camera-view')),
+                routes: [route],
+                refSize: refSize,
+                outline: outline,
+              ),
             ),
           ),
         ),
       );
+    }
+
+    /// Pins the test surface's logical size to exactly `viewSize` (400x800)
+    /// so the `SizedBox(width: viewSize.width, height: viewSize.height)` in
+    /// `buildStage` is never clamped by the platform's real screen bounds.
+    /// Flutter's default test surface is 800x600 logical px, which would
+    /// otherwise cap the 800-tall SizedBox at 600 before it ever reaches
+    /// `ArAlignmentStage`'s `LayoutBuilder`, silently breaking the
+    /// `fitInto(refSize, viewSize)` math this whole group's expected
+    /// coordinates are built on. Mirrors the golden-test viewport pin in
+    /// ar_overlay_painter_test.dart.
+    void pinViewSize(WidgetTester tester) {
+      tester.view.physicalSize = viewSize;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
     }
 
     ArOverlayPainter currentPainter(WidgetTester tester) {
@@ -251,123 +380,179 @@ void main() {
       return customPaint.painter as ArOverlayPainter;
     }
 
-    testWidgets(
-      'A2: AUTO mode feeds the overlay ArController.latest\'s homography; '
-      'toggling to MANUAL switches the overlay to manualAlignProvider\'s '
-      'homography',
-      (tester) async {
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-
-        await tester.pumpWidget(buildStage(container));
-        await tester.pump();
-
-        expect(find.byKey(const Key('fake-camera-view')), findsOneWidget);
-        expect(
-          container.read(arControllerProvider).mode,
-          ArMode.auto,
-          reason: 'ArController starts in auto mode',
-        );
-        expect(
-          currentPainter(tester).homography,
-          Homography.identity(),
-          reason: 'no alignment pushed yet — falls back to identity',
-        );
-
-        final pushedHomography = Homography.translation(5, 7);
-        container.read(arControllerProvider.notifier).onAlignment(
-          ArAlignment(
-            homography: pushedHomography,
-            confidence: 0.9,
-            tracking: true,
-          ),
-        );
-        await tester.pump();
-
-        expect(
-          currentPainter(tester).homography,
-          pushedHomography,
-          reason:
-              'AUTO mode must feed the overlay from ArController.latest',
-        );
-
-        // Toggle to manual via the actual button (not the provider directly)
-        // — this is the real user-facing control.
-        await tester.tap(find.byKey(const Key('ar-mode-toggle')));
-        await tester.pump();
-
-        expect(container.read(arControllerProvider).mode, ArMode.manual);
-        expect(
-          currentPainter(tester).homography,
-          Homography.identity(),
-          reason:
-              'MANUAL mode must feed the overlay from manualAlignProvider, '
-              'not the stale auto alignment — starts at identity',
-        );
-
-        container.read(manualAlignProvider.notifier).pan(const Offset(3, 4));
-        await tester.pump();
-
-        expect(
-          currentPainter(tester).homography,
-          container.read(manualAlignProvider),
-          reason:
-              'MANUAL mode overlay must track manualAlignProvider live, '
-              'and must NOT have reverted to the earlier auto alignment',
-        );
-        expect(
-          currentPainter(tester).homography,
-          isNot(pushedHomography),
-        );
-      },
-    );
+    /// Warps the route-space center point (0.5, 0.5) through the currently
+    /// mounted painter's homography — the on-screen point the middle of the
+    /// route geometry actually renders at.
+    Offset warpedCenter(WidgetTester tester) {
+      return currentPainter(
+        tester,
+      ).homography.warpOriginalPercent(const Offset(0.5, 0.5), refSize);
+    }
 
     testWidgets(
-      'A3: in manual mode, a pan gesture over the overlay updates '
-      "manualAlignProvider's homography away from identity",
+      'MANUAL with no gesture yet: the composite homography is the fitted '
+      'placement (route center lands on the view center) — manual mode '
+      'starts fitted+draggable, not off-screen at raw identity',
       (tester) async {
+        pinViewSize(tester);
         final container = ProviderContainer();
         addTearDown(container.dispose);
-        // Start directly in manual mode so the gesture layer is present
-        // from the very first frame.
         container.read(arControllerProvider.notifier).setMode(ArMode.manual);
 
         await tester.pumpWidget(buildStage(container));
         await tester.pump();
 
-        expect(
-          find.byKey(const Key('ar-manual-gesture-layer')),
-          findsOneWidget,
-        );
-        expect(container.read(manualAlignProvider), Homography.identity());
-
-        await tester.drag(
-          find.byKey(const Key('ar-manual-gesture-layer')),
-          const Offset(30, 20),
-        );
-        await tester.pump();
-
-        expect(
-          container.read(manualAlignProvider),
-          isNot(Homography.identity()),
-          reason: 'a pan gesture must nudge manualAlignProvider off identity',
-        );
-
-        final warped = container
-            .read(manualAlignProvider)
-            .warp(const Offset(0, 0));
-        expect(
-          warped,
-          isNot(const Offset(0, 0)),
-          reason: 'the origin should have visibly translated after the pan',
-        );
+        final center = warpedCenter(tester);
+        expect(center.dx, closeTo(200, 1e-6));
+        expect(center.dy, closeTo(400, 1e-6));
       },
     );
 
     testWidgets(
-      "the reset button (manual mode only) restores manualAlignProvider "
-      'to identity',
+      'MANUAL after a pan drag: the warped route center moves by roughly '
+      'the drag delta on top of the fitted placement, staying on screen',
       (tester) async {
+        pinViewSize(tester);
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
+
+        await tester.drag(
+          find.byKey(const Key('ar-manual-gesture-layer')),
+          const Offset(30, -20),
+        );
+        await tester.pump();
+
+        final center = warpedCenter(tester);
+        expect(center.dx, closeTo(230, 1e-6));
+        expect(center.dy, closeTo(380, 1e-6));
+        expect(center.dx, inInclusiveRange(0, viewSize.width));
+        expect(center.dy, inInclusiveRange(0, viewSize.height));
+      },
+    );
+
+    testWidgets(
+      'AUTO with no alignment pushed yet: the composite falls back to the '
+      'fitted ghost overlay (route center on the view center), confidence 0',
+      (tester) async {
+        pinViewSize(tester);
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
+
+        expect(
+          container.read(arControllerProvider).mode,
+          ArMode.auto,
+          reason: 'ArController starts in auto mode',
+        );
+
+        final center = warpedCenter(tester);
+        expect(center.dx, closeTo(200, 1e-6));
+        expect(center.dy, closeTo(400, 1e-6));
+        expect(currentPainter(tester).confidence, 0.0);
+      },
+    );
+
+    testWidgets(
+      'AUTO with a latest alignment reporting tracking:true + '
+      'screenCorners: the composite is fromQuad(refSize corners, '
+      'screenCorners) — mapping the reference photo directly onto the '
+      'ARKit-reported screen corners — not the fitted-ghost fallback, '
+      'confidence 1.0, outline hidden',
+      (tester) async {
+        pinViewSize(tester);
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final image = (await tester.runAsync(_decode2x2))!;
+
+        await tester.pumpWidget(buildStage(container, outline: image));
+        await tester.pump();
+
+        const corners = [
+          Offset(50, 50),
+          Offset(350, 50),
+          Offset(350, 750),
+          Offset(50, 750),
+        ];
+        container.read(arControllerProvider.notifier).onAlignment(
+          ArAlignment(
+            confidence: 0.0,
+            tracking: true,
+            screenCorners: corners,
+          ),
+        );
+        await tester.pump();
+
+        final expected = Homography.fromQuad(
+          [
+            Offset.zero,
+            Offset(refSize.width, 0),
+            Offset(refSize.width, refSize.height),
+            Offset(0, refSize.height),
+          ],
+          corners,
+        );
+
+        expect(currentPainter(tester).homography, expected);
+        expect(currentPainter(tester).confidence, 1.0);
+        expect(currentPainter(tester).outline, isNull);
+
+        // The reference photo's corners land on (approximately) the
+        // ARKit-reported screen corners.
+        final topLeft = expected.warp(Offset.zero);
+        expect(topLeft.dx, closeTo(50, 1e-6));
+        expect(topLeft.dy, closeTo(50, 1e-6));
+        final bottomRight = expected.warp(
+          Offset(refSize.width, refSize.height),
+        );
+        expect(bottomRight.dx, closeTo(350, 1e-6));
+        expect(bottomRight.dy, closeTo(750, 1e-6));
+      },
+    );
+
+    testWidgets(
+      'AUTO with a latest alignment reporting tracking:false (even with '
+      'screenCorners present): falls back to the fitted ghost overlay, not '
+      'fromQuad — confidence 0',
+      (tester) async {
+        pinViewSize(tester);
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
+
+        container.read(arControllerProvider.notifier).onAlignment(
+          ArAlignment(
+            confidence: 0.0,
+            tracking: false,
+            screenCorners: [
+              Offset(50, 50),
+              Offset(350, 50),
+              Offset(350, 750),
+              Offset(50, 750),
+            ],
+          ),
+        );
+        await tester.pump();
+
+        final center = warpedCenter(tester);
+        expect(center.dx, closeTo(200, 1e-6));
+        expect(center.dy, closeTo(400, 1e-6));
+        expect(currentPainter(tester).confidence, 0.0);
+      },
+    );
+
+    testWidgets(
+      'the reset button (manual mode only) restores the composite back to '
+      'the fitted placement (route center on the view center)',
+      (tester) async {
+        pinViewSize(tester);
         final container = ProviderContainer();
         addTearDown(container.dispose);
         container.read(arControllerProvider.notifier).setMode(ArMode.manual);
@@ -376,14 +561,445 @@ void main() {
         await tester.pumpWidget(buildStage(container));
         await tester.pump();
 
-        expect(container.read(manualAlignProvider), isNot(Homography.identity()));
+        expect(
+          container.read(manualAlignProvider),
+          isNot(Homography.identity()),
+        );
         expect(find.byKey(const Key('ar-reset')), findsOneWidget);
 
         await tester.tap(find.byKey(const Key('ar-reset')));
         await tester.pump();
 
         expect(container.read(manualAlignProvider), Homography.identity());
+
+        final center = warpedCenter(tester);
+        expect(center.dx, closeTo(200, 1e-6));
+        expect(center.dy, closeTo(400, 1e-6));
       },
     );
+
+    testWidgets(
+      'discoverability: AUTO shows an "Auto" label with a "Point at the '
+      'wall" hint; MANUAL (unlocked) shows a "Manual" label with a "Line up '
+      'the outline" hint',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
+
+        expect(find.text('Auto'), findsOneWidget);
+        expect(
+          tester.widget<Text>(find.byKey(const Key('ar-hint'))).data,
+          contains('Point at the wall'),
+        );
+
+        await tester.tap(find.byKey(const Key('ar-mode-toggle')));
+        await tester.pump();
+
+        expect(find.text('Manual'), findsOneWidget);
+        expect(
+          tester.widget<Text>(find.byKey(const Key('ar-hint'))).data,
+          contains('Line up the outline'),
+        );
+      },
+    );
+
+    testWidgets(
+      'the mode-toggle FAB shows the CURRENT mode as a letter: "A" in auto, '
+      '"M" in manual',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
+
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('ar-mode-toggle')),
+            matching: find.text('A'),
+          ),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const Key('ar-mode-toggle')));
+        await tester.pump();
+
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('ar-mode-toggle')),
+            matching: find.text('M'),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'discoverability: AUTO + tracking:true shows a "Tracking" label with a '
+      '"Routes locked to the wall" hint',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
+
+        container.read(arControllerProvider.notifier).onAlignment(
+          ArAlignment(
+            confidence: 0.0,
+            tracking: true,
+            screenCorners: [
+              Offset(50, 50),
+              Offset(350, 50),
+              Offset(350, 750),
+              Offset(50, 750),
+            ],
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('Tracking'), findsOneWidget);
+        expect(
+          tester.widget<Text>(find.byKey(const Key('ar-hint'))).data,
+          contains('locked to the wall'),
+        );
+      },
+    );
+
+    testWidgets(
+      'discoverability: once locked (not yet tracking), the status label '
+      'reads "Locked" with a "Move slowly to find the wall" hint',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('ar-lock')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Locked'), findsOneWidget);
+        expect(
+          tester.widget<Text>(find.byKey(const Key('ar-hint'))).data,
+          contains('Move slowly to find the wall'),
+        );
+      },
+    );
+
+    testWidgets(
+      'discoverability: once locked AND tracking, the status label reads '
+      '"Locked" with a "Routes anchored to the wall" hint',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('ar-lock')));
+        await tester.pumpAndSettle();
+
+        container.read(arControllerProvider.notifier).onAlignment(
+          ArAlignment(
+            confidence: 0.0,
+            tracking: true,
+            screenCorners: const [
+              Offset(50, 50),
+              Offset(350, 50),
+              Offset(350, 750),
+              Offset(50, 750),
+            ],
+          ),
+        );
+        await tester.pump();
+
+        expect(find.text('Locked'), findsOneWidget);
+        expect(
+          tester.widget<Text>(find.byKey(const Key('ar-hint'))).data,
+          contains('Routes anchored to the wall'),
+        );
+      },
+    );
+
+    group('outline-guided alignment + Lock', () {
+      testWidgets(
+        'MANUAL + unlocked + an outline image supplied: the painter receives '
+        'that exact image as its outline',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+          final image = (await tester.runAsync(_decode2x2))!;
+
+          await tester.pumpWidget(buildStage(container, outline: image));
+          await tester.pump();
+
+          expect(currentPainter(tester).outline, same(image));
+          expect(container.read(arLockedProvider), isFalse);
+        },
+      );
+
+      testWidgets(
+        'AUTO mode: the painter outline is null even when an outline image '
+        'is supplied — the guide is manual-only',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          final image = (await tester.runAsync(_decode2x2))!;
+
+          await tester.pumpWidget(buildStage(container, outline: image));
+          await tester.pump();
+
+          expect(
+            container.read(arControllerProvider).mode,
+            ArMode.auto,
+            reason: 'ArController starts in auto mode',
+          );
+          expect(currentPainter(tester).outline, isNull);
+        },
+      );
+
+      testWidgets(
+        'tapping ar-lock: locks the alignment, hides the outline guide, and '
+        'removes the manual gesture layer (routes render frozen)',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+          final image = (await tester.runAsync(_decode2x2))!;
+
+          await tester.pumpWidget(buildStage(container, outline: image));
+          await tester.pump();
+
+          expect(currentPainter(tester).outline, same(image));
+          expect(
+            find.byKey(const Key('ar-manual-gesture-layer')),
+            findsOneWidget,
+          );
+
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pumpAndSettle();
+
+          expect(container.read(arLockedProvider), isTrue);
+          expect(currentPainter(tester).outline, isNull);
+          expect(
+            find.byKey(const Key('ar-manual-gesture-layer')),
+            findsNothing,
+          );
+          expect(
+            tester.widget<Text>(find.byKey(const Key('ar-hint'))).data,
+            contains('Move slowly to find the wall'),
+          );
+        },
+      );
+
+      testWidgets(
+        'tapping ar-lock a second time: unlocks again, restoring the '
+        'outline guide and the manual gesture layer',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+          final image = (await tester.runAsync(_decode2x2))!;
+
+          await tester.pumpWidget(buildStage(container, outline: image));
+          await tester.pump();
+
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pumpAndSettle();
+          expect(container.read(arLockedProvider), isTrue);
+
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pump();
+
+          expect(container.read(arLockedProvider), isFalse);
+          expect(currentPainter(tester).outline, same(image));
+          expect(
+            find.byKey(const Key('ar-manual-gesture-layer')),
+            findsOneWidget,
+          );
+        },
+      );
+
+      testWidgets(
+        'while locked, the reset FAB is hidden but the lock FAB (as an '
+        'unlock control) remains',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+          expect(find.byKey(const Key('ar-reset')), findsOneWidget);
+          expect(find.byKey(const Key('ar-lock')), findsOneWidget);
+
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pumpAndSettle();
+
+          expect(find.byKey(const Key('ar-reset')), findsNothing);
+          expect(find.byKey(const Key('ar-lock')), findsOneWidget);
+        },
+      );
+    });
+
+    group('manual lock <-> native wiring', () {
+      testWidgets(
+        'in unlocked manual mode, tapping ar-lock records exactly one '
+        'lockManual call whose 8 corner doubles equal fit.warp(refCorners), '
+        'and flips locked to true',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+          arCalls.clear();
+
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pumpAndSettle();
+
+          final lockCalls = arCalls.where((c) => c.method == 'lockManual');
+          expect(lockCalls, hasLength(1));
+
+          // manual starts at identity, so the composite is just fit: compute
+          // the expected corners from Homography.fitInto(refSize, viewSize)
+          // warped over the 4 ref corners.
+          final fit = Homography.fitInto(refSize, viewSize);
+          final expected = <double>[];
+          for (final p in [
+            Offset.zero,
+            Offset(refSize.width, 0),
+            Offset(refSize.width, refSize.height),
+            Offset(0, refSize.height),
+          ]) {
+            final w = fit.warp(p);
+            expected
+              ..add(w.dx)
+              ..add(w.dy);
+          }
+
+          final args = lockCalls.single.arguments as Map;
+          final corners = (args['corners'] as List).cast<double>();
+          expect(corners.length, 8);
+          for (var i = 0; i < 8; i++) {
+            expect(corners[i], closeTo(expected[i], 1e-6));
+          }
+
+          expect(container.read(arLockedProvider), isTrue);
+        },
+      );
+
+      testWidgets(
+        'in locked manual mode, tapping ar-lock records unlockManual (no '
+        'args) and flips locked back to false',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pumpAndSettle();
+          expect(container.read(arLockedProvider), isTrue);
+          arCalls.clear();
+
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pump();
+
+          final unlockCalls = arCalls.where((c) => c.method == 'unlockManual');
+          expect(unlockCalls, hasLength(1));
+          expect(unlockCalls.single.arguments, isNull);
+          expect(container.read(arLockedProvider), isFalse);
+        },
+      );
+
+      testWidgets(
+        'in unlocked manual mode, when native declines the lock (lockManual '
+        'returns false — e.g. poor tracking), tapping ar-lock still records '
+        'exactly one lockManual call but arLockedProvider stays false',
+        (tester) async {
+          pinViewSize(tester);
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(arMethodChannel, (call) async {
+                arCalls.add(call);
+                if (call.method == 'lockManual') return false;
+                return null;
+              });
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+          arCalls.clear();
+
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pumpAndSettle();
+
+          final lockCalls = arCalls.where((c) => c.method == 'lockManual');
+          expect(lockCalls, hasLength(1));
+          expect(container.read(arLockedProvider), isFalse);
+        },
+      );
+    });
+
+    group('Re-scan control', () {
+      testWidgets(
+        'AUTO mode: the ar-rescan FAB is present, and tapping it invokes the '
+        'native "rescan" method with no args',
+        (tester) async {
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          expect(
+            container.read(arControllerProvider).mode,
+            ArMode.auto,
+            reason: 'ArController starts in auto mode',
+          );
+          expect(find.byKey(const Key('ar-rescan')), findsOneWidget);
+
+          await tester.tap(find.byKey(const Key('ar-rescan')));
+          await tester.pump();
+
+          final rescanCalls = arCalls.where((c) => c.method == 'rescan');
+          expect(rescanCalls, hasLength(1));
+          expect(rescanCalls.single.arguments, isNull);
+        },
+      );
+
+      testWidgets(
+        'MANUAL mode: the ar-rescan FAB is not shown',
+        (tester) async {
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          expect(find.byKey(const Key('ar-rescan')), findsNothing);
+        },
+      );
+    });
   });
 }

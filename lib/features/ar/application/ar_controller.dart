@@ -56,10 +56,13 @@ class ArController extends Notifier<ArState> {
   ArState build() => const ArState(mode: ArMode.auto, active: false);
 
   /// Switches the alignment mode: updates [ArState.mode] and forwards the
-  /// change to native via [ArChannel.setMode].
+  /// change to native via [ArChannel.setMode]. Always resets
+  /// [arLockedProvider] back to unlocked, so switching modes never leaves a
+  /// stale lock from a previous mode's session behind.
   void setMode(ArMode mode) {
     state = state.copyWith(mode: mode);
     ref.read(arChannelProvider).setMode(mode);
+    ref.read(arLockedProvider.notifier).reset();
   }
 
   /// Records the latest alignment update pushed from native (see the AR
@@ -77,3 +80,27 @@ class ArController extends Notifier<ArState> {
 final arControllerProvider = NotifierProvider<ArController, ArState>(
   ArController.new,
 );
+
+/// Whether the manual alignment is currently locked: while locked, the
+/// manual pan/scale/rotate gesture layer is hidden (routes render frozen at
+/// whatever homography [manualAlignProvider] last held) and the outline-
+/// guide ghost overlay is hidden too, since there's nothing left to line up.
+///
+/// An app-lifetime singleton like [arControllerProvider]/[manualAlignProvider]
+/// — reset per AR-screen-entry by [ArLockedController.reset], mirroring how
+/// the AR screen resets those other two providers on every wall entry (see
+/// `ar_screen.dart`'s `_resetArViewState`).
+final arLockedProvider = NotifierProvider<ArLockedController, bool>(
+  ArLockedController.new,
+);
+
+class ArLockedController extends Notifier<bool> {
+  @override
+  bool build() => false;
+
+  /// Flips locked <-> unlocked (the Lock/Unlock FAB's action).
+  void toggle() => state = !state;
+
+  /// Returns to the unlocked default. Called on every AR-screen entry.
+  void reset() => state = false;
+}

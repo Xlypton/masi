@@ -15,6 +15,14 @@ struct ArAlignmentResult {
     let homography: [Double]
     let confidence: Double
     let tracking: Bool
+    /// Live-frame pixel-buffer dimensions (`CVPixelBufferGetWidth/Height`,
+    /// post-rotation -- i.e. portrait, matching the on-screen preview) at
+    /// the moment this alignment was computed. `0`/`0` is the sentinel for
+    /// "no real match this frame" (identity/no-match/degenerate paths) --
+    /// only populated on an actual Vision observation, so Dart can tell a
+    /// real homography from a fallback one.
+    let frameWidth: Int
+    let frameHeight: Int
 }
 
 /// Wraps `VNHomographicImageRegistrationRequest` to continuously align a
@@ -96,7 +104,7 @@ final class ArVisionPipeline {
             return
         }
         guard let referenceCGImage else {
-            completion(ArAlignmentResult(homography: ArVisionPipeline.identity, confidence: 0, tracking: false))
+            completion(ArAlignmentResult(homography: ArVisionPipeline.identity, confidence: 0, tracking: false, frameWidth: 0, frameHeight: 0))
             return
         }
 
@@ -111,7 +119,8 @@ final class ArVisionPipeline {
             let handler = VNImageRequestHandler(cgImage: referenceCGImage, options: [:])
             try handler.perform([request])
             guard let observation = request.results?.first as? VNImageHomographicAlignmentObservation else {
-                completion(ArAlignmentResult(homography: ArVisionPipeline.identity, confidence: 0, tracking: false))
+                NSLog("AR_DBG vision no-match")
+                completion(ArAlignmentResult(homography: ArVisionPipeline.identity, confidence: 0, tracking: false, frameWidth: 0, frameHeight: 0))
                 return
             }
             let warp = observation.warpTransform
@@ -120,10 +129,18 @@ final class ArVisionPipeline {
                 refSize: referenceSize,
                 liveSize: CGSize(width: liveWidth, height: liveHeight)
             )
-            let confidence = ArVisionPipeline.heuristicConfidence(for: warp)
-            completion(ArAlignmentResult(homography: corrected, confidence: confidence, tracking: confidence > 0.15))
+            let confidence = ArVisionPipeline.heuristicConfidence(for: corrected)
+            NSLog("AR_DBG vision match confidence=%.2f frame=%dx%d", confidence, liveWidth, liveHeight)
+            completion(ArAlignmentResult(
+                homography: corrected,
+                confidence: confidence,
+                tracking: confidence > 0.15,
+                frameWidth: liveWidth,
+                frameHeight: liveHeight
+            ))
         } catch {
-            completion(ArAlignmentResult(homography: ArVisionPipeline.identity, confidence: 0, tracking: false))
+            NSLog("AR_DBG vision no-match")
+            completion(ArAlignmentResult(homography: ArVisionPipeline.identity, confidence: 0, tracking: false, frameWidth: 0, frameHeight: 0))
         }
     }
 
@@ -183,12 +200,25 @@ final class ArVisionPipeline {
         return out
     }
 
-    private static func heuristicConfidence(for warp: matrix_float3x3) -> Double {
-        // A degenerate/near-singular homography indicates a bad match.
-        // NOT a calibrated probability -- see class doc, item 3.
-        let det = Double(simd_determinant(warp))
-        guard det.isFinite, abs(det) > 1e-6 else { return 0 }
-        let magnitude = min(abs(det), 10)
-        return min(1.0, max(0.05, magnitude / 10.0))
+    /// `matrix` is the CORRECTED row-major pixel-space homography (i.e. the
+    /// output of `normalizationCorrection`, not the raw Vision `warpTransform`)
+    /// -- checking finiteness post-correction also catches degenerate scale
+    /// factors introduced by the correction step itself (e.g. a pathological
+    /// `refSize`/`liveSize`), not just a degenerate Vision observation.
+    ///
+    /// Vision does not expose a numeric quality score for
+    /// `VNHomographicImageRegistrationRequest` (see class doc, item 3), so
+    /// this is deliberately binary rather than a graded probability: any
+    /// finite, non-degenerate homographic observation is treated as a
+    /// confident match (0.8, comfortably above the `tracking` threshold of
+    /// 0.15); anything degenerate/non-finite is 0 (no match).
+    private static func heuristicConfidence(for matrix: [Double]) -> Double {
+        guard matrix.count == 9, matrix.allSatisfy({ $0.isFinite }) else { return 0.0 }
+        let det =
+            matrix[0] * (matrix[4] * matrix[8] - matrix[5] * matrix[7])
+            - matrix[1] * (matrix[3] * matrix[8] - matrix[5] * matrix[6])
+            + matrix[2] * (matrix[3] * matrix[7] - matrix[4] * matrix[6])
+        guard det.isFinite, abs(det) > 1e-6 else { return 0.0 }
+        return 0.8
     }
 }

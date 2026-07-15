@@ -19,6 +19,19 @@ void main() {
       final h = Homography.identity();
       expect(h.toRowMajor(), [1, 0, 0, 0, 1, 0, 0, 0, 1]);
     });
+
+    test('toMatrix4ColumnMajor produces the 16-elt identity, column-major', () {
+      final h = Homography.identity();
+      expect(
+        h.toMatrix4ColumnMajor(),
+        [
+          1, 0, 0, 0, //
+          0, 1, 0, 0, //
+          0, 0, 1, 0, //
+          0, 0, 0, 1, //
+        ],
+      );
+    });
   });
 
   group('Homography.translation', () {
@@ -27,6 +40,95 @@ void main() {
       final result = h.warp(const Offset(2, 2));
       expect(result.dx, closeTo(12, 1e-9));
       expect(result.dy, closeTo(-3, 1e-9));
+    });
+
+    test('toMatrix4ColumnMajor: tx/ty land at indices 12/13, otherwise identity', () {
+      final h = Homography.translation(5, 7);
+      final m4 = h.toMatrix4ColumnMajor();
+
+      expect(m4.length, 16);
+      expect(m4[12], 5);
+      expect(m4[13], 7);
+
+      final expected = [
+        1, 0, 0, 0, //
+        0, 1, 0, 0, //
+        0, 0, 1, 0, //
+        5, 7, 0, 1, //
+      ];
+      for (var i = 0; i < 16; i++) {
+        expect(m4[i], closeTo(expected[i], 1e-9), reason: 'index $i');
+      }
+    });
+  });
+
+  group('Homography.scale', () {
+    test('scales x and y independently', () {
+      final h = Homography.scale(2, 3);
+      final result = h.warp(const Offset(4, 5));
+      expect(result.dx, closeTo(8, 1e-9));
+      expect(result.dy, closeTo(15, 1e-9));
+    });
+
+    test('toMatrix4ColumnMajor: sx/sy land at indices 0/5', () {
+      final h = Homography.scale(2, 3);
+      final m4 = h.toMatrix4ColumnMajor();
+
+      expect(m4[0], 2);
+      expect(m4[5], 3);
+    });
+  });
+
+  group('Homography.fitInto', () {
+    test('uniform aspect: center maps to center, corners map to corners', () {
+      final h = Homography.fitInto(const Size(1000, 2000), const Size(400, 800));
+
+      final center = h.warp(const Offset(500, 1000));
+      expect(center.dx, closeTo(200, 1e-9));
+      expect(center.dy, closeTo(400, 1e-9));
+
+      final topLeft = h.warp(const Offset(0, 0));
+      expect(topLeft.dx, closeTo(0, 1e-9));
+      expect(topLeft.dy, closeTo(0, 1e-9));
+
+      final bottomRight = h.warp(const Offset(1000, 2000));
+      expect(bottomRight.dx, closeTo(400, 1e-9));
+      expect(bottomRight.dy, closeTo(800, 1e-9));
+    });
+
+    test('non-uniform aspect: letterboxes vertically, centers content', () {
+      // content is square, view is taller/narrower -> s = min(400/1000, 800/1000) = 0.4
+      final h = Homography.fitInto(const Size(1000, 1000), const Size(400, 800));
+
+      final center = h.warp(const Offset(500, 500));
+      expect(center.dx, closeTo(200, 1e-9));
+      expect(center.dy, closeTo(400, 1e-9));
+
+      final topLeft = h.warp(const Offset(0, 0));
+      expect(topLeft.dx, closeTo(0, 1e-9));
+      expect(topLeft.dy, closeTo(200, 1e-9));
+    });
+
+    test('zero-guard: degenerate content size returns identity', () {
+      final h = Homography.fitInto(const Size(0, 0), const Size(400, 800));
+      final result = h.warp(const Offset(3, 7));
+      expect(result.dx, closeTo(3, 1e-9));
+      expect(result.dy, closeTo(7, 1e-9));
+    });
+  });
+
+  group('Homography.fillInto', () {
+    test('non-uniform aspect: crops, centers content, center maps to center', () {
+      // s = max(400/720, 800/1280) = max(0.5556, 0.625) = 0.625
+      final h = Homography.fillInto(const Size(720, 1280), const Size(400, 800));
+
+      final center = h.warp(const Offset(360, 640));
+      expect(center.dx, closeTo(200, 1e-9));
+      expect(center.dy, closeTo(400, 1e-9));
+
+      final topLeft = h.warp(const Offset(0, 0));
+      expect(topLeft.dx, closeTo(-25, 1e-9));
+      expect(topLeft.dy, closeTo(0, 1e-9));
     });
   });
 
@@ -160,6 +262,113 @@ void main() {
 
     test('fromRowMajor asserts length 9', () {
       expect(() => Homography.fromRowMajor([1, 2, 3]), throwsA(anything));
+    });
+  });
+
+  group('Homography.fromQuad', () {
+    test('B1: pure translation+scale maps all 4 corners and an interior point', () {
+      const src = [
+        Offset(0, 0),
+        Offset(100, 0),
+        Offset(100, 200),
+        Offset(0, 200),
+      ];
+      // dst is src scaled by 0.5 then offset by (10, 20).
+      const dst = [
+        Offset(10, 20),
+        Offset(60, 20),
+        Offset(60, 120),
+        Offset(10, 120),
+      ];
+
+      final h = Homography.fromQuad(src, dst);
+
+      for (var i = 0; i < 4; i++) {
+        final result = h.warp(src[i]);
+        expect(result.dx, closeTo(dst[i].dx, 1e-6), reason: 'corner $i dx');
+        expect(result.dy, closeTo(dst[i].dy, 1e-6), reason: 'corner $i dy');
+      }
+
+      // Interior point: src center (50, 100) -> dst center (35, 70).
+      final center = h.warp(const Offset(50, 100));
+      expect(center.dx, closeTo(35, 1e-6));
+      expect(center.dy, closeTo(70, 1e-6));
+    });
+
+    test('B2: src == dst leaves an interior point unchanged', () {
+      const quad = [
+        Offset(10, 10),
+        Offset(110, 10),
+        Offset(110, 210),
+        Offset(10, 210),
+      ];
+
+      final h = Homography.fromQuad(quad, quad);
+
+      final result = h.warp(const Offset(60, 110));
+      expect(result.dx, closeTo(60, 1e-6));
+      expect(result.dy, closeTo(110, 1e-6));
+
+      for (final corner in quad) {
+        final warped = h.warp(corner);
+        expect(warped.dx, closeTo(corner.dx, 1e-6));
+        expect(warped.dy, closeTo(corner.dy, 1e-6));
+      }
+    });
+
+    test(
+      'B3: genuinely projective (non-affine) trapezoid dst solves perspective terms',
+      () {
+        // src is a square; dst is a trapezoid (the two non-parallel sides are
+        // not parallel to one another), which is NOT the affine image of a
+        // square -- affine maps always send parallelograms to parallelograms.
+        // Getting every corner right therefore proves h20/h21 (the
+        // perspective terms) were actually solved, not just the affine part.
+        const src = [
+          Offset(0, 0),
+          Offset(100, 0),
+          Offset(100, 100),
+          Offset(0, 100),
+        ];
+        const dst = [
+          Offset(0, 0),
+          Offset(100, 0),
+          Offset(80, 100),
+          Offset(20, 100),
+        ];
+
+        final h = Homography.fromQuad(src, dst);
+
+        for (var i = 0; i < 4; i++) {
+          final result = h.warp(src[i]);
+          expect(result.dx, closeTo(dst[i].dx, 1e-6), reason: 'corner $i dx');
+          expect(result.dy, closeTo(dst[i].dy, 1e-6), reason: 'corner $i dy');
+        }
+      },
+    );
+
+    test('B4: degenerate collinear src returns identity, no NaN/Infinity', () {
+      const src = [
+        Offset(0, 0),
+        Offset(1, 1),
+        Offset(2, 2),
+        Offset(3, 3),
+      ];
+      const dst = [
+        Offset(0, 0),
+        Offset(100, 0),
+        Offset(100, 100),
+        Offset(0, 100),
+      ];
+
+      final h = Homography.fromQuad(src, dst);
+      expect(h, equals(Homography.identity()));
+
+      final result = h.warp(const Offset(5, 5));
+      expect(result.dx.isFinite, isTrue);
+      expect(result.dy.isFinite, isTrue);
+      expect(result.dx, closeTo(5, 1e-9));
+      expect(result.dy, closeTo(5, 1e-9));
     });
   });
 

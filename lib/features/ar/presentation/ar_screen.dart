@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -11,6 +12,7 @@ import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/ar/application/ar_channel.dart';
 import 'package:climbtopo/features/ar/application/ar_controller.dart';
 import 'package:climbtopo/features/ar/application/manual_align_controller.dart';
+import 'package:climbtopo/features/ar/application/outline_extractor.dart';
 import 'package:climbtopo/features/ar/domain/homography.dart';
 import 'package:climbtopo/features/ar/presentation/ar_overlay_painter.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
@@ -89,6 +91,13 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   List<TopoRoute>? _routes;
   bool _loading = true;
 
+  /// The reference photo's edge-only "ghost" outline, used by the guided-
+  /// manual alignment stage as a lining-up aid (see [ArAlignmentStage]).
+  /// Computed asynchronously in [_load] (via [extractOutline]) so it never
+  /// blocks the camera/routes from appearing first; stays `null` if
+  /// extraction fails or hasn't finished yet.
+  ui.Image? _outline;
+
   /// Set once [ArChannel.start] has actually been invoked, so [dispose]
   /// only calls [ArChannel.stop] (and clears [ArController.markActive]) for
   /// a session that was really started — never on a platform where AR was
@@ -110,6 +119,10 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     final routes = await ref
         .read(routeRepositoryProvider)
         .loadRoutes(widget.wallId);
+    debugPrint(
+      'AR_DBG _load photo=${photo != null} routeCount=${routes.length} '
+      'visibleCount=${routes.where((r) => r.visible).length}',
+    );
     if (!mounted) return;
 
     // Cross-wall state leak fix: reset the AR view state to a clean
@@ -132,45 +145,89 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       _loading = false;
     });
 
-    final hasVisibleRoute = routes.any((r) => r.visible);
-    if (photo != null &&
-        routes.isNotEmpty &&
-        hasVisibleRoute &&
-        _isArPlatformSupported()) {
-      await _startSession(photo, routes);
+    // Kick off the ghost-outline extraction without blocking the camera/
+    // routes above — they render immediately; the outline (when it
+    // succeeds) fades in a moment later via this second setState.
+    //
+    // Gated on a synchronous existence check first: `extractOutline` spawns
+    // a real background isolate (via `compute()`) to read + decode the file,
+    // which is real OS-level async work that never completes under a
+    // widget test's fake-async pump loop (the same hazard `photo_files.dart`
+    // 's `resolvePhotoPath` documents for `File.exists()` vs `existsSync()`)
+    // — without this guard, any wall whose persisted photo path doesn't
+    // resolve to a real file on THIS host (e.g. a test seeding a placeholder
+    // path with no `path_provider` platform fake registered, so
+    // `PhotoRepository.loadOriginal` can't resolve it to an absolute path)
+    // hangs `tester.pumpAndSettle()` forever trying to spawn+await that
+    // isolate. `existsSync()` is a cheap local stat (synchronous, no event-
+    // loop turn) so it's safe to call unconditionally; on a real device the
+    // photo file genuinely exists, so this never skips real extraction.
+    if (photo != null && File(photo.localPath).existsSync()) {
+      final outline = await extractOutline(photo.localPath);
+      if (!mounted) return;
+      setState(() => _outline = outline);
     }
   }
 
   /// Resets the AR view state to a clean per-wall-entry default: every AR
-  /// session starts in [ArMode.auto] with [manualAlignProvider] back at
-  /// [Homography.identity].
+  /// session starts in [ArMode.auto] (ARKit image-tracking is the primary
+  /// alignment mode) with [manualAlignProvider] back at [Homography.identity]
+  /// and [arLockedProvider] back to unlocked.
   ///
-  /// [arControllerProvider] and [manualAlignProvider] are app-lifetime
-  /// singletons — never reset per wall on their own. Without this, opening
-  /// wall A's AR, switching to Manual and hand-adjusting the overlay,
-  /// backing out, then opening wall B's AR would leave wall B's session
-  /// already in Manual mode with wall A's leftover homography warped over
-  /// wall B's (completely different) routes/feed.
+  /// [arControllerProvider], [manualAlignProvider], and [arLockedProvider]
+  /// are app-lifetime singletons — never reset per wall on their own.
+  /// Without this, opening wall A's AR, hand-adjusting/locking the overlay,
+  /// switching to manual, backing out, then opening wall B's AR would leave
+  /// wall B's session already in manual/locked with wall A's leftover
+  /// homography warped over wall B's (completely different) routes/feed.
   ///
-  /// [manualAlignProvider]'s reset ([ManualAlignController.reset]) is
-  /// always state-only — no native channel involved. [arControllerProvider]
-  /// 's mode is only touched via [ArController.setMode] when it isn't
-  /// already [ArMode.auto]: `setMode` also fires a (fire-and-forget) native
+  /// [manualAlignProvider]'s and [arLockedProvider]'s resets are always
+  /// state-only — no native channel involved. [arControllerProvider]'s mode
+  /// is only touched via [ArController.setMode] when it isn't already
+  /// [ArMode.auto]: `setMode` also fires a (fire-and-forget) native
   /// `setMode` platform-channel call via [arChannelProvider] — harmless on
   /// iOS (or wherever `climbtopo/ar` is mocked, as in this feature's own
   /// tests), but unnecessary work for a mode that's already correct, and a
   /// call this screen has no reason to make on every single entry when
   /// there's nothing to actually reset.
+  ///
+  /// Note: this matches [ArController.build]'s own default (also
+  /// [ArMode.auto]) — manual remains reachable at any time via the
+  /// mode-toggle FAB as a fallback when ARKit tracking isn't available/good
+  /// enough.
   void _resetArViewState() {
     ref.read(manualAlignProvider.notifier).reset();
+    ref.read(arLockedProvider.notifier).reset();
     if (ref.read(arControllerProvider).mode != ArMode.auto) {
       ref.read(arControllerProvider.notifier).setMode(ArMode.auto);
     }
   }
 
+  /// Kicks off [_startSession] once the native `UiKitView` (and therefore
+  /// its `climbtopo/ar` MethodChannel handler) has actually mounted — see
+  /// [build]'s `onPlatformViewCreated` wiring. Calling [ArChannel.start]
+  /// any earlier (e.g. straight out of [_load]) sends it before the native
+  /// handler is registered, so the native side never receives it and the
+  /// camera never starts.
+  void _maybeStartSession() {
+    if (!mounted) return;
+    if (_sessionStarted) return;
+    final photo = _photo;
+    final routes = _routes;
+    if (photo == null || routes == null || routes.isEmpty) return;
+    final hasVisibleRoute = routes.any((r) => r.visible);
+    debugPrint('AR_DBG _maybeStartSession gate hasVisibleRoute=$hasVisibleRoute');
+    if (!hasVisibleRoute || !_isArPlatformSupported()) {
+      debugPrint('AR_DBG _maybeStartSession BAILED (no start call)');
+      return;
+    }
+    unawaited(_startSession(photo, routes));
+  }
+
   Future<void> _startSession(PhotoRef photo, List<TopoRoute> routes) async {
     _sessionStarted = true;
     final channel = ref.read(arChannelProvider);
+    debugPrint('AR_DBG _startSession calling channel.start');
     await channel.start(
       referenceImagePath: photo.localPath,
       refWidth: photo.width,
@@ -225,12 +282,14 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('AR view')),
       body: ArAlignmentStage(
-        cameraView: const UiKitView(
+        cameraView: UiKitView(
           viewType: _kArPlatformViewType,
-          creationParamsCodec: StandardMessageCodec(),
+          creationParamsCodec: const StandardMessageCodec(),
+          onPlatformViewCreated: (_) => _maybeStartSession(),
         ),
         routes: routes,
         refSize: Size(photo.width.toDouble(), photo.height.toDouble()),
+        outline: _outline,
       ),
     );
   }
@@ -301,13 +360,19 @@ class _ArScreenState extends ConsumerState<ArScreen> {
 /// warped through whichever [Homography] the current alignment mode
 /// selects.
 ///
-/// - **Auto mode** ([ArMode.auto]): the homography comes from
-///   [arControllerProvider]'s [ArState.latest] (the most recent
-///   [ArAlignment] pushed from native), falling back to
-///   [Homography.identity] before the first update arrives. [ArState
-///   .latest]'s confidence drives the overlay's low-confidence treatment.
-/// - **Manual mode** ([ArMode.manual]): the homography comes from
-///   [manualAlignProvider], hand-adjustable via the pan/scale/rotate
+/// - **Auto mode** ([ArMode.auto], the primary mode): while ARKit is
+///   tracking (`arState.latest?.tracking == true` with a non-null
+///   `screenCorners`), the homography is solved fresh via
+///   [Homography.fromQuad] — mapping the reference photo's 4 corners onto
+///   the 4 on-screen corners ARKit reports the tracked anchor at — with
+///   confidence pinned to `1.0` (routes are glued to the wall; no outline
+///   guide is shown, there's nothing to line up). While not yet tracking (no
+///   update yet, or the latest update reports `tracking: false`), the
+///   homography falls back to a centered "ghost" placement
+///   ([Homography.fitInto]) with confidence `0.0`, again with no outline
+///   guide.
+/// - **Manual mode** ([ArMode.manual], the fallback): the homography comes
+///   from [manualAlignProvider], hand-adjustable via the pan/scale/rotate
 ///   gesture layer shown over the overlay; confidence is pinned to `1.0`
 ///   (there's nothing to be "unsure" about — the user placed it there).
 ///
@@ -320,6 +385,7 @@ class ArAlignmentStage extends ConsumerWidget {
     required this.cameraView,
     required this.routes,
     required this.refSize,
+    this.outline,
   });
 
   /// The live camera surface to render underneath the overlay. In the real
@@ -333,52 +399,242 @@ class ArAlignmentStage extends ConsumerWidget {
   /// The reference photo's pixel dimensions [routes] are relative to.
   final Size refSize;
 
+  /// The reference photo's ghost outline, used as a guided-alignment aid in
+  /// unlocked manual mode (see [ArOverlayPainter.outline]). `null` while
+  /// extraction hasn't finished (or failed) — the stage simply shows no
+  /// ghost yet/at all in that case.
+  final ui.Image? outline;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final arState = ref.watch(arControllerProvider);
     final manualHomography = ref.watch(manualAlignProvider);
+    final locked = ref.watch(arLockedProvider);
     final isManual = arState.mode == ArMode.manual;
+    final latest = arState.latest;
+    final tracking = latest?.tracking ?? false;
+    // The outline-guide ghost is only useful while the user is actively
+    // lining things up by hand in manual mode: auto mode never shows it —
+    // when tracked, routes are glued to the wall (nothing to guide); when
+    // not yet tracked, the ghost placement isn't something to line up either.
+    final showOutline = isManual && !locked;
 
-    final homography = isManual
-        ? manualHomography
-        : (arState.latest?.homography ?? Homography.identity());
-    final confidence = isManual ? 1.0 : (arState.latest?.confidence ?? 0.0);
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final viewSize = constraints.biggest;
+        final fit = Homography.fitInto(refSize, viewSize);
+        final manualComposite = manualHomography.multiply(fit);
 
-    final overlay = IgnorePointer(
-      child: CustomPaint(
-        painter: ArOverlayPainter(
-          routes: routes,
-          refSize: refSize,
-          homography: homography,
-          palette: kRoutePalette,
-          confidence: confidence,
-          routeColorResolver: topoRouteColor,
-        ),
-        child: const SizedBox.expand(),
-      ),
-    );
+        Future<void> onToggleLock() async {
+          final channel = ref.read(arChannelProvider);
+          final currentlyLocked = ref.read(arLockedProvider);
+          if (currentlyLocked) {
+            channel.unlockManual();
+            ref.read(arLockedProvider.notifier).toggle();
+            return;
+          }
+          final ok = await channel.lockManual(<Offset>[
+            manualComposite.warp(Offset.zero),
+            manualComposite.warp(Offset(refSize.width, 0)),
+            manualComposite.warp(Offset(refSize.width, refSize.height)),
+            manualComposite.warp(Offset(0, refSize.height)),
+          ]);
+          if (!context.mounted) return;
+          if (ok) {
+            ref.read(arLockedProvider.notifier).toggle();
+          } else {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              const SnackBar(
+                content: Text('Hold steady on the wall, then tap Lock again.'),
+                duration: Duration(seconds: 2),
+              ),
+            );
+          }
+        }
 
-    return Stack(
-      fit: StackFit.expand,
-      children: [
-        cameraView,
-        if (isManual) _ManualGestureLayer(child: overlay) else overlay,
-        Positioned(
-          top: 12,
-          right: 12,
-          child: _ArControls(mode: arState.mode),
-        ),
-      ],
+        final Homography homography;
+        final double confidence;
+        if (isManual && !locked) {
+          // manualHomography starts at identity -> composite starts fitted;
+          // every pan/scale/rotate gesture accumulates on top of that fit.
+          homography = manualComposite;
+          confidence = 1.0;
+        } else {
+          // Auto mode OR manual-and-locked: both render from the native
+          // world/ARKit-tracked corners — once locked, manual mode's
+          // overlay is driven the same way auto's is, since the native side
+          // now owns the pinned world anchor.
+          final corners = latest?.screenCorners;
+          if (tracking && corners != null) {
+            // ARKit is tracking: solve the homography that maps the
+            // reference photo's 4 corners directly onto the 4 on-screen
+            // points ARKit reports the tracked anchor's corners project to
+            // this frame — no intermediate camera-frame space involved.
+            homography = Homography.fromQuad(
+              [
+                Offset.zero,
+                Offset(refSize.width, 0),
+                Offset(refSize.width, refSize.height),
+                Offset(0, refSize.height),
+              ],
+              corners,
+            );
+            confidence = 1.0;
+          } else {
+            // Not tracking yet (or no update yet) — show a fitted "ghost"
+            // overlay instead of an unwarped, likely off-screen one.
+            homography = fit;
+            confidence = 0.0;
+          }
+        }
+
+        final overlay = IgnorePointer(
+          child: CustomPaint(
+            painter: ArOverlayPainter(
+              routes: routes,
+              refSize: refSize,
+              homography: homography,
+              palette: kRoutePalette,
+              confidence: confidence,
+              routeColorResolver: topoRouteColor,
+              outline: showOutline ? outline : null,
+            ),
+            child: const SizedBox.expand(),
+          ),
+        );
+
+        // The drag/pinch/rotate gesture layer only makes sense while the
+        // user could still be adjusting alignment by hand: once locked, the
+        // routes render frozen (no gesture layer at all) even in manual
+        // mode.
+        final gestureEnabled = isManual && !locked;
+
+        return Stack(
+          fit: StackFit.expand,
+          children: [
+            cameraView,
+            if (gestureEnabled) _ManualGestureLayer(child: overlay) else overlay,
+            Positioned(
+              top: 12,
+              left: 12,
+              child: _ArStatus(
+                mode: arState.mode,
+                locked: locked,
+                tracking: tracking,
+              ),
+            ),
+            Positioned(
+              top: 12,
+              right: 12,
+              child: _ArControls(
+                mode: arState.mode,
+                locked: locked,
+                onToggleLock: onToggleLock,
+              ),
+            ),
+          ],
+        );
+      },
     );
   }
 }
 
-/// The mode toggle (always shown) and "reset alignment" button (manual-mode
-/// only), floating over the top-right of [ArAlignmentStage].
-class _ArControls extends ConsumerWidget {
-  const _ArControls({required this.mode});
+/// A small, always-visible status readout ("Auto"/"Manual" + a one-line
+/// hint) floating over the top-left of [ArAlignmentStage], so a first-time
+/// user immediately understands what mode they're in and what to do next
+/// (rather than having to guess from the two unlabeled FABs in
+/// [_ArControls]).
+class _ArStatus extends StatelessWidget {
+  const _ArStatus({
+    required this.mode,
+    required this.locked,
+    required this.tracking,
+  });
 
   final ArMode mode;
+  final bool locked;
+
+  /// Whether ARKit is currently tracking the reference photo (only
+  /// meaningful in [ArMode.auto] — ignored in manual mode).
+  final bool tracking;
+
+  @override
+  Widget build(BuildContext context) {
+    final isManual = mode == ArMode.manual;
+    final String label;
+    final String hint;
+    if (isManual && locked) {
+      label = 'Locked';
+      hint = tracking
+          ? 'Routes anchored to the wall'
+          : 'Move slowly to find the wall';
+    } else if (!isManual && tracking) {
+      label = 'Tracking';
+      hint = 'Routes locked to the wall';
+    } else if (!isManual) {
+      label = 'Auto';
+      hint = 'Point at the wall you photographed';
+    } else {
+      label = 'Manual';
+      hint = 'Line up the outline with the wall, then Lock';
+    }
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 200),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              label,
+              key: const Key('ar-mode-label'),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              hint,
+              key: const Key('ar-hint'),
+              style: const TextStyle(color: Colors.white, fontSize: 12),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The mode toggle (always shown), "reset alignment" button (unlocked
+/// manual mode only), the Lock/Unlock button (manual mode only), and the
+/// Re-scan button (auto mode only), floating over the top-right of
+/// [ArAlignmentStage].
+class _ArControls extends ConsumerWidget {
+  const _ArControls({
+    required this.mode,
+    required this.locked,
+    required this.onToggleLock,
+  });
+
+  final ArMode mode;
+  final bool locked;
+
+  /// Invoked by the `ar-lock` FAB's `onPressed`. Built by
+  /// [ArAlignmentStage.build] (which has access to [viewSize],
+  /// [manualHomography]/[fit]/[refSize] needed to compute the lock corners)
+  /// rather than reached for directly here.
+  ///
+  /// `Future<void> Function()` rather than [VoidCallback]: locking now
+  /// awaits native's `lockManual` result before flipping [arLockedProvider]
+  /// (see [ArAlignmentStage.build]'s `onToggleLock`), so the FAB's
+  /// `onPressed` fires it off without awaiting (an `onPressed` is itself a
+  /// synchronous [VoidCallback]).
+  final Future<void> Function() onToggleLock;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -386,7 +642,17 @@ class _ArControls extends ConsumerWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (isManual)
+        if (mode == ArMode.auto)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FloatingActionButton.small(
+              key: const Key('ar-rescan'),
+              tooltip: 'Re-scan the wall',
+              onPressed: () => ref.read(arChannelProvider).rescan(),
+              child: const Icon(Icons.center_focus_strong),
+            ),
+          ),
+        if (isManual && !locked)
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: FloatingActionButton.small(
@@ -397,13 +663,32 @@ class _ArControls extends ConsumerWidget {
               child: const Icon(Icons.restart_alt),
             ),
           ),
+        if (isManual)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FloatingActionButton.small(
+              key: const Key('ar-lock'),
+              tooltip: locked ? 'Unlock alignment' : 'Lock alignment',
+              onPressed: () {
+                onToggleLock();
+              },
+              child: Icon(locked ? Icons.lock : Icons.lock_outline),
+            ),
+          ),
         FloatingActionButton.small(
           key: const Key('ar-mode-toggle'),
           tooltip: isManual ? 'Switch to auto alignment' : 'Switch to manual alignment',
           onPressed: () => ref
               .read(arControllerProvider.notifier)
               .setMode(isManual ? ArMode.auto : ArMode.manual),
-          child: Icon(isManual ? Icons.pan_tool_alt_outlined : Icons.autorenew),
+          child: Text(
+            isManual ? 'M' : 'A',
+            style: TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w700,
+              color: Theme.of(context).colorScheme.onPrimaryContainer,
+            ),
+          ),
         ),
       ],
     );

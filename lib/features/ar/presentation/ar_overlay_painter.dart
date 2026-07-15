@@ -1,4 +1,5 @@
 import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/rendering.dart' show CustomPainter;
@@ -59,6 +60,7 @@ class ArOverlayPainter extends CustomPainter {
     required this.palette,
     this.confidence = 1.0,
     this.routeColorResolver,
+    this.outline,
   });
 
   /// Routes to render, in percent-of-[refSize] space. Routes with
@@ -88,10 +90,33 @@ class ArOverlayPainter extends CustomPainter {
   /// [_fallbackRouteColor] if [palette] is empty).
   final Color Function(TopoRoute route)? routeColorResolver;
 
+  /// Optional "ghost" outline image of the reference photo, drawn faintly
+  /// (behind the route polylines) warped through [homography] so it lines
+  /// up with the live camera feed the same way the routes do. `null` (the
+  /// default) draws no outline at all.
+  final ui.Image? outline;
+
   bool get _isLowConfidence => confidence < kLowConfidenceThreshold;
 
   @override
   void paint(Canvas canvas, Size size) {
+    final outlineImage = outline;
+    if (outlineImage != null) {
+      canvas.save();
+      canvas.transform(homography.toMatrix4ColumnMajor());
+      final dst = Rect.fromLTWH(0, 0, refSize.width, refSize.height);
+      final src = Rect.fromLTWH(0, 0, outlineImage.width.toDouble(), outlineImage.height.toDouble());
+      canvas.saveLayer(dst, Paint()..color = const Color(0x73000000)); // ~45% opacity layer
+      // High-quality (bilinear) filtering smooths the upscaled binary edge
+      // image instead of leaving it jagged/aliased on-device.
+      final outlinePaint = Paint()
+        ..filterQuality = FilterQuality.high
+        ..isAntiAlias = true;
+      canvas.drawImageRect(outlineImage, src, dst, outlinePaint);
+      canvas.restore(); // ends saveLayer
+      canvas.restore(); // ends transform save
+    }
+
     for (final route in routes) {
       if (!route.visible) continue;
 
@@ -173,6 +198,7 @@ class ArOverlayPainter extends CustomPainter {
         homography != oldDelegate.homography ||
         confidence != oldDelegate.confidence ||
         routeColorResolver != oldDelegate.routeColorResolver ||
+        outline != oldDelegate.outline ||
         !listEquals(palette, oldDelegate.palette) ||
         !listEquals(routes, oldDelegate.routes);
   }
