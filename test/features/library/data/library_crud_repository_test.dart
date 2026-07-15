@@ -607,6 +607,187 @@ void main() {
     });
   });
 
+  group(
+    'D1: watchTopos area + routeGradeKeys enrichment (filtering Subtask D)',
+    () {
+      Future<String> insertRoute(
+        String wallId,
+        String photoId,
+        String id, {
+        int number = 1,
+        String? gradeRaw,
+      }) {
+        return db
+            .into(db.routes)
+            .insert(
+              RoutesCompanion.insert(
+                id: id,
+                createdAt: 1000,
+                updatedAt: 1000,
+                wallId: wallId,
+                photoId: photoId,
+                number: number,
+                colorIndex: 0,
+                pointsJson: '[]',
+                symbolsJson: '[]',
+                sortOrder: 0,
+                gradeRaw: Value(gradeRaw),
+                gradeSortKey: Value(
+                  gradeRaw == null
+                      ? null
+                      : gradeSortKey(GradeSystem.french, gradeRaw),
+                ),
+              ),
+            )
+            .then((_) => id);
+      }
+
+      test(
+        "a topo under a REAL area exposes that area's id/name",
+        () async {
+          final area = await repo.createArea('Squamish');
+          final sector = await repo.createSector(area.id, 'Sector');
+          final wall = await repo.createWall(sector.id, 'Wall');
+
+          final topos = await repo.watchTopos().first;
+
+          final ref = topos.firstWhere((t) => t.wallId == wall.id);
+          expect(ref.areaId, area.id);
+          expect(ref.areaName, 'Squamish');
+        },
+      );
+
+      test(
+        'a photo-first topo (filed under the hidden __default__ sentinel '
+        'Area/Sector via createTopo) reports areaId/areaName as null '
+        '(Unfiled) -- the sentinel itself must never surface as a real '
+        'area',
+        () async {
+          final wallId = await repo.createTopo('Photo First Topo');
+
+          final topos = await repo.watchTopos().first;
+
+          final ref = topos.firstWhere((t) => t.wallId == wallId);
+          expect(ref.areaId, isNull);
+          expect(ref.areaName, isNull);
+        },
+      );
+
+      test(
+        "routeGradeKeys contains every live graded route's gradeSortKey, "
+        'deduplicated and sorted, and omits ungraded/soft-deleted routes; a '
+        'wall with no graded routes reports an empty list',
+        () async {
+          final area = await repo.createArea('Area');
+          final sector = await repo.createSector(area.id, 'Sector');
+          final wall = await repo.createWall(sector.id, 'Wall');
+          final bareWall = await repo.createWall(sector.id, 'Bare Wall');
+          final photoId = await repo.attachPhotoToWall(
+            wall.id,
+            '/tmp/p.jpg',
+            1,
+            1,
+          );
+
+          await insertRoute(
+            wall.id,
+            photoId,
+            'route-6a',
+            number: 1,
+            gradeRaw: '6a',
+          );
+          // A duplicate grade must be deduplicated (group_concat DISTINCT).
+          await insertRoute(
+            wall.id,
+            photoId,
+            'route-6a-dup',
+            number: 2,
+            gradeRaw: '6a',
+          );
+          await insertRoute(
+            wall.id,
+            photoId,
+            'route-7a',
+            number: 3,
+            gradeRaw: '7a',
+          );
+          // Ungraded route: must not contribute a key.
+          await insertRoute(wall.id, photoId, 'route-ungraded', number: 4);
+          // Soft-deleted graded route: must not contribute a key either.
+          final deletedRouteId = await insertRoute(
+            wall.id,
+            photoId,
+            'route-deleted',
+            number: 5,
+            gradeRaw: '9a',
+          );
+          await (db.update(
+            db.routes,
+          )..where((t) => t.id.equals(deletedRouteId))).write(
+            const RoutesCompanion(deletedAt: Value(2000)),
+          );
+
+          final topos = await repo.watchTopos().first;
+
+          final ref = topos.firstWhere((t) => t.wallId == wall.id);
+          expect(ref.routeGradeKeys, [
+            gradeSortKey(GradeSystem.french, '6a'),
+            gradeSortKey(GradeSystem.french, '7a'),
+          ]);
+
+          final bareRef = topos.firstWhere((t) => t.wallId == bareWall.id);
+          expect(bareRef.routeGradeKeys, isEmpty);
+        },
+      );
+
+      test(
+        'existing fields (name/thumbnailPath/routeCount/createdAt/'
+        'topGradeLabel/topGradeBand/visibility) are unchanged by the '
+        'area/routeGradeKeys enrichment',
+        () async {
+          final area = await repo.createArea('Area');
+          final sector = await repo.createSector(area.id, 'Sector');
+          final wall = await repo.createWall(sector.id, 'Wall');
+          final photoId = await repo.attachPhotoToWall(
+            wall.id,
+            '/tmp/p.jpg',
+            640,
+            480,
+          );
+          await insertRoute(
+            wall.id,
+            photoId,
+            'route-1',
+            number: 1,
+            gradeRaw: '7a',
+          );
+
+          final ref = (await repo.watchTopos().first).single;
+
+          expect(ref.name, 'Wall');
+          expect(ref.thumbnailPath, 'photos/$photoId.jpg');
+          expect(ref.routeCount, 1);
+          expect(ref.topGradeLabel, '7a');
+          expect(ref.topGradeBand, GradeBand.hard);
+          expect(ref.visibility, 'private');
+        },
+      );
+
+      test(
+        'listAreas/watchAreas still exclude the __default__ sentinel even '
+        'though watchTopos now LEFT JOINs through sectors/areas',
+        () async {
+          final realArea = await repo.createArea('Squamish');
+          await repo.createTopo('Photo First Topo');
+
+          final areas = await repo.listAreas();
+          expect(areas, [realArea]);
+          expect(areas.any((a) => a.name == '__default__'), isFalse);
+        },
+      );
+    },
+  );
+
   group('A8: createTopo', () {
     test('returns a wallId resolving to a real non-deleted Wall row with the '
         'given name', () async {

@@ -105,6 +105,9 @@ class TopoRef {
     this.topGradeLabel,
     this.topGradeBand,
     this.visibility = 'private',
+    this.areaId,
+    this.areaName,
+    this.routeGradeKeys = const [],
   });
 
   final String wallId;
@@ -128,6 +131,27 @@ class TopoRef {
   /// home row's Publish/Unpublish menu item.
   final String visibility;
 
+  /// The id of this topo's ancestor Area (Wall -> Sector -> Area), or `null`
+  /// when the wall is filed under the hidden `__default__` sentinel Area
+  /// (see [LibraryCrudRepository._ensureDefaultAreaId]/[LibraryCrudRepository
+  /// .createTopo]) -- treated as "Unfiled" by the Topos-home area filter
+  /// (see `ToposFilter` in `library_providers.dart`). Never the sentinel's
+  /// own id -- see [watchTopos]'s doc for the detection.
+  final String? areaId;
+
+  /// The display name of [areaId]'s Area, or `null` under the same
+  /// conditions as [areaId] (including when the wall has no area at all).
+  final String? areaName;
+
+  /// The `gradeSortKey` of every live (non-deleted), graded route on this
+  /// wall, deduplicated (via `group_concat(DISTINCT ...)`) and sorted
+  /// ascending -- parsed from [watchTopos]'s `route_grade_keys` column.
+  /// Empty when the wall has no graded routes. Used to filter the Topos
+  /// home by grade range (see `ToposFilter.matches` in
+  /// `library_providers.dart`): a topo matches an active `GradeRange` iff
+  /// ANY of its route grade keys falls in range.
+  final List<double> routeGradeKeys;
+
   @override
   bool operator ==(Object other) =>
       other is TopoRef &&
@@ -138,7 +162,10 @@ class TopoRef {
       other.createdAt == createdAt &&
       other.topGradeLabel == topGradeLabel &&
       other.topGradeBand == topGradeBand &&
-      other.visibility == visibility;
+      other.visibility == visibility &&
+      other.areaId == areaId &&
+      other.areaName == areaName &&
+      _listEquals(other.routeGradeKeys, routeGradeKeys);
 
   @override
   int get hashCode => Object.hash(
@@ -150,6 +177,9 @@ class TopoRef {
     topGradeLabel,
     topGradeBand,
     visibility,
+    areaId,
+    areaName,
+    Object.hashAll(routeGradeKeys),
   );
 
   @override
@@ -157,7 +187,41 @@ class TopoRef {
       'TopoRef(wallId: $wallId, name: $name, thumbnailPath: $thumbnailPath, '
       'routeCount: $routeCount, createdAt: $createdAt, '
       'topGradeLabel: $topGradeLabel, topGradeBand: $topGradeBand, '
-      'visibility: $visibility)';
+      'visibility: $visibility, areaId: $areaId, areaName: $areaName, '
+      'routeGradeKeys: $routeGradeKeys)';
+}
+
+/// Order-sensitive element-wise equality for [TopoRef.routeGradeKeys] (a
+/// plain `List<double>` doesn't override `==` to mean "same elements");
+/// safe to compare positionally since [_parseGradeKeys] sorts its output,
+/// keeping repeated parses of the same underlying data deterministic.
+/// Mirrors `CommunityRepository`'s analogous `SharedTopo.routeGradeKeys`
+/// helper.
+bool _listEquals(List<double> a, List<double> b) {
+  if (identical(a, b)) return true;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
+}
+
+/// Parses a `group_concat(DISTINCT r.grade_sort_key)` column value (e.g.
+/// `'0.0,7.5,13.0'`) into a sorted `List<double>`, silently skipping any
+/// malformed token (defensive against locale/precision anomalies -- in
+/// practice SQLite always renders a REAL with a `.`-decimal, non-locale
+/// form). Returns an empty list for `null`/empty (a wall with no live,
+/// graded routes). See [TopoRef.routeGradeKeys].
+List<double> _parseGradeKeys(String? raw) {
+  if (raw == null || raw.isEmpty) return const [];
+  final keys =
+      raw
+          .split(',')
+          .map((token) => double.tryParse(token.trim()))
+          .whereType<double>()
+          .toList()
+        ..sort();
+  return keys;
 }
 
 /// CRUD + cascading soft-delete for the Area -> Sector -> Wall library
@@ -496,18 +560,29 @@ class LibraryCrudRepository {
   /// Live, flat list of every non-deleted [db.Wall], each paired with its
   /// most recent non-deleted `kind:'original'` [db.Photo]'s `localPath` (or
   /// `null` if it has none), a live count of its non-deleted [db.Route]s,
-  /// and the wall's representative grade — the display label
+  /// the wall's representative grade — the display label
   /// (`gradeRaw`)/[GradeBand] of its hardest non-deleted, graded route (both
-  /// `null` if the wall has no graded routes) — ordered by wall `createdAt`
-  /// DESC (newest topo first).
+  /// `null` if the wall has no graded routes) —, its ancestor Area's id/name
+  /// (`null`/`null` for a wall filed under the hidden `__default__`
+  /// sentinel, or with no area at all -- see [TopoRef.areaId]'s doc), and
+  /// every live graded route's `gradeSortKey` ([TopoRef.routeGradeKeys],
+  /// used by the Topos-home grade filter) — ordered by wall `createdAt` DESC
+  /// (newest topo first).
   ///
   /// This is the first join/aggregate query in this repository. It's
   /// expressed as a raw [customSelect] (rather than a Drift `.join()`) so a
   /// wall with more than one live `'original'` photo doesn't multiply rows
   /// via `GROUP BY`; `readsFrom` is set explicitly to `{walls, photos,
-  /// routes}` so the auto-updating stream re-emits on changes to any of the
-  /// three tables, not just `walls` (this also covers the top-grade
-  /// subquery, which also reads `routes`).
+  /// routes, sectors, areas}` so the auto-updating stream re-emits on
+  /// changes to any of the five tables, not just `walls` (this also covers
+  /// the top-grade subquery, which also reads `routes`, and the
+  /// area/sector `LEFT JOIN`s added for [TopoRef.areaId]/[TopoRef.areaName]).
+  ///
+  /// The `area_id`/`area_name` columns detect the hidden `__default__`
+  /// sentinel Area the SAME way [_areaQuery] does (by name), mapping it to
+  /// `NULL` in SQL so a photo-first topo's [TopoRef.areaId]/[TopoRef.
+  /// areaName] always come back `null` ("Unfiled") rather than ever
+  /// surfacing the sentinel as a real area.
   ///
   /// Tiebreak note: the outer ordering, the thumbnail subquery, and the
   /// top-grade subquery all order by their respective columns DESC at
@@ -536,13 +611,29 @@ class LibraryCrudRepository {
         (SELECT r.grade_sort_key FROM routes r
            WHERE r.wall_id = w.id AND r.deleted_at IS NULL
              AND r.grade_sort_key IS NOT NULL
-           ORDER BY r.grade_sort_key DESC, r.id DESC LIMIT 1) AS top_grade_sort_key
+           ORDER BY r.grade_sort_key DESC, r.id DESC LIMIT 1) AS top_grade_sort_key,
+        (SELECT group_concat(DISTINCT r.grade_sort_key) FROM routes r
+           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+             AND r.grade_sort_key IS NOT NULL) AS route_grade_keys,
+        CASE WHEN a.name = '$_defaultAreaName' THEN NULL ELSE a.id END AS area_id,
+        CASE WHEN a.name = '$_defaultAreaName' THEN NULL ELSE a.name END AS area_name
       FROM walls w
+      LEFT JOIN sectors s ON s.id = w.sector_id
+      LEFT JOIN areas a ON a.id = s.area_id
       WHERE w.deleted_at IS NULL
       ORDER BY w.created_at DESC, w.id DESC
     ''';
     return _db
-        .customSelect(sql, readsFrom: {_db.walls, _db.photos, _db.routes})
+        .customSelect(
+          sql,
+          readsFrom: {
+            _db.walls,
+            _db.photos,
+            _db.routes,
+            _db.sectors,
+            _db.areas,
+          },
+        )
         .watch()
         .map((rows) {
           // Synchronous mapping (NOT asyncMap): an async mapper on this
@@ -574,6 +665,11 @@ class LibraryCrudRepository {
                     : bandForSortKey(
                         row.readNullable<double>('top_grade_sort_key')!,
                       ),
+                areaId: row.readNullable<String>('area_id'),
+                areaName: row.readNullable<String>('area_name'),
+                routeGradeKeys: _parseGradeKeys(
+                  row.readNullable<String>('route_grade_keys'),
+                ),
               ),
           ];
         });

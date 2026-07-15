@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'dart:ui' as ui;
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -8,6 +9,8 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../../shared/filtering/grade_range_picker.dart';
+import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/email_initials.dart';
 import '../../topo/presentation/photo_source_sheet.dart';
@@ -56,6 +59,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final asyncTopos = ref.watch(toposProvider);
+    final filter = ref.watch(toposFilterProvider);
     // Only an *actually loaded* topo list (AsyncData) is a safe source for
     // the "New topo" count; while still loading or errored there is no
     // trustworthy count to derive "Topo N+1" from, so the button must be
@@ -130,13 +134,21 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       body: SafeArea(
         child: Column(
           children: [
+            _ToposFilterBar(
+              isActive: filter.isActive,
+              onTap: () => _showToposFiltersSheet(context),
+            ),
             Expanded(
               child: asyncTopos.when(
                 data: (topos) {
                   if (topos.isEmpty) {
                     return const _EmptyState();
                   }
-                  return _ToposList(topos: topos);
+                  final filtered = applyToposFilter(topos, filter);
+                  if (filtered.isEmpty) {
+                    return const _FilteredEmptyState();
+                  }
+                  return _ToposList(topos: filtered);
                 },
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (error, stackTrace) => Center(
@@ -259,6 +271,73 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   }
 }
 
+/// Compact filter trigger shown in the body, above the topos list (see
+/// [ToposScreen.build]): a slim, right-aligned row holding the
+/// `topos-filter-button` icon button -- same key, [Icons.tune] icon,
+/// `topos-filter-active-indicator` badge, and [_showToposFiltersSheet]
+/// behavior as before. Relocated out of the AppBar's trailing actions: with
+/// a fifth action there (this button alongside Organize/Community/
+/// Logbook/Account), the "Topos" title itself was truncating to "Top…" at
+/// normal text scale.
+class _ToposFilterBar extends StatelessWidget {
+  const _ToposFilterBar({required this.isActive, required this.onTap});
+
+  final bool isActive;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        MasiSpacing.lg,
+        MasiSpacing.xs,
+        MasiSpacing.sm,
+        0,
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
+        children: [
+          if (isActive)
+            Padding(
+              padding: const EdgeInsets.only(right: MasiSpacing.xs),
+              child: Text(
+                'Filters active',
+                style: textTheme.labelMedium?.copyWith(color: colors.accent),
+              ),
+            ),
+          IconButton(
+            key: const Key('topos-filter-button'),
+            icon: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(Icons.tune, color: colors.accent),
+                if (isActive)
+                  Positioned(
+                    key: const Key('topos-filter-active-indicator'),
+                    right: -2,
+                    top: -2,
+                    child: Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: colors.accent,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            tooltip: 'Filters',
+            onPressed: onTap,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _EmptyState extends StatelessWidget {
   const _EmptyState();
 
@@ -277,6 +356,225 @@ class _EmptyState extends StatelessWidget {
             ).textTheme.titleMedium?.copyWith(color: colors.ink2),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Shown instead of [_EmptyState] when there ARE topos but every one of them
+/// was excluded by the active [ToposFilter] (see [applyToposFilter]) --
+/// distinct from "no topos yet" so the user isn't misled into thinking their
+/// library is empty when it's just the filter hiding everything.
+class _FilteredEmptyState extends StatelessWidget {
+  const _FilteredEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Center(
+      key: const Key('topos-filtered-empty-state'),
+      child: Text(
+        'No topos match your filters',
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+      ),
+    );
+  }
+}
+
+/// Opens the Topos-home Filters sheet (see [_ToposFiltersSheet]) from the
+/// `topos-filter-button` app-bar action.
+Future<void> _showToposFiltersSheet(BuildContext context) {
+  return showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    backgroundColor: Colors.transparent,
+    builder: (context) => const _ToposFiltersSheet(),
+  );
+}
+
+/// The Topos-home Filters sheet: a [GradeRangePicker], a visibility
+/// segmented control (All/Shared/Private), and an area multi-select (every
+/// real area from [areasProvider] plus an explicit "Unfiled" option mapping
+/// to [ToposFilter.unfiledAreaId]), with a Clear action that resets
+/// [toposFilterProvider] back to its default (inactive) value.
+///
+/// Purely a thin view over [toposFilterProvider]: every interaction writes
+/// straight through to the shared [ToposFilterController], so the
+/// underlying Topos list (watched by [ToposScreen], which stays mounted
+/// underneath this modal sheet) updates live while the sheet is still open.
+class _ToposFiltersSheet extends ConsumerWidget {
+  const _ToposFiltersSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final filter = ref.watch(toposFilterProvider);
+    final controller = ref.read(toposFilterProvider.notifier);
+    final areas = ref.watch(areasProvider).asData?.value ?? const <AreaRef>[];
+
+    return SafeArea(
+      child: Container(
+        padding: const EdgeInsets.all(MasiSpacing.lg),
+        decoration: BoxDecoration(
+          color: colors.surface,
+          borderRadius: const BorderRadius.vertical(
+            top: Radius.circular(MasiRadii.card),
+          ),
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Filters',
+                      style: textTheme.titleLarge,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  TextButton(
+                    key: const Key('topos-filter-clear'),
+                    onPressed: controller.clear,
+                    child: const Text('Clear'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: MasiSpacing.md),
+              GradeRangePicker(
+                value: filter.grade,
+                onChanged: controller.setGrade,
+              ),
+              const SizedBox(height: MasiSpacing.md),
+              Text(
+                'Visibility',
+                style: textTheme.titleSmall?.copyWith(color: colors.ink2),
+              ),
+              const SizedBox(height: MasiSpacing.xs),
+              _VisibilitySegmented(
+                value: filter.visibility,
+                onChanged: controller.setVisibility,
+              ),
+              const SizedBox(height: MasiSpacing.md),
+              Text(
+                'Area',
+                style: textTheme.titleSmall?.copyWith(color: colors.ink2),
+              ),
+              const SizedBox(height: MasiSpacing.xs),
+              Wrap(
+                spacing: MasiSpacing.sm,
+                runSpacing: MasiSpacing.sm,
+                children: [
+                  FilterChoiceChip(
+                    key: const Key('topos-filter-area-unfiled'),
+                    label: 'Unfiled',
+                    selected: filter.areaIds.contains(
+                      ToposFilter.unfiledAreaId,
+                    ),
+                    onPressed: () =>
+                        controller.toggleArea(ToposFilter.unfiledAreaId),
+                  ),
+                  for (final area in areas)
+                    FilterChoiceChip(
+                      key: Key('topos-filter-area-${area.id}'),
+                      label: area.name,
+                      selected: filter.areaIds.contains(area.id),
+                      onPressed: () => controller.toggleArea(area.id),
+                    ),
+                ],
+              ),
+              const SizedBox(height: MasiSpacing.lg),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A [ToposVisibilityFilter] segmented toggle (All/Shared/Private) for
+/// [_ToposFiltersSheet], visually mirroring [GradeRangePicker]'s
+/// `CupertinoSlidingSegmentedControl` (that widget's own segment-label
+/// helper is private to its file, so this replicates rather than imports
+/// it). Purely controlled: [value] is the current selection, [onChanged]
+/// fires with the new value on every tap.
+class _VisibilitySegmented extends StatelessWidget {
+  const _VisibilitySegmented({required this.value, required this.onChanged});
+
+  final ToposVisibilityFilter value;
+  final ValueChanged<ToposVisibilityFilter> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return CupertinoSlidingSegmentedControl<ToposVisibilityFilter>(
+      key: const Key('topos-filter-visibility'),
+      groupValue: value,
+      backgroundColor: colors.surface2,
+      thumbColor: colors.accent,
+      children: {
+        ToposVisibilityFilter.all: _FilterSegmentLabel(
+          key: const Key('topos-filter-visibility-all'),
+          label: 'All',
+          selected: value == ToposVisibilityFilter.all,
+          colors: colors,
+        ),
+        ToposVisibilityFilter.shared: _FilterSegmentLabel(
+          key: const Key('topos-filter-visibility-shared'),
+          label: 'Shared',
+          selected: value == ToposVisibilityFilter.shared,
+          colors: colors,
+        ),
+        ToposVisibilityFilter.private: _FilterSegmentLabel(
+          key: const Key('topos-filter-visibility-private'),
+          label: 'Private',
+          selected: value == ToposVisibilityFilter.private,
+          colors: colors,
+        ),
+      },
+      onValueChanged: (next) {
+        if (next != null) onChanged(next);
+      },
+    );
+  }
+}
+
+/// A label used inside [_VisibilitySegmented]'s `CupertinoSlidingSegmentedControl`
+/// `children` map, carrying the caller-supplied [Key] so tests can target
+/// each segment directly.
+class _FilterSegmentLabel extends StatelessWidget {
+  const _FilterSegmentLabel({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.colors,
+  });
+
+  final String label;
+  final bool selected;
+  final MasiColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(
+        vertical: MasiSpacing.xs,
+        horizontal: MasiSpacing.sm,
+      ),
+      child: Text(
+        label,
+        style: TextStyle(
+          fontSize: 15,
+          fontWeight: FontWeight.w600,
+          color: selected ? colors.onAccent : colors.ink2,
+        ),
       ),
     );
   }
