@@ -101,4 +101,79 @@ void main() {
       expect(container.read(drawControllerProvider).selectedRouteId, isNull);
     },
   );
+
+  testWidgets(
+    'U5: with zero committed routes but an in-progress route present '
+    '(currentPoints non-empty), placing a symbol succeeds onto '
+    'currentSymbols and shows NO "draw a route first" SnackBar -- the hint '
+    'precondition is routes.isEmpty && currentPoints.isEmpty, not just '
+    'routes.isEmpty',
+    (tester) async {
+      const imageSize = Size(400, 300);
+      tester.view.physicalSize = const Size(
+        400,
+        300 + kSymbolPaletteBarHeight,
+      );
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final controller = TransformationController();
+      addTearDown(controller.dispose);
+
+      final notifier = container.read(drawControllerProvider.notifier);
+      notifier.setMode(DrawMode.draw);
+      // An in-progress (uncommitted) route: routes stays empty, but
+      // currentPoints is not.
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.addPoint(const Offset(0.3, 0.3));
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Scaffold(
+              body: Column(
+                children: [
+                  const SymbolPaletteBar(),
+                  Expanded(
+                    child: TopoCanvas(
+                      imagePath: '/nonexistent/test-topo.jpg',
+                      imageSize: imageSize,
+                      transformationController: controller,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+
+      expect(container.read(drawControllerProvider).routes, isEmpty);
+      expect(container.read(drawControllerProvider).currentPoints, isNotEmpty);
+      expect(find.byType(SnackBar), findsNothing);
+
+      await tester.tap(find.byKey(const Key('topo-symbol-bolt')));
+      await tester.pump();
+      expect(
+        container.read(drawControllerProvider).activeSymbol,
+        SymbolType.bolt,
+      );
+
+      await tester.tapAt(const Offset(200, 150 + kSymbolPaletteBarHeight));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SnackBar), findsNothing);
+      expect(
+        container.read(drawControllerProvider).currentSymbols,
+        hasLength(1),
+      );
+      expect(container.read(drawControllerProvider).routes, isEmpty);
+    },
+  );
 }

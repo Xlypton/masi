@@ -36,6 +36,42 @@ enum SymbolPlacementOutcome {
   noActiveSymbol,
 }
 
+/// A single undoable/redoable drawing operation. [DrawState.undoStack] and
+/// [DrawState.redoStack] are unified LIFO histories of these, so undo/redo
+/// cover BOTH points and symbols -- previously undo/redo only knew about
+/// points (a bug: placing a crux/bolt/anchor symbol could never be undone,
+/// see this file's usage docs for the bug report this fixes) -- whether the
+/// symbol landed on the in-progress route ([AddCurrentSymbolOp]) or an
+/// already-committed one ([AddCommittedSymbolOp]).
+sealed class DrawOp {
+  const DrawOp();
+}
+
+/// A point appended to [DrawState.currentPoints] via
+/// [DrawController.addPoint].
+class AddPointOp extends DrawOp {
+  const AddPointOp(this.point);
+
+  final Offset point;
+}
+
+/// A symbol appended to [DrawState.currentSymbols] -- the in-progress,
+/// uncommitted route -- via [DrawController.placeSymbol].
+class AddCurrentSymbolOp extends DrawOp {
+  const AddCurrentSymbolOp(this.symbol);
+
+  final TopoSymbol symbol;
+}
+
+/// A symbol appended to an already-committed route (identified by
+/// [routeId]) via [DrawController.placeSymbol].
+class AddCommittedSymbolOp extends DrawOp {
+  const AddCommittedSymbolOp(this.routeId, this.symbol);
+
+  final int routeId;
+  final TopoSymbol symbol;
+}
+
 /// Immutable state for the topo route drawing feature.
 ///
 /// [currentPoints] and the points inside [routes] are expressed in percent
@@ -45,7 +81,9 @@ class DrawState {
   const DrawState({
     this.mode = DrawMode.view,
     this.currentPoints = const [],
+    this.currentSymbols = const [],
     this.routes = const [],
+    this.undoStack = const [],
     this.redoStack = const [],
     this.selectedRouteId,
     this.activeSymbol,
@@ -57,6 +95,14 @@ class DrawState {
 
   final DrawMode mode;
   final List<Offset> currentPoints;
+
+  /// Symbols placed (via [DrawController.placeSymbol]) on the in-progress,
+  /// uncommitted route while [currentPoints] is non-empty -- the "place a
+  /// symbol while still drawing the line" fix. [DrawController.commitRoute]
+  /// folds these into the new [TopoRoute.symbols]; [DrawController
+  /// .clearCurrent]/[DrawController.beginPhotoSwitch] discard them.
+  final List<TopoSymbol> currentSymbols;
+
   final List<TopoRoute> routes;
 
   /// The wall this controller is currently loaded/persisting against, or
@@ -67,9 +113,14 @@ class DrawState {
   /// The photo (within [activeWallId]) routes are persisted against.
   final String? activePhotoId;
 
-  /// Points popped off [currentPoints] by [undo], available to be replayed
-  /// by [redo]. Any new point added via [addPoint] clears this stack.
-  final List<Offset> redoStack;
+  /// Operations applied so far, available to be inverted by [undo]. See
+  /// [DrawOp].
+  final List<DrawOp> undoStack;
+
+  /// Operations popped off [undoStack] by [undo], available to be
+  /// re-applied by [redo]. Any new mutation (via [addPoint] or
+  /// [placeSymbol]) clears this stack.
+  final List<DrawOp> redoStack;
 
   /// The id of the currently selected route, or null if none is selected.
   /// Always either null or the id of a route present in [routes].
@@ -88,8 +139,10 @@ class DrawState {
   DrawState copyWith({
     DrawMode? mode,
     List<Offset>? currentPoints,
+    List<TopoSymbol>? currentSymbols,
     List<TopoRoute>? routes,
-    List<Offset>? redoStack,
+    List<DrawOp>? undoStack,
+    List<DrawOp>? redoStack,
     int? selectedRouteId,
     bool selectedRouteIdSet = false,
     SymbolType? activeSymbol,
@@ -104,7 +157,9 @@ class DrawState {
     return DrawState(
       mode: mode ?? this.mode,
       currentPoints: currentPoints ?? this.currentPoints,
+      currentSymbols: currentSymbols ?? this.currentSymbols,
       routes: routes ?? this.routes,
+      undoStack: undoStack ?? this.undoStack,
       redoStack: redoStack ?? this.redoStack,
       selectedRouteId: selectedRouteIdSet
           ? selectedRouteId
@@ -140,38 +195,164 @@ class DrawController extends Notifier<DrawState> {
     state = state.copyWith(mode: mode);
   }
 
-  /// Appends [p] to the in-progress route and clears the redo stack.
+  /// Appends [p] to the in-progress route, pushes an [AddPointOp] onto
+  /// [DrawState.undoStack], and clears [DrawState.redoStack].
   void addPoint(Offset p) {
     state = state.copyWith(
       currentPoints: [...state.currentPoints, p],
+      undoStack: [...state.undoStack, AddPointOp(p)],
       redoStack: const [],
     );
   }
 
-  /// Pops the last point off [DrawState.currentPoints] onto the redo stack.
-  /// No-op if there are no current points.
-  void undo() {
-    if (state.currentPoints.isEmpty) return;
+  /// Pops the last operation off [DrawState.undoStack] and inverts it,
+  /// pushing it onto [DrawState.redoStack] for [redo] to re-apply. No-op if
+  /// [DrawState.undoStack] is empty.
+  ///
+  /// - [AddPointOp]: removes the last element of [DrawState.currentPoints]
+  ///   (the pre-existing point-undo behavior).
+  /// - [AddCurrentSymbolOp]: removes the last element of
+  ///   [DrawState.currentSymbols] -- undoes a symbol placed mid-draw.
+  /// - [AddCommittedSymbolOp]: removes the LAST symbol from the named
+  ///   route's `symbols` and re-persists that route -- see [commitRoute]'s
+  ///   doc for the sync-mutation / no-op-without-a-wall write-through
+  ///   contract shared by every persisting method, including this one. This
+  ///   is the fix for the reported bug: placing a crux/bolt/anchor on an
+  ///   already-committed route can now be undone, including on disk.
+  ///
+  /// The in-memory mutation always happens synchronously, before any
+  /// `await`, so callers that don't await this method still observe the
+  /// state change immediately (only the [AddCommittedSymbolOp] case has
+  /// anything left to `await` afterwards: the DB write-through).
+  Future<void> undo() async {
+    if (state.undoStack.isEmpty) return;
 
-    final points = [...state.currentPoints];
-    final popped = points.removeLast();
-    state = state.copyWith(
-      currentPoints: points,
-      redoStack: [...state.redoStack, popped],
-    );
+    final undoStack = [...state.undoStack];
+    final op = undoStack.removeLast();
+
+    switch (op) {
+      case AddPointOp():
+        final points = [...state.currentPoints];
+        if (points.isNotEmpty) points.removeLast();
+        state = state.copyWith(
+          currentPoints: points,
+          undoStack: undoStack,
+          redoStack: [...state.redoStack, op],
+        );
+        return;
+
+      case AddCurrentSymbolOp():
+        final symbols = [...state.currentSymbols];
+        if (symbols.isNotEmpty) symbols.removeLast();
+        state = state.copyWith(
+          currentSymbols: symbols,
+          undoStack: undoStack,
+          redoStack: [...state.redoStack, op],
+        );
+        return;
+
+      case AddCommittedSymbolOp(routeId: final routeId):
+        final index = state.routes.indexWhere((r) => r.id == routeId);
+        if (index == -1) {
+          // Route no longer exists (e.g. removed since it was placed on);
+          // still consume the op so the undo/redo stacks stay consistent.
+          state = state.copyWith(
+            undoStack: undoStack,
+            redoStack: [...state.redoStack, op],
+          );
+          return;
+        }
+
+        final route = state.routes[index];
+        final symbols = [...route.symbols];
+        if (symbols.isNotEmpty) symbols.removeLast();
+        final updatedRoute = route.copyWith(symbols: symbols);
+        final routes = [...state.routes];
+        routes[index] = updatedRoute;
+        state = state.copyWith(
+          routes: routes,
+          undoStack: undoStack,
+          redoStack: [...state.redoStack, op],
+        );
+
+        final wallId = state.activeWallId;
+        final photoId = state.activePhotoId;
+        if (wallId == null || photoId == null) return;
+        try {
+          await ref
+              .read(routeRepositoryProvider)
+              .upsertRoute(wallId, photoId, updatedRoute);
+        } catch (e, st) {
+          debugPrint('undo: persistence write-through failed: $e\n$st');
+        }
+        return;
+    }
   }
 
-  /// Pushes the last undone point back onto [DrawState.currentPoints].
-  /// No-op if the redo stack is empty.
-  void redo() {
+  /// Pops the last operation off [DrawState.redoStack] and RE-applies it —
+  /// the exact inverse of [undo] — pushing it back onto
+  /// [DrawState.undoStack]. No-op if [DrawState.redoStack] is empty.
+  ///
+  /// Mirrors [undo]'s three cases (re-adding the point/current-symbol, or
+  /// re-appending the symbol to its committed route and re-persisting it),
+  /// with the same synchronous-mutation-before-`await` contract.
+  Future<void> redo() async {
     if (state.redoStack.isEmpty) return;
 
-    final redo = [...state.redoStack];
-    final restored = redo.removeLast();
-    state = state.copyWith(
-      currentPoints: [...state.currentPoints, restored],
-      redoStack: redo,
-    );
+    final redoStack = [...state.redoStack];
+    final op = redoStack.removeLast();
+
+    switch (op) {
+      case AddPointOp(point: final point):
+        state = state.copyWith(
+          currentPoints: [...state.currentPoints, point],
+          redoStack: redoStack,
+          undoStack: [...state.undoStack, op],
+        );
+        return;
+
+      case AddCurrentSymbolOp(symbol: final symbol):
+        state = state.copyWith(
+          currentSymbols: [...state.currentSymbols, symbol],
+          redoStack: redoStack,
+          undoStack: [...state.undoStack, op],
+        );
+        return;
+
+      case AddCommittedSymbolOp(routeId: final routeId, symbol: final symbol):
+        final index = state.routes.indexWhere((r) => r.id == routeId);
+        if (index == -1) {
+          state = state.copyWith(
+            redoStack: redoStack,
+            undoStack: [...state.undoStack, op],
+          );
+          return;
+        }
+
+        final route = state.routes[index];
+        final updatedRoute = route.copyWith(
+          symbols: [...route.symbols, symbol],
+        );
+        final routes = [...state.routes];
+        routes[index] = updatedRoute;
+        state = state.copyWith(
+          routes: routes,
+          redoStack: redoStack,
+          undoStack: [...state.undoStack, op],
+        );
+
+        final wallId = state.activeWallId;
+        final photoId = state.activePhotoId;
+        if (wallId == null || photoId == null) return;
+        try {
+          await ref
+              .read(routeRepositoryProvider)
+              .upsertRoute(wallId, photoId, updatedRoute);
+        } catch (e, st) {
+          debugPrint('redo: persistence write-through failed: $e\n$st');
+        }
+        return;
+    }
   }
 
   /// Replaces the point at [index] with [q], leaving all other points
@@ -184,9 +365,11 @@ class DrawController extends Notifier<DrawState> {
     state = state.copyWith(currentPoints: points);
   }
 
-  /// If there are at least 2 current points, moves them into [DrawState.routes]
-  /// as a new [TopoRoute] and empties [DrawState.currentPoints] and the redo
-  /// stack. No-op otherwise.
+  /// If there are at least 2 current points, moves them (and any
+  /// [DrawState.currentSymbols] placed on them mid-draw) into
+  /// [DrawState.routes] as a new [TopoRoute], and empties
+  /// [DrawState.currentPoints], [DrawState.currentSymbols], and the
+  /// undo/redo stacks. No-op otherwise.
   ///
   /// Persistence write-through: if [DrawState.activeWallId] is set (i.e.
   /// [loadForWall] has been called), the new route is also upserted to the
@@ -200,12 +383,15 @@ class DrawController extends Notifier<DrawState> {
       id: state.nextId,
       number: state.nextNumber,
       points: [...state.currentPoints],
+      symbols: [...state.currentSymbols],
       colorIndex: routeColorIndexFor(state.nextNumber),
     );
 
     state = state.copyWith(
       routes: [...state.routes, route],
       currentPoints: const [],
+      currentSymbols: const [],
+      undoStack: const [],
       redoStack: const [],
       nextId: state.nextId + 1,
       nextNumber: state.nextNumber + 1,
@@ -223,9 +409,15 @@ class DrawController extends Notifier<DrawState> {
     }
   }
 
-  /// Empties the in-progress route and the redo stack.
+  /// Empties the in-progress route (points and symbols) and the undo/redo
+  /// stacks.
   void clearCurrent() {
-    state = state.copyWith(currentPoints: const [], redoStack: const []);
+    state = state.copyWith(
+      currentPoints: const [],
+      currentSymbols: const [],
+      undoStack: const [],
+      redoStack: const [],
+    );
   }
 
   /// Selects the route with the given [id], or clears the selection if
@@ -272,8 +464,11 @@ class DrawController extends Notifier<DrawState> {
   }
 
   /// Removes the route with the given [id]. Clears [DrawState.selectedRouteId]
-  /// if it pointed at the removed route. No-op if [id] does not match any
-  /// route.
+  /// if it pointed at the removed route, and clears [DrawState.undoStack]/
+  /// [DrawState.redoStack] (mirroring [commitRoute]/[clearCurrent]/
+  /// [beginPhotoSwitch]/[loadForWall]) so no stale [AddCommittedSymbolOp]
+  /// (or any other op) can reference a route that no longer exists. No-op
+  /// if [id] does not match any route.
   ///
   /// Persistence write-through: see [commitRoute] doc for the sync-mutation
   /// / no-op-without-a-wall contract shared by all write-through methods.
@@ -288,6 +483,8 @@ class DrawController extends Notifier<DrawState> {
       routes: routes,
       selectedRouteIdSet: clearSelection,
       selectedRouteId: clearSelection ? null : state.selectedRouteId,
+      undoStack: const [],
+      redoStack: const [],
     );
 
     final wallId = state.activeWallId;
@@ -308,28 +505,52 @@ class DrawController extends Notifier<DrawState> {
   }
 
   /// Appends a [TopoSymbol] of [DrawState.activeSymbol]'s type at [percent]
-  /// to a route, and returns which of the four [SymbolPlacementOutcome]
-  /// cases occurred:
+  /// to a route (committed or in-progress), and returns which of the five
+  /// [SymbolPlacementOutcome] cases occurred:
   ///
-  /// - No [DrawState.activeSymbol] (regardless of selection/routes): no-op,
-  ///   returns [SymbolPlacementOutcome.noActiveSymbol].
+  /// - No [DrawState.activeSymbol] (regardless of selection/routes/
+  ///   currentPoints): no-op, returns [SymbolPlacementOutcome.noActiveSymbol].
   /// - A route is already explicitly selected (via [selectRoute]) and it
   ///   still exists in [DrawState.routes]: the symbol is placed on THAT
   ///   route, [DrawState.selectedRouteId] is left unchanged, and this
-  ///   returns [SymbolPlacementOutcome.placed].
-  /// - No route is selected (or the selected id no longer exists) but
+  ///   returns [SymbolPlacementOutcome.placed]. Explicit intent always wins,
+  ///   regardless of the two cases below.
+  /// - [DrawState.mode] is [DrawMode.draw] and [DrawState.currentPoints] is
+  ///   non-empty (i.e. a NEW route is actively being drawn right now):
+  ///   appends the symbol to [DrawState.currentSymbols] (the in-progress,
+  ///   uncommitted route) instead of any committed route, and returns
+  ///   [SymbolPlacementOutcome.placed]. This is the "place a symbol while
+  ///   still drawing the line" fix -- previously a symbol could only ever
+  ///   attach to an already-committed route. [DrawController.commitRoute]
+  ///   later folds [DrawState.currentSymbols] into the new route's
+  ///   `symbols`. This case is checked BEFORE the routes.last auto-select
+  ///   below -- an active in-progress draw always beats it, otherwise the
+  ///   instant a wall had >=1 committed route, every draw-time placement
+  ///   would silently (and incorrectly) land on `routes.last` instead of
+  ///   the route actually being drawn (the reported misattribution bug).
+  /// - No route is selected (or the selected id no longer exists) and the
+  ///   above in-progress-draw case didn't apply (e.g. right after
+  ///   [commitRoute], when [DrawState.currentPoints] is empty again), but
   ///   [DrawState.routes] is non-empty: auto-selects `routes.last` (the
   ///   most recently committed route), places the symbol there, updates
   ///   [DrawState.selectedRouteId] to point at it, and returns
   ///   [SymbolPlacementOutcome.autoSelectedAndPlaced]. This is the "auto-
   ///   select + hint" fix -- previously this case silently no-oped, leaving
   ///   a user who activated a symbol without first selecting a route stuck
-  ///   with an apparently unresponsive canvas.
-  /// - No route is selected and [DrawState.routes] is empty: nothing to
-  ///   place onto, no state change, returns
+  ///   with an apparently unresponsive canvas. This is how "annotate the
+  ///   route I just committed" keeps working: [commitRoute] empties
+  ///   [DrawState.currentPoints], so the in-progress-draw case above no
+  ///   longer applies and this auto-select takes over.
+  /// - Otherwise (no committed routes AND no in-progress route to attach
+  ///   to): nothing to place onto, no state change, returns
   ///   [SymbolPlacementOutcome.noRouteAvailable] so the caller (see
   ///   `_TopoCanvasState._beginInteraction`) can show a hint instead of
   ///   silently doing nothing.
+  ///
+  /// Undo/redo: every placement (committed or in-progress) pushes a
+  /// [DrawOp] onto [DrawState.undoStack] and clears [DrawState.redoStack],
+  /// so [undo]/[redo] can invert/replay it like any other drawing action —
+  /// see [DrawOp]'s doc for the bug this fixes.
   ///
   /// Persistence write-through: see [commitRoute] doc for the sync-mutation
   /// / no-op-without-a-wall contract shared by all write-through methods.
@@ -342,33 +563,69 @@ class DrawController extends Notifier<DrawState> {
         ? -1
         : state.routes.indexWhere((r) => r.id == explicitId);
 
-    final int index;
-    final SymbolPlacementOutcome outcome;
-    final int targetRouteId;
     if (explicitId != null && explicitIndex != -1) {
-      index = explicitIndex;
-      targetRouteId = explicitId;
-      outcome = SymbolPlacementOutcome.placed;
-    } else {
-      if (state.routes.isEmpty) return SymbolPlacementOutcome.noRouteAvailable;
-      index = state.routes.length - 1;
-      targetRouteId = state.routes[index].id;
-      outcome = SymbolPlacementOutcome.autoSelectedAndPlaced;
+      return _placeOnCommittedRoute(
+        index: explicitIndex,
+        targetRouteId: explicitId,
+        symbolType: symbolType,
+        percent: percent,
+        outcome: SymbolPlacementOutcome.placed,
+      );
     }
 
+    if (state.mode == DrawMode.draw && state.currentPoints.isNotEmpty) {
+      final symbol = TopoSymbol(type: symbolType, position: percent);
+      state = state.copyWith(
+        currentSymbols: [...state.currentSymbols, symbol],
+        undoStack: [...state.undoStack, AddCurrentSymbolOp(symbol)],
+        redoStack: const [],
+      );
+      return SymbolPlacementOutcome.placed;
+    }
+
+    if (state.routes.isNotEmpty) {
+      final index = state.routes.length - 1;
+      return _placeOnCommittedRoute(
+        index: index,
+        targetRouteId: state.routes[index].id,
+        symbolType: symbolType,
+        percent: percent,
+        outcome: SymbolPlacementOutcome.autoSelectedAndPlaced,
+      );
+    }
+
+    return SymbolPlacementOutcome.noRouteAvailable;
+  }
+
+  /// Shared implementation for [placeSymbol]'s two committed-route cases
+  /// (explicit selection and auto-select-`routes.last`): appends a
+  /// [TopoSymbol] of [symbolType] at [percent] to the route at [index],
+  /// pushes an [AddCommittedSymbolOp] onto [DrawState.undoStack] (so
+  /// [undo]/[redo] know how to invert/replay it), sets
+  /// [DrawState.selectedRouteId] according to [outcome] (auto-select writes
+  /// it; an explicit selection is left as-is per [placeSymbol]'s doc),
+  /// persists the change, and returns [outcome].
+  Future<SymbolPlacementOutcome> _placeOnCommittedRoute({
+    required int index,
+    required int targetRouteId,
+    required SymbolType symbolType,
+    required Offset percent,
+    required SymbolPlacementOutcome outcome,
+  }) async {
     final route = state.routes[index];
+    final symbol = TopoSymbol(type: symbolType, position: percent);
     final routes = [...state.routes];
-    final updatedRoute = route.copyWith(
-      symbols: [
-        ...route.symbols,
-        TopoSymbol(type: symbolType, position: percent),
-      ],
-    );
+    final updatedRoute = route.copyWith(symbols: [...route.symbols, symbol]);
     routes[index] = updatedRoute;
     state = state.copyWith(
       routes: routes,
       selectedRouteIdSet: outcome == SymbolPlacementOutcome.autoSelectedAndPlaced,
       selectedRouteId: targetRouteId,
+      undoStack: [
+        ...state.undoStack,
+        AddCommittedSymbolOp(targetRouteId, symbol),
+      ],
+      redoStack: const [],
     );
 
     final wallId = state.activeWallId;
@@ -468,8 +725,10 @@ class DrawController extends Notifier<DrawState> {
   /// the previous photo while a new one is visible.
   ///
   /// Clears [DrawState.routes], [DrawState.currentPoints],
-  /// [DrawState.redoStack], and [DrawState.selectedRouteId], and — crucially
-  /// — nulls out [DrawState.activeWallId]/[DrawState.activePhotoId]. Since
+  /// [DrawState.currentSymbols], [DrawState.undoStack]/
+  /// [DrawState.redoStack], and [DrawState.selectedRouteId], and —
+  /// crucially — nulls out [DrawState.activeWallId]/
+  /// [DrawState.activePhotoId]. Since
   /// every write-through method ([commitRoute], [toggleRouteVisibility],
   /// [removeRoute], [placeSymbol]) no-ops its persistence step when
   /// [DrawState.activeWallId] is null, this closes the race where a route
@@ -486,6 +745,8 @@ class DrawController extends Notifier<DrawState> {
     state = state.copyWith(
       routes: const [],
       currentPoints: const [],
+      currentSymbols: const [],
+      undoStack: const [],
       redoStack: const [],
       selectedRouteIdSet: true,
       selectedRouteId: null,
@@ -518,6 +779,8 @@ class DrawController extends Notifier<DrawState> {
     state = state.copyWith(
       routes: loaded,
       currentPoints: const [],
+      currentSymbols: const [],
+      undoStack: const [],
       redoStack: const [],
       selectedRouteIdSet: true,
       selectedRouteId: null,

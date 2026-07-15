@@ -502,12 +502,16 @@ void main() {
   );
 
   test(
-    'S2: placeSymbol with routes empty does not throw, places nothing, '
-    'leaves selectedRouteId null, and returns noRouteAvailable',
+    'S2: placeSymbol with routes AND currentPoints both empty does not '
+    'throw, places nothing, leaves selectedRouteId null, and returns '
+    'noRouteAvailable (the draw-time-placement fix, see U1/U2/U4 below, '
+    'only kicks in once currentPoints is non-empty, so this "nothing to '
+    'place onto at all" case is unchanged)',
     () async {
       final notifier = container.read(drawControllerProvider.notifier);
       notifier.setActiveSymbol(SymbolType.bolt);
       expect(container.read(drawControllerProvider).routes, isEmpty);
+      expect(container.read(drawControllerProvider).currentPoints, isEmpty);
 
       final outcome = await notifier.placeSymbol(const Offset(0.5, 0.5));
 
@@ -623,6 +627,270 @@ void main() {
     },
   );
 
+  // --- Bug fix: symbols can be placed while still drawing the line, and
+  // any symbol placement (draw-time or on a committed route) is undoable --
+  // see draw_controller.dart's DrawOp/placeSymbol/undo/redo docs. -------
+
+  test(
+    'U1: placeSymbol while drawing (routes empty, currentPoints non-empty) '
+    'places onto currentSymbols instead of returning noRouteAvailable, and '
+    'commitRoute folds it into the new route',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+      notifier.setMode(DrawMode.draw);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      expect(container.read(drawControllerProvider).routes, isEmpty);
+
+      notifier.setActiveSymbol(SymbolType.crux);
+      const placedAt = Offset(0.5, 0.5);
+      final outcome = await notifier.placeSymbol(placedAt);
+
+      expect(outcome, SymbolPlacementOutcome.placed);
+      expect(outcome, isNot(SymbolPlacementOutcome.noRouteAvailable));
+      final midDraw = container.read(drawControllerProvider);
+      expect(midDraw.currentSymbols, [
+        const TopoSymbol(type: SymbolType.crux, position: placedAt),
+      ]);
+      // Nothing was committed yet, so routes must still be empty.
+      expect(midDraw.routes, isEmpty);
+
+      await notifier.commitRoute();
+
+      final state = container.read(drawControllerProvider);
+      expect(state.routes.single.symbols, [
+        const TopoSymbol(type: SymbolType.crux, position: placedAt),
+      ]);
+      expect(state.currentSymbols, isEmpty);
+    },
+  );
+
+  test(
+    'U2: undo/redo a draw-time (pre-commit) symbol placement',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+      notifier.setMode(DrawMode.draw);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.setActiveSymbol(SymbolType.bolt);
+      const placedAt = Offset(0.5, 0.5);
+      await notifier.placeSymbol(placedAt);
+      expect(
+        container.read(drawControllerProvider).currentSymbols,
+        hasLength(1),
+      );
+
+      await notifier.undo();
+      expect(container.read(drawControllerProvider).currentSymbols, isEmpty);
+      // The two points drawn before the symbol are untouched by undoing
+      // the symbol placement.
+      expect(container.read(drawControllerProvider).currentPoints, [
+        const Offset(0.1, 0.1),
+        const Offset(0.2, 0.2),
+      ]);
+
+      await notifier.redo();
+      expect(container.read(drawControllerProvider).currentSymbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: placedAt),
+      ]);
+    },
+  );
+
+  test(
+    'U3: undo removes a symbol placed on an already-COMMITTED route (the '
+    'reported bug -- previously undo only ever popped points) and redo '
+    'restores it; see draw_controller_persistence_test.dart for the '
+    'equivalent coverage that the removal/restoration also re-persists',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      await notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+
+      notifier.setActiveSymbol(SymbolType.bolt);
+      const placedAt = Offset(0.15, 0.15);
+      // No explicit selection: auto-selects routes.last, exactly like S1.
+      final outcome = await notifier.placeSymbol(placedAt);
+      expect(outcome, SymbolPlacementOutcome.autoSelectedAndPlaced);
+      expect(
+        container.read(drawControllerProvider).routes.single.symbols,
+        hasLength(1),
+      );
+
+      await notifier.undo();
+      expect(
+        container.read(drawControllerProvider).routes.single.symbols,
+        isEmpty,
+      );
+
+      await notifier.redo();
+      final restored = container.read(drawControllerProvider).routes
+          .firstWhere((r) => r.id == routeId);
+      expect(restored.symbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: placedAt),
+      ]);
+    },
+  );
+
+  test(
+    'U8: placeSymbol while drawing a NEW route (after a route is already '
+    'committed) places onto currentSymbols, NOT onto the pre-existing '
+    'committed route -- an active in-progress draw must beat the '
+    'routes.last auto-select. This is the fix for the reported bug: '
+    'before the reorder, the routes.isNotEmpty auto-select branch fired '
+    'first and silently misattributed the symbol to the committed route '
+    'whenever any committed route existed, defeating the draw-time '
+    'placement feature entirely once a wall had >=1 route.',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+      notifier.setMode(DrawMode.draw);
+
+      // Commit one route first, so state.routes is non-empty.
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      await notifier.commitRoute();
+      final committedRoute = container
+          .read(drawControllerProvider)
+          .routes
+          .single;
+      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+
+      // Start drawing a NEW route -- currentPoints becomes non-empty again
+      // -- with no explicit selection.
+      notifier.addPoint(const Offset(0.5, 0.1));
+      notifier.addPoint(const Offset(0.6, 0.1));
+      expect(
+        container.read(drawControllerProvider).currentPoints,
+        hasLength(2),
+      );
+
+      notifier.setActiveSymbol(SymbolType.bolt);
+      const placedAt = Offset(0.5, 0.5);
+      final outcome = await notifier.placeSymbol(placedAt);
+
+      expect(outcome, SymbolPlacementOutcome.placed);
+      expect(outcome, isNot(SymbolPlacementOutcome.autoSelectedAndPlaced));
+
+      final midDraw = container.read(drawControllerProvider);
+      expect(midDraw.currentSymbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: placedAt),
+      ]);
+      // The PRE-EXISTING committed route must NOT have received the
+      // symbol -- not misattributed.
+      final stillCommitted = midDraw.routes.firstWhere(
+        (r) => r.id == committedRoute.id,
+      );
+      expect(stillCommitted.symbols, isEmpty);
+
+      // After commitRoute, the NEW route carries the bolt and the first
+      // route still has none.
+      await notifier.commitRoute();
+      final state = container.read(drawControllerProvider);
+      expect(state.routes, hasLength(2));
+      final firstRoute = state.routes.firstWhere(
+        (r) => r.id == committedRoute.id,
+      );
+      final newRoute = state.routes.firstWhere(
+        (r) => r.id != committedRoute.id,
+      );
+      expect(firstRoute.symbols, isEmpty);
+      expect(newRoute.symbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: placedAt),
+      ]);
+    },
+  );
+
+  test(
+    'U9: placeSymbol right after commitRoute (currentPoints empty, no new '
+    'line started yet) still auto-selects routes.last -- the reorder must '
+    'NOT regress the existing post-commit "annotate my just-drawn route" '
+    'flow, since step 3 (in-progress draw) requires currentPoints to be '
+    'non-empty and is skipped here.',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      await notifier.commitRoute();
+      final route = container.read(drawControllerProvider).routes.single;
+      expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+
+      notifier.setActiveSymbol(SymbolType.bolt);
+      const placedAt = Offset(0.5, 0.5);
+      final outcome = await notifier.placeSymbol(placedAt);
+
+      expect(outcome, SymbolPlacementOutcome.autoSelectedAndPlaced);
+      final state = container.read(drawControllerProvider);
+      expect(state.selectedRouteId, route.id);
+      expect(state.routes.single.symbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: placedAt),
+      ]);
+    },
+  );
+
+  test(
+    'U4: undo/redo is a single unified LIFO history across points AND '
+    'symbols -- addPoint(A), addPoint(B), placeSymbol (draw-time), '
+    'addPoint(C), then undo x3 pops in reverse order: C (point), the '
+    'symbol, then B (point) -- leaving currentSymbols empty and only A in '
+    'currentPoints',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+      notifier.setMode(DrawMode.draw);
+
+      const a = Offset(0.1, 0.1);
+      const b = Offset(0.2, 0.2);
+      const c = Offset(0.3, 0.3);
+
+      notifier.addPoint(a);
+      notifier.addPoint(b);
+      notifier.setActiveSymbol(SymbolType.anchor);
+      const symbolAt = Offset(0.5, 0.5);
+      await notifier.placeSymbol(symbolAt);
+      notifier.addPoint(c);
+
+      expect(container.read(drawControllerProvider).currentPoints, [a, b, c]);
+      expect(
+        container.read(drawControllerProvider).currentSymbols,
+        hasLength(1),
+      );
+
+      // Pop 1: the most recent op is addPoint(C).
+      await notifier.undo();
+      expect(container.read(drawControllerProvider).currentPoints, [a, b]);
+      expect(
+        container.read(drawControllerProvider).currentSymbols,
+        hasLength(1),
+      );
+
+      // Pop 2: the symbol placement.
+      await notifier.undo();
+      expect(container.read(drawControllerProvider).currentPoints, [a, b]);
+      expect(container.read(drawControllerProvider).currentSymbols, isEmpty);
+
+      // Pop 3: addPoint(B).
+      await notifier.undo();
+      expect(container.read(drawControllerProvider).currentPoints, [a]);
+      expect(container.read(drawControllerProvider).currentSymbols, isEmpty);
+
+      // Redo replays the exact same sequence in reverse.
+      await notifier.redo();
+      expect(container.read(drawControllerProvider).currentPoints, [a, b]);
+      await notifier.redo();
+      expect(
+        container.read(drawControllerProvider).currentSymbols,
+        hasLength(1),
+      );
+      await notifier.redo();
+      expect(container.read(drawControllerProvider).currentPoints, [a, b, c]);
+    },
+  );
+
   test(
     'A6: removeRoute removes the route and clears selectedRouteId iff it '
     'pointed at the removed route',
@@ -672,6 +940,34 @@ void main() {
     expect(after.routes, before.routes);
     expect(after.selectedRouteId, before.selectedRouteId);
   });
+
+  test(
+    'U11: removeRoute clears the undo/redo history stacks, so no op '
+    'survives its route\'s deletion',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      await notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.single.id;
+
+      notifier.setActiveSymbol(SymbolType.bolt);
+      await notifier.placeSymbol(const Offset(0.15, 0.15));
+      await notifier.placeSymbol(const Offset(0.25, 0.25));
+      expect(container.read(drawControllerProvider).undoStack, hasLength(2));
+
+      await notifier.undo();
+      expect(container.read(drawControllerProvider).undoStack, hasLength(1));
+      expect(container.read(drawControllerProvider).redoStack, hasLength(1));
+
+      await notifier.removeRoute(routeId);
+
+      final state = container.read(drawControllerProvider);
+      expect(state.undoStack, isEmpty);
+      expect(state.redoStack, isEmpty);
+    },
+  );
 
   // --- M4: route metadata / grade-key computation ---------------------
 

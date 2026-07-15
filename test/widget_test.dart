@@ -2156,6 +2156,72 @@ void main() {
     );
 
     testWidgets(
+      'U1/U6 (canvas render): placing a symbol on the in-progress '
+      '(uncommitted) route is handed to TopoPainter via currentSymbols, so '
+      'it renders before the route is ever committed',
+      (tester) async {
+        setViewportSize(
+          tester,
+          const Size(400, 300 + kSymbolPaletteBarHeight + 32),
+        );
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.setMode(DrawMode.draw);
+        // Two points drawn but NOT committed: routes stays empty, so
+        // placeSymbol below must land on currentSymbols (see draw_controller
+        // .dart's placeSymbol doc), not a committed route.
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.9, 0.9));
+        expect(container.read(drawControllerProvider).routes, isEmpty);
+
+        await tester.pumpWidget(
+          buildPaletteAndCanvas(container: container, controller: controller),
+        );
+        await tester.pump();
+
+        final barHeight = tester.getSize(find.byType(SymbolPaletteBar)).height;
+        setViewportSize(tester, Size(400, 300 + barHeight));
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('topo-symbol-crux')));
+        await tester.pump();
+        expect(
+          container.read(drawControllerProvider).activeSymbol,
+          SymbolType.crux,
+        );
+
+        // Global (200, 150 + barHeight) -> local (200, 150) -> scene
+        // (200, 150) -> percent (0.5, 0.5), same mapping as A3 above.
+        await tester.tapAt(Offset(200, 150 + barHeight));
+        await tester.pump();
+
+        final state = container.read(drawControllerProvider);
+        expect(state.routes, isEmpty); // still uncommitted
+        expect(state.currentSymbols, hasLength(1));
+        expect(state.currentSymbols.single.type, SymbolType.crux);
+
+        final customPaint = tester.widget<CustomPaint>(
+          find.byWidgetPredicate(
+            (widget) => widget is CustomPaint && widget.painter is TopoPainter,
+          ),
+        );
+        final painter = customPaint.painter as TopoPainter;
+
+        // The painter must be handed the SAME in-progress symbols the
+        // controller holds, so TopoPainter.paint's currentSymbols loop
+        // actually renders it -- this is what makes the symbol visible on
+        // screen before commitRoute is ever called.
+        expect(painter.currentSymbols, state.currentSymbols);
+        expect(painter.currentSymbols.single.position.dx, closeTo(0.5, 0.01));
+        expect(painter.currentSymbols.single.position.dy, closeTo(0.5, 0.01));
+      },
+    );
+
+    testWidgets(
       'switching between symbol controls only activates one at a time',
       (tester) async {
         final container = ProviderContainer();

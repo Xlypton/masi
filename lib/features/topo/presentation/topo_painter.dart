@@ -97,6 +97,7 @@ class TopoPainter extends CustomPainter {
     required this.imageSize,
     required this.routes,
     required this.currentPoints,
+    this.currentSymbols = const [],
     required this.showHandles,
     this.selectedRouteId,
     required this.palette,
@@ -131,6 +132,13 @@ class TopoPainter extends CustomPainter {
 
   /// The in-progress route being drawn, in percent space.
   final List<Offset> currentPoints;
+
+  /// Symbols placed on the in-progress route (via [DrawController
+  /// .placeSymbol] while it's still uncommitted -- see
+  /// `DrawState.currentSymbols`'s doc), in percent space. Rendered in
+  /// [currentColor] like the in-progress polyline itself, since the route
+  /// doesn't have a palette color assigned until it's committed.
+  final List<TopoSymbol> currentSymbols;
 
   /// Whether to draw draggable handles at each [currentPoints] position.
   final bool showHandles;
@@ -210,6 +218,15 @@ class TopoPainter extends CustomPainter {
 
     final currentScene = _toScene(currentPoints);
     _paintPolyline(canvas, currentScene, currentColor, strokeWidth: _strokeWidth / _safeScale);
+
+    for (final symbol in currentSymbols) {
+      _paintSymbol(
+        canvas,
+        CoordinateTransformer.percentToScene(symbol.position, imageSize),
+        symbol.type,
+        currentColor,
+      );
+    }
 
     if (showHandles) {
       final handlePaint = Paint()
@@ -487,6 +504,7 @@ class TopoPainter extends CustomPainter {
         handleColor != oldDelegate.handleColor ||
         routeColorResolver != oldDelegate.routeColorResolver ||
         !_pointsEqual(currentPoints, oldDelegate.currentPoints) ||
+        !listEquals(currentSymbols, oldDelegate.currentSymbols) ||
         !listEquals(palette, oldDelegate.palette) ||
         !listEquals(routes, oldDelegate.routes);
   }

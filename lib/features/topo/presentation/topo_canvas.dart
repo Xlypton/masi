@@ -1007,6 +1007,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                     imageSize: widget.imageSize,
                     routes: drawState.routes,
                     currentPoints: drawState.currentPoints,
+                    currentSymbols: drawState.currentSymbols,
                     showHandles: isDrawMode && drawState.activeSymbol == null,
                     selectedRouteId: drawState.selectedRouteId,
                     palette: kRoutePalette,

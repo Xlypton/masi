@@ -187,6 +187,113 @@ void main() {
     ]);
   });
 
+  test(
+    'U3: undo removes a symbol placed on an already-committed route AND '
+    're-persists that removal (the reported bug: previously undo only ever '
+    'popped points, and had no way to write the removal through to disk); '
+    'redo restores the symbol and re-persists it too',
+    () async {
+      final containerA = makeContainer();
+      final notifierA = containerA.read(drawControllerProvider.notifier);
+      await notifierA.loadForWall(wallId, photoId);
+
+      notifierA.addPoint(const Offset(0.1, 0.1));
+      notifierA.addPoint(const Offset(0.2, 0.2));
+      await notifierA.commitRoute();
+      final routeId = containerA.read(drawControllerProvider).routes.single.id;
+
+      notifierA.selectRoute(routeId);
+      notifierA.setActiveSymbol(SymbolType.bolt);
+      const symbolAt = Offset(0.15, 0.15);
+      await notifierA.placeSymbol(symbolAt);
+      expect(containerA.read(drawControllerProvider).routes.single.symbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: symbolAt),
+      ]);
+
+      await notifierA.undo();
+      expect(
+        containerA.read(drawControllerProvider).routes.single.symbols,
+        isEmpty,
+      );
+
+      // A fresh controller loading the same wall must see the symbol GONE
+      // -- i.e. undo's removal was written through to the DB, not just
+      // held in memory.
+      final containerB = makeContainer();
+      final notifierB = containerB.read(drawControllerProvider.notifier);
+      await notifierB.loadForWall(wallId, photoId);
+      expect(containerB.read(drawControllerProvider).routes.single.symbols, isEmpty);
+
+      await notifierA.redo();
+      expect(containerA.read(drawControllerProvider).routes.single.symbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: symbolAt),
+      ]);
+
+      // And a third fresh controller must see it RESTORED post-redo.
+      final containerC = makeContainer();
+      final notifierC = containerC.read(drawControllerProvider.notifier);
+      await notifierC.loadForWall(wallId, photoId);
+      expect(containerC.read(drawControllerProvider).routes.single.symbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: symbolAt),
+      ]);
+    },
+  );
+
+  test(
+    'U8: placeSymbol while drawing a NEW route (after a route is already '
+    'committed) does not persist the symbol onto the pre-existing '
+    'committed route ON DISK -- a fresh controller reload must see it '
+    'still symbol-less until the new route is itself committed',
+    () async {
+      final containerA = makeContainer();
+      final notifierA = containerA.read(drawControllerProvider.notifier);
+      await notifierA.loadForWall(wallId, photoId);
+      notifierA.setMode(DrawMode.draw);
+
+      notifierA.addPoint(const Offset(0.1, 0.1));
+      notifierA.addPoint(const Offset(0.2, 0.2));
+      await notifierA.commitRoute();
+
+      // Start a NEW in-progress route with no explicit selection.
+      notifierA.addPoint(const Offset(0.5, 0.1));
+      notifierA.addPoint(const Offset(0.6, 0.1));
+
+      notifierA.setActiveSymbol(SymbolType.bolt);
+      const placedAt = Offset(0.5, 0.5);
+      final outcome = await notifierA.placeSymbol(placedAt);
+      expect(outcome, SymbolPlacementOutcome.placed);
+
+      // A fresh controller loading the same wall must see the committed
+      // route UNMODIFIED on disk -- the symbol must not have been written
+      // through to it.
+      final containerB = makeContainer();
+      final notifierB = containerB.read(drawControllerProvider.notifier);
+      await notifierB.loadForWall(wallId, photoId);
+      final loadedBeforeNewCommit = containerB
+          .read(drawControllerProvider)
+          .routes;
+      expect(loadedBeforeNewCommit, hasLength(1));
+      expect(loadedBeforeNewCommit.single.symbols, isEmpty);
+
+      // Committing the new in-progress route persists it WITH the bolt,
+      // while the original committed route still has none.
+      await notifierA.commitRoute();
+
+      final containerC = makeContainer();
+      final notifierC = containerC.read(drawControllerProvider.notifier);
+      await notifierC.loadForWall(wallId, photoId);
+      final loaded = containerC.read(drawControllerProvider).routes;
+      expect(loaded, hasLength(2));
+
+      final original = loaded.firstWhere((r) => r.number == 1);
+      final newRoute = loaded.firstWhere((r) => r.number == 2);
+      expect(original.symbols, isEmpty);
+      expect(newRoute.symbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: placedAt),
+      ]);
+    },
+  );
+
   test('A5: toggleRouteVisibility persists the flipped flag; a reload reflects '
       'it', () async {
     final containerA = makeContainer();
