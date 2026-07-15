@@ -157,9 +157,33 @@ Future<String> resolveAttachedPhotoPath(
   return ownedPath;
 }
 
+/// The outcome of a single [captureWallGpsFromPhoto] call, surfaced to the
+/// caller so it can tell the user whether (and how) a location was found
+/// for the photo just attached — see the "indicator" feature this backs:
+/// a [SnackBar] via [gpsCaptureResultSnackBar] reporting exactly this.
+enum GpsCaptureResult {
+  /// The photo itself carried EXIF GPS tags, and the wall's coordinates
+  /// were set (or updated) from them.
+  exif,
+
+  /// The photo had no EXIF GPS, but the wall had no coordinates yet and a
+  /// device location was available, so that was recorded instead.
+  deviceFallback,
+
+  /// Neither EXIF GPS nor an applicable device-location fallback: no EXIF
+  /// tags, AND either no device location was available, the wall already
+  /// had coordinates (the fallback only ever fills a void — see below), or
+  /// an error occurred. The wall's coordinates are unchanged in every case.
+  none,
+}
+
 /// Reads the file at [path]'s bytes and, if they carry EXIF GPS tags (see
 /// `core/location/photo_gps.dart`'s [extractGpsFromImageBytes]), records
 /// them on [wallId] via [libraryRepo.setWallCoordinates].
+///
+/// Returns a [GpsCaptureResult] describing what happened, so callers (see
+/// [_attachPhotoAndLoad] and `topos_screen.dart`'s `_handleNewTopo`) can
+/// show the user a SnackBar reflecting it via [gpsCaptureResultSnackBar].
 ///
 /// [locationService], if given, backs a fallback for the common no-EXIF
 /// case (screenshots, downloaded images, GPS-less cameras): when the photo
@@ -168,7 +192,9 @@ Future<String> resolveAttachedPhotoPath(
 /// THAT is recorded on [wallId]. EXIF always wins when both are present:
 /// the fallback is only ever attempted after an EXIF read comes back null.
 /// Passing no [locationService] (the default) simply skips the fallback,
-/// leaving the pre-existing EXIF-only behavior unchanged.
+/// leaving the pre-existing EXIF-only behavior unchanged (and returns
+/// [GpsCaptureResult.none] whenever there's no EXIF GPS, exactly as if the
+/// fallback had been attempted and come back empty).
 ///
 /// Data-corruption fix: the device-location fallback only ever fills a
 /// VOID — it is attempted ONLY when [wallId] has no coordinates yet (see
@@ -193,12 +219,12 @@ Future<String> resolveAttachedPhotoPath(
 /// all (see `test/features/topo/presentation/topo_canvas_gps_test.dart`).
 ///
 /// Never throws: a missing/unreadable file, bytes with no EXIF GPS AND no
-/// (or no available) device location, is a silent no-op — this is
-/// deliberately best-effort, exactly like [extractGpsFromImageBytes] and
-/// [LocationService.currentLocation] themselves, so missing location data
-/// of either kind never blocks or breaks the surrounding photo attach/load
-/// flow.
-Future<void> captureWallGpsFromPhoto(
+/// (or no available) device location, resolves to [GpsCaptureResult.none]
+/// rather than throwing — this is deliberately best-effort, exactly like
+/// [extractGpsFromImageBytes] and [LocationService.currentLocation]
+/// themselves, so missing location data of either kind never blocks or
+/// breaks the surrounding photo attach/load flow.
+Future<GpsCaptureResult> captureWallGpsFromPhoto(
   LibraryCrudRepository libraryRepo,
   String wallId,
   String path, {
@@ -213,7 +239,7 @@ Future<void> captureWallGpsFromPhoto(
         gps.latitude,
         gps.longitude,
       );
-      return;
+      return GpsCaptureResult.exif;
     }
 
     // No EXIF GPS -- fall back to the device's current location, but ONLY
@@ -222,19 +248,55 @@ Future<void> captureWallGpsFromPhoto(
     // no EXIF GPS must never silently overwrite them with wherever the
     // device happens to be right now -- see this function's doc for the
     // data-corruption scenario this guards against.
-    if (await libraryRepo.wallHasCoordinates(wallId)) return;
+    if (await libraryRepo.wallHasCoordinates(wallId)) {
+      return GpsCaptureResult.none;
+    }
 
     final device = await locationService?.currentLocation();
-    if (device == null) return;
+    if (device == null) return GpsCaptureResult.none;
     await libraryRepo.setWallCoordinates(
       wallId,
       device.latitude,
       device.longitude,
     );
+    return GpsCaptureResult.deviceFallback;
   } catch (_) {
     // Best-effort: a missing file, decode hiccup, or location failure must
     // never break the photo attach/load flow this runs alongside.
+    return GpsCaptureResult.none;
   }
+}
+
+/// The user-facing message for [result], shared by both flows that call
+/// [captureWallGpsFromPhoto] — this screen's own add/replace-photo action
+/// ([_attachPhotoAndLoad]) and the Topos home's "New topo" flow
+/// (`topos_screen.dart`'s `_handleNewTopo`) — so the wording is identical
+/// for the same underlying outcome no matter which flow produced it.
+String gpsCaptureResultMessage(GpsCaptureResult result) => switch (result) {
+  GpsCaptureResult.exif => 'Location found in photo',
+  GpsCaptureResult.deviceFallback => 'Location set from your current position',
+  GpsCaptureResult.none => 'No location found in photo',
+};
+
+/// A [SnackBar] presenting [gpsCaptureResultMessage] for [result] — with a
+/// leading place-pin icon whenever a location was actually captured
+/// ([GpsCaptureResult.exif] or [GpsCaptureResult.deviceFallback]), omitted
+/// for [GpsCaptureResult.none] so that neutral "nothing found" case reads
+/// plainly rather than implying a location was set.
+SnackBar gpsCaptureResultSnackBar(GpsCaptureResult result) {
+  final foundLocation = result != GpsCaptureResult.none;
+  return SnackBar(
+    content: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (foundLocation) ...[
+          const Icon(Icons.place, size: 18),
+          const SizedBox(width: 8),
+        ],
+        Flexible(child: Text(gpsCaptureResultMessage(result))),
+      ],
+    ),
+  );
 }
 
 class TopoCanvasScreen extends ConsumerStatefulWidget {
@@ -777,13 +839,19 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // mounted/latest-path guards below — it targets the wall, not any
       // in-flight widget/photo state, so it's safe to run even if the user
       // has since moved on to a different photo.
-      await captureWallGpsFromPhoto(
+      final gpsResult = await captureWallGpsFromPhoto(
         libraryRepo,
         widget.wallId,
         path,
         locationService: ref.read(locationServiceProvider),
       );
       if (!mounted) return;
+      // Surfaces the outcome regardless of the latest-path guard below —
+      // it's telling the user what just happened to THIS wall's location,
+      // which is true no matter which photo they've since moved on to.
+      ScaffoldMessenger.of(context).showSnackBar(
+        gpsCaptureResultSnackBar(gpsResult),
+      );
       // Latest-path guard: if the user has already moved on to a different
       // photo since this call started (e.g. this is a stale/out-of-order
       // resolution for a photo the user swiped past), bail out instead of

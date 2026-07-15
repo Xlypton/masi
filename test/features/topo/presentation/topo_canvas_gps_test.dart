@@ -111,8 +111,13 @@ void main() {
           _buildJpegBytes(latitude: 47.4979, longitude: 19.0402),
         );
 
-        await captureWallGpsFromPhoto(repo, wallId, file.path);
+        final result = await captureWallGpsFromPhoto(repo, wallId, file.path);
 
+        expect(
+          result,
+          GpsCaptureResult.exif,
+          reason: 'G1: EXIF GPS found must report GpsCaptureResult.exif',
+        );
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();
@@ -134,8 +139,15 @@ void main() {
         final file = File('${tempDir.path}/no-gps.jpg');
         file.writeAsBytesSync(_buildJpegBytes());
 
-        await captureWallGpsFromPhoto(repo, wallId, file.path);
+        final result = await captureWallGpsFromPhoto(repo, wallId, file.path);
 
+        expect(
+          result,
+          GpsCaptureResult.none,
+          reason:
+              'G3: no EXIF GPS and no locationService given at all must '
+              'report GpsCaptureResult.none',
+        );
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();
@@ -146,13 +158,15 @@ void main() {
     );
 
     test(
-      'B-ii-1: NO EXIF GPS + a device location available falls back to it',
+      'G2/B-ii-1: NO EXIF GPS + a device location available + the wall has '
+      'NO coordinates yet falls back to the device location, reporting '
+      'GpsCaptureResult.deviceFallback',
       () async {
         final wallId = await seedWall();
         final file = File('${tempDir.path}/no-gps-device-fallback.jpg');
         file.writeAsBytesSync(_buildJpegBytes());
 
-        await captureWallGpsFromPhoto(
+        final result = await captureWallGpsFromPhoto(
           repo,
           wallId,
           file.path,
@@ -162,6 +176,7 @@ void main() {
           )),
         );
 
+        expect(result, GpsCaptureResult.deviceFallback);
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();
@@ -172,20 +187,21 @@ void main() {
     );
 
     test(
-      'B-ii-2: NO EXIF GPS + device location denied/unavailable (null) '
-      'leaves coordinates null, no crash',
+      'G3/B-ii-2: NO EXIF GPS + device location denied/unavailable (null) '
+      'leaves coordinates null, no crash, reports GpsCaptureResult.none',
       () async {
         final wallId = await seedWall();
         final file = File('${tempDir.path}/no-gps-no-device.jpg');
         file.writeAsBytesSync(_buildJpegBytes());
 
-        await captureWallGpsFromPhoto(
+        final result = await captureWallGpsFromPhoto(
           repo,
           wallId,
           file.path,
           locationService: const _FakeLocationService(null),
         );
 
+        expect(result, GpsCaptureResult.none);
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();
@@ -196,7 +212,8 @@ void main() {
     );
 
     test(
-      'EXIF GPS wins over an available device location fallback',
+      'EXIF GPS wins over an available device location fallback, reporting '
+      'GpsCaptureResult.exif',
       () async {
         final wallId = await seedWall();
         final file = File('${tempDir.path}/exif-wins.jpg');
@@ -204,7 +221,7 @@ void main() {
           _buildJpegBytes(latitude: 47.4979, longitude: 19.0402),
         );
 
-        await captureWallGpsFromPhoto(
+        final result = await captureWallGpsFromPhoto(
           repo,
           wallId,
           file.path,
@@ -217,6 +234,7 @@ void main() {
           )),
         );
 
+        expect(result, GpsCaptureResult.exif);
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();
@@ -238,7 +256,7 @@ void main() {
         final file = File('${tempDir.path}/replacement-no-gps.jpg');
         file.writeAsBytesSync(_buildJpegBytes());
 
-        await captureWallGpsFromPhoto(
+        final result = await captureWallGpsFromPhoto(
           repo,
           wallId,
           file.path,
@@ -250,6 +268,14 @@ void main() {
           )),
         );
 
+        expect(
+          result,
+          GpsCaptureResult.none,
+          reason:
+              'G3: no EXIF GPS + the wall already has coordinates must '
+              'report GpsCaptureResult.none -- no fallback was applied, '
+              'even though a device location WAS available',
+        );
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();
@@ -276,8 +302,9 @@ void main() {
           _buildJpegBytes(latitude: 48.1372, longitude: 11.5755),
         );
 
-        await captureWallGpsFromPhoto(repo, wallId, file.path);
+        final result = await captureWallGpsFromPhoto(repo, wallId, file.path);
 
+        expect(result, GpsCaptureResult.exif);
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();
@@ -287,16 +314,18 @@ void main() {
     );
 
     test(
-      'a missing file is a silent no-op: no crash, coordinates stay null',
+      'a missing file is a silent no-op: no crash, coordinates stay null, '
+      'reports GpsCaptureResult.none',
       () async {
         final wallId = await seedWall();
 
-        await captureWallGpsFromPhoto(
+        final result = await captureWallGpsFromPhoto(
           repo,
           wallId,
           '${tempDir.path}/does-not-exist.jpg',
         );
 
+        expect(result, GpsCaptureResult.none);
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();
@@ -307,14 +336,15 @@ void main() {
 
     test(
       'garbage (non-image) bytes at the path are a silent no-op: no crash, '
-      'coordinates stay null',
+      'coordinates stay null, reports GpsCaptureResult.none',
       () async {
         final wallId = await seedWall();
         final file = File('${tempDir.path}/garbage.jpg');
         file.writeAsBytesSync(Uint8List.fromList(List<int>.filled(32, 0xFF)));
 
-        await captureWallGpsFromPhoto(repo, wallId, file.path);
+        final result = await captureWallGpsFromPhoto(repo, wallId, file.path);
 
+        expect(result, GpsCaptureResult.none);
         final wall = await (db.select(
           db.walls,
         )..where((t) => t.id.equals(wallId))).getSingle();

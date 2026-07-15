@@ -163,6 +163,26 @@ Future<void> _drain(WidgetTester tester) async {
   await tester.pumpAndSettle();
 }
 
+/// Like [_drain], but deliberately WITHOUT the trailing `pumpAndSettle()`:
+/// used by the "G5: SnackBar" group below to observe `_handleNewTopo`'s
+/// GPS-outcome [SnackBar] WHILE it's still showing. A `pumpAndSettle()`
+/// pumps forward until no more frames are scheduled, which for a SnackBar
+/// means running its entrance animation, its full `duration` (4s default),
+/// AND its exit animation to completion -- so calling it here would settle
+/// the SnackBar fully off-screen before a `find.text` assertion ever ran.
+/// This still performs the SAME number of real-delay+pump iterations as two
+/// back-to-back [_drain] calls (the amount every other test in this file
+/// already relies on to let `_handleNewTopo`'s real Drift/file-IO work
+/// complete), just without ending in a settle.
+Future<void> _drainNoSettle(WidgetTester tester) async {
+  for (var i = 0; i < 12; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump(const Duration(milliseconds: 30));
+  }
+}
+
 /// Runs [body] (which performs real Drift async work) under the real event
 /// loop so its awaits actually complete, capturing the result.
 Future<T> _dbWork<T>(WidgetTester tester, Future<T> Function() body) async {
@@ -960,6 +980,138 @@ void main() {
       },
     );
   });
+
+  group(
+    'G5: SnackBar reflects the outcome of best-effort GPS capture '
+    '(_handleNewTopo)',
+    () {
+      testWidgets(
+        'a picked photo WITH EXIF GPS shows the "Location found in photo" '
+        'SnackBar',
+        (tester) async {
+          final container = _makeContainer();
+          late Directory tempDir;
+          late File jpegFile;
+          await tester.runAsync(() async {
+            tempDir = await Directory.systemTemp.createTemp(
+              'topos_screen_snackbar_exif_test',
+            );
+            jpegFile = File('${tempDir.path}/geotagged.jpg');
+            await jpegFile.writeAsBytes(
+              _buildJpegBytes(latitude: 47.4979, longitude: 19.0402),
+            );
+          });
+          addTearDown(() {
+            if (tempDir.existsSync()) {
+              tempDir.deleteSync(recursive: true);
+            }
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              ToposScreen(
+                photoSourcePicker: (context) async => ImageSource.gallery,
+                photoPicker: (source) async => XFile(jpegFile.path),
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('topos-new-topo')));
+          await _drainNoSettle(tester);
+
+          expect(find.text('Location found in photo'), findsOneWidget);
+        },
+      );
+
+      testWidgets(
+        'a picked photo with NO EXIF GPS + an available device location '
+        'shows the "Location set from your current position" SnackBar',
+        (tester) async {
+          final container = _makeContainer(
+            locationService: const _FakeLocationService((
+              latitude: 47.4979,
+              longitude: 19.0402,
+            )),
+          );
+          late Directory tempDir;
+          late File jpegFile;
+          await tester.runAsync(() async {
+            tempDir = await Directory.systemTemp.createTemp(
+              'topos_screen_snackbar_device_test',
+            );
+            jpegFile = File('${tempDir.path}/no-gps.jpg');
+            await jpegFile.writeAsBytes(_buildJpegBytes());
+          });
+          addTearDown(() {
+            if (tempDir.existsSync()) {
+              tempDir.deleteSync(recursive: true);
+            }
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              ToposScreen(
+                photoSourcePicker: (context) async => ImageSource.gallery,
+                photoPicker: (source) async => XFile(jpegFile.path),
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('topos-new-topo')));
+          await _drainNoSettle(tester);
+
+          expect(
+            find.text('Location set from your current position'),
+            findsOneWidget,
+          );
+        },
+      );
+
+      testWidgets(
+        'a picked photo with NO EXIF GPS and no device location shows the '
+        '"No location found in photo" SnackBar',
+        (tester) async {
+          final container = _makeContainer(
+            locationService: const _FakeLocationService(null),
+          );
+          late Directory tempDir;
+          late File jpegFile;
+          await tester.runAsync(() async {
+            tempDir = await Directory.systemTemp.createTemp(
+              'topos_screen_snackbar_none_test',
+            );
+            jpegFile = File('${tempDir.path}/no-gps.jpg');
+            await jpegFile.writeAsBytes(_buildJpegBytes());
+          });
+          addTearDown(() {
+            if (tempDir.existsSync()) {
+              tempDir.deleteSync(recursive: true);
+            }
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              ToposScreen(
+                photoSourcePicker: (context) async => ImageSource.gallery,
+                photoPicker: (source) async => XFile(jpegFile.path),
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('topos-new-topo')));
+          await _drainNoSettle(tester);
+
+          expect(find.text('No location found in photo'), findsOneWidget);
+        },
+      );
+    },
+  );
 
   group(
     'coord-capture isolation: a setWallCoordinates failure must not abort '
