@@ -3,7 +3,9 @@ import 'dart:convert';
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/features/community/application/community_providers.dart';
 import 'package:climbtopo/features/community/presentation/community_screen.dart';
+import 'package:climbtopo/shared/filtering/grade_range.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -177,6 +179,113 @@ Future<void> _seedComment(
           body: body,
         ),
       );
+}
+
+Future<String> _seedPhoto(
+  AppDatabase db, {
+  required String id,
+  required String wallId,
+}) {
+  return db
+      .into(db.photos)
+      .insert(
+        PhotosCompanion.insert(
+          id: id,
+          createdAt: 1000,
+          updatedAt: 1000,
+          wallId: wallId,
+          localPath: '/tmp/$id.jpg',
+          kind: 'original',
+          width: 100,
+          height: 100,
+        ),
+      )
+      .then((_) => id);
+}
+
+Future<void> _seedRoute(
+  AppDatabase db, {
+  required String id,
+  required String wallId,
+  required String photoId,
+  required int number,
+  String? gradeRaw,
+  double? gradeSortKey,
+  String? style,
+}) {
+  return db
+      .into(db.routes)
+      .insert(
+        RoutesCompanion.insert(
+          id: id,
+          createdAt: 1000,
+          updatedAt: 1000,
+          wallId: wallId,
+          photoId: photoId,
+          number: number,
+          colorIndex: 0,
+          pointsJson: '[]',
+          symbolsJson: '[]',
+          sortOrder: 0,
+          gradeRaw: Value(gradeRaw),
+          gradeSortKey: Value(gradeSortKey),
+          style: Value(style),
+        ),
+      );
+}
+
+/// Seeds two shared, coordinate-having walls with one route each -- a
+/// "Sport Wall" graded 6a/sport and a "Trad Wall" graded 9a/trad -- used by
+/// the Subtask B (Community filtering) test groups below.
+Future<void> _seedFilterScenario(AppDatabase db) async {
+  await _seedArea(
+    db,
+    id: 'area-filter',
+    name: 'Filter Area',
+    latitude: 45.0,
+    longitude: 7.0,
+  );
+  await _seedSector(db, id: 'sector-filter', areaId: 'area-filter', name: 'S');
+
+  await _seedWall(
+    db,
+    id: 'wall-sport',
+    sectorId: 'sector-filter',
+    name: 'Sport Wall',
+    visibility: 'shared',
+    createdAt: 2000,
+  );
+  final sportPhoto = await _seedPhoto(db, id: 'photo-sport', wallId: 'wall-sport');
+  await _seedRoute(
+    db,
+    id: 'route-sport',
+    wallId: 'wall-sport',
+    photoId: sportPhoto,
+    number: 1,
+    gradeRaw: '6a',
+    gradeSortKey: 7.0,
+    style: 'sport',
+  );
+
+  await _seedWall(
+    db,
+    id: 'wall-trad',
+    sectorId: 'sector-filter',
+    name: 'Trad Wall',
+    visibility: 'shared',
+    createdAt: 1000,
+  );
+  final tradPhoto = await _seedPhoto(db, id: 'photo-trad', wallId: 'wall-trad');
+  await _seedRoute(
+    db,
+    id: 'route-trad',
+    wallId: 'wall-trad',
+    photoId: tradPhoto,
+    number: 1,
+    gradeRaw: '9a',
+    gradeSortKey: 25.0,
+    style: 'trad',
+  );
 }
 
 /// Matches the top-level `Material`/`InkWell` feed row for a shared topo
@@ -404,6 +513,306 @@ void main() {
         // The private wall must never appear on the map either.
         expect(
           find.byKey(const Key('community-map-marker-wall-private')),
+          findsNothing,
+        );
+      },
+    );
+  });
+
+  group('B3: filter button + Filters sheet', () {
+    testWidgets(
+      'no active-dot initially; tapping community-filter-button opens the '
+      'sheet (grade picker + style chips visible)',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedFilterScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(container, CommunityScreen(tileProvider: _NoopTileProvider())),
+        );
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-filter-active-dot')),
+          findsNothing,
+        );
+
+        await tester.tap(find.byKey(const Key('community-filter-button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('filter-grade-min')), findsOneWidget);
+        expect(find.byKey(const Key('filter-grade-max')), findsOneWidget);
+        expect(
+          find.byKey(const Key('filter-style-sport')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('filter-style-trad')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('filter-style-boulder')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'selecting a style chip in the sheet narrows the feed LIVE (sheet '
+      'stays open) and shows the active-dot',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedFilterScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(container, CommunityScreen(tileProvider: _NoopTileProvider())),
+        );
+        await _drain(tester);
+
+        expect(_feedRowFinder(), findsNWidgets(2));
+
+        await tester.tap(find.byKey(const Key('community-filter-button')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('filter-style-sport')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('community-topo-row-wall-sport')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-topo-row-wall-trad')),
+          findsNothing,
+        );
+        expect(_feedRowFinder(), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-filter-active-dot')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'a grade range that only wall-sport (6a/key 7.0) falls in narrows '
+      'the feed live',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedFilterScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(container, CommunityScreen(tileProvider: _NoopTileProvider())),
+        );
+        await _drain(tester);
+
+        // Drive the filter through the provider directly (GradeRangePicker's
+        // own dropdown-interaction contract is already covered by Subtask
+        // A's grade_range_picker_test.dart) -- this test's job is only to
+        // confirm CommunityScreen reacts to communityFilterProvider live.
+        container
+            .read(communityFilterProvider.notifier)
+            .setGrade(const GradeRange(minToken: '6a', maxToken: '6a'));
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('community-topo-row-wall-sport')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-topo-row-wall-trad')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'Clear resets both sub-filters and restores the full feed; the '
+      'active-dot disappears',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedFilterScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(container, CommunityScreen(tileProvider: _NoopTileProvider())),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-filter-button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('filter-style-sport')));
+        await tester.pumpAndSettle();
+
+        expect(_feedRowFinder(), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-filter-active-dot')),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const Key('community-filter-clear')));
+        await tester.pumpAndSettle();
+
+        expect(_feedRowFinder(), findsNWidgets(2));
+        expect(
+          find.byKey(const Key('community-filter-active-dot')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'a filter matching nothing shows the "No topos match your filters" '
+      'empty state (distinct from the search empty state)',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedFilterScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(container, CommunityScreen(tileProvider: _NoopTileProvider())),
+        );
+        await _drain(tester);
+
+        container
+            .read(communityFilterProvider.notifier)
+            .setStyles({'boulder'});
+        await tester.pump();
+
+        expect(find.byKey(const Key('community-empty')), findsOneWidget);
+        expect(find.text('No topos match your filters'), findsOneWidget);
+        expect(_feedRowFinder(), findsNothing);
+      },
+    );
+  });
+
+  group('layout overflow regression: Filters sheet', () {
+    /// Wraps [screen] in the same minimal [GoRouter] as [_wrap], plus a
+    /// [MediaQuery] override so `textScaler` can be forced to a large value
+    /// independently of the surface size set via [setViewportSize].
+    Widget wrapWithScale(
+      ProviderContainer container,
+      Widget screen,
+      double textScale,
+    ) {
+      final router = GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(path: '/', builder: (context, state) => screen),
+          GoRoute(
+            path: '/community/topo/:wallId',
+            builder: (context, state) => const SizedBox(),
+          ),
+        ],
+      );
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(
+          theme: MasiTheme.light,
+          routerConfig: router,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
+        ),
+      );
+    }
+
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    // Deliberately seeds NO shared topos: with a populated feed, `_FeedRow`'s
+    // own like/comment/owner Row has a separate, pre-existing overflow at
+    // these extreme text scales (unrelated to the two filter-sheet bugs this
+    // group targets, and out of scope here) that would contaminate these
+    // assertions. An empty feed renders `_EmptyState` behind the sheet
+    // instead, isolating exactly what these tests care about: the Filters
+    // sheet's own layout.
+    testWidgets(
+      'vertical stress: 360x500 @ 2.5x text scale — opening the Filters '
+      'sheet does not overflow vertically (regression: _CommunityFiltersSheet '
+      'body must scroll, like the Topos/Logbook sheets do)',
+      (tester) async {
+        setViewportSize(tester, const Size(360, 500));
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          wrapWithScale(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+            2.5,
+          ),
+        );
+        await _drain(tester);
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(find.byKey(const Key('community-filter-button')));
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'horizontal stress: 320x800 @ 3.0x text scale — the "Filters"/Clear '
+      'header row does not overflow horizontally (regression: the title '
+      'must truncate rather than push Clear off-screen)',
+      (tester) async {
+        setViewportSize(tester, const Size(320, 800));
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          wrapWithScale(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+            3.0,
+          ),
+        );
+        await _drain(tester);
+        expect(tester.takeException(), isNull);
+
+        await tester.tap(find.byKey(const Key('community-filter-button')));
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
+  group('B4: map markers respect the same communityFilterProvider', () {
+    testWidgets(
+      'filtering to style=trad leaves only the Trad Wall marker on the map',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedFilterScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(container, CommunityScreen(tileProvider: _NoopTileProvider())),
+        );
+        await _drain(tester);
+
+        container.read(communityFilterProvider.notifier).setStyles({'trad'});
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('community-map-marker-wall-trad')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-map-marker-wall-sport')),
           findsNothing,
         );
       },

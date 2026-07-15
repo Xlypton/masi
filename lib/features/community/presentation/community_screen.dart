@@ -8,6 +8,8 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../../shared/filtering/grade_range_picker.dart';
+import '../../../shared/filtering/style_filter_chips.dart';
 import '../application/community_providers.dart';
 import '../data/community_repository.dart';
 
@@ -190,9 +192,16 @@ class _TabButton extends StatelessWidget {
   }
 }
 
-/// The Feed tab: a search field over a list of [_FeedRow]s, or [_EmptyState]
-/// when there are no shared topos at all (or none matching the search).
-class _FeedView extends StatelessWidget {
+/// The Feed tab: a search field + filter button over a list of [_FeedRow]s,
+/// or [_EmptyState] when there are no shared topos at all (or none matching
+/// the search / the [communityFilterProvider] grade+style filter).
+///
+/// Name search and the grade/style filter are ANDed together but kept as
+/// two independently-diagnosable empty states (search narrows first, then
+/// the filter) so a user who typed a matching name but filtered out every
+/// result sees "No topos match your filters" rather than the more generic
+/// "No topos match your search".
+class _FeedView extends ConsumerWidget {
   const _FeedView({
     required this.topos,
     required this.searchController,
@@ -204,10 +213,20 @@ class _FeedView extends StatelessWidget {
   final String query;
 
   @override
-  Widget build(BuildContext context) {
-    final filtered = query.isEmpty
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filter = ref.watch(communityFilterProvider);
+    final searchFiltered = query.isEmpty
         ? topos
         : topos.where((t) => t.name.toLowerCase().contains(query)).toList();
+    final filtered = searchFiltered.where(filter.matches).toList();
+
+    final String? emptyMessage = topos.isEmpty
+        ? 'No shared topos yet'
+        : searchFiltered.isEmpty
+        ? 'No topos match your search'
+        : filtered.isEmpty
+        ? 'No topos match your filters'
+        : null;
 
     return Column(
       children: [
@@ -218,20 +237,26 @@ class _FeedView extends StatelessWidget {
             MasiSpacing.lg,
             MasiSpacing.sm,
           ),
-          child: TextField(
-            key: const Key('community-search-field'),
-            controller: searchController,
-            decoration: const InputDecoration(
-              hintText: 'Search topos',
-              prefixIcon: Icon(Icons.search),
-            ),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  key: const Key('community-search-field'),
+                  controller: searchController,
+                  decoration: const InputDecoration(
+                    hintText: 'Search topos',
+                    prefixIcon: Icon(Icons.search),
+                  ),
+                ),
+              ),
+              const SizedBox(width: MasiSpacing.sm),
+              _FilterButton(filter: filter),
+            ],
           ),
         ),
         Expanded(
-          child: topos.isEmpty
-              ? const _EmptyState(message: 'No shared topos yet')
-              : filtered.isEmpty
-              ? const _EmptyState(message: 'No topos match your search')
+          child: emptyMessage != null
+              ? _EmptyState(message: emptyMessage)
               : ListView.separated(
                   padding: const EdgeInsets.symmetric(
                     horizontal: MasiSpacing.lg,
@@ -245,6 +270,128 @@ class _FeedView extends StatelessWidget {
                 ),
         ),
       ],
+    );
+  }
+}
+
+/// The `community-filter-button`: a `tune` icon that opens
+/// [_CommunityFiltersSheet], with a small accent dot overlay whenever
+/// [filter] is active (`community-filter-active-dot`) so a user can tell at
+/// a glance that the feed is currently narrowed.
+class _FilterButton extends StatelessWidget {
+  const _FilterButton({required this.filter});
+
+  final CommunityFilter filter;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        IconButton(
+          key: const Key('community-filter-button'),
+          icon: const Icon(Icons.tune),
+          tooltip: 'Filters',
+          onPressed: () => showModalBottomSheet<void>(
+            context: context,
+            isScrollControlled: true,
+            builder: (_) => const _CommunityFiltersSheet(),
+          ),
+        ),
+        if (filter.isActive)
+          Positioned(
+            right: 8,
+            top: 8,
+            child: IgnorePointer(
+              child: Container(
+                key: const Key('community-filter-active-dot'),
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: colors.accent,
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// The Community feed/map's "Filters" bottom sheet: a [GradeRangePicker] +
+/// [StyleFilterChips] wired directly to [communityFilterProvider], plus a
+/// Clear action. Purely reactive to the provider (no local widget state of
+/// its own), so edits made here are visible live in the feed/map behind it
+/// without needing to close the sheet first.
+class _CommunityFiltersSheet extends ConsumerWidget {
+  const _CommunityFiltersSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    final filter = ref.watch(communityFilterProvider);
+    final notifier = ref.read(communityFilterProvider.notifier);
+
+    return SafeArea(
+      child: Padding(
+        padding: EdgeInsets.fromLTRB(
+          MasiSpacing.lg,
+          MasiSpacing.lg,
+          MasiSpacing.lg,
+          MediaQuery.of(context).viewInsets.bottom + MasiSpacing.lg,
+        ),
+        child: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'Filters',
+                      style: Theme.of(context).textTheme.titleLarge,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  TextButton(
+                    key: const Key('community-filter-clear'),
+                    onPressed: notifier.clear,
+                    child: const Text('Clear'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: MasiSpacing.md),
+              Text(
+                'Grade',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(color: colors.ink2),
+              ),
+              const SizedBox(height: MasiSpacing.sm),
+              GradeRangePicker(
+                value: filter.grade,
+                onChanged: notifier.setGrade,
+              ),
+              const SizedBox(height: MasiSpacing.lg),
+              Text(
+                'Style',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(color: colors.ink2),
+              ),
+              const SizedBox(height: MasiSpacing.sm),
+              StyleFilterChips(
+                selected: filter.styles,
+                onChanged: notifier.setStyles,
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -482,18 +629,22 @@ class _GradientFallback extends StatelessWidget {
 }
 
 /// The Map tab: an OpenStreetMap [FlutterMap] with one [Marker] per shared
-/// topo that [SharedTopo.hasCoordinates] — topos without coordinates are
-/// simply omitted from the marker list, never crash the map.
-class _MapView extends StatelessWidget {
+/// topo that [SharedTopo.hasCoordinates] AND matches the current
+/// [communityFilterProvider] — topos without coordinates, and topos
+/// excluded by the filter, are simply omitted from the marker list, never
+/// crash the map.
+class _MapView extends ConsumerWidget {
   const _MapView({required this.topos, required this.tileProvider});
 
   final List<SharedTopo> topos;
   final TileProvider? tileProvider;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filter = ref.watch(communityFilterProvider);
+    final filteredTopos = topos.where(filter.matches).toList();
     final colors = MasiColors.of(context);
-    final withCoords = topos.where((t) => t.hasCoordinates).toList();
+    final withCoords = filteredTopos.where((t) => t.hasCoordinates).toList();
 
     final center = withCoords.isEmpty
         ? const LatLng(0, 0)
