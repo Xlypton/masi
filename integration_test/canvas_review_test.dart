@@ -275,6 +275,30 @@ void main() {
     await binding.takeScreenshot('canvas-01-view');
 
     // ------------------------------------------------------------------
+    // 01b. Log-ascent visual gate: the routes panel showing each row's new
+    // per-route tick/log icon (`topo-log-ascent-<id>`), then the
+    // `LogAscentSheet` opened by tapping the first seeded route's icon.
+    // ------------------------------------------------------------------
+    await binding.takeScreenshot('canvas-log-01-legend');
+
+    final logAscentButton = find.byKey(const Key('topo-log-ascent-1'));
+    if (tester.any(logAscentButton)) {
+      await tester.tap(logAscentButton);
+      await tester.pumpAndSettle();
+      await binding.takeScreenshot('canvas-log-02-sheet');
+
+      // Dismiss the modal bottom sheet (tap the scrim) so the rest of this
+      // flow's navigation (zoom/draw/back-button steps below) proceeds
+      // against the plain canvas exactly as before this addition.
+      await tester.tapAt(const Offset(20, 40));
+      await tester.pumpAndSettle();
+    } else {
+      debugPrint(
+        'INFO: topo-log-ascent-1 not found; skipping canvas-log-02-sheet.',
+      );
+    }
+
+    // ------------------------------------------------------------------
     // 02. Best-effort pinch/zoom on the InteractiveViewer. Wrapped so a
     // gesture-recognition quirk (or a concurrent lib/ change to the
     // viewer's key/behavior) can't abort the rest of the flow.

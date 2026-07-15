@@ -50,7 +50,12 @@ const double kLegendMaxHeightFraction = 0.4;
 /// ([DrawController.selectRoute]). Renders nothing if there are no routes
 /// yet.
 class RouteLegend extends ConsumerWidget {
-  const RouteLegend({super.key, this.maxHeight, this.readOnly = false});
+  const RouteLegend({
+    super.key,
+    this.maxHeight,
+    this.readOnly = false,
+    this.onLogAscent,
+  });
 
   /// Explicit height cap, overriding the default `kLegendMaxHeightFraction *
   /// MediaQuery.sizeOf(context).height` fallback below.
@@ -70,6 +75,23 @@ class RouteLegend extends ConsumerWidget {
   /// Defaults to `false`, preserving every existing call site's behavior
   /// exactly.
   final bool readOnly;
+
+  /// Invoked with a route's [TopoRoute.id] (the same locally-reassigned int
+  /// every other row control here keys on — see [TopoRoute.id]'s doc) when
+  /// its per-route "log ascent" [IconButton] is tapped. The caller (e.g.
+  /// [TopoCanvasScreen]) is responsible for resolving this int to the
+  /// route's real, persisted DB id (via
+  /// `RouteRepository.routeDbIdsByNumber`) before opening `LogAscentSheet` —
+  /// this widget has no repository access of its own and never needs to
+  /// know that id.
+  ///
+  /// The button only renders when this is non-null AND [readOnly] is
+  /// `false` — a read-only viewer of someone else's shared topo already has
+  /// its own separate "log ascent" affordance (the community detail
+  /// screen's per-route button), so this widget's own copy stays hidden
+  /// there. Null (the default) preserves every existing call site's
+  /// behavior exactly (no button renders at all).
+  final void Function(int routeId)? onLogAscent;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -137,17 +159,38 @@ class RouteLegend extends ConsumerWidget {
             title: Text(
               grade != null ? 'Route ${route.number} • $grade' : 'Route ${route.number}',
               style: Theme.of(context).textTheme.bodyMedium,
+              // Ellipsize rather than wrap: with up to three trailing
+              // IconButtons now possible (log-ascent + visibility + delete),
+              // the title's available width can shrink enough that an
+              // un-truncated label would wrap to a second line and overflow
+              // this dense/compact ListTile's fixed row height (BUG-2a-style
+              // RenderFlex overflow) instead of just eliding gracefully.
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
-            // readOnly hides both trailing controls entirely (rather than
+            // readOnly hides every trailing control entirely (rather than
             // just disabling their `onPressed`) — a read-only viewer of
             // someone else's shared topo has no business toggling
-            // visibility or deleting a route; tap-to-select (`onTap` above)
-            // is left enabled since it mutates no persisted state.
+            // visibility, deleting a route, or logging an ascent here (the
+            // community detail screen has its own separate log-ascent
+            // affordance); tap-to-select (`onTap` above) is left enabled
+            // since it mutates no persisted state.
             trailing: readOnly
                 ? null
                 : Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      if (onLogAscent != null)
+                        IconButton(
+                          key: Key('topo-log-ascent-${route.id}'),
+                          tooltip: 'Log ascent',
+                          iconSize: 18,
+                          visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.all(4),
+                          constraints: const BoxConstraints(),
+                          icon: const Icon(Icons.check_circle_outline),
+                          onPressed: () => onLogAscent!(route.id),
+                        ),
                       IconButton(
                         key: Key('topo-route-visibility-${route.id}'),
                         tooltip: route.visible ? 'Hide route' : 'Show route',

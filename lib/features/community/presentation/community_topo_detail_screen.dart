@@ -2,8 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
-import '../../logbook/application/ascents_providers.dart';
-import '../../logbook/data/ascents_repository.dart';
+import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
 import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
@@ -77,10 +76,14 @@ class _CommunityTopoDetailScreenState
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => _LogAscentSheet(wallId: widget.wallId, routeId: routeId),
+      builder: (_) => LogAscentSheet(
+        routeId: routeId,
+        wallId: widget.wallId,
+        keyPrefix: 'community',
+      ),
     );
     // #20a keyboard-dismiss fix (same rationale as
-    // topo_canvas_screen.dart's `_openMetadataSheet`): _LogAscentSheet's own
+    // topo_canvas_screen.dart's `_openMetadataSheet`): LogAscentSheet's own
     // `_save` already unfocuses before popping itself, but a swipe-down/scrim
     // dismissal bypasses `_save` entirely and pops the sheet's route
     // directly. Unfocusing here, unconditionally once this
@@ -235,96 +238,6 @@ class _CommentRow extends StatelessWidget {
             ).textTheme.labelLarge?.copyWith(color: colors.ink),
           ),
           Text(comment.body, style: Theme.of(context).textTheme.bodyMedium),
-        ],
-      ),
-    );
-  }
-}
-
-/// Small modal sheet for logging an ascent of one route: an [AscentStyle]
-/// picker, an optional notes field, and a save action that stamps
-/// `climbedAt` to "now" (no date picker — matches the ticket's "date
-/// defaulting to now" spec).
-class _LogAscentSheet extends ConsumerStatefulWidget {
-  const _LogAscentSheet({required this.wallId, required this.routeId});
-
-  final String wallId;
-  final String routeId;
-
-  @override
-  ConsumerState<_LogAscentSheet> createState() => _LogAscentSheetState();
-}
-
-class _LogAscentSheetState extends ConsumerState<_LogAscentSheet> {
-  AscentStyle _style = AscentStyle.redpoint;
-  final _notesController = TextEditingController();
-
-  @override
-  void dispose() {
-    _notesController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _save() async {
-    final notes = _notesController.text.trim();
-    await ref
-        .read(ascentsRepositoryProvider)
-        .logAscent(
-          routeId: widget.routeId,
-          wallId: widget.wallId,
-          climbedAt: DateTime.now(),
-          style: _style,
-          notes: notes.isEmpty ? null : notes,
-        );
-    if (mounted) {
-      FocusManager.instance.primaryFocus?.unfocus();
-      Navigator.of(context).pop();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      key: const Key('community-log-ascent-sheet'),
-      padding: EdgeInsets.only(
-        left: MasiSpacing.lg,
-        right: MasiSpacing.lg,
-        top: MasiSpacing.lg,
-        bottom: MediaQuery.viewInsetsOf(context).bottom + MasiSpacing.lg,
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('Log ascent', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: MasiSpacing.md),
-          Wrap(
-            spacing: MasiSpacing.sm,
-            children: [
-              for (final style in AscentStyle.values)
-                ChoiceChip(
-                  key: Key('community-ascent-style-${style.name}'),
-                  label: Text(style.name),
-                  selected: _style == style,
-                  onSelected: (_) => setState(() => _style = style),
-                ),
-            ],
-          ),
-          const SizedBox(height: MasiSpacing.md),
-          TextField(
-            key: const Key('community-ascent-notes'),
-            controller: _notesController,
-            decoration: const InputDecoration(hintText: 'Notes (optional)'),
-          ),
-          const SizedBox(height: MasiSpacing.md),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              key: const Key('community-ascent-save'),
-              onPressed: _save,
-              child: const Text('Save'),
-            ),
-          ),
         ],
       ),
     );

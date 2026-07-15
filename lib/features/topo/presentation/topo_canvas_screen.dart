@@ -9,6 +9,7 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
+import 'package:climbtopo/features/logbook/presentation/log_ascent_sheet.dart';
 import 'package:climbtopo/features/topo/application/active_view_controller.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/application/slice_controller.dart';
@@ -517,6 +518,73 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // screen's own belt-and-suspenders backstop for those paths, so the
     // keyboard is never left stranded no matter how the sheet was
     // dismissed.
+    FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  /// Opens [LogAscentSheet] for the route whose [TopoRoute.id] (a
+  /// locally-reassigned sequential int — see that field's doc, and
+  /// [RouteLegend.onLogAscent]'s doc for why [RouteLegend] itself can only
+  /// ever hand back this int) is [routeId].
+  ///
+  /// [AscentsRepository.logAscent] needs the route's real, persisted DB row
+  /// id instead (a stable uuid `TopoRoute.id` is NOT — see
+  /// `RouteRepository`'s class doc), so this resolves it via
+  /// [RouteRepository.routeDbIdsByNumber], keyed by the route's stable
+  /// [TopoRoute.number] — the exact same resolution
+  /// `routeEntriesForWallProvider` already does for the community detail
+  /// screen's own log-ascent button (see that provider's doc).
+  ///
+  /// If the route can't be resolved to a persisted row — either it's
+  /// already gone from [DrawState.routes] (e.g. a race with a concurrent
+  /// delete) or it's a just-committed route whose `commitRoute`
+  /// fire-and-forget write hasn't landed yet (or failed, see that method's
+  /// doc) — this shows a [SnackBar] rather than silently doing nothing:
+  /// without it, the button looked broken with zero feedback.
+  Future<void> _openLogAscentSheet(int routeId) async {
+    if (widget.readOnly) return;
+    final routes = ref.read(drawControllerProvider).routes;
+    TopoRoute? route;
+    for (final r in routes) {
+      if (r.id == routeId) {
+        route = r;
+        break;
+      }
+    }
+    String? dbId;
+    if (route != null) {
+      final dbIds = await ref
+          .read(routeRepositoryProvider)
+          .routeDbIdsByNumber(widget.wallId);
+      dbId = dbIds[route.number];
+    }
+    if (!mounted) return;
+    if (dbId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Route is still saving — try again in a moment.'),
+        ),
+      );
+      return;
+    }
+    // Rebind to a non-nullable local: closures don't retain the null-check
+    // promotion of a captured mutable variable like `dbId` above.
+    final resolvedDbId = dbId;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => LogAscentSheet(
+        routeId: resolvedDbId,
+        wallId: widget.wallId,
+        keyPrefix: 'topo',
+      ),
+    );
+    // #20a keyboard-dismiss fix (same rationale as this file's own
+    // `_openMetadataSheet` and the community screen's
+    // `_openLogAscentSheet`): LogAscentSheet's own `_save` already
+    // unfocuses before popping itself, but a swipe-down/scrim dismissal
+    // bypasses `_save` entirely — this is the belt-and-suspenders backstop
+    // for that path.
+    if (!context.mounted) return;
     FocusManager.instance.primaryFocus?.unfocus();
   }
 
@@ -1316,6 +1384,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       slices: _slices,
       canvasKey: _canvasKey,
       readOnly: widget.readOnly,
+      // Only ever wired when NOT readOnly: the community (readOnly) canvas
+      // has its own separate per-route log-ascent button on
+      // CommunityTopoDetailScreen — see RouteLegend.onLogAscent's doc for
+      // why this widget's own copy must stay hidden there.
+      onLogAscent: widget.readOnly ? null : _openLogAscentSheet,
     );
   }
 
@@ -1410,6 +1483,7 @@ class TopoCanvasBody extends ConsumerWidget {
     this.slices = const [],
     this.canvasKey,
     this.readOnly = false,
+    this.onLogAscent,
   });
 
   final String imagePath;
@@ -1457,6 +1531,12 @@ class TopoCanvasBody extends ConsumerWidget {
   /// Null (the default) preserves every pre-existing call site/test that
   /// doesn't care about [TopoCanvas]'s identity across rebuilds.
   final Key? canvasKey;
+
+  /// Passed straight through to [RouteLegend.onLogAscent] — see that
+  /// field's doc. Null (the default, and always what [TopoCanvasScreen]
+  /// passes when [readOnly] is `true`) hides the per-route log-ascent
+  /// button entirely.
+  final void Function(int routeId)? onLogAscent;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -1630,6 +1710,7 @@ class TopoCanvasBody extends ConsumerWidget {
                                     RouteLegend(
                                       maxHeight: overlayLegendMaxHeight,
                                       readOnly: readOnly,
+                                      onLogAscent: onLogAscent,
                                     ),
                                   ],
                                 ),
