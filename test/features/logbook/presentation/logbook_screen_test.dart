@@ -5,7 +5,7 @@ import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/logbook/application/ascents_providers.dart';
 import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
 import 'package:climbtopo/features/logbook/presentation/logbook_screen.dart';
-import 'package:drift/drift.dart' hide isNotNull;
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -33,6 +33,7 @@ Future<_Seed> _seed(
   String? routeName,
   String? gradeRaw,
   double? gradeSortKey,
+  String? style,
 }) async {
   final areaId = 'area-$n';
   final sectorId = 'sector-$n';
@@ -100,6 +101,7 @@ Future<_Seed> _seed(
           name: Value(routeName),
           gradeRaw: Value(gradeRaw),
           gradeSortKey: Value(gradeSortKey),
+          style: Value(style),
           colorIndex: 0,
           pointsJson: '[]',
           symbolsJson: '[]',
@@ -416,6 +418,373 @@ void main() {
           find.byKey(Key('logbook-entry-${ascent.id}')),
           findsOneWidget,
         );
+      },
+    );
+  });
+
+  group('C3: filter button + sheet', () {
+    testWidgets(
+      'logbook-filter-button opens a sheet exposing all three filter '
+      'facets',
+      (tester) async {
+        final container = _makeContainer();
+        final database = container.read(appDatabaseProvider);
+        final repo = container.read(ascentsRepositoryProvider);
+        final s = await _dbWork(tester, () => _seed(database, '1'));
+        await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: s.routeId,
+            wallId: s.wallId,
+            climbedAt: DateTime.utc(2026, 1, 1),
+            style: AscentStyle.onsight,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('logbook-filter-button')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('logbook-filter-button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('filter-grade-min')), findsOneWidget);
+        expect(find.byKey(const Key('filter-grade-max')), findsOneWidget);
+        expect(find.byKey(const Key('filter-style-sport')), findsOneWidget);
+        expect(find.byKey(const Key('filter-style-trad')), findsOneWidget);
+        expect(find.byKey(const Key('filter-style-boulder')), findsOneWidget);
+        expect(
+          find.byKey(const Key('filter-ascent-onsight')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('filter-ascent-flash')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'no active filter indicator before any facet is chosen',
+      (tester) async {
+        final container = _makeContainer();
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('logbook-filter-active-indicator')),
+          findsNothing,
+        );
+      },
+    );
+  });
+
+  group('C3: live filtering by route style', () {
+    testWidgets(
+      'selecting a style chip narrows the list to matching entries and '
+      'shows the active indicator; Clear restores the full list',
+      (tester) async {
+        final container = _makeContainer();
+        final database = container.read(appDatabaseProvider);
+        final repo = container.read(ascentsRepositoryProvider);
+
+        final sport = await _dbWork(
+          tester,
+          () => _seed(database, 'sport', wallName: 'Sport Wall', style: 'sport'),
+        );
+        final trad = await _dbWork(
+          tester,
+          () => _seed(database, 'trad', wallName: 'Trad Wall', style: 'trad'),
+        );
+        final sportAscent = await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: sport.routeId,
+            wallId: sport.wallId,
+            climbedAt: DateTime.utc(2026, 1, 1),
+            style: AscentStyle.onsight,
+          ),
+        );
+        final tradAscent = await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: trad.routeId,
+            wallId: trad.wallId,
+            climbedAt: DateTime.utc(2026, 1, 2),
+            style: AscentStyle.flash,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(Key('logbook-entry-${sportAscent.id}')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(Key('logbook-entry-${tradAscent.id}')),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const Key('logbook-filter-button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('filter-style-sport')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(Key('logbook-entry-${sportAscent.id}')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(Key('logbook-entry-${tradAscent.id}')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('logbook-filter-active-indicator')),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const Key('logbook-filter-clear')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(Key('logbook-entry-${sportAscent.id}')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(Key('logbook-entry-${tradAscent.id}')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('logbook-filter-active-indicator')),
+          findsNothing,
+        );
+      },
+    );
+  });
+
+  group('C3: live filtering by ascent type', () {
+    testWidgets(
+      'selecting an ascent-type chip narrows the list to matching entries',
+      (tester) async {
+        final container = _makeContainer();
+        final database = container.read(appDatabaseProvider);
+        final repo = container.read(ascentsRepositoryProvider);
+
+        final s = await _dbWork(tester, () => _seed(database, '1'));
+        final onsight = await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: s.routeId,
+            wallId: s.wallId,
+            climbedAt: DateTime.utc(2026, 1, 1),
+            style: AscentStyle.onsight,
+          ),
+        );
+        final attempt = await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: s.routeId,
+            wallId: s.wallId,
+            climbedAt: DateTime.utc(2026, 1, 2),
+            style: AscentStyle.attempt,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('logbook-filter-button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('filter-ascent-onsight')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(Key('logbook-entry-${onsight.id}')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(Key('logbook-entry-${attempt.id}')),
+          findsNothing,
+        );
+      },
+    );
+  });
+
+  group('C3: live filtering by grade range', () {
+    testWidgets(
+      'picking a min grade narrows the list to entries at or above it',
+      (tester) async {
+        final container = _makeContainer();
+        final database = container.read(appDatabaseProvider);
+        final repo = container.read(ascentsRepositoryProvider);
+
+        final easy = await _dbWork(
+          tester,
+          () => _seed(
+            database,
+            'easy',
+            wallName: 'Easy Wall',
+            gradeRaw: '5a',
+            gradeSortKey: gradeSortKey(GradeSystem.french, '5a'),
+          ),
+        );
+        final hard = await _dbWork(
+          tester,
+          () => _seed(
+            database,
+            'hard',
+            wallName: 'Hard Wall',
+            gradeRaw: '7a',
+            gradeSortKey: gradeSortKey(GradeSystem.french, '7a'),
+          ),
+        );
+        final easyAscent = await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: easy.routeId,
+            wallId: easy.wallId,
+            climbedAt: DateTime.utc(2026, 1, 1),
+            style: AscentStyle.onsight,
+          ),
+        );
+        final hardAscent = await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: hard.routeId,
+            wallId: hard.wallId,
+            climbedAt: DateTime.utc(2026, 1, 2),
+            style: AscentStyle.redpoint,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('logbook-filter-button')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('filter-grade-min')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('6a').last);
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(Key('logbook-entry-${hardAscent.id}')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(Key('logbook-entry-${easyAscent.id}')),
+          findsNothing,
+        );
+      },
+    );
+  });
+
+  group('C3: filtered-empty state', () {
+    testWidgets(
+      'entries exist but none match the active filters shows a distinct '
+      'empty state (not the "no ascents logged yet" one)',
+      (tester) async {
+        final container = _makeContainer();
+        final database = container.read(appDatabaseProvider);
+        final repo = container.read(ascentsRepositoryProvider);
+
+        final s = await _dbWork(
+          tester,
+          () => _seed(database, '1', style: 'sport'),
+        );
+        await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: s.routeId,
+            wallId: s.wallId,
+            climbedAt: DateTime.utc(2026, 1, 1),
+            style: AscentStyle.onsight,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('logbook-filter-button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('filter-style-trad')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('logbook-empty')), findsNothing);
+        expect(find.byKey(const Key('logbook-filtered-empty')), findsOneWidget);
+        expect(find.text('No ascents match your filters'), findsOneWidget);
+      },
+    );
+  });
+
+  group('layout overflow regression: Filters sheet', () {
+    /// Wraps [screen] in the same plain [MaterialApp] as [_wrap], plus a
+    /// [MediaQuery] override so `textScaler` can be forced to a large value
+    /// independently of the surface size set via [setViewportSize].
+    Widget wrapWithScale(
+      ProviderContainer container,
+      Widget screen,
+      double textScale,
+    ) {
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: MasiTheme.light,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
+          home: screen,
+        ),
+      );
+    }
+
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    testWidgets(
+      'vertical stress: 360x500 @ 2.5x text scale — opening the Filters '
+      'sheet does not overflow vertically',
+      (tester) async {
+        setViewportSize(tester, const Size(360, 500));
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          wrapWithScale(container, const LogbookScreen(), 2.5),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('logbook-filter-button')));
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'horizontal stress: 320x800 @ 3.0x text scale — the "Filters"/Clear '
+      'header row does not overflow horizontally (regression: the title '
+      'must truncate rather than push Clear off-screen)',
+      (tester) async {
+        setViewportSize(tester, const Size(320, 800));
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          wrapWithScale(container, const LogbookScreen(), 3.0),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('logbook-filter-button')));
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
       },
     );
   });

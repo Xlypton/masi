@@ -3,6 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../../shared/filtering/ascent_type_filter_chips.dart';
+import '../../../shared/filtering/grade_range_picker.dart';
+import '../../../shared/filtering/style_filter_chips.dart';
 import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
 import 'logbook_providers.dart';
@@ -20,6 +23,7 @@ class LogbookScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final asyncEntries = ref.watch(logbookEntriesProvider);
+    final filter = ref.watch(logbookFilterProvider);
     return Scaffold(
       key: const Key('logbook-screen'),
       appBar: AppBar(
@@ -30,6 +34,14 @@ class LogbookScreen extends ConsumerWidget {
           overflow: TextOverflow.ellipsis,
         ),
         centerTitle: false,
+        actions: [
+          IconButton(
+            key: const Key('logbook-filter-button'),
+            tooltip: 'Filters',
+            icon: _FilterIcon(active: filter.isActive),
+            onPressed: () => _openFilterSheet(context),
+          ),
+        ],
       ),
       body: SafeArea(
         child: asyncEntries.when(
@@ -37,7 +49,14 @@ class LogbookScreen extends ConsumerWidget {
             if (entries.isEmpty) {
               return const _EmptyState();
             }
-            return _LogbookList(entries: entries);
+            final filtered = [
+              for (final entry in entries)
+                if (filter.matches(entry)) entry,
+            ];
+            if (filtered.isEmpty) {
+              return const _FilteredEmptyState();
+            }
+            return _LogbookList(entries: filtered);
           },
           loading: () => const Center(child: CircularProgressIndicator()),
           error: (error, stackTrace) => Center(
@@ -55,6 +74,159 @@ class LogbookScreen extends ConsumerWidget {
             ),
           ),
         ),
+      ),
+    );
+  }
+
+  Future<void> _openFilterSheet(BuildContext context) {
+    return showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (_) => const _LogbookFilterSheet(),
+    );
+  }
+}
+
+/// The `Icons.tune` filter-bar-chart icon, with a small accent-colored dot
+/// (keyed `logbook-filter-active-indicator`) overlaid when [active] — the
+/// Logbook screen's visual cue that at least one filter facet is currently
+/// narrowing the list.
+class _FilterIcon extends StatelessWidget {
+  const _FilterIcon({required this.active});
+
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Stack(
+      clipBehavior: Clip.none,
+      children: [
+        const Icon(Icons.tune),
+        if (active)
+          Positioned(
+            right: -2,
+            top: -2,
+            child: Container(
+              key: const Key('logbook-filter-active-indicator'),
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: colors.accent,
+                shape: BoxShape.circle,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// The Logbook's Filters bottom sheet: [GradeRangePicker] + [StyleFilterChips]
+/// + [AscentTypeFilterChips], each wired straight to [logbookFilterProvider],
+/// plus a Clear action that resets every facet back to inactive. Purely a
+/// thin view over that Notifier — it holds no state of its own, so every
+/// interaction updates the provider immediately and (via `LogbookScreen`'s
+/// `ref.watch`) the underlying list re-filters live while this sheet is
+/// still open.
+class _LogbookFilterSheet extends ConsumerWidget {
+  const _LogbookFilterSheet();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final filter = ref.watch(logbookFilterProvider);
+    final notifier = ref.read(logbookFilterProvider.notifier);
+    return Padding(
+      key: const Key('logbook-filter-sheet'),
+      padding: EdgeInsets.only(
+        left: MasiSpacing.lg,
+        right: MasiSpacing.lg,
+        top: MasiSpacing.lg,
+        bottom: MediaQuery.viewInsetsOf(context).bottom + MasiSpacing.lg,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Filters',
+                    style: Theme.of(context).textTheme.titleMedium,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                TextButton(
+                  key: const Key('logbook-filter-clear'),
+                  onPressed: notifier.clear,
+                  child: const Text('Clear'),
+                ),
+              ],
+            ),
+            const SizedBox(height: MasiSpacing.md),
+            GradeRangePicker(value: filter.grade, onChanged: notifier.setGrade),
+            const SizedBox(height: MasiSpacing.md),
+            const _SheetSectionLabel('Route style'),
+            const SizedBox(height: MasiSpacing.sm),
+            StyleFilterChips(
+              selected: filter.routeStyles,
+              onChanged: notifier.setRouteStyles,
+            ),
+            const SizedBox(height: MasiSpacing.md),
+            const _SheetSectionLabel('Ascent type'),
+            const SizedBox(height: MasiSpacing.sm),
+            AscentTypeFilterChips(
+              selected: filter.ascentTypes,
+              onChanged: notifier.setAscentTypes,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A small section-header label used above each filter facet in
+/// [_LogbookFilterSheet] (e.g. "Route style", "Ascent type").
+class _SheetSectionLabel extends StatelessWidget {
+  const _SheetSectionLabel(this.label);
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Text(
+      label,
+      style: Theme.of(
+        context,
+      ).textTheme.titleSmall?.copyWith(color: colors.ink2),
+    );
+  }
+}
+
+/// Shown instead of [_LogbookList]/[_EmptyState] when the Logbook has
+/// ascents but the current [LogbookFilter] excludes all of them — distinct
+/// from [_EmptyState] (which means there is nothing logged at all) so the
+/// user isn't told to go log a climb when they actually just need to loosen
+/// a filter.
+class _FilteredEmptyState extends StatelessWidget {
+  const _FilteredEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Center(
+      key: const Key('logbook-filtered-empty'),
+      child: Text(
+        'No ascents match your filters',
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(color: colors.ink2),
       ),
     );
   }
