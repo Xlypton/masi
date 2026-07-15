@@ -1,3 +1,4 @@
+import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
@@ -28,7 +29,10 @@ ProviderContainer _makeContainer() {
 Widget _wrap(ProviderContainer container, Widget child) {
   return UncontrolledProviderScope(
     container: container,
-    child: MaterialApp(home: child),
+    // The restyled CrudListScaffold reads MasiColors.of(context) — without
+    // this theme registered, that ThemeExtension lookup null-check-crashes
+    // on the very first build.
+    child: MaterialApp(home: child, theme: MasiTheme.light),
   );
 }
 
@@ -93,10 +97,22 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('crud-name-field')), findsNothing);
-        expect(find.widgetWithText(ListTile, 'Sector A1'), findsOneWidget);
         final sectorsInA = await _dbWork(
           tester,
           () => repo.listSectors(areaA.id),
+        );
+        final createdSectorA1 = sectorsInA.singleWhere(
+          (s) => s.name == 'Sector A1',
+        );
+        // Scope to the row's card (via its Key): a bare find.text also
+        // matches the dialog's EditableText while the dialog is still
+        // animating out.
+        expect(
+          find.descendant(
+            of: find.byKey(Key('sector-item-${createdSectorA1.id}')),
+            matching: find.text('Sector A1'),
+          ),
+          findsOneWidget,
         );
         expect(sectorsInA.map((s) => s.name), contains('Sector A1'));
         expect(
@@ -181,10 +197,22 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('crud-name-field')), findsNothing);
-        expect(find.widgetWithText(ListTile, 'Wall A1'), findsOneWidget);
         final wallsInA = await _dbWork(
           tester,
           () => repo.listWalls(sectorA.id),
+        );
+        final createdWallA1 = wallsInA.singleWhere(
+          (w) => w.name == 'Wall A1',
+        );
+        // Scope to the row's card (via its Key): a bare find.text also
+        // matches the dialog's EditableText while the dialog is still
+        // animating out.
+        expect(
+          find.descendant(
+            of: find.byKey(Key('wall-item-${createdWallA1.id}')),
+            matching: find.text('Wall A1'),
+          ),
+          findsOneWidget,
         );
         expect(wallsInA.map((w) => w.name), contains('Wall A1'));
         expect(wallsInA.every((w) => w.sectorId == sectorA.id), isTrue);

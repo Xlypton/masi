@@ -141,4 +141,29 @@ void main() {
       expect(wallsA.single, wallA0);
     });
   });
+
+  group('A3: toposProvider', () {
+    test(
+      'emits the same data as a direct watchTopos() call on the repository',
+      () async {
+        final container = _makeContainer();
+        final repo = container.read(libraryCrudRepositoryProvider);
+
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final wall = await repo.createWall(sector.id, 'Wall');
+        await repo.attachPhotoToWall(wall.id, '/tmp/thumb.jpg', 100, 200);
+
+        final emissions = _listenAndCollect<List<TopoRef>>(
+          container,
+          toposProvider,
+        );
+        await _waitUntil(emissions, (e) => e.isNotEmpty);
+
+        final expected = await repo.watchTopos().first;
+
+        expect(emissions.last, expected);
+      },
+    );
+  });
 }

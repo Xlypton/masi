@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:climbtopo/app/router.dart';
+import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
@@ -36,7 +37,10 @@ ProviderContainer _makeContainer() {
 Widget _wrap(ProviderContainer container, Widget child) {
   return UncontrolledProviderScope(
     container: container,
-    child: MaterialApp(home: child),
+    // The restyled CrudListScaffold reads MasiColors.of(context) — without
+    // this theme registered, that ThemeExtension lookup null-check-crashes
+    // on the very first build.
+    child: MaterialApp(home: child, theme: MasiTheme.light),
   );
 }
 
@@ -123,9 +127,21 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('crud-name-field')), findsNothing);
-        // Scope to the ListTile: a bare find.text also matches the dialog's
-        // EditableText while the dialog is still animating out.
-        expect(find.widgetWithText(ListTile, 'Frankenjura'), findsOneWidget);
+        final areas = await _dbWork(
+          tester,
+          () => container.read(libraryCrudRepositoryProvider).listAreas(),
+        );
+        final createdArea = areas.singleWhere((a) => a.name == 'Frankenjura');
+        // Scope to the row's card (via its Key): a bare find.text also
+        // matches the dialog's EditableText while the dialog is still
+        // animating out.
+        expect(
+          find.descendant(
+            of: find.byKey(Key('area-item-${createdArea.id}')),
+            matching: find.text('Frankenjura'),
+          ),
+          findsOneWidget,
+        );
         expect(
           find.text('No areas yet — tap + to add one'),
           findsNothing,
@@ -208,8 +224,9 @@ void main() {
         await tester.tap(find.byKey(Key('area-delete-${area.id}')));
         await _drain(tester);
 
-        // Confirm dialog is up; the area must still be present underneath.
-        expect(find.text('Delete?'), findsOneWidget);
+        // Confirm sheet (CupertinoActionSheet) is up; the area must still
+        // be present underneath.
+        expect(find.text('Delete "Squamish"?'), findsOneWidget);
 
         await tester.tap(find.byKey(Key('area-delete-confirm-${area.id}')));
         await _drain(tester);
@@ -343,9 +360,20 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: MaterialApp.router(routerConfig: appRouter),
+            child: MaterialApp.router(
+              routerConfig: appRouter,
+              // `/` now renders ToposScreen first (see below), which reads
+              // MasiColors.of(context) — without this theme, that lookup's
+              // ThemeExtension is absent and the very first build crashes.
+              theme: MasiTheme.light,
+            ),
           ),
         );
+        await _drain(tester);
+
+        // `/` now renders ToposScreen (the new flat home), not AreasScreen —
+        // navigate to the Areas hierarchy explicitly before exercising it.
+        appRouter.go('/areas');
         await _drain(tester);
 
         expect(find.text('Area A'), findsOneWidget);

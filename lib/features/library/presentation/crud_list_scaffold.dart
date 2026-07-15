@@ -1,25 +1,38 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../app/theme.dart';
 
 /// Generic AppBar + body scaffold for a "list of named entities" CRUD screen
 /// (Areas / Sectors / Walls), driven by an [AsyncValue] the caller already
 /// obtained from `ref.watch(...)`.
 ///
 /// This widget is intentionally NOT a [ConsumerWidget]: it knows nothing
-/// about Riverpod. The three screens (AreasScreen / SectorsScreen /
+/// about Riverpod's `ref`. The three screens (AreasScreen / SectorsScreen /
 /// WallsScreen) each watch their own scoped provider and pass the resulting
 /// [AsyncValue] plus a handful of callbacks (create/rename/delete/retry/tap)
-/// in, which keeps this widget trivially testable and reusable.
+/// in, which keeps this widget trivially testable and reusable. (The
+/// [AsyncValue] *type* itself comes from Riverpod, same as before this
+/// restyle — only `ref`/`ConsumerWidget` are off-limits here.)
+///
+/// Visually this mirrors `topos_screen.dart`'s "Topos home" patterns (large
+/// title nav, grouped-inset card rows, bottom-pinned filled create button,
+/// iOS-style confirm surfaces) rather than plain Material widgets, per
+/// DESIGN.md.
 ///
 /// Widget keys, so screens stay tappable in widget tests:
-///  - `<entityKey>-add-fab`: the FloatingActionButton that opens the "create"
-///    dialog.
-///  - `<entityKey>-item-<id>`: each row's [ListTile].
-///  - `<entityKey>-rename-<id>`: the rename icon button on a row.
+///  - `<entityKey>-add-fab`: the bottom-pinned "create" button (a full-width
+///    filled button now, not a literal `FloatingActionButton` — key name
+///    kept verbatim for test stability).
+///  - `<entityKey>-item-<id>`: each row's card ([Material]).
+///  - `<entityKey>-rename-<id>`: the rename icon button on a row; opens the
+///    shared name-entry dialog.
 ///  - `<entityKey>-delete-<id>`: the delete icon button on a row; tapping it
-///    opens a confirm [AlertDialog] (does NOT delete immediately).
-///  - `<entityKey>-delete-confirm-<id>`: the "Delete" button inside that
-///    confirm dialog — tapping IT calls [onDelete].
+///    opens an iOS-style [CupertinoActionSheet] confirm surface (does NOT
+///    delete immediately).
+///  - `<entityKey>-delete-confirm-<id>`: the destructive "Delete" action
+///    inside that confirm sheet — tapping IT calls [onDelete].
 ///  - `<entityKey>-retry`: the retry button shown in the error state.
 ///  - `crud-name-field` / `crud-name-submit`: the text field and submit
 ///    button inside the shared add/rename name dialog (only one such dialog
@@ -60,65 +73,158 @@ class CrudListScaffold<T> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
-      body: asyncItems.when(
-        data: (items) {
-          if (items.isEmpty) {
-            return Center(child: Text(emptyMessage));
-          }
-          return ListView.builder(
-            itemCount: items.length,
-            itemBuilder: (context, index) {
-              final item = items[index];
-              final id = idOf(item);
-              final subtitleText = subtitleOf?.call(item);
-              return ListTile(
-                key: Key('$entityKey-item-$id'),
-                title: Text(nameOf(item)),
-                subtitle: subtitleText != null ? Text(subtitleText) : null,
-                onTap: () => onTap(item),
-                trailing: Row(
+      appBar: AppBar(
+        title: Text(
+          title,
+          style: textTheme.displaySmall,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        centerTitle: false,
+      ),
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: asyncItems.when(
+                data: (items) {
+                  if (items.isEmpty) {
+                    return _EmptyState(message: emptyMessage);
+                  }
+                  return ListView.separated(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: MasiSpacing.lg,
+                      vertical: MasiSpacing.md,
+                    ),
+                    itemCount: items.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: MasiSpacing.sm),
+                    itemBuilder: (context, index) =>
+                        _buildRow(context, items[index]),
+                  );
+                },
+                loading: () =>
+                    const Center(child: CircularProgressIndicator()),
+                error: (error, stackTrace) => Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Something went wrong: $error',
+                        style: textTheme.bodyMedium?.copyWith(
+                          color: colors.ink2,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: MasiSpacing.sm),
+                      ElevatedButton(
+                        key: Key('$entityKey-retry'),
+                        onPressed: onRetry,
+                        child: const Text('Retry'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                MasiSpacing.lg,
+                MasiSpacing.md,
+                MasiSpacing.lg,
+                MasiSpacing.lg,
+              ),
+              child: SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  key: Key('$entityKey-add-fab'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.accent,
+                    foregroundColor: colors.onAccent,
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                  ),
+                  onPressed: () => _handleCreate(context),
+                  child: Text(addDialogTitle),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// A single grouped-inset row card: title/subtitle, rename/delete
+  /// triggers, and a trailing chevron — mirrors `topos_screen.dart`'s
+  /// `_TopoRow` (`Material` + `InkWell`, same radius, same padding rhythm).
+  Widget _buildRow(BuildContext context, T item) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final id = idOf(item);
+    final subtitleText = subtitleOf?.call(item);
+
+    return Material(
+      key: Key('$entityKey-item-$id'),
+      color: colors.surface,
+      borderRadius: BorderRadius.circular(MasiRadii.card),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        onTap: () => onTap(item),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MasiSpacing.md,
+            vertical: MasiSpacing.sm,
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    IconButton(
-                      key: Key('$entityKey-rename-$id'),
-                      icon: const Icon(Icons.edit),
-                      tooltip: 'Rename',
-                      onPressed: () => _handleRename(context, item),
+                    Text(
+                      nameOf(item),
+                      style: textTheme.titleMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    IconButton(
-                      key: Key('$entityKey-delete-$id'),
-                      icon: const Icon(Icons.delete),
-                      tooltip: 'Delete',
-                      onPressed: () => _handleDelete(context, item),
-                    ),
+                    if (subtitleText != null && subtitleText.isNotEmpty) ...[
+                      const SizedBox(height: 2),
+                      Text(
+                        subtitleText,
+                        style: textTheme.titleSmall?.copyWith(
+                          color: colors.ink2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
                   ],
                 ),
-              );
-            },
-          );
-        },
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (error, stackTrace) => Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Text('Something went wrong: $error'),
-              const SizedBox(height: 8),
-              ElevatedButton(
-                key: Key('$entityKey-retry'),
-                onPressed: onRetry,
-                child: const Text('Retry'),
               ),
+              IconButton(
+                key: Key('$entityKey-rename-$id'),
+                icon: Icon(Icons.edit_outlined, color: colors.ink2),
+                tooltip: 'Rename',
+                onPressed: () => _handleRename(context, item),
+              ),
+              IconButton(
+                key: Key('$entityKey-delete-$id'),
+                icon: Icon(Icons.delete_outline, color: colors.ink2),
+                tooltip: 'Delete',
+                onPressed: () => _handleDelete(context, item),
+              ),
+              Icon(Icons.chevron_right, color: colors.ink3),
             ],
           ),
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        key: Key('$entityKey-add-fab'),
-        onPressed: () => _handleCreate(context),
-        child: const Icon(Icons.add),
       ),
     );
   }
@@ -139,24 +245,42 @@ class CrudListScaffold<T> extends StatelessWidget {
     await onRename(item, name);
   }
 
+  /// iOS-style delete confirmation: a [CupertinoActionSheet] with a single
+  /// destructive action (rendered in `MasiColors.gradeHard`, per DESIGN.md's
+  /// Buttons spec) and a Cancel button. Selecting "Delete" is the required
+  /// separate confirm step — [onDelete] only fires after that tap, never on
+  /// the initial `<entityKey>-delete-<id>` tap that opens this sheet.
   Future<void> _handleDelete(BuildContext context, T item) async {
     final id = idOf(item);
-    final confirmed = await showDialog<bool>(
+    final colors = MasiColors.of(context);
+    final confirmed = await showCupertinoModalPopup<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Delete?'),
-        content: Text('Delete "${nameOf(item)}"? This cannot be undone.'),
+      // The default `kCupertinoModalBarrierColor` is only ~20% black in
+      // light mode, which is too weak to fully obscure whatever is behind
+      // the sheet: the action-sheet group and the cancel button render as
+      // two separate rounded groups with a transparent gap between them,
+      // and the bottom-pinned filled "New X" button (`colors.accent`,
+      // built above in `build()`) bleeds through that gap. A materially
+      // darker (>=45%) barrier hides it.
+      barrierColor: Colors.black45,
+      builder: (sheetContext) => CupertinoActionSheet(
+        title: Text('Delete "${nameOf(item)}"?'),
+        message: const Text('This cannot be undone.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
+          CupertinoActionSheetAction(
             key: Key('$entityKey-delete-confirm-$id'),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Delete'),
+            isDestructiveAction: true,
+            onPressed: () => Navigator.of(sheetContext).pop(true),
+            child: Text(
+              'Delete',
+              style: TextStyle(color: colors.gradeHard),
+            ),
           ),
         ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.of(sheetContext).pop(false),
+          child: const Text('Cancel'),
+        ),
       ),
     );
     if (confirmed == true) {
@@ -173,6 +297,28 @@ class CrudListScaffold<T> extends StatelessWidget {
       context: context,
       builder: (dialogContext) =>
           _NameDialog(title: title, initialValue: initialValue ?? ''),
+    );
+  }
+}
+
+/// Themed empty state — mirrors `topos_screen.dart`'s `_EmptyState`
+/// (centered, `titleMedium` text tinted `colors.ink2`).
+class _EmptyState extends StatelessWidget {
+  const _EmptyState({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Center(
+      child: Text(
+        message,
+        style: Theme.of(context).textTheme.titleMedium?.copyWith(
+          color: colors.ink2,
+        ),
+        textAlign: TextAlign.center,
+      ),
     );
   }
 }
@@ -224,13 +370,23 @@ class _NameDialogState extends State<_NameDialog> {
   void _submit() {
     final name = _controller.text.trim();
     if (name.isEmpty) return;
+    FocusManager.instance.primaryFocus?.unfocus();
     Navigator.of(context).pop(name);
   }
 
   @override
   Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    // The dialog's chrome (background, corner radius, title/content text
+    // style) already comes from `theme.dart`'s `DialogThemeData`
+    // (`MasiRadii.large`, `colors.surface`) and the ambient
+    // `InputDecorationTheme` (`MasiRadii.control`, `colors.surface2`) — no
+    // need to fight those with hardcoded decoration here. Only the actions
+    // get an explicit MASI tint, since bare `TextButton`s would otherwise
+    // just take Material's default styling.
     return AlertDialog(
-      title: Text(widget.title),
+      title: Text(widget.title, style: textTheme.titleLarge),
       content: TextField(
         key: const Key('crud-name-field'),
         controller: _controller,
@@ -240,11 +396,19 @@ class _NameDialogState extends State<_NameDialog> {
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.of(context).pop(),
+          style: TextButton.styleFrom(foregroundColor: colors.accent),
+          onPressed: () {
+            FocusManager.instance.primaryFocus?.unfocus();
+            Navigator.of(context).pop();
+          },
           child: const Text('Cancel'),
         ),
         TextButton(
           key: const Key('crud-name-submit'),
+          style: TextButton.styleFrom(
+            foregroundColor: colors.accent,
+            disabledForegroundColor: colors.ink3,
+          ),
           onPressed: _canSubmit ? _submit : null,
           child: const Text('Save'),
         ),
