@@ -2207,4 +2207,234 @@ void main() {
       );
     },
   );
+
+  group('S1: search field filters by name', () {
+    testWidgets(
+      'entering "moon" hides "Sunset Arete" and shows only "Moonrise Slab"',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            toposProvider.overrideWith(
+              (ref) => Stream.value(const [
+                TopoRef(
+                  wallId: 'wall-sunset',
+                  name: 'Sunset Arete',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 1000,
+                ),
+                TopoRef(
+                  wallId: 'wall-moonrise',
+                  name: 'Moonrise Slab',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 900,
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.text('Sunset Arete'), findsOneWidget);
+        expect(find.text('Moonrise Slab'), findsOneWidget);
+
+        await tester.enterText(
+          find.byKey(const Key('topos-search-field')),
+          'moon',
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Moonrise Slab'), findsOneWidget);
+        expect(find.text('Sunset Arete'), findsNothing);
+      },
+    );
+  });
+
+  group(
+    'S2: search with no matches shows the search-specific empty state',
+    () {
+      testWidgets(
+        'a query matching nothing shows topos-search-empty-state, not the '
+        'filtered or "no topos yet" empty states, and no topo rows',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              toposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  TopoRef(
+                    wallId: 'wall-sunset',
+                    name: 'Sunset Arete',
+                    thumbnailPath: null,
+                    routeCount: 0,
+                    createdAt: 1000,
+                  ),
+                ]),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(_wrap(container, const ToposScreen()));
+          await _drain(tester);
+
+          await tester.enterText(
+            find.byKey(const Key('topos-search-field')),
+            'nonexistent-query-xyz',
+          );
+          await tester.pumpAndSettle();
+
+          expect(
+            find.byKey(const Key('topos-search-empty-state')),
+            findsOneWidget,
+          );
+          expect(find.text('No topos match your search'), findsOneWidget);
+          expect(find.byKey(const Key('topos-empty-state')), findsNothing);
+          expect(
+            find.byKey(const Key('topos-filtered-empty-state')),
+            findsNothing,
+          );
+          expect(find.text('Sunset Arete'), findsNothing);
+        },
+      );
+    },
+  );
+
+  group('S3: search ANDs with the existing filter', () {
+    testWidgets(
+      'with a Shared visibility filter active AND a query, only topos '
+      'matching BOTH appear',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            toposProvider.overrideWith(
+              (ref) => Stream.value(const [
+                TopoRef(
+                  wallId: 'wall-moon-shared',
+                  name: 'Moonrise Slab',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 1000,
+                  visibility: 'shared',
+                ),
+                TopoRef(
+                  wallId: 'wall-moon-private',
+                  name: 'Moonrise Wall',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 950,
+                ),
+                TopoRef(
+                  wallId: 'wall-sunrise-shared',
+                  name: 'Sunrise Slope',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 900,
+                  visibility: 'shared',
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        container
+            .read(toposFilterProvider.notifier)
+            .setVisibility(ToposVisibilityFilter.shared);
+        await tester.pumpAndSettle();
+
+        // Filter alone: both shared topos show, the private one is hidden.
+        expect(find.text('Moonrise Slab'), findsOneWidget);
+        expect(find.text('Sunrise Slope'), findsOneWidget);
+        expect(find.text('Moonrise Wall'), findsNothing);
+
+        await tester.enterText(
+          find.byKey(const Key('topos-search-field')),
+          'moon',
+        );
+        await tester.pumpAndSettle();
+
+        // Search ANDs with the filter: only the shared AND
+        // name-matching topo remains.
+        expect(find.text('Moonrise Slab'), findsOneWidget);
+        expect(find.text('Sunrise Slope'), findsNothing);
+        expect(find.text('Moonrise Wall'), findsNothing);
+      },
+    );
+  });
+
+  group('S4: clearing the query restores the full (filtered) list', () {
+    testWidgets(
+      'clearing topos-search-field after a narrowing query restores every '
+      'topo that still matches the active filter',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            toposProvider.overrideWith(
+              (ref) => Stream.value(const [
+                TopoRef(
+                  wallId: 'wall-sunset',
+                  name: 'Sunset Arete',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 1000,
+                ),
+                TopoRef(
+                  wallId: 'wall-moonrise',
+                  name: 'Moonrise Slab',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 900,
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.enterText(
+          find.byKey(const Key('topos-search-field')),
+          'moon',
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Sunset Arete'), findsNothing);
+        expect(find.text('Moonrise Slab'), findsOneWidget);
+
+        await tester.enterText(
+          find.byKey(const Key('topos-search-field')),
+          '',
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('Sunset Arete'), findsOneWidget);
+        expect(find.text('Moonrise Slab'), findsOneWidget);
+      },
+    );
+  });
 }

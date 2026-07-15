@@ -57,6 +57,34 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   /// button is disabled and a second tap is a no-op.
   bool _creating = false;
 
+  /// Keyword search over the Topos home, mirroring
+  /// `community_screen.dart`'s `_CommunityScreenState` search field: the
+  /// controller backs the `topos-search-field` [TextField], and [_query] is
+  /// its trimmed/lowercased text, updated only when it actually changes so
+  /// unrelated rebuilds (e.g. a caret move) don't trigger extra work.
+  final _searchController = TextEditingController();
+  String _query = '';
+
+  @override
+  void initState() {
+    super.initState();
+    _searchController.addListener(_onSearchChanged);
+  }
+
+  void _onSearchChanged() {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query != _query) {
+      setState(() => _query = query);
+    }
+  }
+
+  @override
+  void dispose() {
+    _searchController.removeListener(_onSearchChanged);
+    _searchController.dispose();
+    super.dispose();
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
@@ -137,6 +165,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         child: Column(
           children: [
             _ToposFilterBar(
+              searchController: _searchController,
               isActive: filter.isActive,
               onTap: () => _showToposFiltersSheet(context),
             ),
@@ -146,7 +175,19 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   if (topos.isEmpty) {
                     return const _EmptyState();
                   }
-                  final filtered = applyToposFilter(topos, filter);
+                  // Search narrows first, then the filter facets (mirrors
+                  // `community_screen.dart`'s `_FeedView`), so the two stay
+                  // independently diagnosable: a query that matches nothing
+                  // shows the search-specific empty state even if the
+                  // active filter would otherwise also exclude everything.
+                  final query = _query;
+                  final searchFiltered = query.isEmpty
+                      ? topos
+                      : topos.where((t) => _matchesQuery(t, query)).toList();
+                  if (searchFiltered.isEmpty) {
+                    return const _SearchEmptyState();
+                  }
+                  final filtered = applyToposFilter(searchFiltered, filter);
                   if (filtered.isEmpty) {
                     return const _FilteredEmptyState();
                   }
@@ -317,17 +358,38 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   }
 }
 
-/// Compact filter trigger shown in the body, above the topos list (see
-/// [ToposScreen.build]): a slim, right-aligned row holding the
-/// `topos-filter-button` icon button -- same key, [Icons.tune] icon,
-/// `topos-filter-active-indicator` badge, and [_showToposFiltersSheet]
-/// behavior as before. Relocated out of the AppBar's trailing actions: with
-/// a fifth action there (this button alongside Organize/Community/
-/// Logbook/Account), the "Topos" title itself was truncating to "Top…" at
-/// normal text scale.
-class _ToposFilterBar extends StatelessWidget {
-  const _ToposFilterBar({required this.isActive, required this.onTap});
+/// Whether [topo] matches keyword [query] (already trimmed/lowercased): its
+/// name, top grade label, or area name contains it. Mirrors
+/// `community_screen.dart`'s `_FeedView`'s name-only search, but widened to
+/// also match [TopoRef.topGradeLabel] / [TopoRef.areaName] so a "keyword"
+/// like a grade ("7a") or an area ("Squamish") also narrows the list, not
+/// just the topo's own name.
+bool _matchesQuery(TopoRef topo, String query) {
+  if (topo.name.toLowerCase().contains(query)) return true;
+  final grade = topo.topGradeLabel;
+  if (grade != null && grade.toLowerCase().contains(query)) return true;
+  final area = topo.areaName;
+  if (area != null && area.toLowerCase().contains(query)) return true;
+  return false;
+}
 
+/// Search field + filter trigger shown in the body, above the topos list
+/// (see [ToposScreen.build]): a [Row] holding the `topos-search-field`
+/// [TextField] (mirrors `community_screen.dart`'s `_FeedView` search field:
+/// same hint text and prefix icon) alongside the `topos-filter-button` icon
+/// button -- same key, [Icons.tune] icon, `topos-filter-active-indicator`
+/// badge, and [_showToposFiltersSheet] behavior as before. The filter
+/// trigger was relocated out of the AppBar's trailing actions: with a fifth
+/// action there (this button alongside Organize/Community/Logbook/Account),
+/// the "Topos" title itself was truncating to "Top…" at normal text scale.
+class _ToposFilterBar extends StatelessWidget {
+  const _ToposFilterBar({
+    required this.searchController,
+    required this.isActive,
+    required this.onTap,
+  });
+
+  final TextEditingController searchController;
   final bool isActive;
   final VoidCallback onTap;
 
@@ -343,8 +405,18 @@ class _ToposFilterBar extends StatelessWidget {
         0,
       ),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
         children: [
+          Expanded(
+            child: TextField(
+              key: const Key('topos-search-field'),
+              controller: searchController,
+              decoration: const InputDecoration(
+                hintText: 'Search topos',
+                prefixIcon: Icon(Icons.search),
+              ),
+            ),
+          ),
+          const SizedBox(width: MasiSpacing.sm),
           if (isActive)
             Padding(
               padding: const EdgeInsets.only(right: MasiSpacing.xs),
@@ -421,6 +493,31 @@ class _FilteredEmptyState extends StatelessWidget {
       key: const Key('topos-filtered-empty-state'),
       child: Text(
         'No topos match your filters',
+        style: Theme.of(
+          context,
+        ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+      ),
+    );
+  }
+}
+
+/// Shown instead of [_EmptyState] / [_FilteredEmptyState] when there ARE
+/// topos but the `topos-search-field` keyword query (see
+/// [ToposScreen.build]'s [_matchesQuery] narrowing, checked BEFORE the
+/// [ToposFilter] facets) excludes every one of them -- distinct from both
+/// other empty states, mirroring `community_screen.dart`'s `_FeedView`
+/// three-way split, so a user who typed a query that matches nothing sees a
+/// message about their search specifically, not a generic/misleading one.
+class _SearchEmptyState extends StatelessWidget {
+  const _SearchEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Center(
+      key: const Key('topos-search-empty-state'),
+      child: Text(
+        'No topos match your search',
         style: Theme.of(
           context,
         ).textTheme.titleMedium?.copyWith(color: colors.ink2),
