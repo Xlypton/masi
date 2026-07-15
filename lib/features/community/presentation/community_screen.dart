@@ -13,6 +13,7 @@ import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
+import '../../account/application/auth_providers.dart';
 import '../application/community_providers.dart';
 import '../data/community_repository.dart';
 
@@ -423,16 +424,23 @@ class _EmptyState extends StatelessWidget {
 /// then like/comment counts + owner. Visually mirrors
 /// `topos_screen.dart`'s `_TopoRow` (same 52x52 thumbnail, grade pill), plus
 /// the community-specific like/comment/owner line.
-class _FeedRow extends StatelessWidget {
+///
+/// A [ConsumerWidget] (rather than [StatelessWidget]) so it can watch
+/// [authStateProvider] for the signed-in uid and mark the row as [_OwnBadge]
+/// when [topo.ownerId] matches it — the row must rebuild live on sign-in/out,
+/// not just render once with a stale uid.
+class _FeedRow extends ConsumerWidget {
   const _FeedRow({required this.topo});
 
   final SharedTopo topo;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final wallId = topo.wallId;
+    final myUid = ref.watch(authStateProvider).asData?.value.uid;
+    final isMine = topo.ownerId != null && topo.ownerId == myUid;
 
     return Material(
       key: Key('community-topo-row-$wallId'),
@@ -485,6 +493,7 @@ class _FeedRow extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        if (isMine) _OwnBadge(wallId: wallId),
                       ],
                     ),
                     const SizedBox(height: 2),
@@ -535,6 +544,49 @@ class _FeedRow extends StatelessWidget {
               Icon(Icons.chevron_right, color: colors.ink3),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact "Yours" badge marking a feed row as one of the signed-in user's
+/// own published topos — the Community-side half of the "clear division
+/// between community and own topos" pairing with `topos_screen.dart`'s
+/// `_VisibilityBadge`. Placed inside the row's grade/route-count [Wrap]
+/// (never the likes/comments/owner [Row] below, which stays untouched) so
+/// it wraps safely at large text scales instead of widening anything; text
+/// is a single short word, never flexible.
+class _OwnBadge extends StatelessWidget {
+  const _OwnBadge({required this.wallId});
+
+  final String wallId;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+
+    return Semantics(
+      label: 'Your topo',
+      child: Container(
+        key: Key('community-own-badge-$wallId'),
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.xs,
+          vertical: 2,
+        ),
+        decoration: BoxDecoration(
+          color: colors.accent,
+          borderRadius: BorderRadius.circular(MasiRadii.control),
+        ),
+        child: Text(
+          'Yours',
+          style: textTheme.labelSmall?.copyWith(
+            color: colors.onAccent,
+            fontWeight: FontWeight.w600,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
         ),
       ),
     );

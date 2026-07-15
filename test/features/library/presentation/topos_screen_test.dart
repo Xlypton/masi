@@ -2125,4 +2125,86 @@ void main() {
       );
     },
   );
+
+  group(
+    'T1: visibility badge — clear division between published/private topos '
+    '(community vs. own)',
+    () {
+      testWidgets(
+        'a shared topo shows the Published badge, a private topo shows the '
+        'Private badge, each distinctly keyed and distinguishable by text; '
+        'no overflow at 390x800 @ 1.0x',
+        (tester) async {
+          tester.view.physicalSize = const Size(390, 800);
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetPhysicalSize);
+          addTearDown(tester.view.resetDevicePixelRatio);
+
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              toposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  TopoRef(
+                    wallId: 'wall-shared-badge',
+                    name: 'Shared Wall',
+                    thumbnailPath: null,
+                    routeCount: 1,
+                    createdAt: 1000,
+                    visibility: 'shared',
+                  ),
+                  TopoRef(
+                    wallId: 'wall-private-badge',
+                    name: 'Private Wall',
+                    thumbnailPath: null,
+                    routeCount: 1,
+                    createdAt: 900,
+                  ),
+                ]),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(_wrap(container, const ToposScreen()));
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+
+          final sharedBadge = find.byKey(
+            const Key('topo-visibility-badge-wall-shared-badge'),
+          );
+          final privateBadge = find.byKey(
+            const Key('topo-visibility-badge-wall-private-badge'),
+          );
+          expect(sharedBadge, findsOneWidget);
+          expect(privateBadge, findsOneWidget);
+
+          // Distinguishable by their text content.
+          expect(
+            find.descendant(of: sharedBadge, matching: find.text('Published')),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(of: sharedBadge, matching: find.text('Private')),
+            findsNothing,
+          );
+          expect(
+            find.descendant(of: privateBadge, matching: find.text('Private')),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: privateBadge,
+              matching: find.text('Published'),
+            ),
+            findsNothing,
+          );
+        },
+      );
+    },
+  );
 }

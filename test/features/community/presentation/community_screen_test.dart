@@ -4,6 +4,8 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/core/location/location_service.dart';
+import 'package:climbtopo/features/account/application/auth_providers.dart';
+import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/community/application/community_providers.dart';
 import 'package:climbtopo/features/community/presentation/community_screen.dart';
 import 'package:climbtopo/shared/filtering/grade_range.dart';
@@ -1408,6 +1410,91 @@ void main() {
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
+        },
+      );
+    },
+  );
+
+  group(
+    'T2: own-topo badge — clear division between community and own topos '
+    '(feed side of the pairing with T1\'s visibility badge)',
+    () {
+      testWidgets(
+        'the signed-in uid\'s own shared topo shows the Yours badge; a '
+        'topo owned by someone else, and one with no owner at all, do not',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              authStateProvider.overrideWith(
+                (ref) => Stream.value(
+                  const AuthSessionState.signedIn(
+                    'me@example.com',
+                    uid: 'me',
+                  ),
+                ),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-own', name: 'Area Own');
+            await _seedSector(
+              db,
+              id: 'sector-own',
+              areaId: 'area-own',
+              name: 'S',
+            );
+            await _seedWall(
+              db,
+              id: 'wall-mine',
+              sectorId: 'sector-own',
+              name: 'Mine',
+              visibility: 'shared',
+              ownerId: 'me',
+            );
+            await _seedWall(
+              db,
+              id: 'wall-other',
+              sectorId: 'sector-own',
+              name: 'Someone Else\'s',
+              visibility: 'shared',
+              ownerId: 'other',
+            );
+            await _seedWall(
+              db,
+              id: 'wall-no-owner',
+              sectorId: 'sector-own',
+              name: 'No Owner',
+              visibility: 'shared',
+            );
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byKey(const Key('community-own-badge-wall-mine')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('community-own-badge-wall-other')),
+            findsNothing,
+          );
+          expect(
+            find.byKey(const Key('community-own-badge-wall-no-owner')),
+            findsNothing,
+          );
         },
       );
     },

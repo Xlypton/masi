@@ -704,6 +704,10 @@ class _TopoRow extends ConsumerWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
+                        _VisibilityBadge(
+                          wallId: topo.wallId,
+                          isShared: topo.visibility == 'shared',
+                        ),
                       ],
                     ),
                   ],
@@ -867,6 +871,73 @@ class _GradePill extends StatelessWidget {
         ),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
+}
+
+/// Compact badge marking a topo row's publish state — "Published" (accent
+/// fill) for a topo shared to Community, or a muted "Private" otherwise —
+/// so the Topos home reads as a clear division between community-visible
+/// and owner-only topos. Placed inside the row's grade/route-count [Wrap]
+/// (rather than the trailing icon cluster) so it wraps safely alongside
+/// them at large text scales instead of widening the [Row] and risking the
+/// overflow this row was JUST fixed for; text stays a single short word
+/// with a matching icon, never flexible.
+class _VisibilityBadge extends StatelessWidget {
+  const _VisibilityBadge({required this.wallId, required this.isShared});
+
+  final String wallId;
+  final bool isShared;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final label = isShared ? 'Published' : 'Private';
+    final foreground = isShared ? colors.onAccent : colors.ink3;
+    final background = isShared ? colors.accent : colors.surface2;
+
+    return Semantics(
+      label: isShared ? 'Published to Community' : 'Private, not shared',
+      child: Container(
+        key: Key('topo-visibility-badge-$wallId'),
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.xs,
+          vertical: 2,
+        ),
+        decoration: BoxDecoration(
+          color: background,
+          borderRadius: BorderRadius.circular(MasiRadii.control),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              isShared ? Icons.public : Icons.lock_outline,
+              size: 12,
+              color: foreground,
+            ),
+            const SizedBox(width: 2),
+            // `Flexible` (not a bare `Text`) is required here: a `Row`
+            // gives non-flexible children an UNBOUNDED main-axis
+            // constraint, so without it `maxLines`/`overflow: ellipsis`
+            // never engage and the badge overflows its `Wrap` slot at
+            // large text scales (regression -- see the "AppBar Organize
+            // action + _TopoRow" test this badge sits alongside).
+            Flexible(
+              child: Text(
+                label,
+                style: textTheme.labelSmall?.copyWith(
+                  color: foreground,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
