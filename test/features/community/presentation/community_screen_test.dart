@@ -1132,6 +1132,49 @@ void main() {
         expect(find.text('detail-wall-shared-1'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'C1/C2/C3: TileLayer evicts off-screen error tiles (so a transient '
+      'fetch failure is re-requested on zoom/pan instead of staying a '
+      'permanent gray rectangle), fetches real tiles up to native zoom 20, '
+      'and keeps a slightly larger keep-buffer -- while the urlTemplate '
+      'regression guard from the test above still holds',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+
+        final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
+        // C1: off-screen error tiles must be evicted so zooming/panning
+        // re-requests them instead of leaving a permanent gray hole.
+        expect(
+          tileLayer.evictErrorTileStrategy,
+          EvictErrorTileStrategy.notVisibleRespectMargin,
+        );
+        // C2: CartoDB light_all serves real tiles through z20.
+        expect(tileLayer.maxNativeZoom, 20);
+        // C3 regression guard: urlTemplate is unchanged, and keepBuffer is
+        // bumped from the default of 2 to 3.
+        expect(
+          tileLayer.urlTemplate,
+          'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        );
+        expect(tileLayer.keepBuffer, 3);
+      },
+    );
   });
 
   group(

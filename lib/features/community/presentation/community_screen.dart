@@ -688,6 +688,19 @@ class _MapView extends ConsumerWidget {
           userAgentPackageName: 'com.climbtopo.climbtopo',
           tileProvider: tileProvider ?? NetworkTileProvider(),
           retinaMode: RetinaMode.isHighDensity(context),
+          // Without this, a tile that fails once (transient CartoDB
+          // throttling/network blip) is never evicted and therefore never
+          // re-requested, leaving a permanent gray rectangle even as the
+          // user zooms/pans past it. Evicting off-screen error tiles lets
+          // them be re-fetched next time they scroll into view.
+          evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
+          // CartoDB's light_all basemap serves real tiles through z20;
+          // without this flutter_map stops fetching past its default native
+          // zoom and upscales/blurs the last real tile instead.
+          maxNativeZoom: 20,
+          // Slightly larger than the default (2) ring of off-screen tiles
+          // kept pre-fetched, so panning shows fewer transient gray edges.
+          keepBuffer: 3,
         ),
         MarkerLayer(
           markers: [
