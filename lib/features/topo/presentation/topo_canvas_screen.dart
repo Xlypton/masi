@@ -898,11 +898,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // Floating translucent-glass chrome over an edge-to-edge photo, per
     // DESIGN.md "Topo canvas": no opaque AppBar/BottomAppBar — the canvas
     // area (or empty state) fills the whole Scaffold behind a top glass
-    // pill (back + title + mode-aware actions), the symbol palette (draw
-    // mode only, floating directly below the title pill on the SAME glass
-    // material), and a bottom glass cluster (undo/redo/cancel/commit) + the
-    // accent capture FAB, all floating within thumb reach and inset by the
-    // safe area.
+    // pill (back + title + mode-aware actions, including add-photo — see
+    // `_topTrailingActions`'s `topo-add-photo-button`), the symbol palette
+    // (draw mode only, floating directly below the title pill on the SAME
+    // glass material), and a bottom glass cluster (undo/redo/cancel/commit,
+    // draw mode only — see `_buildBottomChrome`), all floating within thumb
+    // reach and inset by the safe area.
     return Scaffold(
       backgroundColor: colors.ground,
       extendBody: true,
@@ -1169,11 +1170,30 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
     }
 
+    // add-photo lives in the top chrome, alongside the other trailing
+    // glyphs, so it's reachable in BOTH view and draw mode — unconditional
+    // on mode (other than readOnly, matching every other editing affordance
+    // in this list) and, critically, NOT gated on `activePhotoId != null`
+    // like the slice/AR buttons above: this is the one control that must
+    // still work with NO photo loaded yet (see `_buildEmptyState`) — the
+    // user's only way to attach a wall's first photo. There is no bottom
+    // FAB for this action; see `_buildBottomChrome`'s doc.
+    if (!widget.readOnly) {
+      actions.add(
+        GlassIconButton(
+          key: const Key('topo-add-photo-button'),
+          icon: Icons.add_photo_alternate_outlined,
+          tooltip: 'Pick a photo',
+          onPressed: _pickImage,
+        ),
+      );
+    }
+
     return actions;
   }
 
-  /// The bottom glass cluster (undo / redo / discard-current / commit) plus
-  /// the accent capture FAB — gated to [DrawMode.draw] ONLY.
+  /// The bottom glass cluster (undo / redo / discard-current / commit) —
+  /// gated to [DrawMode.draw] ONLY; every other mode renders nothing here.
   ///
   /// Bug fix ("the editor remains open, overlaying the bottom ... covers
   /// the RouteLegend"): this cluster used to be rendered mode-INDEPENDENTLY
@@ -1186,69 +1206,62 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// (undo/redo only ever act on [DrawState.currentPoints], which is only
   /// ever non-empty while actively drawing). Per DESIGN.md's "Topo canvas"
   /// spec ("bottom pill (undo / redo / commit)" is one of DRAW mode's
-  /// tools), the cluster now only shows in draw mode; view mode shows just
-  /// the capture FAB (still available to replace the photo at any time),
-  /// aligned to the trailing edge where the cluster would otherwise sit.
+  /// tools), the cluster now only shows in draw mode.
+  ///
+  /// Bottom-band reclaim (masi-canvas-bottom-reclaim.md): add-photo lives in
+  /// the top chrome's trailing-action cluster instead (see
+  /// `_topTrailingActions`'s `topo-add-photo-button`, reachable in both view
+  /// AND draw mode) — there is no bottom FAB. So this method renders
+  /// literally nothing outside draw mode, letting [TopoCanvasBody]'s
+  /// floating [RouteLegend] sit flush near the bottom safe area instead of
+  /// leaving that band empty.
   Widget _buildBottomChrome(
     MasiColors colors,
     DrawController drawNotifier,
     DrawMode mode,
   ) {
-    // readOnly: no bottom chrome at all — neither the draw cluster (already
-    // unreachable, since draw mode itself is unreachable — see
-    // `_topTrailingActions`'s mode-toggle gate) nor the capture/replace-photo
-    // FAB, which is itself an editing affordance (attaching a new photo to
-    // someone else's shared wall) with no place in a read-only viewer.
+    // readOnly: no bottom chrome at all — the draw cluster is already
+    // unreachable, since draw mode itself is unreachable (see
+    // `_topTrailingActions`'s mode-toggle gate).
     if (widget.readOnly) {
       return const SizedBox.shrink();
     }
 
-    final fab = TopoCaptureFab(onPressed: _pickImage, tooltip: 'Pick a photo');
-
     if (mode != DrawMode.draw) {
-      return Align(alignment: Alignment.centerRight, child: fab);
+      return const SizedBox.shrink();
     }
 
-    return Row(
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        Expanded(
-          child: GlassChrome(
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                GlassIconButton(
-                  key: const Key('topo-undo-button'),
-                  icon: Icons.undo,
-                  tooltip: 'Undo',
-                  onPressed: drawNotifier.undo,
-                ),
-                GlassIconButton(
-                  key: const Key('topo-redo-button'),
-                  icon: Icons.redo,
-                  tooltip: 'Redo',
-                  onPressed: drawNotifier.redo,
-                ),
-                GlassIconButton(
-                  key: const Key('topo-clear-button'),
-                  icon: Icons.close,
-                  tooltip: 'Discard current route',
-                  onPressed: drawNotifier.clearCurrent,
-                ),
-                GlassIconButton(
-                  key: const Key('topo-commit-button'),
-                  icon: Icons.check,
-                  tooltip: 'Commit route',
-                  active: true,
-                  onPressed: _handleCommitRoute,
-                ),
-              ],
-            ),
+    return GlassChrome(
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          GlassIconButton(
+            key: const Key('topo-undo-button'),
+            icon: Icons.undo,
+            tooltip: 'Undo',
+            onPressed: drawNotifier.undo,
           ),
-        ),
-        const SizedBox(width: MasiSpacing.md),
-        fab,
-      ],
+          GlassIconButton(
+            key: const Key('topo-redo-button'),
+            icon: Icons.redo,
+            tooltip: 'Redo',
+            onPressed: drawNotifier.redo,
+          ),
+          GlassIconButton(
+            key: const Key('topo-clear-button'),
+            icon: Icons.close,
+            tooltip: 'Discard current route',
+            onPressed: drawNotifier.clearCurrent,
+          ),
+          GlassIconButton(
+            key: const Key('topo-commit-button'),
+            icon: Icons.check,
+            tooltip: 'Commit route',
+            active: true,
+            onPressed: _handleCommitRoute,
+          ),
+        ],
+      ),
     );
   }
 
@@ -1461,16 +1474,25 @@ class TopoCanvasBody extends ConsumerWidget {
     final hasRoutes = drawState.routes.isNotEmpty;
     final legendExpanded = ref.watch(legendExpandedProvider);
 
-    // Bottom clearance the floating draw-mode toolbar cluster (see
-    // TopoCanvasScreen._buildBottomChrome) needs reserved above it so it
-    // never occludes RouteLegend's last row(s) — unchanged from before this
-    // fix, just hoisted out so both the legend's Padding AND its maxHeight
-    // cap (below) can share the same value.
+    // Bottom clearance reserved above the floating RouteLegend overlay, so
+    // both the legend's Padding AND its maxHeight cap (below) can share the
+    // same value. Mode-aware (bottom-band reclaim,
+    // masi-canvas-bottom-reclaim.md): only DRAW mode's undo/redo/clear/
+    // commit cluster (see TopoCanvasScreen._buildBottomChrome) actually
+    // occupies this floating bottom band, so only draw mode needs the extra
+    // `kBottomChromeClusterHeight + sm` reserved above it to avoid occluding
+    // RouteLegend's last row(s). VIEW mode's bottom chrome is now empty (the
+    // add-photo action lives in the top bar instead — see
+    // `_topTrailingActions`), so the legend only needs the same small `md`
+    // breathing-room gap every OTHER floating element gets above the safe
+    // area, letting it sit flush near the bottom instead of leaving a dead
+    // gap where the draw-mode cluster would have been.
     final legendBottomPadding = hasRoutes
         ? MediaQuery.paddingOf(context).bottom +
               MasiSpacing.md +
-              kBottomChromeClusterHeight +
-              MasiSpacing.sm
+              (drawState.mode == DrawMode.draw
+                  ? kBottomChromeClusterHeight + MasiSpacing.sm
+                  : 0.0)
         : 0.0;
 
     return Column(
