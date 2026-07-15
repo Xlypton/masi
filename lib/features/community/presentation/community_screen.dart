@@ -4,7 +4,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:latlong2/latlong.dart';
+// `hide Path`: latlong2 exports its own generic `Path<T>` (a geodesic path
+// helper we never use here), which otherwise shadows dart:ui's `Path` (from
+// `package:flutter/material.dart`) needed by `_PinPointerPainter` below.
+import 'package:latlong2/latlong.dart' hide Path;
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
@@ -662,9 +665,11 @@ class _MapView extends ConsumerWidget {
       ),
       children: [
         TileLayer(
-          urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          urlTemplate:
+              'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
           userAgentPackageName: 'com.climbtopo.climbtopo',
           tileProvider: tileProvider ?? NetworkTileProvider(),
+          retinaMode: RetinaMode.isHighDensity(context),
         ),
         MarkerLayer(
           markers: [
@@ -672,23 +677,144 @@ class _MapView extends ConsumerWidget {
               Marker(
                 point: LatLng(topo.latitude!, topo.longitude!),
                 width: 40,
-                height: 40,
+                height: _MapPinBadge.totalHeight,
+                alignment: Alignment.topCenter,
                 child: GestureDetector(
                   key: Key('community-map-marker-${topo.wallId}'),
                   onTap: () {
                     FocusManager.instance.primaryFocus?.unfocus();
                     context.push('/community/topo/${topo.wallId}');
                   },
-                  child: Icon(
-                    Icons.location_pin,
-                    color: colors.accent,
-                    size: 36,
-                  ),
+                  child: _MapPinBadge(accentColor: colors.accent),
                 ),
               ),
           ],
         ),
+        // An always-visible custom credit pill — deliberately NOT a
+        // `RichAttributionWidget`, whose OSM/CARTO text is hidden behind a
+        // collapsed info-icon popup until tapped, which does not satisfy
+        // OSM/CARTO's requirement that attribution be visible without
+        // interaction. `IgnorePointer` keeps the pill from stealing marker
+        // taps, and bottom-right placement keeps it clear of the pins.
+        IgnorePointer(
+          child: Align(
+            alignment: Alignment.bottomRight,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: colors.surface.withValues(alpha: 0.85),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 6,
+                    vertical: 2,
+                  ),
+                  child: Text(
+                    '© OpenStreetMap contributors · CARTO',
+                    key: const Key('community-map-attribution'),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: colors.ink2,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
       ],
     );
   }
+}
+
+/// The Map tab's per-topo marker: the app's raster logo in a small white
+/// circular badge — subtle shadow, thin accent-tinted ring — sitting atop a
+/// tiny downward-pointing triangle, so it reads as a map pin (tip anchored to
+/// the coordinate via the [Marker]'s `Alignment.topCenter`) rather than a
+/// generic dot, and stays legible against the light CartoDB Positron basemap.
+class _MapPinBadge extends StatelessWidget {
+  const _MapPinBadge({required this.accentColor});
+
+  final Color accentColor;
+
+  static const double _badgeSize = 34;
+  static const double _pointerSize = 8;
+
+  /// Total rendered height of the badge + downward pointer, with zero
+  /// vertical slack. The enclosing [Marker]'s `height` MUST equal this
+  /// exactly: flutter_map's `Marker.alignment` doc states that
+  /// [Alignment.topCenter] anchors the marker BOX's bottom edge to the
+  /// geographic point. If the box were any taller than this content, the
+  /// [Column] below (tight-constrained to the box's full height, so
+  /// `mainAxisSize.min` cannot shrink it) would pack its children at the
+  /// top and leave the extra space below the pointer — floating the
+  /// pointer's visual tip above the actual coordinate.
+  static const double totalHeight = _badgeSize + (_pointerSize - 2);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: _badgeSize,
+          height: _badgeSize,
+          padding: const EdgeInsets.all(3),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+            border: Border.all(color: accentColor, width: 1.5),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 4,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: ClipOval(
+            child: Image.asset(
+              'assets/icon/masi_icon.png',
+              fit: BoxFit.cover,
+              errorBuilder: (context, error, stackTrace) => Icon(
+                Icons.place,
+                size: _badgeSize - 8,
+                color: accentColor,
+              ),
+            ),
+          ),
+        ),
+        CustomPaint(
+          size: const Size(_pointerSize, _pointerSize - 2),
+          painter: _PinPointerPainter(accentColor),
+        ),
+      ],
+    );
+  }
+}
+
+/// Paints the small downward triangle beneath [_MapPinBadge]'s circle,
+/// tinted to match the badge's accent ring so the whole marker reads as one
+/// cohesive pin shape.
+class _PinPointerPainter extends CustomPainter {
+  const _PinPointerPainter(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final path = Path()
+      ..moveTo(0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width / 2, size.height)
+      ..close();
+    canvas.drawPath(path, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PinPointerPainter oldDelegate) =>
+      oldDelegate.color != color;
 }

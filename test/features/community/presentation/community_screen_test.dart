@@ -70,6 +70,30 @@ Widget _wrap(ProviderContainer container, Widget screen) {
   );
 }
 
+/// Like [_wrap], but the `/community/topo/:wallId` destination renders a
+/// keyed placeholder carrying the tapped wallId in its text, so a test can
+/// confirm that tapping a map marker actually navigated (rather than just
+/// that the `GestureDetector`'s key/onTap exist).
+Widget _wrapWithDetailRoute(ProviderContainer container, Widget screen) {
+  final router = GoRouter(
+    initialLocation: '/',
+    routes: [
+      GoRoute(path: '/', builder: (context, state) => screen),
+      GoRoute(
+        path: '/community/topo/:wallId',
+        builder: (context, state) => Text(
+          'detail-${state.pathParameters['wallId']}',
+          key: const Key('community-topo-detail-placeholder'),
+        ),
+      ),
+    ],
+  );
+  return UncontrolledProviderScope(
+    container: container,
+    child: MaterialApp.router(theme: MasiTheme.light, routerConfig: router),
+  );
+}
+
 /// Advances real asynchronous work (Drift's in-memory background executor)
 /// that would otherwise never make progress under `testWidgets`' fake-async
 /// clock, then pumps to flush the resulting Riverpod-triggered rebuilds.
@@ -815,6 +839,188 @@ void main() {
           find.byKey(const Key('community-map-marker-wall-sport')),
           findsNothing,
         );
+      },
+    );
+  });
+
+  group('Subtask A: map polish — nicer tiles, attribution, logo markers', () {
+    testWidgets(
+      'Map tab uses the CartoDB Positron tile URL (no API key), keeps the '
+      'injectable tileProvider seam, and shows the OSM/CARTO credit TEXT '
+      'visibly at a realistic viewport WITHOUT any tap (regression: a '
+      'collapsed RichAttributionWidget info-icon popup does not satisfy '
+      'the "attribution must be visible without interaction" requirement)',
+      (tester) async {
+        // A realistic ≥360px-wide logical viewport (rather than
+        // flutter_test's tiny ~267-logical-px default surface), so the
+        // credit pill's overflow behaviour is exercised meaningfully.
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+
+        final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
+        expect(
+          tileLayer.urlTemplate,
+          'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        );
+        // Still the injected fake, never a real NetworkTileProvider — this
+        // test must perform no real network I/O.
+        expect(tileLayer.tileProvider, isA<_NoopTileProvider>());
+
+        // The credit text must be rendered and visible WITHOUT any tap —
+        // not merely present (opacity 0) somewhere in the tree, which is
+        // exactly how `RichAttributionWidget`'s collapsed popup renders its
+        // `TextSourceAttribution`s: still built, wrapped in an
+        // `AnimatedOpacity(opacity: 0)`, so a bare `find.textContaining`
+        // would pass even though nothing is visible on screen.
+        final osmFinder = find.textContaining('OpenStreetMap');
+        final cartoFinder = find.textContaining('CARTO');
+        expect(osmFinder, findsOneWidget);
+        expect(cartoFinder, findsOneWidget);
+
+        for (final finder in [osmFinder, cartoFinder]) {
+          final zeroOpacityAncestors = find.ancestor(
+            of: finder,
+            matching: find.byWidgetPredicate((widget) {
+              if (widget is AnimatedOpacity) return widget.opacity == 0;
+              if (widget is Opacity) return widget.opacity == 0;
+              return false;
+            }),
+          );
+          expect(
+            zeroOpacityAncestors,
+            findsNothing,
+            reason:
+                'credit text must not be hidden behind a zero-opacity '
+                'wrapper (i.e. must be visible without any tap)',
+          );
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'marker box has no vertical slack: the box height equals the badge '
+      '+ pointer content height (34 + 6 = 40px) exactly, so '
+      "Alignment.topCenter's bottom-edge anchor (per flutter_map's "
+      'Marker.alignment doc) lands the pointer tip precisely on the '
+      'coordinate rather than floating above it',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+
+        final markerBoxSize = tester.getSize(
+          find.byKey(const Key('community-map-marker-wall-shared-1')),
+        );
+        expect(markerBoxSize.height, 40.0);
+      },
+    );
+
+    Finder markerLogoFinder(String wallId) => find.descendant(
+      of: find.byKey(Key('community-map-marker-$wallId')),
+      matching: find.byWidgetPredicate((widget) {
+        if (widget is Image && widget.image is AssetImage) {
+          return (widget.image as AssetImage).assetName ==
+              'assets/icon/masi_icon.png';
+        }
+        return false;
+      }),
+    );
+
+    testWidgets(
+      'each topo marker renders the app-logo badge (an Image.asset of '
+      'masi_icon.png) rather than the old pin icon, keeping its stable key',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('community-map-marker-wall-shared-1')),
+          findsOneWidget,
+        );
+        expect(markerLogoFinder('wall-shared-1'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'tapping a logo marker still navigates to the topo detail route',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrapWithDetailRoute(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        await tester.tap(
+          find.byKey(const Key('community-map-marker-wall-shared-1')),
+        );
+        // Bounded pumps (not pumpAndSettle) to advance the go_router push
+        // transition without waiting on the TileLayer's own fade-in
+        // animation underneath, which _drain's docs note is fine to leave
+        // mid-flight.
+        for (var i = 0; i < 5; i++) {
+          await tester.pump(const Duration(milliseconds: 100));
+        }
+
+        expect(
+          find.byKey(const Key('community-topo-detail-placeholder')),
+          findsOneWidget,
+        );
+        expect(find.text('detail-wall-shared-1'), findsOneWidget);
       },
     );
   });
