@@ -5,19 +5,19 @@ import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 
 /// Stroke/swatch color for [GradeBand.beginner].
-const Color _beginnerColor = Color(0xFF43A047); // green
+const Color _beginnerColor = Color(0xFF2F9E6B); // green
 
 /// Stroke/swatch color for [GradeBand.intermediate].
-const Color _intermediateColor = Color(0xFF1E88E5); // blue
+const Color _intermediateColor = Color(0xFF3B82C4); // blue
 
 /// Stroke/swatch color for [GradeBand.advanced].
-const Color _advancedColor = Color(0xFFFB8C00); // orange
+const Color _advancedColor = Color(0xFFE08A2B); // orange
 
 /// Stroke/swatch color for [GradeBand.hard].
-const Color _hardColor = Color(0xFFE53935); // red
+const Color _hardColor = Color(0xFFD6483B); // red
 
 /// Stroke/swatch color for [GradeBand.elite].
-const Color _eliteColor = Color(0xFF8E24AA); // purple
+const Color _eliteColor = Color(0xFF8A5CD1); // purple
 
 /// Fallback color used by [colorForRoute] when a route has no grade AND an
 /// empty palette is passed in (mirrors `TopoPainter`'s own empty-palette

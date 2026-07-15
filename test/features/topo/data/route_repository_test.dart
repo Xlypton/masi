@@ -468,4 +468,66 @@ void main() {
     expect(afterUpdate.createdAt, 1000);
     expect(afterUpdate.updatedAt, 2000);
   });
+
+  group('P1-b: ownerId stamping on create', () {
+    test(
+      'upsertRoute(insert path) stamps ownerId with the injected '
+      'currentUid',
+      () async {
+        final owned = RouteRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+        );
+
+        await owned.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+
+        final raw = await db.select(db.routes).getSingle();
+        expect(raw.ownerId, 'u1');
+      },
+    );
+
+    test('default currentUid (signed-out) leaves ownerId null', () async {
+      await repo.upsertRoute(
+        wallId,
+        photoId,
+        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+      );
+
+      final raw = await db.select(db.routes).getSingle();
+      expect(raw.ownerId, isNull);
+    });
+
+    test(
+      'upsertRoute(update path) does not overwrite an existing ownerId',
+      () async {
+        final owned = RouteRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+        );
+        await owned.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+
+        // A later update, even from a different (or signed-out) session,
+        // must not touch the ownerId stamped at creation time.
+        final laterSignedOut = RouteRepository(db, nowMs: () => 2000);
+        await laterSignedOut.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
+        );
+
+        final raw = await db.select(db.routes).getSingle();
+        expect(raw.ownerId, 'u1');
+      },
+    );
+  });
 }

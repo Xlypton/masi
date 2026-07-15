@@ -38,7 +38,7 @@ class PhotoSelector extends ConsumerWidget {
       height: 48,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
         children: [
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 4),

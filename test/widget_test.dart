@@ -1,4 +1,6 @@
 import 'package:climbtopo/app/app.dart';
+import 'package:climbtopo/app/router.dart';
+import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
@@ -59,10 +61,11 @@ void main() {
   testWidgets(
     'App boots to AreasScreen (root route) showing its empty state',
     (WidgetTester tester) async {
-      // M6: '/' now routes to AreasScreen (the library CRUD root) instead of
-      // the topo canvas, so the old "ClimbTopo" app-bar-title smoke check no
-      // longer applies — TopoCanvasScreen itself is still covered directly
-      // by the draw-mode-controls group below.
+      // The router's default `/` route is now ToposScreen (the flat
+      // photo-first home) rather than AreasScreen — navigate to `/areas`
+      // explicitly before exercising the library CRUD root's empty state,
+      // which is what this test actually covers. TopoCanvasScreen itself is
+      // still covered directly by the draw-mode-controls group below.
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);
 
@@ -78,6 +81,9 @@ void main() {
       // Let GoRouter/MaterialApp.router settle AND the Drift-backed
       // areasProvider watch stream emit its first (empty) value, so the
       // AreasScreen leaves its loading spinner and renders the empty state.
+      await _drain(tester);
+
+      appRouter.go('/areas');
       await _drain(tester);
 
       expect(find.text('Areas'), findsOneWidget);
@@ -115,7 +121,10 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const TopoCanvasScreen(wallId: 'test-wall'),
+          ),
         ),
       );
       await tester.pumpAndSettle();
@@ -132,7 +141,8 @@ void main() {
     });
 
     testWidgets(
-      'A3: undo/redo/commit toolbar buttons invoke the draw controller',
+      'A3: undo/redo/commit toolbar buttons invoke the draw controller '
+      '(bottom cluster is draw-mode-only; committing returns to view mode)',
       (tester) async {
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
@@ -147,10 +157,26 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
+            child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const TopoCanvasScreen(wallId: 'test-wall'),
+          ),
           ),
         );
         await tester.pumpAndSettle();
+
+        // Bug fix coverage: the undo/redo/cancel/commit cluster is now
+        // gated to DrawMode.draw (previously shown unconditionally, which
+        // is what let it cover RouteLegend even in view mode — see
+        // TopoCanvasScreen._buildBottomChrome's doc). The screen opens in
+        // view mode by default, so none of the cluster's buttons exist yet.
+        expect(container.read(drawControllerProvider).mode, DrawMode.view);
+        expect(find.byKey(const Key('topo-undo-button')), findsNothing);
+        expect(find.byKey(const Key('topo-commit-button')), findsNothing);
+
+        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+        await tester.pumpAndSettle();
+        expect(container.read(drawControllerProvider).mode, DrawMode.draw);
 
         final notifier = container.read(drawControllerProvider.notifier);
         notifier.addPoint(const Offset(0.1, 0.1));
@@ -169,6 +195,10 @@ void main() {
         await tester.pumpAndSettle();
         expect(container.read(drawControllerProvider).currentPoints, isEmpty);
         expect(container.read(drawControllerProvider).routes.length, 1);
+        // Bug fix: committing returns the canvas to view mode (previously
+        // it stayed in draw mode, leaving the cluster on screen over
+        // RouteLegend even after the user was done editing).
+        expect(container.read(drawControllerProvider).mode, DrawMode.view);
 
         // A real commit opens the route-metadata sheet for the just
         // -committed route; dismiss it (Cancel) before continuing so the
@@ -178,7 +208,14 @@ void main() {
         await tester.tap(find.byKey(const Key('topo-meta-cancel')));
         await tester.pumpAndSettle();
 
-        // topo-clear-button: start a new current route, then discard it.
+        // topo-clear-button: back in view mode post-commit, the cluster
+        // (including the clear button) is hidden again until draw mode is
+        // re-entered.
+        expect(find.byKey(const Key('topo-clear-button')), findsNothing);
+        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+        await tester.pumpAndSettle();
+
+        // Start a new current route, then discard it.
         notifier.addPoint(const Offset(0.3, 0.3));
         await tester.tap(find.byKey(const Key('topo-clear-button')));
         await tester.pump();
@@ -210,7 +247,10 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
+            child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const TopoCanvasScreen(wallId: 'test-wall'),
+          ),
           ),
         );
         await tester.pumpAndSettle();
@@ -278,7 +318,13 @@ void main() {
     }) {
       return UncontrolledProviderScope(
         container: container,
+        // Fix 2 (canvas UI fixes) needs `theme: MasiTheme.light`: TopoCanvas
+        // now reads `MasiColors.of(context)` (for its viewport frame's
+        // hairline border) in every build, which null-check-throws without
+        // a MASI-themed ancestor — a bare `MaterialApp()` (as this used to
+        // pump) has no `MasiColors` extension registered.
         child: MaterialApp(
+          theme: MasiTheme.light,
           home: Scaffold(
             body: TopoCanvas(
               imagePath: '/nonexistent/test-topo.jpg',
@@ -301,8 +347,8 @@ void main() {
     }
 
     testWidgets(
-      'A2: InteractiveViewer pan/scale are disabled in draw mode, enabled '
-      'in view mode',
+      'A2: InteractiveViewer pan is disabled (but scale stays enabled) in '
+      'draw mode; both are enabled in view mode',
       (tester) async {
         setViewportSize(tester, const Size(400, 300));
         final container = ProviderContainer();
@@ -324,8 +370,20 @@ void main() {
         container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
         await tester.pump();
 
-        expect(viewer().panEnabled, isFalse);
-        expect(viewer().scaleEnabled, isFalse);
+        expect(
+          viewer().panEnabled,
+          isFalse,
+          reason:
+              'draw mode locks single-finger pan so it is unambiguously a '
+              'tap-to-add / handle-drag gesture instead',
+        );
+        expect(
+          viewer().scaleEnabled,
+          isTrue,
+          reason:
+              'draw mode still allows a two-finger pinch to pan/zoom — '
+              'only single-finger pan is reserved for drawing',
+        );
 
         container.read(drawControllerProvider.notifier).setMode(DrawMode.view);
         await tester.pump();
@@ -368,6 +426,51 @@ void main() {
     );
 
     testWidgets(
+      'A4 corner-tap regression: a draw-mode tap in the extreme CORNER of '
+      'the viewport still places a point (full-bleed canvas rework: the '
+      'viewport is no longer clipped/rounded at all, so this is a cheap '
+      'guard against ever reintroducing a corner-clipping gesture bug)',
+      (tester) async {
+        // Same identity-transform harness as the tap-adds-a-point test
+        // above: viewport == imageSize == Size(400, 300), so tapping
+        // local/global (x, y) maps to scene (x, y) directly.
+        setViewportSize(tester, const Size(400, 300));
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+
+        container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
+
+        await tester.pumpWidget(
+          buildCanvas(container: container, controller: controller),
+        );
+        await tester.pump();
+
+        // (2, 2) sits in the extreme top-left corner of the viewport's
+        // bounding rect. Historical note: this used to sit OUTSIDE a
+        // MasiRadii.large-rounded corner arc that a ClipRRect clipped hit-
+        // testing to (not just painting), so a tap there silently placed no
+        // point — the original regression this test guarded against. The
+        // full-bleed canvas rework removed that rounding/clip entirely, so
+        // this now simply guards against a future edit reintroducing any
+        // clip that would swallow corner taps again.
+        await tester.tapAt(const Offset(2, 2));
+        await tester.pump();
+
+        final points = container.read(drawControllerProvider).currentPoints;
+        expect(
+          points.length,
+          1,
+          reason:
+              'a tap in the extreme corner must still reach the gesture '
+              'layer and place a point — nothing should clip hit-testing '
+              'there',
+        );
+      },
+    );
+
+    testWidgets(
       'dragging an existing handle moves it instead of adding a new point',
       (tester) async {
         setViewportSize(tester, const Size(400, 300));
@@ -397,14 +500,117 @@ void main() {
     );
 
     testWidgets(
-      'Fix 1: a large photo fits the viewport (minScale allows zooming out '
-      'to fitScale, and the controller is initialized to fitScale so the '
-      'whole image is visible on first layout)',
+      'gesture model: a single-finger drag STARTING ON EMPTY SPACE in draw '
+      'mode (moved past the tap slop before release) adds NO point — only '
+      'a genuine tap (or a drag starting ON a handle) does',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 300));
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+
+        container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
+
+        await tester.pumpWidget(
+          buildCanvas(container: container, controller: controller),
+        );
+        await tester.pump();
+
+        // (200, 150) is empty space (no existing points yet), and the drag
+        // moves well past `_tapMovementSlopPx` (8.0) before release.
+        await tester.dragFrom(const Offset(200, 150), const Offset(40, 0));
+        await tester.pump();
+
+        expect(
+          container.read(drawControllerProvider).currentPoints,
+          isEmpty,
+          reason:
+              'a drag that starts on empty space and moves past the tap '
+              'slop must add nothing — panEnabled is false in draw mode, '
+              'so this must not fall back to panning either; it is simply '
+              'a no-op',
+        );
+      },
+    );
+
+    testWidgets(
+      'gesture model: a TWO-finger gesture in draw mode pans/zooms via '
+      'InteractiveViewer and adds NO point',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 300));
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+
+        container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
+
+        await tester.pumpWidget(
+          buildCanvas(container: container, controller: controller),
+        );
+        await tester.pump();
+
+        final matrixBefore = controller.value.clone();
+
+        // Two pointers going down and moving together (a pinch/pan), as in
+        // the "Fix 1: draw mode ignores a second finger" test above but
+        // with BOTH fingers moving rather than just the first placing a
+        // symbol — mirroring how InteractiveViewer's own ScaleGestureRecognizer
+        // is driven in its own tests.
+        final gestureA = await tester.startGesture(
+          const Offset(150, 100),
+          pointer: 1,
+        );
+        await tester.pump();
+        final gestureB = await tester.startGesture(
+          const Offset(250, 200),
+          pointer: 2,
+        );
+        await tester.pump();
+
+        // Move both pointers apart (a pinch-out/zoom-in gesture).
+        await gestureA.moveTo(const Offset(120, 70));
+        await gestureB.moveTo(const Offset(280, 230));
+        await tester.pump();
+
+        await gestureA.up();
+        await gestureB.up();
+        await tester.pump();
+
+        expect(
+          container.read(drawControllerProvider).currentPoints,
+          isEmpty,
+          reason:
+              'a two-finger gesture must never add a point — the raw '
+              'Listener aborts the (nonexistent, here) pending tap the '
+              'moment the second finger goes down, and single-finger tap-'
+              'to-add never gets a chance to fire for either pointer',
+        );
+        expect(
+          controller.value,
+          isNot(equals(matrixBefore)),
+          reason:
+              'scaleEnabled is true in draw mode (only panEnabled is '
+              "locked), so InteractiveViewer's own recognizer must still "
+              'apply the two-finger pinch/pan to the transformation '
+              'controller',
+        );
+      },
+    );
+
+    testWidgets(
+      'Fix 1 (canvas look rework: default framing is CONTAIN, not COVER): '
+      'a large photo fits ENTIRELY inside the viewport (minScale allows '
+      'zooming out to fitScale, and the controller is initialized to '
+      'fitScale itself so the whole image is visible on first layout)',
       (tester) async {
         // A real 4000x3000 photo in a narrow ~400x800 phone viewport: the
         // image is far larger than the viewport on both axes, so fitScale
-        // is governed by the tighter-constraining axis (width here:
-        // 400/4000 = 0.1 < 800/3000 = 0.2667).
+        // (CONTAIN — now used for BOTH minScale and the initial/reframe
+        // transform, per the canvas look rework's "whole wall visible on
+        // open" default) is governed by the tighter-constraining axis
+        // (width here: 400/4000 = 0.1 < 800/3000 = 0.2667).
         const imageSize = Size(4000, 3000);
         const viewportSize = Size(400, 800);
         const fitScale = 0.1; // min(400/4000, 800/3000)
@@ -444,9 +650,10 @@ void main() {
           controller.value.getMaxScaleOnAxis(),
           closeTo(fitScale, epsilon),
           reason:
-              'the controller should be initialized to fitScale on '
-              'first layout so the whole image is visible without any '
-              'manual zoom',
+              'canvas look rework: the controller is now initialized to '
+              'fitScale (CONTAIN) on first layout, so the WHOLE photo is '
+              'visible on open rather than pre-cropped to fill the '
+              'viewport (the old COVER/fillScale behavior)',
         );
       },
     );
@@ -729,82 +936,23 @@ void main() {
   // itself is still pumped (without an image) by the passing A1/A3 draw-mode
   // control tests above, which confirm the DB-overridden providers wire up.
 
-  group('TopoCanvasBody: symbol bar mode visibility (Fix 2)', () {
-    // TopoCanvasBody is pumped directly (mirroring how TopoCanvas itself is
-    // tested above) with a live-watched drawState via a Consumer, an
-    // injected fixed imageSize, and an identity TransformationController —
-    // no real, decodable image file is needed. TopoCanvasScreen's own
-    // _buildCanvasArea only ever constructs this same widget once the real
-    // async image decode resolves, so exercising TopoCanvasBody directly
-    // covers Fix 2's actual conditional (`if (drawState.mode ==
-    // DrawMode.draw) const SymbolPaletteBar()`).
-    Widget buildBody({
-      required ProviderContainer container,
-      required TransformationController controller,
-      Size imageSize = const Size(400, 300),
-    }) {
-      return UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(
-          home: Scaffold(
-            body: Consumer(
-              builder: (context, ref, _) {
-                final drawState = ref.watch(drawControllerProvider);
-                return TopoCanvasBody(
-                  imagePath: '/nonexistent/test-topo.jpg',
-                  imageSize: imageSize,
-                  drawState: drawState,
-                  transformationController: controller,
-                );
-              },
-            ),
-          ),
-        ),
-      );
-    }
-
-    testWidgets(
-      'the symbol bar is present in draw mode and absent in view mode',
-      (tester) async {
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        final controller = TransformationController();
-        addTearDown(controller.dispose);
-
-        final notifier = container.read(drawControllerProvider.notifier);
-
-        await tester.pumpWidget(
-          buildBody(container: container, controller: controller),
-        );
-        await tester.pump();
-
-        // Default mode is view: the symbol bar must be hidden.
-        expect(container.read(drawControllerProvider).mode, DrawMode.view);
-        expect(find.byType(SymbolPaletteBar), findsNothing);
-
-        // Switching to draw mode shows it.
-        notifier.setMode(DrawMode.draw);
-        await tester.pump();
-
-        expect(find.byType(SymbolPaletteBar), findsOneWidget);
-
-        // Switching back to view mode hides it again, without clearing
-        // activeSymbol.
-        notifier.setActiveSymbol(SymbolType.anchor);
-        await tester.pump();
-
-        notifier.setMode(DrawMode.view);
-        await tester.pump();
-
-        expect(find.byType(SymbolPaletteBar), findsNothing);
-        expect(
-          container.read(drawControllerProvider).activeSymbol,
-          SymbolType.anchor,
-          reason: 'peeking at view mode must not clear the chosen symbol',
-        );
-      },
-    );
-  });
+  // NOTE (canvas look rework, Subtask A): the "TopoCanvasBody: symbol bar
+  // mode visibility (Fix 2)" group that used to live here tested
+  // `SymbolPaletteBar` as an ALWAYS-MOUNTED, `Visibility(maintainSize:
+  // true)`-wrapped, in-flow child of `TopoCanvasBody`'s own Column — that
+  // reserved-slot approach is gone. `SymbolPaletteBar` no longer lives in
+  // `TopoCanvasBody`/`TopoCanvasScreen`'s in-flow layout at all: it now
+  // floats as a Stack overlay in `TopoCanvasScreen`'s own `build` (on
+  // `GlassChrome`, directly below the title pill), shown only in draw mode,
+  // with NO reserved slot — see `TopoCanvasScreen.build`'s
+  // `showSymbolPalette` and `symbol_palette_bar.dart`'s class doc. Removed
+  // rather than kept passing-but-meaningless (it asserted a `Visibility`
+  // ancestor around `SymbolPaletteBar` inside `TopoCanvasBody` that no
+  // longer exists). The NEW floating/mode-gating/no-collision behavior is
+  // covered by `test/features/topo/presentation/canvas_viewport_intent_test
+  // .dart`'s "A-f" group, and the reclaimed canvas-region height (no more
+  // permanently-reserved band) by that same file's "A-f: canvas region is
+  // taller in view mode" test.
 
   group('TopoCanvasBody: slice mode overlay (M5)', () {
     // Mirrors the "symbol bar mode visibility" harness above: TopoCanvasBody
@@ -822,7 +970,13 @@ void main() {
     }) {
       return UncontrolledProviderScope(
         container: container,
+        // Fix 2 (canvas UI fixes) needs `theme: MasiTheme.light`: this
+        // renders a real `TopoCanvas` (via `TopoCanvasBody`), which now
+        // reads `MasiColors.of(context)` for its viewport frame's hairline
+        // border in every build — see the top-level 'TopoCanvas' group's
+        // buildCanvas for the full rationale.
         child: MaterialApp(
+          theme: MasiTheme.light,
           home: Scaffold(
             body: Consumer(
               builder: (context, ref, _) {
@@ -911,11 +1065,17 @@ void main() {
         );
         await tester.pump();
 
-        // Column children (the absent symbol bar, the Expanded canvas area,
-        // RouteLegend) all stretch to the Column's full width regardless of
-        // their individual heights, so the Expanded canvas area — and the
-        // SliceTool stacked inside it — spans the full 400px viewport
-        // width: a tap at local (200, 150) lands at fraction 200/400 = 0.5.
+        // Column children (the top clearance spacer, the invisible-but-
+        // still-SIZED symbol bar slot — Fix 3 of the canvas UI fixes
+        // reserves both unconditionally now, see TopoCanvasBody.build's
+        // doc — the Expanded canvas area, RouteLegend) all stretch to the
+        // Column's full WIDTH regardless of their individual heights, so
+        // the Expanded canvas area — and the SliceTool stacked inside it —
+        // spans the full 400px viewport width. SliceTool's cut fraction is
+        // `dx / viewportWidth` (purely horizontal), so it's unaffected by
+        // the Expanded region's now-shifted-down vertical origin: a tap at
+        // GLOBAL (200, 150) still lands at fraction 200/400 = 0.5, whatever
+        // its (irrelevant here) local y ends up being.
         await tester.tapAt(const Offset(200, 150));
         await tester.pump();
 
@@ -931,12 +1091,207 @@ void main() {
     );
   });
 
+  group(
+    'TopoCanvasBody: stable canvas viewport across bar toggles (Fix 3 of '
+    'the canvas UI fixes)',
+    () {
+      // Bug fix ("not always centered" / "the photo jumps"): PhotoSelector's
+      // and SymbolPaletteBar's slots used to be conditionally INCLUDED in
+      // this Column (`if (showSymbolBar) SymbolPaletteBar()`), so the
+      // Expanded canvas region below them resized every time `showSymbolBar`
+      // flipped — most commonly on every single draw<->view mode toggle
+      // (which `_handleCommitRoute` itself triggers after every committed
+      // route). A resized Expanded region gives TopoCanvas a different
+      // LayoutBuilder viewport, which makes `_reframeIfNeeded` recompute a
+      // fresh fit and visibly re-center/rescale the photo. TopoCanvasBody
+      // now reserves those slots' sizes UNCONDITIONALLY (via
+      // `Visibility(maintainSize: true, ...)`), toggling only their
+      // visibility — so the Expanded region, and therefore TopoCanvas's fit,
+      // must stay pixel-identical across the toggle. See
+      // TopoCanvasBody.build's doc for the full rationale (and the accepted
+      // trade-off: a no-slices wall in view mode no longer extends fully
+      // edge-to-edge behind the top pill).
+      void setViewportSize(WidgetTester tester, Size size) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
+
+      Widget buildBody({
+        required ProviderContainer container,
+        required TransformationController controller,
+        Size imageSize = const Size(1600, 1200),
+        String? originalPhotoId,
+        List<PhotoRef> slices = const [],
+      }) {
+        return UncontrolledProviderScope(
+          container: container,
+          // Needs `theme: MasiTheme.light`: this renders a real TopoCanvas
+          // (via TopoCanvasBody), which reads MasiColors.of(context) (e.g.
+          // the Scaffold's own `ground` fill showing through any letterbox
+          // margins) on every build.
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Scaffold(
+              body: Consumer(
+                builder: (context, ref, _) {
+                  final drawState = ref.watch(drawControllerProvider);
+                  return TopoCanvasBody(
+                    imagePath: '/nonexistent/test-topo.jpg',
+                    imageSize: imageSize,
+                    drawState: drawState,
+                    transformationController: controller,
+                    originalPhotoId: originalPhotoId,
+                    slices: slices,
+                  );
+                },
+              ),
+            ),
+          ),
+        );
+      }
+
+      testWidgets(
+        'toggling draw/view mode does not resize the canvas viewport frame '
+        '(a wall with no slices — only the symbol bar toggles)',
+        (tester) async {
+          setViewportSize(tester, const Size(400, 800));
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          final controller = TransformationController();
+          addTearDown(controller.dispose);
+          final notifier = container.read(drawControllerProvider.notifier);
+
+          await tester.pumpWidget(
+            buildBody(container: container, controller: controller),
+          );
+          await tester.pump();
+
+          final frameFinder = find.byKey(
+            const Key('topo-interactive-viewer'),
+          );
+          final sizeBefore = tester.getSize(frameFinder);
+
+          notifier.setMode(DrawMode.draw);
+          await tester.pump();
+
+          expect(
+            tester.getSize(frameFinder),
+            sizeBefore,
+            reason:
+                'entering draw mode (which shows the symbol bar) must not '
+                'change the canvas viewport size — its slot is always '
+                'reserved now, only its visibility toggles',
+          );
+
+          notifier.setMode(DrawMode.view);
+          await tester.pump();
+
+          expect(tester.getSize(frameFinder), sizeBefore);
+        },
+      );
+
+      testWidgets(
+        "the image's fit transform (scale + translation) is byte-identical "
+        'across a draw/view toggle, proving the photo does not visibly '
+        'jump or re-center',
+        (tester) async {
+          setViewportSize(tester, const Size(400, 800));
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          final controller = TransformationController();
+          addTearDown(controller.dispose);
+          final notifier = container.read(drawControllerProvider.notifier);
+
+          await tester.pumpWidget(
+            buildBody(container: container, controller: controller),
+          );
+          await tester.pump();
+
+          final matrixBefore = controller.value.clone();
+
+          notifier.setMode(DrawMode.draw);
+          await tester.pump();
+          expect(controller.value, matrixBefore);
+
+          notifier.setMode(DrawMode.view);
+          await tester.pump();
+          expect(controller.value, matrixBefore);
+        },
+      );
+
+      testWidgets(
+        'a wall WITH slices (PhotoSelector always eligible to show) also '
+        'keeps the canvas viewport stable across draw/view toggles',
+        (tester) async {
+          setViewportSize(tester, const Size(400, 800));
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          final controller = TransformationController();
+          addTearDown(controller.dispose);
+          final notifier = container.read(drawControllerProvider.notifier);
+
+          const slice = PhotoRef(
+            id: 'slice-1',
+            wallId: 'wall-1',
+            kind: 'slice',
+            localPath: '/tmp/original.jpg',
+            width: 1000,
+            height: 2000,
+            parentPhotoId: 'orig-1',
+            cropXpct: 0.25,
+            cropWidthPct: 0.5,
+          );
+
+          await tester.pumpWidget(
+            buildBody(
+              container: container,
+              controller: controller,
+              originalPhotoId: 'orig-1',
+              slices: const [slice],
+            ),
+          );
+          await tester.pump();
+
+          final frameFinder = find.byKey(
+            const Key('topo-interactive-viewer'),
+          );
+          final sizeBefore = tester.getSize(frameFinder);
+
+          notifier.setMode(DrawMode.draw);
+          await tester.pump();
+          expect(tester.getSize(frameFinder), sizeBefore);
+
+          notifier.setMode(DrawMode.view);
+          await tester.pump();
+          expect(tester.getSize(frameFinder), sizeBefore);
+        },
+      );
+    },
+  );
+
   group('TopoCanvasScreen slice-mode controls', () {
     // These operate purely on sliceControllerProvider + the screen's local
     // _sliceMode UI state via the app bar, so — like the draw-mode toggle
     // and toolbar tests above — they're pumped via the full TopoCanvasScreen
     // without ever selecting an image: the app bar renders regardless of
     // imagePath/imageSize (see TopoCanvasScreen.build's AppBar.actions).
+    //
+    // Bug 8 fix (canvas look rework): `topo-slice-mode-button` is now gated
+    // on `drawState.activePhotoId != null` (previously it showed regardless
+    // — the slice tool over an empty canvas). Each test below seeds
+    // `activePhotoId` directly via `drawControllerProvider.notifier
+    // .loadForWall(...)` (a plain SELECT against an unknown wallId is safe —
+    // see `loadForWall`'s doc, and the same seam the "AR entry"/"slice mode
+    // forces Original view" groups elsewhere in this file already use) so
+    // the button exists to tap, without ever touching `selectedImageProvider`
+    // or triggering the real, undriveable-under-fake-time image decode this
+    // file's M3 NOTE describes.
+    Future<void> seedActivePhoto(ProviderContainer container) =>
+        container
+            .read(drawControllerProvider.notifier)
+            .loadForWall('test-wall', 'test-original-photo');
 
     testWidgets(
       'the slice-mode toggle shows/hides the Commit and Clear actions',
@@ -954,13 +1309,19 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
+            child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const TopoCanvasScreen(wallId: 'test-wall'),
+          ),
           ),
         );
         await tester.pumpAndSettle();
 
         expect(find.byKey(const Key('topo-slice-commit')), findsNothing);
         expect(find.byKey(const Key('topo-slice-clear')), findsNothing);
+
+        await seedActivePhoto(container);
+        await tester.pump();
 
         await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
         await tester.pump();
@@ -992,10 +1353,16 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
+            child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const TopoCanvasScreen(wallId: 'test-wall'),
+          ),
           ),
         );
         await tester.pumpAndSettle();
+
+        await seedActivePhoto(container);
+        await tester.pump();
 
         await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
         await tester.pump();
@@ -1027,10 +1394,16 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
+            child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const TopoCanvasScreen(wallId: 'test-wall'),
+          ),
           ),
         );
         await tester.pumpAndSettle();
+
+        await seedActivePhoto(container);
+        await tester.pump();
 
         await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
         await tester.pump();
@@ -1128,7 +1501,10 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: MaterialApp.router(routerConfig: router),
+            child: MaterialApp.router(
+              routerConfig: router,
+              theme: MasiTheme.light,
+            ),
           ),
         );
         await tester.pumpAndSettle();
@@ -1209,7 +1585,10 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: MaterialApp(home: TopoCanvasScreen(wallId: wall.id)),
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: TopoCanvasScreen(wallId: wall.id),
+            ),
           ),
         );
         await tester.pumpAndSettle();
@@ -1264,7 +1643,10 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(home: Scaffold(body: RouteLegend())),
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const Scaffold(body: RouteLegend()),
+          ),
         ),
       );
       await tester.pump();
@@ -1332,7 +1714,10 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: Scaffold(body: RouteLegend())),
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: const Scaffold(body: RouteLegend()),
+            ),
           ),
         );
         await tester.pump();
@@ -1356,6 +1741,120 @@ void main() {
         );
       },
     );
+
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    testWidgets(
+      'Fix 1: a single route wraps to its own content height instead of '
+      'the old hard-coded 140px box (which left a tall, mostly-empty gap '
+      'for just one row)',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 800));
+
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        notifier.commitRoute();
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: const Scaffold(body: RouteLegend()),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final size = tester.getSize(find.byKey(const Key('topo-route-legend')));
+        expect(
+          size.height,
+          lessThan(100),
+          reason:
+              'one route must render as ~one row of content — a single '
+              "ListTile — not the old fixed 140px SizedBox that left a "
+              'tall, mostly-empty box for just one route',
+        );
+      },
+    );
+
+    testWidgets(
+      'Fix 1: >=8 routes cap the legend at <=~40% of the screen height and '
+      'scroll internally, with every row still reachable (none clipped)',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 800));
+
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(drawControllerProvider.notifier);
+        for (var i = 0; i < 10; i++) {
+          notifier.addPoint(const Offset(0.1, 0.1));
+          notifier.addPoint(const Offset(0.2, 0.2));
+          notifier.commitRoute();
+        }
+        final routes = container.read(drawControllerProvider).routes;
+        expect(routes, hasLength(10));
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: const Scaffold(body: RouteLegend()),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        // 800 (screen height) * 0.4 (the cap fraction) = 320.
+        const expectedMaxHeight = 320.0;
+        final size = tester.getSize(find.byKey(const Key('topo-route-legend')));
+        expect(
+          size.height,
+          lessThanOrEqualTo(expectedMaxHeight + 0.5),
+          reason:
+              '10 routes must cap at <=40% of the 800px-tall screen '
+              '(${expectedMaxHeight}px) rather than growing to fit every '
+              'row, which would push (or overflow past) the canvas above '
+              'it',
+        );
+        expect(
+          size.height,
+          greaterThan(100),
+          reason:
+              '10 routes should fill the cap, not shrink-wrap down to a '
+              'single row — sanity check that this scenario actually '
+              'exercises the capped/scrolling path, not the content-sized '
+              'path from the single-route test above',
+        );
+
+        // The first route is visible without scrolling...
+        expect(
+          find.byKey(Key('topo-route-legend-item-${routes.first.id}')),
+          findsOneWidget,
+        );
+        // ...and the LAST route, even though off-screen initially, is
+        // still reachable by scrolling — proving nothing is permanently
+        // clipped, just capped-and-scrollable.
+        await tester.scrollUntilVisible(
+          find.byKey(Key('topo-route-legend-item-${routes.last.id}')),
+          200.0,
+          scrollable: find.byType(Scrollable),
+        );
+        expect(
+          find.byKey(Key('topo-route-legend-item-${routes.last.id}')),
+          findsOneWidget,
+        );
+      },
+    );
   });
 
   group('RouteMetadataSheet', () {
@@ -1371,6 +1870,7 @@ void main() {
       return UncontrolledProviderScope(
         container: container,
         child: MaterialApp(
+          theme: MasiTheme.light,
           home: Scaffold(
             body: RouteMetadataSheet(routeId: routeId, initial: initial),
           ),
@@ -1537,6 +2037,10 @@ void main() {
       return UncontrolledProviderScope(
         container: container,
         child: MaterialApp(
+          // SymbolPaletteBar reads MasiColors off the ambient Theme — see
+          // the "TopoCanvasBody: symbol bar mode visibility" buildBody's
+          // identical fix above.
+          theme: MasiTheme.light,
           home: Scaffold(
             body: Column(
               children: [
@@ -1567,10 +2071,16 @@ void main() {
       'again clears it); with a route selected, a canvas tap appends a '
       'symbol of that type to the route',
       (tester) async {
-        // 300 (imageSize height) + 56 (SymbolPaletteBar height) so the
-        // Expanded TopoCanvas gets exactly imageSize as its viewport,
-        // keeping the identity-transform coordinate math below valid.
-        setViewportSize(tester, const Size(400, 356));
+        // 300 (imageSize height) + a generous placeholder for the bar's
+        // height: measured for real just below, since SymbolPaletteBar's
+        // ACTUAL rendered height (canvas look rework: now GlassChrome-
+        // wrapped, adding that widget's own vertical padding on top of
+        // kSymbolPaletteBarHeight) is no longer exactly
+        // kSymbolPaletteBarHeight — see symbol_palette_bar.dart's class doc.
+        setViewportSize(
+          tester,
+          const Size(400, 300 + kSymbolPaletteBarHeight + 32),
+        );
         final container = ProviderContainer();
         addTearDown(container.dispose);
         final controller = TransformationController();
@@ -1589,6 +2099,15 @@ void main() {
         );
         await tester.pump();
 
+        // Measure the bar's REAL rendered height (rather than assuming
+        // kSymbolPaletteBarHeight exactly — see the setViewportSize comment
+        // above), then resize the viewport so the Expanded TopoCanvas below
+        // it gets EXACTLY `imageSize` as its viewport, keeping the
+        // identity-transform coordinate math below valid.
+        final barHeight = tester.getSize(find.byType(SymbolPaletteBar)).height;
+        setViewportSize(tester, Size(400, 300 + barHeight));
+        await tester.pump();
+
         expect(container.read(drawControllerProvider).activeSymbol, isNull);
 
         await tester.tap(find.byKey(const Key('topo-symbol-anchor')));
@@ -1599,11 +2118,12 @@ void main() {
           SymbolType.anchor,
         );
 
-        // TopoCanvas sits below the 56px-tall SymbolPaletteBar in the
+        // TopoCanvas sits below the `barHeight`-tall SymbolPaletteBar in the
         // Column, so a global tap's localPosition *within TopoCanvas* is
-        // offset by that 56px: tapping global (200, 206) lands at local
-        // (200, 150) -> scene (200, 150) -> percent (0.5, 0.5).
-        await tester.tapAt(const Offset(200, 206));
+        // offset by that height: tapping global (200, 150 + barHeight)
+        // lands at local (200, 150) -> scene (200, 150) -> percent
+        // (0.5, 0.5).
+        await tester.tapAt(Offset(200, 150 + barHeight));
         await tester.pump();
 
         final route = container.read(drawControllerProvider).routes.single;
@@ -1644,7 +2164,12 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: Scaffold(body: SymbolPaletteBar())),
+            // SymbolPaletteBar reads MasiColors off the ambient Theme — see
+            // buildPaletteAndCanvas's identical fix above.
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: const Scaffold(body: SymbolPaletteBar()),
+            ),
           ),
         );
         await tester.pump();
@@ -1865,7 +2390,10 @@ void main() {
     }) {
       return UncontrolledProviderScope(
         container: container,
+        // Fix 2 (canvas UI fixes) needs `theme: MasiTheme.light` — see the
+        // 'TopoCanvas' group's buildCanvas above for why.
         child: MaterialApp(
+          theme: MasiTheme.light,
           home: Scaffold(
             body: TopoCanvas(
               imagePath: '/nonexistent/test-topo.jpg',
@@ -1989,7 +2517,10 @@ void main() {
     }) {
       return UncontrolledProviderScope(
         container: container,
+        // Fix 2 (canvas UI fixes) needs `theme: MasiTheme.light` — see the
+        // 'TopoCanvas' group's buildCanvas above for why.
         child: MaterialApp(
+          theme: MasiTheme.light,
           home: Scaffold(
             body: TopoCanvas(
               imagePath: '/nonexistent/test-topo.jpg',
@@ -2013,7 +2544,8 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        // fitScale = min(400/4000, 800/2000) = min(0.1, 0.4) = 0.1
+        // fitScale (CONTAIN — canvas look rework's default open-framing) =
+        // min(400/4000, 800/2000) = min(0.1, 0.4) = 0.1
         const imageSizeA = Size(4000, 2000);
         await tester.pumpWidget(
           buildCanvas(
@@ -2030,7 +2562,9 @@ void main() {
           reason: 'first layout must fit imageSize A',
         );
 
-        // fitScale = min(400/2000, 800/4000) = min(0.2, 0.2) = 0.2 — a
+        // fitScale = min(400/2000, 800/4000) = min(0.2, 0.2) = 0.2 — this
+        // image's aspect ratio matches the viewport's exactly (no letterbox
+        // either way), so CONTAIN and COVER coincide here regardless. A
         // different image, at the SAME widget position/State, still with
         // no crop active (null->null, i.e. an "unchanged" crop value).
         const imageSizeB = Size(2000, 4000);
@@ -2085,7 +2619,10 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
+            // Fix 2 (canvas UI fixes) needs `theme: MasiTheme.light` — see
+            // the 'TopoCanvas' group's buildCanvas for why.
             child: MaterialApp(
+              theme: MasiTheme.light,
               home: Scaffold(
                 body: TopoCanvas(
                   imagePath: '/nonexistent/test-topo.jpg',
@@ -2147,7 +2684,10 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
+            child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const TopoCanvasScreen(wallId: 'test-wall'),
+          ),
           ),
         );
         await tester.pumpAndSettle();
@@ -2208,7 +2748,10 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: TopoCanvasScreen(wallId: 'test-wall')),
+            child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const TopoCanvasScreen(wallId: 'test-wall'),
+          ),
           ),
         );
         await tester.pumpAndSettle();
@@ -2234,6 +2777,13 @@ void main() {
         );
         container.read(activeViewProvider.notifier).showSlice(slice);
         expect(container.read(activeViewProvider)!.isOriginal, isFalse);
+
+        // Bug 8 fix (canvas look rework): `topo-slice-mode-button` is now
+        // gated on `drawState.activePhotoId != null` (see that fix's doc),
+        // so — unlike before this gate existed — the widget tree must
+        // actually REBUILD to pick up the `loadForWall` call above before
+        // the button exists to tap.
+        await tester.pump();
 
         await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
         await tester.pump();
@@ -2290,6 +2840,11 @@ void main() {
               child: const ClimbTopoApp(),
             ),
           );
+          await _drain(tester);
+
+          // `/` now renders ToposScreen, not AreasScreen — navigate to the
+          // Areas hierarchy explicitly before driving the nav chain below.
+          appRouter.go('/areas');
           await _drain(tester);
 
           expect(find.text('Test Area'), findsOneWidget);

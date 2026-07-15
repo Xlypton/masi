@@ -9,8 +9,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A minimal fake [Canvas] that records the drawing calls [TopoPainter]
-/// actually makes (`drawCircle`, `drawLine`, `drawPath`, `drawParagraph`)
-/// without needing a mocking package. `TopoPainter.paint` never calls
+/// actually makes (`drawCircle`, `drawLine`, `drawPath`, `drawParagraph`,
+/// `drawRRect` — recorded as a regression guard so tests can assert NO
+/// background chip is drawn behind a route-number label) without needing a
+/// mocking package. `TopoPainter.paint` never calls
 /// `save`/`restore`/`transform`/clip methods, so leaving those to the
 /// `noSuchMethod` fallback is safe: they are never invoked in these tests.
 class _RecordingCanvas implements Canvas {
@@ -23,6 +25,14 @@ class _RecordingCanvas implements Canvas {
   final List<Path> paths = [];
   final List<Paint> pathPaints = [];
   final List<({ui.Paragraph paragraph, Offset offset})> paragraphs = [];
+  final List<RRect> roundRects = [];
+  final List<Paint> roundRectPaints = [];
+
+  @override
+  void drawRRect(RRect rrect, Paint paint) {
+    roundRects.add(rrect);
+    roundRectPaints.add(paint);
+  }
 
   @override
   void drawCircle(Offset c, double radius, Paint paint) {
@@ -67,6 +77,7 @@ void main() {
     bool showHandles = false,
     int? selectedRouteId,
     List<Color> palette = palette,
+    double scale = 1.0,
   }) {
     return TopoPainter(
       imageSize: imageSize,
@@ -75,6 +86,7 @@ void main() {
       showHandles: showHandles,
       selectedRouteId: selectedRouteId,
       palette: palette,
+      scale: scale,
     );
   }
 
@@ -479,11 +491,11 @@ void main() {
 
   group('colorForGradeBand (M4 cleanup coverage: all 5 bands)', () {
     test('returns the exact spec Color literal for each GradeBand', () {
-      expect(colorForGradeBand(GradeBand.beginner), const Color(0xFF43A047)); // green
-      expect(colorForGradeBand(GradeBand.intermediate), const Color(0xFF1E88E5)); // blue
-      expect(colorForGradeBand(GradeBand.advanced), const Color(0xFFFB8C00)); // orange
-      expect(colorForGradeBand(GradeBand.hard), const Color(0xFFE53935)); // red
-      expect(colorForGradeBand(GradeBand.elite), const Color(0xFF8E24AA)); // purple
+      expect(colorForGradeBand(GradeBand.beginner), const Color(0xFF2F9E6B)); // green
+      expect(colorForGradeBand(GradeBand.intermediate), const Color(0xFF3B82C4)); // blue
+      expect(colorForGradeBand(GradeBand.advanced), const Color(0xFFE08A2B)); // orange
+      expect(colorForGradeBand(GradeBand.hard), const Color(0xFFD6483B)); // red
+      expect(colorForGradeBand(GradeBand.elite), const Color(0xFF8A5CD1)); // purple
     });
   });
 
@@ -696,6 +708,386 @@ void main() {
       },
     );
   });
+
+  group(
+    'TopoPainter scale (Subtask 2: screen-constant stroke/handles/symbols)',
+    () {
+      test(
+        'A1: at scale 1.0 (identity/default), the painted stroke width '
+        'equals the base _strokeWidth (5.5 — bumped from 4.0 so unselected '
+        'routes read boldly at rest on a Retina phone screen) — preserves '
+        'pre-existing scene-px behavior for callers that never pass scale',
+        () {
+          final painter = buildPainter(
+            currentPoints: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+          );
+          final canvas = _RecordingCanvas();
+
+          painter.paint(canvas, imageSize);
+
+          expect(canvas.lines, hasLength(1));
+          expect(canvas.linePaints.single.strokeWidth, 5.5);
+        },
+      );
+
+      test(
+        'A2: at scale 0.25, the value passed to Paint.strokeWidth equals '
+        '_strokeWidth / 0.25 (= 22.0), so once the canvas itself is scaled '
+        'down by 0.25 the ON-SCREEN width stays constant at 5.5',
+        () {
+          final painter = buildPainter(
+            currentPoints: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+            scale: 0.25,
+          );
+          final canvas = _RecordingCanvas();
+
+          painter.paint(canvas, imageSize);
+
+          expect(canvas.lines, hasLength(1));
+          expect(canvas.linePaints.single.strokeWidth, closeTo(22.0, 1e-9));
+        },
+      );
+
+      test(
+        'A3a: the in-progress-route single-point dot radius doubles in '
+        'scene space at scale 0.5 (base _dotRadius 4.0 -> 8.0)',
+        () {
+          final at1 = buildPainter(currentPoints: const [Offset(0.5, 0.5)]);
+          final canvas1 = _RecordingCanvas();
+          at1.paint(canvas1, imageSize);
+
+          final at05 = buildPainter(
+            currentPoints: const [Offset(0.5, 0.5)],
+            scale: 0.5,
+          );
+          final canvas05 = _RecordingCanvas();
+          at05.paint(canvas05, imageSize);
+
+          expect(canvas1.circleRadii.single, 4.0);
+          expect(canvas05.circleRadii.single, closeTo(8.0, 1e-9));
+        },
+      );
+
+      test(
+        'A3b: draggable handle radius doubles in scene space at scale 0.5 '
+        '(base _handleRadius 6.0 -> 12.0)',
+        () {
+          const points = [Offset(0.5, 0.5)];
+
+          final at1 = buildPainter(currentPoints: points, showHandles: true);
+          final canvas1 = _RecordingCanvas();
+          at1.paint(canvas1, imageSize);
+
+          final at05 = buildPainter(
+            currentPoints: points,
+            showHandles: true,
+            scale: 0.5,
+          );
+          final canvas05 = _RecordingCanvas();
+          at05.paint(canvas05, imageSize);
+
+          // Single current point + showHandles=true draws the dot (radius
+          // 4.0 base) then the handle (radius 6.0 base) as the second
+          // circle — see the existing "draws the dot plus one handle" test
+          // above for this same two-circle shape.
+          expect(canvas1.circleRadii, hasLength(2));
+          expect(canvas1.circleRadii[1], 6.0);
+          expect(canvas05.circleRadii[1], closeTo(12.0, 1e-9));
+        },
+      );
+
+      test(
+        'A3c: symbol glyph radius doubles in scene space at scale 0.5 '
+        '(base _symbolRadius 7.0 -> 14.0), via the anchor glyph\'s circle',
+        () {
+          TopoRoute routeWithAnchor() => TopoRoute(
+            id: 1,
+            number: 1,
+            colorIndex: 0,
+            points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+            symbols: const [
+              TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.5)),
+            ],
+          );
+
+          final at1 = buildPainter(routes: [routeWithAnchor()]);
+          final canvas1 = _RecordingCanvas();
+          at1.paint(canvas1, imageSize);
+
+          final at05 = buildPainter(routes: [routeWithAnchor()], scale: 0.5);
+          final canvas05 = _RecordingCanvas();
+          at05.paint(canvas05, imageSize);
+
+          // The 2-point route itself draws a line (not a circle), so the
+          // only recorded circle is the anchor glyph.
+          expect(canvas1.circleRadii, hasLength(1));
+          expect(canvas1.circleRadii.single, 7.0);
+          expect(canvas05.circleRadii.single, closeTo(14.0, 1e-9));
+        },
+      );
+
+      test(
+        'A3d (#18): the route-number label is offset PERPENDICULAR to the '
+        "first segment's direction — clear of the route stroke regardless "
+        'of which way the route heads from its first point — and that '
+        'offset magnitude doubles in scene space at scale 0.5, proving the '
+        'POSITION (not just the font) is scaled by 1/scale like every '
+        'other on-screen-constant size',
+        () {
+          TopoRoute routeWithLabel() => TopoRoute(
+            id: 1,
+            number: 1,
+            colorIndex: 0,
+            // Anchored well away from the image edges (unlike some other
+            // fixtures in this file) so doubling the offset magnitude at
+            // scale 0.5 below stays clear of the edge-clamping margin
+            // added by the label-clipping fix — this test is specifically
+            // about the unclamped scaling behavior; A3h below covers
+            // clamping near an edge.
+            points: const [Offset(0.3, 0.3), Offset(0.7, 0.6)],
+          );
+          // percent (0.3, 0.3) -> (0.7, 0.6) in a 400x300 image -> scene
+          // (120, 90) -> (280, 180).
+          const anchor = Offset(120, 90);
+          const segment = Offset(160, 90); // (280-120, 180-90)
+          final unit = segment / segment.distance;
+          // Matches TopoPainter._paintLabel's own perpendicular
+          // construction: rotate the segment's unit direction by -90°,
+          // i.e. (dx, dy) -> (dy, -dx).
+          final expectedDirection = Offset(unit.dy, -unit.dx);
+
+          final canvas1 = _RecordingCanvas();
+          buildPainter(routes: [routeWithLabel()]).paint(canvas1, imageSize);
+
+          final canvas05 = _RecordingCanvas();
+          buildPainter(
+            routes: [routeWithLabel()],
+            scale: 0.5,
+          ).paint(canvas05, imageSize);
+
+          expect(canvas1.paragraphs, hasLength(1));
+          expect(canvas05.paragraphs, hasLength(1));
+
+          final delta1 = canvas1.paragraphs.single.offset - anchor;
+          final delta05 = canvas05.paragraphs.single.offset - anchor;
+
+          // Perpendicular to the segment: dot product ~0 — this is what
+          // "clear of the stroke" means geometrically, regardless of the
+          // stroke's own direction.
+          expect(
+            (delta1.dx * segment.dx + delta1.dy * segment.dy).abs(),
+            lessThan(0.01),
+            reason: 'label offset must be perpendicular to the first segment',
+          );
+
+          // Magnitude is the fixed on-screen offset distance (22.0, see
+          // _labelOffsetDistance) and doubles in SCENE space at scale 0.5
+          // (the ON-SCREEN distance itself stays constant).
+          expect(delta1.distance, closeTo(22.0, 1e-6));
+          expect(delta05.distance, closeTo(44.0, 1e-6));
+
+          // Same direction at both scales — only the magnitude changes.
+          expect(
+            delta1.dx / delta1.distance,
+            closeTo(expectedDirection.dx, 1e-6),
+          );
+          expect(
+            delta1.dy / delta1.distance,
+            closeTo(expectedDirection.dy, 1e-6),
+          );
+          expect(
+            delta05.dx / delta05.distance,
+            closeTo(expectedDirection.dx, 1e-6),
+          );
+          expect(
+            delta05.dy / delta05.distance,
+            closeTo(expectedDirection.dy, 1e-6),
+          );
+        },
+      );
+
+      test(
+        'A3f (#18): a single-point route (no segment to be perpendicular '
+        'to) falls back to the pre-existing up-and-left placement',
+        () {
+          final route = TopoRoute(
+            id: 1,
+            number: 1,
+            colorIndex: 0,
+            points: const [Offset(0.5, 0.5)],
+          );
+          final canvas = _RecordingCanvas();
+
+          buildPainter(routes: [route]).paint(canvas, imageSize);
+
+          // percent (0.5, 0.5) in a 400x300 image -> scene (200, 150).
+          const anchor = Offset(200, 150);
+          expect(canvas.paragraphs, hasLength(1));
+          final delta = canvas.paragraphs.single.offset - anchor;
+
+          expect(delta.dx, lessThan(0), reason: 'fallback must offset left');
+          expect(delta.dy, lessThan(0), reason: 'fallback must offset up');
+          expect(delta.distance, closeTo(22.0, 1e-6));
+        },
+      );
+
+      test(
+        'A3g (#18): the route number is painted with NO background chip — '
+        'only the number (with a subtle text shadow for legibility)',
+        () {
+          final route = TopoRoute(
+            id: 1,
+            number: 1,
+            colorIndex: 0,
+            points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          );
+          final canvas = _RecordingCanvas();
+
+          buildPainter(routes: [route]).paint(canvas, imageSize);
+
+          expect(
+            canvas.roundRects,
+            isEmpty,
+            reason: 'no background chip must be drawn behind the label — '
+                'only the number',
+          );
+
+          // The label itself must still be painted at its (unchanged)
+          // perpendicular-offset origin. The subtle drop shadow added for
+          // legibility is baked into the built paragraph/TextStyle and is
+          // not independently observable from this recording canvas.
+          expect(canvas.paragraphs, hasLength(1));
+          final labelOrigin = canvas.paragraphs.single.offset;
+          expect(
+            labelOrigin.dx.isFinite && labelOrigin.dy.isFinite,
+            isTrue,
+            reason: 'the label must still be painted at a well-defined '
+                'origin',
+          );
+        },
+      );
+
+      test(
+        'A3h: a route whose first point sits at the image corner has its '
+        'label CLAMPED so the full laid-out label stays within the image '
+        "bounds — not clipped off-frame (fix for the perpendicular offset "
+        'pushing it into negative/out-of-bounds territory near an edge)',
+        () {
+          // Single-point route pinned to the top-left corner: unclamped,
+          // the fallback up-and-left offset direction would place the
+          // label origin at negative x/y (off-frame).
+          final route = TopoRoute(
+            id: 1,
+            number: 9,
+            colorIndex: 0,
+            points: const [Offset(0.0, 0.0)],
+          );
+          final canvas = _RecordingCanvas();
+
+          buildPainter(routes: [route]).paint(canvas, imageSize);
+
+          expect(canvas.paragraphs, hasLength(1));
+          final origin = canvas.paragraphs.single.offset;
+          final paragraph = canvas.paragraphs.single.paragraph;
+
+          expect(
+            origin.dx,
+            greaterThanOrEqualTo(0),
+            reason: 'label must not clip off the left edge',
+          );
+          expect(
+            origin.dy,
+            greaterThanOrEqualTo(0),
+            reason: 'label must not clip off the top edge',
+          );
+          expect(
+            origin.dx + paragraph.maxIntrinsicWidth,
+            lessThanOrEqualTo(imageSize.width),
+            reason: 'label must not clip off the right edge',
+          );
+          expect(
+            origin.dy + paragraph.height,
+            lessThanOrEqualTo(imageSize.height),
+            reason: 'label must not clip off the bottom edge',
+          );
+        },
+      );
+
+      test(
+        'A3e: label font size itself scales by 1/scale — the rendered '
+        'paragraph is measurably wider at scale 0.5 (fontSize 28.0) than '
+        'at scale 1.0 (fontSize 14.0) for the same text',
+        () {
+          TopoRoute routeWithLabel() => TopoRoute(
+            id: 1,
+            number: 8,
+            colorIndex: 0,
+            points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          );
+
+          double? widthAt(double scale) {
+            final canvas = _RecordingCanvas();
+            buildPainter(
+              routes: [routeWithLabel()],
+              scale: scale,
+            ).paint(canvas, imageSize);
+            // _RecordingCanvas.drawParagraph (used by TextPainter.paint)
+            // captures the real ui.Paragraph the engine laid out, so its
+            // maxIntrinsicWidth reflects the actual fontSize used.
+            return canvas.paragraphs.isEmpty
+                ? null
+                : canvas.paragraphs.single.paragraph.maxIntrinsicWidth;
+          }
+
+          final widthAt1 = widthAt(1.0);
+          final widthAt05 = widthAt(0.5);
+
+          expect(widthAt1, isNotNull);
+          expect(widthAt05, isNotNull);
+          // fontSize doubles (14.0 -> 28.0) at scale 0.5, so the laid-out
+          // paragraph width should also roughly double.
+          expect(widthAt05! / widthAt1!, closeTo(2.0, 0.2));
+        },
+      );
+
+      test(
+        'A4: shouldRepaint returns true when only scale changes',
+        () {
+          final a = buildPainter();
+          final b = buildPainter(scale: 0.5);
+
+          expect(a.shouldRepaint(b), isTrue);
+          expect(b.shouldRepaint(a), isTrue);
+        },
+      );
+
+      test(
+        'shouldRepaint returns false when scale (and everything else) is '
+        'identical',
+        () {
+          final a = buildPainter(scale: 0.5);
+          final b = buildPainter(scale: 0.5);
+
+          expect(a.shouldRepaint(b), isFalse);
+        },
+      );
+
+      test(
+        'Non-positive scale is clamped to 1.0 (no divide-by-zero blow-up): '
+        'scale 0.0 paints the same stroke width as scale 1.0',
+        () {
+          final at0 = buildPainter(
+            currentPoints: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+            scale: 0.0,
+          );
+          final canvas = _RecordingCanvas();
+
+          expect(() => at0.paint(canvas, imageSize), returnsNormally);
+          expect(canvas.linePaints.single.strokeWidth, 5.5);
+        },
+      );
+    },
+  );
 
   group('TopoPainter golden', () {
     testWidgets(

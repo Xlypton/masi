@@ -15,10 +15,18 @@ import 'route_mapper.dart';
 /// is the natural key. Each route still gets its own uuid `id` column in
 /// the database; callers of this repository never need to see it.
 class RouteRepository {
-  RouteRepository(this._db, {required this.nowMs});
+  RouteRepository(this._db, {required this.nowMs, this.currentUid = _noUid});
 
   final db.AppDatabase _db;
   final int Function() nowMs;
+
+  /// The Supabase Auth uid of the signed-in user (or `null` if signed out),
+  /// read lazily at INSERT time to stamp a new route's `ownerId`. Defaults
+  /// to always-`null` so existing constructors/tests keep their
+  /// pre-sync-pivot signed-out behavior unchanged.
+  final String? Function() currentUid;
+
+  static String? _noUid() => null;
 
   static const _uuid = Uuid();
 
@@ -64,6 +72,7 @@ class RouteRepository {
               symbolsJson: symbolsJson,
               sortOrder: route.number,
               visible: Value(route.visible),
+              ownerId: Value(currentUid()),
             ),
           );
     } else {
@@ -101,6 +110,22 @@ class RouteRepository {
     return [
       for (var i = 0; i < rows.length; i++) rowToDomain(rows[i], i + 1),
     ];
+  }
+
+  /// Maps each non-deleted route's stable [TopoRoute.number] to its
+  /// underlying DB row `id` (a UUID) for [wallId].
+  ///
+  /// Unlike [TopoRoute.id] — a locally-reassigned sequential int, see class
+  /// doc — a route's real `id` column is the only identity another table
+  /// (e.g. `Ascents.routeId`) can reference. Exposed for callers (e.g. the
+  /// community feature's "log ascent" action) that need to resolve a
+  /// specific route's real id from the same `number` [loadRoutes] already
+  /// exposes, without leaking the full DB row shape.
+  Future<Map<int, String>> routeDbIdsByNumber(String wallId) async {
+    final rows = await (_db.select(
+      _db.routes,
+    )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).get();
+    return {for (final row in rows) row.number: row.id};
   }
 
   /// Soft-deletes the non-deleted route identified by `(wallId, number)` by

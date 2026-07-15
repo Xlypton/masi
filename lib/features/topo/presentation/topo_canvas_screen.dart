@@ -1,23 +1,33 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
 
+import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
+import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/topo/application/active_view_controller.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/application/slice_controller.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
 import 'package:climbtopo/features/topo/presentation/photo_selector.dart';
+import 'package:climbtopo/features/topo/presentation/photo_source_sheet.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
 import 'package:climbtopo/features/topo/presentation/slice_tool.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
+
+// Theme-follow fix: the canvas backdrop used to be a hardcoded near-black
+// (`_kCanvasBackdrop = Color(0xFF121316)`) regardless of the app's
+// light/dark theme. The Scaffold below now uses `colors.ground` — the same
+// theme-derived token the empty-state placeholder ([_buildEmptyState]) has
+// always used — so the canvas follows the theme like every other screen.
 
 /// Holds the path of the currently selected image, or null if none.
 class SelectedImageNotifier extends Notifier<String?> {
@@ -94,13 +104,102 @@ Future<PhotoRef?> loadWallOriginalPhoto(
   return photo;
 }
 
+/// Resolves the app-owned path for the just-attached photo [photoId] via
+/// [libraryRepo] and, if it differs from [pickedPath] (the transient
+/// picker-cache path [_TopoCanvasScreenState._pickImage] originally
+/// selected), updates [selectedImage] to hold the owned path instead.
+/// Returns whichever path ends up current (the owned path, or [pickedPath]
+/// unchanged if [libraryRepo].attachPhotoToWall's copy never happened/failed
+/// and the row still points at [pickedPath]).
+///
+/// This is the fix for a confirmed photo-ownership bug: [attachPhotoToWall]
+/// copies a freshly-picked file into the app-owned `<appDocuments>/photos/`
+/// directory and stores THAT path on the new row, but only returns the new
+/// photo's id (see that method's doc) — `selectedImageProvider` itself was
+/// left holding whatever raw path `_pickImage` selected before the attach
+/// even started, for the rest of the session. If the user then sliced that
+/// SAME photo before navigating away, `_handleSliceCommit` read
+/// `selectedImageProvider` (still the stale, OS-evictable picker-cache path)
+/// as `originalLocalPath` and `PhotoRepository.replaceSlices` stored it
+/// verbatim on every slice row — so a slice's `localPath` never pointed at
+/// the owned file at all, only ever healed for the ORIGINAL row (via
+/// `ensureLocalCopy`), never for slices created in the same session.
+///
+/// [libraryRepo].photoLocalPath is a direct primary-key lookup by [photoId]
+/// — unlike `PhotoRepository.loadOriginal`'s wallId+kind query, it can never
+/// throw on a wall that has accumulated more than one live `'original'` row
+/// (e.g. from replacing a wall's photo more than once), so re-reading the
+/// owned path this way is safe even in that case.
+///
+/// Extracted as a standalone function taking [libraryRepo] and
+/// [selectedImage] (a [SelectedImageNotifier], not a [WidgetRef]) directly
+/// — mirroring [loadWallOriginalPhoto]'s own extraction above — so this
+/// fix's contract is directly testable against a [ProviderContainer]'s
+/// `libraryCrudRepositoryProvider`/`selectedImageProvider`: no widget pump,
+/// no real image decode (see
+/// `test/features/library/data/photo_ownership_test.dart`'s "S1 regression"
+/// group, which exercises exactly this — attach, then read
+/// `selectedImageProvider` back into a real `SliceController.commit` call —
+/// rather than sidestepping the bug via a post-hoc `loadOriginal` re-read).
+Future<String> resolveAttachedPhotoPath(
+  LibraryCrudRepository libraryRepo,
+  SelectedImageNotifier selectedImage,
+  String photoId,
+  String pickedPath,
+) async {
+  final ownedPath = await libraryRepo.photoLocalPath(photoId) ?? pickedPath;
+  if (ownedPath != pickedPath) {
+    selectedImage.select(ownedPath);
+  }
+  return ownedPath;
+}
+
 class TopoCanvasScreen extends ConsumerStatefulWidget {
-  const TopoCanvasScreen({super.key, required this.wallId});
+  const TopoCanvasScreen({
+    super.key,
+    required this.wallId,
+    this.readOnly = false,
+    @visibleForTesting this.debugInitialImageSize,
+  });
 
   /// The wall this canvas is bound to (from the `/walls/:wallId` route).
   /// Routes/photos loaded and attached by this screen are always scoped to
   /// this wall — see [loadWallOriginalPhoto] and [_attachPhotoAndLoad].
   final String wallId;
+
+  /// When `true`, this screen renders strictly as a viewer: the photo,
+  /// routes, and floating [RouteLegend] show exactly as they would
+  /// otherwise, but every editing affordance is hidden AND its handler
+  /// short-circuits (belt-and-suspenders — see e.g. [_pickImage],
+  /// [_openMetadataSheet], [_toggleSliceMode], [_handleSliceCommit],
+  /// [_handleCommitRoute]): the mode toggle, the draw toolbar cluster
+  /// (undo/redo/clear/commit), the slice-mode entry point, the symbol
+  /// palette, [PhotoSelector], the capture/replace-photo FAB, and the
+  /// route-metadata-edit glyph. [DrawMode] can never become
+  /// [DrawMode.draw] in this mode (there is no surviving control that
+  /// flips it — see [_topTrailingActions]) — pan/zoom and tap-to-select
+  /// (view mode's own, non-mutating gestures) stay fully enabled.
+  ///
+  /// Backs `CommunityTopoDetailScreen`, which embeds this screen (readOnly)
+  /// as its own top section for viewing someone else's shared topo.
+  /// Defaults to `false`, which preserves every pre-existing behavior of
+  /// this screen exactly (no gate added below ever fires for an existing
+  /// call site) — see this class's regression-guard tests.
+  final bool readOnly;
+
+  /// TEST-ONLY seam: when non-null, [_TopoCanvasScreenState.build] uses this
+  /// as the resolved natural image size for whatever photo path ends up
+  /// selected, instead of decoding it via [_resolveImageSize]'s real
+  /// `FileImage(...).resolve(...)` — see the "Reaching the topo canvas in
+  /// tests" note in the project CLAUDE.md for why that real decode can't be
+  /// driven from a widget test (it hangs under fake-async).
+  ///
+  /// Always null in production (the default), so this changes no production
+  /// behavior: [build] only reads it, never sets it, and every other
+  /// production path (the FileImage decode, error handling, reframing) is
+  /// untouched.
+  @visibleForTesting
+  final Size? debugInitialImageSize;
 
   @override
   ConsumerState<TopoCanvasScreen> createState() => _TopoCanvasScreenState();
@@ -109,6 +208,28 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
 class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   final TransformationController _transformationController =
       TransformationController();
+
+  /// A stable identity for [TopoCanvas] across this screen's whole lifetime,
+  /// handed down through [TopoCanvasBody] (see [_buildCanvasArea]).
+  ///
+  /// Historical note (full-bleed canvas rework): [TopoCanvasBody.build] used
+  /// to branch between a [Column] (not zoomed) and a [Stack] (zoomed) at the
+  /// same logical position — different [Widget] runtime types at that
+  /// slot — which needed this [GlobalKey] so Flutter could match the old
+  /// [TopoCanvas] `Element` to the new one across that structural change
+  /// rather than tearing down and remounting a brand new
+  /// `TopoCanvas`/`_TopoCanvasState` (silently discarding the user's own
+  /// zoom/pan) every time the zoomed-in state flipped. [RouteLegend] is now
+  /// PERMANENTLY a floating overlay (see [TopoCanvasBody.build]) — there is
+  /// no more Column<->Stack toggle, so [TopoCanvas] never restructures at
+  /// all — but this key is kept regardless: it costs nothing, and it's a
+  /// cheap guard against a future edit reintroducing a structural toggle
+  /// above [TopoCanvas] and silently losing this identity-preservation
+  /// property again. Created ONCE here (a field of this long-lived `State`,
+  /// not of [TopoCanvasBody] — which is itself a brand new object every
+  /// rebuild, so a key stored there would be equally short-lived and defeat
+  /// the whole point).
+  final GlobalKey _canvasKey = GlobalKey();
 
   /// The decoded natural size of the currently selected image, resolved
   /// asynchronously by [_resolveImageSize]. Null while unknown/loading.
@@ -136,10 +257,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// The current wall's persisted slices (ordered by cropXpct ascending),
   /// loaded via [_loadSlicesForOriginal] once the wall/original photo is
   /// known. Shown as [PhotoSelector] chips above the canvas whenever
-  /// non-empty. Reset to empty in [_resolveImageSize] the moment a new image
-  /// is selected, alongside `_imageSize`, so the canvas area (hidden behind
-  /// a loading spinner while `_imageSize` is null — see [_buildCanvasArea])
-  /// never shows a stale photo's slice chips while a new one is loading.
+  /// non-empty. Reset to empty the moment a new image is selected — see
+  /// [build]'s `ref.listen<String?>(selectedImageProvider, ...)` callback,
+  /// where this reset now lives (Bug 9 fix — see [_resolveImageSize]'s doc
+  /// for why it was moved out of there) — so a stale photo's slice chips
+  /// never show while a new one is loading.
   List<PhotoRef> _slices = const [];
 
   ImageStream? _imageStream;
@@ -186,7 +308,44 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // never ran at all for a photo-less wall). No user input is possible in
     // that window, so it does not reopen the wrong-wall-commit bug this fix
     // closes.
-    Future.microtask(() => _loadInitialPhotoForWall(widget.wallId));
+    Future.microtask(() {
+      // Bug fix ("editor remains open" / "if I open the topo again it's the
+      // same"): DrawController.beginPhotoSwitch deliberately leaves
+      // DrawState.mode untouched (it's a tool/UI choice, not per-photo
+      // state — see that method's doc), and drawControllerProvider itself
+      // is a single app-lifetime global, not scoped per wall/screen. So
+      // without this, leaving a PREVIOUS wall in draw mode (e.g. the user
+      // backed out mid-draw without hitting the mode toggle) meant EVERY
+      // topo opened after that — including reopening the very same one —
+      // started in draw mode, with the undo/redo/cancel/commit cluster
+      // already covering the route legend before the user did anything.
+      // Forcing view mode here, once per fresh screen mount (this widget is
+      // itself recreated per wallId — see the class doc), makes "opens in
+      // view mode" an invariant of opening a topo, not a leftover of
+      // whatever the previously-viewed wall was doing.
+      _resetToViewMode();
+      _loadInitialPhotoForWall(widget.wallId);
+    });
+  }
+
+  /// Forces [DrawState.mode] back to [DrawMode.view]. See [initState]'s doc
+  /// for why this must run once per fresh screen mount (and again from
+  /// [didUpdateWidget] on a wallId change) rather than relying on
+  /// [DrawController.beginPhotoSwitch], which deliberately preserves mode
+  /// across an in-screen photo swap.
+  void _resetToViewMode() {
+    ref.read(drawControllerProvider.notifier).setMode(DrawMode.view);
+    // Bug fix (stale collapsed legend leaking across walls): legendExpandedProvider
+    // is, like drawControllerProvider, a single app-lifetime global rather than
+    // scoped per wall/screen. The `ref.listen` in build() only resets it via
+    // setForMode when DrawMode actually TRANSITIONS — but if the user manually
+    // collapsed the legend (header chevron) while already in view mode, mode
+    // never changes on a fresh mount (it's already DrawMode.view), so that
+    // listener never fires and the collapsed state would otherwise leak into
+    // every subsequently opened wall. Unconditionally re-asserting the
+    // view-mode default here, once per fresh mount, closes that the same way
+    // setMode(DrawMode.view) above closes it for draw mode.
+    ref.read(legendExpandedProvider.notifier).setForMode(DrawMode.view);
   }
 
   /// Defensive re-entry point for [widget.wallId] changing on an EXISTING
@@ -209,8 +368,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // Deferred the same way as initState's call — see its doc for why a
       // direct, synchronous call here would hit Riverpod's "modify a
       // provider while the widget tree was building" guard (didUpdateWidget
-      // is itself a build-lifecycle callback).
-      Future.microtask(() => _loadInitialPhotoForWall(widget.wallId));
+      // is itself a build-lifecycle callback). Also resets to view mode,
+      // same rationale as initState (see _resetToViewMode's doc).
+      Future.microtask(() {
+        _resetToViewMode();
+        _loadInitialPhotoForWall(widget.wallId);
+      });
     }
   }
 
@@ -227,13 +390,23 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
   /// Invokes [DrawController.commitRoute] and, if it actually committed a
   /// new route (it no-ops when there are fewer than 2 current points — see
-  /// that method's doc), opens [RouteMetadataSheet] for that route so its
-  /// name/grade/style/description can be filled in right away.
+  /// that method's doc), switches back to [DrawMode.view] and opens
+  /// [RouteMetadataSheet] for that route so its name/grade/style/description
+  /// can be filled in right away.
   ///
   /// The new route is the last entry in [DrawState.routes]: `commitRoute`
   /// always appends, never inserts, so "highest number" and "last in the
   /// list" agree.
+  ///
+  /// Bug fix ("after finishing the edit and saving it the editor remains
+  /// open, overlaying the bottom"): committing used to leave [DrawState.mode]
+  /// at [DrawMode.draw], so the undo/redo/cancel/commit cluster (only shown
+  /// in draw mode — see [_buildBottomChrome]) stayed on screen, covering
+  /// [RouteLegend], even though the user was done editing. The ✓ button is
+  /// the natural "I'm finished with this route" action, so committing now
+  /// also returns the canvas to view mode.
   Future<void> _handleCommitRoute() async {
+    if (widget.readOnly) return;
     final notifier = ref.read(drawControllerProvider.notifier);
     final countBefore = ref.read(drawControllerProvider).routes.length;
     await notifier.commitRoute();
@@ -242,6 +415,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     final routes = ref.read(drawControllerProvider).routes;
     if (routes.length <= countBefore) return;
 
+    notifier.setMode(DrawMode.view);
     await _openMetadataSheet(routes.last);
   }
 
@@ -264,6 +438,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// for the duration of slice mode (see [TopoCanvasBody.build]) so the user
   /// can't switch to a slice mid-slicing and reintroduce the same problem.
   void _toggleSliceMode() {
+    if (widget.readOnly) return;
     ref.read(sliceControllerProvider.notifier).clear();
     final enteringSliceMode = !_sliceMode;
     if (enteringSliceMode) {
@@ -289,6 +464,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// size hasn't resolved yet ([_imageSize] null) — there is nothing to
   /// persist against in either case.
   Future<void> _handleSliceCommit() async {
+    if (widget.readOnly) return;
     final cuts = ref.read(sliceControllerProvider);
     if (cuts.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -325,20 +501,42 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// Opens [RouteMetadataSheet] as a modal bottom sheet for [route],
   /// pre-filling its fields from [route]'s current metadata.
   Future<void> _openMetadataSheet(TopoRoute route) async {
+    if (widget.readOnly) return;
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
       builder: (_) => RouteMetadataSheet(routeId: route.id, initial: route),
     );
+    // #20a keyboard-dismiss fix: RouteMetadataSheet's own Save/Cancel/`_pop`
+    // already unfocus before popping themselves (see that file), but a
+    // modal bottom sheet can ALSO be dismissed by the user swiping it down
+    // or tapping the scrim — both pop the sheet's route directly via the
+    // Navigator/framework, bypassing RouteMetadataSheet's `_pop` entirely.
+    // Unfocusing here, unconditionally once this `showModalBottomSheet`
+    // future resolves (by WHATEVER means the sheet closed), is this
+    // screen's own belt-and-suspenders backstop for those paths, so the
+    // keyboard is never left stranded no matter how the sheet was
+    // dismissed.
+    FocusManager.instance.primaryFocus?.unfocus();
   }
 
+  /// Lets the user choose Camera or Library (via [showPhotoSourceSheet]'s
+  /// iOS action sheet — see DESIGN.md "Photo source") before picking an
+  /// image with [pickPhotoFrom], preserving the exact same
+  /// attach-and-load flow ([_pendingAttachPath] + [_attachPhotoAndLoad] via
+  /// [_resolveImageSize]'s decode callback) that a gallery-only pick used
+  /// to feed directly. Replaces the previous `ImagePicker().pickImage(source:
+  /// ImageSource.gallery)`-only call so the canvas's "replace/add photo"
+  /// FAB offers the same Camera/Library choice as the Topos-home "New
+  /// topo" flow.
   Future<void> _pickImage() async {
-    final picker = ImagePicker();
-    final xfile = await picker.pickImage(source: ImageSource.gallery);
-    if (xfile != null) {
-      _pendingAttachPath = xfile.path;
-      ref.read(selectedImageProvider.notifier).select(xfile.path);
-    }
+    if (widget.readOnly) return;
+    final source = await showPhotoSourceSheet(context);
+    if (source == null || !mounted) return;
+    final xfile = await pickPhotoFrom(source);
+    if (xfile == null || !mounted) return;
+    _pendingAttachPath = xfile.path;
+    ref.read(selectedImageProvider.notifier).select(xfile.path);
   }
 
   /// Restores [wallId]'s already-attached original photo (if any) so the
@@ -415,9 +613,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// out-of-order resolution can't clobber a newer photo's state.
   Future<void> _attachPhotoAndLoad(String path, int width, int height) async {
     try {
-      final photoId = await ref
-          .read(libraryCrudRepositoryProvider)
-          .attachPhotoToWall(widget.wallId, path, width, height);
+      final libraryRepo = ref.read(libraryCrudRepositoryProvider);
+      final photoId = await libraryRepo.attachPhotoToWall(
+        widget.wallId,
+        path,
+        width,
+        height,
+      );
       if (!mounted) return;
       // Latest-path guard: if the user has already moved on to a different
       // photo since this call started (e.g. this is a stale/out-of-order
@@ -425,10 +627,25 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // calling loadForWall — otherwise this stale load could clobber the
       // CURRENT photo's in-memory state with the wrong wall's routes.
       if (ref.read(selectedImageProvider) != path) return;
+
+      // Photo-ownership bug fix: attachPhotoToWall already copied the
+      // picked file into the app-owned photos/ dir and stored THAT path on
+      // the new row, but only returns the id — resolveAttachedPhotoPath
+      // re-reads the owned path and swaps selectedImageProvider onto it
+      // (see that function's doc for why this must happen here, before any
+      // slice commit can read the stale picker path).
+      final ownedPath = await resolveAttachedPhotoPath(
+        libraryRepo,
+        ref.read(selectedImageProvider.notifier),
+        photoId,
+        path,
+      );
+      if (!mounted || ref.read(selectedImageProvider) != ownedPath) return;
+
       await ref
           .read(drawControllerProvider.notifier)
           .loadForWall(widget.wallId, photoId);
-      if (!mounted || ref.read(selectedImageProvider) != path) return;
+      if (!mounted || ref.read(selectedImageProvider) != ownedPath) return;
       await _loadSlicesForOriginal(photoId);
     } catch (e, st) {
       debugPrint('Failed to attach/load photo for $path: $e\n$st');
@@ -471,6 +688,26 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// sizing its [CustomPaint]. Guarded by [_resolvedForPath] so repeated
   /// widget rebuilds while the same image is selected don't re-trigger a
   /// decode.
+  ///
+  /// Bug 9 fix (photo-selector slice race): this used to ALSO reset
+  /// `_slices` to empty here, in this method's own `setState`. But this
+  /// runs from an `addPostFrameCallback` scheduled in [build] (see that
+  /// scheduling site's doc), i.e. only after a REAL FRAME renders — whereas
+  /// [_loadSlicesForOriginal] (kicked off from the same photo-switch, via
+  /// [_loadInitialPhotoForWall]) is a plain async chain with no such
+  /// frame-boundary requirement, and can easily resolve and call its own
+  /// `setState(() => _slices = slices)` FIRST. Whichever finished last used
+  /// to win: if this method's frame-gated reset fired AFTER the slice load
+  /// had already populated `_slices` for the SAME new photo, it silently
+  /// wiped the freshly-loaded, correct slices back to empty — making
+  /// [PhotoSelector] intermittently fail to appear for a wall that
+  /// genuinely has persisted slices. The reset now lives in `build`'s
+  /// `ref.listen<String?>(selectedImageProvider, ...)` callback instead —
+  /// see that callback's doc — which fires SYNCHRONOUSLY the moment the
+  /// photo path changes, strictly before [_loadInitialPhotoForWall]'s own
+  /// `await`-chained call to [_loadSlicesForOriginal] even starts, so the
+  /// two can no longer race: the reset is now always-first by construction,
+  /// not merely "usually first" by frame-timing luck.
   void _resolveImageSize(String path) {
     if (_resolvedForPath == path) return;
     _resolvedForPath = path;
@@ -478,7 +715,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       setState(() {
         _imageSize = null;
         _imageLoadError = false;
-        _slices = const [];
       });
     }
 
@@ -556,154 +792,497 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         // ends up active.
         ref.read(activeViewProvider.notifier).clear();
         _transformationController.value = Matrix4.identity();
+        // Bug 9 fix (photo-selector slice race): also clear `_slices` HERE,
+        // synchronously, the moment the path changes — rather than inside
+        // [_resolveImageSize]'s frame-gated decode callback, where it used
+        // to live (see that method's doc for the full race it caused).
+        // [beforeLoadForWall]'s `select(...)` call (in [loadWallOriginalPhoto])
+        // is what triggers this listener for a restored photo, and it fires
+        // BEFORE [_loadInitialPhotoForWall]'s subsequent `await
+        // drawController.loadForWall(...)` / [_loadSlicesForOriginal] calls
+        // even start — so this reset is now unconditionally first, never a
+        // race. Direct field mutation (no `setState`) mirrors
+        // `_transformationController.value =` right above: this listener
+        // callback fires as part of the SAME state-change notification that
+        // also updates `drawState`/`imagePath` (both `ref.watch` here), so
+        // the rebuild those trigger picks up this new `_slices` value too.
+        _slices = const [];
       }
     });
+
+    // Fix 1/3 (legend expand/collapse): reset the legend card to its
+    // mode-appropriate default the moment DrawMode actually changes — expanded
+    // in view mode (nothing else occupies this screen real estate, so show
+    // the full route list), collapsed to the compact chip in draw mode (so
+    // the floating card doesn't sit over the drawing surface the user is
+    // actively working on). `.select` + the `previous != next` guard here
+    // keep this from firing on every unrelated DrawState rebuild — only an
+    // actual mode flip should reset the user's toggle. No `fireImmediately`:
+    // this callback synchronously writes another provider, and doing so
+    // while THIS widget is still building throws (see the `beginPhotoSwitch`
+    // listener above / its own microtask-deferral doc for the same
+    // Riverpod rule).
+    ref.listen<DrawMode>(
+      drawControllerProvider.select((s) => s.mode),
+      (previous, next) {
+        if (previous != next) {
+          ref.read(legendExpandedProvider.notifier).setForMode(next);
+        }
+      },
+    );
 
     final imagePath = ref.watch(selectedImageProvider);
     final drawState = ref.watch(drawControllerProvider);
     final drawNotifier = ref.read(drawControllerProvider.notifier);
+    // The topo/wall name backs the canvas title (DESIGN.md "Topo canvas"):
+    // AsyncValue.maybeWhen falls back to "Topo" both while this is still
+    // loading and if the wall genuinely has no name (or doesn't exist —
+    // see router_test.dart's nonexistent-wall-id smoke test), so the title
+    // is never blank and never shows the literal app name "ClimbTopo".
+    final wallName = ref.watch(wallNameProvider(widget.wallId));
+    final title = wallName.maybeWhen(
+      data: (name) => (name == null || name.isEmpty) ? 'Topo' : name,
+      orElse: () => 'Topo',
+    );
 
     if (imagePath != null && imagePath != _resolvedForPath) {
-      // Deferred to after this frame: triggering the decode (and its
-      // setState) synchronously during build is not allowed.
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _resolveImageSize(imagePath);
-      });
+      final debugSize = widget.debugInitialImageSize;
+      if (debugSize != null) {
+        // TEST-ONLY seam (see TopoCanvasScreen.debugInitialImageSize's doc):
+        // bypass the real FileImage decode entirely and use the injected
+        // size directly. Mutating these fields directly (no setState) is
+        // safe here — it's still within this same build call, before
+        // _buildCanvasArea below reads them — and mirrors what the real
+        // decode's success callback ultimately sets, minus the async
+        // round-trip.
+        _resolvedForPath = imagePath;
+        _imageSize = debugSize;
+        _imageLoadError = false;
+      } else {
+        // Deferred to after this frame: triggering the decode (and its
+        // setState) synchronously during build is not allowed.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) _resolveImageSize(imagePath);
+        });
+      }
     }
 
+    final colors = MasiColors.of(context);
+
+    // Canvas look rework: the symbol palette only ever means anything with a
+    // photo loaded AND while actually drawing (mirrors Bug 8's
+    // `activePhotoId != null` gate on the mode-toggle/slice-mode-button
+    // above) AND never during the slice-tool overlay (mirrors this same
+    // build's `showPhotoSelector` slice-mode exclusion just below).
+    final showSymbolPalette =
+        !widget.readOnly &&
+        imagePath != null &&
+        drawState.mode == DrawMode.draw &&
+        !_sliceMode;
+
+    // Full-bleed canvas rework (slice-picker relocation bug fix): PhotoSelector
+    // used to be an in-flow, OPAQUE bar inside `TopoCanvasBody`'s Column,
+    // reserving vertical clearance above it — which pushed the photo down
+    // (broke full-bleed) for exactly the walls where a user had bothered to
+    // slice their topo; a wall with no slices stayed full-bleed all along.
+    // It now floats in this SAME top glass band as the title pill/symbol
+    // palette (see the Column below), on its own `GlassChrome`, so the photo
+    // stays full-bleed behind it regardless of whether slices exist. Still
+    // hidden for the duration of slice-TOOL mode (`_sliceMode` — a distinct
+    // flag from `DrawMode.draw`/`showSymbolPalette` above): mirrors
+    // `_toggleSliceMode`'s doc for why letting the user switch to a slice
+    // mid-slicing would corrupt `SliceTool`'s crop-fraction math.
+    final hasSlices = drawState.activePhotoId != null && _slices.isNotEmpty;
+    final showPhotoSelector = !widget.readOnly && hasSlices && !_sliceMode;
+
+    // Floating translucent-glass chrome over an edge-to-edge photo, per
+    // DESIGN.md "Topo canvas": no opaque AppBar/BottomAppBar — the canvas
+    // area (or empty state) fills the whole Scaffold behind a top glass
+    // pill (back + title + mode-aware actions), the symbol palette (draw
+    // mode only, floating directly below the title pill on the SAME glass
+    // material), and a bottom glass cluster (undo/redo/cancel/commit) + the
+    // accent capture FAB, all floating within thumb reach and inset by the
+    // safe area.
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('ClimbTopo'),
-        centerTitle: false,
-        actions: [
-          // Only meaningful once the wall has a photo AND at least one
-          // committed, VISIBLE route: with nothing to align (or every route
-          // hidden), AR would show an empty feed.
-          if (drawState.activePhotoId != null &&
-              drawState.routes.any((r) => r.visible))
-            IconButton(
-              key: const Key('topo-ar-button'),
-              icon: const Icon(Icons.view_in_ar_outlined),
-              tooltip: 'View in AR',
-              onPressed: () => context.push('/walls/${widget.wallId}/ar'),
-            ),
-          if (drawState.selectedRouteId != null)
-            IconButton(
-              key: const Key('topo-edit-metadata-button'),
-              icon: const Icon(Icons.edit_note),
-              tooltip: 'Edit route metadata',
-              onPressed: () {
-                final selected = drawState.routes.firstWhere(
-                  (r) => r.id == drawState.selectedRouteId,
-                );
-                _openMetadataSheet(selected);
-              },
-            ),
-          if (_sliceMode) ...[
-            IconButton(
-              key: const Key('topo-slice-clear'),
-              icon: const Icon(Icons.clear),
-              tooltip: 'Clear pending cuts',
-              onPressed: () =>
-                  ref.read(sliceControllerProvider.notifier).clear(),
-            ),
-            IconButton(
-              key: const Key('topo-slice-commit'),
-              icon: const Icon(Icons.check),
-              tooltip: 'Commit slices',
-              onPressed: _handleSliceCommit,
-            ),
-          ],
-          IconButton(
-            key: const Key('topo-slice-mode-button'),
-            icon: Icon(
-              _sliceMode ? Icons.content_cut : Icons.content_cut_outlined,
-            ),
-            tooltip: _sliceMode
-                ? 'Exit slice mode'
-                : 'Slice this photo into strips',
-            onPressed: _toggleSliceMode,
+      backgroundColor: colors.ground,
+      extendBody: true,
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: imagePath == null
+                ? _buildEmptyState(context)
+                : _buildCanvasArea(imagePath, drawState),
           ),
-          IconButton(
-            key: const Key('topo-mode-toggle'),
-            icon: Icon(
-              drawState.mode == DrawMode.draw
-                  ? Icons.edit
-                  : Icons.pan_tool_alt_outlined,
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: SafeArea(
+              bottom: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  MasiSpacing.lg,
+                  MasiSpacing.sm,
+                  MasiSpacing.lg,
+                  0,
+                ),
+                // The title row and the (slice-eligible-only) PhotoSelector
+                // now share a SINGLE GlassChrome card (an inner Column keeps
+                // them from overlapping — no transparent gap between them
+                // exposes the full-bleed photo behind). The (draw-mode-only)
+                // symbol palette remains a separate floating sibling below,
+                // in this outer Column, so it still can never overlap the
+                // shared card: its position is always "directly below
+                // whatever's already rendered above it, plus a fixed gap",
+                // which a Column gives for free without needing to know the
+                // other's runtime size.
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    GlassChrome(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 6,
+                        vertical: 4,
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          _buildTopChromeRow(
+                            context,
+                            colors,
+                            title,
+                            drawState,
+                            drawNotifier,
+                          ),
+                          if (showPhotoSelector) ...[
+                            Divider(
+                              height: MasiSpacing.sm,
+                              thickness: 1,
+                              color: colors.separator,
+                            ),
+                            PhotoSelector(
+                              originalPhotoId: drawState.activePhotoId!,
+                              slices: _slices,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    if (showSymbolPalette) ...[
+                      const SizedBox(height: MasiSpacing.sm),
+                      const SymbolPaletteBar(),
+                    ],
+                  ],
+                ),
+              ),
             ),
-            tooltip: drawState.mode == DrawMode.draw
-                ? 'Switch to view mode'
-                : 'Switch to draw mode',
-            onPressed: drawNotifier.toggleMode,
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: SafeArea(
+              top: false,
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  MasiSpacing.lg,
+                  0,
+                  MasiSpacing.lg,
+                  MasiSpacing.md,
+                ),
+                child: _buildBottomChrome(colors, drawNotifier, drawState.mode),
+              ),
+            ),
           ),
         ],
       ),
-      body: imagePath == null
-          ? _buildEmptyState(context)
-          : _buildCanvasArea(imagePath, drawState),
-      bottomNavigationBar: BottomAppBar(
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            IconButton(
-              key: const Key('topo-undo-button'),
-              icon: const Icon(Icons.undo),
-              tooltip: 'Undo',
-              onPressed: drawNotifier.undo,
-            ),
-            IconButton(
-              key: const Key('topo-redo-button'),
-              icon: const Icon(Icons.redo),
-              tooltip: 'Redo',
-              onPressed: drawNotifier.redo,
-            ),
-            IconButton(
-              key: const Key('topo-clear-button'),
-              icon: const Icon(Icons.clear),
-              tooltip: 'Discard current route',
-              onPressed: drawNotifier.clearCurrent,
-            ),
-            IconButton(
-              key: const Key('topo-commit-button'),
-              icon: const Icon(Icons.check),
-              tooltip: 'Commit route',
-              onPressed: _handleCommitRoute,
-            ),
-          ],
+    );
+  }
+
+  /// The top chrome row: a back chevron, the topo name (never truncated —
+  /// [Expanded] + `maxLines: 1` + [TextOverflow.ellipsis] — see
+  /// [_topTrailingActions]'s doc for why it was truncating to "ClimbT…"
+  /// before), and mode-aware trailing action glyphs. Returns just the `Row`
+  /// — the caller wraps it (together with the slice-picker) in a single
+  /// shared `GlassChrome` card.
+  Widget _buildTopChromeRow(
+    BuildContext context,
+    MasiColors colors,
+    String title,
+    DrawState drawState,
+    DrawController drawNotifier,
+  ) {
+    return Row(
+      children: [
+        GlassIconButton(
+          key: const Key('topo-back-button'),
+          icon: Icons.chevron_left,
+          tooltip: 'Back',
+          onPressed: () {
+            if (context.canPop()) {
+              FocusManager.instance.primaryFocus?.unfocus();
+              context.pop();
+            } else {
+              context.go('/');
+            }
+          },
         ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _pickImage,
-        tooltip: 'Pick a photo',
-        child: const Icon(Icons.add_photo_alternate_outlined),
-      ),
+        Expanded(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: MasiSpacing.xs,
+            ),
+            child: Text(
+              title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                color: colors.ink,
+              ),
+            ),
+          ),
+        ),
+        ..._topTrailingActions(context, drawState, drawNotifier),
+      ],
+    );
+  }
+
+  /// Mode-aware trailing glyphs for [_buildTopChromeRow] — this is what keeps
+  /// the top chrome from ever becoming the old crowded AR/X/check/scissors/
+  /// pencil jumble (which was also what forced the "ClimbTopo" title to
+  /// truncate to "ClimbT…"):
+  ///  - slice mode: clear / commit the pending cuts, or exit slice mode.
+  ///  - otherwise: an optional edit-metadata glyph (route selected) + an
+  ///    optional AR glyph (view mode, eligible wall) + the draw/view mode
+  ///    toggle + (view mode only) the slice-mode entry point.
+  List<Widget> _topTrailingActions(
+    BuildContext context,
+    DrawState drawState,
+    DrawController drawNotifier,
+  ) {
+    if (_sliceMode) {
+      return [
+        GlassIconButton(
+          key: const Key('topo-slice-clear'),
+          icon: Icons.clear,
+          tooltip: 'Clear pending cuts',
+          onPressed: () => ref.read(sliceControllerProvider.notifier).clear(),
+        ),
+        GlassIconButton(
+          key: const Key('topo-slice-commit'),
+          icon: Icons.check,
+          tooltip: 'Commit slices',
+          onPressed: _handleSliceCommit,
+        ),
+        GlassIconButton(
+          key: const Key('topo-slice-mode-button'),
+          icon: Icons.content_cut,
+          tooltip: 'Exit slice mode',
+          active: true,
+          onPressed: _toggleSliceMode,
+        ),
+      ];
+    }
+
+    final actions = <Widget>[];
+
+    if (!widget.readOnly && drawState.selectedRouteId != null) {
+      actions.add(
+        GlassIconButton(
+          key: const Key('topo-edit-metadata-button'),
+          icon: Icons.edit_note,
+          tooltip: 'Edit route metadata',
+          onPressed: () {
+            final selected = drawState.routes.firstWhere(
+              (r) => r.id == drawState.selectedRouteId,
+            );
+            _openMetadataSheet(selected);
+          },
+        ),
+      );
+    }
+
+    // Only meaningful once the wall has a photo AND at least one committed,
+    // VISIBLE route: with nothing to align (or every route hidden), AR
+    // would show an empty feed. Kept to view mode (rather than always-on,
+    // as it was before) so draw mode's row stays a clean back + name + a
+    // single mode-toggle glyph.
+    if (drawState.mode == DrawMode.view &&
+        drawState.activePhotoId != null &&
+        drawState.routes.any((r) => r.visible)) {
+      actions.add(
+        GlassIconButton(
+          key: const Key('topo-ar-button'),
+          icon: Icons.view_in_ar_outlined,
+          tooltip: 'View in AR',
+          onPressed: () => context.push('/walls/${widget.wallId}/ar'),
+        ),
+      );
+    }
+
+    // The mode toggle itself stays UNGATED (other than the readOnly check
+    // below): flipping DrawState.mode (an app-lifetime-global) with no photo
+    // loaded is inert — there's no canvas mounted to observe it on (see
+    // `_buildCanvasArea`) — but harmless, and a substantial part of this
+    // screen's own test suite deliberately exercises the draw-mode
+    // toggle/toolbar in isolation from the image-decode path this way (see
+    // the M3 NOTE elsewhere in test/widget_test.dart).
+    //
+    // readOnly gate: this is the ONLY control anywhere in this screen that
+    // can flip DrawState.mode to DrawMode.draw — hiding it here is what
+    // makes [TopoCanvasScreen.readOnly]'s "never enter Draw mode" guarantee
+    // hold, since every mutating handler is otherwise unreachable once
+    // draw mode itself is unreachable.
+    if (!widget.readOnly) {
+      actions.add(
+        GlassIconButton(
+          key: const Key('topo-mode-toggle'),
+          icon: drawState.mode == DrawMode.draw
+              ? Icons.edit
+              : Icons.pan_tool_alt_outlined,
+          tooltip: drawState.mode == DrawMode.draw
+              ? 'Switch to view mode'
+              : 'Switch to draw mode',
+          active: drawState.mode == DrawMode.draw,
+          onPressed: drawNotifier.toggleMode,
+        ),
+      );
+    }
+
+    // Bug 8 fix: the slice-mode entry point is meaningless with no photo
+    // loaded yet — there's nothing to slice. Gated on `activePhotoId !=
+    // null`, mirroring the AR button's own guard above. Before this fix,
+    // `_topTrailingActions` was built unconditionally even in the no-photo
+    // empty state (see `_buildTopChromeRow`'s call site in `build`), so the
+    // empty state offered a slice-mode-button that opened `SliceTool` over
+    // nothing.
+    if (!widget.readOnly &&
+        drawState.mode == DrawMode.view &&
+        drawState.activePhotoId != null) {
+      actions.add(
+        GlassIconButton(
+          key: const Key('topo-slice-mode-button'),
+          icon: Icons.content_cut_outlined,
+          tooltip: 'Slice this photo into strips',
+          onPressed: _toggleSliceMode,
+        ),
+      );
+    }
+
+    return actions;
+  }
+
+  /// The bottom glass cluster (undo / redo / discard-current / commit) plus
+  /// the accent capture FAB — gated to [DrawMode.draw] ONLY.
+  ///
+  /// Bug fix ("the editor remains open, overlaying the bottom ... covers
+  /// the RouteLegend"): this cluster used to be rendered mode-INDEPENDENTLY
+  /// (unconditionally, in both view and draw mode), on the theory that
+  /// undo/redo/commit act on [DrawState.currentPoints] regardless of mode
+  /// so they should stay tappable at all times. In practice that meant the
+  /// cluster sat on screen — and visually covered [RouteLegend]'s bottom
+  /// rows, since both float at the very bottom of the same [Stack] — even
+  /// in view mode, where there is nothing in progress to undo/redo/commit
+  /// (undo/redo only ever act on [DrawState.currentPoints], which is only
+  /// ever non-empty while actively drawing). Per DESIGN.md's "Topo canvas"
+  /// spec ("bottom pill (undo / redo / commit)" is one of DRAW mode's
+  /// tools), the cluster now only shows in draw mode; view mode shows just
+  /// the capture FAB (still available to replace the photo at any time),
+  /// aligned to the trailing edge where the cluster would otherwise sit.
+  Widget _buildBottomChrome(
+    MasiColors colors,
+    DrawController drawNotifier,
+    DrawMode mode,
+  ) {
+    // readOnly: no bottom chrome at all — neither the draw cluster (already
+    // unreachable, since draw mode itself is unreachable — see
+    // `_topTrailingActions`'s mode-toggle gate) nor the capture/replace-photo
+    // FAB, which is itself an editing affordance (attaching a new photo to
+    // someone else's shared wall) with no place in a read-only viewer.
+    if (widget.readOnly) {
+      return const SizedBox.shrink();
+    }
+
+    final fab = TopoCaptureFab(onPressed: _pickImage, tooltip: 'Pick a photo');
+
+    if (mode != DrawMode.draw) {
+      return Align(alignment: Alignment.centerRight, child: fab);
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(
+          child: GlassChrome(
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                GlassIconButton(
+                  key: const Key('topo-undo-button'),
+                  icon: Icons.undo,
+                  tooltip: 'Undo',
+                  onPressed: drawNotifier.undo,
+                ),
+                GlassIconButton(
+                  key: const Key('topo-redo-button'),
+                  icon: Icons.redo,
+                  tooltip: 'Redo',
+                  onPressed: drawNotifier.redo,
+                ),
+                GlassIconButton(
+                  key: const Key('topo-clear-button'),
+                  icon: Icons.close,
+                  tooltip: 'Discard current route',
+                  onPressed: drawNotifier.clearCurrent,
+                ),
+                GlassIconButton(
+                  key: const Key('topo-commit-button'),
+                  icon: Icons.check,
+                  tooltip: 'Commit route',
+                  active: true,
+                  onPressed: _handleCommitRoute,
+                ),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(width: MasiSpacing.md),
+        fab,
+      ],
     );
   }
 
   Widget _buildEmptyState(BuildContext context) {
-    return Center(
-      child: Column(
-        key: const Key('topo-empty-state'),
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.photo_size_select_actual_outlined,
-            size: 72,
-            color: Theme.of(context).colorScheme.outline,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'No photo yet — pick one to start',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: Theme.of(context).colorScheme.outline,
+    final colors = MasiColors.of(context);
+    return ColoredBox(
+      color: colors.ground,
+      child: Center(
+        child: Column(
+          key: const Key('topo-empty-state'),
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.photo_size_select_actual_outlined,
+              size: 72,
+              color: colors.ink3,
             ),
-          ),
-        ],
+            const SizedBox(height: MasiSpacing.lg),
+            Text(
+              'No photo yet — pick one to start',
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: colors.ink2,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildCanvasArea(String imagePath, DrawState drawState) {
+  Widget _buildCanvasArea(
+    String imagePath,
+    DrawState drawState,
+  ) {
     if (_imageLoadError) {
       return _buildImageErrorState(context);
     }
@@ -722,43 +1301,83 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       sliceMode: _sliceMode,
       originalPhotoId: drawState.activePhotoId,
       slices: _slices,
+      canvasKey: _canvasKey,
+      readOnly: widget.readOnly,
     );
   }
 
   Widget _buildImageErrorState(BuildContext context) {
-    return Center(
-      child: Column(
-        key: const Key('topo-image-error-state'),
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.broken_image_outlined,
-            size: 72,
-            color: Theme.of(context).colorScheme.error,
-          ),
-          const SizedBox(height: 16),
-          Text(
-            "Couldn't load this photo",
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: Theme.of(context).colorScheme.error,
+    final colors = MasiColors.of(context);
+    return ColoredBox(
+      color: colors.ground,
+      child: Center(
+        child: Column(
+          key: const Key('topo-image-error-state'),
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.broken_image_outlined,
+              size: 72,
+              color: colors.gradeHard,
             ),
-          ),
-          const SizedBox(height: 16),
-          OutlinedButton(
-            key: const Key('topo-image-error-pick-another'),
-            onPressed: _pickImage,
-            child: const Text('Choose another photo'),
-          ),
-        ],
+            const SizedBox(height: MasiSpacing.lg),
+            Text(
+              "Couldn't load this photo",
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                color: colors.gradeHard,
+              ),
+            ),
+            const SizedBox(height: MasiSpacing.lg),
+            // readOnly: no retry affordance — there is nothing a read-only
+            // viewer could pick to replace someone else's photo with (see
+            // TopoCanvasScreen.readOnly's doc).
+            if (!widget.readOnly)
+              // "Tinted" secondary button per DESIGN.md "Buttons": accent
+              // text on a faint accent wash, rather than the previous
+              // Material OutlinedButton.
+              Material(
+                color: colors.accent.withValues(alpha: 0.16),
+                borderRadius: BorderRadius.circular(MasiRadii.control),
+                child: InkWell(
+                  key: const Key('topo-image-error-pick-another'),
+                  onTap: _pickImage,
+                  borderRadius: BorderRadius.circular(MasiRadii.control),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: MasiSpacing.lg,
+                      vertical: MasiSpacing.md,
+                    ),
+                    child: Text(
+                      'Choose another photo',
+                      style: TextStyle(
+                        color: colors.accent,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
       ),
     );
   }
 }
 
-/// The canvas area shown once [imageSize] is resolved: the [PhotoSelector]
-/// (when the wall has slices), the symbol palette bar (gated to
-/// [DrawMode.draw] — see Fix 2), the interactive [TopoCanvas] framed to
-/// whichever view is active, and the [RouteLegend].
+/// The canvas area shown once [imageSize] is resolved: the interactive
+/// [TopoCanvas] framed to whichever view is active, and the [RouteLegend].
+///
+/// Slice-picker relocation bug fix: [PhotoSelector] used to render here too,
+/// as an in-flow, opaque bar reserving clearance above the canvas whenever
+/// the wall had slices — which broke full-bleed for exactly those walls. It
+/// now floats in [_TopoCanvasScreenState.build]'s own top glass chrome band
+/// (alongside the title pill and, in draw mode, the symbol palette bar)
+/// instead, so this widget's canvas region is unconditionally full-bleed
+/// regardless of slices. [originalPhotoId]/[slices] are kept as accepted
+/// parameters below purely so existing layout-stability test harnesses
+/// (`canvas_viewport_intent_test.dart`'s A3d, `widget_test.dart`'s "Fix 3"
+/// group) — which exercise this widget directly and pass them — keep
+/// compiling; neither is read by [build] anymore.
 ///
 /// Extracted as a standalone public widget (rather than inlined into
 /// [_TopoCanvasScreenState._buildCanvasArea]) so it can be pumped directly
@@ -776,12 +1395,24 @@ class TopoCanvasBody extends ConsumerWidget {
     this.sliceMode = false,
     this.originalPhotoId,
     this.slices = const [],
+    this.canvasKey,
+    this.readOnly = false,
   });
 
   final String imagePath;
   final Size imageSize;
   final DrawState drawState;
   final TransformationController transformationController;
+
+  /// See [TopoCanvasScreen.readOnly]. Forces the slice-tool overlay off
+  /// regardless of [sliceMode] (belt-and-suspenders: [TopoCanvasScreen]
+  /// itself never lets `_sliceMode` become true when it's readOnly, since
+  /// the only control that flips it is hidden — see that screen's
+  /// `_topTrailingActions` — but this widget doesn't rely on that alone)
+  /// and hides [RouteLegend]'s per-route visibility-toggle/delete controls,
+  /// leaving tap-to-select (a non-mutating view affordance) untouched.
+  /// Defaults to `false`, preserving every existing call site's behavior.
+  final bool readOnly;
 
   /// Whether the slice-creation tool overlay ([SliceTool]) is showing over
   /// the canvas. Defaults to `false` so existing call sites (and the
@@ -793,18 +1424,26 @@ class TopoCanvasBody extends ConsumerWidget {
   /// async image-decode gate.
   final bool sliceMode;
 
-  /// The id of the wall's "original" (unsliced) photo, or null if unknown
-  /// yet (e.g. [TopoCanvasScreen]'s wall/routes load hasn't resolved). Fed
-  /// to [PhotoSelector] (and used as the "Original" chip's target); the
-  /// selector is only shown when both this is non-null AND [slices] is
-  /// non-empty.
+  /// Unused inside [build] since the slice-picker relocation bug fix (see
+  /// this class's doc) — [PhotoSelector] no longer renders here, so this no
+  /// longer feeds it. Kept as an accepted, harmless parameter purely for the
+  /// layout-stability test harnesses noted in the class doc.
   final String? originalPhotoId;
 
-  /// The wall's persisted slices (ordered by cropXpct ascending). Defaults
-  /// to empty so existing call sites/tests that never mention slicing are
-  /// unaffected — with no slices, [PhotoSelector] is never shown and
-  /// [TopoCanvas] is never framed to a crop.
+  /// Unused inside [build] since the slice-picker relocation bug fix (see
+  /// this class's doc) — [PhotoSelector] no longer renders here, so this no
+  /// longer feeds it. Kept as an accepted, harmless parameter purely for the
+  /// layout-stability test harnesses noted in the class doc.
   final List<PhotoRef> slices;
+
+  /// A stable identity for the [TopoCanvas] built inside [build], assigned
+  /// as its [Widget.key]. See [_TopoCanvasScreenState._canvasKey]'s doc for
+  /// why this must be a caller-owned [GlobalKey] (not one this widget
+  /// creates itself — [TopoCanvasBody] is reconstructed fresh on every
+  /// rebuild, so a key it created internally would be equally short-lived).
+  /// Null (the default) preserves every pre-existing call site/test that
+  /// doesn't care about [TopoCanvas]'s identity across rebuilds.
+  final Key? canvasKey;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -819,54 +1458,280 @@ class TopoCanvasBody extends ConsumerWidget {
         ? activeView.cropWidthPct
         : null;
 
+    final hasRoutes = drawState.routes.isNotEmpty;
+    final legendExpanded = ref.watch(legendExpandedProvider);
+
+    // Bottom clearance the floating draw-mode toolbar cluster (see
+    // TopoCanvasScreen._buildBottomChrome) needs reserved above it so it
+    // never occludes RouteLegend's last row(s) — unchanged from before this
+    // fix, just hoisted out so both the legend's Padding AND its maxHeight
+    // cap (below) can share the same value.
+    final legendBottomPadding = hasRoutes
+        ? MediaQuery.paddingOf(context).bottom +
+              MasiSpacing.md +
+              kBottomChromeClusterHeight +
+              MasiSpacing.sm
+        : 0.0;
+
     return Column(
       children: [
-        // Hidden during slice mode (Fix 2): the screen forces activeView
-        // back to Original the moment slice mode is entered (see
-        // TopoCanvasScreen._toggleSliceMode's doc for why SliceTool's
-        // dx/viewportWidth cut math requires that), so letting the user
-        // switch to a slice mid-slicing via this selector would silently
-        // reintroduce the same corrupted-crop-rect bug.
-        if (originalPhotoId != null && slices.isNotEmpty && !sliceMode)
-          PhotoSelector(originalPhotoId: originalPhotoId!, slices: slices),
-        // Only shown in draw mode (and never during slice mode, which is
-        // mutually exclusive with drawing): in view mode a canvas tap means
-        // "select a route", not "place a symbol", so showing (and letting
-        // the user activate) the symbol bar there would be misleading. Not
-        // clearing `activeSymbol` on mode switch is deliberate — see fix
-        // notes — so a quick peek at view mode and back to draw mode
-        // preserves the user's chosen symbol.
-        if (drawState.mode == DrawMode.draw && !sliceMode)
-          const SymbolPaletteBar(),
-        Expanded(
-          child: Stack(
-            children: [
-              TopoCanvas(
-                imagePath: imagePath,
-                imageSize: imageSize,
-                transformationController: transformationController,
-                activeCropXpct: cropXpct,
-                activeCropWidthPct: cropWidthPct,
-              ),
-              if (sliceMode)
-                Positioned.fill(
-                  // SliceTool is sized to the actual rendered viewport (via
-                  // LayoutBuilder) rather than the image's natural
-                  // `imageSize`, and its opaque gesture detector sits on top
-                  // of TopoCanvas — see SliceTool's class doc for why that's
-                  // what keeps slice-mode taps from ever reaching
-                  // TopoCanvas's own draw/view gesture handling underneath.
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => SliceTool(
-                      size: Size(constraints.maxWidth, constraints.maxHeight),
-                    ),
+        // The canvas + [RouteLegend] region: [RouteLegend] is now
+        // PERMANENTLY a floating, translucent [GlassChrome] overlay pinned
+        // near the bottom via a [Stack] (whenever routes exist) — it never
+        // reflows or resizes the canvas beneath it, regardless of zoom.
+        // [TopoCanvas] itself fills this ENTIRE `Flexible` region via
+        // `Positioned.fill`, full-bleed to the screen edges (under the
+        // floating top/bottom chrome and the status bar — see
+        // [TopoCanvas.build]'s own doc for why it no longer clips to a
+        // rounded, inset frame). `BoxFit.contain` on the image (unchanged)
+        // still keeps the WHOLE wall visible; the only non-image area is
+        // any letterbox from an aspect mismatch, which falls against the
+        // Scaffold's own `ground` fill showing through.
+        //
+        // `Flexible(fit: FlexFit.tight)` rather than `Expanded` here
+        // deliberately: it fills the remaining Column space identically
+        // (`Expanded` IS just `Flexible(fit: FlexFit.tight)` — see its own
+        // source), but as a DIFFERENT runtime type, so it doesn't get
+        // confused with an `Expanded` ancestor elsewhere in this subtree.
+        Flexible(
+          fit: FlexFit.tight,
+          child: LayoutBuilder(
+            builder: (context, constraints) {
+              final innerAvailableHeight = constraints.maxHeight;
+              // The reserved chrome-clearance must never exceed the height
+              // that actually exists, or the bottom offset alone (applied
+              // unconditionally, regardless of the legend's own height)
+              // could push the floating overlay's `Positioned` bounds
+              // negative on an extremely short viewport. On absurdly tiny
+              // viewports the legend is allowed to degrade toward zero
+              // visible height; a negative/invalid `Positioned` offset is
+              // not.
+              final effectiveLegendBottomPadding = math.max(
+                0.0,
+                math.min(legendBottomPadding, innerAvailableHeight),
+              );
+              final overlayLegendMaxHeight =
+                  innerAvailableHeight * kLegendMaxHeightFraction;
+
+              final canvasStack = Stack(
+                children: [
+                  TopoCanvas(
+                    key: canvasKey,
+                    imagePath: imagePath,
+                    imageSize: imageSize,
+                    transformationController: transformationController,
+                    activeCropXpct: cropXpct,
+                    activeCropWidthPct: cropWidthPct,
                   ),
-                ),
-            ],
+                  if (sliceMode && !readOnly)
+                    Positioned.fill(
+                      // SliceTool is sized to the actual rendered
+                      // viewport (via LayoutBuilder) rather than the
+                      // image's natural `imageSize`, and its opaque
+                      // gesture detector sits on top of TopoCanvas —
+                      // see SliceTool's class doc for why that's what
+                      // keeps slice-mode taps from ever reaching
+                      // TopoCanvas's own draw/view gesture handling
+                      // underneath.
+                      child: LayoutBuilder(
+                        builder: (context, sliceConstraints) => SliceTool(
+                          size: Size(
+                            sliceConstraints.maxWidth,
+                            sliceConstraints.maxHeight,
+                          ),
+                          // Passed so SliceTool can map taps
+                          // through the photo's actual on-screen
+                          // rect rather than the raw viewport
+                          // width — correct even when the photo is
+                          // horizontally letterboxed (a tall photo
+                          // / wide viewport). See SliceTool's
+                          // class doc.
+                          imageSize: imageSize,
+                          transformationController: transformationController,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+
+              // The canvas ALWAYS takes the entire region (no row reserved
+              // for RouteLegend below it — the image fills the whole
+              // screen, permanently) and RouteLegend floats on top instead,
+              // via a Positioned overlay that takes no layout space. Gated
+              // on `hasRoutes` so an empty wall doesn't float a useless
+              // empty glass chip.
+              return Stack(
+                children: [
+                  Positioned.fill(child: canvasStack),
+                  // Fix 1/3 (legend expand/collapse): the full RouteLegend
+                  // card and the compact chip are mutually exclusive views of
+                  // the SAME `legendExpandedProvider` state, not two
+                  // independently-toggled widgets — exactly one of them (or
+                  // neither, when `!hasRoutes`) is ever in the tree at once.
+                  // `topo-route-legend-overlay` lives ONLY on the expanded
+                  // card (not on this outer Positioned) so a widget-test
+                  // finder for that key is a true "is the full card showing"
+                  // signal — absent while only the collapsed chip
+                  // (`topo-route-legend-chip`) is present.
+                  if (hasRoutes)
+                    Positioned(
+                      left: MasiSpacing.md,
+                      right: MasiSpacing.md,
+                      bottom: effectiveLegendBottomPadding,
+                      child: legendExpanded
+                          ? GlassChrome(
+                              key: const Key('topo-route-legend-overlay'),
+                              strong: true,
+                              // `Material(type: transparency)` — required so
+                              // RouteLegend's ListTiles have a Material
+                              // ANCESTOR closer than the Scaffold's own:
+                              // without it, GlassChrome's own colored/
+                              // blurred Container sits BETWEEN each ListTile
+                              // and the nearest Material (the Scaffold's),
+                              // which Flutter flags as a debug assertion
+                              // ("ListTile background color or ink splashes
+                              // may be invisible") since that opaque layer
+                              // would paint over — and hide — the
+                              // ListTile's own background/ink-splash
+                              // effects.
+                              child: Material(
+                                type: MaterialType.transparency,
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    _LegendHeader(
+                                      routeCount: drawState.routes.length,
+                                      onToggle: () => ref
+                                          .read(legendExpandedProvider.notifier)
+                                          .toggle(),
+                                    ),
+                                    RouteLegend(
+                                      maxHeight: overlayLegendMaxHeight,
+                                      readOnly: readOnly,
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            )
+                          : Align(
+                              alignment: Alignment.centerLeft,
+                              child: _LegendChip(
+                                key: const Key('topo-route-legend-chip'),
+                                routeCount: drawState.routes.length,
+                                onTap: () => ref
+                                    .read(legendExpandedProvider.notifier)
+                                    .toggle(),
+                              ),
+                            ),
+                    ),
+                ],
+              );
+            },
           ),
         ),
-        const RouteLegend(),
       ],
+    );
+  }
+}
+
+/// `'$n route(s)'` label shared by [_LegendChip] and [_LegendHeader], so the
+/// collapsed and expanded states of the legend always agree on wording.
+String _routeCountLabel(int n) => '$n ${n == 1 ? 'route' : 'routes'}';
+
+/// The collapsed form of the floating route-legend overlay (Fix 1/3): a
+/// compact frosted pill showing just the route count, tappable to re-expand
+/// [RouteLegend] via [legendExpandedProvider]. Shown instead of the full card
+/// while [DrawMode.draw] is active (see [LegendExpandedController.setForMode])
+/// or whenever the user has manually collapsed it, so the full route list
+/// never sits over the surface the user is actively drawing on.
+class _LegendChip extends StatelessWidget {
+  const _LegendChip({super.key, required this.routeCount, required this.onTap});
+
+  final int routeCount;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return GlassChrome(
+      strong: true,
+      padding: const EdgeInsets.symmetric(
+        horizontal: MasiSpacing.md,
+        vertical: MasiSpacing.sm,
+      ),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(
+              _routeCountLabel(routeCount),
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(color: colors.ink),
+            ),
+            const SizedBox(width: MasiSpacing.xs),
+            Icon(Icons.keyboard_arrow_up, size: 18, color: colors.ink),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The expanded [RouteLegend] card's header (Fix 1/3): a grab handle, the
+/// route count, and a collapse chevron, tappable anywhere to collapse back to
+/// [_LegendChip] via [legendExpandedProvider]. Lives INSIDE the card's own
+/// `Material(type: transparency)` (see the legend-overlay build site) so its
+/// [InkWell] gets a splash.
+class _LegendHeader extends StatelessWidget {
+  const _LegendHeader({required this.routeCount, required this.onToggle});
+
+  final int routeCount;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return InkWell(
+      onTap: onToggle,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          MasiSpacing.sm,
+          MasiSpacing.xs,
+          MasiSpacing.xs,
+          MasiSpacing.xs,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Center(
+              child: Container(
+                width: 32,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.ink3,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: MasiSpacing.xs),
+            Row(
+              children: [
+                Text(
+                  _routeCountLabel(routeCount),
+                  style: Theme.of(
+                    context,
+                  ).textTheme.labelLarge?.copyWith(color: colors.ink),
+                ),
+                const Spacer(),
+                Icon(Icons.keyboard_arrow_down, size: 18, color: colors.ink),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

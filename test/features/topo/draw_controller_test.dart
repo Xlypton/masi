@@ -444,36 +444,184 @@ void main() {
     },
   );
 
-  test('placeSymbol is a no-op when there is no selected route', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+  // --- Symbol-placement fix: auto-select + hint (see draw_controller.dart's
+  // placeSymbol doc and lib/features/topo/presentation/topo_canvas.dart's
+  // _beginInteraction) -------------------------------------------------
+  //
+  // BEFORE this fix, `placeSymbol` with no selected route silently no-oped
+  // regardless of whether any routes existed at all -- the two tests this
+  // section replaces ('placeSymbol is a no-op when there is no selected
+  // route' and 'placeSymbol is a no-op when there is no active symbol')
+  // asserted exactly that pure no-op for BOTH cases. That silent no-op when
+  // routes DID exist (just none selected) was the bug: a user who activated
+  // a symbol without first tapping a route to select it got a canvas that
+  // appeared totally unresponsive. S1 below is the corrected replacement for
+  // the "no selected route" case (routes non-empty now auto-selects
+  // routes.last instead of no-op'ing). S2 covers the genuinely-empty-routes
+  // case, which still cannot place anything but must now be distinguishable
+  // (via the returned outcome) so the caller can show a hint instead of
+  // doing nothing. S4/S4b preserve the "no active symbol" no-op verbatim
+  // (that half of the old behavior was correct and is NOT changed) while
+  // additionally asserting the new outcome value and the no-routes-at-all
+  // sub-case.
 
-    notifier.addPoint(const Offset(0.1, 0.1));
-    notifier.addPoint(const Offset(0.2, 0.2));
-    notifier.commitRoute();
+  test(
+    'S1: placeSymbol with no route selected but routes non-empty '
+    'auto-selects routes.last and places the symbol there',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
 
-    notifier.setActiveSymbol(SymbolType.anchor);
-    final before = container.read(drawControllerProvider).routes;
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
 
-    notifier.placeSymbol(const Offset(0.5, 0.5));
+      notifier.addPoint(const Offset(0.3, 0.3));
+      notifier.addPoint(const Offset(0.4, 0.4));
+      notifier.commitRoute();
 
-    expect(container.read(drawControllerProvider).routes, before);
-  });
+      final routes = container.read(drawControllerProvider).routes;
+      final r1 = routes[0];
+      final r2 = routes[1];
+      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
 
-  test('placeSymbol is a no-op when there is no active symbol', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+      notifier.setActiveSymbol(SymbolType.bolt);
+      const placedAt = Offset(0.5, 0.5);
+      final outcome = await notifier.placeSymbol(placedAt);
 
-    notifier.addPoint(const Offset(0.1, 0.1));
-    notifier.addPoint(const Offset(0.2, 0.2));
-    notifier.commitRoute();
-    final routeId = container.read(drawControllerProvider).routes.first.id;
+      expect(outcome, SymbolPlacementOutcome.autoSelectedAndPlaced);
 
-    notifier.selectRoute(routeId);
-    final before = container.read(drawControllerProvider).routes;
+      final state = container.read(drawControllerProvider);
+      expect(state.selectedRouteId, r2.id);
+      final updatedR2 = state.routes.firstWhere((r) => r.id == r2.id);
+      final updatedR1 = state.routes.firstWhere((r) => r.id == r1.id);
+      expect(updatedR2.symbols, [
+        const TopoSymbol(type: SymbolType.bolt, position: placedAt),
+      ]);
+      expect(updatedR1.symbols, isEmpty);
+    },
+  );
 
-    notifier.placeSymbol(const Offset(0.5, 0.5));
+  test(
+    'S2: placeSymbol with routes empty does not throw, places nothing, '
+    'leaves selectedRouteId null, and returns noRouteAvailable',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+      notifier.setActiveSymbol(SymbolType.bolt);
+      expect(container.read(drawControllerProvider).routes, isEmpty);
 
-    expect(container.read(drawControllerProvider).routes, before);
-  });
+      final outcome = await notifier.placeSymbol(const Offset(0.5, 0.5));
+
+      expect(outcome, SymbolPlacementOutcome.noRouteAvailable);
+      final state = container.read(drawControllerProvider);
+      expect(state.routes, isEmpty);
+      expect(state.selectedRouteId, isNull);
+    },
+  );
+
+  test(
+    'S3: placeSymbol with a route already explicitly selected places on '
+    'THAT route (not routes.last, if different), leaves selectedRouteId '
+    'unchanged, and returns the plain placed outcome (distinguishable from '
+    'auto-selected)',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+
+      notifier.addPoint(const Offset(0.3, 0.3));
+      notifier.addPoint(const Offset(0.4, 0.4));
+      notifier.commitRoute();
+
+      final routes = container.read(drawControllerProvider).routes;
+      final r1 = routes[0];
+      final r2 = routes[1];
+
+      // Explicitly select r1 -- NOT routes.last (r2) -- so a bug that
+      // ignored the explicit selection and fell back to routes.last would
+      // be caught.
+      notifier.selectRoute(r1.id);
+      notifier.setActiveSymbol(SymbolType.anchor);
+
+      const placedAt = Offset(0.15, 0.15);
+      final outcome = await notifier.placeSymbol(placedAt);
+
+      expect(outcome, SymbolPlacementOutcome.placed);
+      expect(outcome, isNot(SymbolPlacementOutcome.autoSelectedAndPlaced));
+
+      final state = container.read(drawControllerProvider);
+      expect(state.selectedRouteId, r1.id);
+      final updatedR1 = state.routes.firstWhere((r) => r.id == r1.id);
+      final updatedR2 = state.routes.firstWhere((r) => r.id == r2.id);
+      expect(updatedR1.symbols, [
+        const TopoSymbol(type: SymbolType.anchor, position: placedAt),
+      ]);
+      expect(updatedR2.symbols, isEmpty);
+    },
+  );
+
+  test(
+    'S4: addPoint still appends to currentPoints exactly as before when no '
+    'symbol is active -- the line-drawing path is untouched by the '
+    'placeSymbol auto-select/hint fix',
+    () {
+      final notifier = container.read(drawControllerProvider.notifier);
+      expect(container.read(drawControllerProvider).activeSymbol, isNull);
+
+      notifier.addPoint(const Offset(0.7, 0.7));
+      expect(container.read(drawControllerProvider).currentPoints, [
+        const Offset(0.7, 0.7),
+      ]);
+
+      notifier.addPoint(const Offset(0.8, 0.8));
+      expect(container.read(drawControllerProvider).currentPoints, [
+        const Offset(0.7, 0.7),
+        const Offset(0.8, 0.8),
+      ]);
+    },
+  );
+
+  test(
+    'S4b: placeSymbol with no active symbol returns noActiveSymbol and '
+    'makes no state change, even with a route already selected',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+      final routeId = container.read(drawControllerProvider).routes.first.id;
+      notifier.selectRoute(routeId);
+      expect(container.read(drawControllerProvider).activeSymbol, isNull);
+
+      final before = container.read(drawControllerProvider);
+      final outcome = await notifier.placeSymbol(const Offset(0.5, 0.5));
+
+      expect(outcome, SymbolPlacementOutcome.noActiveSymbol);
+      final after = container.read(drawControllerProvider);
+      expect(after.routes, before.routes);
+      expect(after.selectedRouteId, before.selectedRouteId);
+      expect(after.currentPoints, before.currentPoints);
+    },
+  );
+
+  test(
+    'placeSymbol with no active symbol is a no-op and returns '
+    'noActiveSymbol even with no route selected and no routes at all',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+      expect(container.read(drawControllerProvider).activeSymbol, isNull);
+      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+      expect(container.read(drawControllerProvider).routes, isEmpty);
+
+      final outcome = await notifier.placeSymbol(const Offset(0.5, 0.5));
+
+      expect(outcome, SymbolPlacementOutcome.noActiveSymbol);
+      expect(container.read(drawControllerProvider).routes, isEmpty);
+      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+    },
+  );
 
   test(
     'A6: removeRoute removes the route and clears selectedRouteId iff it '

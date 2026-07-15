@@ -3,6 +3,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart' as db;
 import '../domain/slice_geometry.dart';
+import 'photo_files.dart';
 
 /// Domain-level view of a `Photos` row (original or slice), independent of
 /// the generated drift data class.
@@ -72,12 +73,33 @@ class PhotoRef {
 /// fresh row per [SliceSpec], so callers never have to diff old vs. new
 /// slice geometry themselves.
 class PhotoRepository {
-  PhotoRepository(this._db, {required this.nowMs});
+  PhotoRepository(
+    this._db, {
+    required this.nowMs,
+    this.currentUid = _noUid,
+    PhotoFiles? photoFiles,
+  }) : _photoFiles = photoFiles ?? PhotoFiles();
 
   final db.AppDatabase _db;
   final int Function() nowMs;
 
+  /// The Supabase Auth uid of the signed-in user (or `null` if signed out),
+  /// read lazily at INSERT time to stamp a new slice photo's `ownerId`.
+  /// Defaults to always-`null` so existing constructors/tests keep their
+  /// pre-sync-pivot signed-out behavior unchanged.
+  final String? Function() currentUid;
+
+  static String? _noUid() => null;
+
   static const _uuid = Uuid();
+
+  /// Resolves a stored `localPath` (which may be the canonical relative
+  /// form, or a legacy/stale absolute one — see [PhotoFiles.resolvePhotoPath])
+  /// to an absolute path, self-healing the DB row when a stale absolute path
+  /// is found to have moved (container rotation). Injectable so tests can
+  /// point it at a temp directory without a `path_provider` platform fake;
+  /// defaults to the real app-documents-backed [PhotoFiles].
+  final PhotoFiles _photoFiles;
 
   /// Replaces the full set of slices for [originalPhotoId] with one row per
   /// entry in [slices].
@@ -96,6 +118,16 @@ class PhotoRepository {
     String originalLocalPath,
     List<SliceSpec> slices,
   ) async {
+    // Canonicalize BEFORE the transaction: originalLocalPath may already be
+    // a resolved absolute path (e.g. handed back by
+    // LibraryCrudRepository.photoLocalPath), and every slice row must store
+    // the same rotation-proof relative form the original does. Resolve once
+    // (not per-slice) for the in-memory PhotoRefs returned below, so their
+    // `localPath` matches loadOriginal/loadSlices' always-absolute contract.
+    final stored = await _photoFiles.canonicalStoredPath(originalLocalPath);
+    final resolvedLocalPath = (await _photoFiles.resolvePhotoPath(
+      stored,
+    )).path;
     return _db.transaction(() async {
       final now = nowMs();
 
@@ -123,13 +155,14 @@ class PhotoRepository {
                 createdAt: now,
                 updatedAt: now,
                 wallId: wallId,
-                localPath: originalLocalPath,
+                localPath: stored,
                 kind: 'slice',
                 width: originalWidth,
                 height: originalHeight,
                 parentPhotoId: Value(originalPhotoId),
                 cropXpct: Value(slice.cropXpct),
                 cropWidthPct: Value(slice.cropWidthPct),
+                ownerId: Value(currentUid()),
               ),
             );
         inserted.add(
@@ -137,7 +170,7 @@ class PhotoRepository {
             id: id,
             wallId: wallId,
             kind: 'slice',
-            localPath: originalLocalPath,
+            localPath: resolvedLocalPath,
             width: originalWidth,
             height: originalHeight,
             parentPhotoId: originalPhotoId,
@@ -164,7 +197,7 @@ class PhotoRepository {
           ..orderBy([(t) => OrderingTerm(expression: t.cropXpct)]))
         .get();
 
-    return [for (final row in rows) _rowToRef(row)];
+    return Future.wait([for (final row in rows) _rowToRef(row)]);
   }
 
   /// Loads the non-deleted `kind: 'original'` photo for [wallId], or `null`
@@ -178,15 +211,39 @@ class PhotoRepository {
         ))
         .getSingleOrNull();
 
-    return row == null ? null : _rowToRef(row);
+    return row == null ? null : await _rowToRef(row);
   }
 
-  PhotoRef _rowToRef(db.Photo row) {
+  /// Resolves [row]'s stored `localPath` to an absolute path and self-heals
+  /// the DB row's `localPath` (and ONLY `localPath` — not
+  /// `dirty`/`updatedAt`/`remoteId`, since this is a local-only self-heal,
+  /// not a semantic edit that should trigger re-sync) when a stale absolute
+  /// path is found to have moved.
+  ///
+  /// Uses [PhotoFiles.resolvePhotoPathSync] (NOT the awaiting
+  /// [PhotoFiles.resolvePhotoPath]): `loadOriginal`/`loadSlices` are driven
+  /// on the canvas widget mount under a `flutter_test` `pump()`, where
+  /// awaiting a real `path_provider` call never completes and hard-hangs
+  /// `pumpAndSettle`. The sync resolver is cache-backed and returns
+  /// immediately; on a cold cache it best-effort returns the stored value
+  /// (and warms for next time), so a first load may be unresolved but never
+  /// hangs. The heal signal it returns is still applied here via the
+  /// (async) DB write.
+  Future<PhotoRef> _rowToRef(db.Photo row) async {
+    final resolution = _photoFiles.resolvePhotoPathSync(row.localPath);
+    final healed = resolution.healedRelativePath;
+    if (healed != null) {
+      await (_db.update(
+        _db.photos,
+      )..where((t) => t.id.equals(row.id))).write(
+        db.PhotosCompanion(localPath: Value(healed)),
+      );
+    }
     return PhotoRef(
       id: row.id,
       wallId: row.wallId,
       kind: row.kind,
-      localPath: row.localPath,
+      localPath: resolution.path,
       width: row.width,
       height: row.height,
       parentPhotoId: row.parentPhotoId,

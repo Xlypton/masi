@@ -1,8 +1,13 @@
+import 'dart:io';
+
 import 'package:climbtopo/core/db/app_database.dart';
+import 'package:climbtopo/features/topo/data/photo_files.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/slice_geometry.dart';
+import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
 
 void main() {
   late AppDatabase db;
@@ -314,5 +319,321 @@ void main() {
     )..where((t) => t.id.equals(inserted.single.id))).getSingle();
     expect(raw.createdAt, 2000);
     expect(raw.updatedAt, 2000);
+  });
+
+  group(
+    'S2: relative-path resolution + self-heal (container-rotation fix)',
+    () {
+      late Directory docsDir;
+      late PhotoFiles photoFiles;
+      late PhotoRepository healingRepo;
+
+      String photosDirPath() => p.join(docsDir.path, 'photos');
+
+      setUp(() async {
+        docsDir = Directory.systemTemp.createTempSync(
+          'photo_repository_docs_',
+        );
+        photoFiles = PhotoFiles(docsDir: () async => docsDir);
+        // resolvePhotoPath drives resolution off PhotoFiles' memoized docs
+        // path (it deliberately never awaits path_provider on its hot path,
+        // so it can't hang a widget pump); warm that cache up front so these
+        // await-driven unit tests see deterministic resolution/heal.
+        await photoFiles.warmDocsPath();
+        healingRepo = PhotoRepository(
+          db,
+          nowMs: () => 1000,
+          photoFiles: photoFiles,
+        );
+      });
+
+      tearDown(() {
+        if (docsDir.existsSync()) docsDir.deleteSync(recursive: true);
+      });
+
+      Future<void> setOriginalLocalPath(String localPath) {
+        return (db.update(
+          db.photos,
+        )..where((t) => t.id.equals(originalPhotoId))).write(
+          PhotosCompanion(localPath: Value(localPath)),
+        );
+      }
+
+      test(
+        'loadOriginal resolves an already-relative stored localPath to an '
+        'absolute path under the CURRENT docs dir, and does not rewrite the '
+        'DB row (nothing to heal)',
+        () async {
+          await setOriginalLocalPath('photos/$originalPhotoId.jpg');
+
+          final loaded = await healingRepo.loadOriginal(wallId);
+
+          expect(
+            loaded!.localPath,
+            p.join(docsDir.path, 'photos/$originalPhotoId.jpg'),
+          );
+
+          final raw = await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(originalPhotoId))).getSingle();
+          expect(raw.localPath, 'photos/$originalPhotoId.jpg');
+        },
+      );
+
+      test(
+        'loadOriginal self-heals a STALE absolute localPath (simulating a '
+        'container-UUID rotation) whose file has moved to the current docs '
+        'dir under the same basename: returns the new absolute path AND '
+        'rewrites the DB row to the relative form, WITHOUT touching '
+        'updatedAt/dirty',
+        () async {
+          Directory(photosDirPath()).createSync(recursive: true);
+          File(
+            p.join(photosDirPath(), '$originalPhotoId.jpg'),
+          ).writeAsBytesSync(List<int>.filled(4, 1));
+          const staleAbsolute =
+              '/private/var/mobile/Containers/Data/Application/'
+              'OLD-UUID/Documents/photos/photo-original-1.jpg';
+          await setOriginalLocalPath(staleAbsolute);
+          final before = await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(originalPhotoId))).getSingle();
+
+          final loaded = await healingRepo.loadOriginal(wallId);
+
+          expect(
+            loaded!.localPath,
+            p.join(photosDirPath(), '$originalPhotoId.jpg'),
+          );
+
+          final after = await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(originalPhotoId))).getSingle();
+          expect(after.localPath, 'photos/$originalPhotoId.jpg');
+          expect(
+            after.updatedAt,
+            before.updatedAt,
+            reason: 'the self-heal must touch ONLY localPath, not updatedAt '
+                '(it is a local-only heal, not a semantic edit that should '
+                'trigger re-sync)',
+          );
+          expect(after.dirty, isFalse);
+        },
+      );
+
+      test(
+        'loadOriginal does NOT heal a stale absolute localPath whose '
+        're-derived candidate does not exist either (the photo is '
+        'genuinely missing, not just moved) — still returns a best-effort '
+        'absolute path so the existing "missing photo" UI degrades '
+        'gracefully',
+        () async {
+          const staleAbsolute =
+              '/private/var/mobile/Containers/Data/Application/'
+              'OLD-UUID/Documents/photos/photo-original-1.jpg';
+          await setOriginalLocalPath(staleAbsolute);
+
+          final loaded = await healingRepo.loadOriginal(wallId);
+
+          expect(
+            loaded!.localPath,
+            p.join(photosDirPath(), '$originalPhotoId.jpg'),
+          );
+
+          final raw = await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(originalPhotoId))).getSingle();
+          expect(
+            raw.localPath,
+            staleAbsolute,
+            reason: 'must not heal to a relative path pointing at a file '
+                'that was never confirmed to exist',
+          );
+        },
+      );
+
+      test(
+        'loadOriginal treats a legacy absolute path whose file still '
+        'exists AT THAT EXACT PATH as valid, unchanged — no heal needed',
+        () async {
+          final legacyAbsolute = p.join(docsDir.path, 'legacy-original.jpg');
+          File(legacyAbsolute).writeAsBytesSync(List<int>.filled(4, 2));
+          await setOriginalLocalPath(legacyAbsolute);
+
+          final loaded = await healingRepo.loadOriginal(wallId);
+
+          expect(loaded!.localPath, legacyAbsolute);
+
+          final raw = await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(originalPhotoId))).getSingle();
+          expect(raw.localPath, legacyAbsolute);
+        },
+      );
+
+      test(
+        'loadSlices resolves + heals every slice row independently',
+        () async {
+          await healingRepo.replaceSlices(
+            wallId,
+            originalPhotoId,
+            originalWidth,
+            originalHeight,
+            'photos/$originalPhotoId.jpg',
+            const [SliceSpec(0.0, 0.5), SliceSpec(0.5, 0.5)],
+          );
+          Directory(photosDirPath()).createSync(recursive: true);
+          File(
+            p.join(photosDirPath(), '$originalPhotoId.jpg'),
+          ).writeAsBytesSync(List<int>.filled(4, 3));
+          const staleAbsolute =
+              '/private/var/mobile/Containers/Data/Application/'
+              'OLD-UUID/Documents/photos/photo-original-1.jpg';
+          await (db.update(
+            db.photos,
+          )..where(
+                (t) =>
+                    t.parentPhotoId.equals(originalPhotoId) &
+                    t.kind.equals('slice'),
+              ))
+              .write(PhotosCompanion(localPath: Value(staleAbsolute)));
+
+          final loaded = await healingRepo.loadSlices(originalPhotoId);
+
+          expect(loaded, hasLength(2));
+          for (final slice in loaded) {
+            expect(
+              slice.localPath,
+              p.join(photosDirPath(), '$originalPhotoId.jpg'),
+            );
+          }
+
+          final rawSlices = await (db.select(
+            db.photos,
+          )..where(
+                (t) =>
+                    t.parentPhotoId.equals(originalPhotoId) &
+                    t.kind.equals('slice'),
+              ))
+              .get();
+          expect(rawSlices, hasLength(2));
+          for (final raw in rawSlices) {
+            expect(raw.localPath, 'photos/$originalPhotoId.jpg');
+          }
+        },
+      );
+
+      test(
+        'replaceSlices canonicalizes an absolute originalLocalPath under '
+        '<currentDocsDir>/photos/ into the relative form before storing, '
+        'and returns PhotoRefs whose localPath is resolved back to '
+        'absolute',
+        () async {
+          Directory(photosDirPath()).createSync(recursive: true);
+          final absoluteOriginal = p.join(
+            photosDirPath(),
+            '$originalPhotoId.jpg',
+          );
+          File(absoluteOriginal).writeAsBytesSync(List<int>.filled(4, 4));
+
+          final inserted = await healingRepo.replaceSlices(
+            wallId,
+            originalPhotoId,
+            originalWidth,
+            originalHeight,
+            absoluteOriginal,
+            const [SliceSpec(0.0, 1.0)],
+          );
+
+          expect(inserted.single.localPath, absoluteOriginal);
+
+          final raw = await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(inserted.single.id))).getSingle();
+          expect(raw.localPath, 'photos/$originalPhotoId.jpg');
+        },
+      );
+
+      test(
+        'replaceSlices leaves a foreign absolute originalLocalPath (outside '
+        '<currentDocsDir>/photos/) unchanged, since it cannot be '
+        'canonicalized against a directory the app does not own it under',
+        () async {
+          final foreignDir = Directory.systemTemp.createTempSync(
+            'photo_repository_foreign_',
+          );
+          addTearDown(() => foreignDir.deleteSync(recursive: true));
+          final foreignAbsolute = p.join(foreignDir.path, 'foreign.jpg');
+          File(foreignAbsolute).writeAsBytesSync(List<int>.filled(4, 5));
+
+          final inserted = await healingRepo.replaceSlices(
+            wallId,
+            originalPhotoId,
+            originalWidth,
+            originalHeight,
+            foreignAbsolute,
+            const [SliceSpec(0.0, 1.0)],
+          );
+
+          expect(inserted.single.localPath, foreignAbsolute);
+
+          final raw = await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(inserted.single.id))).getSingle();
+          expect(raw.localPath, foreignAbsolute);
+        },
+      );
+    },
+  );
+
+  group('P1-b: ownerId stamping on create', () {
+    test(
+      'replaceSlices stamps ownerId on every inserted slice with the '
+      'injected currentUid',
+      () async {
+        final owned = PhotoRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+        );
+
+        final inserted = await owned.replaceSlices(
+          wallId,
+          originalPhotoId,
+          originalWidth,
+          originalHeight,
+          originalLocalPath,
+          [const SliceSpec(0.0, 0.5), const SliceSpec(0.5, 0.5)],
+        );
+
+        expect(inserted, hasLength(2));
+        for (final slice in inserted) {
+          final raw = await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(slice.id))).getSingle();
+          expect(raw.ownerId, 'u1');
+        }
+      },
+    );
+
+    test(
+      'default currentUid (signed-out) leaves ownerId null on inserted '
+      'slices',
+      () async {
+        final inserted = await repo.replaceSlices(
+          wallId,
+          originalPhotoId,
+          originalWidth,
+          originalHeight,
+          originalLocalPath,
+          [const SliceSpec(0.0, 1.0)],
+        );
+
+        final raw = await (db.select(
+          db.photos,
+        )..where((t) => t.id.equals(inserted.single.id))).getSingle();
+        expect(raw.ownerId, isNull);
+      },
+    );
   });
 }

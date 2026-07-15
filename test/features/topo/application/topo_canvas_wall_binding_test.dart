@@ -87,7 +87,13 @@ void main() {
       expect(photo, isNotNull);
       expect(photo!.id, photoId);
       expect(photo.wallId, wall.id);
-      expect(photo.localPath, '/tmp/wall-photo.jpg');
+      // #17 (photo-ownership fix): attachPhotoToWall copies the picked file
+      // into the app-owned photos/ dir and stores THAT relative path, not
+      // the transient source path handed to attachPhotoToWall above — so
+      // this must be the owned relative form `photos/<uuid>.jpg`, never
+      // the original '/tmp/wall-photo.jpg' source path.
+      expect(photo.localPath, matches(RegExp(r'^photos/.*\.jpg$')));
+      expect(photo.localPath, isNot('/tmp/wall-photo.jpg'));
 
       final state = container.read(drawControllerProvider);
       expect(state.activeWallId, wall.id);
@@ -154,7 +160,10 @@ void main() {
       expect(reloaded!.id, photoId);
       expect(reloaded.wallId, wall.id, reason: 'must belong to the navigated wall');
       expect(reloaded.kind, 'original');
-      expect(reloaded.localPath, '/tmp/picked.jpg');
+      // #17 (photo-ownership fix): the owned relative path, not the
+      // transient source path passed to attachPhotoToWall.
+      expect(reloaded.localPath, matches(RegExp(r'^photos/.*\.jpg$')));
+      expect(reloaded.localPath, isNot('/tmp/picked.jpg'));
       expect(reloaded.width, 640);
       expect(reloaded.height, 480);
 
@@ -240,7 +249,12 @@ void main() {
       final stateA = container.read(drawControllerProvider);
       expect(stateA.activeWallId, wallA.id);
       expect(stateA.routes, hasLength(2));
-      expect(selectedImagePath, '/tmp/wall-a.jpg');
+      // #17 (photo-ownership fix): beforeLoadForWall receives the loaded
+      // PhotoRef, whose localPath is now the owned relative form, not the
+      // original '/tmp/wall-a.jpg' source path attachPhotoToWall was called
+      // with above.
+      expect(selectedImagePath, matches(RegExp(r'^photos/.*\.jpg$')));
+      expect(selectedImagePath, isNot('/tmp/wall-a.jpg'));
 
       // Now enter wall B (the photo-less case) on the SAME container/
       // notifier — this is the real-app scenario: navigating from A to B

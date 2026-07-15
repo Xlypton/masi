@@ -11,6 +11,31 @@ import 'package:climbtopo/features/topo/domain/topo_route.dart';
 /// drawing mode.
 enum DrawMode { view, draw }
 
+/// The result of a [DrawController.placeSymbol] call, distinguishing the
+/// four cases callers (currently just `_TopoCanvasState._beginInteraction`)
+/// need to react to differently -- specifically, whether a hint should be
+/// shown to the user.
+enum SymbolPlacementOutcome {
+  /// The symbol was placed on the route [DrawState.selectedRouteId] already
+  /// pointed at (it was explicitly selected before this call).
+  placed,
+
+  /// No route was selected, but [DrawState.routes] was non-empty, so
+  /// [DrawController.placeSymbol] auto-selected `routes.last` (the most
+  /// recently committed route) and placed the symbol on it.
+  autoSelectedAndPlaced,
+
+  /// No route was selected and [DrawState.routes] was empty, so there was
+  /// nothing to place the symbol on. Callers should surface a hint (e.g. "draw
+  /// a route first") rather than silently doing nothing.
+  noRouteAvailable,
+
+  /// [DrawState.activeSymbol] was null, so there was no symbol type to
+  /// place. This is a plain no-op with no user-facing feedback -- symmetric
+  /// with the pre-existing no-active-symbol no-op behavior.
+  noActiveSymbol,
+}
+
 /// Immutable state for the topo route drawing feature.
 ///
 /// [currentPoints] and the points inside [routes] are expressed in percent
@@ -283,18 +308,53 @@ class DrawController extends Notifier<DrawState> {
   }
 
   /// Appends a [TopoSymbol] of [DrawState.activeSymbol]'s type at [percent]
-  /// to the currently selected route. No-op if there is no selected route
-  /// or no active symbol.
+  /// to a route, and returns which of the four [SymbolPlacementOutcome]
+  /// cases occurred:
+  ///
+  /// - No [DrawState.activeSymbol] (regardless of selection/routes): no-op,
+  ///   returns [SymbolPlacementOutcome.noActiveSymbol].
+  /// - A route is already explicitly selected (via [selectRoute]) and it
+  ///   still exists in [DrawState.routes]: the symbol is placed on THAT
+  ///   route, [DrawState.selectedRouteId] is left unchanged, and this
+  ///   returns [SymbolPlacementOutcome.placed].
+  /// - No route is selected (or the selected id no longer exists) but
+  ///   [DrawState.routes] is non-empty: auto-selects `routes.last` (the
+  ///   most recently committed route), places the symbol there, updates
+  ///   [DrawState.selectedRouteId] to point at it, and returns
+  ///   [SymbolPlacementOutcome.autoSelectedAndPlaced]. This is the "auto-
+  ///   select + hint" fix -- previously this case silently no-oped, leaving
+  ///   a user who activated a symbol without first selecting a route stuck
+  ///   with an apparently unresponsive canvas.
+  /// - No route is selected and [DrawState.routes] is empty: nothing to
+  ///   place onto, no state change, returns
+  ///   [SymbolPlacementOutcome.noRouteAvailable] so the caller (see
+  ///   `_TopoCanvasState._beginInteraction`) can show a hint instead of
+  ///   silently doing nothing.
   ///
   /// Persistence write-through: see [commitRoute] doc for the sync-mutation
   /// / no-op-without-a-wall contract shared by all write-through methods.
-  Future<void> placeSymbol(Offset percent) async {
-    final selectedId = state.selectedRouteId;
+  Future<SymbolPlacementOutcome> placeSymbol(Offset percent) async {
     final symbolType = state.activeSymbol;
-    if (selectedId == null || symbolType == null) return;
+    if (symbolType == null) return SymbolPlacementOutcome.noActiveSymbol;
 
-    final index = state.routes.indexWhere((r) => r.id == selectedId);
-    if (index == -1) return;
+    final explicitId = state.selectedRouteId;
+    final explicitIndex = explicitId == null
+        ? -1
+        : state.routes.indexWhere((r) => r.id == explicitId);
+
+    final int index;
+    final SymbolPlacementOutcome outcome;
+    final int targetRouteId;
+    if (explicitId != null && explicitIndex != -1) {
+      index = explicitIndex;
+      targetRouteId = explicitId;
+      outcome = SymbolPlacementOutcome.placed;
+    } else {
+      if (state.routes.isEmpty) return SymbolPlacementOutcome.noRouteAvailable;
+      index = state.routes.length - 1;
+      targetRouteId = state.routes[index].id;
+      outcome = SymbolPlacementOutcome.autoSelectedAndPlaced;
+    }
 
     final route = state.routes[index];
     final routes = [...state.routes];
@@ -305,11 +365,15 @@ class DrawController extends Notifier<DrawState> {
       ],
     );
     routes[index] = updatedRoute;
-    state = state.copyWith(routes: routes);
+    state = state.copyWith(
+      routes: routes,
+      selectedRouteIdSet: outcome == SymbolPlacementOutcome.autoSelectedAndPlaced,
+      selectedRouteId: targetRouteId,
+    );
 
     final wallId = state.activeWallId;
     final photoId = state.activePhotoId;
-    if (wallId == null || photoId == null) return;
+    if (wallId == null || photoId == null) return outcome;
     try {
       await ref
           .read(routeRepositoryProvider)
@@ -317,6 +381,7 @@ class DrawController extends Notifier<DrawState> {
     } catch (e, st) {
       debugPrint('placeSymbol: persistence write-through failed: $e\n$st');
     }
+    return outcome;
   }
 
   /// AUTHORITATIVELY replaces free-form/grade metadata (name, grade, style,
