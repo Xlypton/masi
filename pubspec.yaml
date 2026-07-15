@@ -51,6 +51,7 @@ dependencies:
   # transitive dep via the Flutter SDK, now declared directly since it's
   # imported directly.
   characters: ^1.4.1
+  geolocator: ^14.0.3
 
 dev_dependencies:
   flutter_test:

@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../../core/location/location_service.dart';
 import '../../../core/location/photo_gps.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
@@ -265,18 +266,40 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       // extra seam beyond the existing photoPicker injection point — a
       // test supplies known bytes via photoPicker exactly as it already
       // does for the dimension-decode assertions. A photo with no EXIF GPS
-      // (or a corrupt/undecodable one) leaves the wall's coordinates null;
-      // extractGpsFromImageBytes never throws. setWallCoordinates is a DB
-      // write, though, and COULD throw -- deliberately isolated in its own
-      // try/catch (mirrors `topo_canvas_screen.dart`'s
-      // `captureWallGpsFromPhoto`, which "never throws") so a coords
-      // failure can NEVER be caught by the outer try/catch below and abort
-      // the topo+photo creation that already committed above, nor block
-      // the navigation that follows.
+      // (or a corrupt/undecodable one) falls back to the device's current
+      // location via locationServiceProvider (see
+      // `captureWallGpsFromPhoto`'s doc for the identical EXIF-wins-else-
+      // device-fallback contract on the topo canvas's own attach flow); if
+      // that ALSO has nothing, the wall's coordinates simply stay null.
+      // extractGpsFromImageBytes and LocationService.currentLocation both
+      // never throw. setWallCoordinates is a DB write, though, and COULD
+      // throw -- deliberately isolated in its own try/catch (mirrors
+      // `topo_canvas_screen.dart`'s `captureWallGpsFromPhoto`, which "never
+      // throws") so a coords failure can NEVER be caught by the outer
+      // try/catch below and abort the topo+photo creation that already
+      // committed above, nor block the navigation that follows.
       try {
         final gps = extractGpsFromImageBytes(bytes);
         if (gps != null) {
           await repo.setWallCoordinates(wallId, gps.latitude, gps.longitude);
+        } else if (!await repo.wallHasCoordinates(wallId)) {
+          // Device-location fallback only ever fills a VOID -- mirrors the
+          // guard in `topo_canvas_screen.dart`'s `captureWallGpsFromPhoto`
+          // (see that function's doc for the data-corruption scenario this
+          // closes). `wallId` here is always freshly created a few lines
+          // above, so this is a no-op safety net in THIS flow today, but
+          // keeps the two call sites' semantics identical/safe against any
+          // future change that lets this run against a pre-existing wall.
+          final device = await ref
+              .read(locationServiceProvider)
+              .currentLocation();
+          if (device != null) {
+            await repo.setWallCoordinates(
+              wallId,
+              device.latitude,
+              device.longitude,
+            );
+          }
         }
       } catch (e, st) {
         debugPrint('Failed to capture GPS for new topo $wallId: $e\n$st');

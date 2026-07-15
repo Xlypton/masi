@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/location/location_service.dart';
 import 'package:climbtopo/core/location/photo_gps.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
@@ -160,6 +161,29 @@ Future<String> resolveAttachedPhotoPath(
 /// `core/location/photo_gps.dart`'s [extractGpsFromImageBytes]), records
 /// them on [wallId] via [libraryRepo.setWallCoordinates].
 ///
+/// [locationService], if given, backs a fallback for the common no-EXIF
+/// case (screenshots, downloaded images, GPS-less cameras): when the photo
+/// itself carries no GPS, [LocationService.currentLocation] is asked for
+/// the DEVICE's current position instead, and — if one is available —
+/// THAT is recorded on [wallId]. EXIF always wins when both are present:
+/// the fallback is only ever attempted after an EXIF read comes back null.
+/// Passing no [locationService] (the default) simply skips the fallback,
+/// leaving the pre-existing EXIF-only behavior unchanged.
+///
+/// Data-corruption fix: the device-location fallback only ever fills a
+/// VOID — it is attempted ONLY when [wallId] has no coordinates yet (see
+/// [LibraryCrudRepository.wallHasCoordinates]). This function runs on
+/// EVERY photo attach, including REPLACING a wall's existing photo (the
+/// canvas's add/replace-photo action): without this guard, a wall correctly
+/// geotagged from its first photo's real EXIF GPS at the crag would have
+/// those coordinates silently overwritten by wherever the device happens to
+/// be — e.g. the user's home — the moment its photo is later replaced with
+/// a no-EXIF image (a screenshot, a downloaded photo). EXIF GPS itself is
+/// NOT subject to this guard: an EXIF read on a replacement photo always
+/// updates [wallId]'s coordinates, even overwriting existing ones — that is
+/// explicit, user-chosen photo data, not an incidental device position.
+///
+
 /// Extracted as a standalone function taking [libraryRepo] and a plain file
 /// [path] directly — mirroring [loadWallOriginalPhoto]/
 /// [resolveAttachedPhotoPath]'s own extraction above — so this is directly
@@ -168,24 +192,48 @@ Future<String> resolveAttachedPhotoPath(
 /// `ui.instantiateImageCodec` decode, and no `image_picker` dependency at
 /// all (see `test/features/topo/presentation/topo_canvas_gps_test.dart`).
 ///
-/// Never throws: a missing/unreadable file, or bytes with no EXIF GPS, is a
-/// silent no-op — this is deliberately best-effort, exactly like
-/// [extractGpsFromImageBytes] itself, so a photo with no GPS (the common
-/// case: screenshots, downloaded images, GPS-less cameras) never blocks or
-/// breaks the surrounding photo attach/load flow.
+/// Never throws: a missing/unreadable file, bytes with no EXIF GPS AND no
+/// (or no available) device location, is a silent no-op — this is
+/// deliberately best-effort, exactly like [extractGpsFromImageBytes] and
+/// [LocationService.currentLocation] themselves, so missing location data
+/// of either kind never blocks or breaks the surrounding photo attach/load
+/// flow.
 Future<void> captureWallGpsFromPhoto(
   LibraryCrudRepository libraryRepo,
   String wallId,
-  String path,
-) async {
+  String path, {
+  LocationService? locationService,
+}) async {
   try {
     final bytes = await File(path).readAsBytes();
     final gps = extractGpsFromImageBytes(bytes);
-    if (gps == null) return;
-    await libraryRepo.setWallCoordinates(wallId, gps.latitude, gps.longitude);
+    if (gps != null) {
+      await libraryRepo.setWallCoordinates(
+        wallId,
+        gps.latitude,
+        gps.longitude,
+      );
+      return;
+    }
+
+    // No EXIF GPS -- fall back to the device's current location, but ONLY
+    // to fill a VOID: if the wall already has coordinates (e.g. from a
+    // previous photo's real EXIF GPS at the crag), a replacement photo with
+    // no EXIF GPS must never silently overwrite them with wherever the
+    // device happens to be right now -- see this function's doc for the
+    // data-corruption scenario this guards against.
+    if (await libraryRepo.wallHasCoordinates(wallId)) return;
+
+    final device = await locationService?.currentLocation();
+    if (device == null) return;
+    await libraryRepo.setWallCoordinates(
+      wallId,
+      device.latitude,
+      device.longitude,
+    );
   } catch (_) {
-    // Best-effort: a missing file or decode hiccup must never break the
-    // photo attach/load flow this runs alongside.
+    // Best-effort: a missing file, decode hiccup, or location failure must
+    // never break the photo attach/load flow this runs alongside.
   }
 }
 
@@ -724,11 +772,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
       // Best-effort GPS capture (see captureWallGpsFromPhoto's doc): reads
       // the same freshly-attached file's EXIF and, if it carries GPS tags,
-      // records them on this wall. Independent of the mounted/latest-path
-      // guards below — it targets the wall, not any in-flight widget/photo
-      // state, so it's safe to run even if the user has since moved on to
-      // a different photo.
-      await captureWallGpsFromPhoto(libraryRepo, widget.wallId, path);
+      // records them on this wall; if not, falls back to the device's
+      // current location via locationServiceProvider. Independent of the
+      // mounted/latest-path guards below — it targets the wall, not any
+      // in-flight widget/photo state, so it's safe to run even if the user
+      // has since moved on to a different photo.
+      await captureWallGpsFromPhoto(
+        libraryRepo,
+        widget.wallId,
+        path,
+        locationService: ref.read(locationServiceProvider),
+      );
       if (!mounted) return;
       // Latest-path guard: if the user has already moved on to a different
       // photo since this call started (e.g. this is a stale/out-of-order

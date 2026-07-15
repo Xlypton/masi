@@ -648,6 +648,11 @@ class _MapView extends ConsumerWidget {
     final filteredTopos = topos.where(filter.matches).toList();
     final colors = MasiColors.of(context);
     final withCoords = filteredTopos.where((t) => t.hasCoordinates).toList();
+    // Best-effort device position (see myLocationProvider's doc): loading,
+    // error, and denied/unavailable (a `null` AsyncData) all collapse to
+    // "no marker" here — the map and every topo marker render exactly the
+    // same either way.
+    final myLocation = ref.watch(myLocationProvider).asData?.value;
 
     final center = withCoords.isEmpty
         ? const LatLng(0, 0)
@@ -690,6 +695,27 @@ class _MapView extends ConsumerWidget {
               ),
           ],
         ),
+        // The "you are here" marker, in its own MarkerLayer placed AFTER the
+        // topo markers' layer so it always paints above them (flutter_map
+        // stacks `FlutterMap.children` in list order). Omitted entirely
+        // whenever myLocation is null — loading, denied, disabled, or any
+        // other resolution failure (see myLocationProvider's doc) — so the
+        // map and topo markers are unaffected either way.
+        if (myLocation != null)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: LatLng(myLocation.latitude, myLocation.longitude),
+                width: _MyLocationMarker.size,
+                height: _MyLocationMarker.size,
+                alignment: Alignment.center,
+                child: const KeyedSubtree(
+                  key: Key('community-map-my-location'),
+                  child: _MyLocationMarker(),
+                ),
+              ),
+            ],
+          ),
         // An always-visible custom credit pill — deliberately NOT a
         // `RichAttributionWidget`, whose OSM/CARTO text is hidden behind a
         // collapsed info-icon popup until tapped, which does not satisfy
@@ -726,6 +752,37 @@ class _MapView extends ConsumerWidget {
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The Map tab's "you are here" marker: a small filled blue dot with a white
+/// ring (the familiar device-position convention), deliberately NOT styled
+/// like [_MapPinBadge] — a plain dot centered exactly on the coordinate
+/// (rather than a pin whose tip points at it) reads unambiguously as "this
+/// is where I am", distinct from every topo's pin.
+class _MyLocationMarker extends StatelessWidget {
+  const _MyLocationMarker();
+
+  static const double size = 18;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        color: Colors.blue,
+        shape: BoxShape.circle,
+        border: Border.all(color: Colors.white, width: 3),
+        boxShadow: const [
+          BoxShadow(
+            color: Colors.black38,
+            blurRadius: 4,
+            offset: Offset(0, 1),
+          ),
+        ],
+      ),
     );
   }
 }

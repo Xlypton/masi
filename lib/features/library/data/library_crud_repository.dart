@@ -579,6 +579,27 @@ class LibraryCrudRepository {
     return row?.name;
   }
 
+  /// Whether the non-deleted [db.Wall] identified by [wallId] currently has
+  /// GPS coordinates recorded (`latitude` non-null) — `false` if it has none
+  /// or the wall doesn't exist (or is soft-deleted).
+  ///
+  /// Data-corruption guard: `topo_canvas_screen.dart`'s
+  /// [captureWallGpsFromPhoto]/`topos_screen.dart`'s `_handleNewTopo` read
+  /// this before falling back to the device's current location for a
+  /// no-EXIF photo, so that fallback only ever fills a VOID (a wall with no
+  /// coordinates yet) and never overwrites coordinates the wall already has
+  /// — e.g. from a previous photo's real EXIF GPS at the actual crag — with
+  /// wherever the device happens to be right now (e.g. the user's home,
+  /// weeks later, replacing the wall's photo with a screenshot).
+  Future<bool> wallHasCoordinates(String wallId) async {
+    final row =
+        await (_db.select(_db.walls)
+              ..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())
+              ..limit(1))
+            .getSingleOrNull();
+    return row?.latitude != null;
+  }
+
   // ---------------------------------------------------------------------
   // Topos (flat Wall list for the Topos home)
   // ---------------------------------------------------------------------

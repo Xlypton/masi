@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/location/location_service.dart';
 import 'package:climbtopo/features/community/application/community_providers.dart';
 import 'package:climbtopo/features/community/presentation/community_screen.dart';
 import 'package:climbtopo/shared/filtering/grade_range.dart';
@@ -35,14 +36,37 @@ class _NoopTileProvider extends TileProvider {
   }
 }
 
+/// A [LocationService] double that resolves to whatever fixed [result] it
+/// was constructed with — no real geolocator/platform-channel call ever
+/// happens under `flutter_test`.
+class _FakeLocationService implements LocationService {
+  const _FakeLocationService(this.result);
+
+  final DeviceLocation? result;
+
+  @override
+  Future<DeviceLocation?> currentLocation() async => result;
+}
+
 /// Builds a [ProviderContainer] wired to a fresh in-memory database.
 /// Mirrors `topos_screen_test.dart`'s `_makeContainer`.
-ProviderContainer _makeContainer() {
+///
+/// [locationService], when given, overrides `locationServiceProvider` (see
+/// `myLocationProvider`'s "you are here" marker) with a [_FakeLocationService]
+/// so a test can script the device position without touching real
+/// geolocation. Tests that don't pass it leave `locationServiceProvider`
+/// un-overridden — the real `GeolocatorLocationService` still never throws
+/// under `flutter_test` (no platform channel is registered, so its internal
+/// try/catch resolves to `null`), so every pre-existing map test is
+/// unaffected.
+ProviderContainer _makeContainer({LocationService? locationService}) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
+      if (locationService != null)
+        locationServiceProvider.overrideWithValue(locationService),
     ],
   );
   addTearDown(db.close);
@@ -544,6 +568,83 @@ void main() {
         expect(
           find.byKey(const Key('community-map-marker-wall-private')),
           findsNothing,
+        );
+      },
+    );
+  });
+
+  group('C: "you are here" device-location marker', () {
+    testWidgets(
+      'C1: a fixed device location renders community-map-my-location, '
+      'alongside the topo markers',
+      (tester) async {
+        // A point close to wall-shared-1's (45.0, 7.0) coordinates -- which
+        // is also this map's auto-centered viewport (see `_MapView`'s
+        // `center` -- the average of every topo WITH coordinates) --  so it
+        // stays inside flutter_map's `MarkerLayer` on-screen culling bounds
+        // regardless of the test surface's exact pixel size/zoom.
+        final container = _makeContainer(
+          locationService: const _FakeLocationService((
+            latitude: 45.001,
+            longitude: 7.001,
+          )),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('community-map-my-location')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-map-marker-wall-shared-1')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'C2: a null device location (denied/unavailable/loading) renders no '
+      'marker, and the map + topo markers still render with no crash',
+      (tester) async {
+        final container = _makeContainer(
+          locationService: const _FakeLocationService(null),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(find.byType(FlutterMap), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-map-my-location')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('community-map-marker-wall-shared-1')),
+          findsOneWidget,
         );
       },
     );

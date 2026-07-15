@@ -6,6 +6,7 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
+import 'package:climbtopo/core/location/location_service.dart';
 import 'package:climbtopo/features/account/application/auth_providers.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
@@ -87,17 +88,41 @@ void _setDms(
 /// out from under a still-active watch stream hangs waiting on the
 /// background executor isolate. (Mirrors
 /// `test/features/library/presentation/areas_screen_test.dart`.)
-ProviderContainer _makeContainer() {
+///
+/// [locationService], when given, overrides `locationServiceProvider` (see
+/// `_handleNewTopo`'s no-EXIF device-location fallback) with a
+/// [_FakeLocationService] so a test can script the device position without
+/// touching real geolocation. Tests that don't pass it leave
+/// `locationServiceProvider` un-overridden — the real
+/// `GeolocatorLocationService` still never throws under `flutter_test` (no
+/// platform channel is registered, so its internal try/catch resolves to
+/// `null`), so every pre-existing "no EXIF GPS" test is unaffected.
+ProviderContainer _makeContainer({LocationService? locationService}) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
+      if (locationService != null)
+        locationServiceProvider.overrideWithValue(locationService),
     ],
   );
   addTearDown(db.close);
   addTearDown(container.dispose);
   return container;
+}
+
+/// A [LocationService] double that resolves to whatever fixed [result] it
+/// was constructed with — no real geolocator call, ever, under
+/// `flutter_test`. Mirrors `community_screen_test.dart`'s
+/// `_FakeLocationService`.
+class _FakeLocationService implements LocationService {
+  const _FakeLocationService(this.result);
+
+  final DeviceLocation? result;
+
+  @override
+  Future<DeviceLocation?> currentLocation() async => result;
 }
 
 /// Wraps [screen] in a real (minimal) [GoRouter] so `context.push` calls
@@ -589,6 +614,185 @@ void main() {
         );
         expect(wall.latitude, isNull);
         expect(wall.longitude, isNull);
+      },
+    );
+
+    testWidgets(
+      'B-ii-1: a picked photo with NO EXIF GPS + a device location '
+      'available falls back to it for the new topo\'s wall coordinates',
+      (tester) async {
+        final container = _makeContainer(
+          locationService: const _FakeLocationService((
+            latitude: 47.4979,
+            longitude: 19.0402,
+          )),
+        );
+        late Directory tempDir;
+        late File jpegFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_device_fallback_test',
+          );
+          jpegFile = File('${tempDir.path}/no-gps.jpg');
+          await jpegFile.writeAsBytes(_buildJpegBytes());
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(jpegFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos.length, 1);
+
+        final wall = await _dbWork(
+          tester,
+          () => (container.read(appDatabaseProvider).select(
+            container.read(appDatabaseProvider).walls,
+          )..where((t) => t.id.equals(topos.single.wallId))).getSingle(),
+        );
+        expect(wall.latitude, closeTo(47.4979, 1e-9));
+        expect(wall.longitude, closeTo(19.0402, 1e-9));
+      },
+    );
+
+    testWidgets(
+      'B-ii-2: a picked photo with NO EXIF GPS + device location denied/'
+      'unavailable (null) leaves the new topo\'s wall coordinates null, '
+      'no crash',
+      (tester) async {
+        final container = _makeContainer(
+          locationService: const _FakeLocationService(null),
+        );
+        late Directory tempDir;
+        late File jpegFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_device_denied_test',
+          );
+          jpegFile = File('${tempDir.path}/no-gps.jpg');
+          await jpegFile.writeAsBytes(_buildJpegBytes());
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(jpegFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos.length, 1);
+
+        final wall = await _dbWork(
+          tester,
+          () => (container.read(appDatabaseProvider).select(
+            container.read(appDatabaseProvider).walls,
+          )..where((t) => t.id.equals(topos.single.wallId))).getSingle(),
+        );
+        expect(wall.latitude, isNull);
+        expect(wall.longitude, isNull);
+      },
+    );
+
+    testWidgets(
+      'EXIF GPS wins over an available device location fallback for the '
+      'new topo\'s wall coordinates',
+      (tester) async {
+        final container = _makeContainer(
+          // A deliberately different device location -- if this "won" the
+          // wall would end up with THESE coordinates instead of the EXIF
+          // ones asserted below.
+          locationService: const _FakeLocationService((
+            latitude: 10,
+            longitude: 10,
+          )),
+        );
+        late Directory tempDir;
+        late File jpegFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_exif_wins_test',
+          );
+          jpegFile = File('${tempDir.path}/geotagged.jpg');
+          await jpegFile.writeAsBytes(
+            _buildJpegBytes(latitude: 47.4979, longitude: 19.0402),
+          );
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(jpegFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+        await _drain(tester);
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos.length, 1);
+
+        final wall = await _dbWork(
+          tester,
+          () => (container.read(appDatabaseProvider).select(
+            container.read(appDatabaseProvider).walls,
+          )..where((t) => t.id.equals(topos.single.wallId))).getSingle(),
+        );
+        expect(wall.latitude, closeTo(47.4979, 1e-4));
+        expect(wall.longitude, closeTo(19.0402, 1e-4));
       },
     );
 

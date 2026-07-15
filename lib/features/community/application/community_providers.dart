@@ -1,6 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/database_provider.dart';
+import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range.dart';
 import '../data/community_repository.dart';
 
@@ -109,3 +110,19 @@ final communityFilterProvider =
     NotifierProvider<CommunityFilterNotifier, CommunityFilter>(
       CommunityFilterNotifier.new,
     );
+
+/// The device's current position, fetched once (best-effort, via
+/// [locationServiceProvider]) whenever the Community map's `_MapView` first
+/// watches this — i.e. on opening the Map tab. Backs the "you are here"
+/// marker; `AsyncLoading`/`AsyncError`/a `null` `AsyncData` all mean "don't
+/// draw the marker", never a crash (see `LocationService.currentLocation`'s
+/// "never throws" contract — this can only ever end up `AsyncError` if a
+/// [locationServiceProvider] override itself throws, which a well-behaved
+/// implementation never does).
+///
+/// `autoDispose` so leaving the Community screen drops the cached result —
+/// coming back later re-fetches rather than showing an arbitrarily stale
+/// position from a previous visit.
+final myLocationProvider = FutureProvider.autoDispose<DeviceLocation?>(
+  (ref) => ref.watch(locationServiceProvider).currentLocation(),
+);

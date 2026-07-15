@@ -14,6 +14,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:climbtopo/core/db/app_database.dart';
+import 'package:climbtopo/core/location/location_service.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
@@ -22,6 +23,19 @@ import 'package:image/image.dart' as img;
 // See photo_gps_test.dart's identical import for why this reaches into
 // package:image's src/ directly (Rational isn't exported from the barrel).
 import 'package:image/src/util/rational.dart';
+
+/// A [LocationService] double that resolves to whatever fixed [result] it
+/// was constructed with — no real geolocator call, ever, under
+/// `flutter_test`. Mirrors `community_screen_test.dart`'s
+/// `_FakeLocationService`.
+class _FakeLocationService implements LocationService {
+  const _FakeLocationService(this.result);
+
+  final DeviceLocation? result;
+
+  @override
+  Future<DeviceLocation?> currentLocation() async => result;
+}
 
 List<int> _buildJpegBytes({double? latitude, double? longitude}) {
   final image = img.Image(width: 4, height: 4);
@@ -128,6 +142,147 @@ void main() {
         expect(wall.latitude, isNull);
         expect(wall.longitude, isNull);
         expect(wall.dirty, isFalse);
+      },
+    );
+
+    test(
+      'B-ii-1: NO EXIF GPS + a device location available falls back to it',
+      () async {
+        final wallId = await seedWall();
+        final file = File('${tempDir.path}/no-gps-device-fallback.jpg');
+        file.writeAsBytesSync(_buildJpegBytes());
+
+        await captureWallGpsFromPhoto(
+          repo,
+          wallId,
+          file.path,
+          locationService: const _FakeLocationService((
+            latitude: 47.4979,
+            longitude: 19.0402,
+          )),
+        );
+
+        final wall = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wallId))).getSingle();
+        expect(wall.latitude, closeTo(47.4979, 1e-9));
+        expect(wall.longitude, closeTo(19.0402, 1e-9));
+        expect(wall.dirty, isTrue);
+      },
+    );
+
+    test(
+      'B-ii-2: NO EXIF GPS + device location denied/unavailable (null) '
+      'leaves coordinates null, no crash',
+      () async {
+        final wallId = await seedWall();
+        final file = File('${tempDir.path}/no-gps-no-device.jpg');
+        file.writeAsBytesSync(_buildJpegBytes());
+
+        await captureWallGpsFromPhoto(
+          repo,
+          wallId,
+          file.path,
+          locationService: const _FakeLocationService(null),
+        );
+
+        final wall = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wallId))).getSingle();
+        expect(wall.latitude, isNull);
+        expect(wall.longitude, isNull);
+        expect(wall.dirty, isFalse);
+      },
+    );
+
+    test(
+      'EXIF GPS wins over an available device location fallback',
+      () async {
+        final wallId = await seedWall();
+        final file = File('${tempDir.path}/exif-wins.jpg');
+        file.writeAsBytesSync(
+          _buildJpegBytes(latitude: 47.4979, longitude: 19.0402),
+        );
+
+        await captureWallGpsFromPhoto(
+          repo,
+          wallId,
+          file.path,
+          // A deliberately different device location -- if this "won" the
+          // wall would end up with THESE coordinates instead of the EXIF
+          // ones asserted below.
+          locationService: const _FakeLocationService((
+            latitude: 10,
+            longitude: 10,
+          )),
+        );
+
+        final wall = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wallId))).getSingle();
+        expect(wall.latitude, closeTo(47.4979, 1e-4));
+        expect(wall.longitude, closeTo(19.0402, 1e-4));
+      },
+    );
+
+    test(
+      'data-corruption regression: replacing a wall\'s photo with a '
+      'NO-EXIF photo does NOT overwrite its EXISTING coordinates with the '
+      'device\'s current location',
+      () async {
+        final wallId = await seedWall();
+        // The wall is already correctly geotagged -- e.g. from a first
+        // photo's real EXIF GPS at the actual crag.
+        await repo.setWallCoordinates(wallId, 47.4979, 19.0402);
+
+        final file = File('${tempDir.path}/replacement-no-gps.jpg');
+        file.writeAsBytesSync(_buildJpegBytes());
+
+        await captureWallGpsFromPhoto(
+          repo,
+          wallId,
+          file.path,
+          // A deliberately different "home" location -- if the bug is
+          // present, this ends up overwriting the crag coords above.
+          locationService: const _FakeLocationService((
+            latitude: 40.7128,
+            longitude: -74.0060,
+          )),
+        );
+
+        final wall = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wallId))).getSingle();
+        expect(
+          wall.latitude,
+          closeTo(47.4979, 1e-4),
+          reason:
+              'the device\'s current location must never overwrite '
+              'coordinates the wall already has',
+        );
+        expect(wall.longitude, closeTo(19.0402, 1e-4));
+      },
+    );
+
+    test(
+      'EXIF GPS on a replacement photo UPDATES a wall\'s existing '
+      'coordinates -- EXIF is authoritative even on replace',
+      () async {
+        final wallId = await seedWall();
+        await repo.setWallCoordinates(wallId, 47.4979, 19.0402);
+
+        final file = File('${tempDir.path}/replacement-exif.jpg');
+        file.writeAsBytesSync(
+          _buildJpegBytes(latitude: 48.1372, longitude: 11.5755),
+        );
+
+        await captureWallGpsFromPhoto(repo, wallId, file.path);
+
+        final wall = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wallId))).getSingle();
+        expect(wall.latitude, closeTo(48.1372, 1e-4));
+        expect(wall.longitude, closeTo(11.5755, 1e-4));
       },
     );
 
