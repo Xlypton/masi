@@ -6,6 +6,12 @@ import 'package:drift/drift.dart';
 /// - [deletedAt]: nullable ms-epoch soft-delete tombstone.
 /// - [remoteId]: nullable id assigned by the future sync backend.
 /// - [dirty]: true when local changes haven't been pushed to the backend yet.
+/// - [ownerId]: the Supabase Auth uid that created this row, or `null` for
+///   rows created while signed-out (or created before this column existed —
+///   see the v1->v2 migration in `app_database.dart`). Stamped once at
+///   create time by each inserting repository's injected `currentUid` seam;
+///   never overwritten on update. `null` rows can later be attributed to a
+///   user via `LibraryCrudRepository.claimOwnership` once they sign in.
 mixin SyncColumns on Table {
   TextColumn get id => text()();
   IntColumn get createdAt => integer()();
@@ -13,6 +19,7 @@ mixin SyncColumns on Table {
   IntColumn get deletedAt => integer().nullable()();
   TextColumn get remoteId => text().nullable()();
   BoolColumn get dirty => boolean().withDefault(const Constant(false))();
+  TextColumn get ownerId => text().nullable()();
 }
 
 class Areas extends Table with SyncColumns {
@@ -38,6 +45,13 @@ class Walls extends Table with SyncColumns {
   TextColumn get sectorId => text().references(Sectors, #id)();
   TextColumn get name => text()();
   IntColumn get sortOrder => integer()();
+
+  /// Cloud-sharing visibility for this wall (a "topo"): `'private'` (default;
+  /// visible only to its owner) or `'shared'`. Deliberately separate from
+  /// [Routes.visible], which is a per-route render show/hide flag, not a
+  /// sharing concept.
+  TextColumn get visibility =>
+      text().withDefault(const Constant('private'))();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -85,6 +99,34 @@ class Routes extends Table with SyncColumns {
   TextColumn get symbolsJson => text()();
   IntColumn get sortOrder => integer()();
   BoolColumn get visible => boolean().withDefault(const Constant(true))();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class Comments extends Table with SyncColumns {
+  TextColumn get wallId => text().references(Walls, #id)();
+  TextColumn get body => text()();
+  TextColumn get authorName => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class Likes extends Table with SyncColumns {
+  TextColumn get wallId => text().references(Walls, #id)();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+class Ascents extends Table with SyncColumns {
+  TextColumn get routeId => text().references(Routes, #id)();
+  TextColumn get wallId => text().references(Walls, #id)();
+  IntColumn get climbedAt => integer()();
+  TextColumn get style => text()();
+  TextColumn get notes => text().nullable()();
+  TextColumn get gradeOpinion => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};

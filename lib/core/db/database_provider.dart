@@ -7,7 +7,8 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import 'app_database.dart';
-import '../../features/topo/data/library_repository.dart';
+import '../../features/account/application/auth_providers.dart';
+import '../../features/topo/data/photo_files.dart';
 import '../../features/topo/data/photo_repository.dart';
 import '../../features/topo/data/route_repository.dart';
 
@@ -42,19 +43,27 @@ final routeRepositoryProvider = Provider<RouteRepository>(
   (ref) => RouteRepository(
     ref.watch(appDatabaseProvider),
     nowMs: ref.watch(nowMsProvider),
+    currentUid: ref.watch(currentUidProvider),
   ),
 );
 
-final libraryRepositoryProvider = Provider<LibraryRepository>(
-  (ref) => LibraryRepository(
-    ref.watch(appDatabaseProvider),
-    nowMs: ref.watch(nowMsProvider),
-  ),
-);
+/// Single [PhotoFiles] instance shared by every repository that resolves
+/// `Photos.localPath` values (`photoRepositoryProvider`,
+/// `libraryCrudRepositoryProvider`), so its memoized docs-path cache
+/// (`_cachedDocsPath`) is warmed exactly ONCE and visible everywhere.
+///
+/// Deliberately does NOT depend on [currentUidProvider] (or any other
+/// auth-driven provider): the docs-path cache has nothing to do with who is
+/// signed in, and depending on auth would tear down and rebuild a fresh,
+/// cold `PhotoFiles` on every sign-in/out — defeating the whole point of
+/// pre-warming it once at startup (see `main.dart`).
+final photoFilesProvider = Provider<PhotoFiles>((ref) => PhotoFiles());
 
 final photoRepositoryProvider = Provider<PhotoRepository>(
   (ref) => PhotoRepository(
     ref.watch(appDatabaseProvider),
     nowMs: ref.watch(nowMsProvider),
+    currentUid: ref.watch(currentUidProvider),
+    photoFiles: ref.watch(photoFilesProvider),
   ),
 );

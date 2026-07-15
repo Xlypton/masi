@@ -74,6 +74,17 @@ class $AreasTable extends Areas with TableInfo<$AreasTable, Area> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _nameMeta = const VerificationMeta('name');
   @override
   late final GeneratedColumn<String> name = GeneratedColumn<String>(
@@ -124,6 +135,7 @@ class $AreasTable extends Areas with TableInfo<$AreasTable, Area> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     name,
     description,
     latitude,
@@ -178,6 +190,12 @@ class $AreasTable extends Areas with TableInfo<$AreasTable, Area> {
       context.handle(
         _dirtyMeta,
         dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
       );
     }
     if (data.containsKey('name')) {
@@ -242,6 +260,10 @@ class $AreasTable extends Areas with TableInfo<$AreasTable, Area> {
         DriftSqlType.bool,
         data['${effectivePrefix}dirty'],
       )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
       name: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}name'],
@@ -274,6 +296,7 @@ class Area extends DataClass implements Insertable<Area> {
   final int? deletedAt;
   final String? remoteId;
   final bool dirty;
+  final String? ownerId;
   final String name;
   final String? description;
   final double? latitude;
@@ -285,6 +308,7 @@ class Area extends DataClass implements Insertable<Area> {
     this.deletedAt,
     this.remoteId,
     required this.dirty,
+    this.ownerId,
     required this.name,
     this.description,
     this.latitude,
@@ -303,6 +327,9 @@ class Area extends DataClass implements Insertable<Area> {
       map['remote_id'] = Variable<String>(remoteId);
     }
     map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
     map['name'] = Variable<String>(name);
     if (!nullToAbsent || description != null) {
       map['description'] = Variable<String>(description);
@@ -328,6 +355,9 @@ class Area extends DataClass implements Insertable<Area> {
           ? const Value.absent()
           : Value(remoteId),
       dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
       name: Value(name),
       description: description == null && nullToAbsent
           ? const Value.absent()
@@ -353,6 +383,7 @@ class Area extends DataClass implements Insertable<Area> {
       deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
       name: serializer.fromJson<String>(json['name']),
       description: serializer.fromJson<String?>(json['description']),
       latitude: serializer.fromJson<double?>(json['latitude']),
@@ -369,6 +400,7 @@ class Area extends DataClass implements Insertable<Area> {
       'deletedAt': serializer.toJson<int?>(deletedAt),
       'remoteId': serializer.toJson<String?>(remoteId),
       'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
       'name': serializer.toJson<String>(name),
       'description': serializer.toJson<String?>(description),
       'latitude': serializer.toJson<double?>(latitude),
@@ -383,6 +415,7 @@ class Area extends DataClass implements Insertable<Area> {
     Value<int?> deletedAt = const Value.absent(),
     Value<String?> remoteId = const Value.absent(),
     bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
     String? name,
     Value<String?> description = const Value.absent(),
     Value<double?> latitude = const Value.absent(),
@@ -394,6 +427,7 @@ class Area extends DataClass implements Insertable<Area> {
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     remoteId: remoteId.present ? remoteId.value : this.remoteId,
     dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
     name: name ?? this.name,
     description: description.present ? description.value : this.description,
     latitude: latitude.present ? latitude.value : this.latitude,
@@ -407,6 +441,7 @@ class Area extends DataClass implements Insertable<Area> {
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
       name: data.name.present ? data.name.value : this.name,
       description: data.description.present
           ? data.description.value
@@ -425,6 +460,7 @@ class Area extends DataClass implements Insertable<Area> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('name: $name, ')
           ..write('description: $description, ')
           ..write('latitude: $latitude, ')
@@ -441,6 +477,7 @@ class Area extends DataClass implements Insertable<Area> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     name,
     description,
     latitude,
@@ -456,6 +493,7 @@ class Area extends DataClass implements Insertable<Area> {
           other.deletedAt == this.deletedAt &&
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
           other.name == this.name &&
           other.description == this.description &&
           other.latitude == this.latitude &&
@@ -469,6 +507,7 @@ class AreasCompanion extends UpdateCompanion<Area> {
   final Value<int?> deletedAt;
   final Value<String?> remoteId;
   final Value<bool> dirty;
+  final Value<String?> ownerId;
   final Value<String> name;
   final Value<String?> description;
   final Value<double?> latitude;
@@ -481,6 +520,7 @@ class AreasCompanion extends UpdateCompanion<Area> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.name = const Value.absent(),
     this.description = const Value.absent(),
     this.latitude = const Value.absent(),
@@ -494,6 +534,7 @@ class AreasCompanion extends UpdateCompanion<Area> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     required String name,
     this.description = const Value.absent(),
     this.latitude = const Value.absent(),
@@ -510,6 +551,7 @@ class AreasCompanion extends UpdateCompanion<Area> {
     Expression<int>? deletedAt,
     Expression<String>? remoteId,
     Expression<bool>? dirty,
+    Expression<String>? ownerId,
     Expression<String>? name,
     Expression<String>? description,
     Expression<double>? latitude,
@@ -523,6 +565,7 @@ class AreasCompanion extends UpdateCompanion<Area> {
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (remoteId != null) 'remote_id': remoteId,
       if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
       if (name != null) 'name': name,
       if (description != null) 'description': description,
       if (latitude != null) 'latitude': latitude,
@@ -538,6 +581,7 @@ class AreasCompanion extends UpdateCompanion<Area> {
     Value<int?>? deletedAt,
     Value<String?>? remoteId,
     Value<bool>? dirty,
+    Value<String?>? ownerId,
     Value<String>? name,
     Value<String?>? description,
     Value<double?>? latitude,
@@ -551,6 +595,7 @@ class AreasCompanion extends UpdateCompanion<Area> {
       deletedAt: deletedAt ?? this.deletedAt,
       remoteId: remoteId ?? this.remoteId,
       dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
       name: name ?? this.name,
       description: description ?? this.description,
       latitude: latitude ?? this.latitude,
@@ -580,6 +625,9 @@ class AreasCompanion extends UpdateCompanion<Area> {
     if (dirty.present) {
       map['dirty'] = Variable<bool>(dirty.value);
     }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
     if (name.present) {
       map['name'] = Variable<String>(name.value);
     }
@@ -607,6 +655,7 @@ class AreasCompanion extends UpdateCompanion<Area> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('name: $name, ')
           ..write('description: $description, ')
           ..write('latitude: $latitude, ')
@@ -688,6 +737,17 @@ class $SectorsTable extends Sectors with TableInfo<$SectorsTable, Sector> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _areaIdMeta = const VerificationMeta('areaId');
   @override
   late final GeneratedColumn<String> areaId = GeneratedColumn<String>(
@@ -728,6 +788,7 @@ class $SectorsTable extends Sectors with TableInfo<$SectorsTable, Sector> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     areaId,
     name,
     sortOrder,
@@ -781,6 +842,12 @@ class $SectorsTable extends Sectors with TableInfo<$SectorsTable, Sector> {
       context.handle(
         _dirtyMeta,
         dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
       );
     }
     if (data.containsKey('area_id')) {
@@ -840,6 +907,10 @@ class $SectorsTable extends Sectors with TableInfo<$SectorsTable, Sector> {
         DriftSqlType.bool,
         data['${effectivePrefix}dirty'],
       )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
       areaId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}area_id'],
@@ -868,6 +939,7 @@ class Sector extends DataClass implements Insertable<Sector> {
   final int? deletedAt;
   final String? remoteId;
   final bool dirty;
+  final String? ownerId;
   final String areaId;
   final String name;
   final int sortOrder;
@@ -878,6 +950,7 @@ class Sector extends DataClass implements Insertable<Sector> {
     this.deletedAt,
     this.remoteId,
     required this.dirty,
+    this.ownerId,
     required this.areaId,
     required this.name,
     required this.sortOrder,
@@ -895,6 +968,9 @@ class Sector extends DataClass implements Insertable<Sector> {
       map['remote_id'] = Variable<String>(remoteId);
     }
     map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
     map['area_id'] = Variable<String>(areaId);
     map['name'] = Variable<String>(name);
     map['sort_order'] = Variable<int>(sortOrder);
@@ -913,6 +989,9 @@ class Sector extends DataClass implements Insertable<Sector> {
           ? const Value.absent()
           : Value(remoteId),
       dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
       areaId: Value(areaId),
       name: Value(name),
       sortOrder: Value(sortOrder),
@@ -931,6 +1010,7 @@ class Sector extends DataClass implements Insertable<Sector> {
       deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
       areaId: serializer.fromJson<String>(json['areaId']),
       name: serializer.fromJson<String>(json['name']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
@@ -946,6 +1026,7 @@ class Sector extends DataClass implements Insertable<Sector> {
       'deletedAt': serializer.toJson<int?>(deletedAt),
       'remoteId': serializer.toJson<String?>(remoteId),
       'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
       'areaId': serializer.toJson<String>(areaId),
       'name': serializer.toJson<String>(name),
       'sortOrder': serializer.toJson<int>(sortOrder),
@@ -959,6 +1040,7 @@ class Sector extends DataClass implements Insertable<Sector> {
     Value<int?> deletedAt = const Value.absent(),
     Value<String?> remoteId = const Value.absent(),
     bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
     String? areaId,
     String? name,
     int? sortOrder,
@@ -969,6 +1051,7 @@ class Sector extends DataClass implements Insertable<Sector> {
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     remoteId: remoteId.present ? remoteId.value : this.remoteId,
     dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
     areaId: areaId ?? this.areaId,
     name: name ?? this.name,
     sortOrder: sortOrder ?? this.sortOrder,
@@ -981,6 +1064,7 @@ class Sector extends DataClass implements Insertable<Sector> {
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
       areaId: data.areaId.present ? data.areaId.value : this.areaId,
       name: data.name.present ? data.name.value : this.name,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
@@ -996,6 +1080,7 @@ class Sector extends DataClass implements Insertable<Sector> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('areaId: $areaId, ')
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder')
@@ -1011,6 +1096,7 @@ class Sector extends DataClass implements Insertable<Sector> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     areaId,
     name,
     sortOrder,
@@ -1025,6 +1111,7 @@ class Sector extends DataClass implements Insertable<Sector> {
           other.deletedAt == this.deletedAt &&
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
           other.areaId == this.areaId &&
           other.name == this.name &&
           other.sortOrder == this.sortOrder);
@@ -1037,6 +1124,7 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
   final Value<int?> deletedAt;
   final Value<String?> remoteId;
   final Value<bool> dirty;
+  final Value<String?> ownerId;
   final Value<String> areaId;
   final Value<String> name;
   final Value<int> sortOrder;
@@ -1048,6 +1136,7 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.areaId = const Value.absent(),
     this.name = const Value.absent(),
     this.sortOrder = const Value.absent(),
@@ -1060,6 +1149,7 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     required String areaId,
     required String name,
     required int sortOrder,
@@ -1077,6 +1167,7 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     Expression<int>? deletedAt,
     Expression<String>? remoteId,
     Expression<bool>? dirty,
+    Expression<String>? ownerId,
     Expression<String>? areaId,
     Expression<String>? name,
     Expression<int>? sortOrder,
@@ -1089,6 +1180,7 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (remoteId != null) 'remote_id': remoteId,
       if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
       if (areaId != null) 'area_id': areaId,
       if (name != null) 'name': name,
       if (sortOrder != null) 'sort_order': sortOrder,
@@ -1103,6 +1195,7 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     Value<int?>? deletedAt,
     Value<String?>? remoteId,
     Value<bool>? dirty,
+    Value<String?>? ownerId,
     Value<String>? areaId,
     Value<String>? name,
     Value<int>? sortOrder,
@@ -1115,6 +1208,7 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
       deletedAt: deletedAt ?? this.deletedAt,
       remoteId: remoteId ?? this.remoteId,
       dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
       areaId: areaId ?? this.areaId,
       name: name ?? this.name,
       sortOrder: sortOrder ?? this.sortOrder,
@@ -1143,6 +1237,9 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     if (dirty.present) {
       map['dirty'] = Variable<bool>(dirty.value);
     }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
     if (areaId.present) {
       map['area_id'] = Variable<String>(areaId.value);
     }
@@ -1167,6 +1264,7 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('areaId: $areaId, ')
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder, ')
@@ -1247,6 +1345,17 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _sectorIdMeta = const VerificationMeta(
     'sectorId',
   );
@@ -1281,6 +1390,18 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     type: DriftSqlType.int,
     requiredDuringInsert: true,
   );
+  static const VerificationMeta _visibilityMeta = const VerificationMeta(
+    'visibility',
+  );
+  @override
+  late final GeneratedColumn<String> visibility = GeneratedColumn<String>(
+    'visibility',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+    defaultValue: const Constant('private'),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1289,9 +1410,11 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     sectorId,
     name,
     sortOrder,
+    visibility,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1344,6 +1467,12 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
         dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
       );
     }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
     if (data.containsKey('sector_id')) {
       context.handle(
         _sectorIdMeta,
@@ -1367,6 +1496,12 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
       );
     } else if (isInserting) {
       context.missing(_sortOrderMeta);
+    }
+    if (data.containsKey('visibility')) {
+      context.handle(
+        _visibilityMeta,
+        visibility.isAcceptableOrUnknown(data['visibility']!, _visibilityMeta),
+      );
     }
     return context;
   }
@@ -1401,6 +1536,10 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
         DriftSqlType.bool,
         data['${effectivePrefix}dirty'],
       )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
       sectorId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}sector_id'],
@@ -1412,6 +1551,10 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
       sortOrder: attachedDatabase.typeMapping.read(
         DriftSqlType.int,
         data['${effectivePrefix}sort_order'],
+      )!,
+      visibility: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}visibility'],
       )!,
     );
   }
@@ -1429,9 +1572,16 @@ class Wall extends DataClass implements Insertable<Wall> {
   final int? deletedAt;
   final String? remoteId;
   final bool dirty;
+  final String? ownerId;
   final String sectorId;
   final String name;
   final int sortOrder;
+
+  /// Cloud-sharing visibility for this wall (a "topo"): `'private'` (default;
+  /// visible only to its owner) or `'shared'`. Deliberately separate from
+  /// [Routes.visible], which is a per-route render show/hide flag, not a
+  /// sharing concept.
+  final String visibility;
   const Wall({
     required this.id,
     required this.createdAt,
@@ -1439,9 +1589,11 @@ class Wall extends DataClass implements Insertable<Wall> {
     this.deletedAt,
     this.remoteId,
     required this.dirty,
+    this.ownerId,
     required this.sectorId,
     required this.name,
     required this.sortOrder,
+    required this.visibility,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1456,9 +1608,13 @@ class Wall extends DataClass implements Insertable<Wall> {
       map['remote_id'] = Variable<String>(remoteId);
     }
     map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
     map['sector_id'] = Variable<String>(sectorId);
     map['name'] = Variable<String>(name);
     map['sort_order'] = Variable<int>(sortOrder);
+    map['visibility'] = Variable<String>(visibility);
     return map;
   }
 
@@ -1474,9 +1630,13 @@ class Wall extends DataClass implements Insertable<Wall> {
           ? const Value.absent()
           : Value(remoteId),
       dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
       sectorId: Value(sectorId),
       name: Value(name),
       sortOrder: Value(sortOrder),
+      visibility: Value(visibility),
     );
   }
 
@@ -1492,9 +1652,11 @@ class Wall extends DataClass implements Insertable<Wall> {
       deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
       sectorId: serializer.fromJson<String>(json['sectorId']),
       name: serializer.fromJson<String>(json['name']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      visibility: serializer.fromJson<String>(json['visibility']),
     );
   }
   @override
@@ -1507,9 +1669,11 @@ class Wall extends DataClass implements Insertable<Wall> {
       'deletedAt': serializer.toJson<int?>(deletedAt),
       'remoteId': serializer.toJson<String?>(remoteId),
       'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
       'sectorId': serializer.toJson<String>(sectorId),
       'name': serializer.toJson<String>(name),
       'sortOrder': serializer.toJson<int>(sortOrder),
+      'visibility': serializer.toJson<String>(visibility),
     };
   }
 
@@ -1520,9 +1684,11 @@ class Wall extends DataClass implements Insertable<Wall> {
     Value<int?> deletedAt = const Value.absent(),
     Value<String?> remoteId = const Value.absent(),
     bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
     String? sectorId,
     String? name,
     int? sortOrder,
+    String? visibility,
   }) => Wall(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -1530,9 +1696,11 @@ class Wall extends DataClass implements Insertable<Wall> {
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     remoteId: remoteId.present ? remoteId.value : this.remoteId,
     dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
     sectorId: sectorId ?? this.sectorId,
     name: name ?? this.name,
     sortOrder: sortOrder ?? this.sortOrder,
+    visibility: visibility ?? this.visibility,
   );
   Wall copyWithCompanion(WallsCompanion data) {
     return Wall(
@@ -1542,9 +1710,13 @@ class Wall extends DataClass implements Insertable<Wall> {
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
       sectorId: data.sectorId.present ? data.sectorId.value : this.sectorId,
       name: data.name.present ? data.name.value : this.name,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      visibility: data.visibility.present
+          ? data.visibility.value
+          : this.visibility,
     );
   }
 
@@ -1557,9 +1729,11 @@ class Wall extends DataClass implements Insertable<Wall> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('sectorId: $sectorId, ')
           ..write('name: $name, ')
-          ..write('sortOrder: $sortOrder')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('visibility: $visibility')
           ..write(')'))
         .toString();
   }
@@ -1572,9 +1746,11 @@ class Wall extends DataClass implements Insertable<Wall> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     sectorId,
     name,
     sortOrder,
+    visibility,
   );
   @override
   bool operator ==(Object other) =>
@@ -1586,9 +1762,11 @@ class Wall extends DataClass implements Insertable<Wall> {
           other.deletedAt == this.deletedAt &&
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
           other.sectorId == this.sectorId &&
           other.name == this.name &&
-          other.sortOrder == this.sortOrder);
+          other.sortOrder == this.sortOrder &&
+          other.visibility == this.visibility);
 }
 
 class WallsCompanion extends UpdateCompanion<Wall> {
@@ -1598,9 +1776,11 @@ class WallsCompanion extends UpdateCompanion<Wall> {
   final Value<int?> deletedAt;
   final Value<String?> remoteId;
   final Value<bool> dirty;
+  final Value<String?> ownerId;
   final Value<String> sectorId;
   final Value<String> name;
   final Value<int> sortOrder;
+  final Value<String> visibility;
   final Value<int> rowid;
   const WallsCompanion({
     this.id = const Value.absent(),
@@ -1609,9 +1789,11 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.sectorId = const Value.absent(),
     this.name = const Value.absent(),
     this.sortOrder = const Value.absent(),
+    this.visibility = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   WallsCompanion.insert({
@@ -1621,9 +1803,11 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     required String sectorId,
     required String name,
     required int sortOrder,
+    this.visibility = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -1638,9 +1822,11 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     Expression<int>? deletedAt,
     Expression<String>? remoteId,
     Expression<bool>? dirty,
+    Expression<String>? ownerId,
     Expression<String>? sectorId,
     Expression<String>? name,
     Expression<int>? sortOrder,
+    Expression<String>? visibility,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -1650,9 +1836,11 @@ class WallsCompanion extends UpdateCompanion<Wall> {
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (remoteId != null) 'remote_id': remoteId,
       if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
       if (sectorId != null) 'sector_id': sectorId,
       if (name != null) 'name': name,
       if (sortOrder != null) 'sort_order': sortOrder,
+      if (visibility != null) 'visibility': visibility,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -1664,9 +1852,11 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     Value<int?>? deletedAt,
     Value<String?>? remoteId,
     Value<bool>? dirty,
+    Value<String?>? ownerId,
     Value<String>? sectorId,
     Value<String>? name,
     Value<int>? sortOrder,
+    Value<String>? visibility,
     Value<int>? rowid,
   }) {
     return WallsCompanion(
@@ -1676,9 +1866,11 @@ class WallsCompanion extends UpdateCompanion<Wall> {
       deletedAt: deletedAt ?? this.deletedAt,
       remoteId: remoteId ?? this.remoteId,
       dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
       sectorId: sectorId ?? this.sectorId,
       name: name ?? this.name,
       sortOrder: sortOrder ?? this.sortOrder,
+      visibility: visibility ?? this.visibility,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -1704,6 +1896,9 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     if (dirty.present) {
       map['dirty'] = Variable<bool>(dirty.value);
     }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
     if (sectorId.present) {
       map['sector_id'] = Variable<String>(sectorId.value);
     }
@@ -1712,6 +1907,9 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     }
     if (sortOrder.present) {
       map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (visibility.present) {
+      map['visibility'] = Variable<String>(visibility.value);
     }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
@@ -1728,9 +1926,11 @@ class WallsCompanion extends UpdateCompanion<Wall> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('sectorId: $sectorId, ')
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder, ')
+          ..write('visibility: $visibility, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -1807,6 +2007,17 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
       'CHECK ("dirty" IN (0, 1))',
     ),
     defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
   @override
@@ -1902,6 +2113,7 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     wallId,
     localPath,
     kind,
@@ -1960,6 +2172,12 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
       context.handle(
         _dirtyMeta,
         dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
       );
     }
     if (data.containsKey('wall_id')) {
@@ -2059,6 +2277,10 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
         DriftSqlType.bool,
         data['${effectivePrefix}dirty'],
       )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
       wallId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}wall_id'],
@@ -2107,6 +2329,7 @@ class Photo extends DataClass implements Insertable<Photo> {
   final int? deletedAt;
   final String? remoteId;
   final bool dirty;
+  final String? ownerId;
   final String wallId;
   final String localPath;
   final String kind;
@@ -2122,6 +2345,7 @@ class Photo extends DataClass implements Insertable<Photo> {
     this.deletedAt,
     this.remoteId,
     required this.dirty,
+    this.ownerId,
     required this.wallId,
     required this.localPath,
     required this.kind,
@@ -2144,6 +2368,9 @@ class Photo extends DataClass implements Insertable<Photo> {
       map['remote_id'] = Variable<String>(remoteId);
     }
     map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
     map['wall_id'] = Variable<String>(wallId);
     map['local_path'] = Variable<String>(localPath);
     map['kind'] = Variable<String>(kind);
@@ -2173,6 +2400,9 @@ class Photo extends DataClass implements Insertable<Photo> {
           ? const Value.absent()
           : Value(remoteId),
       dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
       wallId: Value(wallId),
       localPath: Value(localPath),
       kind: Value(kind),
@@ -2202,6 +2432,7 @@ class Photo extends DataClass implements Insertable<Photo> {
       deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
       wallId: serializer.fromJson<String>(json['wallId']),
       localPath: serializer.fromJson<String>(json['localPath']),
       kind: serializer.fromJson<String>(json['kind']),
@@ -2222,6 +2453,7 @@ class Photo extends DataClass implements Insertable<Photo> {
       'deletedAt': serializer.toJson<int?>(deletedAt),
       'remoteId': serializer.toJson<String?>(remoteId),
       'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
       'wallId': serializer.toJson<String>(wallId),
       'localPath': serializer.toJson<String>(localPath),
       'kind': serializer.toJson<String>(kind),
@@ -2240,6 +2472,7 @@ class Photo extends DataClass implements Insertable<Photo> {
     Value<int?> deletedAt = const Value.absent(),
     Value<String?> remoteId = const Value.absent(),
     bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
     String? wallId,
     String? localPath,
     String? kind,
@@ -2255,6 +2488,7 @@ class Photo extends DataClass implements Insertable<Photo> {
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     remoteId: remoteId.present ? remoteId.value : this.remoteId,
     dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
     wallId: wallId ?? this.wallId,
     localPath: localPath ?? this.localPath,
     kind: kind ?? this.kind,
@@ -2274,6 +2508,7 @@ class Photo extends DataClass implements Insertable<Photo> {
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
       wallId: data.wallId.present ? data.wallId.value : this.wallId,
       localPath: data.localPath.present ? data.localPath.value : this.localPath,
       kind: data.kind.present ? data.kind.value : this.kind,
@@ -2298,6 +2533,7 @@ class Photo extends DataClass implements Insertable<Photo> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('wallId: $wallId, ')
           ..write('localPath: $localPath, ')
           ..write('kind: $kind, ')
@@ -2318,6 +2554,7 @@ class Photo extends DataClass implements Insertable<Photo> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     wallId,
     localPath,
     kind,
@@ -2337,6 +2574,7 @@ class Photo extends DataClass implements Insertable<Photo> {
           other.deletedAt == this.deletedAt &&
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
           other.wallId == this.wallId &&
           other.localPath == this.localPath &&
           other.kind == this.kind &&
@@ -2354,6 +2592,7 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
   final Value<int?> deletedAt;
   final Value<String?> remoteId;
   final Value<bool> dirty;
+  final Value<String?> ownerId;
   final Value<String> wallId;
   final Value<String> localPath;
   final Value<String> kind;
@@ -2370,6 +2609,7 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.wallId = const Value.absent(),
     this.localPath = const Value.absent(),
     this.kind = const Value.absent(),
@@ -2387,6 +2627,7 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     required String wallId,
     required String localPath,
     required String kind,
@@ -2411,6 +2652,7 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     Expression<int>? deletedAt,
     Expression<String>? remoteId,
     Expression<bool>? dirty,
+    Expression<String>? ownerId,
     Expression<String>? wallId,
     Expression<String>? localPath,
     Expression<String>? kind,
@@ -2428,6 +2670,7 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (remoteId != null) 'remote_id': remoteId,
       if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
       if (wallId != null) 'wall_id': wallId,
       if (localPath != null) 'local_path': localPath,
       if (kind != null) 'kind': kind,
@@ -2447,6 +2690,7 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     Value<int?>? deletedAt,
     Value<String?>? remoteId,
     Value<bool>? dirty,
+    Value<String?>? ownerId,
     Value<String>? wallId,
     Value<String>? localPath,
     Value<String>? kind,
@@ -2464,6 +2708,7 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
       deletedAt: deletedAt ?? this.deletedAt,
       remoteId: remoteId ?? this.remoteId,
       dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
       wallId: wallId ?? this.wallId,
       localPath: localPath ?? this.localPath,
       kind: kind ?? this.kind,
@@ -2496,6 +2741,9 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     }
     if (dirty.present) {
       map['dirty'] = Variable<bool>(dirty.value);
+    }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
     }
     if (wallId.present) {
       map['wall_id'] = Variable<String>(wallId.value);
@@ -2536,6 +2784,7 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('wallId: $wallId, ')
           ..write('localPath: $localPath, ')
           ..write('kind: $kind, ')
@@ -2620,6 +2869,17 @@ class $RoutesTable extends Routes with TableInfo<$RoutesTable, Route> {
       'CHECK ("dirty" IN (0, 1))',
     ),
     defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
   );
   static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
   @override
@@ -2785,6 +3045,7 @@ class $RoutesTable extends Routes with TableInfo<$RoutesTable, Route> {
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     wallId,
     photoId,
     number,
@@ -2849,6 +3110,12 @@ class $RoutesTable extends Routes with TableInfo<$RoutesTable, Route> {
       context.handle(
         _dirtyMeta,
         dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
       );
     }
     if (data.containsKey('wall_id')) {
@@ -2994,6 +3261,10 @@ class $RoutesTable extends Routes with TableInfo<$RoutesTable, Route> {
         DriftSqlType.bool,
         data['${effectivePrefix}dirty'],
       )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
       wallId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}wall_id'],
@@ -3066,6 +3337,7 @@ class Route extends DataClass implements Insertable<Route> {
   final int? deletedAt;
   final String? remoteId;
   final bool dirty;
+  final String? ownerId;
   final String wallId;
   final String photoId;
   final int number;
@@ -3087,6 +3359,7 @@ class Route extends DataClass implements Insertable<Route> {
     this.deletedAt,
     this.remoteId,
     required this.dirty,
+    this.ownerId,
     required this.wallId,
     required this.photoId,
     required this.number,
@@ -3115,6 +3388,9 @@ class Route extends DataClass implements Insertable<Route> {
       map['remote_id'] = Variable<String>(remoteId);
     }
     map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
     map['wall_id'] = Variable<String>(wallId);
     map['photo_id'] = Variable<String>(photoId);
     map['number'] = Variable<int>(number);
@@ -3156,6 +3432,9 @@ class Route extends DataClass implements Insertable<Route> {
           ? const Value.absent()
           : Value(remoteId),
       dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
       wallId: Value(wallId),
       photoId: Value(photoId),
       number: Value(number),
@@ -3195,6 +3474,7 @@ class Route extends DataClass implements Insertable<Route> {
       deletedAt: serializer.fromJson<int?>(json['deletedAt']),
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
       wallId: serializer.fromJson<String>(json['wallId']),
       photoId: serializer.fromJson<String>(json['photoId']),
       number: serializer.fromJson<int>(json['number']),
@@ -3221,6 +3501,7 @@ class Route extends DataClass implements Insertable<Route> {
       'deletedAt': serializer.toJson<int?>(deletedAt),
       'remoteId': serializer.toJson<String?>(remoteId),
       'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
       'wallId': serializer.toJson<String>(wallId),
       'photoId': serializer.toJson<String>(photoId),
       'number': serializer.toJson<int>(number),
@@ -3245,6 +3526,7 @@ class Route extends DataClass implements Insertable<Route> {
     Value<int?> deletedAt = const Value.absent(),
     Value<String?> remoteId = const Value.absent(),
     bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
     String? wallId,
     String? photoId,
     int? number,
@@ -3266,6 +3548,7 @@ class Route extends DataClass implements Insertable<Route> {
     deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
     remoteId: remoteId.present ? remoteId.value : this.remoteId,
     dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
     wallId: wallId ?? this.wallId,
     photoId: photoId ?? this.photoId,
     number: number ?? this.number,
@@ -3289,6 +3572,7 @@ class Route extends DataClass implements Insertable<Route> {
       deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
       wallId: data.wallId.present ? data.wallId.value : this.wallId,
       photoId: data.photoId.present ? data.photoId.value : this.photoId,
       number: data.number.present ? data.number.value : this.number,
@@ -3327,6 +3611,7 @@ class Route extends DataClass implements Insertable<Route> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('wallId: $wallId, ')
           ..write('photoId: $photoId, ')
           ..write('number: $number, ')
@@ -3346,13 +3631,14 @@ class Route extends DataClass implements Insertable<Route> {
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     createdAt,
     updatedAt,
     deletedAt,
     remoteId,
     dirty,
+    ownerId,
     wallId,
     photoId,
     number,
@@ -3367,7 +3653,7 @@ class Route extends DataClass implements Insertable<Route> {
     symbolsJson,
     sortOrder,
     visible,
-  );
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -3378,6 +3664,7 @@ class Route extends DataClass implements Insertable<Route> {
           other.deletedAt == this.deletedAt &&
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
           other.wallId == this.wallId &&
           other.photoId == this.photoId &&
           other.number == this.number &&
@@ -3401,6 +3688,7 @@ class RoutesCompanion extends UpdateCompanion<Route> {
   final Value<int?> deletedAt;
   final Value<String?> remoteId;
   final Value<bool> dirty;
+  final Value<String?> ownerId;
   final Value<String> wallId;
   final Value<String> photoId;
   final Value<int> number;
@@ -3423,6 +3711,7 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     this.wallId = const Value.absent(),
     this.photoId = const Value.absent(),
     this.number = const Value.absent(),
@@ -3446,6 +3735,7 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     this.deletedAt = const Value.absent(),
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
     required String wallId,
     required String photoId,
     required int number,
@@ -3478,6 +3768,7 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     Expression<int>? deletedAt,
     Expression<String>? remoteId,
     Expression<bool>? dirty,
+    Expression<String>? ownerId,
     Expression<String>? wallId,
     Expression<String>? photoId,
     Expression<int>? number,
@@ -3501,6 +3792,7 @@ class RoutesCompanion extends UpdateCompanion<Route> {
       if (deletedAt != null) 'deleted_at': deletedAt,
       if (remoteId != null) 'remote_id': remoteId,
       if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
       if (wallId != null) 'wall_id': wallId,
       if (photoId != null) 'photo_id': photoId,
       if (number != null) 'number': number,
@@ -3526,6 +3818,7 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     Value<int?>? deletedAt,
     Value<String?>? remoteId,
     Value<bool>? dirty,
+    Value<String?>? ownerId,
     Value<String>? wallId,
     Value<String>? photoId,
     Value<int>? number,
@@ -3549,6 +3842,7 @@ class RoutesCompanion extends UpdateCompanion<Route> {
       deletedAt: deletedAt ?? this.deletedAt,
       remoteId: remoteId ?? this.remoteId,
       dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
       wallId: wallId ?? this.wallId,
       photoId: photoId ?? this.photoId,
       number: number ?? this.number,
@@ -3587,6 +3881,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     }
     if (dirty.present) {
       map['dirty'] = Variable<bool>(dirty.value);
+    }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
     }
     if (wallId.present) {
       map['wall_id'] = Variable<String>(wallId.value);
@@ -3645,6 +3942,7 @@ class RoutesCompanion extends UpdateCompanion<Route> {
           ..write('deletedAt: $deletedAt, ')
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
           ..write('wallId: $wallId, ')
           ..write('photoId: $photoId, ')
           ..write('number: $number, ')
@@ -3665,6 +3963,1891 @@ class RoutesCompanion extends UpdateCompanion<Route> {
   }
 }
 
+class $CommentsTable extends Comments with TableInfo<$CommentsTable, Comment> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $CommentsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _remoteIdMeta = const VerificationMeta(
+    'remoteId',
+  );
+  @override
+  late final GeneratedColumn<String> remoteId = GeneratedColumn<String>(
+    'remote_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _dirtyMeta = const VerificationMeta('dirty');
+  @override
+  late final GeneratedColumn<bool> dirty = GeneratedColumn<bool>(
+    'dirty',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("dirty" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
+  @override
+  late final GeneratedColumn<String> wallId = GeneratedColumn<String>(
+    'wall_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES walls (id)',
+    ),
+  );
+  static const VerificationMeta _bodyMeta = const VerificationMeta('body');
+  @override
+  late final GeneratedColumn<String> body = GeneratedColumn<String>(
+    'body',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _authorNameMeta = const VerificationMeta(
+    'authorName',
+  );
+  @override
+  late final GeneratedColumn<String> authorName = GeneratedColumn<String>(
+    'author_name',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    wallId,
+    body,
+    authorName,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'comments';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<Comment> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    if (data.containsKey('remote_id')) {
+      context.handle(
+        _remoteIdMeta,
+        remoteId.isAcceptableOrUnknown(data['remote_id']!, _remoteIdMeta),
+      );
+    }
+    if (data.containsKey('dirty')) {
+      context.handle(
+        _dirtyMeta,
+        dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
+    if (data.containsKey('wall_id')) {
+      context.handle(
+        _wallIdMeta,
+        wallId.isAcceptableOrUnknown(data['wall_id']!, _wallIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_wallIdMeta);
+    }
+    if (data.containsKey('body')) {
+      context.handle(
+        _bodyMeta,
+        body.isAcceptableOrUnknown(data['body']!, _bodyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_bodyMeta);
+    }
+    if (data.containsKey('author_name')) {
+      context.handle(
+        _authorNameMeta,
+        authorName.isAcceptableOrUnknown(data['author_name']!, _authorNameMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Comment map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Comment(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deleted_at'],
+      ),
+      remoteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}remote_id'],
+      ),
+      dirty: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}dirty'],
+      )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
+      wallId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}wall_id'],
+      )!,
+      body: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}body'],
+      )!,
+      authorName: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}author_name'],
+      ),
+    );
+  }
+
+  @override
+  $CommentsTable createAlias(String alias) {
+    return $CommentsTable(attachedDatabase, alias);
+  }
+}
+
+class Comment extends DataClass implements Insertable<Comment> {
+  final String id;
+  final int createdAt;
+  final int updatedAt;
+  final int? deletedAt;
+  final String? remoteId;
+  final bool dirty;
+  final String? ownerId;
+  final String wallId;
+  final String body;
+  final String? authorName;
+  const Comment({
+    required this.id,
+    required this.createdAt,
+    required this.updatedAt,
+    this.deletedAt,
+    this.remoteId,
+    required this.dirty,
+    this.ownerId,
+    required this.wallId,
+    required this.body,
+    this.authorName,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
+    }
+    if (!nullToAbsent || remoteId != null) {
+      map['remote_id'] = Variable<String>(remoteId);
+    }
+    map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
+    map['wall_id'] = Variable<String>(wallId);
+    map['body'] = Variable<String>(body);
+    if (!nullToAbsent || authorName != null) {
+      map['author_name'] = Variable<String>(authorName);
+    }
+    return map;
+  }
+
+  CommentsCompanion toCompanion(bool nullToAbsent) {
+    return CommentsCompanion(
+      id: Value(id),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+      remoteId: remoteId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(remoteId),
+      dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
+      wallId: Value(wallId),
+      body: Value(body),
+      authorName: authorName == null && nullToAbsent
+          ? const Value.absent()
+          : Value(authorName),
+    );
+  }
+
+  factory Comment.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Comment(
+      id: serializer.fromJson<String>(json['id']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
+      remoteId: serializer.fromJson<String?>(json['remoteId']),
+      dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
+      wallId: serializer.fromJson<String>(json['wallId']),
+      body: serializer.fromJson<String>(json['body']),
+      authorName: serializer.fromJson<String?>(json['authorName']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
+      'remoteId': serializer.toJson<String?>(remoteId),
+      'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
+      'wallId': serializer.toJson<String>(wallId),
+      'body': serializer.toJson<String>(body),
+      'authorName': serializer.toJson<String?>(authorName),
+    };
+  }
+
+  Comment copyWith({
+    String? id,
+    int? createdAt,
+    int? updatedAt,
+    Value<int?> deletedAt = const Value.absent(),
+    Value<String?> remoteId = const Value.absent(),
+    bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
+    String? wallId,
+    String? body,
+    Value<String?> authorName = const Value.absent(),
+  }) => Comment(
+    id: id ?? this.id,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+    remoteId: remoteId.present ? remoteId.value : this.remoteId,
+    dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
+    wallId: wallId ?? this.wallId,
+    body: body ?? this.body,
+    authorName: authorName.present ? authorName.value : this.authorName,
+  );
+  Comment copyWithCompanion(CommentsCompanion data) {
+    return Comment(
+      id: data.id.present ? data.id.value : this.id,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
+      dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      wallId: data.wallId.present ? data.wallId.value : this.wallId,
+      body: data.body.present ? data.body.value : this.body,
+      authorName: data.authorName.present
+          ? data.authorName.value
+          : this.authorName,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Comment(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('wallId: $wallId, ')
+          ..write('body: $body, ')
+          ..write('authorName: $authorName')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    wallId,
+    body,
+    authorName,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Comment &&
+          other.id == this.id &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt &&
+          other.remoteId == this.remoteId &&
+          other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
+          other.wallId == this.wallId &&
+          other.body == this.body &&
+          other.authorName == this.authorName);
+}
+
+class CommentsCompanion extends UpdateCompanion<Comment> {
+  final Value<String> id;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int?> deletedAt;
+  final Value<String?> remoteId;
+  final Value<bool> dirty;
+  final Value<String?> ownerId;
+  final Value<String> wallId;
+  final Value<String> body;
+  final Value<String?> authorName;
+  final Value<int> rowid;
+  const CommentsCompanion({
+    this.id = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    this.wallId = const Value.absent(),
+    this.body = const Value.absent(),
+    this.authorName = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  CommentsCompanion.insert({
+    required String id,
+    required int createdAt,
+    required int updatedAt,
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    required String wallId,
+    required String body,
+    this.authorName = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt),
+       wallId = Value(wallId),
+       body = Value(body);
+  static Insertable<Comment> custom({
+    Expression<String>? id,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? deletedAt,
+    Expression<String>? remoteId,
+    Expression<bool>? dirty,
+    Expression<String>? ownerId,
+    Expression<String>? wallId,
+    Expression<String>? body,
+    Expression<String>? authorName,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (remoteId != null) 'remote_id': remoteId,
+      if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
+      if (wallId != null) 'wall_id': wallId,
+      if (body != null) 'body': body,
+      if (authorName != null) 'author_name': authorName,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  CommentsCompanion copyWith({
+    Value<String>? id,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int?>? deletedAt,
+    Value<String?>? remoteId,
+    Value<bool>? dirty,
+    Value<String?>? ownerId,
+    Value<String>? wallId,
+    Value<String>? body,
+    Value<String?>? authorName,
+    Value<int>? rowid,
+  }) {
+    return CommentsCompanion(
+      id: id ?? this.id,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      remoteId: remoteId ?? this.remoteId,
+      dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
+      wallId: wallId ?? this.wallId,
+      body: body ?? this.body,
+      authorName: authorName ?? this.authorName,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
+    }
+    if (remoteId.present) {
+      map['remote_id'] = Variable<String>(remoteId.value);
+    }
+    if (dirty.present) {
+      map['dirty'] = Variable<bool>(dirty.value);
+    }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
+    if (wallId.present) {
+      map['wall_id'] = Variable<String>(wallId.value);
+    }
+    if (body.present) {
+      map['body'] = Variable<String>(body.value);
+    }
+    if (authorName.present) {
+      map['author_name'] = Variable<String>(authorName.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('CommentsCompanion(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('wallId: $wallId, ')
+          ..write('body: $body, ')
+          ..write('authorName: $authorName, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $LikesTable extends Likes with TableInfo<$LikesTable, Like> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $LikesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _remoteIdMeta = const VerificationMeta(
+    'remoteId',
+  );
+  @override
+  late final GeneratedColumn<String> remoteId = GeneratedColumn<String>(
+    'remote_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _dirtyMeta = const VerificationMeta('dirty');
+  @override
+  late final GeneratedColumn<bool> dirty = GeneratedColumn<bool>(
+    'dirty',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("dirty" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
+  @override
+  late final GeneratedColumn<String> wallId = GeneratedColumn<String>(
+    'wall_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES walls (id)',
+    ),
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    wallId,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'likes';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<Like> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    if (data.containsKey('remote_id')) {
+      context.handle(
+        _remoteIdMeta,
+        remoteId.isAcceptableOrUnknown(data['remote_id']!, _remoteIdMeta),
+      );
+    }
+    if (data.containsKey('dirty')) {
+      context.handle(
+        _dirtyMeta,
+        dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
+    if (data.containsKey('wall_id')) {
+      context.handle(
+        _wallIdMeta,
+        wallId.isAcceptableOrUnknown(data['wall_id']!, _wallIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_wallIdMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Like map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Like(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deleted_at'],
+      ),
+      remoteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}remote_id'],
+      ),
+      dirty: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}dirty'],
+      )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
+      wallId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}wall_id'],
+      )!,
+    );
+  }
+
+  @override
+  $LikesTable createAlias(String alias) {
+    return $LikesTable(attachedDatabase, alias);
+  }
+}
+
+class Like extends DataClass implements Insertable<Like> {
+  final String id;
+  final int createdAt;
+  final int updatedAt;
+  final int? deletedAt;
+  final String? remoteId;
+  final bool dirty;
+  final String? ownerId;
+  final String wallId;
+  const Like({
+    required this.id,
+    required this.createdAt,
+    required this.updatedAt,
+    this.deletedAt,
+    this.remoteId,
+    required this.dirty,
+    this.ownerId,
+    required this.wallId,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
+    }
+    if (!nullToAbsent || remoteId != null) {
+      map['remote_id'] = Variable<String>(remoteId);
+    }
+    map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
+    map['wall_id'] = Variable<String>(wallId);
+    return map;
+  }
+
+  LikesCompanion toCompanion(bool nullToAbsent) {
+    return LikesCompanion(
+      id: Value(id),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+      remoteId: remoteId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(remoteId),
+      dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
+      wallId: Value(wallId),
+    );
+  }
+
+  factory Like.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Like(
+      id: serializer.fromJson<String>(json['id']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
+      remoteId: serializer.fromJson<String?>(json['remoteId']),
+      dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
+      wallId: serializer.fromJson<String>(json['wallId']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
+      'remoteId': serializer.toJson<String?>(remoteId),
+      'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
+      'wallId': serializer.toJson<String>(wallId),
+    };
+  }
+
+  Like copyWith({
+    String? id,
+    int? createdAt,
+    int? updatedAt,
+    Value<int?> deletedAt = const Value.absent(),
+    Value<String?> remoteId = const Value.absent(),
+    bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
+    String? wallId,
+  }) => Like(
+    id: id ?? this.id,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+    remoteId: remoteId.present ? remoteId.value : this.remoteId,
+    dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
+    wallId: wallId ?? this.wallId,
+  );
+  Like copyWithCompanion(LikesCompanion data) {
+    return Like(
+      id: data.id.present ? data.id.value : this.id,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
+      dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      wallId: data.wallId.present ? data.wallId.value : this.wallId,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Like(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('wallId: $wallId')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    wallId,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Like &&
+          other.id == this.id &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt &&
+          other.remoteId == this.remoteId &&
+          other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
+          other.wallId == this.wallId);
+}
+
+class LikesCompanion extends UpdateCompanion<Like> {
+  final Value<String> id;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int?> deletedAt;
+  final Value<String?> remoteId;
+  final Value<bool> dirty;
+  final Value<String?> ownerId;
+  final Value<String> wallId;
+  final Value<int> rowid;
+  const LikesCompanion({
+    this.id = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    this.wallId = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  LikesCompanion.insert({
+    required String id,
+    required int createdAt,
+    required int updatedAt,
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    required String wallId,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt),
+       wallId = Value(wallId);
+  static Insertable<Like> custom({
+    Expression<String>? id,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? deletedAt,
+    Expression<String>? remoteId,
+    Expression<bool>? dirty,
+    Expression<String>? ownerId,
+    Expression<String>? wallId,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (remoteId != null) 'remote_id': remoteId,
+      if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
+      if (wallId != null) 'wall_id': wallId,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  LikesCompanion copyWith({
+    Value<String>? id,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int?>? deletedAt,
+    Value<String?>? remoteId,
+    Value<bool>? dirty,
+    Value<String?>? ownerId,
+    Value<String>? wallId,
+    Value<int>? rowid,
+  }) {
+    return LikesCompanion(
+      id: id ?? this.id,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      remoteId: remoteId ?? this.remoteId,
+      dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
+      wallId: wallId ?? this.wallId,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
+    }
+    if (remoteId.present) {
+      map['remote_id'] = Variable<String>(remoteId.value);
+    }
+    if (dirty.present) {
+      map['dirty'] = Variable<bool>(dirty.value);
+    }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
+    if (wallId.present) {
+      map['wall_id'] = Variable<String>(wallId.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('LikesCompanion(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('wallId: $wallId, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $AscentsTable extends Ascents with TableInfo<$AscentsTable, Ascent> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $AscentsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _remoteIdMeta = const VerificationMeta(
+    'remoteId',
+  );
+  @override
+  late final GeneratedColumn<String> remoteId = GeneratedColumn<String>(
+    'remote_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _dirtyMeta = const VerificationMeta('dirty');
+  @override
+  late final GeneratedColumn<bool> dirty = GeneratedColumn<bool>(
+    'dirty',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("dirty" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _routeIdMeta = const VerificationMeta(
+    'routeId',
+  );
+  @override
+  late final GeneratedColumn<String> routeId = GeneratedColumn<String>(
+    'route_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES routes (id)',
+    ),
+  );
+  static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
+  @override
+  late final GeneratedColumn<String> wallId = GeneratedColumn<String>(
+    'wall_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES walls (id)',
+    ),
+  );
+  static const VerificationMeta _climbedAtMeta = const VerificationMeta(
+    'climbedAt',
+  );
+  @override
+  late final GeneratedColumn<int> climbedAt = GeneratedColumn<int>(
+    'climbed_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _styleMeta = const VerificationMeta('style');
+  @override
+  late final GeneratedColumn<String> style = GeneratedColumn<String>(
+    'style',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _notesMeta = const VerificationMeta('notes');
+  @override
+  late final GeneratedColumn<String> notes = GeneratedColumn<String>(
+    'notes',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _gradeOpinionMeta = const VerificationMeta(
+    'gradeOpinion',
+  );
+  @override
+  late final GeneratedColumn<String> gradeOpinion = GeneratedColumn<String>(
+    'grade_opinion',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    routeId,
+    wallId,
+    climbedAt,
+    style,
+    notes,
+    gradeOpinion,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'ascents';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<Ascent> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    if (data.containsKey('remote_id')) {
+      context.handle(
+        _remoteIdMeta,
+        remoteId.isAcceptableOrUnknown(data['remote_id']!, _remoteIdMeta),
+      );
+    }
+    if (data.containsKey('dirty')) {
+      context.handle(
+        _dirtyMeta,
+        dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
+    if (data.containsKey('route_id')) {
+      context.handle(
+        _routeIdMeta,
+        routeId.isAcceptableOrUnknown(data['route_id']!, _routeIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_routeIdMeta);
+    }
+    if (data.containsKey('wall_id')) {
+      context.handle(
+        _wallIdMeta,
+        wallId.isAcceptableOrUnknown(data['wall_id']!, _wallIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_wallIdMeta);
+    }
+    if (data.containsKey('climbed_at')) {
+      context.handle(
+        _climbedAtMeta,
+        climbedAt.isAcceptableOrUnknown(data['climbed_at']!, _climbedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_climbedAtMeta);
+    }
+    if (data.containsKey('style')) {
+      context.handle(
+        _styleMeta,
+        style.isAcceptableOrUnknown(data['style']!, _styleMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_styleMeta);
+    }
+    if (data.containsKey('notes')) {
+      context.handle(
+        _notesMeta,
+        notes.isAcceptableOrUnknown(data['notes']!, _notesMeta),
+      );
+    }
+    if (data.containsKey('grade_opinion')) {
+      context.handle(
+        _gradeOpinionMeta,
+        gradeOpinion.isAcceptableOrUnknown(
+          data['grade_opinion']!,
+          _gradeOpinionMeta,
+        ),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  Ascent map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return Ascent(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deleted_at'],
+      ),
+      remoteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}remote_id'],
+      ),
+      dirty: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}dirty'],
+      )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
+      routeId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}route_id'],
+      )!,
+      wallId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}wall_id'],
+      )!,
+      climbedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}climbed_at'],
+      )!,
+      style: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}style'],
+      )!,
+      notes: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}notes'],
+      ),
+      gradeOpinion: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}grade_opinion'],
+      ),
+    );
+  }
+
+  @override
+  $AscentsTable createAlias(String alias) {
+    return $AscentsTable(attachedDatabase, alias);
+  }
+}
+
+class Ascent extends DataClass implements Insertable<Ascent> {
+  final String id;
+  final int createdAt;
+  final int updatedAt;
+  final int? deletedAt;
+  final String? remoteId;
+  final bool dirty;
+  final String? ownerId;
+  final String routeId;
+  final String wallId;
+  final int climbedAt;
+  final String style;
+  final String? notes;
+  final String? gradeOpinion;
+  const Ascent({
+    required this.id,
+    required this.createdAt,
+    required this.updatedAt,
+    this.deletedAt,
+    this.remoteId,
+    required this.dirty,
+    this.ownerId,
+    required this.routeId,
+    required this.wallId,
+    required this.climbedAt,
+    required this.style,
+    this.notes,
+    this.gradeOpinion,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
+    }
+    if (!nullToAbsent || remoteId != null) {
+      map['remote_id'] = Variable<String>(remoteId);
+    }
+    map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
+    map['route_id'] = Variable<String>(routeId);
+    map['wall_id'] = Variable<String>(wallId);
+    map['climbed_at'] = Variable<int>(climbedAt);
+    map['style'] = Variable<String>(style);
+    if (!nullToAbsent || notes != null) {
+      map['notes'] = Variable<String>(notes);
+    }
+    if (!nullToAbsent || gradeOpinion != null) {
+      map['grade_opinion'] = Variable<String>(gradeOpinion);
+    }
+    return map;
+  }
+
+  AscentsCompanion toCompanion(bool nullToAbsent) {
+    return AscentsCompanion(
+      id: Value(id),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+      remoteId: remoteId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(remoteId),
+      dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
+      routeId: Value(routeId),
+      wallId: Value(wallId),
+      climbedAt: Value(climbedAt),
+      style: Value(style),
+      notes: notes == null && nullToAbsent
+          ? const Value.absent()
+          : Value(notes),
+      gradeOpinion: gradeOpinion == null && nullToAbsent
+          ? const Value.absent()
+          : Value(gradeOpinion),
+    );
+  }
+
+  factory Ascent.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return Ascent(
+      id: serializer.fromJson<String>(json['id']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
+      remoteId: serializer.fromJson<String?>(json['remoteId']),
+      dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
+      routeId: serializer.fromJson<String>(json['routeId']),
+      wallId: serializer.fromJson<String>(json['wallId']),
+      climbedAt: serializer.fromJson<int>(json['climbedAt']),
+      style: serializer.fromJson<String>(json['style']),
+      notes: serializer.fromJson<String?>(json['notes']),
+      gradeOpinion: serializer.fromJson<String?>(json['gradeOpinion']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
+      'remoteId': serializer.toJson<String?>(remoteId),
+      'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
+      'routeId': serializer.toJson<String>(routeId),
+      'wallId': serializer.toJson<String>(wallId),
+      'climbedAt': serializer.toJson<int>(climbedAt),
+      'style': serializer.toJson<String>(style),
+      'notes': serializer.toJson<String?>(notes),
+      'gradeOpinion': serializer.toJson<String?>(gradeOpinion),
+    };
+  }
+
+  Ascent copyWith({
+    String? id,
+    int? createdAt,
+    int? updatedAt,
+    Value<int?> deletedAt = const Value.absent(),
+    Value<String?> remoteId = const Value.absent(),
+    bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
+    String? routeId,
+    String? wallId,
+    int? climbedAt,
+    String? style,
+    Value<String?> notes = const Value.absent(),
+    Value<String?> gradeOpinion = const Value.absent(),
+  }) => Ascent(
+    id: id ?? this.id,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+    remoteId: remoteId.present ? remoteId.value : this.remoteId,
+    dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
+    routeId: routeId ?? this.routeId,
+    wallId: wallId ?? this.wallId,
+    climbedAt: climbedAt ?? this.climbedAt,
+    style: style ?? this.style,
+    notes: notes.present ? notes.value : this.notes,
+    gradeOpinion: gradeOpinion.present ? gradeOpinion.value : this.gradeOpinion,
+  );
+  Ascent copyWithCompanion(AscentsCompanion data) {
+    return Ascent(
+      id: data.id.present ? data.id.value : this.id,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
+      dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      routeId: data.routeId.present ? data.routeId.value : this.routeId,
+      wallId: data.wallId.present ? data.wallId.value : this.wallId,
+      climbedAt: data.climbedAt.present ? data.climbedAt.value : this.climbedAt,
+      style: data.style.present ? data.style.value : this.style,
+      notes: data.notes.present ? data.notes.value : this.notes,
+      gradeOpinion: data.gradeOpinion.present
+          ? data.gradeOpinion.value
+          : this.gradeOpinion,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('Ascent(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('routeId: $routeId, ')
+          ..write('wallId: $wallId, ')
+          ..write('climbedAt: $climbedAt, ')
+          ..write('style: $style, ')
+          ..write('notes: $notes, ')
+          ..write('gradeOpinion: $gradeOpinion')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    routeId,
+    wallId,
+    climbedAt,
+    style,
+    notes,
+    gradeOpinion,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is Ascent &&
+          other.id == this.id &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt &&
+          other.remoteId == this.remoteId &&
+          other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
+          other.routeId == this.routeId &&
+          other.wallId == this.wallId &&
+          other.climbedAt == this.climbedAt &&
+          other.style == this.style &&
+          other.notes == this.notes &&
+          other.gradeOpinion == this.gradeOpinion);
+}
+
+class AscentsCompanion extends UpdateCompanion<Ascent> {
+  final Value<String> id;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int?> deletedAt;
+  final Value<String?> remoteId;
+  final Value<bool> dirty;
+  final Value<String?> ownerId;
+  final Value<String> routeId;
+  final Value<String> wallId;
+  final Value<int> climbedAt;
+  final Value<String> style;
+  final Value<String?> notes;
+  final Value<String?> gradeOpinion;
+  final Value<int> rowid;
+  const AscentsCompanion({
+    this.id = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    this.routeId = const Value.absent(),
+    this.wallId = const Value.absent(),
+    this.climbedAt = const Value.absent(),
+    this.style = const Value.absent(),
+    this.notes = const Value.absent(),
+    this.gradeOpinion = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  AscentsCompanion.insert({
+    required String id,
+    required int createdAt,
+    required int updatedAt,
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    required String routeId,
+    required String wallId,
+    required int climbedAt,
+    required String style,
+    this.notes = const Value.absent(),
+    this.gradeOpinion = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt),
+       routeId = Value(routeId),
+       wallId = Value(wallId),
+       climbedAt = Value(climbedAt),
+       style = Value(style);
+  static Insertable<Ascent> custom({
+    Expression<String>? id,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? deletedAt,
+    Expression<String>? remoteId,
+    Expression<bool>? dirty,
+    Expression<String>? ownerId,
+    Expression<String>? routeId,
+    Expression<String>? wallId,
+    Expression<int>? climbedAt,
+    Expression<String>? style,
+    Expression<String>? notes,
+    Expression<String>? gradeOpinion,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (remoteId != null) 'remote_id': remoteId,
+      if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
+      if (routeId != null) 'route_id': routeId,
+      if (wallId != null) 'wall_id': wallId,
+      if (climbedAt != null) 'climbed_at': climbedAt,
+      if (style != null) 'style': style,
+      if (notes != null) 'notes': notes,
+      if (gradeOpinion != null) 'grade_opinion': gradeOpinion,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  AscentsCompanion copyWith({
+    Value<String>? id,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int?>? deletedAt,
+    Value<String?>? remoteId,
+    Value<bool>? dirty,
+    Value<String?>? ownerId,
+    Value<String>? routeId,
+    Value<String>? wallId,
+    Value<int>? climbedAt,
+    Value<String>? style,
+    Value<String?>? notes,
+    Value<String?>? gradeOpinion,
+    Value<int>? rowid,
+  }) {
+    return AscentsCompanion(
+      id: id ?? this.id,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      remoteId: remoteId ?? this.remoteId,
+      dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
+      routeId: routeId ?? this.routeId,
+      wallId: wallId ?? this.wallId,
+      climbedAt: climbedAt ?? this.climbedAt,
+      style: style ?? this.style,
+      notes: notes ?? this.notes,
+      gradeOpinion: gradeOpinion ?? this.gradeOpinion,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
+    }
+    if (remoteId.present) {
+      map['remote_id'] = Variable<String>(remoteId.value);
+    }
+    if (dirty.present) {
+      map['dirty'] = Variable<bool>(dirty.value);
+    }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
+    if (routeId.present) {
+      map['route_id'] = Variable<String>(routeId.value);
+    }
+    if (wallId.present) {
+      map['wall_id'] = Variable<String>(wallId.value);
+    }
+    if (climbedAt.present) {
+      map['climbed_at'] = Variable<int>(climbedAt.value);
+    }
+    if (style.present) {
+      map['style'] = Variable<String>(style.value);
+    }
+    if (notes.present) {
+      map['notes'] = Variable<String>(notes.value);
+    }
+    if (gradeOpinion.present) {
+      map['grade_opinion'] = Variable<String>(gradeOpinion.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('AscentsCompanion(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('routeId: $routeId, ')
+          ..write('wallId: $wallId, ')
+          ..write('climbedAt: $climbedAt, ')
+          ..write('style: $style, ')
+          ..write('notes: $notes, ')
+          ..write('gradeOpinion: $gradeOpinion, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -3673,6 +5856,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $WallsTable walls = $WallsTable(this);
   late final $PhotosTable photos = $PhotosTable(this);
   late final $RoutesTable routes = $RoutesTable(this);
+  late final $CommentsTable comments = $CommentsTable(this);
+  late final $LikesTable likes = $LikesTable(this);
+  late final $AscentsTable ascents = $AscentsTable(this);
   late final Index idxRoutesWallNumberLive = Index(
     'idx_routes_wall_number_live',
     'CREATE UNIQUE INDEX idx_routes_wall_number_live ON routes (wall_id, number) WHERE deleted_at IS NULL',
@@ -3687,6 +5873,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     walls,
     photos,
     routes,
+    comments,
+    likes,
+    ascents,
     idxRoutesWallNumberLive,
   ];
 }
@@ -3699,6 +5888,7 @@ typedef $$AreasTableCreateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       required String name,
       Value<String?> description,
       Value<double?> latitude,
@@ -3713,6 +5903,7 @@ typedef $$AreasTableUpdateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       Value<String> name,
       Value<String?> description,
       Value<double?> latitude,
@@ -3779,6 +5970,11 @@ class $$AreasTableFilterComposer extends Composer<_$AppDatabase, $AreasTable> {
 
   ColumnFilters<bool> get dirty => $composableBuilder(
     column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -3867,6 +6063,11 @@ class $$AreasTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get name => $composableBuilder(
     column: $table.name,
     builder: (column) => ColumnOrderings(column),
@@ -3914,6 +6115,9 @@ class $$AreasTableAnnotationComposer
 
   GeneratedColumn<bool> get dirty =>
       $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
 
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
@@ -3989,6 +6193,7 @@ class $$AreasTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 Value<String> name = const Value.absent(),
                 Value<String?> description = const Value.absent(),
                 Value<double?> latitude = const Value.absent(),
@@ -4001,6 +6206,7 @@ class $$AreasTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 name: name,
                 description: description,
                 latitude: latitude,
@@ -4015,6 +6221,7 @@ class $$AreasTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 required String name,
                 Value<String?> description = const Value.absent(),
                 Value<double?> latitude = const Value.absent(),
@@ -4027,6 +6234,7 @@ class $$AreasTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 name: name,
                 description: description,
                 latitude: latitude,
@@ -4088,6 +6296,7 @@ typedef $$SectorsTableCreateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       required String areaId,
       required String name,
       required int sortOrder,
@@ -4101,6 +6310,7 @@ typedef $$SectorsTableUpdateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       Value<String> areaId,
       Value<String> name,
       Value<int> sortOrder,
@@ -4184,6 +6394,11 @@ class $$SectorsTableFilterComposer
 
   ColumnFilters<bool> get dirty => $composableBuilder(
     column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -4285,6 +6500,11 @@ class $$SectorsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get name => $composableBuilder(
     column: $table.name,
     builder: (column) => ColumnOrderings(column),
@@ -4345,6 +6565,9 @@ class $$SectorsTableAnnotationComposer
 
   GeneratedColumn<bool> get dirty =>
       $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
 
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
@@ -4435,6 +6658,7 @@ class $$SectorsTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 Value<String> areaId = const Value.absent(),
                 Value<String> name = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
@@ -4446,6 +6670,7 @@ class $$SectorsTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 areaId: areaId,
                 name: name,
                 sortOrder: sortOrder,
@@ -4459,6 +6684,7 @@ class $$SectorsTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 required String areaId,
                 required String name,
                 required int sortOrder,
@@ -4470,6 +6696,7 @@ class $$SectorsTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 areaId: areaId,
                 name: name,
                 sortOrder: sortOrder,
@@ -4563,9 +6790,11 @@ typedef $$WallsTableCreateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       required String sectorId,
       required String name,
       required int sortOrder,
+      Value<String> visibility,
       Value<int> rowid,
     });
 typedef $$WallsTableUpdateCompanionBuilder =
@@ -4576,9 +6805,11 @@ typedef $$WallsTableUpdateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       Value<String> sectorId,
       Value<String> name,
       Value<int> sortOrder,
+      Value<String> visibility,
       Value<int> rowid,
     });
 
@@ -4640,6 +6871,63 @@ final class $$WallsTableReferences
       manager.$state.copyWith(prefetchedData: cache),
     );
   }
+
+  static MultiTypedResultKey<$CommentsTable, List<Comment>> _commentsRefsTable(
+    _$AppDatabase db,
+  ) => MultiTypedResultKey.fromTable(
+    db.comments,
+    aliasName: 'walls__id__comments__wall_id',
+  );
+
+  $$CommentsTableProcessedTableManager get commentsRefs {
+    final manager = $$CommentsTableTableManager(
+      $_db,
+      $_db.comments,
+    ).filter((f) => f.wallId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_commentsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$LikesTable, List<Like>> _likesRefsTable(
+    _$AppDatabase db,
+  ) => MultiTypedResultKey.fromTable(
+    db.likes,
+    aliasName: 'walls__id__likes__wall_id',
+  );
+
+  $$LikesTableProcessedTableManager get likesRefs {
+    final manager = $$LikesTableTableManager(
+      $_db,
+      $_db.likes,
+    ).filter((f) => f.wallId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_likesRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$AscentsTable, List<Ascent>> _ascentsRefsTable(
+    _$AppDatabase db,
+  ) => MultiTypedResultKey.fromTable(
+    db.ascents,
+    aliasName: 'walls__id__ascents__wall_id',
+  );
+
+  $$AscentsTableProcessedTableManager get ascentsRefs {
+    final manager = $$AscentsTableTableManager(
+      $_db,
+      $_db.ascents,
+    ).filter((f) => f.wallId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_ascentsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$WallsTableFilterComposer extends Composer<_$AppDatabase, $WallsTable> {
@@ -4680,6 +6968,11 @@ class $$WallsTableFilterComposer extends Composer<_$AppDatabase, $WallsTable> {
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
   ColumnFilters<String> get name => $composableBuilder(
     column: $table.name,
     builder: (column) => ColumnFilters(column),
@@ -4687,6 +6980,11 @@ class $$WallsTableFilterComposer extends Composer<_$AppDatabase, $WallsTable> {
 
   ColumnFilters<int> get sortOrder => $composableBuilder(
     column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get visibility => $composableBuilder(
+    column: $table.visibility,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -4762,6 +7060,81 @@ class $$WallsTableFilterComposer extends Composer<_$AppDatabase, $WallsTable> {
     );
     return f(composer);
   }
+
+  Expression<bool> commentsRefs(
+    Expression<bool> Function($$CommentsTableFilterComposer f) f,
+  ) {
+    final $$CommentsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.comments,
+      getReferencedColumn: (t) => t.wallId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$CommentsTableFilterComposer(
+            $db: $db,
+            $table: $db.comments,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> likesRefs(
+    Expression<bool> Function($$LikesTableFilterComposer f) f,
+  ) {
+    final $$LikesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.likes,
+      getReferencedColumn: (t) => t.wallId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LikesTableFilterComposer(
+            $db: $db,
+            $table: $db.likes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> ascentsRefs(
+    Expression<bool> Function($$AscentsTableFilterComposer f) f,
+  ) {
+    final $$AscentsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.ascents,
+      getReferencedColumn: (t) => t.wallId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AscentsTableFilterComposer(
+            $db: $db,
+            $table: $db.ascents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$WallsTableOrderingComposer
@@ -4803,6 +7176,11 @@ class $$WallsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get name => $composableBuilder(
     column: $table.name,
     builder: (column) => ColumnOrderings(column),
@@ -4810,6 +7188,11 @@ class $$WallsTableOrderingComposer
 
   ColumnOrderings<int> get sortOrder => $composableBuilder(
     column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get visibility => $composableBuilder(
+    column: $table.visibility,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -4864,11 +7247,19 @@ class $$WallsTableAnnotationComposer
   GeneratedColumn<bool> get dirty =>
       $composableBuilder(column: $table.dirty, builder: (column) => column);
 
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
 
   GeneratedColumn<int> get sortOrder =>
       $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<String> get visibility => $composableBuilder(
+    column: $table.visibility,
+    builder: (column) => column,
+  );
 
   $$SectorsTableAnnotationComposer get sectorId {
     final $$SectorsTableAnnotationComposer composer = $composerBuilder(
@@ -4942,6 +7333,81 @@ class $$WallsTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> commentsRefs<T extends Object>(
+    Expression<T> Function($$CommentsTableAnnotationComposer a) f,
+  ) {
+    final $$CommentsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.comments,
+      getReferencedColumn: (t) => t.wallId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$CommentsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.comments,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> likesRefs<T extends Object>(
+    Expression<T> Function($$LikesTableAnnotationComposer a) f,
+  ) {
+    final $$LikesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.likes,
+      getReferencedColumn: (t) => t.wallId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$LikesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.likes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<T> ascentsRefs<T extends Object>(
+    Expression<T> Function($$AscentsTableAnnotationComposer a) f,
+  ) {
+    final $$AscentsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.ascents,
+      getReferencedColumn: (t) => t.wallId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AscentsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.ascents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$WallsTableTableManager
@@ -4961,6 +7427,9 @@ class $$WallsTableTableManager
             bool sectorId,
             bool photosRefs,
             bool routesRefs,
+            bool commentsRefs,
+            bool likesRefs,
+            bool ascentsRefs,
           })
         > {
   $$WallsTableTableManager(_$AppDatabase db, $WallsTable table)
@@ -4982,9 +7451,11 @@ class $$WallsTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 Value<String> sectorId = const Value.absent(),
                 Value<String> name = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
+                Value<String> visibility = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => WallsCompanion(
                 id: id,
@@ -4993,9 +7464,11 @@ class $$WallsTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 sectorId: sectorId,
                 name: name,
                 sortOrder: sortOrder,
+                visibility: visibility,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -5006,9 +7479,11 @@ class $$WallsTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 required String sectorId,
                 required String name,
                 required int sortOrder,
+                Value<String> visibility = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => WallsCompanion.insert(
                 id: id,
@@ -5017,9 +7492,11 @@ class $$WallsTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 sectorId: sectorId,
                 name: name,
                 sortOrder: sortOrder,
+                visibility: visibility,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -5029,12 +7506,22 @@ class $$WallsTableTableManager
               )
               .toList(),
           prefetchHooksCallback:
-              ({sectorId = false, photosRefs = false, routesRefs = false}) {
+              ({
+                sectorId = false,
+                photosRefs = false,
+                routesRefs = false,
+                commentsRefs = false,
+                likesRefs = false,
+                ascentsRefs = false,
+              }) {
                 return PrefetchHooks(
                   db: db,
                   explicitlyWatchedTables: [
                     if (photosRefs) db.photos,
                     if (routesRefs) db.routes,
+                    if (commentsRefs) db.comments,
+                    if (likesRefs) db.likes,
+                    if (ascentsRefs) db.ascents,
                   ],
                   addJoins:
                       <
@@ -5096,6 +7583,49 @@ class $$WallsTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (commentsRefs)
+                        await $_getPrefetchedData<Wall, $WallsTable, Comment>(
+                          currentTable: table,
+                          referencedTable: $$WallsTableReferences
+                              ._commentsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$WallsTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).commentsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.wallId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (likesRefs)
+                        await $_getPrefetchedData<Wall, $WallsTable, Like>(
+                          currentTable: table,
+                          referencedTable: $$WallsTableReferences
+                              ._likesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$WallsTableReferences(db, table, p0).likesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.wallId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                      if (ascentsRefs)
+                        await $_getPrefetchedData<Wall, $WallsTable, Ascent>(
+                          currentTable: table,
+                          referencedTable: $$WallsTableReferences
+                              ._ascentsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$WallsTableReferences(db, table, p0).ascentsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.wallId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -5116,7 +7646,14 @@ typedef $$WallsTableProcessedTableManager =
       $$WallsTableUpdateCompanionBuilder,
       (Wall, $$WallsTableReferences),
       Wall,
-      PrefetchHooks Function({bool sectorId, bool photosRefs, bool routesRefs})
+      PrefetchHooks Function({
+        bool sectorId,
+        bool photosRefs,
+        bool routesRefs,
+        bool commentsRefs,
+        bool likesRefs,
+        bool ascentsRefs,
+      })
     >;
 typedef $$PhotosTableCreateCompanionBuilder =
     PhotosCompanion Function({
@@ -5126,6 +7663,7 @@ typedef $$PhotosTableCreateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       required String wallId,
       required String localPath,
       required String kind,
@@ -5144,6 +7682,7 @@ typedef $$PhotosTableUpdateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       Value<String> wallId,
       Value<String> localPath,
       Value<String> kind,
@@ -5249,6 +7788,11 @@ class $$PhotosTableFilterComposer
 
   ColumnFilters<bool> get dirty => $composableBuilder(
     column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -5393,6 +7937,11 @@ class $$PhotosTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get localPath => $composableBuilder(
     column: $table.localPath,
     builder: (column) => ColumnOrderings(column),
@@ -5496,6 +8045,9 @@ class $$PhotosTableAnnotationComposer
 
   GeneratedColumn<bool> get dirty =>
       $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
 
   GeneratedColumn<String> get localPath =>
       $composableBuilder(column: $table.localPath, builder: (column) => column);
@@ -5627,6 +8179,7 @@ class $$PhotosTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 Value<String> wallId = const Value.absent(),
                 Value<String> localPath = const Value.absent(),
                 Value<String> kind = const Value.absent(),
@@ -5643,6 +8196,7 @@ class $$PhotosTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 wallId: wallId,
                 localPath: localPath,
                 kind: kind,
@@ -5661,6 +8215,7 @@ class $$PhotosTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 required String wallId,
                 required String localPath,
                 required String kind,
@@ -5677,6 +8232,7 @@ class $$PhotosTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 wallId: wallId,
                 localPath: localPath,
                 kind: kind,
@@ -5788,6 +8344,7 @@ typedef $$RoutesTableCreateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       required String wallId,
       required String photoId,
       required int number,
@@ -5812,6 +8369,7 @@ typedef $$RoutesTableUpdateCompanionBuilder =
       Value<int?> deletedAt,
       Value<String?> remoteId,
       Value<bool> dirty,
+      Value<String?> ownerId,
       Value<String> wallId,
       Value<String> photoId,
       Value<int> number,
@@ -5866,6 +8424,25 @@ final class $$RoutesTableReferences
       manager.$state.copyWith(prefetchedData: [item]),
     );
   }
+
+  static MultiTypedResultKey<$AscentsTable, List<Ascent>> _ascentsRefsTable(
+    _$AppDatabase db,
+  ) => MultiTypedResultKey.fromTable(
+    db.ascents,
+    aliasName: 'routes__id__ascents__route_id',
+  );
+
+  $$AscentsTableProcessedTableManager get ascentsRefs {
+    final manager = $$AscentsTableTableManager(
+      $_db,
+      $_db.ascents,
+    ).filter((f) => f.routeId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_ascentsRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
 }
 
 class $$RoutesTableFilterComposer
@@ -5904,6 +8481,11 @@ class $$RoutesTableFilterComposer
 
   ColumnFilters<bool> get dirty => $composableBuilder(
     column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -6012,6 +8594,31 @@ class $$RoutesTableFilterComposer
     );
     return composer;
   }
+
+  Expression<bool> ascentsRefs(
+    Expression<bool> Function($$AscentsTableFilterComposer f) f,
+  ) {
+    final $$AscentsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.ascents,
+      getReferencedColumn: (t) => t.routeId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AscentsTableFilterComposer(
+            $db: $db,
+            $table: $db.ascents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$RoutesTableOrderingComposer
@@ -6050,6 +8657,11 @@ class $$RoutesTableOrderingComposer
 
   ColumnOrderings<bool> get dirty => $composableBuilder(
     column: $table.dirty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -6187,6 +8799,9 @@ class $$RoutesTableAnnotationComposer
   GeneratedColumn<bool> get dirty =>
       $composableBuilder(column: $table.dirty, builder: (column) => column);
 
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
   GeneratedColumn<int> get number =>
       $composableBuilder(column: $table.number, builder: (column) => column);
 
@@ -6280,6 +8895,31 @@ class $$RoutesTableAnnotationComposer
     );
     return composer;
   }
+
+  Expression<T> ascentsRefs<T extends Object>(
+    Expression<T> Function($$AscentsTableAnnotationComposer a) f,
+  ) {
+    final $$AscentsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.ascents,
+      getReferencedColumn: (t) => t.routeId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$AscentsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.ascents,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$RoutesTableTableManager
@@ -6295,7 +8935,7 @@ class $$RoutesTableTableManager
           $$RoutesTableUpdateCompanionBuilder,
           (Route, $$RoutesTableReferences),
           Route,
-          PrefetchHooks Function({bool wallId, bool photoId})
+          PrefetchHooks Function({bool wallId, bool photoId, bool ascentsRefs})
         > {
   $$RoutesTableTableManager(_$AppDatabase db, $RoutesTable table)
     : super(
@@ -6316,6 +8956,7 @@ class $$RoutesTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 Value<String> wallId = const Value.absent(),
                 Value<String> photoId = const Value.absent(),
                 Value<int> number = const Value.absent(),
@@ -6338,6 +8979,7 @@ class $$RoutesTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 wallId: wallId,
                 photoId: photoId,
                 number: number,
@@ -6362,6 +9004,7 @@ class $$RoutesTableTableManager
                 Value<int?> deletedAt = const Value.absent(),
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
                 required String wallId,
                 required String photoId,
                 required int number,
@@ -6384,6 +9027,7 @@ class $$RoutesTableTableManager
                 deletedAt: deletedAt,
                 remoteId: remoteId,
                 dirty: dirty,
+                ownerId: ownerId,
                 wallId: wallId,
                 photoId: photoId,
                 number: number,
@@ -6406,7 +9050,453 @@ class $$RoutesTableTableManager
                     (e.readTable(table), $$RoutesTableReferences(db, table, e)),
               )
               .toList(),
-          prefetchHooksCallback: ({wallId = false, photoId = false}) {
+          prefetchHooksCallback:
+              ({wallId = false, photoId = false, ascentsRefs = false}) {
+                return PrefetchHooks(
+                  db: db,
+                  explicitlyWatchedTables: [if (ascentsRefs) db.ascents],
+                  addJoins:
+                      <
+                        T extends TableManagerState<
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic,
+                          dynamic
+                        >
+                      >(state) {
+                        if (wallId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.wallId,
+                                    referencedTable: $$RoutesTableReferences
+                                        ._wallIdTable(db),
+                                    referencedColumn: $$RoutesTableReferences
+                                        ._wallIdTable(db)
+                                        .id,
+                                  )
+                                  as T;
+                        }
+                        if (photoId) {
+                          state =
+                              state.withJoin(
+                                    currentTable: table,
+                                    currentColumn: table.photoId,
+                                    referencedTable: $$RoutesTableReferences
+                                        ._photoIdTable(db),
+                                    referencedColumn: $$RoutesTableReferences
+                                        ._photoIdTable(db)
+                                        .id,
+                                  )
+                                  as T;
+                        }
+
+                        return state;
+                      },
+                  getPrefetchedDataCallback: (items) async {
+                    return [
+                      if (ascentsRefs)
+                        await $_getPrefetchedData<Route, $RoutesTable, Ascent>(
+                          currentTable: table,
+                          referencedTable: $$RoutesTableReferences
+                              ._ascentsRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$RoutesTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).ascentsRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.routeId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
+                    ];
+                  },
+                );
+              },
+        ),
+      );
+}
+
+typedef $$RoutesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $RoutesTable,
+      Route,
+      $$RoutesTableFilterComposer,
+      $$RoutesTableOrderingComposer,
+      $$RoutesTableAnnotationComposer,
+      $$RoutesTableCreateCompanionBuilder,
+      $$RoutesTableUpdateCompanionBuilder,
+      (Route, $$RoutesTableReferences),
+      Route,
+      PrefetchHooks Function({bool wallId, bool photoId, bool ascentsRefs})
+    >;
+typedef $$CommentsTableCreateCompanionBuilder =
+    CommentsCompanion Function({
+      required String id,
+      required int createdAt,
+      required int updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      required String wallId,
+      required String body,
+      Value<String?> authorName,
+      Value<int> rowid,
+    });
+typedef $$CommentsTableUpdateCompanionBuilder =
+    CommentsCompanion Function({
+      Value<String> id,
+      Value<int> createdAt,
+      Value<int> updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      Value<String> wallId,
+      Value<String> body,
+      Value<String?> authorName,
+      Value<int> rowid,
+    });
+
+final class $$CommentsTableReferences
+    extends BaseReferences<_$AppDatabase, $CommentsTable, Comment> {
+  $$CommentsTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $WallsTable _wallIdTable(_$AppDatabase db) =>
+      db.walls.createAlias('comments__wall_id__walls__id');
+
+  $$WallsTableProcessedTableManager get wallId {
+    final $_column = $_itemColumn<String>('wall_id')!;
+
+    final manager = $$WallsTableTableManager(
+      $_db,
+      $_db.walls,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_wallIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$CommentsTableFilterComposer
+    extends Composer<_$AppDatabase, $CommentsTable> {
+  $$CommentsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get authorName => $composableBuilder(
+    column: $table.authorName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$WallsTableFilterComposer get wallId {
+    final $$WallsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableFilterComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$CommentsTableOrderingComposer
+    extends Composer<_$AppDatabase, $CommentsTable> {
+  $$CommentsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get authorName => $composableBuilder(
+    column: $table.authorName,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$WallsTableOrderingComposer get wallId {
+    final $$WallsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableOrderingComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$CommentsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $CommentsTable> {
+  $$CommentsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get remoteId =>
+      $composableBuilder(column: $table.remoteId, builder: (column) => column);
+
+  GeneratedColumn<bool> get dirty =>
+      $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  GeneratedColumn<String> get body =>
+      $composableBuilder(column: $table.body, builder: (column) => column);
+
+  GeneratedColumn<String> get authorName => $composableBuilder(
+    column: $table.authorName,
+    builder: (column) => column,
+  );
+
+  $$WallsTableAnnotationComposer get wallId {
+    final $$WallsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$CommentsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $CommentsTable,
+          Comment,
+          $$CommentsTableFilterComposer,
+          $$CommentsTableOrderingComposer,
+          $$CommentsTableAnnotationComposer,
+          $$CommentsTableCreateCompanionBuilder,
+          $$CommentsTableUpdateCompanionBuilder,
+          (Comment, $$CommentsTableReferences),
+          Comment,
+          PrefetchHooks Function({bool wallId})
+        > {
+  $$CommentsTableTableManager(_$AppDatabase db, $CommentsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$CommentsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$CommentsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$CommentsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                Value<String> wallId = const Value.absent(),
+                Value<String> body = const Value.absent(),
+                Value<String?> authorName = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => CommentsCompanion(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                wallId: wallId,
+                body: body,
+                authorName: authorName,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required int createdAt,
+                required int updatedAt,
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                required String wallId,
+                required String body,
+                Value<String?> authorName = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => CommentsCompanion.insert(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                wallId: wallId,
+                body: body,
+                authorName: authorName,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$CommentsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({wallId = false}) {
             return PrefetchHooks(
               db: db,
               explicitlyWatchedTables: [],
@@ -6431,23 +9521,10 @@ class $$RoutesTableTableManager
                           state.withJoin(
                                 currentTable: table,
                                 currentColumn: table.wallId,
-                                referencedTable: $$RoutesTableReferences
+                                referencedTable: $$CommentsTableReferences
                                     ._wallIdTable(db),
-                                referencedColumn: $$RoutesTableReferences
+                                referencedColumn: $$CommentsTableReferences
                                     ._wallIdTable(db)
-                                    .id,
-                              )
-                              as T;
-                    }
-                    if (photoId) {
-                      state =
-                          state.withJoin(
-                                currentTable: table,
-                                currentColumn: table.photoId,
-                                referencedTable: $$RoutesTableReferences
-                                    ._photoIdTable(db),
-                                referencedColumn: $$RoutesTableReferences
-                                    ._photoIdTable(db)
                                     .id,
                               )
                               as T;
@@ -6464,19 +9541,947 @@ class $$RoutesTableTableManager
       );
 }
 
-typedef $$RoutesTableProcessedTableManager =
+typedef $$CommentsTableProcessedTableManager =
     ProcessedTableManager<
       _$AppDatabase,
-      $RoutesTable,
-      Route,
-      $$RoutesTableFilterComposer,
-      $$RoutesTableOrderingComposer,
-      $$RoutesTableAnnotationComposer,
-      $$RoutesTableCreateCompanionBuilder,
-      $$RoutesTableUpdateCompanionBuilder,
-      (Route, $$RoutesTableReferences),
-      Route,
-      PrefetchHooks Function({bool wallId, bool photoId})
+      $CommentsTable,
+      Comment,
+      $$CommentsTableFilterComposer,
+      $$CommentsTableOrderingComposer,
+      $$CommentsTableAnnotationComposer,
+      $$CommentsTableCreateCompanionBuilder,
+      $$CommentsTableUpdateCompanionBuilder,
+      (Comment, $$CommentsTableReferences),
+      Comment,
+      PrefetchHooks Function({bool wallId})
+    >;
+typedef $$LikesTableCreateCompanionBuilder =
+    LikesCompanion Function({
+      required String id,
+      required int createdAt,
+      required int updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      required String wallId,
+      Value<int> rowid,
+    });
+typedef $$LikesTableUpdateCompanionBuilder =
+    LikesCompanion Function({
+      Value<String> id,
+      Value<int> createdAt,
+      Value<int> updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      Value<String> wallId,
+      Value<int> rowid,
+    });
+
+final class $$LikesTableReferences
+    extends BaseReferences<_$AppDatabase, $LikesTable, Like> {
+  $$LikesTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $WallsTable _wallIdTable(_$AppDatabase db) =>
+      db.walls.createAlias('likes__wall_id__walls__id');
+
+  $$WallsTableProcessedTableManager get wallId {
+    final $_column = $_itemColumn<String>('wall_id')!;
+
+    final manager = $$WallsTableTableManager(
+      $_db,
+      $_db.walls,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_wallIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$LikesTableFilterComposer extends Composer<_$AppDatabase, $LikesTable> {
+  $$LikesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$WallsTableFilterComposer get wallId {
+    final $$WallsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableFilterComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$LikesTableOrderingComposer
+    extends Composer<_$AppDatabase, $LikesTable> {
+  $$LikesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$WallsTableOrderingComposer get wallId {
+    final $$WallsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableOrderingComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$LikesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $LikesTable> {
+  $$LikesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get remoteId =>
+      $composableBuilder(column: $table.remoteId, builder: (column) => column);
+
+  GeneratedColumn<bool> get dirty =>
+      $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  $$WallsTableAnnotationComposer get wallId {
+    final $$WallsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$LikesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $LikesTable,
+          Like,
+          $$LikesTableFilterComposer,
+          $$LikesTableOrderingComposer,
+          $$LikesTableAnnotationComposer,
+          $$LikesTableCreateCompanionBuilder,
+          $$LikesTableUpdateCompanionBuilder,
+          (Like, $$LikesTableReferences),
+          Like,
+          PrefetchHooks Function({bool wallId})
+        > {
+  $$LikesTableTableManager(_$AppDatabase db, $LikesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$LikesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$LikesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$LikesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                Value<String> wallId = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => LikesCompanion(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                wallId: wallId,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required int createdAt,
+                required int updatedAt,
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                required String wallId,
+                Value<int> rowid = const Value.absent(),
+              }) => LikesCompanion.insert(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                wallId: wallId,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) =>
+                    (e.readTable(table), $$LikesTableReferences(db, table, e)),
+              )
+              .toList(),
+          prefetchHooksCallback: ({wallId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (wallId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.wallId,
+                                referencedTable: $$LikesTableReferences
+                                    ._wallIdTable(db),
+                                referencedColumn: $$LikesTableReferences
+                                    ._wallIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$LikesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $LikesTable,
+      Like,
+      $$LikesTableFilterComposer,
+      $$LikesTableOrderingComposer,
+      $$LikesTableAnnotationComposer,
+      $$LikesTableCreateCompanionBuilder,
+      $$LikesTableUpdateCompanionBuilder,
+      (Like, $$LikesTableReferences),
+      Like,
+      PrefetchHooks Function({bool wallId})
+    >;
+typedef $$AscentsTableCreateCompanionBuilder =
+    AscentsCompanion Function({
+      required String id,
+      required int createdAt,
+      required int updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      required String routeId,
+      required String wallId,
+      required int climbedAt,
+      required String style,
+      Value<String?> notes,
+      Value<String?> gradeOpinion,
+      Value<int> rowid,
+    });
+typedef $$AscentsTableUpdateCompanionBuilder =
+    AscentsCompanion Function({
+      Value<String> id,
+      Value<int> createdAt,
+      Value<int> updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      Value<String> routeId,
+      Value<String> wallId,
+      Value<int> climbedAt,
+      Value<String> style,
+      Value<String?> notes,
+      Value<String?> gradeOpinion,
+      Value<int> rowid,
+    });
+
+final class $$AscentsTableReferences
+    extends BaseReferences<_$AppDatabase, $AscentsTable, Ascent> {
+  $$AscentsTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $RoutesTable _routeIdTable(_$AppDatabase db) =>
+      db.routes.createAlias('ascents__route_id__routes__id');
+
+  $$RoutesTableProcessedTableManager get routeId {
+    final $_column = $_itemColumn<String>('route_id')!;
+
+    final manager = $$RoutesTableTableManager(
+      $_db,
+      $_db.routes,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_routeIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $WallsTable _wallIdTable(_$AppDatabase db) =>
+      db.walls.createAlias('ascents__wall_id__walls__id');
+
+  $$WallsTableProcessedTableManager get wallId {
+    final $_column = $_itemColumn<String>('wall_id')!;
+
+    final manager = $$WallsTableTableManager(
+      $_db,
+      $_db.walls,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_wallIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$AscentsTableFilterComposer
+    extends Composer<_$AppDatabase, $AscentsTable> {
+  $$AscentsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get climbedAt => $composableBuilder(
+    column: $table.climbedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get style => $composableBuilder(
+    column: $table.style,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get notes => $composableBuilder(
+    column: $table.notes,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get gradeOpinion => $composableBuilder(
+    column: $table.gradeOpinion,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$RoutesTableFilterComposer get routeId {
+    final $$RoutesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.routeId,
+      referencedTable: $db.routes,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RoutesTableFilterComposer(
+            $db: $db,
+            $table: $db.routes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$WallsTableFilterComposer get wallId {
+    final $$WallsTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableFilterComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AscentsTableOrderingComposer
+    extends Composer<_$AppDatabase, $AscentsTable> {
+  $$AscentsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get climbedAt => $composableBuilder(
+    column: $table.climbedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get style => $composableBuilder(
+    column: $table.style,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get notes => $composableBuilder(
+    column: $table.notes,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get gradeOpinion => $composableBuilder(
+    column: $table.gradeOpinion,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$RoutesTableOrderingComposer get routeId {
+    final $$RoutesTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.routeId,
+      referencedTable: $db.routes,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RoutesTableOrderingComposer(
+            $db: $db,
+            $table: $db.routes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$WallsTableOrderingComposer get wallId {
+    final $$WallsTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableOrderingComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AscentsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $AscentsTable> {
+  $$AscentsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get remoteId =>
+      $composableBuilder(column: $table.remoteId, builder: (column) => column);
+
+  GeneratedColumn<bool> get dirty =>
+      $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  GeneratedColumn<int> get climbedAt =>
+      $composableBuilder(column: $table.climbedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get style =>
+      $composableBuilder(column: $table.style, builder: (column) => column);
+
+  GeneratedColumn<String> get notes =>
+      $composableBuilder(column: $table.notes, builder: (column) => column);
+
+  GeneratedColumn<String> get gradeOpinion => $composableBuilder(
+    column: $table.gradeOpinion,
+    builder: (column) => column,
+  );
+
+  $$RoutesTableAnnotationComposer get routeId {
+    final $$RoutesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.routeId,
+      referencedTable: $db.routes,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RoutesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.routes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$WallsTableAnnotationComposer get wallId {
+    final $$WallsTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.wallId,
+      referencedTable: $db.walls,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$WallsTableAnnotationComposer(
+            $db: $db,
+            $table: $db.walls,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$AscentsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $AscentsTable,
+          Ascent,
+          $$AscentsTableFilterComposer,
+          $$AscentsTableOrderingComposer,
+          $$AscentsTableAnnotationComposer,
+          $$AscentsTableCreateCompanionBuilder,
+          $$AscentsTableUpdateCompanionBuilder,
+          (Ascent, $$AscentsTableReferences),
+          Ascent,
+          PrefetchHooks Function({bool routeId, bool wallId})
+        > {
+  $$AscentsTableTableManager(_$AppDatabase db, $AscentsTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$AscentsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$AscentsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$AscentsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                Value<String> routeId = const Value.absent(),
+                Value<String> wallId = const Value.absent(),
+                Value<int> climbedAt = const Value.absent(),
+                Value<String> style = const Value.absent(),
+                Value<String?> notes = const Value.absent(),
+                Value<String?> gradeOpinion = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => AscentsCompanion(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                routeId: routeId,
+                wallId: wallId,
+                climbedAt: climbedAt,
+                style: style,
+                notes: notes,
+                gradeOpinion: gradeOpinion,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required int createdAt,
+                required int updatedAt,
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                required String routeId,
+                required String wallId,
+                required int climbedAt,
+                required String style,
+                Value<String?> notes = const Value.absent(),
+                Value<String?> gradeOpinion = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => AscentsCompanion.insert(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                routeId: routeId,
+                wallId: wallId,
+                climbedAt: climbedAt,
+                style: style,
+                notes: notes,
+                gradeOpinion: gradeOpinion,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$AscentsTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({routeId = false, wallId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (routeId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.routeId,
+                                referencedTable: $$AscentsTableReferences
+                                    ._routeIdTable(db),
+                                referencedColumn: $$AscentsTableReferences
+                                    ._routeIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+                    if (wallId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.wallId,
+                                referencedTable: $$AscentsTableReferences
+                                    ._wallIdTable(db),
+                                referencedColumn: $$AscentsTableReferences
+                                    ._wallIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$AscentsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $AscentsTable,
+      Ascent,
+      $$AscentsTableFilterComposer,
+      $$AscentsTableOrderingComposer,
+      $$AscentsTableAnnotationComposer,
+      $$AscentsTableCreateCompanionBuilder,
+      $$AscentsTableUpdateCompanionBuilder,
+      (Ascent, $$AscentsTableReferences),
+      Ascent,
+      PrefetchHooks Function({bool routeId, bool wallId})
     >;
 
 class $AppDatabaseManager {
@@ -6492,4 +10497,10 @@ class $AppDatabaseManager {
       $$PhotosTableTableManager(_db, _db.photos);
   $$RoutesTableTableManager get routes =>
       $$RoutesTableTableManager(_db, _db.routes);
+  $$CommentsTableTableManager get comments =>
+      $$CommentsTableTableManager(_db, _db.comments);
+  $$LikesTableTableManager get likes =>
+      $$LikesTableTableManager(_db, _db.likes);
+  $$AscentsTableTableManager get ascents =>
+      $$AscentsTableTableManager(_db, _db.ascents);
 }
