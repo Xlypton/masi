@@ -21,6 +21,7 @@ import '../../topo/presentation/topo_canvas_screen.dart'
     show captureWallGpsFromPhoto, gpsCaptureResultSnackBar;
 import '../application/library_providers.dart';
 import '../data/library_crud_repository.dart';
+import '../../../shared/presentation/masi_icon.dart';
 import 'move_target_picker.dart';
 import 'set_location_picker.dart';
 
@@ -151,19 +152,19 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         actions: [
           IconButton(
             key: const Key('topos-organize'),
-            icon: Icon(Icons.folder_outlined, color: colors.accent),
+            icon: MasiIcon('folder', color: colors.accent),
             tooltip: 'Organize',
             onPressed: () => context.push('/areas'),
           ),
           IconButton(
             key: const Key('home-community-button'),
-            icon: Icon(Icons.explore_outlined, color: colors.accent),
+            icon: MasiIcon('compass', color: colors.accent),
             tooltip: 'Community',
             onPressed: () => context.push('/community'),
           ),
           IconButton(
             key: const Key('home-logbook-button'),
-            icon: Icon(Icons.menu_book_outlined, color: colors.accent),
+            icon: MasiIcon('logbook', color: colors.accent),
             tooltip: 'Logbook',
             onPressed: () => context.push('/logbook'),
           ),
@@ -183,7 +184,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                       ),
                     ),
                   )
-                : Icon(Icons.person_outline, color: colors.accent),
+                : MasiIcon('person', color: colors.accent),
             tooltip: 'Account',
             onPressed: () => context.push('/account'),
           ),
@@ -426,7 +427,7 @@ class _ToposFilterBar extends StatelessWidget {
               controller: searchController,
               decoration: InputDecoration(
                 hintText: 'Search topos',
-                prefixIcon: const Icon(Icons.search),
+                prefixIcon: const MasiIcon('search'),
                 filled: true,
                 fillColor: colors.surface2,
                 border: OutlineInputBorder(
@@ -455,25 +456,9 @@ class _ToposFilterBar extends StatelessWidget {
             ),
           IconButton(
             key: const Key('topos-filter-button'),
-            icon: Stack(
-              clipBehavior: Clip.none,
-              children: [
-                Icon(Icons.tune, color: colors.accent),
-                if (isActive)
-                  Positioned(
-                    key: const Key('topos-filter-active-indicator'),
-                    right: -2,
-                    top: -2,
-                    child: Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: colors.accent,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                  ),
-              ],
+            icon: MasiIcon(
+              isActive ? 'filter_active' : 'filter',
+              color: colors.accent,
             ),
             tooltip: 'Filters',
             onPressed: onTap,
@@ -861,7 +846,7 @@ class _TopoRow extends ConsumerWidget {
               ),
               PopupMenuButton<String>(
                 key: Key('topo-menu-${topo.wallId}'),
-                icon: Icon(Icons.more_vert, color: colors.ink3),
+                icon: MasiIcon('more_horiz', color: colors.ink3),
                 onSelected: (value) {
                   switch (value) {
                     case 'rename':
@@ -946,7 +931,7 @@ class _TopoRow extends ConsumerWidget {
                   ];
                 },
               ),
-              Icon(Icons.chevron_right, color: colors.ink3),
+              MasiIcon('chevron_right', color: colors.ink3),
             ],
           ),
         ),
@@ -1226,8 +1211,8 @@ class _VisibilityBadge extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              isShared ? Icons.public : Icons.lock_outline,
+            MasiIcon(
+              isShared ? 'globe' : 'lock',
               size: 12,
               color: foreground,
             ),

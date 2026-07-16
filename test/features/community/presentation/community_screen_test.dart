@@ -8,6 +8,7 @@ import 'package:climbtopo/features/account/application/auth_providers.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/community/application/community_providers.dart';
 import 'package:climbtopo/features/community/presentation/community_screen.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 import 'package:climbtopo/shared/filtering/grade_range.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
@@ -1067,7 +1068,7 @@ void main() {
         await _drain(tester);
 
         expect(
-          find.byKey(const Key('community-filter-active-dot')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsNothing,
         );
 
@@ -1122,7 +1123,7 @@ void main() {
         );
         expect(_feedRowFinder(), findsOneWidget);
         expect(
-          find.byKey(const Key('community-filter-active-dot')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsOneWidget,
         );
       },
@@ -1181,7 +1182,7 @@ void main() {
 
         expect(_feedRowFinder(), findsOneWidget);
         expect(
-          find.byKey(const Key('community-filter-active-dot')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsOneWidget,
         );
 
@@ -1190,7 +1191,7 @@ void main() {
 
         expect(_feedRowFinder(), findsNWidgets(2));
         expect(
-          find.byKey(const Key('community-filter-active-dot')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsNothing,
         );
       },

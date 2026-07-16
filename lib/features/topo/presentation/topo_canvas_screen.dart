@@ -25,6 +25,7 @@ import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
 import 'package:climbtopo/features/topo/presentation/slice_tool.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 
 // Theme-follow fix: the canvas backdrop used to be a hardcoded near-black
 // (`_kCanvasBackdrop = Color(0xFF121316)`) regardless of the app's
@@ -290,7 +291,7 @@ SnackBar gpsCaptureResultSnackBar(GpsCaptureResult result) {
       mainAxisSize: MainAxisSize.min,
       children: [
         if (foundLocation) ...[
-          const Icon(Icons.place, size: 18),
+          MasiIcon('pin', size: 18),
           const SizedBox(width: 8),
         ],
         Flexible(child: Text(gpsCaptureResultMessage(result))),
@@ -1246,9 +1247,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   ) {
     return Row(
       children: [
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-back-button'),
-          icon: Icons.chevron_left,
+          icon: MasiIcon('chevron_left'),
           tooltip: 'Back',
           onPressed: () {
             if (context.canPop()) {
@@ -1258,6 +1259,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               context.go('/');
             }
           },
+          color: colors.accent,
+          style: IconButton.styleFrom(shape: const CircleBorder()),
         ),
         Expanded(
           child: Padding(
@@ -1292,26 +1295,35 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     DrawState drawState,
     DrawController drawNotifier,
   ) {
+    final colors = MasiColors.of(context);
     if (_sliceMode) {
       return [
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-slice-clear'),
-          icon: Icons.clear,
+          icon: MasiIcon('close'),
           tooltip: 'Clear pending cuts',
           onPressed: () => ref.read(sliceControllerProvider.notifier).clear(),
+          color: colors.accent,
+          style: IconButton.styleFrom(shape: const CircleBorder()),
         ),
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-slice-commit'),
-          icon: Icons.check,
+          icon: MasiIcon('check'),
           tooltip: 'Commit slices',
           onPressed: _handleSliceCommit,
+          color: colors.accent,
+          style: IconButton.styleFrom(shape: const CircleBorder()),
         ),
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-slice-mode-button'),
-          icon: Icons.content_cut,
+          icon: MasiIcon('scissors'),
           tooltip: 'Exit slice mode',
-          active: true,
           onPressed: _toggleSliceMode,
+          color: colors.accent,
+          style: IconButton.styleFrom(
+            backgroundColor: colors.accent.withValues(alpha: 0.16),
+            shape: const CircleBorder(),
+          ),
         ),
       ];
     }
@@ -1320,9 +1332,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
     if (!widget.readOnly && drawState.selectedRouteId != null) {
       actions.add(
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-edit-metadata-button'),
-          icon: Icons.edit_note,
+          icon: MasiIcon('edit_note'),
           tooltip: 'Edit route metadata',
           onPressed: () {
             final selected = drawState.routes.firstWhere(
@@ -1330,6 +1342,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             );
             _openMetadataSheet(selected);
           },
+          color: colors.accent,
+          style: IconButton.styleFrom(shape: const CircleBorder()),
         ),
       );
     }
@@ -1343,11 +1357,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         drawState.activePhotoId != null &&
         drawState.routes.any((r) => r.visible)) {
       actions.add(
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-ar-button'),
-          icon: Icons.view_in_ar_outlined,
+          icon: MasiIcon('ar_cube'),
           tooltip: 'View in AR',
           onPressed: () => context.push('/walls/${widget.wallId}/ar'),
+          color: colors.accent,
+          style: IconButton.styleFrom(shape: const CircleBorder()),
         ),
       );
     }
@@ -1367,16 +1383,22 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // draw mode itself is unreachable.
     if (!widget.readOnly) {
       actions.add(
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-mode-toggle'),
           icon: drawState.mode == DrawMode.draw
-              ? Icons.edit
-              : Icons.pan_tool_alt_outlined,
+              ? MasiIcon('edit')
+              : MasiIcon('eye'),
           tooltip: drawState.mode == DrawMode.draw
               ? 'Switch to view mode'
               : 'Switch to draw mode',
-          active: drawState.mode == DrawMode.draw,
           onPressed: drawNotifier.toggleMode,
+          color: colors.accent,
+          style: IconButton.styleFrom(
+            backgroundColor: drawState.mode == DrawMode.draw
+                ? colors.accent.withValues(alpha: 0.16)
+                : null,
+            shape: const CircleBorder(),
+          ),
         ),
       );
     }
@@ -1392,11 +1414,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         drawState.mode == DrawMode.view &&
         drawState.activePhotoId != null) {
       actions.add(
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-slice-mode-button'),
-          icon: Icons.content_cut_outlined,
+          icon: MasiIcon('scissors'),
           tooltip: 'Slice this photo into strips',
           onPressed: _toggleSliceMode,
+          color: colors.accent,
+          style: IconButton.styleFrom(shape: const CircleBorder()),
         ),
       );
     }
@@ -1411,11 +1435,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // FAB for this action; see `_buildBottomChrome`'s doc.
     if (!widget.readOnly) {
       actions.add(
-        GlassIconButton(
+        IconButton(
           key: const Key('topo-add-photo-button'),
-          icon: Icons.add_photo_alternate_outlined,
+          icon: MasiIcon('image_add'),
           tooltip: 'Pick a photo',
           onPressed: _pickImage,
+          color: colors.accent,
+          style: IconButton.styleFrom(shape: const CircleBorder()),
         ),
       );
     }
@@ -1466,30 +1492,40 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          GlassIconButton(
+          IconButton(
             key: const Key('topo-undo-button'),
-            icon: Icons.undo,
+            icon: MasiIcon('undo'),
             tooltip: 'Undo',
             onPressed: drawNotifier.undo,
+            color: colors.accent,
+            style: IconButton.styleFrom(shape: const CircleBorder()),
           ),
-          GlassIconButton(
+          IconButton(
             key: const Key('topo-redo-button'),
-            icon: Icons.redo,
+            icon: MasiIcon('redo'),
             tooltip: 'Redo',
             onPressed: drawNotifier.redo,
+            color: colors.accent,
+            style: IconButton.styleFrom(shape: const CircleBorder()),
           ),
-          GlassIconButton(
+          IconButton(
             key: const Key('topo-clear-button'),
-            icon: Icons.close,
+            icon: MasiIcon('close'),
             tooltip: 'Discard current route',
             onPressed: drawNotifier.clearCurrent,
+            color: colors.accent,
+            style: IconButton.styleFrom(shape: const CircleBorder()),
           ),
-          GlassIconButton(
+          IconButton(
             key: const Key('topo-commit-button'),
-            icon: Icons.check,
+            icon: MasiIcon('check'),
             tooltip: 'Commit route',
-            active: true,
             onPressed: _handleCommitRoute,
+            color: colors.accent,
+            style: IconButton.styleFrom(
+              backgroundColor: colors.accent.withValues(alpha: 0.16),
+              shape: const CircleBorder(),
+            ),
           ),
         ],
       ),
@@ -1505,8 +1541,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           key: const Key('topo-empty-state'),
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.photo_size_select_actual_outlined,
+            MasiIcon(
+              'image',
               size: 72,
               color: colors.ink3,
             ),
@@ -1564,8 +1600,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           key: const Key('topo-image-error-state'),
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              Icons.broken_image_outlined,
+            MasiIcon(
+              'image_broken',
               size: 72,
               color: colors.gradeHard,
             ),
@@ -1938,7 +1974,7 @@ class _LegendChip extends StatelessWidget {
               ).textTheme.labelLarge?.copyWith(color: colors.ink),
             ),
             const SizedBox(width: MasiSpacing.xs),
-            Icon(Icons.keyboard_arrow_up, size: 18, color: colors.ink),
+            MasiIcon('chevron_up', size: 18, color: colors.ink),
           ],
         ),
       ),
@@ -1992,7 +2028,7 @@ class _LegendHeader extends StatelessWidget {
                   ).textTheme.labelLarge?.copyWith(color: colors.ink),
                 ),
                 const Spacer(),
-                Icon(Icons.keyboard_arrow_down, size: 18, color: colors.ink),
+                MasiIcon('chevron_down', size: 18, color: colors.ink),
               ],
             ),
           ],

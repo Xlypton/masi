@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/shared/filtering/grade_range.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 
 /// A grade-system toggle plus min/max grade dropdowns for filter sheets,
 /// screen-agnostic so it's reusable across Community/Logbook/Topos filter
@@ -207,7 +208,7 @@ class _GradeBoundField extends StatelessWidget {
               isExpanded: true,
               value: value,
               dropdownColor: colors.surface,
-              icon: Icon(CupertinoIcons.chevron_down, size: 16, color: colors.ink2),
+              icon: MasiIcon('chevron_down', size: 16, color: colors.ink2),
               style: TextStyle(fontSize: 15, fontWeight: FontWeight.w400, color: colors.ink),
               items: [
                 const DropdownMenuItem<String?>(value: null, child: Text('Any')),

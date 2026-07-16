@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/masi_icon.dart';
 
 /// Generic AppBar + body scaffold for a "list of named entities" CRUD screen
 /// (Areas / Sectors / Walls), driven by an [AsyncValue] the caller already
@@ -223,27 +224,24 @@ class CrudListScaffold<T> extends StatelessWidget {
               ),
               IconButton(
                 key: Key('$entityKey-rename-$id'),
-                icon: Icon(Icons.edit_outlined, color: colors.ink2),
+                icon: MasiIcon('edit', color: colors.ink2),
                 tooltip: 'Rename',
                 onPressed: () => _handleRename(context, item),
               ),
               if (onMove != null)
                 IconButton(
                   key: Key('$entityKey-move-$id'),
-                  icon: Icon(
-                    Icons.drive_file_move_outlined,
-                    color: colors.ink2,
-                  ),
+                  icon: MasiIcon('folder_move', color: colors.ink2),
                   tooltip: 'Move',
                   onPressed: () => onMove!(context, item),
                 ),
               IconButton(
                 key: Key('$entityKey-delete-$id'),
-                icon: Icon(Icons.delete_outline, color: colors.ink2),
+                icon: MasiIcon('delete', color: colors.ink2),
                 tooltip: 'Delete',
                 onPressed: () => _handleDelete(context, item),
               ),
-              Icon(Icons.chevron_right, color: colors.ink3),
+              MasiIcon('chevron_right', color: colors.ink3),
             ],
           ),
         ),

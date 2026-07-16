@@ -6,6 +6,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/location/location_service.dart';
+import '../../../shared/presentation/masi_icon.dart';
 import '../../community/presentation/community_screen.dart'
     show buildResilientTileHttpClient, buildResilientTileProvider;
 
@@ -219,7 +220,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
       floatingActionButton: FloatingActionButton.extended(
         key: const Key('set-location-my-location'),
         onPressed: _useMyLocation,
-        icon: const Icon(Icons.my_location),
+        icon: MasiIcon('my_location'),
         label: const Text('Use my location'),
       ),
     );

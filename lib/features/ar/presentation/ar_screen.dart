@@ -19,6 +19,7 @@ import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 
 /// The `PlatformView` type used for the native camera/AR surface on iOS.
 /// Kept as a top-level constant string (rather than sprinkled as a literal)
@@ -300,8 +301,8 @@ class _ArScreenState extends ConsumerState<ArScreen> {
         key: const Key('ar-unsupported-placeholder'),
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.phonelink_off_outlined,
+          MasiIcon(
+            'phone_off',
             size: 72,
             color: Theme.of(context).colorScheme.outline,
           ),
@@ -329,8 +330,8 @@ class _ArScreenState extends ConsumerState<ArScreen> {
         key: const Key('ar-missing-data'),
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          Icon(
-            Icons.image_not_supported_outlined,
+          MasiIcon(
+            'image_off',
             size: 72,
             color: Theme.of(context).colorScheme.outline,
           ),
@@ -649,7 +650,7 @@ class _ArControls extends ConsumerWidget {
               key: const Key('ar-rescan'),
               tooltip: 'Re-scan the wall',
               onPressed: () => ref.read(arChannelProvider).rescan(),
-              child: const Icon(Icons.center_focus_strong),
+              child: const MasiIcon('scan'),
             ),
           ),
         if (isManual && !locked)
@@ -660,7 +661,7 @@ class _ArControls extends ConsumerWidget {
               tooltip: 'Reset alignment',
               onPressed: () =>
                   ref.read(manualAlignProvider.notifier).reset(),
-              child: const Icon(Icons.restart_alt),
+              child: const MasiIcon('restart'),
             ),
           ),
         if (isManual)
@@ -672,7 +673,7 @@ class _ArControls extends ConsumerWidget {
               onPressed: () {
                 onToggleLock();
               },
-              child: Icon(locked ? Icons.lock : Icons.lock_outline),
+              child: MasiIcon(locked ? 'lock' : 'lock_open'),
             ),
           ),
         FloatingActionButton.small(

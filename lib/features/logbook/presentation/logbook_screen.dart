@@ -6,6 +6,7 @@ import '../../../core/grades/grade_system.dart';
 import '../../../shared/filtering/ascent_type_filter_chips.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
+import '../../../shared/presentation/masi_icon.dart';
 import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
 import 'logbook_providers.dart';
@@ -87,10 +88,9 @@ class LogbookScreen extends ConsumerWidget {
   }
 }
 
-/// The `Icons.tune` filter-bar-chart icon, with a small accent-colored dot
-/// (keyed `logbook-filter-active-indicator`) overlaid when [active] — the
-/// Logbook screen's visual cue that at least one filter facet is currently
-/// narrowing the list.
+/// The filter icon — `filter_active` (with dot baked in) when [active],
+/// plain `filter` otherwise. The Logbook screen's visual cue that at least
+/// one filter facet is currently narrowing the list.
 class _FilterIcon extends StatelessWidget {
   const _FilterIcon({required this.active});
 
@@ -99,26 +99,7 @@ class _FilterIcon extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        const Icon(Icons.tune),
-        if (active)
-          Positioned(
-            right: -2,
-            top: -2,
-            child: Container(
-              key: const Key('logbook-filter-active-indicator'),
-              width: 8,
-              height: 8,
-              decoration: BoxDecoration(
-                color: colors.accent,
-                shape: BoxShape.circle,
-              ),
-            ),
-          ),
-      ],
-    );
+    return MasiIcon(active ? 'filter_active' : 'filter', color: colors.accent);
   }
 }
 
@@ -346,7 +327,7 @@ class _LogbookRow extends ConsumerWidget {
             ),
             IconButton(
               key: Key('logbook-entry-delete-${entry.ascentId}'),
-              icon: Icon(Icons.delete_outline, color: colors.ink3),
+              icon: MasiIcon('delete', color: colors.ink3),
               tooltip: 'Delete',
               onPressed: () => _handleDelete(context, ref, entry),
             ),

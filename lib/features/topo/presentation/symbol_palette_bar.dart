@@ -5,6 +5,7 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 
 /// Overall height of [SymbolPaletteBar]. Bumped from the historical `56`
 /// (an icon-only row) to fit an icon PLUS a short text label per control —
@@ -16,25 +17,31 @@ import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
 /// below this bar) have one source of truth for it.
 const double kSymbolPaletteBarHeight = 68.0;
 
-/// Icon used for each [SymbolType] control in [SymbolPaletteBar].
+/// Widget builder for each [SymbolType] control in [SymbolPaletteBar].
 ///
 /// Bug fix (unlabeled + ambiguous glyphs): [SymbolType.bolt] used to reuse
 /// `Icons.close` ("X"), which reads as "close/delete" rather than a
-/// climbing bolt; it's now `Icons.fiber_manual_record` (a plain filled
+/// climbing bolt; it now uses `MasiIcon('bolt')` (a plain filled
 /// dot — the standard topo-diagram glyph for a bolt) so it's not confused
-/// with a dismiss/cancel action. [SymbolType.rest] used
-/// `Icons.pause_circle_outline`, which reads as a media "pause" control
-/// rather than a resting stance; it's now `Icons.self_improvement` (a
-/// seated/resting figure glyph), which reads unambiguously as "rest" once
-/// paired with its new text label. [SymbolType.anchor]/[SymbolType.top]/
-/// [SymbolType.crux] keep their existing, already-clear glyphs.
-const Map<SymbolType, IconData> _symbolIcons = {
-  SymbolType.anchor: Icons.anchor,
-  SymbolType.bolt: Icons.fiber_manual_record,
-  SymbolType.top: Icons.change_history,
-  SymbolType.crux: Icons.star,
-  SymbolType.rest: Icons.self_improvement,
-};
+/// with a dismiss/cancel action. [SymbolType.rest] uses
+/// `Icons.self_improvement` (a seated/resting figure glyph), which reads
+/// unambiguously as "rest" once paired with its text label.
+/// [SymbolType.anchor]/[SymbolType.top]/[SymbolType.crux] use Masi
+/// equivalents, while [SymbolType.rest] keeps Material (no equivalent).
+Widget _symbolIconWidget(SymbolType type, {Color? color, double? size}) {
+  switch (type) {
+    case SymbolType.anchor:
+      return MasiIcon('anchor', color: color, size: size);
+    case SymbolType.bolt:
+      return MasiIcon('bolt', color: color, size: size);
+    case SymbolType.top:
+      return MasiIcon('finish_flag', color: color, size: size);
+    case SymbolType.crux:
+      return MasiIcon('crux', color: color, size: size);
+    case SymbolType.rest:
+      return Icon(Icons.self_improvement, color: color, size: size);
+  }
+}
 
 /// Tooltip/label used for each [SymbolType] control in [SymbolPaletteBar].
 const Map<SymbolType, String> _symbolLabels = {
@@ -155,7 +162,7 @@ class _SymbolButton extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(_symbolIcons[type], color: activeColor, size: 22),
+                  _symbolIconWidget(type, color: activeColor, size: 22),
                   const SizedBox(height: 2),
                   // Caption/Footnote-sized label per DESIGN.md's type scale —
                   // this is the main "unlabeled symbols" fix: a short,

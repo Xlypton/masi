@@ -13,6 +13,7 @@ import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/library/presentation/set_location_picker.dart';
 import 'package:climbtopo/features/library/presentation/topos_screen.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -1509,8 +1510,8 @@ void main() {
         final button = tester.widget<IconButton>(
           find.byKey(const Key('topos-account-button')),
         );
-        expect(button.icon, isA<Icon>());
-        expect((button.icon as Icon).icon, Icons.person_outline);
+        expect(button.icon, isA<MasiIcon>());
+        expect((button.icon as MasiIcon).name, 'person');
         expect(find.byType(CircleAvatar), findsNothing);
       },
     );
@@ -1539,8 +1540,8 @@ void main() {
         final button = tester.widget<IconButton>(
           find.byKey(const Key('topos-account-button')),
         );
-        expect(button.icon, isA<Icon>());
-        expect((button.icon as Icon).icon, Icons.person_outline);
+        expect(button.icon, isA<MasiIcon>());
+        expect((button.icon as MasiIcon).name, 'person');
         expect(find.byType(CircleAvatar), findsNothing);
       },
     );
@@ -2144,9 +2145,9 @@ void main() {
           findsNothing,
         );
         expect(find.byKey(const Key('topos-filter-button')), findsOneWidget);
-        // No filter is active yet, so no badge should show.
+        // No filter is active yet, so the filter_active icon should not show.
         expect(
-          find.byKey(const Key('topos-filter-active-indicator')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsNothing,
         );
 
@@ -2226,9 +2227,9 @@ void main() {
         expect(find.text('Private Topo'), findsNothing);
         expect(find.text('Shared Topo'), findsOneWidget);
         expect(
-          find.byKey(const Key('topos-filter-active-indicator')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsOneWidget,
-          reason: 'an active visibility facet must show the badge',
+          reason: 'an active visibility facet must show the filter_active icon',
         );
 
         await tester.tap(
@@ -2239,7 +2240,7 @@ void main() {
         expect(find.text('Private Topo'), findsOneWidget);
         expect(find.text('Shared Topo'), findsOneWidget);
         expect(
-          find.byKey(const Key('topos-filter-active-indicator')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsNothing,
         );
       },
@@ -2348,7 +2349,7 @@ void main() {
         expect(find.text('In Area Topo'), findsNothing);
         expect(find.text('Unfiled Topo'), findsOneWidget);
         expect(
-          find.byKey(const Key('topos-filter-active-indicator')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsOneWidget,
         );
       },
@@ -2416,7 +2417,7 @@ void main() {
         expect(find.text('Private In Area'), findsOneWidget);
         expect(find.text('Shared Unfiled'), findsOneWidget);
         expect(
-          find.byKey(const Key('topos-filter-active-indicator')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsNothing,
         );
         expect(

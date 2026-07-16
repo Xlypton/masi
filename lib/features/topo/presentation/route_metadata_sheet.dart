@@ -6,6 +6,7 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 
 /// Free-form climbing style options offered by [RouteMetadataSheet], by
 /// convention one of `'sport'`, `'trad'`, `'boulder'` (see
@@ -485,7 +486,7 @@ class _GradeDropdown extends StatelessWidget {
           value: value,
           hint: Text('Grade', style: TextStyle(fontSize: 17, color: colors.ink3)),
           dropdownColor: colors.surface,
-          icon: Icon(CupertinoIcons.chevron_down, size: 16, color: colors.ink2),
+          icon: MasiIcon('chevron_down', size: 16, color: colors.ink2),
           style: TextStyle(fontSize: 17, fontWeight: FontWeight.w400, color: colors.ink),
           items: [
             for (final option in options)

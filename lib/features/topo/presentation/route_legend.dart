@@ -5,6 +5,7 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 
 /// Whether the [RouteLegend] panel is expanded (showing its route rows) or
 /// collapsed (hidden/minimized) — defaults to expanded in view mode. See
@@ -188,7 +189,7 @@ class RouteLegend extends ConsumerWidget {
                           visualDensity: VisualDensity.compact,
                           padding: const EdgeInsets.all(4),
                           constraints: const BoxConstraints(),
-                          icon: const Icon(Icons.check_circle_outline),
+                          icon: MasiIcon('send_check', size: 18),
                           onPressed: () => onLogAscent!(route.id),
                         ),
                       IconButton(
@@ -198,11 +199,9 @@ class RouteLegend extends ConsumerWidget {
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints(),
-                        icon: Icon(
-                          route.visible
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                        ),
+                        icon: route.visible
+                            ? MasiIcon('eye')
+                            : Icon(Icons.visibility_off_outlined),
                         onPressed: () =>
                             notifier.toggleRouteVisibility(route.id),
                       ),
@@ -213,7 +212,7 @@ class RouteLegend extends ConsumerWidget {
                         visualDensity: VisualDensity.compact,
                         padding: const EdgeInsets.all(4),
                         constraints: const BoxConstraints(),
-                        icon: const Icon(Icons.delete_outline),
+                        icon: MasiIcon('delete'),
                         onPressed: () => notifier.removeRoute(route.id),
                       ),
                     ],

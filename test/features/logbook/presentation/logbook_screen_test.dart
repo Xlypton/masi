@@ -5,6 +5,7 @@ import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/logbook/application/ascents_providers.dart';
 import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
 import 'package:climbtopo/features/logbook/presentation/logbook_screen.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -470,7 +471,7 @@ void main() {
         await _drain(tester);
 
         expect(
-          find.byKey(const Key('logbook-filter-active-indicator')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsNothing,
         );
       },
@@ -539,7 +540,7 @@ void main() {
           findsNothing,
         );
         expect(
-          find.byKey(const Key('logbook-filter-active-indicator')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsOneWidget,
         );
 
@@ -555,7 +556,7 @@ void main() {
           findsOneWidget,
         );
         expect(
-          find.byKey(const Key('logbook-filter-active-indicator')),
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
           findsNothing,
         );
       },

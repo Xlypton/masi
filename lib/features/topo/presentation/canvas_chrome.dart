@@ -13,7 +13,7 @@ import 'package:climbtopo/app/theme.dart';
 /// + `4` bottom, from its default `EdgeInsets.symmetric(horizontal: 8,
 /// vertical: 4)`) plus the inner `IconButton` row's real rendered height
 /// (Material's `kMinInteractiveDimension` tap target, `48`px — the
-/// cluster's `GlassIconButton`s don't override `minimumSize`), for a
+/// cluster's `IconButton`s don't override `minimumSize`), for a
 /// baseline of `56`. That baseline was measured to fall `2`px short of
 /// the cluster's *actual* rendered height (`58`px, observed via
 /// `tester.getRect` in `canvas_mode_intent_test.dart`'s `A1e`) — small
@@ -133,44 +133,6 @@ class GlassChrome extends StatelessWidget {
           ),
           child: tintedCard,
         ),
-      ),
-    );
-  }
-}
-
-/// A round glyph button for use inside a [GlassChrome] cluster (back
-/// chevron, undo/redo/commit, mode toggles, ...). Per DESIGN.md
-/// "Navigation": trailing actions are `accent` glyphs, never a filled
-/// button in the bar — [active] adds only a faint accent-tinted wash
-/// (`~16%`, matching the "Tinted" button spec) to mark the current tool/
-/// mode, not a solid fill.
-class GlassIconButton extends StatelessWidget {
-  const GlassIconButton({
-    super.key,
-    required this.icon,
-    required this.onPressed,
-    this.tooltip,
-    this.active = false,
-  });
-
-  final IconData icon;
-  final VoidCallback? onPressed;
-  final String? tooltip;
-  final bool active;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return IconButton(
-      onPressed: onPressed,
-      tooltip: tooltip,
-      icon: Icon(icon),
-      color: onPressed == null ? colors.ink3 : colors.accent,
-      style: IconButton.styleFrom(
-        backgroundColor: active
-            ? colors.accent.withValues(alpha: 0.16)
-            : null,
-        shape: const CircleBorder(),
       ),
     );
   }

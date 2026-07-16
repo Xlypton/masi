@@ -15,6 +15,7 @@ import 'package:latlong2/latlong.dart' hide Path;
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../../shared/presentation/masi_icon.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
@@ -379,7 +380,7 @@ class _FeedView extends ConsumerWidget {
                   controller: searchController,
                   decoration: InputDecoration(
                     hintText: 'Search topos',
-                    prefixIcon: const Icon(Icons.search),
+                    prefixIcon: const MasiIcon('search'),
                     filled: true,
                     fillColor: colors.surface2,
                     border: OutlineInputBorder(
@@ -423,9 +424,8 @@ class _FeedView extends ConsumerWidget {
 }
 
 /// The `community-filter-button`: a `tune` icon that opens
-/// [_CommunityFiltersSheet], with a small accent dot overlay whenever
-/// [filter] is active (`community-filter-active-dot`) so a user can tell at
-/// a glance that the feed is currently narrowed.
+/// [_CommunityFiltersSheet], showing `filter_active` whenever [filter] is
+/// active so a user can tell at a glance that the feed is currently narrowed.
 class _FilterButton extends StatelessWidget {
   const _FilterButton({required this.filter});
 
@@ -434,36 +434,18 @@ class _FilterButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    return Stack(
-      clipBehavior: Clip.none,
-      children: [
-        IconButton(
-          key: const Key('community-filter-button'),
-          icon: const Icon(Icons.tune),
-          tooltip: 'Filters',
-          onPressed: () => showModalBottomSheet<void>(
-            context: context,
-            isScrollControlled: true,
-            builder: (_) => const _CommunityFiltersSheet(),
-          ),
-        ),
-        if (filter.isActive)
-          Positioned(
-            right: 8,
-            top: 8,
-            child: IgnorePointer(
-              child: Container(
-                key: const Key('community-filter-active-dot'),
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: colors.accent,
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-          ),
-      ],
+    return IconButton(
+      key: const Key('community-filter-button'),
+      icon: MasiIcon(
+        filter.isActive ? 'filter_active' : 'filter',
+        color: colors.accent,
+      ),
+      tooltip: 'Filters',
+      onPressed: () => showModalBottomSheet<void>(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => const _CommunityFiltersSheet(),
+      ),
     );
   }
 }
@@ -685,7 +667,7 @@ class _FeedRow extends ConsumerWidget {
                   ],
                 ),
               ),
-              Icon(Icons.chevron_right, color: colors.ink3),
+              MasiIcon('chevron_right', color: colors.ink3),
             ],
           ),
         ),
@@ -1356,7 +1338,7 @@ class _MapViewState extends ConsumerState<_MapView> {
             children: [
               _MapControlButton(
                 mapControlKey: const Key('community-map-compass'),
-                icon: Icons.explore_outlined,
+                iconName: 'compass',
                 tooltip: 'Reset north',
                 colors: colors,
                 rotationDegrees: -_rotationDegrees,
@@ -1365,7 +1347,7 @@ class _MapViewState extends ConsumerState<_MapView> {
               const SizedBox(height: 8),
               _MapControlButton(
                 mapControlKey: const Key('community-map-find-me'),
-                icon: Icons.my_location,
+                iconName: 'my_location',
                 tooltip: 'Find my location',
                 colors: colors,
                 onPressed: _onFindMePressed,
@@ -1392,7 +1374,7 @@ class _MapViewState extends ConsumerState<_MapView> {
 class _MapControlButton extends StatelessWidget {
   const _MapControlButton({
     required this.mapControlKey,
-    required this.icon,
+    required this.iconName,
     required this.tooltip,
     required this.colors,
     required this.onPressed,
@@ -1400,7 +1382,7 @@ class _MapControlButton extends StatelessWidget {
   });
 
   final Key mapControlKey;
-  final IconData icon;
+  final String iconName;
   final String tooltip;
   final MasiColors colors;
   final VoidCallback onPressed;
@@ -1418,7 +1400,7 @@ class _MapControlButton extends StatelessWidget {
         onPressed: onPressed,
         icon: Transform.rotate(
           angle: rotationDegrees * math.pi / 180,
-          child: Icon(icon, color: colors.ink),
+          child: MasiIcon(iconName, color: colors.ink),
         ),
       ),
     );
