@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' show Client, ClientException;
+import 'package:http/retry.dart' show RetryClient;
 // `hide Path`: latlong2 exports its own generic `Path<T>` (a geodesic path
 // helper we never use here), which otherwise shadows dart:ui's `Path` (from
 // `package:flutter/material.dart`) needed by `_PinPointerPainter` below.
@@ -11,12 +15,98 @@ import 'package:latlong2/latlong.dart' hide Path;
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../library/application/library_providers.dart';
 import '../application/community_providers.dart';
 import '../data/community_repository.dart';
+
+/// Builds the `RetryClient`-wrapped [http.Client] used by
+/// [buildResilientTileProvider] — split out into its own top-level function
+/// so the RAW client (needed to `.close()` it later — see MAJOR 2 in
+/// `_MapViewState`'s fix history) is reachable independently of the
+/// [NetworkTileProvider] wrapper built around it.
+///
+/// [NetworkTileProvider]'s own default HTTP client only retries a bare `503`
+/// response — never `429` (exactly what CartoDB returns once a device's tile
+/// requests get throttled) nor a transient connection error/timeout. A tile
+/// that fails once under the default client is never retried, so it renders
+/// as flutter_map's flat gray error-tile placeholder forever, even long
+/// after the throttling/network blip has cleared. Retrying 429/5xx and
+/// `SocketException`/`ClientException` with a short exponential backoff
+/// lets those same tiles succeed on a later attempt instead.
+///
+/// [inner] overrides the actual transport wrapped by the retry policy
+/// (production leaves it null, getting a real [Client]) — used by
+/// `_MapViewState._tileProvider` to accept a test-injected
+/// `tileHttpClientFactory` (see `community_screen_test.dart`'s FX3), so a
+/// test can exercise this exact retry-policy wiring with a fake, non-network
+/// transport instead of a real socket.
+Client buildResilientTileHttpClient({Client? inner}) {
+  return RetryClient(
+    inner ?? Client(),
+    retries: 4,
+    when: (response) =>
+        response.statusCode == 429 || response.statusCode >= 500,
+    whenError: (error, stackTrace) =>
+        error is SocketException || error is ClientException,
+    delay: (retryCount) => Duration(milliseconds: 200 * (1 << retryCount)),
+  );
+}
+
+/// Builds the production [NetworkTileProvider] for the Map tab's [TileLayer],
+/// backed by [buildResilientTileHttpClient]'s retry policy — or, when
+/// [httpClient] is given, that client instead (used by [_MapViewState]'s
+/// create-once tile-provider cache, which needs to hold onto the raw client
+/// to close it later).
+///
+/// [cachingProvider] defaults to null, i.e. flutter_map's own default (the
+/// on-disk [BuiltInMapCachingProvider]) — overridden to
+/// [DisabledMapCachingProvider] only by `_MapViewState._tileProvider` when a
+/// test's `tileHttpClientFactory` is in play, so that test never performs
+/// real platform-channel/file I/O for a cache directory `flutter_test`
+/// never provides. Production, which never sets `tileHttpClientFactory`, is
+/// completely unaffected and keeps the real on-disk cache.
+///
+/// A named top-level function (rather than an inline `NetworkTileProvider()`
+/// call at the `TileLayer` call site) so this policy is unit-testable on its
+/// own — see `community_screen_test.dart`'s MC2 — without needing to pump a
+/// full widget tree or perform real network I/O.
+NetworkTileProvider buildResilientTileProvider({
+  Client? httpClient,
+  MapCachingProvider? cachingProvider,
+}) {
+  return NetworkTileProvider(
+    httpClient: httpClient ?? buildResilientTileHttpClient(),
+    cachingProvider: cachingProvider,
+  );
+}
+
+/// Test-only instrumentation for MAJOR 2's create-once/dispose-closes-client
+/// fix (see `_MapViewState`'s `_tileProvider`/`dispose`): incremented exactly
+/// once per resilient tile HTTP client a `_MapViewState` itself creates
+/// (never when a test injects its own `tileProvider`, e.g. `_NoopTileProvider`
+/// — that path never touches these counters at all) and once per such client
+/// a `dispose()` call actually closes. A secondary, always-safe confirmation
+/// alongside `community_screen_test.dart`'s FX3, which primarily exercises
+/// the real create-once/dispose-closes code path directly via a spy
+/// `tileHttpClientFactory` (never real network I/O).
+@visibleForTesting
+int debugResilientTileClientCreateCount = 0;
+
+@visibleForTesting
+int debugResilientTileClientCloseCount = 0;
+
+/// Resets [debugResilientTileClientCreateCount]/
+/// [debugResilientTileClientCloseCount] to 0 — call from a test's setup so
+/// counts from an earlier test in the same run never leak in.
+@visibleForTesting
+void debugResetResilientTileClientCounters() {
+  debugResilientTileClientCreateCount = 0;
+  debugResilientTileClientCloseCount = 0;
+}
 
 /// Which of the Community screen's two views is currently shown. Public
 /// (unlike the rest of this file's private widgets) so it can be selected
@@ -47,11 +137,25 @@ class CommunityScreen extends ConsumerStatefulWidget {
     this.tileProvider,
     this.initialTab,
     this.focusWallId,
+    this.mapController,
+    this.tileHttpClientFactory,
   });
 
   final TileProvider? tileProvider;
   final CommunityTab? initialTab;
   final String? focusWallId;
+
+  /// Test-injectable [MapController] seam, threaded through to [_MapView] —
+  /// see that class's `controller` doc. Production code (the app's real
+  /// `/community` route) leaves this null.
+  @visibleForTesting
+  final MapController? mapController;
+
+  /// Test-injectable factory for the INNER [Client] wrapped by the Map tab's
+  /// resilient tile provider, threaded through to [_MapView] — see that
+  /// class's `tileHttpClientFactory` doc. Production code leaves this null.
+  @visibleForTesting
+  final Client Function()? tileHttpClientFactory;
 
   @override
   ConsumerState<CommunityScreen> createState() => _CommunityScreenState();
@@ -125,6 +229,8 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                         topos: topos,
                         tileProvider: widget.tileProvider,
                         focusWallId: widget.focusWallId,
+                        controller: widget.mapController,
+                        tileHttpClientFactory: widget.tileHttpClientFactory,
                       ),
                 loading: () =>
                     const Center(child: CircularProgressIndicator()),
@@ -730,11 +836,17 @@ class _GradientFallback extends StatelessWidget {
 /// the topo is still private, before it's ever published). See this class's
 /// `build` method for how "own" is determined and deduped against the
 /// shared set.
-class _MapView extends ConsumerWidget {
+///
+/// A [ConsumerStatefulWidget] (rather than [ConsumerWidget]) so it can own a
+/// [MapController] for the find-me/compass controls added over the map —
+/// see [_MapViewState].
+class _MapView extends ConsumerStatefulWidget {
   const _MapView({
     required this.topos,
     required this.tileProvider,
     this.focusWallId,
+    this.controller,
+    this.tileHttpClientFactory,
   });
 
   final List<SharedTopo> topos;
@@ -742,8 +854,8 @@ class _MapView extends ConsumerWidget {
 
   /// When non-null AND found among this build's own/community located
   /// topos, overrides the map's initial center to that wall's coordinates
-  /// at an elevated zoom (see [build]'s `hasFocus` branch) so a single
-  /// "Show on map" deep link (`topos_screen.dart`'s `_TopoRow`, via
+  /// at an elevated zoom (see [_MapViewState.build]'s `hasFocus` branch) so
+  /// a single "Show on map" deep link (`topos_screen.dart`'s `_TopoRow`, via
   /// `/community?tab=map&focus=<wallId>`) frames that one boulder instead of
   /// the whole combined marker set. A `focusWallId` that doesn't match any
   /// rendered topo (not found, filtered out, or simply lacking coordinates)
@@ -751,10 +863,157 @@ class _MapView extends ConsumerWidget {
   /// never crash or blank the map.
   final String? focusWallId;
 
+  /// Test-injectable [MapController] seam (see `community_screen_test.dart`'s
+  /// MC3/MC4: a test supplies its own controller and reads `controller.camera`
+  /// after driving a tap on `community-map-find-me`/`community-map-compass`).
+  /// Production code (`CommunityScreen`) leaves this null, and
+  /// [_MapViewState] creates, owns, and disposes its own instead.
+  @visibleForTesting
+  final MapController? controller;
+
+  /// Test-injectable factory for the INNER [Client] wrapped by
+  /// [_MapViewState]'s create-once resilient tile provider (see that
+  /// class's `_tileProvider` doc) — used by `community_screen_test.dart`'s
+  /// FX3 to exercise the real `buildResilientTileHttpClient`/
+  /// `buildResilientTileProvider` wiring, create-once caching, and
+  /// dispose-closes-client behavior end-to-end with a spy [Client] that
+  /// resolves fake responses synchronously, instead of a real socket.
+  /// Deliberately separate from [tileProvider] (which bypasses this whole
+  /// path). Production (`CommunityScreen`) leaves this null.
+  @visibleForTesting
+  final Client Function()? tileHttpClientFactory;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_MapView> createState() => _MapViewState();
+}
+
+class _MapViewState extends ConsumerState<_MapView> {
+  late final MapController _mapController;
+  late final bool _ownsController;
+  StreamSubscription<MapEvent>? _mapEventSubscription;
+
+  /// The map's current bearing, mirrored from [MapController.mapEventStream]
+  /// so the compass button's icon can rotate to keep pointing north (see
+  /// `_compassButton`) — kept as widget state (rather than read directly off
+  /// `_mapController.camera` inside `build`) because a controller-driven
+  /// rotation (a drag gesture, or this same compass button) does not, on its
+  /// own, trigger a rebuild of this widget.
+  double _rotationDegrees = 0;
+
+  /// One-shot guard for the imperative device-location auto-center in
+  /// [build]'s `ref.listen(myLocationProvider, ...)` — see MAJOR 1 in this
+  /// class's fix history. Sticks at `true` for the rest of this
+  /// [_MapViewState]'s lifetime once the camera has been auto-centered once,
+  /// so a later, unrelated rebuild (e.g. the compass's rotation-driven
+  /// `setState`) can never re-fight the user by moving the camera back.
+  bool _didAutoCenter = false;
+
+  /// The resilient tile HTTP client THIS state created (see [_tileProvider]),
+  /// held so [dispose] can close exactly it — never an injected
+  /// `widget.tileProvider` (e.g. every existing test's `_NoopTileProvider`),
+  /// which this widget never owns and must never touch. Stays `null` for
+  /// this whole state's lifetime whenever `widget.tileProvider` is non-null.
+  Client? _tileHttpClient;
+
+  /// The create-once resilient [NetworkTileProvider] built by
+  /// [_tileProvider] the first time it's needed — see that method's doc for
+  /// why this must be cached rather than rebuilt on every `build()` call.
+  NetworkTileProvider? _resilientTileProvider;
+
+  @override
+  void initState() {
+    super.initState();
+    _ownsController = widget.controller == null;
+    _mapController = widget.controller ?? MapController();
+    _mapEventSubscription = _mapController.mapEventStream.listen((event) {
+      final rotation = _mapController.camera.rotation;
+      if (rotation != _rotationDegrees) {
+        setState(() => _rotationDegrees = rotation);
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _mapEventSubscription?.cancel();
+    if (_ownsController) {
+      _mapController.dispose();
+    }
+    // Close exactly the client THIS state created (see [_tileProvider]) —
+    // an injected `widget.tileProvider` leaves `_tileHttpClient` null and is
+    // never touched here; its lifecycle belongs to whoever injected it (see
+    // MAJOR 2 in this class's fix history).
+    final tileHttpClient = _tileHttpClient;
+    if (tileHttpClient != null) {
+      tileHttpClient.close();
+      debugResilientTileClientCloseCount++;
+    }
+    super.dispose();
+  }
+
+  /// The Map tab's [TileLayer.tileProvider]: [widget.tileProvider] when
+  /// injected (every existing test's `_NoopTileProvider`, bypassing this
+  /// entirely so no client is ever created under `flutter_test`), else a
+  /// resilient [NetworkTileProvider] built ONCE for this [_MapViewState]'s
+  /// entire lifetime and reused on every subsequent `build()` call — see
+  /// MAJOR 2 in this class's fix history: calling `buildResilientTileProvider()`
+  /// directly inline inside `build` allocated a brand-new provider +
+  /// `RetryClient` + `http.Client` on EVERY rebuild (and the compass's
+  /// `mapEventStream` listener triggers a `setState` on every rotation
+  /// frame), leaking one never-closed `http.Client` per rebuild — worse,
+  /// passing an explicit `httpClient:` marks it as externally-owned, so even
+  /// flutter_map's own `TileLayer.dispose() -> tileProvider.dispose()` would
+  /// never have closed it anyway (see [NetworkTileProvider]'s
+  /// `_isInternallyCreatedClient` guard). [dispose] above closes the client
+  /// captured here explicitly instead of relying on that.
+  TileProvider _tileProvider() {
+    final injected = widget.tileProvider;
+    if (injected != null) return injected;
+    final existing = _resilientTileProvider;
+    if (existing != null) return existing;
+    final testFactory = widget.tileHttpClientFactory;
+    final client = buildResilientTileHttpClient(inner: testFactory?.call());
+    _tileHttpClient = client;
+    debugResilientTileClientCreateCount++;
+    final provider = buildResilientTileProvider(
+      httpClient: client,
+      // A test-injected `tileHttpClientFactory` (see
+      // `community_screen_test.dart`'s FX3) means we're under test with a
+      // fake, non-network transport -- skip flutter_map's default on-disk
+      // `BuiltInMapCachingProvider` in that case only, since it would
+      // otherwise perform real platform-channel/file I/O for a cache
+      // directory `flutter_test` never provides. Production
+      // (`testFactory == null`) is completely unaffected and keeps the
+      // default on-disk cache.
+      cachingProvider:
+          testFactory != null ? const DisabledMapCachingProvider() : null,
+    );
+    _resilientTileProvider = provider;
+    return provider;
+  }
+
+  /// `community-map-find-me`'s handler: fetches ONE fresh fix (never the
+  /// possibly-stale [myLocationProvider] value already driving the "you are
+  /// here" marker) and recenters the map on it at a walking-around zoom.
+  /// [LocationService.currentLocation] never throws (see its doc) — a
+  /// `null` result (denied/disabled/unavailable) surfaces as a SnackBar
+  /// instead of moving the map.
+  Future<void> _onFindMePressed() async {
+    final location = await ref.read(locationServiceProvider).currentLocation();
+    if (!mounted) return;
+    if (location == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Location unavailable')),
+      );
+      return;
+    }
+    _mapController.move(LatLng(location.latitude, location.longitude), 14);
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final filter = ref.watch(communityFilterProvider);
-    final filteredTopos = topos.where(filter.matches).toList();
+    final filteredTopos = widget.topos.where(filter.matches).toList();
     final colors = MasiColors.of(context);
     final withCoords = filteredTopos.where((t) => t.hasCoordinates).toList();
 
@@ -769,7 +1028,7 @@ class _MapView extends ConsumerWidget {
     // data this widget already has.
     final myUid = ref.watch(authStateProvider).asData?.value.uid;
     final ownerByWallId = <String, String?>{
-      for (final t in topos) t.wallId: t.ownerId,
+      for (final t in widget.topos) t.wallId: t.ownerId,
     };
     bool isMine(String wallId) {
       if (!ownerByWallId.containsKey(wallId)) {
@@ -821,6 +1080,46 @@ class _MapView extends ConsumerWidget {
       for (final t in communityWithCoords) LatLng(t.latitude!, t.longitude!),
     ];
 
+    // Imperative one-shot auto-center on the device's location — see MAJOR 1
+    // in this class's fix history. `myLocation` above comes from
+    // `myLocationProvider`, an autoDispose FutureProvider that's still
+    // `AsyncLoading` (null) on this widget's FIRST build — applying it only
+    // via `MapOptions.initialCenter` (honored by flutter_map exactly ONCE, at
+    // first mount) would leave the map stuck at the (0,0)/1.5 world view
+    // forever once the fix resolves a moment later, since a later rebuild's
+    // freshly-computed `center` below is never re-applied to an
+    // already-mounted map. `ref.listen` instead fires the instant
+    // `myLocationProvider` actually transitions to a resolved value, moving
+    // the (by-then-mounted) map's camera directly.
+    //
+    // Guarded to fire at most once per `_MapViewState` (`_didAutoCenter`),
+    // and only when there are NO located topos to frame instead and no
+    // `focusWallId` deep link is in play — both of those DO work correctly
+    // via `initialCenter`/`initialZoom` below, since `topos` is already
+    // populated by this widget's first build — so it never fights the user
+    // afterward (e.g. after they've since panned/zoomed/rotated away, or
+    // once topos load in and should be framed instead).
+    ref.listen<AsyncValue<DeviceLocation?>>(myLocationProvider, (
+      previous,
+      next,
+    ) {
+      if (_didAutoCenter) return;
+      if (widget.focusWallId != null) return;
+      if (combinedCoords.isNotEmpty) return;
+      final loc = next.asData?.value;
+      if (loc == null) return;
+      _didAutoCenter = true;
+      if (!mounted) return;
+      try {
+        _mapController.move(LatLng(loc.latitude, loc.longitude), 12);
+      } catch (_) {
+        // Defensive: a controller detached from its map (e.g. this widget
+        // torn down in the same microtask the fix resolved) must never
+        // crash — a missed one-shot auto-center is harmless; the user can
+        // still center manually via `community-map-find-me`.
+      }
+    });
+
     // `focusWallId`, if given, overrides the combined center/zoom above --
     // checked against BOTH already-computed located sets (own first, since
     // an own+shared topo is deduped to render only as "own"; see this
@@ -829,7 +1128,7 @@ class _MapView extends ConsumerWidget {
     // found / filtered out / no coordinates) leaves `focusPoint` null and
     // the combined-set behavior below is unaffected.
     LatLng? focusPoint;
-    final focusId = focusWallId;
+    final focusId = widget.focusWallId;
     if (focusId != null) {
       for (final t in ownWithCoords) {
         if (t.wallId == focusId) {
@@ -847,10 +1146,23 @@ class _MapView extends ConsumerWidget {
       }
     }
 
+    // When there are no located topos at all AND no `focusWallId` was even
+    // requested, prefer centering on the device's current position (at a
+    // moderate zoom) over the maximally-unhelpful (0,0)/1.5 whole-world
+    // view. A `focusWallId` that failed to resolve to a point (not found /
+    // filtered out / no coordinates, and no OTHER located topos exist
+    // either) deliberately still falls through to the (0,0)/1.5 fallback
+    // below rather than silently substituting the device's own location for
+    // a link that named a specific, different place.
+    final useMyLocationFallback = widget.focusWallId == null &&
+        myLocation != null;
+
     final center =
         focusPoint ??
         (combinedCoords.isEmpty
-            ? const LatLng(0, 0)
+            ? (useMyLocationFallback
+                ? LatLng(myLocation.latitude, myLocation.longitude)
+                : const LatLng(0, 0))
             : LatLng(
                 combinedCoords.map((p) => p.latitude).reduce(
                       (a, b) => a + b,
@@ -863,16 +1175,19 @@ class _MapView extends ConsumerWidget {
               ));
     final zoom = focusPoint != null
         ? 15.0
-        : (combinedCoords.isEmpty ? 1.5 : 11.0);
+        : (combinedCoords.isEmpty
+            ? (useMyLocationFallback ? 12.0 : 1.5)
+            : 11.0);
 
-    return FlutterMap(
+    final flutterMap = FlutterMap(
+      mapController: _mapController,
       options: MapOptions(initialCenter: center, initialZoom: zoom),
       children: [
         TileLayer(
           urlTemplate:
               'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
           userAgentPackageName: 'com.climbtopo.climbtopo',
-          tileProvider: tileProvider ?? NetworkTileProvider(),
+          tileProvider: _tileProvider(),
           retinaMode: RetinaMode.isHighDensity(context),
           // Without this, a tile that fails once (transient CartoDB
           // throttling/network blip) is never evicted and therefore never
@@ -999,6 +1314,90 @@ class _MapView extends ConsumerWidget {
           ),
         ),
       ],
+    );
+
+    // Map controls (find-me/compass) are siblings of the FlutterMap in a
+    // Stack, ABOVE it — FlutterMap.children are map LAYERS (they scroll/zoom
+    // with the map), whereas these controls must stay fixed to the screen.
+    // Positioned bottom-right, above the attribution pill (which sits
+    // flush at the very bottom-right — see the `IgnorePointer`/`Align`
+    // above), so neither overlaps the other or the top-left legend.
+    return Stack(
+      children: [
+        flutterMap,
+        Positioned(
+          right: 8,
+          bottom: 44,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _MapControlButton(
+                mapControlKey: const Key('community-map-compass'),
+                icon: Icons.explore_outlined,
+                tooltip: 'Reset north',
+                colors: colors,
+                rotationDegrees: -_rotationDegrees,
+                onPressed: () => _mapController.rotate(0),
+              ),
+              const SizedBox(height: 8),
+              _MapControlButton(
+                mapControlKey: const Key('community-map-find-me'),
+                icon: Icons.my_location,
+                tooltip: 'Find my location',
+                colors: colors,
+                onPressed: _onFindMePressed,
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// A compact, theme-aware circular icon button for the Map tab's find-me/
+/// compass controls (`community-map-find-me`/`community-map-compass`) —
+/// styled with [MasiColors] rather than Material's default
+/// `FloatingActionButton` look, to sit consistently with the rest of the
+/// app's chrome.
+///
+/// [mapControlKey] (rather than a bare `key` ctor param) so the wrapping
+/// [Material] — the actual hit-testable/keyed widget a test taps — carries
+/// the stable key, since [_MapControlButton] itself is a plain
+/// [StatelessWidget] whose own `key` only identifies it to Flutter's element
+/// tree, not to `find.byKey` callers reaching for the tappable surface.
+class _MapControlButton extends StatelessWidget {
+  const _MapControlButton({
+    required this.mapControlKey,
+    required this.icon,
+    required this.tooltip,
+    required this.colors,
+    required this.onPressed,
+    this.rotationDegrees = 0,
+  });
+
+  final Key mapControlKey;
+  final IconData icon;
+  final String tooltip;
+  final MasiColors colors;
+  final VoidCallback onPressed;
+  final double rotationDegrees;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      key: mapControlKey,
+      color: colors.surface,
+      shape: const CircleBorder(),
+      elevation: 2,
+      child: IconButton(
+        tooltip: tooltip,
+        onPressed: onPressed,
+        icon: Transform.rotate(
+          angle: rotationDegrees * math.pi / 180,
+          child: Icon(icon, color: colors.ink),
+        ),
+      ),
     );
   }
 }

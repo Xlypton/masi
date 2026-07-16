@@ -16,6 +16,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:http/http.dart' show BaseClient, BaseRequest, StreamedResponse;
 import 'package:latlong2/latlong.dart';
 
 /// A minimal-but-real 1x1 transparent PNG (base64) — same known-valid bytes
@@ -36,6 +37,37 @@ class _NoopTileProvider extends TileProvider {
   @override
   ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
     return MemoryImage(_tinyPngBytes);
+  }
+}
+
+/// A spy [Client] that resolves every request synchronously to a tiny fake
+/// PNG response — never touching real DNS/sockets — and tracks whether
+/// [close] was called. Used by FX3 (`community_screen_test.dart`'s MAJOR-2
+/// create-once/dispose-closes-client group) to exercise
+/// `_MapViewState`'s REAL `buildResilientTileHttpClient`/
+/// `buildResilientTileProvider` wiring end-to-end, via
+/// `CommunityScreen.tileHttpClientFactory`, without ever performing real
+/// network I/O — which, like the real image-codec decode CLAUDE.md warns
+/// never to drive in a widget test, would never resolve under
+/// `flutter_test`'s FakeAsync zone (a real `Socket.connect` is genuine
+/// OS-level async I/O, not a `Timer` FakeAsync can fast-forward — and a
+/// fast local failure would still arm a real `RetryClient` backoff
+/// `Timer`, which `flutter_test` flags as "a Timer is still pending" at
+/// teardown).
+class _SpyHttpClient extends BaseClient {
+  bool closed = false;
+  int sendCount = 0;
+
+  @override
+  Future<StreamedResponse> send(BaseRequest request) async {
+    sendCount++;
+    return StreamedResponse(Stream.value(_tinyPngBytes), 200);
+  }
+
+  @override
+  void close() {
+    closed = true;
+    super.close();
   }
 }
 
@@ -1958,6 +1990,491 @@ void main() {
         expect(find.byType(FlutterMap), findsNothing);
         expect(
           find.byKey(const Key('community-search-field')),
+          findsOneWidget,
+        );
+      },
+    );
+  });
+
+  group('MC1: default map center — device location vs (0,0) fallback', () {
+    testWidgets(
+      'FX1 (MAJOR 1): no located topos + a device location fix -> the '
+      'CAMERA is imperatively moved to that fix at zoom ~12 once the fix '
+      'resolves (not merely `options.initialCenter`, which flutter_map only '
+      'honors ONCE at first mount -- before an autoDispose FutureProvider '
+      "like `myLocationProvider` has resolved -- so reading the map's "
+      'actual camera, via an injected MapController, is what proves the '
+      'production bug: before the fix, the camera stays parked at '
+      '(0,0)/1.5 forever even though `options.initialCenter` recomputes '
+      'correctly on the next rebuild)',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final container = _makeContainer(
+          locationService: const _FakeLocationService((
+            latitude: 51.5,
+            longitude: -0.1,
+          )),
+        );
+        final db = container.read(appDatabaseProvider);
+        // No walls seeded at all -- no located topos, own or shared.
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-empty', name: 'Area Empty');
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(
+              tileProvider: _NoopTileProvider(),
+              initialTab: CommunityTab.map,
+              mapController: controller,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final camera = controller.camera;
+        expect((camera.center.latitude - 51.5).abs(), lessThan(0.01));
+        expect((camera.center.longitude - (-0.1)).abs(), lessThan(0.01));
+        expect(camera.zoom, 12);
+      },
+    );
+
+    testWidgets(
+      'no located topos AND no device location -> still falls back to '
+      '(0,0)/1.5 (regression)',
+      (tester) async {
+        final container = _makeContainer(
+          locationService: const _FakeLocationService(null),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-empty2', name: 'Area Empty 2');
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(
+              tileProvider: _NoopTileProvider(),
+              initialTab: CommunityTab.map,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
+        expect(flutterMap.options.initialCenter, const LatLng(0, 0));
+        expect(flutterMap.options.initialZoom, 1.5);
+      },
+    );
+  });
+
+  group(
+    'FX2: device-location auto-center is one-shot and never overrides a '
+    'located-topos framing',
+    () {
+      testWidgets(
+        'FX2a: after the auto-center resolves, further map interaction '
+        '(rotate) does not re-trigger it -- the camera center stays put',
+        (tester) async {
+          final controller = MapController();
+          addTearDown(controller.dispose);
+          final container = _makeContainer(
+            locationService: const _FakeLocationService((
+              latitude: 51.5,
+              longitude: -0.1,
+            )),
+          );
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-empty3', name: 'Area Empty 3');
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(
+                tileProvider: _NoopTileProvider(),
+                initialTab: CommunityTab.map,
+                mapController: controller,
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          expect(
+            (controller.camera.center.latitude - 51.5).abs(),
+            lessThan(0.01),
+          );
+
+          controller.rotate(30);
+          await tester.pump();
+
+          expect(tester.takeException(), isNull);
+          expect(controller.camera.rotation, 30);
+          expect(
+            (controller.camera.center.latitude - 51.5).abs(),
+            lessThan(0.01),
+          );
+          expect(
+            (controller.camera.center.longitude - (-0.1)).abs(),
+            lessThan(0.01),
+          );
+        },
+      );
+
+      testWidgets(
+        'FX2b: located topos are already present -> the device-location '
+        'auto-center never fires; the camera stays framed on the topos\' '
+        'combined center, never jumping to the (unrelated) device fix',
+        (tester) async {
+          final controller = MapController();
+          addTearDown(controller.dispose);
+          final container = _makeContainer(
+            locationService: const _FakeLocationService((
+              latitude: 51.5,
+              longitude: -0.1,
+            )),
+          );
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() => _seedStandardScenario(db));
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(
+                tileProvider: _NoopTileProvider(),
+                initialTab: CommunityTab.map,
+                mapController: controller,
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          final camera = controller.camera;
+          // wall-shared-1 is the only located topo (45.0, 7.0) -- the
+          // camera must stay framed there, never jumping to the fake
+          // 51.5/-0.1 device fix.
+          expect((camera.center.latitude - 45.0).abs(), lessThan(0.5));
+          expect((camera.center.longitude - 7.0).abs(), lessThan(0.5));
+        },
+      );
+    },
+  );
+
+  group('MC2: resilient tile provider factory', () {
+    test(
+      'buildResilientTileProvider() returns a non-null NetworkTileProvider '
+      'without throwing (the retry behavior itself -- 429/5xx/connection- '
+      'error retries with backoff -- is on-device-only and not exercised '
+      'here)',
+      () {
+        final provider = buildResilientTileProvider();
+        expect(provider, isA<NetworkTileProvider>());
+      },
+    );
+
+    test(
+      'buildResilientTileHttpClient(inner: ...) wraps the GIVEN client '
+      'rather than allocating its own real http.Client() -- the seam '
+      'FX3 below relies on to exercise the retry-policy wiring with a spy',
+      () {
+        final spy = _SpyHttpClient();
+        final client = buildResilientTileHttpClient(inner: spy);
+        expect(client, isNotNull);
+        // Closing the returned (RetryClient-wrapped) client must close the
+        // exact spy passed in -- RetryClient.close() delegates to its inner
+        // client -- proving `inner` is genuinely wired through rather than
+        // ignored in favor of a fresh internal Client().
+        client.close();
+        expect(spy.closed, isTrue);
+      },
+    );
+  });
+
+  group(
+    'FX3 (MAJOR 2): resilient tile provider is created ONCE per '
+    '_MapViewState (never per-rebuild) and its client is closed on dispose',
+    () {
+      testWidgets(
+        'with NO injected tileProvider (only a spy tileHttpClientFactory, '
+        'so no real network I/O ever happens), TileLayer.tileProvider stays '
+        'the SAME instance across a rebuild triggered by the compass -- '
+        'proving create-once -- and dispose() closes exactly the client '
+        'this widget created',
+        (tester) async {
+          debugResetResilientTileClientCounters();
+          final spyClient = _SpyHttpClient();
+          final controller = MapController();
+          addTearDown(controller.dispose);
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() => _seedStandardScenario(db));
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(
+                initialTab: CommunityTab.map,
+                mapController: controller,
+                tileHttpClientFactory: () => spyClient,
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          expect(debugResilientTileClientCreateCount, 1);
+
+          final firstProvider = tester
+              .widget<TileLayer>(find.byType(TileLayer))
+              .tileProvider;
+          expect(firstProvider, isA<NetworkTileProvider>());
+
+          // Trigger a rebuild via the compass's rotation-driven setState --
+          // the exact path MAJOR 2's bug report identifies as the source of
+          // the per-rebuild client leak.
+          controller.rotate(30);
+          await tester.pump();
+
+          expect(tester.takeException(), isNull);
+          final secondProvider = tester
+              .widget<TileLayer>(find.byType(TileLayer))
+              .tileProvider;
+          expect(
+            identical(firstProvider, secondProvider),
+            isTrue,
+            reason:
+                'the SAME NetworkTileProvider instance must be reused '
+                'across rebuilds, not reallocated',
+          );
+          expect(
+            debugResilientTileClientCreateCount,
+            1,
+            reason: 'a second rebuild must not create a second client',
+          );
+          expect(spyClient.closed, isFalse);
+
+          // Tear this widget down (replace the whole tree) so
+          // `_MapViewState.dispose()` runs, then confirm it closed exactly
+          // the client this widget itself created.
+          await tester.pumpWidget(const SizedBox());
+          await tester.pump();
+
+          expect(tester.takeException(), isNull);
+          expect(spyClient.closed, isTrue);
+          expect(debugResilientTileClientCloseCount, 1);
+        },
+      );
+
+      testWidgets(
+        'an injected tileProvider (e.g. _NoopTileProvider, as every other '
+        'test in this file uses) bypasses this entirely -- no resilient '
+        'client is ever created, so dispose() has nothing of its own to '
+        'close',
+        (tester) async {
+          debugResetResilientTileClientCounters();
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() => _seedStandardScenario(db));
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(
+                tileProvider: _NoopTileProvider(),
+                initialTab: CommunityTab.map,
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          expect(debugResilientTileClientCreateCount, 0);
+
+          await tester.pumpWidget(const SizedBox());
+          await tester.pump();
+
+          expect(tester.takeException(), isNull);
+          expect(debugResilientTileClientCloseCount, 0);
+        },
+      );
+    },
+  );
+
+  group('MC3: find-me map control', () {
+    testWidgets(
+      'tapping community-map-find-me fetches a fresh fix and recenters/'
+      'zooms the injected MapController to it',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final container = _makeContainer(
+          locationService: const _FakeLocationService((
+            latitude: 40.0,
+            longitude: -3.7,
+          )),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(
+              tileProvider: _NoopTileProvider(),
+              initialTab: CommunityTab.map,
+              mapController: controller,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-find-me')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final camera = controller.camera;
+        expect((camera.center.latitude - 40.0).abs(), lessThan(0.01));
+        expect((camera.center.longitude - (-3.7)).abs(), lessThan(0.01));
+        expect(camera.zoom, 14);
+      },
+    );
+
+    testWidgets(
+      'when the location service resolves null, shows a "Location '
+      'unavailable" SnackBar instead of moving the map',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final container = _makeContainer(
+          locationService: const _FakeLocationService(null),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(
+              tileProvider: _NoopTileProvider(),
+              initialTab: CommunityTab.map,
+              mapController: controller,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-find-me')));
+        await tester.pump();
+
+        expect(tester.takeException(), isNull);
+        expect(find.text('Location unavailable'), findsOneWidget);
+      },
+    );
+  });
+
+  group('MC4: compass map control', () {
+    testWidgets(
+      'tapping community-map-compass resets the injected MapController\'s '
+      'rotation to 0',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(
+              tileProvider: _NoopTileProvider(),
+              initialTab: CommunityTab.map,
+              mapController: controller,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        controller.rotate(45);
+        await tester.pump();
+
+        expect(controller.camera.rotation, 45);
+
+        await tester.tap(find.byKey(const Key('community-map-compass')));
+        await tester.pump();
+
+        expect(tester.takeException(), isNull);
+        expect(controller.camera.rotation, 0);
+      },
+    );
+  });
+
+  group('MC5: no regression — map controls do not disturb existing behavior', () {
+    testWidgets(
+      'tile config (urlTemplate/evictErrorTileStrategy/maxNativeZoom/'
+      'keepBuffer), attribution, legend, and my-location marker all still '
+      'render as before once the Stack/MapController restructuring lands',
+      (tester) async {
+        final container = _makeContainer(
+          locationService: const _FakeLocationService((
+            latitude: 45.001,
+            longitude: 7.001,
+          )),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(
+              tileProvider: _NoopTileProvider(),
+              initialTab: CommunityTab.map,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+
+        final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
+        expect(
+          tileLayer.urlTemplate,
+          'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+        );
+        expect(
+          tileLayer.evictErrorTileStrategy,
+          EvictErrorTileStrategy.notVisibleRespectMargin,
+        );
+        expect(tileLayer.maxNativeZoom, 20);
+        expect(tileLayer.keepBuffer, 3);
+
+        expect(
+          find.byKey(const Key('community-map-attribution')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('community-map-legend')), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-map-marker-wall-shared-1')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-map-my-location')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-map-find-me')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-map-compass')),
           findsOneWidget,
         );
       },

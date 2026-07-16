@@ -52,6 +52,11 @@ dependencies:
   # imported directly.
   characters: ^1.4.1
   geolocator: ^14.0.3
+  # Direct dep (was transitive via supabase_flutter et al.) so
+  # `community_screen.dart` can build a resilient tile-fetch `RetryClient`
+  # (see `buildResilientTileProvider`) without tripping
+  # `depend_on_referenced_packages`.
+  http: ^1.6.0
 
 dev_dependencies:
   flutter_test:
