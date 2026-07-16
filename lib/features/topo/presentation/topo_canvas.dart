@@ -1001,28 +1001,50 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   errorBuilder: (context, error, stackTrace) =>
                       const SizedBox.shrink(),
                 ),
-                CustomPaint(
-                  size: widget.imageSize,
-                  painter: TopoPainter(
-                    imageSize: widget.imageSize,
-                    routes: drawState.routes,
-                    currentPoints: drawState.currentPoints,
-                    currentSymbols: drawState.currentSymbols,
-                    showHandles: isDrawMode && drawState.activeSymbol == null,
-                    selectedRouteId: drawState.selectedRouteId,
-                    palette: kRoutePalette,
-                    // Live view-transform scale so TopoPainter can divide
-                    // its scene-space sizes by it and render at a constant
-                    // ON-SCREEN size instead of shrinking to a sub-pixel
-                    // hairline at small fit scales (see TopoPainter.scale).
-                    scale: _currentScale,
-                    // Wires grade-band coloring into the canvas itself (not
-                    // just the legend, see route_legend.dart): a stable
-                    // top-level function reference — not a closure allocated
-                    // fresh per build — so TopoPainter.shouldRepaint's
-                    // reference comparison of routeColorResolver stays
-                    // stable across rebuilds (see topoRouteColor's doc).
-                    routeColorResolver: topoRouteColor,
+                // Wrapped in a ListenableBuilder on the transformation
+                // controller (bug fix: "lines are super thin until you tap
+                // one") — `_currentScale` reads the controller's LIVE value,
+                // but that value changes out-of-band from this widget's own
+                // `build()`: the fit/fill reframe (`_reframeIfNeeded` above)
+                // writes the real, non-identity scale into the controller
+                // from a POST-FRAME callback, well after this `build()` has
+                // already run and already captured a stale `scale == 1.0`.
+                // Without listening, that stale scale stuck in the painter
+                // until SOME UNRELATED rebuild (e.g. a Riverpod state change
+                // from tapping/selecting a route) happened to re-run
+                // `build()` and sample the now-correct scale — which is
+                // exactly the reported symptom (thin at open, normal after a
+                // tap). This ListenableBuilder re-reads `_currentScale` and
+                // rebuilds `TopoPainter` on every controller tick, fixing
+                // both the first-paint reframe and keeping the on-screen
+                // line width constant during live pinch-zoom.
+                ListenableBuilder(
+                  listenable: widget.transformationController,
+                  builder: (context, _) => CustomPaint(
+                    size: widget.imageSize,
+                    painter: TopoPainter(
+                      imageSize: widget.imageSize,
+                      routes: drawState.routes,
+                      currentPoints: drawState.currentPoints,
+                      currentSymbols: drawState.currentSymbols,
+                      showHandles:
+                          isDrawMode && drawState.activeSymbol == null,
+                      selectedRouteId: drawState.selectedRouteId,
+                      palette: kRoutePalette,
+                      // Live view-transform scale so TopoPainter can divide
+                      // its scene-space sizes by it and render at a constant
+                      // ON-SCREEN size instead of shrinking to a sub-pixel
+                      // hairline at small fit scales (see TopoPainter.scale).
+                      scale: _currentScale,
+                      // Wires grade-band coloring into the canvas itself
+                      // (not just the legend, see route_legend.dart): a
+                      // stable top-level function reference — not a closure
+                      // allocated fresh per build — so
+                      // TopoPainter.shouldRepaint's reference comparison of
+                      // routeColorResolver stays stable across rebuilds (see
+                      // topoRouteColor's doc).
+                      routeColorResolver: topoRouteColor,
+                    ),
                   ),
                 ),
               ],

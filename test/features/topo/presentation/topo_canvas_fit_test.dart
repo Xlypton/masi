@@ -84,6 +84,7 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
+import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -691,6 +692,155 @@ void main() {
               'a resize must never overwrite a transform the user has '
               'manually adjusted since the last auto-frame',
         );
+      },
+    );
+  });
+
+  group('TopoPainter is fed the LIVE transform scale, not a stale one '
+      '(thin-lines-until-tapped bug)', () {
+    // Reproduces the reported bug: "when I first open the topo the lines
+    // are super thin — if I tap on them they become normal size." Root
+    // cause: TopoPainter divides its on-screen stroke width by `scale` (see
+    // topo_painter.dart) so it renders at a constant ON-SCREEN size
+    // regardless of zoom — but `_currentScale` was sampled once per
+    // `_TopoCanvasState.build()`, and nothing ever listened to
+    // `widget.transformationController` to trigger a rebuild when the
+    // post-frame fit/fill reframe (see the A3 group above) wrote the REAL,
+    // non-identity scale into it. So the painter kept using the stale
+    // `scale == 1.0` from the very first build until some UNRELATED
+    // Riverpod rebuild (e.g. tapping a route, which calls `selectRoute`)
+    // happened to re-run `build()` and pick up the now-correct scale.
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    Widget buildCanvas({
+      required ProviderContainer container,
+      required TransformationController controller,
+      required Size imageSize,
+    }) {
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: MasiTheme.light,
+          home: Scaffold(
+            body: TopoCanvas(
+              imagePath: '/nonexistent/test-topo.jpg',
+              imageSize: imageSize,
+              transformationController: controller,
+            ),
+          ),
+        ),
+      );
+    }
+
+    TopoPainter findTopoPainter(WidgetTester tester) {
+      final customPaint = tester.widget<CustomPaint>(
+        find.byWidgetPredicate(
+          (widget) => widget is CustomPaint && widget.painter is TopoPainter,
+        ),
+      );
+      return customPaint.painter as TopoPainter;
+    }
+
+    testWidgets(
+      'L1: once the post-frame reframe commits the fill-width scale to the '
+      'controller, TopoPainter is fed that SAME (non-1.0) scale on the very '
+      'next pump — not the stale scale == 1.0 sampled on the first build — '
+      'with a committed route present',
+      (tester) async {
+        const imageSize = Size(1600, 1200);
+        const viewportSize = Size(400, 800);
+        setViewportSize(tester, viewportSize);
+
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.8, 0.8));
+        notifier.commitRoute();
+        expect(container.read(drawControllerProvider).routes, hasLength(1));
+
+        await tester.pumpWidget(
+          buildCanvas(
+            container: container,
+            controller: controller,
+            imageSize: imageSize,
+          ),
+        );
+        await tester.pump();
+
+        final expectedScale = TopoCanvas.computeFillWidthTransform(
+          imageSize: imageSize,
+          viewportSize: viewportSize,
+        ).getMaxScaleOnAxis();
+        // Sanity: for this large image in this viewport the fill scale is
+        // clearly not 1.0 (~0.25), so a stale scale is unambiguously
+        // distinguishable from the live one.
+        expect(expectedScale, isNot(closeTo(1.0, 0.05)));
+        expect(
+          controller.value.getMaxScaleOnAxis(),
+          closeTo(expectedScale, 0.001),
+          reason: 'sanity: the post-frame reframe committed the fill scale '
+              'to the controller',
+        );
+
+        final painter = findTopoPainter(tester);
+        expect(
+          painter.scale,
+          closeTo(controller.value.getMaxScaleOnAxis(), 0.001),
+          reason: 'TopoPainter must be fed the LIVE (post-reframe) scale, '
+              'not the stale scale == 1.0 sampled on the very first build, '
+              'before the transformationController ever changed',
+        );
+      },
+    );
+
+    testWidgets(
+      'L2: a subsequent LIVE change to the transformationController (e.g. a '
+      'pinch-zoom) is reflected in the TopoPainter scale on the very next '
+      'pump, with no other rebuild trigger (e.g. selecting a route) '
+      'involved — proving the canvas reacts to the controller generally, '
+      'not just on the initial reframe',
+      (tester) async {
+        const imageSize = Size(1600, 1200);
+        const viewportSize = Size(400, 800);
+        setViewportSize(tester, viewportSize);
+
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+
+        final notifier = container.read(drawControllerProvider.notifier);
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.8, 0.8));
+        notifier.commitRoute();
+
+        await tester.pumpWidget(
+          buildCanvas(
+            container: container,
+            controller: controller,
+            imageSize: imageSize,
+          ),
+        );
+        await tester.pump();
+
+        final zoomedMatrix = Matrix4.identity()
+          ..setEntry(0, 0, 0.5)
+          ..setEntry(1, 1, 0.5)
+          ..setEntry(2, 2, 0.5);
+        controller.value = zoomedMatrix;
+        await tester.pump();
+
+        final painter = findTopoPainter(tester);
+        expect(painter.scale, closeTo(0.5, 0.001));
       },
     );
   });
