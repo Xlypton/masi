@@ -424,9 +424,23 @@ class _ToposFilterBar extends StatelessWidget {
             child: TextField(
               key: const Key('topos-search-field'),
               controller: searchController,
-              decoration: const InputDecoration(
+              decoration: InputDecoration(
                 hintText: 'Search topos',
-                prefixIcon: Icon(Icons.search),
+                prefixIcon: const Icon(Icons.search),
+                filled: true,
+                fillColor: colors.surface2,
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide(color: colors.separator),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide(color: colors.separator),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(24),
+                  borderSide: BorderSide(color: colors.accent, width: 1.5),
+                ),
               ),
             ),
           ),
