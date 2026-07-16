@@ -774,6 +774,36 @@ void main() {
       );
 
       test(
+        'exposes the wall latitude/longitude set via setWallCoordinates; a '
+        'wall with no coordinates reports both as null (M1 -- backs the '
+        "Community map's own-topo markers)",
+        () async {
+          final area = await repo.createArea('Area');
+          final sector = await repo.createSector(area.id, 'Sector');
+          final wallWithCoords = await repo.createWall(sector.id, 'Wall');
+          final wallWithoutCoords = await repo.createWall(
+            sector.id,
+            'Bare Wall',
+          );
+          await repo.setWallCoordinates(wallWithCoords.id, 47.4979, 19.0402);
+
+          final topos = await repo.watchTopos().first;
+
+          final withCoordsRef = topos.firstWhere(
+            (t) => t.wallId == wallWithCoords.id,
+          );
+          expect(withCoordsRef.latitude, 47.4979);
+          expect(withCoordsRef.longitude, 19.0402);
+
+          final withoutCoordsRef = topos.firstWhere(
+            (t) => t.wallId == wallWithoutCoords.id,
+          );
+          expect(withoutCoordsRef.latitude, isNull);
+          expect(withoutCoordsRef.longitude, isNull);
+        },
+      );
+
+      test(
         'listAreas/watchAreas still exclude the __default__ sentinel even '
         'though watchTopos now LEFT JOINs through sectors/areas',
         () async {

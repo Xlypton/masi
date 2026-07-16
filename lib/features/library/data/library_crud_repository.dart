@@ -108,6 +108,8 @@ class TopoRef {
     this.areaId,
     this.areaName,
     this.routeGradeKeys = const [],
+    this.latitude,
+    this.longitude,
   });
 
   final String wallId;
@@ -152,6 +154,15 @@ class TopoRef {
   /// ANY of its route grade keys falls in range.
   final List<double> routeGradeKeys;
 
+  /// Coordinates captured directly on this wall (see [db.Walls.latitude]/
+  /// [db.Walls.longitude], populated automatically from a freshly-picked
+  /// photo's EXIF GPS tags via [LibraryCrudRepository.setWallCoordinates]),
+  /// or `null` if none have been recorded. Mirrors `SharedTopo.latitude`/
+  /// `longitude` in `community_repository.dart` — backs the Community map's
+  /// "own topos" markers (see `_MapView` in `community_screen.dart`).
+  final double? latitude;
+  final double? longitude;
+
   @override
   bool operator ==(Object other) =>
       other is TopoRef &&
@@ -165,7 +176,9 @@ class TopoRef {
       other.visibility == visibility &&
       other.areaId == areaId &&
       other.areaName == areaName &&
-      _listEquals(other.routeGradeKeys, routeGradeKeys);
+      _listEquals(other.routeGradeKeys, routeGradeKeys) &&
+      other.latitude == latitude &&
+      other.longitude == longitude;
 
   @override
   int get hashCode => Object.hash(
@@ -180,6 +193,7 @@ class TopoRef {
     areaId,
     areaName,
     Object.hashAll(routeGradeKeys),
+    Object.hash(latitude, longitude),
   );
 
   @override
@@ -188,7 +202,8 @@ class TopoRef {
       'routeCount: $routeCount, createdAt: $createdAt, '
       'topGradeLabel: $topGradeLabel, topGradeBand: $topGradeBand, '
       'visibility: $visibility, areaId: $areaId, areaName: $areaName, '
-      'routeGradeKeys: $routeGradeKeys)';
+      'routeGradeKeys: $routeGradeKeys, latitude: $latitude, '
+      'longitude: $longitude)';
 }
 
 /// Order-sensitive element-wise equality for [TopoRef.routeGradeKeys] (a
@@ -616,8 +631,10 @@ class LibraryCrudRepository {
   /// (`null`/`null` for a wall filed under the hidden `__default__`
   /// sentinel, or with no area at all -- see [TopoRef.areaId]'s doc), and
   /// every live graded route's `gradeSortKey` ([TopoRef.routeGradeKeys],
-  /// used by the Topos-home grade filter) — ordered by wall `createdAt` DESC
-  /// (newest topo first).
+  /// used by the Topos-home grade filter), and the wall's own
+  /// latitude/longitude ([TopoRef.latitude]/[TopoRef.longitude], `null` until
+  /// set via [setWallCoordinates] — backs the Community map's "own topos"
+  /// markers) — ordered by wall `createdAt` DESC (newest topo first).
   ///
   /// This is the first join/aggregate query in this repository. It's
   /// expressed as a raw [customSelect] (rather than a Drift `.join()`) so a
@@ -649,6 +666,8 @@ class LibraryCrudRepository {
         w.name AS wall_name,
         w.created_at AS wall_created_at,
         w.visibility AS wall_visibility,
+        w.latitude AS wall_latitude,
+        w.longitude AS wall_longitude,
         (SELECT p.local_path FROM photos p
            WHERE p.wall_id = w.id AND p.kind = 'original' AND p.deleted_at IS NULL
            ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS thumbnail_path,
@@ -720,6 +739,8 @@ class LibraryCrudRepository {
                 routeGradeKeys: _parseGradeKeys(
                   row.readNullable<String>('route_grade_keys'),
                 ),
+                latitude: row.readNullable<double>('wall_latitude'),
+                longitude: row.readNullable<double>('wall_longitude'),
               ),
           ];
         });

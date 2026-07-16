@@ -14,6 +14,7 @@ import '../../../core/grades/grade_system.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
+import '../../library/application/library_providers.dart';
 import '../application/community_providers.dart';
 import '../data/community_repository.dart';
 
@@ -700,7 +701,13 @@ class _GradientFallback extends StatelessWidget {
 /// topo that [SharedTopo.hasCoordinates] AND matches the current
 /// [communityFilterProvider] — topos without coordinates, and topos
 /// excluded by the filter, are simply omitted from the marker list, never
-/// crash the map.
+/// crash the map — PLUS a second, visually distinct ("Yours") marker set for
+/// the signed-in user's own located topos (from [toposProvider], which is
+/// EVERY non-deleted local wall regardless of [TopoRef.visibility] — a
+/// freshly-picked photo's GPS location must show up immediately even while
+/// the topo is still private, before it's ever published). See this class's
+/// `build` method for how "own" is determined and deduped against the
+/// shared set.
 class _MapView extends ConsumerWidget {
   const _MapView({required this.topos, required this.tileProvider});
 
@@ -713,25 +720,82 @@ class _MapView extends ConsumerWidget {
     final filteredTopos = topos.where(filter.matches).toList();
     final colors = MasiColors.of(context);
     final withCoords = filteredTopos.where((t) => t.hasCoordinates).toList();
+
+    // "Own" located topos: every local wall (regardless of visibility) that
+    // has coordinates AND isn't actually someone else's shared topo pulled
+    // down onto this device by sync (see `SyncService.pullOwnAndShared` --
+    // sync only ever pulls ANOTHER user's wall when it's already
+    // `visibility == 'shared'`, so a wall this device has never seen in the
+    // shared feed at all is guaranteed local-only, i.e. always "mine").
+    // Cross-referencing the ALREADY-FETCHED, unfiltered `topos` (rather than
+    // adding an `ownerId` column to `TopoRef`) keeps this a pure read of
+    // data this widget already has.
+    final myUid = ref.watch(authStateProvider).asData?.value.uid;
+    final ownerByWallId = <String, String?>{
+      for (final t in topos) t.wallId: t.ownerId,
+    };
+    bool isMine(String wallId) {
+      if (!ownerByWallId.containsKey(wallId)) {
+        return true; // never surfaced in the shared feed -> local-only.
+      }
+      // A `null` owner on a wall that IS in the shared feed (a legacy/
+      // pre-ownership row, or a transiently-null `myUid` while auth is
+      // still resolving) can never be safely proven to be this device's
+      // own -- `null == null` must NOT count as a match, or a foreign
+      // shared topo with no owner stamp would be misclassified as "Yours"
+      // and route into the EDITOR for a wall that isn't actually ours.
+      // Degrade to the safe side (community / read-only detail) instead;
+      // the `containsKey == false` branch above still correctly claims a
+      // genuinely-local null-owner wall, since that one was never in the
+      // shared feed at all.
+      final owner = ownerByWallId[wallId];
+      return owner != null && owner == myUid;
+    }
+
+    // Own markers are intentionally NEVER filtered by
+    // `communityFilterProvider` (the grade/style filter above only applies
+    // to `filteredTopos`/`withCoords`) -- they're the user's own reference
+    // points and must always show regardless of the community filter.
+    final ownTopos = ref.watch(toposProvider).asData?.value ?? [];
+    final ownWithCoords = ownTopos
+        .where((t) => t.latitude != null && t.longitude != null)
+        .where((t) => isMine(t.wallId))
+        .toList();
+
+    // DEDUPE: a topo that is both own AND shared (a published own topo)
+    // renders exactly once -- as the "Yours" marker below, never also as a
+    // neutral community pin for the same wallId.
+    final ownWallIds = ownWithCoords.map((t) => t.wallId).toSet();
+    final communityWithCoords = withCoords
+        .where((t) => !ownWallIds.contains(t.wallId))
+        .toList();
+
     // Best-effort device position (see myLocationProvider's doc): loading,
     // error, and denied/unavailable (a `null` AsyncData) all collapse to
     // "no marker" here — the map and every topo marker render exactly the
     // same either way.
     final myLocation = ref.watch(myLocationProvider).asData?.value;
 
-    final center = withCoords.isEmpty
+    // Centered/zoomed over the COMBINED (own + community, deduped)
+    // coordinate set, so a user with only private, unpublished topos still
+    // sees the map frame them, rather than the empty (0,0)/1.5 fallback.
+    final combinedCoords = [
+      for (final t in ownWithCoords) LatLng(t.latitude!, t.longitude!),
+      for (final t in communityWithCoords) LatLng(t.latitude!, t.longitude!),
+    ];
+    final center = combinedCoords.isEmpty
         ? const LatLng(0, 0)
         : LatLng(
-            withCoords.map((t) => t.latitude!).reduce((a, b) => a + b) /
-                withCoords.length,
-            withCoords.map((t) => t.longitude!).reduce((a, b) => a + b) /
-                withCoords.length,
+            combinedCoords.map((p) => p.latitude).reduce((a, b) => a + b) /
+                combinedCoords.length,
+            combinedCoords.map((p) => p.longitude).reduce((a, b) => a + b) /
+                combinedCoords.length,
           );
 
     return FlutterMap(
       options: MapOptions(
         initialCenter: center,
-        initialZoom: withCoords.isEmpty ? 1.5 : 11,
+        initialZoom: combinedCoords.isEmpty ? 1.5 : 11,
       ),
       children: [
         TileLayer(
@@ -756,7 +820,7 @@ class _MapView extends ConsumerWidget {
         ),
         MarkerLayer(
           markers: [
-            for (final topo in withCoords)
+            for (final topo in communityWithCoords)
               Marker(
                 point: LatLng(topo.latitude!, topo.longitude!),
                 width: 40,
@@ -769,6 +833,29 @@ class _MapView extends ConsumerWidget {
                     context.push('/community/topo/${topo.wallId}');
                   },
                   child: _MapPinBadge(accentColor: colors.accent),
+                ),
+              ),
+          ],
+        ),
+        // The signed-in user's own located topos -- see this class's `build`
+        // doc for how "own" is determined/deduped. Its own [MarkerLayer]
+        // (rather than sharing the one above) so ordering is explicit: own
+        // markers paint above community ones, below "you are here".
+        MarkerLayer(
+          markers: [
+            for (final topo in ownWithCoords)
+              Marker(
+                point: LatLng(topo.latitude!, topo.longitude!),
+                width: 40,
+                height: _MapPinBadge.totalHeight,
+                alignment: Alignment.topCenter,
+                child: GestureDetector(
+                  key: Key('community-map-own-marker-${topo.wallId}'),
+                  onTap: () {
+                    FocusManager.instance.primaryFocus?.unfocus();
+                    context.push('/walls/${topo.wallId}');
+                  },
+                  child: _OwnMapPinBadge(accentColor: colors.accent),
                 ),
               ),
           ],
@@ -829,6 +916,98 @@ class _MapView extends ConsumerWidget {
             ),
           ),
         ),
+        // A compact "Yours" vs "Community" legend, top-left so it never
+        // fights the bottom-right attribution pill for space. Purely
+        // informational (no tap target of its own), like the attribution.
+        IgnorePointer(
+          child: Align(
+            alignment: Alignment.topLeft,
+            child: Padding(
+              padding: const EdgeInsets.all(6),
+              child: _MapLegend(colors: colors),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The Map tab's "Yours"/"Community" key (`community-map-legend`),
+/// distinguishing [_OwnMapPinBadge]'s accent-filled marker from
+/// [_MapPinBadge]'s neutral white-with-accent-ring marker.
+class _MapLegend extends StatelessWidget {
+  const _MapLegend({required this.colors});
+
+  final MasiColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final textStyle = Theme.of(
+      context,
+    ).textTheme.labelSmall?.copyWith(color: colors.ink2);
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        color: colors.surface.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        child: Column(
+          key: const Key('community-map-legend'),
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _MapLegendRow(
+              swatchColor: colors.accent,
+              label: 'Yours',
+              textStyle: textStyle,
+            ),
+            const SizedBox(height: 4),
+            _MapLegendRow(
+              swatchColor: colors.surface,
+              swatchBorderColor: colors.accent,
+              label: 'Community',
+              textStyle: textStyle,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _MapLegendRow extends StatelessWidget {
+  const _MapLegendRow({
+    required this.swatchColor,
+    required this.label,
+    this.swatchBorderColor,
+    this.textStyle,
+  });
+
+  final Color swatchColor;
+  final Color? swatchBorderColor;
+  final String label;
+  final TextStyle? textStyle;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: swatchColor,
+            shape: BoxShape.circle,
+            border: swatchBorderColor != null
+                ? Border.all(color: swatchBorderColor!, width: 1.5)
+                : null,
+          ),
+        ),
+        const SizedBox(width: 6),
+        Text(label, style: textStyle, maxLines: 1, overflow: TextOverflow.ellipsis),
       ],
     );
   }
@@ -920,6 +1099,56 @@ class _MapPinBadge extends StatelessWidget {
                 color: accentColor,
               ),
             ),
+          ),
+        ),
+        CustomPaint(
+          size: const Size(_pointerSize, _pointerSize - 2),
+          painter: _PinPointerPainter(accentColor),
+        ),
+      ],
+    );
+  }
+}
+
+/// The Map tab's per-OWN-topo marker: an accent-FILLED circular badge
+/// (rather than [_MapPinBadge]'s neutral white-with-accent-ring), so the
+/// signed-in user's own located topos read as visually distinct from
+/// everyone else's shared ones at a glance — same silhouette/pointer/total
+/// height as [_MapPinBadge] (see [_MapPinBadge.totalHeight], reused
+/// unchanged by both marker layers) so the two families sit at a consistent
+/// size on the map, differing only in color/fill.
+class _OwnMapPinBadge extends StatelessWidget {
+  const _OwnMapPinBadge({required this.accentColor});
+
+  final Color accentColor;
+
+  static const double _badgeSize = _MapPinBadge._badgeSize;
+  static const double _pointerSize = _MapPinBadge._pointerSize;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: _badgeSize,
+          height: _badgeSize,
+          decoration: BoxDecoration(
+            color: accentColor,
+            shape: BoxShape.circle,
+            border: Border.all(color: Colors.white, width: 2),
+            boxShadow: const [
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 4,
+                offset: Offset(0, 2),
+              ),
+            ],
+          ),
+          child: Icon(
+            Icons.person_pin_circle,
+            size: _badgeSize - 8,
+            color: Colors.white,
           ),
         ),
         CustomPaint(

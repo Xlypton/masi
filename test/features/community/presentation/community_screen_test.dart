@@ -16,6 +16,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:latlong2/latlong.dart';
 
 /// A minimal-but-real 1x1 transparent PNG (base64) — same known-valid bytes
 /// `topos_screen_test.dart` decodes for its "New topo" flow — used as the
@@ -293,6 +294,19 @@ Future<void> _seedRoute(
 /// Seeds two shared, coordinate-having walls with one route each -- a
 /// "Sport Wall" graded 6a/sport and a "Trad Wall" graded 9a/trad -- used by
 /// the Subtask B (Community filtering) test groups below.
+///
+/// Both carry an explicit foreign [_otherOwnerId] (a wallId these tests
+/// never sign in as) rather than the default `null` owner: this is what a
+/// wall pulled down onto this device from ANOTHER user's shared topo looks
+/// like (see `SyncService.pullOwnAndShared`'s doc -- a pulled row keeps its
+/// original, foreign `ownerId`, never rewritten to the signed-in uid), which
+/// is exactly what these fixtures are meant to represent for the Community
+/// feed/map's test purposes. Map own/community marker logic
+/// (`_MapView.build` in `community_screen.dart`) treats a `null`-owner wall
+/// as unambiguously local/own, so leaving these `null` would make every
+/// existing map marker test below collide with the new "own topos" feature
+/// (see M2/M3/M6 in the coords/own-marker test groups) -- an own-vs-shared
+/// distinction these older fixtures simply never needed before.
 Future<void> _seedFilterScenario(AppDatabase db) async {
   // Coordinates now live on the WALL itself (see
   // `LibraryCrudRepository.setWallCoordinates` /
@@ -310,6 +324,7 @@ Future<void> _seedFilterScenario(AppDatabase db) async {
     createdAt: 2000,
     latitude: 45.0,
     longitude: 7.0,
+    ownerId: _otherOwnerId,
   );
   final sportPhoto = await _seedPhoto(db, id: 'photo-sport', wallId: 'wall-sport');
   await _seedRoute(
@@ -332,6 +347,7 @@ Future<void> _seedFilterScenario(AppDatabase db) async {
     createdAt: 1000,
     latitude: 46.0,
     longitude: 8.0,
+    ownerId: _otherOwnerId,
   );
   final tradPhoto = await _seedPhoto(db, id: 'photo-trad', wallId: 'wall-trad');
   await _seedRoute(
@@ -359,6 +375,16 @@ Finder _feedRowFinder() {
   });
 }
 
+/// Owner uid these tests never sign in as (`_makeContainer` never overrides
+/// `authStateProvider`, so `myUid` resolves to `null`) -- used to give the
+/// pre-existing "community" fixture walls below (`wall-shared-1`,
+/// `wall-sport`, `wall-trad`) a realistic foreign owner instead of the
+/// default `null`, so the Map tab's new own-vs-community split (see
+/// `_MapView.build`'s doc in `community_screen.dart`) correctly treats them
+/// as NOT this device's own topos. See `_seedFilterScenario`'s doc for the
+/// full rationale.
+const _otherOwnerId = 'other-user';
+
 /// Seeds a standard scenario shared by several tests: two shared walls (one
 /// with Area coordinates, one without) plus one private wall, which must
 /// never surface anywhere in the Community screen.
@@ -378,6 +404,7 @@ Future<void> _seedStandardScenario(AppDatabase db) async {
     createdAt: 2000,
     latitude: 45.0,
     longitude: 7.0,
+    ownerId: _otherOwnerId,
   );
   await _seedLike(db, id: 'like-1', wallId: 'wall-shared-1');
   await _seedLike(db, id: 'like-2', wallId: 'wall-shared-1');
@@ -576,6 +603,318 @@ void main() {
       },
     );
   });
+
+  group(
+    'Own-topo map markers (GPS-on-map fix): a user\'s own located topos '
+    'must show on the map even while still private',
+    () {
+      testWidgets(
+        'M2: an own (local, private) topo with coords shows '
+        'community-map-own-marker-<id>; a shared topo owned by someone else '
+        'shows community-map-marker-<id> -- both present, distinct keys',
+        (tester) async {
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-own', name: 'Area Own');
+            await _seedSector(
+              db,
+              id: 'sector-own',
+              areaId: 'area-own',
+              name: 'S',
+            );
+            // Own: a private local wall with coordinates -- never shared,
+            // so it is NOT in the sharedToposProvider feed at all. Kept
+            // a hair away (not a full degree, like C1's my-location fixture)
+            // from wall-community-1's coordinates so BOTH stay inside
+            // flutter_map's on-screen culling bounds at the auto-computed
+            // averaged center/zoom -- flutter_test's tiny default surface
+            // only ever shows a small fraction of a degree at zoom 11.
+            await _seedWall(
+              db,
+              id: 'wall-own-1',
+              sectorId: 'sector-own',
+              name: 'My Secret Wall',
+              latitude: 45.0,
+              longitude: 7.0,
+            );
+            // Community: shared, owned by someone else.
+            await _seedWall(
+              db,
+              id: 'wall-community-1',
+              sectorId: 'sector-own',
+              name: 'Someone Else\'s Wall',
+              visibility: 'shared',
+              latitude: 45.001,
+              longitude: 7.001,
+              ownerId: _otherOwnerId,
+            );
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('community-map-toggle')));
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byKey(const Key('community-map-own-marker-wall-own-1')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('community-map-marker-wall-own-1')),
+            findsNothing,
+          );
+          expect(
+            find.byKey(
+              const Key('community-map-marker-wall-community-1'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              const Key('community-map-own-marker-wall-community-1'),
+            ),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
+        'M3: a wall that is both own AND shared (a published own topo) '
+        'renders exactly once, as the OWN marker -- the community marker '
+        'for the same wallId is absent',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              authStateProvider.overrideWith(
+                (ref) => Stream.value(
+                  const AuthSessionState.signedIn(
+                    'me@example.com',
+                    uid: 'me',
+                  ),
+                ),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-dedupe', name: 'Area Dedupe');
+            await _seedSector(
+              db,
+              id: 'sector-dedupe',
+              areaId: 'area-dedupe',
+              name: 'S',
+            );
+            await _seedWall(
+              db,
+              id: 'wall-mine-shared',
+              sectorId: 'sector-dedupe',
+              name: 'My Published Wall',
+              visibility: 'shared',
+              latitude: 50.0,
+              longitude: 60.0,
+              ownerId: 'me',
+            );
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('community-map-toggle')));
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byKey(
+              const Key('community-map-own-marker-wall-mine-shared'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('community-map-marker-wall-mine-shared')),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
+        'M4: own located topos with ZERO shared topos still render on the '
+        'map (not empty) -- the map centers/zooms on the own markers',
+        (tester) async {
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-own-only', name: 'Area Own Only');
+            await _seedSector(
+              db,
+              id: 'sector-own-only',
+              areaId: 'area-own-only',
+              name: 'S',
+            );
+            await _seedWall(
+              db,
+              id: 'wall-own-only',
+              sectorId: 'sector-own-only',
+              name: 'Only Mine',
+              latitude: 12.0,
+              longitude: 34.0,
+            );
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('community-map-toggle')));
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          expect(find.byType(FlutterMap), findsOneWidget);
+          expect(
+            find.byKey(const Key('community-map-own-marker-wall-own-only')),
+            findsOneWidget,
+          );
+          // No shared topos were seeded at all -> zero community markers,
+          // yet the map is still zoomed in on the own marker(s) rather than
+          // falling back to the empty (0,0)/1.5 world view.
+          final flutterMap = tester.widget<FlutterMap>(
+            find.byType(FlutterMap),
+          );
+          expect(flutterMap.options.initialZoom, 11);
+          expect(flutterMap.options.initialCenter, const LatLng(12.0, 34.0));
+        },
+      );
+
+      testWidgets(
+        'M5: community-map-legend is shown, distinguishing Yours from '
+        'Community',
+        (tester) async {
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() => _seedStandardScenario(db));
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('community-map-toggle')));
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          final legendFinder = find.byKey(
+            const Key('community-map-legend'),
+          );
+          expect(legendFinder, findsOneWidget);
+          expect(
+            find.descendant(
+              of: legendFinder,
+              matching: find.textContaining('Yours'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: legendFinder,
+              matching: find.textContaining('Community'),
+            ),
+            findsOneWidget,
+          );
+        },
+      );
+
+      testWidgets(
+        'F1 (safety regression): a shared topo with a null ownerId (a '
+        'legacy/pre-ownership row with no owner stamp), viewed signed-out '
+        '(myUid also null), must NOT be misclassified as own -- a '
+        'null-owner must never be treated as equal to a null myUid. It '
+        'renders as a COMMUNITY marker (read-only detail), never as the '
+        'OWN marker, which would route into this device\'s wall editor '
+        'for a wall this device does not actually own',
+        (tester) async {
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedArea(
+              db,
+              id: 'area-foreign-null',
+              name: 'Area Foreign Null',
+            );
+            await _seedSector(
+              db,
+              id: 'sector-foreign-null',
+              areaId: 'area-foreign-null',
+              name: 'S',
+            );
+            // A shared topo (present in the sync/community feed) whose
+            // ownerId is null -- e.g. a legacy row synced before ownership
+            // stamping existed. `_makeContainer` never overrides
+            // `authStateProvider`, so `myUid` is also null here
+            // (signed-out) -- exactly the null-owner/null-myUid collision
+            // the safety fix guards against.
+            await _seedWall(
+              db,
+              id: 'wall-foreign-null-owner',
+              sectorId: 'sector-foreign-null',
+              name: 'Foreign Null-Owner Wall',
+              visibility: 'shared',
+              latitude: 45.0,
+              longitude: 7.0,
+            );
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.tap(find.byKey(const Key('community-map-toggle')));
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byKey(
+              const Key('community-map-marker-wall-foreign-null-owner'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              const Key('community-map-own-marker-wall-foreign-null-owner'),
+            ),
+            findsNothing,
+          );
+        },
+      );
+    },
+  );
 
   group('C: "you are here" device-location marker', () {
     testWidgets(
