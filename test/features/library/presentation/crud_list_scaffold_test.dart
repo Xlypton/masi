@@ -11,6 +11,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// scaffold only ever calls [idOf]/[nameOf] on it.
 Widget _harness({
   required Future<void> Function(String item) onDelete,
+  Future<void> Function(BuildContext context, String item)? onMove,
 }) {
   return MaterialApp(
     theme: MasiTheme.light,
@@ -28,6 +29,7 @@ Widget _harness({
       onCreate: (_) async {},
       onRename: (item, name) async {},
       onDelete: onDelete,
+      onMove: onMove,
     ),
   );
 }
@@ -158,6 +160,48 @@ void main() {
           isFalse,
           reason: 'cancelling the name dialog must dismiss the keyboard',
         );
+      },
+    );
+  });
+
+  group('D8: optional onMove button', () {
+    testWidgets(
+      'V5 (no regression): omitting onMove (the AreasScreen/WallsScreen '
+      'default) renders no move button at all, existing rename/delete '
+      'buttons unaffected',
+      (tester) async {
+        await tester.pumpWidget(_harness(onDelete: (_) async {}));
+
+        expect(find.byKey(const Key('area-move-Test Area')), findsNothing);
+        expect(find.byKey(const Key('area-rename-Test Area')), findsOneWidget);
+        expect(find.byKey(const Key('area-delete-Test Area')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'supplying onMove renders area-move-<id>; tapping it calls onMove '
+      'with the row\'s own item AND a live BuildContext',
+      (tester) async {
+        final moved = <String>[];
+        BuildContext? capturedContext;
+        await tester.pumpWidget(
+          _harness(
+            onDelete: (_) async {},
+            onMove: (context, item) async {
+              capturedContext = context;
+              moved.add(item);
+            },
+          ),
+        );
+
+        expect(find.byKey(const Key('area-move-Test Area')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('area-move-Test Area')));
+        await tester.pump();
+
+        expect(moved, ['Test Area']);
+        expect(capturedContext, isNotNull);
+        expect(capturedContext!.mounted, isTrue);
       },
     );
   });

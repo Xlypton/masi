@@ -322,6 +322,37 @@ class LibraryCrudRepository {
     });
   }
 
+  /// Non-deleted, non-default Areas usable as a MOVE destination for
+  /// [moveSector] (see `sectors_screen.dart`'s destination-area picker):
+  /// owned by [uid], or unowned (`ownerId == null`, e.g. created offline/
+  /// signed-out).
+  ///
+  /// Deliberately excludes any Area owned by a DIFFERENT uid — a "foreign"
+  /// Area pulled in locally from discovering someone else's shared topo
+  /// (see `community_repository.dart`). Moving one of this device's own
+  /// Sectors under a foreign Area would create a parent reference that
+  /// never gets pushed back up for the foreign owner to see (this device
+  /// only ever pushes rows it itself owns), leaving a dangling reference on
+  /// their other devices.
+  Future<List<AreaRef>> listOwnAreas(String? uid) async {
+    final rows =
+        await (_db.select(_db.areas)
+              ..where(
+                (t) =>
+                    t.deletedAt.isNull() &
+                    t.name.equals(_defaultAreaName).not() &
+                    (uid == null
+                        ? t.ownerId.isNull()
+                        : (t.ownerId.isNull() | t.ownerId.equals(uid))),
+              )
+              ..orderBy([
+                (t) => OrderingTerm(expression: t.name),
+                (t) => OrderingTerm(expression: t.createdAt),
+              ]))
+            .get();
+    return rows.map(_areaRefFromRow).toList();
+  }
+
   // ---------------------------------------------------------------------
   // Sectors
   // ---------------------------------------------------------------------
@@ -372,6 +403,31 @@ class LibraryCrudRepository {
     return _db.transaction(() async {
       await _cascadeSoftDeleteSectorSubtree(id, nowMs());
     });
+  }
+
+  /// Non-deleted, non-default Sectors, across ALL areas (unlike
+  /// [listSectors], which is scoped to a single area), usable as a MOVE
+  /// destination for [moveWall] (see `topos_screen.dart`'s destination-
+  /// sector picker). Same own-or-unowned ownership filter as [listOwnAreas],
+  /// and for the same dangling-foreign-parent reason — see that doc.
+  Future<List<SectorRef>> listOwnSectors(String? uid) async {
+    final rows =
+        await (_db.select(_db.sectors)
+              ..where(
+                (t) =>
+                    t.deletedAt.isNull() &
+                    t.name.equals(_defaultSectorName).not() &
+                    (uid == null
+                        ? t.ownerId.isNull()
+                        : (t.ownerId.isNull() | t.ownerId.equals(uid))),
+              )
+              ..orderBy([
+                (t) => OrderingTerm(expression: t.areaId),
+                (t) => OrderingTerm(expression: t.sortOrder),
+                (t) => OrderingTerm(expression: t.createdAt),
+              ]))
+            .get();
+    return rows.map(_sectorRefFromRow).toList();
   }
 
   // ---------------------------------------------------------------------
@@ -664,6 +720,23 @@ class LibraryCrudRepository {
               ..limit(1))
             .getSingleOrNull();
     return row?.name;
+  }
+
+  /// The current `sectorId` of the non-deleted [db.Wall] identified by
+  /// [wallId], or `null` if it doesn't exist (or has been soft-deleted).
+  ///
+  /// [TopoRef] (the Topos-home read model) deliberately carries no
+  /// `sectorId` of its own — this is the one-shot lookup `topos_screen.
+  /// dart`'s "Move to…" flow uses to resolve a topo's CURRENT sector so it
+  /// can be excluded from the destination-sector picker's candidates (see
+  /// [listOwnSectors]).
+  Future<String?> wallSectorId(String wallId) async {
+    final row =
+        await (_db.select(_db.walls)
+              ..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())
+              ..limit(1))
+            .getSingleOrNull();
+    return row?.sectorId;
   }
 
   /// Whether the non-deleted [db.Wall] identified by [wallId] currently has

@@ -226,6 +226,21 @@ class _ThrowingSetCoordinatesRepository extends LibraryCrudRepository {
   }
 }
 
+/// A [LibraryCrudRepository] whose [moveWall] always throws, leaving every
+/// other method backed by the real implementation against [db]. Used to
+/// prove `_handleMove`'s `await repo.moveWall(...)` is guarded: a move
+/// failure (e.g. the destination sector got hard-deleted between the picker
+/// opening and the tap, tripping the `PRAGMA foreign_keys = ON` FK check)
+/// must surface as an error SnackBar, never an unhandled async error.
+class _ThrowingMoveWallRepository extends LibraryCrudRepository {
+  _ThrowingMoveWallRepository(super.db, {required super.nowMs});
+
+  @override
+  Future<void> moveWall(String wallId, String newSectorId) {
+    throw Exception('moveWall boom (test)');
+  }
+}
+
 void main() {
   group('A1: empty state', () {
     testWidgets(
@@ -2670,6 +2685,218 @@ void main() {
 
         expect(find.text('Sunset Arete'), findsOneWidget);
         expect(find.text('Moonrise Slab'), findsOneWidget);
+      },
+    );
+  });
+
+  group('D8: "Move to…" — move a topo to another sector', () {
+    testWidgets(
+      'V1: the menu shows topo-move-<wallId>; tapping it opens a picker '
+      'labelled "AreaName › SectorName" per candidate; selecting a '
+      'move-target-sector-<id> calls moveWall via the real repo (the '
+      'wall\'s sectorId actually changes) and shows a confirmation SnackBar',
+      (tester) async {
+        final container = _makeContainer();
+        final repo = container.read(libraryCrudRepositoryProvider);
+
+        final areaA = await _dbWork(tester, () => repo.createArea('Area A'));
+        final currentSector = await _dbWork(
+          tester,
+          () => repo.createSector(areaA.id, 'Current Sector'),
+        );
+        final destSector = await _dbWork(
+          tester,
+          () => repo.createSector(areaA.id, 'Dest Sector'),
+        );
+        final wall = await _dbWork(
+          tester,
+          () => repo.createWall(currentSector.id, 'My Topo'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-${wall.id}')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(Key('topo-move-${wall.id}')), findsOneWidget);
+
+        await tester.tap(find.byKey(Key('topo-move-${wall.id}')));
+        await _drain(tester);
+
+        expect(
+          find.text('Area A › Dest Sector'),
+          findsOneWidget,
+          reason: 'candidates must be labelled "AreaName › SectorName"',
+        );
+        expect(
+          find.byKey(Key('move-target-sector-${destSector.id}')),
+          findsOneWidget,
+        );
+
+        await tester.tap(
+          find.byKey(Key('move-target-sector-${destSector.id}')),
+        );
+        await _drain(tester);
+
+        final newSectorId = await _dbWork(
+          tester,
+          () => repo.wallSectorId(wall.id),
+        );
+        expect(newSectorId, destSector.id);
+        expect(find.text('Moved to Dest Sector'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'V3 (own-filter): a FOREIGN-owned sector never appears as a '
+      'candidate; an unowned (own-device) sector does',
+      (tester) async {
+        final container = _makeContainer();
+        final repo = container.read(libraryCrudRepositoryProvider);
+        final db = container.read(appDatabaseProvider);
+
+        final area = await _dbWork(tester, () => repo.createArea('Area'));
+        final currentSector = await _dbWork(
+          tester,
+          () => repo.createSector(area.id, 'Current Sector'),
+        );
+        final wall = await _dbWork(
+          tester,
+          () => repo.createWall(currentSector.id, 'My Topo'),
+        );
+        // Own (unowned, this device -- currentUid defaults to null).
+        await _dbWork(
+          tester,
+          () => repo.createSector(area.id, 'Own Sector'),
+        );
+        // Foreign -- pulled in locally from discovering someone else's
+        // shared topo -- must never be offered as a move destination.
+        final foreignRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'foreign-uid',
+        );
+        await _dbWork(
+          tester,
+          () => foreignRepo.createSector(area.id, 'Foreign Sector'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-${wall.id}')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-move-${wall.id}')));
+        await _drain(tester);
+
+        expect(find.text('Area › Own Sector'), findsOneWidget);
+        expect(find.text('Area › Foreign Sector'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'V4: the topo\'s CURRENT sector is excluded from the candidate list',
+      (tester) async {
+        final container = _makeContainer();
+        final repo = container.read(libraryCrudRepositoryProvider);
+
+        final area = await _dbWork(tester, () => repo.createArea('Area'));
+        final currentSector = await _dbWork(
+          tester,
+          () => repo.createSector(area.id, 'Current Sector'),
+        );
+        await _dbWork(
+          tester,
+          () => repo.createSector(area.id, 'Other Sector'),
+        );
+        final wall = await _dbWork(
+          tester,
+          () => repo.createWall(currentSector.id, 'My Topo'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-${wall.id}')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-move-${wall.id}')));
+        await _drain(tester);
+
+        expect(find.text('Area › Current Sector'), findsNothing);
+        expect(find.text('Area › Other Sector'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'E1: a repo whose moveWall throws (e.g. the destination sector was '
+      'hard-deleted between the picker opening and the tap, tripping the FK '
+      'check) shows an error SnackBar and produces NO unhandled exception '
+      '(regression -- the bare, un-try/catch-guarded await used to let the '
+      'throw escape as a silent, unobserved async error)',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final repo = _ThrowingMoveWallRepository(db, nowMs: () => 1000);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            libraryCrudRepositoryProvider.overrideWithValue(repo),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final areaA = await _dbWork(tester, () => repo.createArea('Area A'));
+        final currentSector = await _dbWork(
+          tester,
+          () => repo.createSector(areaA.id, 'Current Sector'),
+        );
+        final destSector = await _dbWork(
+          tester,
+          () => repo.createSector(areaA.id, 'Dest Sector'),
+        );
+        final wall = await _dbWork(
+          tester,
+          () => repo.createWall(currentSector.id, 'My Topo'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-${wall.id}')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-move-${wall.id}')));
+        await _drain(tester);
+
+        await tester.tap(
+          find.byKey(Key('move-target-sector-${destSector.id}')),
+        );
+        // NOT pumpAndSettle -- see _drainNoSettle's doc: settling would run
+        // the error SnackBar's full show+hide animation before the
+        // find.text assertion below ever ran.
+        await _drainNoSettle(tester);
+
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'a move failure must never surface as an unhandled async '
+              'error',
+        );
+        expect(
+          find.text("Couldn't move — please try again"),
+          findsOneWidget,
+        );
+
+        final unchangedSectorId = await _dbWork(
+          tester,
+          () => repo.wallSectorId(wall.id),
+        );
+        expect(
+          unchangedSectorId,
+          currentSector.id,
+          reason: 'the throwing moveWall must not have actually moved it',
+        );
       },
     );
   });

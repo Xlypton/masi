@@ -1932,4 +1932,125 @@ void main() {
       },
     );
   });
+
+  group('D8: wallSectorId / listOwnAreas / listOwnSectors — move-picker '
+      'lookups', () {
+    test(
+      'wallSectorId returns the wall\'s current sectorId, null for a '
+      'nonexistent or soft-deleted wall',
+      () async {
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final wall = await repo.createWall(sector.id, 'Wall');
+
+        expect(await repo.wallSectorId(wall.id), sector.id);
+        expect(await repo.wallSectorId('does-not-exist'), isNull);
+
+        await repo.softDeleteWall(wall.id);
+        expect(await repo.wallSectorId(wall.id), isNull);
+      },
+    );
+
+    test(
+      'listOwnAreas includes unowned + own areas, excludes a FOREIGN-owned '
+      'area, excludes the __default__ sentinel and soft-deleted areas',
+      () async {
+        // Unowned: created via the signed-out-default `repo` (currentUid
+        // always null).
+        final unowned = await repo.createArea('Unowned Area');
+
+        final myRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'my-uid',
+        );
+        final mine = await myRepo.createArea('My Area');
+
+        final foreignRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'foreign-uid',
+        );
+        await foreignRepo.createArea('Foreign Area');
+
+        // The hidden __default__ sentinel area (created lazily by
+        // createTopo) and a soft-deleted area must also never appear.
+        await repo.createTopo('Photo First Topo');
+        final deleted = await repo.createArea('Deleted Area');
+        await repo.softDeleteArea(deleted.id);
+
+        final own = await myRepo.listOwnAreas('my-uid');
+
+        expect(
+          own.map((a) => a.name),
+          containsAll(['Unowned Area', 'My Area']),
+        );
+        expect(own.map((a) => a.name), isNot(contains('Foreign Area')));
+        expect(own.map((a) => a.name), isNot(contains('__default__')));
+        expect(own.map((a) => a.name), isNot(contains('Deleted Area')));
+        expect(own.map((a) => a.id), contains(unowned.id));
+        expect(own.map((a) => a.id), contains(mine.id));
+      },
+    );
+
+    test(
+      'listOwnAreas(null) (signed-out) includes only unowned areas, never a '
+      'FOREIGN-owned one',
+      () async {
+        await repo.createArea('Unowned Area');
+        final foreignRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'foreign-uid',
+        );
+        await foreignRepo.createArea('Foreign Area');
+
+        final own = await repo.listOwnAreas(null);
+
+        expect(own.map((a) => a.name), ['Unowned Area']);
+      },
+    );
+
+    test(
+      'listOwnSectors spans ALL areas (unlike listSectors), includes '
+      'unowned + own sectors, excludes a FOREIGN-owned sector and the '
+      '__default__ sentinel',
+      () async {
+        final areaA = await repo.createArea('Area A');
+        final areaB = await repo.createArea('Area B');
+        // Unowned sector.
+        final unowned = await repo.createSector(areaA.id, 'Unowned Sector');
+
+        final myRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'my-uid',
+        );
+        final mine = await myRepo.createSector(areaB.id, 'My Sector');
+
+        final foreignRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'foreign-uid',
+        );
+        await foreignRepo.createSector(areaA.id, 'Foreign Sector');
+
+        // The hidden __default__ sentinel sector.
+        await repo.createTopo('Photo First Topo');
+
+        final own = await myRepo.listOwnSectors('my-uid');
+
+        expect(
+          own.map((s) => s.name),
+          containsAll(['Unowned Sector', 'My Sector']),
+        );
+        expect(own.map((s) => s.name), isNot(contains('Foreign Sector')));
+        expect(own.map((s) => s.name), isNot(contains('__default__')));
+        expect(own.map((s) => s.id), contains(unowned.id));
+        expect(own.map((s) => s.id), contains(mine.id));
+        // Spans both areas — not scoped to a single one, unlike listSectors.
+        expect(own.map((s) => s.areaId), containsAll([areaA.id, areaB.id]));
+      },
+    );
+  });
 }

@@ -19,6 +19,7 @@ import '../../topo/presentation/topo_canvas_screen.dart'
     show captureWallGpsFromPhoto, gpsCaptureResultSnackBar;
 import '../application/library_providers.dart';
 import '../data/library_crud_repository.dart';
+import 'move_target_picker.dart';
 
 /// The new flat "photo-first" home (see DESIGN.md "Topos home"): every
 /// non-deleted [db.Wall] rendered as a single "topo" row (thumbnail + name +
@@ -798,6 +799,8 @@ class _TopoRow extends ConsumerWidget {
                   switch (value) {
                     case 'rename':
                       _handleRename(context, ref, topo);
+                    case 'move':
+                      _handleMove(context, ref, topo);
                     case 'publish':
                       _handlePublish(context, ref, topo);
                     case 'unpublish':
@@ -817,6 +820,11 @@ class _TopoRow extends ConsumerWidget {
                       key: Key('topo-rename-${topo.wallId}'),
                       value: 'rename',
                       child: const Text('Rename'),
+                    ),
+                    PopupMenuItem(
+                      key: Key('topo-move-${topo.wallId}'),
+                      value: 'move',
+                      child: const Text('Move to…'),
                     ),
                     PopupMenuItem(
                       key: Key('topo-publish-${topo.wallId}'),
@@ -880,6 +888,66 @@ class _TopoRow extends ConsumerWidget {
     await ref
         .read(libraryCrudRepositoryProvider)
         .renameWall(topo.wallId, newName);
+  }
+
+  /// "Move to…" flow: resolves [topo]'s destination-sector candidates
+  /// (this device's own, non-default sectors across every area — see
+  /// [LibraryCrudRepository.listOwnSectors]'s doc for why FOREIGN sectors
+  /// are never offered — minus [topo]'s CURRENT sector, resolved via
+  /// [LibraryCrudRepository.wallSectorId] since [TopoRef] itself carries no
+  /// `sectorId`), labels each candidate `"AreaName › SectorName"` (area
+  /// names come from the unfiltered [LibraryCrudRepository.listAreas] purely
+  /// for display — a sector's own ownership, not its area's, gates whether
+  /// it's offered), shows [showMoveTargetPicker], and on a selection calls
+  /// [LibraryCrudRepository.moveWall] followed by a confirmation [SnackBar].
+  /// A no-op if the sheet is dismissed without a selection.
+  Future<void> _handleMove(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+  ) async {
+    final repo = ref.read(libraryCrudRepositoryProvider);
+    final myUid = ref.read(authStateProvider).asData?.value.uid;
+    final currentSectorId = await repo.wallSectorId(topo.wallId);
+    final areas = await repo.listAreas();
+    final areaNames = {for (final area in areas) area.id: area.name};
+    final ownSectors = await repo.listOwnSectors(myUid);
+    final candidates = ownSectors
+        .where((sector) => sector.id != currentSectorId)
+        .toList();
+    if (!context.mounted) return;
+
+    final targetSectorId = await showMoveTargetPicker(
+      context,
+      title: 'Move "${topo.name}" to…',
+      keyPrefix: 'move-target-sector',
+      emptyMessage: 'No other sectors available',
+      options: [
+        for (final sector in candidates)
+          MoveTargetOption(
+            id: sector.id,
+            label: '${areaNames[sector.areaId] ?? 'Unknown'} › ${sector.name}',
+          ),
+      ],
+    );
+    if (targetSectorId == null) return;
+
+    try {
+      await repo.moveWall(topo.wallId, targetSectorId);
+    } catch (e, st) {
+      debugPrint('Failed to move topo: $e\n$st');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't move — please try again")),
+      );
+      return;
+    }
+    if (!context.mounted) return;
+
+    final targetSector = candidates.firstWhere((s) => s.id == targetSectorId);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Moved to ${targetSector.name}')),
+    );
   }
 
   /// Publishes [topo] to Community after an explicit confirm (this is the

@@ -28,6 +28,12 @@ import '../../../app/theme.dart';
 ///  - `<entityKey>-item-<id>`: each row's card ([Material]).
 ///  - `<entityKey>-rename-<id>`: the rename icon button on a row; opens the
 ///    shared name-entry dialog.
+///  - `<entityKey>-move-<id>`: OPTIONAL move icon button on a row, rendered
+///    only when [onMove] is supplied (currently wired only in
+///    `sectors_screen.dart` — Areas are top-level and a Walls-list move is
+///    out of scope). Tapping it calls [onMove] with the row's own
+///    [BuildContext] and item; the caller (not this generic scaffold) owns
+///    picking a destination and invoking the actual move.
 ///  - `<entityKey>-delete-<id>`: the delete icon button on a row; tapping it
 ///    opens an iOS-style [CupertinoActionSheet] confirm surface (does NOT
 ///    delete immediately).
@@ -54,6 +60,7 @@ class CrudListScaffold<T> extends StatelessWidget {
     required this.onRename,
     required this.onDelete,
     this.subtitleOf,
+    this.onMove,
   });
 
   final String title;
@@ -70,6 +77,11 @@ class CrudListScaffold<T> extends StatelessWidget {
   final Future<void> Function(String name) onCreate;
   final Future<void> Function(T item, String newName) onRename;
   final Future<void> Function(T item) onDelete;
+
+  /// Optional move trigger — see the `<entityKey>-move-<id>` key doc above.
+  /// `null` (the default) omits the move button entirely, which is how
+  /// `AreasScreen`/`WallsScreen` keep their existing row layout unchanged.
+  final Future<void> Function(BuildContext context, T item)? onMove;
 
   @override
   Widget build(BuildContext context) {
@@ -215,6 +227,16 @@ class CrudListScaffold<T> extends StatelessWidget {
                 tooltip: 'Rename',
                 onPressed: () => _handleRename(context, item),
               ),
+              if (onMove != null)
+                IconButton(
+                  key: Key('$entityKey-move-$id'),
+                  icon: Icon(
+                    Icons.drive_file_move_outlined,
+                    color: colors.ink2,
+                  ),
+                  tooltip: 'Move',
+                  onPressed: () => onMove!(context, item),
+                ),
               IconButton(
                 key: Key('$entityKey-delete-$id'),
                 icon: Icon(Icons.delete_outline, color: colors.ink2),
