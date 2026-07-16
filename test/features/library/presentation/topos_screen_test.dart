@@ -140,6 +140,20 @@ Widget _wrap(ProviderContainer container, Widget screen) {
         builder: (context, state) => const SizedBox(),
       ),
       GoRoute(path: '/areas', builder: (context, state) => const SizedBox()),
+      // The "Show on map" menu action's destination (see
+      // `_TopoRow._handleShowOnMap`) -- a keyed placeholder carrying the
+      // pushed query params in its text, so a test can confirm both that
+      // navigation happened AND that it carried the right tab/focus values,
+      // without needing the real `CommunityScreen`/`FlutterMap`.
+      GoRoute(
+        path: '/community',
+        builder: (context, state) => Text(
+          'community-'
+          '${state.uri.queryParameters['tab']}-'
+          '${state.uri.queryParameters['focus']}',
+          key: const Key('community-placeholder'),
+        ),
+      ),
     ],
   );
   return UncontrolledProviderScope(
@@ -1765,6 +1779,76 @@ void main() {
           )..where((t) => t.id.equals(wallId))).getSingle(),
         );
         expect(wall.visibility, 'private');
+      },
+    );
+  });
+
+  group('Q1: "Show on map" menu action', () {
+    testWidgets(
+      'a topo WITH coordinates shows an enabled "Show on map" item; tapping '
+      'it navigates to /community?tab=map&focus=<wallId>',
+      (tester) async {
+        final container = _makeContainer();
+        final wallId = await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .createTopo('Located Wall'),
+        );
+        await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .setWallCoordinates(wallId, 47.4979, 19.0402),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+
+        final itemFinder = find.byKey(Key('topo-show-on-map-$wallId'));
+        expect(itemFinder, findsOneWidget);
+        expect(
+          tester.widget<PopupMenuItem<String>>(itemFinder).enabled,
+          isTrue,
+        );
+        expect(find.text('No location set'), findsNothing);
+
+        await tester.tap(itemFinder);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('community-placeholder')), findsOneWidget);
+        expect(find.text('community-map-$wallId'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a topo WITHOUT coordinates shows a disabled "Show on map" item '
+      '(never navigates)',
+      (tester) async {
+        final container = _makeContainer();
+        final wallId = await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .createTopo('Unlocated Wall'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+
+        final itemFinder = find.byKey(Key('topo-show-on-map-$wallId'));
+        expect(itemFinder, findsOneWidget);
+        expect(
+          tester.widget<PopupMenuItem<String>>(itemFinder).enabled,
+          isFalse,
+        );
+        expect(find.text('No location set'), findsOneWidget);
       },
     );
   });

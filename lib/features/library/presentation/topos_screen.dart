@@ -802,12 +802,16 @@ class _TopoRow extends ConsumerWidget {
                       _handlePublish(context, ref, topo);
                     case 'unpublish':
                       _handleUnpublish(ref, topo);
+                    case 'show-on-map':
+                      _handleShowOnMap(context, topo);
                     case 'delete':
                       _handleDelete(context, ref, topo);
                   }
                 },
                 itemBuilder: (context) {
                   final isShared = topo.visibility == 'shared';
+                  final hasCoords =
+                      topo.latitude != null && topo.longitude != null;
                   return [
                     PopupMenuItem(
                       key: Key('topo-rename-${topo.wallId}'),
@@ -818,6 +822,34 @@ class _TopoRow extends ConsumerWidget {
                       key: Key('topo-publish-${topo.wallId}'),
                       value: isShared ? 'unpublish' : 'publish',
                       child: Text(isShared ? 'Unpublish' : 'Publish'),
+                    ),
+                    // Enabled only when the wall actually has coordinates
+                    // (from EXIF/device GPS capture at photo-attach time —
+                    // see `setWallCoordinates`); a located topo pushes
+                    // straight into `/community`'s Map tab, focused on this
+                    // wall (see `_handleShowOnMap`). Rather than omitting the
+                    // item entirely when unlocated, it stays visible but
+                    // disabled with a "No location set" hint, so a user
+                    // isn't left wondering why the action is missing.
+                    PopupMenuItem(
+                      key: Key('topo-show-on-map-${topo.wallId}'),
+                      value: 'show-on-map',
+                      enabled: hasCoords,
+                      child: hasCoords
+                          ? const Text('Show on map')
+                          : Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Text('Show on map'),
+                                Text(
+                                  'No location set',
+                                  style: textTheme.labelSmall?.copyWith(
+                                    color: colors.ink3,
+                                  ),
+                                ),
+                              ],
+                            ),
                     ),
                     PopupMenuItem(
                       key: Key('topo-delete-${topo.wallId}'),
@@ -888,6 +920,15 @@ class _TopoRow extends ConsumerWidget {
 
   Future<void> _handleUnpublish(WidgetRef ref, TopoRef topo) {
     return ref.read(libraryCrudRepositoryProvider).unpublishTopo(topo.wallId);
+  }
+
+  /// Pushes straight into `/community`'s Map tab, centered/zoomed on
+  /// [topo] (see `CommunityScreen`'s `initialTab`/`focusWallId` and
+  /// `_MapView`'s `focusWallId` doc). Only ever reachable when the menu
+  /// item is enabled (i.e. [topo] has coordinates) — see this row's
+  /// `itemBuilder`.
+  void _handleShowOnMap(BuildContext context, TopoRef topo) {
+    context.push('/community?tab=map&focus=${topo.wallId}');
   }
 
   Future<void> _handleDelete(

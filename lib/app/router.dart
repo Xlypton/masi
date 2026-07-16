@@ -11,6 +11,24 @@ import '../features/library/presentation/walls_screen.dart';
 import '../features/logbook/presentation/logbook_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
 
+/// Parses `/community`'s optional `?tab=`/`?focus=` query params (see
+/// [CommunityScreen.initialTab]/[CommunityScreen.focusWallId]) into typed
+/// values. Kept as a standalone pure function (rather than inlined in the
+/// `GoRoute.builder` below) so the parsing itself is unit-testable against a
+/// plain query-parameter map, without needing a real [GoRouterState] or
+/// widget tree.
+///
+/// `tab=map` selects the Map tab; any other value (including absent, which
+/// is every existing `/community` link/push in the app today) leaves `tab`
+/// `null`, matching [CommunityScreen]'s previous unconditional Feed-tab
+/// default exactly.
+({CommunityTab? tab, String? focusWallId}) parseCommunityRouteParams(
+  Map<String, String> queryParameters,
+) {
+  final tab = queryParameters['tab'] == 'map' ? CommunityTab.map : null;
+  return (tab: tab, focusWallId: queryParameters['focus']);
+}
+
 final appRouter = GoRouter(
   routes: [
     GoRoute(path: '/', builder: (context, state) => const ToposScreen()),
@@ -23,7 +41,13 @@ final appRouter = GoRouter(
     // exact path from CommunityScreen's feed rows and map markers.
     GoRoute(
       path: '/community',
-      builder: (context, state) => const CommunityScreen(),
+      builder: (context, state) {
+        final params = parseCommunityRouteParams(state.uri.queryParameters);
+        return CommunityScreen(
+          initialTab: params.tab,
+          focusWallId: params.focusWallId,
+        );
+      },
     ),
     GoRoute(
       path: '/community/topo/:wallId',

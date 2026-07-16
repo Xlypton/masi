@@ -223,4 +223,78 @@ void main() {
       expect(find.byType(LogbookScreen), findsOneWidget);
     });
   });
+
+  group('Q4: /community query-param parsing (parseCommunityRouteParams)', () {
+    test('no query params -> tab null, focusWallId null (plain /community, '
+        'unchanged behavior)', () {
+      final result = parseCommunityRouteParams(const {});
+      expect(result.tab, isNull);
+      expect(result.focusWallId, isNull);
+    });
+
+    test('tab=map -> CommunityTab.map', () {
+      final result = parseCommunityRouteParams(const {'tab': 'map'});
+      expect(result.tab, CommunityTab.map);
+      expect(result.focusWallId, isNull);
+    });
+
+    test('any non-"map" tab value -> null (defaults to Feed)', () {
+      final result = parseCommunityRouteParams(const {'tab': 'feed'});
+      expect(result.tab, isNull);
+    });
+
+    test('focus=<id> is parsed regardless of tab', () {
+      final result = parseCommunityRouteParams(const {'focus': 'wall-x'});
+      expect(result.tab, isNull);
+      expect(result.focusWallId, 'wall-x');
+    });
+
+    test('tab=map&focus=<id> -> both parsed', () {
+      final result = parseCommunityRouteParams(const {
+        'tab': 'map',
+        'focus': 'wall-x',
+      });
+      expect(result.tab, CommunityTab.map);
+      expect(result.focusWallId, 'wall-x');
+    });
+  });
+
+  group('Q4: /community?tab=map&focus=X builds CommunityScreen focused on X', () {
+    setUp(() => appRouter.go('/'));
+
+    testWidgets(
+      'navigating to /community?tab=map&focus=wall-x builds a '
+      'CommunityScreen with initialTab=CommunityTab.map and '
+      'focusWallId=wall-x',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        appRouter.go('/community?tab=map&focus=wall-x');
+        // Bounded pumps only -- deliberately NOT `_drain`'s trailing
+        // `pumpAndSettle()`. This route's real (production) builder has no
+        // injectable `tileProvider` seam, so with `initialTab: map` it
+        // builds a REAL `FlutterMap` backed by the real network
+        // `NetworkTileProvider` -- unlike every Map-tab test in
+        // `community_screen_test.dart`, which injects `_NoopTileProvider`.
+        // `pumpAndSettle` would wait for that tile fetch to resolve, which
+        // never happens under `flutter_test`. A handful of bounded pumps is
+        // enough to let GoRouter resolve the route and build the widget
+        // tree; reading `CommunityScreen`'s own constructor params below
+        // doesn't require the map's tiles to have loaded.
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 30));
+        }
+
+        expect(find.byType(CommunityScreen), findsOneWidget);
+        final screen = tester.widget<CommunityScreen>(
+          find.byType(CommunityScreen),
+        );
+        expect(screen.initialTab, CommunityTab.map);
+        expect(screen.focusWallId, 'wall-x');
+      },
+    );
+  });
 }

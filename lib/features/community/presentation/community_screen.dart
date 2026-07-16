@@ -18,8 +18,12 @@ import '../../library/application/library_providers.dart';
 import '../application/community_providers.dart';
 import '../data/community_repository.dart';
 
-/// Which of the Community screen's two views is currently shown.
-enum _CommunityTab { feed, map }
+/// Which of the Community screen's two views is currently shown. Public
+/// (unlike the rest of this file's private widgets) so it can be selected
+/// from outside — [CommunityScreen.initialTab], and in turn `/app/router.dart`'s
+/// `/community` route (deep-linked to the Map tab from a topo's "Show on
+/// map" action — see `topos_screen.dart`'s `_TopoRow`).
+enum CommunityTab { feed, map }
 
 /// The Community discovery screen: a segmented Feed/Map toggle over every
 /// shared topo (a Wall with `visibility == 'shared'`). Feed is a searchable
@@ -31,23 +35,37 @@ enum _CommunityTab { feed, map }
 /// defaulting (when `null`) to the real [NetworkTileProvider] backed by
 /// OpenStreetMap tiles. Widget tests MUST override this with an in-memory
 /// fake so switching to the Map tab never performs real network I/O.
+///
+/// [initialTab] selects which tab this screen opens on (`null`, the
+/// default, opens on Feed — the screen's previous unconditional behavior).
+/// [focusWallId], when the Map tab is shown, centers/zooms the map on that
+/// wall's coordinates instead of the combined marker-set center — see
+/// `_MapView`'s `focusWallId` doc.
 class CommunityScreen extends ConsumerStatefulWidget {
-  const CommunityScreen({super.key, this.tileProvider});
+  const CommunityScreen({
+    super.key,
+    this.tileProvider,
+    this.initialTab,
+    this.focusWallId,
+  });
 
   final TileProvider? tileProvider;
+  final CommunityTab? initialTab;
+  final String? focusWallId;
 
   @override
   ConsumerState<CommunityScreen> createState() => _CommunityScreenState();
 }
 
 class _CommunityScreenState extends ConsumerState<CommunityScreen> {
-  _CommunityTab _tab = _CommunityTab.feed;
+  late CommunityTab _tab;
   final _searchController = TextEditingController();
   String _query = '';
 
   @override
   void initState() {
     super.initState();
+    _tab = widget.initialTab ?? CommunityTab.feed;
     _searchController.addListener(_onSearchChanged);
   }
 
@@ -97,13 +115,17 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
             ),
             Expanded(
               child: asyncSharedTopos.when(
-                data: (topos) => _tab == _CommunityTab.feed
+                data: (topos) => _tab == CommunityTab.feed
                     ? _FeedView(
                         topos: topos,
                         searchController: _searchController,
                         query: _query,
                       )
-                    : _MapView(topos: topos, tileProvider: widget.tileProvider),
+                    : _MapView(
+                        topos: topos,
+                        tileProvider: widget.tileProvider,
+                        focusWallId: widget.focusWallId,
+                      ),
                 loading: () =>
                     const Center(child: CircularProgressIndicator()),
                 error: (error, stackTrace) =>
@@ -123,8 +145,8 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
 class _TabToggle extends StatelessWidget {
   const _TabToggle({required this.tab, required this.onChanged});
 
-  final _CommunityTab tab;
-  final ValueChanged<_CommunityTab> onChanged;
+  final CommunityTab tab;
+  final ValueChanged<CommunityTab> onChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -141,8 +163,8 @@ class _TabToggle extends StatelessWidget {
             child: _TabButton(
               key: const Key('community-feed-toggle'),
               label: 'Feed',
-              selected: tab == _CommunityTab.feed,
-              onTap: () => onChanged(_CommunityTab.feed),
+              selected: tab == CommunityTab.feed,
+              onTap: () => onChanged(CommunityTab.feed),
             ),
           ),
           const SizedBox(width: 4),
@@ -150,8 +172,8 @@ class _TabToggle extends StatelessWidget {
             child: _TabButton(
               key: const Key('community-map-toggle'),
               label: 'Map',
-              selected: tab == _CommunityTab.map,
-              onTap: () => onChanged(_CommunityTab.map),
+              selected: tab == CommunityTab.map,
+              onTap: () => onChanged(CommunityTab.map),
             ),
           ),
         ],
@@ -709,10 +731,25 @@ class _GradientFallback extends StatelessWidget {
 /// `build` method for how "own" is determined and deduped against the
 /// shared set.
 class _MapView extends ConsumerWidget {
-  const _MapView({required this.topos, required this.tileProvider});
+  const _MapView({
+    required this.topos,
+    required this.tileProvider,
+    this.focusWallId,
+  });
 
   final List<SharedTopo> topos;
   final TileProvider? tileProvider;
+
+  /// When non-null AND found among this build's own/community located
+  /// topos, overrides the map's initial center to that wall's coordinates
+  /// at an elevated zoom (see [build]'s `hasFocus` branch) so a single
+  /// "Show on map" deep link (`topos_screen.dart`'s `_TopoRow`, via
+  /// `/community?tab=map&focus=<wallId>`) frames that one boulder instead of
+  /// the whole combined marker set. A `focusWallId` that doesn't match any
+  /// rendered topo (not found, filtered out, or simply lacking coordinates)
+  /// silently falls back to the existing combined-set center/zoom — it must
+  /// never crash or blank the map.
+  final String? focusWallId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -783,20 +820,53 @@ class _MapView extends ConsumerWidget {
       for (final t in ownWithCoords) LatLng(t.latitude!, t.longitude!),
       for (final t in communityWithCoords) LatLng(t.latitude!, t.longitude!),
     ];
-    final center = combinedCoords.isEmpty
-        ? const LatLng(0, 0)
-        : LatLng(
-            combinedCoords.map((p) => p.latitude).reduce((a, b) => a + b) /
-                combinedCoords.length,
-            combinedCoords.map((p) => p.longitude).reduce((a, b) => a + b) /
-                combinedCoords.length,
-          );
+
+    // `focusWallId`, if given, overrides the combined center/zoom above --
+    // checked against BOTH already-computed located sets (own first, since
+    // an own+shared topo is deduped to render only as "own"; see this
+    // class's doc), so a deep link works regardless of which marker family
+    // the wall actually renders as. A focus id that matches neither (not
+    // found / filtered out / no coordinates) leaves `focusPoint` null and
+    // the combined-set behavior below is unaffected.
+    LatLng? focusPoint;
+    final focusId = focusWallId;
+    if (focusId != null) {
+      for (final t in ownWithCoords) {
+        if (t.wallId == focusId) {
+          focusPoint = LatLng(t.latitude!, t.longitude!);
+          break;
+        }
+      }
+      if (focusPoint == null) {
+        for (final t in communityWithCoords) {
+          if (t.wallId == focusId) {
+            focusPoint = LatLng(t.latitude!, t.longitude!);
+            break;
+          }
+        }
+      }
+    }
+
+    final center =
+        focusPoint ??
+        (combinedCoords.isEmpty
+            ? const LatLng(0, 0)
+            : LatLng(
+                combinedCoords.map((p) => p.latitude).reduce(
+                      (a, b) => a + b,
+                    ) /
+                    combinedCoords.length,
+                combinedCoords.map((p) => p.longitude).reduce(
+                      (a, b) => a + b,
+                    ) /
+                    combinedCoords.length,
+              ));
+    final zoom = focusPoint != null
+        ? 15.0
+        : (combinedCoords.isEmpty ? 1.5 : 11.0);
 
     return FlutterMap(
-      options: MapOptions(
-        initialCenter: center,
-        initialZoom: combinedCoords.isEmpty ? 1.5 : 11,
-      ),
+      options: MapOptions(initialCenter: center, initialZoom: zoom),
       children: [
         TileLayer(
           urlTemplate:

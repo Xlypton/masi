@@ -1838,4 +1838,129 @@ void main() {
       );
     },
   );
+
+  group('Q2/Q3: initialTab + focusWallId deep link', () {
+    testWidgets(
+      'CommunityScreen(initialTab: CommunityTab.map, focusWallId: X) opens '
+      'on the Map tab, centered/zoomed on X\'s coordinates (not the '
+      'combined-set center)',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-focus', name: 'Area Focus');
+          await _seedSector(
+            db,
+            id: 'sector-focus',
+            areaId: 'area-focus',
+            name: 'S',
+          );
+          await _seedWall(
+            db,
+            id: 'wall-focus',
+            sectorId: 'sector-focus',
+            name: 'Focus Wall',
+            latitude: 12.0,
+            longitude: 34.0,
+          );
+          // A second, far-away located wall proves the map centers on the
+          // FOCUSED wall specifically, not the average of both.
+          await _seedWall(
+            db,
+            id: 'wall-other',
+            sectorId: 'sector-focus',
+            name: 'Other Wall',
+            latitude: -50.0,
+            longitude: 170.0,
+          );
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(
+              tileProvider: _NoopTileProvider(),
+              initialTab: CommunityTab.map,
+              focusWallId: 'wall-focus',
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        // Opened straight on the Map tab: the Feed's search field is never
+        // shown, and exactly one FlutterMap is built without needing to tap
+        // `community-map-toggle` first.
+        expect(find.byKey(const Key('community-search-field')), findsNothing);
+        expect(find.byType(FlutterMap), findsOneWidget);
+
+        final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
+        expect(flutterMap.options.initialCenter, const LatLng(12.0, 34.0));
+        expect(flutterMap.options.initialZoom, 15);
+      },
+    );
+
+    testWidgets(
+      'a focusWallId that matches no rendered topo (not found / no coords) '
+      'falls back to the existing combined-set center/zoom, never crashes',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-nofocus', name: 'Area No Focus');
+          await _seedSector(
+            db,
+            id: 'sector-nofocus',
+            areaId: 'area-nofocus',
+            name: 'S',
+          );
+          await _seedWall(
+            db,
+            id: 'wall-real',
+            sectorId: 'sector-nofocus',
+            name: 'Real Wall',
+            latitude: 12.0,
+            longitude: 34.0,
+          );
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(
+              tileProvider: _NoopTileProvider(),
+              initialTab: CommunityTab.map,
+              focusWallId: 'does-not-exist',
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
+        expect(flutterMap.options.initialZoom, 11);
+        expect(flutterMap.options.initialCenter, const LatLng(12.0, 34.0));
+      },
+    );
+
+    testWidgets(
+      'plain CommunityScreen() (no initialTab/focusWallId) still opens on '
+      'the Feed tab -- regression',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          _wrap(container, CommunityScreen(tileProvider: _NoopTileProvider())),
+        );
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(find.byType(FlutterMap), findsNothing);
+        expect(
+          find.byKey(const Key('community-search-field')),
+          findsOneWidget,
+        );
+      },
+    );
+  });
 }
