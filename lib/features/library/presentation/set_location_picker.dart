@@ -153,7 +153,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Set location'),
-        leadingWidth: 72,
+        leadingWidth: 96,
         leading: TextButton(
           key: const Key('set-location-cancel'),
           onPressed: () => Navigator.of(context).pop(),

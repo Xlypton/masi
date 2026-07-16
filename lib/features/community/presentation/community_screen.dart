@@ -380,7 +380,11 @@ class _FeedView extends ConsumerWidget {
                   controller: searchController,
                   decoration: InputDecoration(
                     hintText: 'Search topos',
-                    prefixIcon: const MasiIcon('search'),
+                    prefixIcon: MasiIcon(
+                      'search',
+                      size: 20,
+                      color: colors.ink3,
+                    ),
                     filled: true,
                     fillColor: colors.surface2,
                     border: OutlineInputBorder(
