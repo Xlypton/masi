@@ -11,9 +11,11 @@ import 'package:climbtopo/features/account/application/auth_providers.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
+import 'package:climbtopo/features/library/presentation/set_location_picker.dart';
 import 'package:climbtopo/features/library/presentation/topos_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -23,6 +25,7 @@ import 'package:image/image.dart' as img;
 // JPEG fixture for the A7 GPS-capture test below.
 import 'package:image/src/util/rational.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 
 /// A minimal-but-real 1x1 transparent PNG (base64), used to give
 /// `ui.instantiateImageCodec` real bytes to decode in the "New topo" flow
@@ -223,6 +226,20 @@ class _ThrowingSetCoordinatesRepository extends LibraryCrudRepository {
     double longitude,
   ) {
     throw Exception('setWallCoordinates boom (test)');
+  }
+}
+
+/// A tile provider that never performs any network/file I/O: every tile
+/// request resolves synchronously to the same tiny in-memory image. Copied
+/// from `community_screen_test.dart`'s identical class (library-private to
+/// that file) -- wired into every "Set location" picker this file opens, so
+/// its `FlutterMap`'s `TileLayer` can never attempt a real network fetch
+/// under `flutter_test` (see CLAUDE.md: "never hit the network in a widget
+/// test").
+class _NoopTileProvider extends TileProvider {
+  @override
+  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
+    return MemoryImage(_tinyPngBytes);
   }
 }
 
@@ -1864,6 +1881,242 @@ void main() {
           isFalse,
         );
         expect(find.text('No location set'), findsOneWidget);
+      },
+    );
+  });
+
+  group('S-L: "Set location" manual map pin picker', () {
+    testWidgets(
+      'S-L1a: a topo WITH coordinates shows an enabled "Edit location" item',
+      (tester) async {
+        final container = _makeContainer();
+        final wallId = await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .createTopo('Located Wall'),
+        );
+        await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .setWallCoordinates(wallId, 47.4979, 19.0402),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+
+        final itemFinder = find.byKey(Key('topo-set-location-$wallId'));
+        expect(itemFinder, findsOneWidget);
+        expect(
+          tester.widget<PopupMenuItem<String>>(itemFinder).enabled,
+          isTrue,
+        );
+        expect(find.text('Edit location'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'S-L1b: a topo WITHOUT coordinates shows an enabled "Set location" '
+      'item',
+      (tester) async {
+        final container = _makeContainer();
+        final wallId = await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .createTopo('Unlocated Wall'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+
+        final itemFinder = find.byKey(Key('topo-set-location-$wallId'));
+        expect(itemFinder, findsOneWidget);
+        expect(
+          tester.widget<PopupMenuItem<String>>(itemFinder).enabled,
+          isTrue,
+        );
+        expect(find.text('Set location'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'S-L2: tapping "Set location" opens the full-screen map picker '
+      '(Save action + fixed center crosshair)',
+      (tester) async {
+        final container = _makeContainer();
+        final wallId = await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .createTopo('New Wall'),
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(setLocationTileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-set-location-$wallId')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('set-location-save')), findsOneWidget);
+        expect(find.byKey(const Key('set-location-cancel')), findsOneWidget);
+        expect(
+          find.byKey(const Key('set-location-crosshair')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'S-L3: panning the map (moving the injected MapController) then '
+      'tapping Save writes the new center via setWallCoordinates and shows '
+      'a "Location saved" confirmation SnackBar',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final container = _makeContainer();
+        final wallId = await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .createTopo('New Wall'),
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              setLocationTileProvider: _NoopTileProvider(),
+              setLocationMapController: controller,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-set-location-$wallId')));
+        await tester.pumpAndSettle();
+
+        // Simulate the user panning the map: move the injected controller
+        // directly rather than driving a real drag gesture -- the crosshair
+        // is fixed to the screen center, so "where the pin points" is
+        // exactly wherever `camera.center` ends up.
+        controller.move(const LatLng(47.5, 19.04), 14);
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('set-location-save')));
+        await _drain(tester);
+
+        expect(find.text('Location saved'), findsOneWidget);
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        final saved = topos.firstWhere((t) => t.wallId == wallId);
+        expect(saved.latitude, isNotNull);
+        expect(saved.longitude, isNotNull);
+        expect(saved.latitude!, closeTo(47.5, 0.0001));
+        expect(saved.longitude!, closeTo(19.04, 0.0001));
+      },
+    );
+
+    testWidgets(
+      'S-L4: Cancel pops without writing any coordinates',
+      (tester) async {
+        final container = _makeContainer();
+        final wallId = await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .createTopo('New Wall'),
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(setLocationTileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-set-location-$wallId')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('set-location-cancel')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('set-location-save')), findsNothing);
+        expect(find.text('New Wall'), findsOneWidget);
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        final unchanged = topos.firstWhere((t) => t.wallId == wallId);
+        expect(unchanged.latitude, isNull);
+        expect(unchanged.longitude, isNull);
+      },
+    );
+
+    testWidgets(
+      'S-L5: "use my location" moves the map to the fake device fix',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        const fakeLocation = _FakeLocationService((
+          latitude: 40.0,
+          longitude: -3.7,
+        ));
+        late BuildContext capturedContext;
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: MasiTheme.light,
+            home: Builder(
+              builder: (context) {
+                capturedContext = context;
+                return const SizedBox();
+              },
+            ),
+          ),
+        );
+
+        unawaited(
+          showSetLocationPicker(
+            capturedContext,
+            tileProvider: _NoopTileProvider(),
+            controller: controller,
+            locationService: fakeLocation,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('set-location-my-location')));
+        await _drain(tester);
+
+        final center = controller.camera.center;
+        expect((center.latitude - 40.0).abs(), lessThan(0.01));
+        expect((center.longitude - (-3.7)).abs(), lessThan(0.01));
       },
     );
   });

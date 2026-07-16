@@ -3,9 +3,11 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart' show MapController, TileProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
@@ -20,6 +22,7 @@ import '../../topo/presentation/topo_canvas_screen.dart'
 import '../application/library_providers.dart';
 import '../data/library_crud_repository.dart';
 import 'move_target_picker.dart';
+import 'set_location_picker.dart';
 
 /// The new flat "photo-first" home (see DESIGN.md "Topos home"): every
 /// non-deleted [db.Wall] rendered as a single "topo" row (thumbnail + name +
@@ -33,6 +36,17 @@ import 'move_target_picker.dart';
 /// the real [showPhotoSourceSheet] / [pickPhotoFrom]) so widget tests can
 /// drive the "New topo" flow without touching the real camera/gallery UI.
 ///
+/// [setLocationTileProvider] / [setLocationMapController] /
+/// [setLocationLocationService] are the same kind of seam for every
+/// `_TopoRow`'s "Set location" action (see `set_location_picker.dart`'s
+/// `showSetLocationPicker`), threaded all the way down to
+/// `_TopoRow._handleSetLocation` — production leaves all three null, letting
+/// the picker build its own resilient tile provider/`MapController` and
+/// read the real `locationServiceProvider`, exactly like `CommunityScreen`'s
+/// identical `tileProvider`/`mapController` seams. A widget test that opens
+/// the picker MUST inject `setLocationTileProvider` (a noop tile provider),
+/// or the map would attempt a real network tile fetch under `flutter_test`.
+///
 /// A [ConsumerStatefulWidget] (rather than a stateless [ConsumerWidget])
 /// so it can hold the [_creating] re-entrancy flag: without it, a fast
 /// double-tap on "New topo" would fire two concurrent creation flows that
@@ -43,10 +57,22 @@ class ToposScreen extends ConsumerStatefulWidget {
     super.key,
     this.photoSourcePicker = showPhotoSourceSheet,
     this.photoPicker = pickPhotoFrom,
+    this.setLocationTileProvider,
+    this.setLocationMapController,
+    this.setLocationLocationService,
   });
 
   final Future<ImageSource?> Function(BuildContext) photoSourcePicker;
   final Future<XFile?> Function(ImageSource) photoPicker;
+
+  @visibleForTesting
+  final TileProvider? setLocationTileProvider;
+
+  @visibleForTesting
+  final MapController? setLocationMapController;
+
+  @visibleForTesting
+  final LocationService? setLocationLocationService;
 
   @override
   ConsumerState<ToposScreen> createState() => _ToposScreenState();
@@ -193,7 +219,13 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   if (filtered.isEmpty) {
                     return const _FilteredEmptyState();
                   }
-                  return _ToposList(topos: filtered);
+                  return _ToposList(
+                    topos: filtered,
+                    setLocationTileProvider: widget.setLocationTileProvider,
+                    setLocationMapController: widget.setLocationMapController,
+                    setLocationLocationService:
+                        widget.setLocationLocationService,
+                  );
                 },
                 loading: () => const Center(child: CircularProgressIndicator()),
                 error: (error, stackTrace) => Center(
@@ -706,9 +738,17 @@ class _FilterSegmentLabel extends StatelessWidget {
 }
 
 class _ToposList extends StatelessWidget {
-  const _ToposList({required this.topos});
+  const _ToposList({
+    required this.topos,
+    this.setLocationTileProvider,
+    this.setLocationMapController,
+    this.setLocationLocationService,
+  });
 
   final List<TopoRef> topos;
+  final TileProvider? setLocationTileProvider;
+  final MapController? setLocationMapController;
+  final LocationService? setLocationLocationService;
 
   @override
   Widget build(BuildContext context) {
@@ -720,15 +760,28 @@ class _ToposList extends StatelessWidget {
       itemCount: topos.length,
       separatorBuilder: (context, index) =>
           const SizedBox(height: MasiSpacing.sm),
-      itemBuilder: (context, index) => _TopoRow(topo: topos[index]),
+      itemBuilder: (context, index) => _TopoRow(
+        topo: topos[index],
+        setLocationTileProvider: setLocationTileProvider,
+        setLocationMapController: setLocationMapController,
+        setLocationLocationService: setLocationLocationService,
+      ),
     );
   }
 }
 
 class _TopoRow extends ConsumerWidget {
-  const _TopoRow({required this.topo});
+  const _TopoRow({
+    required this.topo,
+    this.setLocationTileProvider,
+    this.setLocationMapController,
+    this.setLocationLocationService,
+  });
 
   final TopoRef topo;
+  final TileProvider? setLocationTileProvider;
+  final MapController? setLocationMapController;
+  final LocationService? setLocationLocationService;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -807,6 +860,8 @@ class _TopoRow extends ConsumerWidget {
                       _handleUnpublish(ref, topo);
                     case 'show-on-map':
                       _handleShowOnMap(context, topo);
+                    case 'set-location':
+                      _handleSetLocation(context, ref, topo);
                     case 'delete':
                       _handleDelete(context, ref, topo);
                   }
@@ -858,6 +913,16 @@ class _TopoRow extends ConsumerWidget {
                                 ),
                               ],
                             ),
+                    ),
+                    // Always enabled -- unlike "Show on map" above, a topo
+                    // can be GIVEN a location whether or not it has one
+                    // already, so this item is never disabled; the label
+                    // just flips to "Edit location" once coordinates exist,
+                    // so the menu reads as "add" vs "change" appropriately.
+                    PopupMenuItem(
+                      key: Key('topo-set-location-${topo.wallId}'),
+                      value: 'set-location',
+                      child: Text(hasCoords ? 'Edit location' : 'Set location'),
                     ),
                     PopupMenuItem(
                       key: Key('topo-delete-${topo.wallId}'),
@@ -997,6 +1062,53 @@ class _TopoRow extends ConsumerWidget {
   /// `itemBuilder`.
   void _handleShowOnMap(BuildContext context, TopoRef topo) {
     context.push('/community?tab=map&focus=${topo.wallId}');
+  }
+
+  /// "Set location"/"Edit location" flow: opens [showSetLocationPicker]
+  /// centered on [topo]'s existing coordinates when it has any (`null`
+  /// otherwise -- the picker itself decides what to do with an absent
+  /// `initial`), and on a non-null pick writes it via
+  /// [LibraryCrudRepository.setWallCoordinates]. Mirrors [_handleMove]'s
+  /// shape: await a value-returning picker, bail on a null (cancelled)
+  /// result, then write through the real repo inside a try/catch that
+  /// surfaces a confirmation/error [SnackBar], with `mounted` guards across
+  /// every await.
+  Future<void> _handleSetLocation(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+  ) async {
+    final initial = (topo.latitude != null && topo.longitude != null)
+        ? LatLng(topo.latitude!, topo.longitude!)
+        : null;
+
+    final picked = await showSetLocationPicker(
+      context,
+      initial: initial,
+      tileProvider: setLocationTileProvider,
+      controller: setLocationMapController,
+      locationService: setLocationLocationService,
+    );
+    if (picked == null) return;
+    if (!context.mounted) return;
+
+    try {
+      await ref
+          .read(libraryCrudRepositoryProvider)
+          .setWallCoordinates(topo.wallId, picked.latitude, picked.longitude);
+    } catch (e, st) {
+      debugPrint('Failed to set topo location: $e\n$st');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't save location — please try again")),
+      );
+      return;
+    }
+    if (!context.mounted) return;
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Location saved')));
   }
 
   Future<void> _handleDelete(
