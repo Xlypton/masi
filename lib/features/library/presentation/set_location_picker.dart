@@ -204,9 +204,9 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                 children: [
                   // White halo behind the crosshair so it stays legible
                   // over the light CartoDB basemap tiles.
-                  Icon(Icons.gps_fixed, size: 34, color: Colors.white),
-                  Icon(
-                    Icons.gps_fixed,
+                  MasiIcon('my_location', size: 34, color: Colors.white),
+                  MasiIcon(
+                    'my_location',
                     key: const Key('set-location-crosshair'),
                     size: 28,
                     color: colors.accent,

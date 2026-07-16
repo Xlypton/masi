@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/masi_icon.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
 import '../application/comments_providers.dart';
@@ -185,7 +186,7 @@ class _CommunityTopoDetailScreenState
                       IconButton(
                         key: const Key('community-comment-submit'),
                         tooltip: 'Post comment',
-                        icon: const Icon(Icons.send),
+                        icon: MasiIcon('send_check'),
                         onPressed: _submitComment,
                       ),
                     ],
