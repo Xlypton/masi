@@ -10,7 +10,7 @@ import 'package:http/http.dart' show Client, ClientException;
 import 'package:http/retry.dart' show RetryClient;
 // `hide Path`: latlong2 exports its own generic `Path<T>` (a geodesic path
 // helper we never use here), which otherwise shadows dart:ui's `Path` (from
-// `package:flutter/material.dart`) needed by `_PinPointerPainter` below.
+// `package:flutter/material.dart`) needed by `_BoulderPainter` below.
 import 'package:latlong2/latlong.dart' hide Path;
 
 import '../../../app/theme.dart';
@@ -1209,7 +1209,7 @@ class _MapViewState extends ConsumerState<_MapView> {
               Marker(
                 point: LatLng(topo.latitude!, topo.longitude!),
                 width: 40,
-                height: _MapPinBadge.totalHeight,
+                height: _BoulderMarker.totalHeight,
                 alignment: Alignment.topCenter,
                 child: GestureDetector(
                   key: Key('community-map-marker-${topo.wallId}'),
@@ -1217,7 +1217,12 @@ class _MapViewState extends ConsumerState<_MapView> {
                     FocusManager.instance.primaryFocus?.unfocus();
                     context.push('/community/topo/${topo.wallId}');
                   },
-                  child: _MapPinBadge(accentColor: colors.accent),
+                  // Community-feed topos are, by construction, always
+                  // shared/public (see `CommunityRepository.watchSharedTopos`
+                  // -- the feed only ever contains `visibility == 'shared'`
+                  // rows), so this marker always paints the lighter, public
+                  // boulder tint.
+                  child: _BoulderMarker(isPublic: true, colors: colors),
                 ),
               ),
           ],
@@ -1232,7 +1237,7 @@ class _MapViewState extends ConsumerState<_MapView> {
               Marker(
                 point: LatLng(topo.latitude!, topo.longitude!),
                 width: 40,
-                height: _MapPinBadge.totalHeight,
+                height: _BoulderMarker.totalHeight,
                 alignment: Alignment.topCenter,
                 child: GestureDetector(
                   key: Key('community-map-own-marker-${topo.wallId}'),
@@ -1240,7 +1245,10 @@ class _MapViewState extends ConsumerState<_MapView> {
                     FocusManager.instance.primaryFocus?.unfocus();
                     context.push('/walls/${topo.wallId}');
                   },
-                  child: _OwnMapPinBadge(accentColor: colors.accent),
+                  child: _BoulderMarker(
+                    isPublic: topo.visibility == 'shared',
+                    colors: colors,
+                  ),
                 ),
               ),
           ],
@@ -1301,7 +1309,7 @@ class _MapViewState extends ConsumerState<_MapView> {
             ),
           ),
         ),
-        // A compact "Yours" vs "Community" legend, top-left so it never
+        // A compact "Private" vs "Public" legend, top-left so it never
         // fights the bottom-right attribution pill for space. Purely
         // informational (no tap target of its own), like the attribution.
         IgnorePointer(
@@ -1402,9 +1410,12 @@ class _MapControlButton extends StatelessWidget {
   }
 }
 
-/// The Map tab's "Yours"/"Community" key (`community-map-legend`),
-/// distinguishing [_OwnMapPinBadge]'s accent-filled marker from
-/// [_MapPinBadge]'s neutral white-with-accent-ring marker.
+/// The Map tab's "Private"/"Public" key (`community-map-legend`),
+/// explaining [_BoulderMarker]'s visibility-encoded color: a dark swatch
+/// (matching [_BoulderMarker.privateBase]) for private topos, a light one
+/// (matching [_BoulderMarker.publicBase]) for public ones -- every marker on
+/// the map (own or community) is colored by that same rule, regardless of
+/// which `MarkerLayer`/tap-target it belongs to.
 class _MapLegend extends StatelessWidget {
   const _MapLegend({required this.colors});
 
@@ -1415,6 +1426,7 @@ class _MapLegend extends StatelessWidget {
     final textStyle = Theme.of(
       context,
     ).textTheme.labelSmall?.copyWith(color: colors.ink2);
+    final swatchBorder = colors.ink2.withValues(alpha: 0.35);
     return DecoratedBox(
       decoration: BoxDecoration(
         color: colors.surface.withValues(alpha: 0.85),
@@ -1428,15 +1440,16 @@ class _MapLegend extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _MapLegendRow(
-              swatchColor: colors.accent,
-              label: 'Yours',
+              swatchColor: _BoulderMarker.privateBase(colors),
+              swatchBorderColor: swatchBorder,
+              label: 'Private',
               textStyle: textStyle,
             ),
             const SizedBox(height: 4),
             _MapLegendRow(
-              swatchColor: colors.surface,
-              swatchBorderColor: colors.accent,
-              label: 'Community',
+              swatchColor: _BoulderMarker.publicBase(colors),
+              swatchBorderColor: swatchBorder,
+              label: 'Public',
               textStyle: textStyle,
             ),
           ],
@@ -1484,9 +1497,9 @@ class _MapLegendRow extends StatelessWidget {
 
 /// The Map tab's "you are here" marker: a small filled blue dot with a white
 /// ring (the familiar device-position convention), deliberately NOT styled
-/// like [_MapPinBadge] — a plain dot centered exactly on the coordinate
-/// (rather than a pin whose tip points at it) reads unambiguously as "this
-/// is where I am", distinct from every topo's pin.
+/// like [_BoulderMarker] — a plain dot centered exactly on the coordinate
+/// (rather than a shape whose base sits at it) reads unambiguously as "this
+/// is where I am", distinct from every topo's marker.
 class _MyLocationMarker extends StatelessWidget {
   const _MyLocationMarker();
 
@@ -1513,141 +1526,234 @@ class _MyLocationMarker extends StatelessWidget {
   }
 }
 
-/// The Map tab's per-topo marker: the app's raster logo in a small white
-/// circular badge — subtle shadow, thin accent-tinted ring — sitting atop a
-/// tiny downward-pointing triangle, so it reads as a map pin (tip anchored to
-/// the coordinate via the [Marker]'s `Alignment.topCenter`) rather than a
-/// generic dot, and stays legible against the light CartoDB Positron basemap.
-class _MapPinBadge extends StatelessWidget {
-  const _MapPinBadge({required this.accentColor});
+/// The Map tab's per-topo marker: a faceted purple boulder silhouette
+/// matching the app-icon mark (`assets/icon/masi_icon.png`, still used only
+/// as the launcher icon — see this class's replacement of [
+/// _MapPinBadge]/[_OwnMapPinBadge], the old logo-in-a-white-circle pins),
+/// with a white zig-zag "crack" down the middle. Used by BOTH the community
+/// and own `MarkerLayer`s in [_MapView.build] — the own-vs-community split
+/// still exists (separate layers/tap targets), it just no longer changes the
+/// marker's color. Instead, [isPublic] alone drives the fill: a lighter
+/// lilac boulder for public/shared topos, a darker deep-purple one for
+/// private topos, so a topo's visibility reads directly off the map without
+/// needing the legend (see [_MapLegend], which explains the convention).
+class _BoulderMarker extends StatelessWidget {
+  const _BoulderMarker({required this.isPublic, required this.colors});
 
-  final Color accentColor;
+  final bool isPublic;
+  final MasiColors colors;
 
-  static const double _badgeSize = 34;
-  static const double _pointerSize = 8;
+  /// Total height of the enclosing [Marker] box. Unlike the old
+  /// [_MapPinBadge]/[_OwnMapPinBadge] this replaces, this widget's own
+  /// drawn content (see [_boulderSize]) is deliberately SMALLER than this —
+  /// [MarkerLayer] wraps every marker's child in a `Positioned(width:,
+  /// height:)` inside a `Stack`, which gives it TIGHT constraints of
+  /// exactly (`width`, `height`) regardless of the child's own size (see
+  /// flutter_map's `marker_layer.dart`), so this constant only has to match
+  /// the call sites' `Marker.height` for box-height tests to keep passing —
+  /// the boulder itself is bottom-anchored inside that box (see [build]),
+  /// which is what keeps its visual base sitting on the actual coordinate
+  /// per `Alignment.topCenter`'s "anchors the box's bottom edge" semantics.
+  static const double totalHeight = 40;
 
-  /// Total rendered height of the badge + downward pointer, with zero
-  /// vertical slack. The enclosing [Marker]'s `height` MUST equal this
-  /// exactly: flutter_map's `Marker.alignment` doc states that
-  /// [Alignment.topCenter] anchors the marker BOX's bottom edge to the
-  /// geographic point. If the box were any taller than this content, the
-  /// [Column] below (tight-constrained to the box's full height, so
-  /// `mainAxisSize.min` cannot shrink it) would pack its children at the
-  /// top and leave the extra space below the pointer — floating the
-  /// pointer's visual tip above the actual coordinate.
-  static const double totalHeight = _badgeSize + (_pointerSize - 2);
+  /// Size of the boulder silhouette actually drawn, in logical pixels — see
+  /// [_BoulderPainter]'s silhouette/crack points, which are normalized
+  /// (0..1) fractions of this box.
+  static const Size _boulderSize = Size(34, 38);
+
+  /// Base fill for a PUBLIC (shared/community-visible) topo: [colors.accent]
+  /// lightened towards white — a light lilac. Shared with [_MapLegend] so
+  /// the legend swatch always matches the marker exactly.
+  static Color publicBase(MasiColors colors) =>
+      Color.lerp(colors.accent, Colors.white, 0.42)!;
+
+  /// Base fill for a PRIVATE topo: [colors.accent] darkened towards black —
+  /// a deep purple. Shared with [_MapLegend] so the legend swatch always
+  /// matches the marker exactly.
+  static Color privateBase(MasiColors colors) =>
+      Color.lerp(colors.accent, Colors.black, 0.34)!;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: _badgeSize,
-          height: _badgeSize,
-          padding: const EdgeInsets.all(3),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            shape: BoxShape.circle,
-            border: Border.all(color: accentColor, width: 1.5),
-            boxShadow: const [
-              BoxShadow(
-                color: Colors.black26,
-                blurRadius: 4,
-                offset: Offset(0, 2),
-              ),
-            ],
-          ),
-          child: ClipOval(
-            child: Image.asset(
-              'assets/icon/masi_icon.png',
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) => Icon(
-                Icons.place,
-                size: _badgeSize - 8,
-                color: accentColor,
-              ),
-            ),
-          ),
+    final base = isPublic ? publicBase(colors) : privateBase(colors);
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: CustomPaint(
+        size: _boulderSize,
+        painter: _BoulderPainter(
+          base: base,
+          // Lighter top-left facet and darker right facet, both derived
+          // from `base`, give the flat silhouette a faceted, 3D read like
+          // the app-icon mark.
+          topFacet: Color.lerp(base, Colors.white, 0.22)!,
+          rightFacet: Color.lerp(base, Colors.black, 0.20)!,
+          // The CartoDB basemap underneath is ALWAYS the light "Positron"
+          // style, regardless of the app's own theme -- so a public boulder
+          // in DARK app theme (a pale lilac `base`, lerped 42% towards
+          // white) needs a darker-than-fill outline to stay legible against
+          // that near-white map; a private boulder's already-dark `base`
+          // gets the same treatment for a consistent, always-visible edge.
+          outline: Color.lerp(base, Colors.black, 0.40)!,
+          // Matches the crack to whichever end of the contrast range `base`
+          // sits at, rather than always white: a light/public `base` gets a
+          // dark crack (white on pale lilac was near-invisible against the
+          // light map), a dark/private `base` keeps the original white.
+          crackColor: base.computeLuminance() > 0.5
+              ? Color.lerp(base, Colors.black, 0.40)!
+              : Colors.white,
         ),
-        CustomPaint(
-          size: const Size(_pointerSize, _pointerSize - 2),
-          painter: _PinPointerPainter(accentColor),
-        ),
-      ],
+      ),
     );
   }
 }
 
-/// The Map tab's per-OWN-topo marker: an accent-FILLED circular badge
-/// (rather than [_MapPinBadge]'s neutral white-with-accent-ring), so the
-/// signed-in user's own located topos read as visually distinct from
-/// everyone else's shared ones at a glance — same silhouette/pointer/total
-/// height as [_MapPinBadge] (see [_MapPinBadge.totalHeight], reused
-/// unchanged by both marker layers) so the two families sit at a consistent
-/// size on the map, differing only in color/fill.
-class _OwnMapPinBadge extends StatelessWidget {
-  const _OwnMapPinBadge({required this.accentColor});
+/// Paints [_BoulderMarker]'s faceted boulder: a filled silhouette stroked
+/// with a darker [outline] (so its edge stays defined against the always-
+/// light CartoDB basemap regardless of app theme -- see that field's doc), a
+/// lighter top-left facet and darker right facet overlaid on top (clipped to
+/// the silhouette) for a faceted 3D look, a contrast-adaptive [crackColor]
+/// zig-zag stroked down the middle, and a soft shadow ellipse under the
+/// base. All points below are normalized (0..1) fractions of the painted
+/// [Size], x right / y down, kept as named consts so the
+/// silhouette/crack/facets are easy to retune independently of each other.
+class _BoulderPainter extends CustomPainter {
+  const _BoulderPainter({
+    required this.base,
+    required this.topFacet,
+    required this.rightFacet,
+    required this.outline,
+    required this.crackColor,
+  });
 
-  final Color accentColor;
+  final Color base;
+  final Color topFacet;
+  final Color rightFacet;
 
-  static const double _badgeSize = _MapPinBadge._badgeSize;
-  static const double _pointerSize = _MapPinBadge._pointerSize;
+  /// Silhouette edge stroke, darker than [base] -- see [_BoulderMarker.build]
+  /// for why this exists: the CartoDB basemap is always the light Positron
+  /// style, so without a defined edge a pale (dark-theme, public) `base`
+  /// washes out against it.
+  final Color outline;
 
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          width: _badgeSize,
-          height: _badgeSize,
-          decoration: BoxDecoration(
-            color: accentColor,
-            shape: BoxShape.circle,
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: const [
-              BoxShadow(
-                color: Colors.black26,
-                blurRadius: 4,
-                offset: Offset(0, 2),
-              ),
-            ],
-          ),
-          child: Icon(
-            Icons.person_pin_circle,
-            size: _badgeSize - 8,
-            color: Colors.white,
-          ),
-        ),
-        CustomPaint(
-          size: const Size(_pointerSize, _pointerSize - 2),
-          painter: _PinPointerPainter(accentColor),
-        ),
-      ],
-    );
+  /// The crack's stroke color, contrast-adapted to [base] -- see
+  /// [_BoulderMarker.build]. Always white before this fix, which was
+  /// invisible on a light/public `base` against the light basemap.
+  final Color crackColor;
+
+  // Silhouette outline, in walk order.
+  static const _peak = Offset(0.52, 0.16);
+  static const _upperLeft = Offset(0.30, 0.28);
+  static const _leftMid = Offset(0.15, 0.46);
+  static const _lowerLeft = Offset(0.14, 0.66);
+  static const _bottomLeft = Offset(0.26, 0.82);
+  static const _bottomRight = Offset(0.74, 0.82);
+  static const _rightLower = Offset(0.87, 0.66);
+  static const _rightUpper = Offset(0.90, 0.48);
+  static const _upperRight = Offset(0.71, 0.28);
+
+  static const _silhouette = [
+    _peak,
+    _upperLeft,
+    _leftMid,
+    _lowerLeft,
+    _bottomLeft,
+    _bottomRight,
+    _rightLower,
+    _rightUpper,
+    _upperRight,
+  ];
+
+  // The white crack, a simple zig-zag from the top ridge to the base.
+  static const _crackPoints = [
+    Offset(0.50, 0.24),
+    Offset(0.57, 0.42),
+    Offset(0.47, 0.55),
+    Offset(0.55, 0.70),
+    Offset(0.51, 0.81),
+  ];
+
+  static Offset _scale(Offset normalized, Size size) =>
+      Offset(normalized.dx * size.width, normalized.dy * size.height);
+
+  static Path _pathThrough(List<Offset> normalizedPoints, Size size) {
+    final scaled = normalizedPoints.map((o) => _scale(o, size)).toList();
+    return Path()..addPolygon(scaled, false);
   }
-}
-
-/// Paints the small downward triangle beneath [_MapPinBadge]'s circle,
-/// tinted to match the badge's accent ring so the whole marker reads as one
-/// cohesive pin shape.
-class _PinPointerPainter extends CustomPainter {
-  const _PinPointerPainter(this.color);
-
-  final Color color;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = Path()
-      ..moveTo(0, 0)
-      ..lineTo(size.width, 0)
-      ..lineTo(size.width / 2, size.height)
-      ..close();
-    canvas.drawPath(path, Paint()..color = color);
+    final silhouette = Path()..addPolygon(
+      _silhouette.map((o) => _scale(o, size)).toList(),
+      true,
+    );
+
+    // Soft shadow, a low ellipse just under the boulder's base.
+    canvas.drawOval(
+      Rect.fromCenter(
+        center: Offset(size.width * 0.52, size.height * 0.94),
+        width: size.width * 0.72,
+        height: size.height * 0.14,
+      ),
+      Paint()..color = Colors.black.withValues(alpha: 0.15),
+    );
+
+    // Base fill.
+    canvas.drawPath(silhouette, Paint()..color = base);
+
+    // Silhouette edge stroke -- see [outline]'s doc: without this, a pale
+    // (dark-theme, public) fill has no defined boundary against the
+    // always-light CartoDB basemap underneath.
+    canvas.drawPath(
+      silhouette,
+      Paint()
+        ..color = outline
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2
+        ..strokeJoin = StrokeJoin.round,
+    );
+
+    // Facets: clipped to the silhouette so they never spill past its edge.
+    canvas.save();
+    canvas.clipPath(silhouette);
+    final center = Offset(size.width * 0.5, size.height * 0.52);
+    canvas.drawPath(
+      Path()
+        ..moveTo(_scale(_peak, size).dx, _scale(_peak, size).dy)
+        ..lineTo(_scale(_upperLeft, size).dx, _scale(_upperLeft, size).dy)
+        ..lineTo(_scale(_leftMid, size).dx, _scale(_leftMid, size).dy)
+        ..lineTo(center.dx, center.dy)
+        ..close(),
+      Paint()..color = topFacet,
+    );
+    canvas.drawPath(
+      Path()
+        ..moveTo(_scale(_upperRight, size).dx, _scale(_upperRight, size).dy)
+        ..lineTo(_scale(_rightUpper, size).dx, _scale(_rightUpper, size).dy)
+        ..lineTo(_scale(_rightLower, size).dx, _scale(_rightLower, size).dy)
+        ..lineTo(_scale(_bottomRight, size).dx, _scale(_bottomRight, size).dy)
+        ..lineTo(center.dx, center.dy)
+        ..close(),
+      Paint()..color = rightFacet,
+    );
+    canvas.restore();
+
+    // Crack, contrast-adapted to `base` -- see [crackColor]'s doc.
+    canvas.drawPath(
+      _pathThrough(_crackPoints, size),
+      Paint()
+        ..color = crackColor
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..strokeJoin = StrokeJoin.round
+        ..strokeCap = StrokeCap.round,
+    );
   }
 
   @override
-  bool shouldRepaint(covariant _PinPointerPainter oldDelegate) =>
-      oldDelegate.color != color;
+  bool shouldRepaint(covariant _BoulderPainter oldDelegate) =>
+      oldDelegate.base != base ||
+      oldDelegate.topFacet != topFacet ||
+      oldDelegate.rightFacet != rightFacet ||
+      oldDelegate.outline != outline ||
+      oldDelegate.crackColor != crackColor;
 }

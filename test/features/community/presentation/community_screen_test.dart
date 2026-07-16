@@ -394,6 +394,33 @@ Future<void> _seedFilterScenario(AppDatabase db) async {
   );
 }
 
+/// Matches the `_BoulderMarker` (`community_screen.dart`) rendered as the
+/// child of the map marker keyed [markerKey]. `_BoulderMarker` is a private
+/// widget, so it can't be named via `find.byType` from this file's library
+/// -- matching on `runtimeType.toString()` is the only way to find it from
+/// outside its declaring library. Replaces the old `markerLogoFinder`,
+/// which asserted an `Image.asset('assets/icon/masi_icon.png')` — the
+/// logo-in-a-white-circle look the boulder marker replaced.
+Finder _boulderMarkerFinder(Key markerKey) => find.descendant(
+  of: find.byKey(markerKey),
+  matching: find.byWidgetPredicate(
+    (widget) => widget.runtimeType.toString() == '_BoulderMarker',
+  ),
+);
+
+/// Reads the `isPublic` flag off the `_BoulderMarker` found by
+/// [_boulderMarkerFinder]. Read through `dynamic` rather than a static
+/// `_BoulderMarker` type -- Dart's library-privacy means `_BoulderMarker`
+/// (declared in `community_screen.dart`) can't be named as a type from this
+/// file's library at all, but a PUBLICLY-named member (`isPublic`, no
+/// leading underscore) on an instance obtained dynamically is still
+/// reachable regardless of which library declared or is naming the
+/// instance's class.
+bool _boulderMarkerIsPublic(WidgetTester tester, Key markerKey) {
+  final widget = tester.widget(_boulderMarkerFinder(markerKey));
+  return (widget as dynamic).isPublic as bool;
+}
+
 /// Matches the top-level `Material`/`InkWell` feed row for a shared topo
 /// (`community-topo-row-<wallId>`), excluding the `-likes`/`-comments` text
 /// keys nested inside it — used to count "exactly N rows" (D2a).
@@ -839,8 +866,8 @@ void main() {
       );
 
       testWidgets(
-        'M5: community-map-legend is shown, distinguishing Yours from '
-        'Community',
+        'M5: community-map-legend is shown, distinguishing Private from '
+        'Public',
         (tester) async {
           final container = _makeContainer();
           final db = container.read(appDatabaseProvider);
@@ -865,14 +892,14 @@ void main() {
           expect(
             find.descendant(
               of: legendFinder,
-              matching: find.textContaining('Yours'),
+              matching: find.textContaining('Private'),
             ),
             findsOneWidget,
           );
           expect(
             find.descendant(
               of: legendFinder,
-              matching: find.textContaining('Community'),
+              matching: find.textContaining('Public'),
             ),
             findsOneWidget,
           );
@@ -1400,11 +1427,11 @@ void main() {
     );
 
     testWidgets(
-      'marker box has no vertical slack: the box height equals the badge '
-      '+ pointer content height (34 + 6 = 40px) exactly, so '
+      'marker box has no vertical slack: the box height equals '
+      '_BoulderMarker.totalHeight (40px) exactly, so '
       "Alignment.topCenter's bottom-edge anchor (per flutter_map's "
-      'Marker.alignment doc) lands the pointer tip precisely on the '
-      'coordinate rather than floating above it',
+      'Marker.alignment doc) keeps the bottom-anchored boulder marker '
+      "sitting precisely on the coordinate rather than floating above it",
       (tester) async {
         final container = _makeContainer();
         final db = container.read(appDatabaseProvider);
@@ -1430,20 +1457,9 @@ void main() {
       },
     );
 
-    Finder markerLogoFinder(String wallId) => find.descendant(
-      of: find.byKey(Key('community-map-marker-$wallId')),
-      matching: find.byWidgetPredicate((widget) {
-        if (widget is Image && widget.image is AssetImage) {
-          return (widget.image as AssetImage).assetName ==
-              'assets/icon/masi_icon.png';
-        }
-        return false;
-      }),
-    );
-
     testWidgets(
-      'each topo marker renders the app-logo badge (an Image.asset of '
-      'masi_icon.png) rather than the old pin icon, keeping its stable key',
+      'each topo marker renders the faceted boulder marker (replacing the '
+      'old app-logo-in-a-white-circle pin), keeping its stable key',
       (tester) async {
         final container = _makeContainer();
         final db = container.read(appDatabaseProvider);
@@ -1465,7 +1481,110 @@ void main() {
           find.byKey(const Key('community-map-marker-wall-shared-1')),
           findsOneWidget,
         );
-        expect(markerLogoFinder('wall-shared-1'), findsOneWidget);
+        expect(
+          _boulderMarkerFinder(
+            const Key('community-map-marker-wall-shared-1'),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'boulder marker tint encodes visibility: an own PRIVATE topo renders '
+      'isPublic == false, while an own PUBLIC (shared) topo and a '
+      'community topo both render isPublic == true',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            authStateProvider.overrideWith(
+              (ref) => Stream.value(
+                const AuthSessionState.signedIn('me@example.com', uid: 'me'),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-tint', name: 'Area Tint');
+          await _seedSector(db, id: 'sector-tint', areaId: 'area-tint', name: 'S');
+          // Own, private: never shared, so it's not in the community feed
+          // at all -- must render the DARK (private) boulder.
+          await _seedWall(
+            db,
+            id: 'wall-own-private',
+            sectorId: 'sector-tint',
+            name: 'Own Private',
+            latitude: 45.0,
+            longitude: 7.0,
+            ownerId: 'me',
+          );
+          // Own, public (shared): renders exactly once, as the own marker
+          // (see M3) -- must render the LIGHT (public) boulder.
+          await _seedWall(
+            db,
+            id: 'wall-own-public',
+            sectorId: 'sector-tint',
+            name: 'Own Public',
+            visibility: 'shared',
+            latitude: 45.001,
+            longitude: 7.001,
+            ownerId: 'me',
+          );
+          // Community: someone else's shared topo -- always renders the
+          // LIGHT (public) boulder, per `CommunityRepository.watchSharedTopos`
+          // only ever surfacing `visibility == 'shared'` rows.
+          await _seedWall(
+            db,
+            id: 'wall-community',
+            sectorId: 'sector-tint',
+            name: 'Community Topo',
+            visibility: 'shared',
+            latitude: 45.002,
+            longitude: 7.002,
+            ownerId: _otherOwnerId,
+          );
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-map-toggle')));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+
+        expect(
+          _boulderMarkerIsPublic(
+            tester,
+            const Key('community-map-own-marker-wall-own-private'),
+          ),
+          isFalse,
+        );
+        expect(
+          _boulderMarkerIsPublic(
+            tester,
+            const Key('community-map-own-marker-wall-own-public'),
+          ),
+          isTrue,
+        );
+        expect(
+          _boulderMarkerIsPublic(
+            tester,
+            const Key('community-map-marker-wall-community'),
+          ),
+          isTrue,
+        );
       },
     );
 
