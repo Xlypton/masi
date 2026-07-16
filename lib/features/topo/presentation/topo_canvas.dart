@@ -1,14 +1,50 @@
 import 'dart:io';
+import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/route_hit_test.dart';
+import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
+
+/// Maps each [SymbolType] that has a dedicated masi brand glyph to its SVG
+/// asset name suffix (`assets/icons/masi/masi_<name>.svg`) — the SAME
+/// assets `MasiIcon`/the draw-mode `SymbolPaletteBar` render, so the
+/// on-photo marker matches the palette glyph exactly. [SymbolType.rest] has
+/// no entry: it keeps [TopoPainter]'s hand-drawn ringed-dot geometry (no
+/// brand glyph exists for it) — see [TopoPainter]'s "Symbol glyph mapping"
+/// doc.
+const Map<SymbolType, String> _symbolGlyphAssetNames = {
+  SymbolType.anchor: 'anchor',
+  SymbolType.bolt: 'bolt',
+  SymbolType.top: 'finish_flag',
+  SymbolType.crux: 'crux',
+};
+
+/// Preloads [_symbolGlyphAssetNames]'s glyphs as [ui.Picture]s ONCE (called
+/// from [_TopoCanvasState.initState], never from [TopoPainter.paint] —
+/// which runs every frame) via `flutter_svg`'s exported `vg`
+/// (`vector_graphics`) picture-decoding API — the same underlying decode
+/// `MasiIcon`'s `SvgPicture.asset` uses. Each glyph's [PictureInfo.picture]
+/// is recorded in the SVG's 24x24 viewBox space; [TopoPainter] scales it to
+/// match the existing marker's on-screen size at paint time.
+Future<Map<SymbolType, ui.Picture>> _loadSymbolPictures() async {
+  final pictures = <SymbolType, ui.Picture>{};
+  for (final entry in _symbolGlyphAssetNames.entries) {
+    final info = await vg.loadPicture(
+      SvgAssetLoader('assets/icons/masi/masi_${entry.value}.svg'),
+      null,
+    );
+    pictures[entry.key] = info.picture;
+  }
+  return pictures;
+}
 
 /// Logical-pixel radius (independent of zoom level) within which a tap or
 /// drag-start is considered to have hit an existing point handle rather than
@@ -352,6 +388,43 @@ class TopoCanvas extends ConsumerStatefulWidget {
 }
 
 class _TopoCanvasState extends ConsumerState<TopoCanvas> {
+  /// The masi brand glyphs (see [_symbolGlyphAssetNames]) preloaded ONCE via
+  /// [_loadSymbolPictures] in [initState] — never re-loaded on rebuild, and
+  /// never loaded inside [TopoPainter.paint] (which runs every frame) —
+  /// then handed to [TopoPainter] via its `symbolPictures` constructor
+  /// param. Starts empty so the very first frame(s), before the async SVG
+  /// decode completes, fall back to [TopoPainter]'s pre-existing hand-drawn
+  /// geometry (see that class's doc) rather than blocking on the load; once
+  /// loaded, [setState] swaps in the full map and triggers exactly one
+  /// repaint.
+  Map<SymbolType, ui.Picture> _symbolPictures = const {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSymbolPictures().then((pictures) {
+      if (!mounted) {
+        // Disposed before the load finished: dispose the just-decoded
+        // pictures instead of leaking them (see [ui.Picture.dispose]'s
+        // "caller's responsibility" contract) rather than assigning them to
+        // a field on a widget that's gone.
+        for (final picture in pictures.values) {
+          picture.dispose();
+        }
+        return;
+      }
+      setState(() => _symbolPictures = pictures);
+    });
+  }
+
+  @override
+  void dispose() {
+    for (final picture in _symbolPictures.values) {
+      picture.dispose();
+    }
+    super.dispose();
+  }
+
   /// Index into `DrawState.currentPoints` currently being dragged, or null
   /// if the user isn't mid-drag on an existing handle.
   int? _draggingIndex;
@@ -1044,6 +1117,12 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                       // routeColorResolver stays stable across rebuilds (see
                       // topoRouteColor's doc).
                       routeColorResolver: topoRouteColor,
+                      // The masi brand glyphs preloaded once in initState
+                      // (see [_symbolPictures]'s doc) — empty on the very
+                      // first frame(s), so TopoPainter falls back to its
+                      // hand-drawn geometry until the async SVG decode
+                      // completes.
+                      symbolPictures: _symbolPictures,
                     ),
                   ),
                 ),

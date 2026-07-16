@@ -83,15 +83,24 @@ const double _labelEdgeMargin = 6.0;
 ///
 /// ## Symbol glyph mapping
 ///
-/// Each [TopoSymbol] is rendered as a glyph distinct per [SymbolType], drawn
-/// with plain canvas primitives (no images/fonts):
+/// Each [TopoSymbol] is rendered as a glyph distinct per [SymbolType]. When
+/// [symbolPictures] has a loaded masi brand-glyph [Picture] for a type
+/// (see `TopoCanvas`'s `_loadSymbolPictures`, which preloads
+/// `assets/icons/masi/masi_<name>.svg` once, outside [paint]), that glyph is
+/// drawn instead — this is what makes the on-photo marker match the
+/// draw-mode symbol palette's own `MasiIcon`/`SvgPicture` rendering of the
+/// same glyph. [SymbolType.rest] never draws a glyph (there isn't a
+/// dedicated brand icon for it), and any type without a loaded entry in
+/// [symbolPictures] (e.g. before the async load completes) falls back to
+/// the historical hand-drawn geometry below, so a marker is never left
+/// blank:
 ///  - [SymbolType.anchor]: a filled circle.
 ///  - [SymbolType.bolt]: an "X" made of two crossed lines.
 ///  - [SymbolType.top]: a closed, filled/stroked triangle (3-point path).
 ///  - [SymbolType.crux]: a star/asterisk made of several crossing lines
 ///    (a "+" plus an "X", four spokes total).
 ///  - [SymbolType.rest]: a stroked circle outline with a small filled dot at
-///    its center.
+///    its center (always this geometry, never a glyph).
 class TopoPainter extends CustomPainter {
   const TopoPainter({
     required this.imageSize,
@@ -105,6 +114,7 @@ class TopoPainter extends CustomPainter {
     this.handleColor = _defaultHandleColor,
     this.routeColorResolver,
     this.scale = 1.0,
+    this.symbolPictures = const {},
   });
 
   /// The natural size of the underlying topo image, used to convert percent
@@ -167,6 +177,18 @@ class TopoPainter extends CustomPainter {
   /// (or [_fallbackRouteColor] if [palette] is empty), preserving this
   /// painter's pre-existing behavior.
   final Color Function(TopoRoute route)? routeColorResolver;
+
+  /// Preloaded masi brand glyphs (see the class doc's "Symbol glyph
+  /// mapping" section), keyed by [SymbolType], drawn via
+  /// [Canvas.drawPicture] in [_paintSymbol] instead of that method's
+  /// hand-drawn primitives for any type present here — EXCEPT
+  /// [SymbolType.rest], which always keeps its hand-drawn geometry even if
+  /// a caller supplied an entry for it. Defaults to empty so every
+  /// pre-existing caller/test that constructs a [TopoPainter] directly
+  /// (never passing this) keeps rendering the historical hand-drawn
+  /// geometry unchanged, and so does any type whose glyph hasn't finished
+  /// loading yet.
+  final Map<SymbolType, Picture> symbolPictures;
 
   /// [scale] clamped to a small positive floor so dividing by it never
   /// produces a divide-by-zero (`double.infinity`) or a non-positive
@@ -364,6 +386,19 @@ class TopoPainter extends CustomPainter {
     // regardless of the live fit/zoom scale.
     final radius = _symbolRadius / _safeScale;
 
+    // Prefer the preloaded masi brand glyph for this type, if one has
+    // loaded — EXCEPT for SymbolType.rest, which has no dedicated brand
+    // icon and always keeps its hand-drawn geometry in the switch below
+    // regardless of what symbolPictures contains for it (defensive: this
+    // guarantees rest's geometry even if a caller ever mis-populated that
+    // entry). Any other type without a loaded picture yet falls through to
+    // the same switch, so a marker is never left blank while loading.
+    final picture = type == SymbolType.rest ? null : symbolPictures[type];
+    if (picture != null) {
+      _paintSymbolPicture(canvas, center, picture, color, radius);
+      return;
+    }
+
     switch (type) {
       case SymbolType.anchor:
         // Filled circle.
@@ -420,6 +455,46 @@ class TopoPainter extends CustomPainter {
         canvas.drawCircle(center, radius / 3, fillPaint);
         break;
     }
+  }
+
+  /// Draws a preloaded masi brand-glyph [picture] (a [Picture] recorded in
+  /// the glyph SVG's 24x24 viewBox space — see `TopoCanvas`'s
+  /// `_loadSymbolPictures`) centered at [center], tinted to [color], and
+  /// sized so its on-screen diameter matches [radius]'s `2 * radius` — the
+  /// SAME on-screen footprint the hand-drawn geometry in [_paintSymbol]'s
+  /// switch uses for this marker (e.g. the old filled-circle anchor's
+  /// diameter), so swapping in the brand glyph doesn't change how big the
+  /// marker reads on screen.
+  ///
+  /// Tinting uses a `saveLayer` + `BlendMode.srcIn` [ColorFilter] — the same
+  /// technique `MasiIcon`/`SvgPicture`'s own `colorFilter` uses — because
+  /// the glyph SVGs are drawn in `currentColor` plus fill-opacity facet
+  /// layers: `srcIn` replaces every drawn pixel's RGB with [color] while
+  /// preserving each pixel's own alpha, so the facet shading survives as
+  /// varying opacity of the SAME tint color rather than being flattened to
+  /// a single flat blob.
+  void _paintSymbolPicture(
+    Canvas canvas,
+    Offset center,
+    Picture picture,
+    Color color,
+    double radius,
+  ) {
+    final target = 2 * radius;
+    final k = target / 24.0; // The glyph SVGs use a 24x24 viewBox.
+    canvas.save();
+    canvas.translate(center.dx, center.dy);
+    canvas.scale(k);
+    canvas.saveLayer(
+      const Rect.fromLTWH(-12, -12, 24, 24),
+      Paint()..colorFilter = ColorFilter.mode(color, BlendMode.srcIn),
+    );
+    // Shift so the glyph's 0..24 viewBox is centered on `center` (already
+    // the local origin after the translate above).
+    canvas.translate(-12, -12);
+    canvas.drawPicture(picture);
+    canvas.restore(); // saveLayer
+    canvas.restore(); // translate+scale
   }
 
   void _paintPolyline(
@@ -503,6 +578,8 @@ class TopoPainter extends CustomPainter {
         currentColor != oldDelegate.currentColor ||
         handleColor != oldDelegate.handleColor ||
         routeColorResolver != oldDelegate.routeColorResolver ||
+        !identical(symbolPictures, oldDelegate.symbolPictures) ||
+        symbolPictures.length != oldDelegate.symbolPictures.length ||
         !_pointsEqual(currentPoints, oldDelegate.currentPoints) ||
         !listEquals(currentSymbols, oldDelegate.currentSymbols) ||
         !listEquals(palette, oldDelegate.palette) ||

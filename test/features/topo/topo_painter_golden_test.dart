@@ -27,11 +27,43 @@ class _RecordingCanvas implements Canvas {
   final List<({ui.Paragraph paragraph, Offset offset})> paragraphs = [];
   final List<RRect> roundRects = [];
   final List<Paint> roundRectPaints = [];
+  // Subtask D (masi glyph markers): records for the picture-drawing path
+  // (Canvas.save/translate/scale/saveLayer/drawPicture/restore), which the
+  // pre-existing hand-drawn-geometry tests above never exercise (their
+  // `symbolPictures` map is always empty) but the new symbolPictures tests
+  // below need to assert against directly.
+  final List<ui.Picture> drawnPictures = [];
+  final List<Paint> saveLayerPaints = [];
+  int saveCount = 0;
+  int restoreCount = 0;
 
   @override
   void drawRRect(RRect rrect, Paint paint) {
     roundRects.add(rrect);
     roundRectPaints.add(paint);
+  }
+
+  @override
+  void save() => saveCount++;
+
+  @override
+  void restore() => restoreCount++;
+
+  @override
+  void translate(double dx, double dy) {}
+
+  @override
+  void scale(double sx, [double? sy]) {}
+
+  @override
+  void saveLayer(Rect? bounds, Paint paint) {
+    saveLayerPaints.add(paint);
+    saveCount++;
+  }
+
+  @override
+  void drawPicture(ui.Picture picture) {
+    drawnPictures.add(picture);
   }
 
   @override
@@ -413,6 +445,241 @@ void main() {
         final canvas = _RecordingCanvas();
 
         expect(() => painter.paint(canvas, imageSize), returnsNormally);
+      },
+    );
+  });
+
+  group('TopoPainter symbolPictures (masi brand glyph markers, Subtask D)', () {
+    /// A trivial, cheaply-constructed [ui.Picture] standing in for a
+    /// decoded masi glyph SVG (`vg.loadPicture`'s real decode isn't
+    /// available/needed in a plain `test()` — the painter only cares that
+    /// it's handed A [ui.Picture] to draw, not what it contains).
+    ui.Picture dummyPicture() {
+      final recorder = ui.PictureRecorder();
+      final canvas = Canvas(recorder);
+      canvas.drawRect(
+        const Rect.fromLTWH(0, 0, 24, 24),
+        Paint()..color = const Color(0xFFFFFFFF),
+      );
+      return recorder.endRecording();
+    }
+
+    test(
+      'D2: a SymbolType with a loaded picture draws it via drawPicture, '
+      'wrapped in a saveLayer whose Paint carries a srcIn ColorFilter of '
+      "the route's resolved color, and skips the old hand-drawn geometry "
+      'for that type entirely',
+      () {
+        final pic = dummyPicture();
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: const [
+            TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.5)),
+          ],
+        );
+        final painter = TopoPainter(
+          imageSize: imageSize,
+          routes: [route],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          symbolPictures: {SymbolType.anchor: pic},
+        );
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, imageSize);
+
+        expect(canvas.drawnPictures, [pic]);
+        expect(canvas.saveLayerPaints, hasLength(1));
+        expect(
+          canvas.saveLayerPaints.single.colorFilter,
+          const ColorFilter.mode(Color(0xFF2E7D32), BlendMode.srcIn),
+        );
+        // The route itself is a 2-point polyline (drawLine, no circle), so
+        // NO circle means the old filled-circle anchor geometry was
+        // entirely skipped in favor of the picture path.
+        expect(canvas.circleCenters, isEmpty);
+      },
+    );
+
+    test(
+      'D3: SymbolType.rest ALWAYS keeps its ringed-dot geometry, even when '
+      'a caller (mis-)supplies a loaded picture for it',
+      () {
+        final pic = dummyPicture();
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: const [
+            TopoSymbol(type: SymbolType.rest, position: Offset(0.5, 0.5)),
+          ],
+        );
+        final painter = TopoPainter(
+          imageSize: imageSize,
+          routes: [route],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          symbolPictures: {SymbolType.rest: pic},
+        );
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, imageSize);
+
+        expect(canvas.drawnPictures, isEmpty);
+        expect(canvas.saveLayerPaints, isEmpty);
+        // Ringed-dot: an outline circle (stroke) plus a smaller filled
+        // center dot -- two circles.
+        expect(canvas.circleCenters, hasLength(2));
+      },
+    );
+
+    test(
+      'D4: a type with NO entry in symbolPictures (e.g. before the async '
+      'glyph load completes) falls back to the pre-existing hand-drawn '
+      'geometry -- never a blank marker',
+      () {
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: const [
+            TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.5)),
+          ],
+        );
+        final painter = TopoPainter(
+          imageSize: imageSize,
+          routes: [route],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          // symbolPictures deliberately omitted -> defaults to const {}.
+        );
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, imageSize);
+
+        expect(canvas.drawnPictures, isEmpty);
+        // The old filled-circle anchor geometry: exactly one circle (the
+        // 2-point route itself draws a line, not a circle).
+        expect(canvas.circleCenters, hasLength(1));
+      },
+    );
+
+    test(
+      'D5a: shouldRepaint returns true when symbolPictures changes from '
+      'empty to a loaded map (identity change), and false when the exact '
+      'same map instance is reused across two painters',
+      () {
+        final loaded = {SymbolType.anchor: dummyPicture()};
+
+        const withoutPictures = TopoPainter(
+          imageSize: imageSize,
+          routes: [],
+          currentPoints: [],
+          showHandles: false,
+          palette: palette,
+        );
+        final withPictures = TopoPainter(
+          imageSize: imageSize,
+          routes: const [],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          symbolPictures: loaded,
+        );
+
+        expect(withoutPictures.shouldRepaint(withPictures), isTrue);
+        expect(withPictures.shouldRepaint(withoutPictures), isTrue);
+
+        final samePictures = TopoPainter(
+          imageSize: imageSize,
+          routes: const [],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          symbolPictures: loaded,
+        );
+
+        expect(withPictures.shouldRepaint(samePictures), isFalse);
+      },
+    );
+
+    test(
+      'D5b: shouldRepaint returns true when symbolPictures grows (length '
+      'change) even if handed a length check would otherwise miss an '
+      'identity-only comparison',
+      () {
+        final onePicture = {SymbolType.anchor: dummyPicture()};
+        final twoPictures = {
+          SymbolType.anchor: dummyPicture(),
+          SymbolType.bolt: dummyPicture(),
+        };
+
+        final a = TopoPainter(
+          imageSize: imageSize,
+          routes: const [],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          symbolPictures: onePicture,
+        );
+        final b = TopoPainter(
+          imageSize: imageSize,
+          routes: const [],
+          currentPoints: const [],
+          showHandles: false,
+          palette: palette,
+          symbolPictures: twoPictures,
+        );
+
+        expect(a.shouldRepaint(b), isTrue);
+      },
+    );
+
+    test(
+      'D5c: all prior TopoPainter constructor params still work together '
+      'with symbolPictures supplied (no regressions to the existing '
+      'route/label/selection/handle rendering)',
+      () {
+        final pic = dummyPicture();
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [
+            Offset(0.1, 0.1),
+            Offset(0.4, 0.5),
+            Offset(0.9, 0.8),
+          ],
+          symbols: const [
+            TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
+            TopoSymbol(type: SymbolType.rest, position: Offset(0.9, 0.8)),
+          ],
+        );
+        final painter = TopoPainter(
+          imageSize: imageSize,
+          routes: [route],
+          currentPoints: const [Offset(0.2, 0.2)],
+          showHandles: true,
+          selectedRouteId: 1,
+          palette: palette,
+          currentColor: Colors.orange,
+          handleColor: Colors.blue,
+          scale: 0.5,
+          symbolPictures: {SymbolType.anchor: pic},
+        );
+        final canvas = ui.PictureRecorder();
+        final realCanvas = Canvas(canvas);
+
+        expect(() => painter.paint(realCanvas, imageSize), returnsNormally);
+        expect(canvas.endRecording(), isNotNull);
       },
     );
   });
