@@ -1764,4 +1764,172 @@ void main() {
       },
     );
   });
+
+  group('D7: moveWall / moveSector re-parenting', () {
+    test(
+      'R1: moveWall re-parents into the destination sector, appends '
+      'sortOrder past the destination siblings, marks dirty with a bumped '
+      'updatedAt',
+      () async {
+        final area = await repo.createArea('Area');
+        final sourceSector = await repo.createSector(area.id, 'Source');
+        final destSector = await repo.createSector(area.id, 'Dest');
+        final wall = await repo.createWall(sourceSector.id, 'Wall');
+        // Pre-existing walls in dest sector so "append at end" is meaningful.
+        await repo.createWall(destSector.id, 'Dest Wall 0');
+        final destWall1 = await repo.createWall(destSector.id, 'Dest Wall 1');
+
+        final moveRepo = LibraryCrudRepository(db, nowMs: () => 2000);
+        await moveRepo.moveWall(wall.id, destSector.id);
+
+        final row = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wall.id))).getSingle();
+        expect(row.sectorId, destSector.id);
+        expect(row.dirty, isTrue);
+        expect(row.updatedAt, 2000);
+        expect(row.sortOrder, greaterThan(destWall1.sortOrder));
+      },
+    );
+
+    test(
+      'R2: moveWall leaves a sibling left behind in the source sector AND '
+      'a pre-existing wall in the destination sector untouched',
+      () async {
+        final area = await repo.createArea('Area');
+        final sourceSector = await repo.createSector(area.id, 'Source');
+        final destSector = await repo.createSector(area.id, 'Dest');
+        final wall = await repo.createWall(sourceSector.id, 'Wall');
+        final sibling = await repo.createWall(sourceSector.id, 'Sibling');
+        final destWall = await repo.createWall(destSector.id, 'Dest Wall');
+
+        await repo.moveWall(wall.id, destSector.id);
+
+        final siblingRow = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(sibling.id))).getSingle();
+        expect(siblingRow.sectorId, sourceSector.id);
+        expect(siblingRow.sortOrder, sibling.sortOrder);
+        expect(siblingRow.dirty, isFalse);
+        expect(siblingRow.updatedAt, 1000);
+
+        final destWallRow = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(destWall.id))).getSingle();
+        expect(destWallRow.sectorId, destSector.id);
+        expect(destWallRow.sortOrder, destWall.sortOrder);
+        expect(destWallRow.dirty, isFalse);
+        expect(destWallRow.updatedAt, 1000);
+      },
+    );
+
+    test(
+      'R3: moveWall to a nonexistent sector throws (FK enforcement)',
+      () async {
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final wall = await repo.createWall(sector.id, 'Wall');
+
+        await expectLater(
+          repo.moveWall(wall.id, 'nonexistent-sector'),
+          throwsA(anything),
+        );
+      },
+    );
+
+    test(
+      'R4: moveSector re-parents into the destination area, appends '
+      'sortOrder past the destination siblings, marks dirty with a bumped '
+      'updatedAt; siblings/nonexistent-area behave the same as moveWall',
+      () async {
+        final sourceArea = await repo.createArea('Source Area');
+        final destArea = await repo.createArea('Dest Area');
+        final sector = await repo.createSector(sourceArea.id, 'Sector');
+        final sourceSibling = await repo.createSector(
+          sourceArea.id,
+          'Source Sibling',
+        );
+        await repo.createSector(destArea.id, 'Dest Sector 0');
+        final destSector1 = await repo.createSector(
+          destArea.id,
+          'Dest Sector 1',
+        );
+
+        final moveRepo = LibraryCrudRepository(db, nowMs: () => 2000);
+        await moveRepo.moveSector(sector.id, destArea.id);
+
+        final row = await (db.select(
+          db.sectors,
+        )..where((t) => t.id.equals(sector.id))).getSingle();
+        expect(row.areaId, destArea.id);
+        expect(row.dirty, isTrue);
+        expect(row.updatedAt, 2000);
+        expect(row.sortOrder, greaterThan(destSector1.sortOrder));
+
+        final siblingRow = await (db.select(
+          db.sectors,
+        )..where((t) => t.id.equals(sourceSibling.id))).getSingle();
+        expect(siblingRow.areaId, sourceArea.id);
+        expect(siblingRow.sortOrder, sourceSibling.sortOrder);
+        expect(siblingRow.dirty, isFalse);
+        expect(siblingRow.updatedAt, 1000);
+
+        final destSector1Row = await (db.select(
+          db.sectors,
+        )..where((t) => t.id.equals(destSector1.id))).getSingle();
+        expect(destSector1Row.areaId, destArea.id);
+        expect(destSector1Row.sortOrder, destSector1.sortOrder);
+        expect(destSector1Row.dirty, isFalse);
+        expect(destSector1Row.updatedAt, 1000);
+
+        await expectLater(
+          repo.moveSector(sector.id, 'nonexistent-area'),
+          throwsA(anything),
+        );
+      },
+    );
+
+    test(
+      'R5a: moving a soft-deleted wall is a no-op (guard excludes it)',
+      () async {
+        final area = await repo.createArea('Area');
+        final sourceSector = await repo.createSector(area.id, 'Source');
+        final destSector = await repo.createSector(area.id, 'Dest');
+        final wall = await repo.createWall(sourceSector.id, 'Wall');
+        await repo.softDeleteWall(wall.id);
+
+        await repo.moveWall(wall.id, destSector.id);
+
+        final row = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wall.id))).getSingle();
+        expect(row.sectorId, sourceSector.id);
+        expect(row.sortOrder, wall.sortOrder);
+        expect(row.dirty, isFalse);
+        expect(row.updatedAt, 1000);
+        expect(row.deletedAt, isNotNull);
+      },
+    );
+
+    test(
+      'R5b: moving a soft-deleted sector is a no-op (guard excludes it)',
+      () async {
+        final sourceArea = await repo.createArea('Source Area');
+        final destArea = await repo.createArea('Dest Area');
+        final sector = await repo.createSector(sourceArea.id, 'Sector');
+        await repo.softDeleteSector(sector.id);
+
+        await repo.moveSector(sector.id, destArea.id);
+
+        final row = await (db.select(
+          db.sectors,
+        )..where((t) => t.id.equals(sector.id))).getSingle();
+        expect(row.areaId, sourceArea.id);
+        expect(row.sortOrder, sector.sortOrder);
+        expect(row.dirty, isFalse);
+        expect(row.updatedAt, 1000);
+        expect(row.deletedAt, isNotNull);
+      },
+    );
+  });
 }

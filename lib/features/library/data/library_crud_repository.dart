@@ -479,6 +479,78 @@ class LibraryCrudRepository {
     );
   }
 
+  /// Re-parents [wallId] to [newSectorId]: updates its `sectorId`,
+  /// recomputes `sortOrder` via [_nextSortOrder] scoped to [newSectorId] so
+  /// the wall appends at the end of the destination sector's siblings
+  /// (avoiding a collision with a destination sibling's existing
+  /// `sortOrder`), and marks the wall dirty with a bumped `updatedAt` — the
+  /// same wall-row update shape [setWallCoordinates]/[_setWallVisibility]
+  /// use. Guarded to non-deleted walls (`deletedAt.isNull()`), so calling
+  /// this on a soft-deleted wallId is a silent no-op. The sortOrder read and
+  /// the update run inside one [db.AppDatabase.transaction], mirroring
+  /// [createWall]/[createSector]'s append-at-end pattern.
+  ///
+  /// [newSectorId] must reference a live [db.Sector] row: `PRAGMA
+  /// foreign_keys = ON` (see `app_database.dart`) makes writing an
+  /// unknown/nonexistent sector id throw.
+  ///
+  /// The Wall-level half of the Area/Sector/Wall re-parenting pair added so
+  /// an existing topo can be moved to a different wall's sector; see
+  /// [moveSector] for the Sector-level half (moving a sector — and its whole
+  /// subtree of walls — to a different area).
+  Future<void> moveWall(String wallId, String newSectorId) {
+    return _db.transaction(() async {
+      final now = nowMs();
+      final sortOrder = await _nextSortOrder(
+        table: _db.walls,
+        sortOrderColumn: _db.walls.sortOrder,
+        scope: _db.walls.sectorId.equals(newSectorId),
+      );
+      await (_db.update(
+        _db.walls,
+      )..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())).write(
+        db.WallsCompanion(
+          sectorId: Value(newSectorId),
+          sortOrder: Value(sortOrder),
+          updatedAt: Value(now),
+          dirty: const Value(true),
+        ),
+      );
+    });
+  }
+
+  /// Re-parents [sectorId] to [newAreaId] — the Sector-level half of the
+  /// [moveWall] re-parenting pair. Same shape: recomputes `sortOrder` via
+  /// [_nextSortOrder] scoped to [newAreaId] (append at the end of the
+  /// destination area's siblings), marks the sector dirty with a bumped
+  /// `updatedAt`, is a no-op on a soft-deleted sectorId, runs in one
+  /// [db.AppDatabase.transaction], and relies on `PRAGMA foreign_keys = ON`
+  /// to throw if [newAreaId] doesn't reference a live [db.Area] row.
+  ///
+  /// Note this only moves the sector row itself — the walls underneath it
+  /// keep their existing `sectorId` and simply come along transitively
+  /// (their ancestor area changes, but their own row is untouched).
+  Future<void> moveSector(String sectorId, String newAreaId) {
+    return _db.transaction(() async {
+      final now = nowMs();
+      final sortOrder = await _nextSortOrder(
+        table: _db.sectors,
+        sortOrderColumn: _db.sectors.sortOrder,
+        scope: _db.sectors.areaId.equals(newAreaId),
+      );
+      await (_db.update(
+        _db.sectors,
+      )..where((t) => t.id.equals(sectorId) & t.deletedAt.isNull())).write(
+        db.SectorsCompanion(
+          areaId: Value(newAreaId),
+          sortOrder: Value(sortOrder),
+          updatedAt: Value(now),
+          dirty: const Value(true),
+        ),
+      );
+    });
+  }
+
   Future<void> _setWallVisibility(String wallId, String visibility) async {
     final now = nowMs();
     await (_db.update(
