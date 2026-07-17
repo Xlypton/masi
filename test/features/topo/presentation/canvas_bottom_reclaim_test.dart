@@ -20,6 +20,7 @@ import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/data/route_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
+import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/cupertino.dart';
@@ -489,19 +490,36 @@ void main() {
       // Selecting a route (needed so the AR/edit-metadata glyphs above are
       // both present, the worst case this test targets) also surfaces the
       // floating RouteLegend overlay — a SEPARATE widget from the top
-      // chrome this test exercises, with its own pre-existing overflow bug
-      // at extreme text scales (`_LegendHeader`'s and `_LegendChip`'s own
-      // Rows, confirmed via `git stash` to reproduce identically before
-      // this file's `_topRowIconStyle` fix — i.e. unrelated to it, and out
-      // of scope for this regression). Drained here rather than asserted
-      // away, so that pre-existing, separate bug doesn't spuriously fail
-      // THIS test — which proves its own claim about the top chrome
-      // directly below, via each trailing button's actual on-screen rect,
-      // not a blanket "zero exceptions anywhere on screen" check.
-      var pending = tester.takeException();
-      while (pending != null) {
-        pending = tester.takeException();
-      }
+      // chrome this test exercises. `_LegendHeader` and `_LegendChip` used
+      // to RenderFlex-overflow at extreme text scales (their route-count
+      // `Text` had no `Flexible`/ellipsis), which this test used to drain
+      // rather than assert away, so that pre-existing, separate bug didn't
+      // spuriously fail this test's real claim about the top chrome. Now
+      // that both widgets wrap their count `Text` in a `Flexible` with
+      // `overflow: TextOverflow.ellipsis` (see topo_canvas_screen.dart),
+      // the legend no longer overflows either, so this asserts zero
+      // exceptions outright instead of draining them.
+      expect(tester.takeException(), isNull);
+
+      // Direct proof the legend header itself fits the viewport at 3x (not
+      // just "no exception anywhere") — the expanded `_LegendHeader` form,
+      // since selecting a route above doesn't touch `legendExpandedProvider`
+      // and the screen starts in DrawMode.view (which defaults it expanded).
+      final legendRect = tester.getRect(
+        find.byKey(const Key('topo-route-legend-overlay')),
+      );
+      expect(
+        legendRect.right,
+        lessThanOrEqualTo(viewportSize.width),
+        reason:
+            'the expanded route-legend header (rect=$legendRect) must not '
+            'overflow the $viewportSize viewport at 3x text scale',
+      );
+      expect(
+        legendRect.left,
+        greaterThanOrEqualTo(0),
+        reason: 'topo-route-legend-overlay must not be laid out off-screen',
+      );
 
       // The real proof: every glyph in the top chrome row — the back
       // button plus all 6 trailing actions — is laid out entirely within
@@ -536,6 +554,87 @@ void main() {
               'viewport at 3x text scale',
         );
       }
+    },
+  );
+
+  testWidgets(
+    'collapsed route-legend chip (_LegendChip) does not overflow at 375px '
+    'width even at a 3x text scale — companion to the expanded-header '
+    'coverage above, since the chip is a structurally different Row '
+    '(mainAxisSize.min, no Spacer) that needed its own Flexible+ellipsis '
+    'fix on the route-count Text',
+    (tester) async {
+      const viewportSize = Size(375, 812);
+      tester.view.physicalSize = viewportSize;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final seeded = await seedWallWithPhotoAndRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: seeded.container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(3.0)),
+              child: child!,
+            ),
+            home: TopoCanvasScreen(
+              wallId: seeded.wallId,
+              debugInitialImageSize: const Size(1000, 2000),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        seeded.container.read(drawControllerProvider).mode,
+        DrawMode.view,
+      );
+
+      // The screen starts with the legend expanded (view mode's default —
+      // see LegendExpandedController.build()); force it into the collapsed
+      // `_LegendChip` form directly via the provider, the same seam
+      // legend_reset_on_remount_test.dart uses, rather than hunting for a
+      // tappable chevron.
+      seeded.container.read(legendExpandedProvider.notifier).toggle();
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('topo-route-legend-chip')),
+        findsOneWidget,
+        reason: 'legend must be in its collapsed chip form for this test',
+      );
+      expect(find.byKey(const Key('topo-route-legend-overlay')), findsNothing);
+
+      // No RenderFlex overflow (or any other exception) from the chip's
+      // route-count Text growing at 3x scale.
+      expect(tester.takeException(), isNull);
+
+      // Direct proof the chip itself fits the viewport at 3x, not just "no
+      // exception anywhere".
+      final chipRect = tester.getRect(
+        find.byKey(const Key('topo-route-legend-chip')),
+      );
+      expect(
+        chipRect.right,
+        lessThanOrEqualTo(viewportSize.width),
+        reason:
+            'the collapsed route-legend chip (rect=$chipRect) must not '
+            'overflow the $viewportSize viewport at 3x text scale',
+      );
+      expect(
+        chipRect.left,
+        greaterThanOrEqualTo(0),
+        reason: 'topo-route-legend-chip must not be laid out off-screen',
+      );
     },
   );
 }

@@ -2184,11 +2184,15 @@ class _LegendChip extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(
-              _routeCountLabel(routeCount),
-              style: Theme.of(
-                context,
-              ).textTheme.labelLarge?.copyWith(color: colors.ink),
+            Flexible(
+              child: Text(
+                _routeCountLabel(routeCount),
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: colors.ink),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
             ),
             const SizedBox(width: MasiSpacing.xs),
             MasiIcon('chevron_up', size: 18, color: colors.ink),
@@ -2238,11 +2242,15 @@ class _LegendHeader extends StatelessWidget {
             const SizedBox(height: MasiSpacing.xs),
             Row(
               children: [
-                Text(
-                  _routeCountLabel(routeCount),
-                  style: Theme.of(
-                    context,
-                  ).textTheme.labelLarge?.copyWith(color: colors.ink),
+                Flexible(
+                  child: Text(
+                    _routeCountLabel(routeCount),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: colors.ink),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
                 const Spacer(),
                 MasiIcon('chevron_down', size: 18, color: colors.ink),
