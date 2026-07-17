@@ -422,6 +422,31 @@ bool _boulderMarkerIsPublic(WidgetTester tester, Key markerKey) {
   return (widget as dynamic).isPublic as bool;
 }
 
+/// Matches the `MasiIcon('boulder_logo')` glyph rendered inside the
+/// `_BoulderMarker` found by [_boulderMarkerFinder] (C1b: the map marker no
+/// longer hand-paints a boulder via `CustomPaint` -- it renders the real
+/// `masi_boulder_logo` asset through the app's shared, PUBLIC `MasiIcon`
+/// widget, which -- unlike `_BoulderMarker` itself -- can be named directly).
+Finder _boulderLogoFinder(Key markerKey) => find.descendant(
+  of: _boulderMarkerFinder(markerKey),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is MasiIcon && widget.name == 'boulder_logo',
+  ),
+);
+
+/// Matches the `MasiIcon('comment')` glyph rendered inside a feed row's
+/// `-comments`-keyed cell (see `_FeedRow` in `community_screen.dart`) --
+/// C1d replaced the old `'\u{1F4AC} $count'` emoji-text with this icon next
+/// to a bare count, so a test can assert the glyph directly via `MasiIcon`
+/// (a public widget, unlike `_BoulderMarker`) rather than matching on emoji
+/// text.
+Finder _commentGlyphFinder(Key commentsKey) => find.descendant(
+  of: find.byKey(commentsKey),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is MasiIcon && widget.name == 'comment',
+  ),
+);
+
 /// Matches the top-level `Material`/`InkWell` feed row for a shared topo
 /// (`community-topo-row-<wallId>`), excluding the `-likes`/`-comments` text
 /// keys nested inside it — used to count "exactly N rows" (D2a).
@@ -547,13 +572,120 @@ void main() {
           findsOneWidget,
         );
         expect(find.text('♥ 2'), findsOneWidget);
-        expect(find.text('\u{1F4AC} 1'), findsOneWidget);
+        // C1d: the comment glyph is now a `MasiIcon('comment')` + a bare
+        // count (no more emoji text) -- scoped to each row's
+        // `-comments` key so the two rows' counts (1 vs 0) can't collide.
+        const shared1Comments = Key(
+          'community-topo-row-wall-shared-1-comments',
+        );
+        expect(_commentGlyphFinder(shared1Comments), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(shared1Comments),
+            matching: find.text('1'),
+          ),
+          findsOneWidget,
+        );
         // wall-shared-2 has 0 likes, 0 comments.
         expect(find.text('♥ 0'), findsOneWidget);
-        expect(find.text('\u{1F4AC} 0'), findsOneWidget);
+        const shared2Comments = Key(
+          'community-topo-row-wall-shared-2-comments',
+        );
+        expect(_commentGlyphFinder(shared2Comments), findsOneWidget);
+        expect(
+          find.descendant(
+            of: find.byKey(shared2Comments),
+            matching: find.text('0'),
+          ),
+          findsOneWidget,
+        );
       },
     );
   });
+
+  group(
+    'C1e: boulder-logo map marker + comment icon (masi_boulder_logo/'
+    'masi_comment SVG asset swap)',
+    () {
+      testWidgets(
+        'a shared topo with coordinates renders MasiIcon(\'boulder_logo\') '
+        'in its map marker, and its feed row (commentCount > 0) renders '
+        'MasiIcon(\'comment\') next to the count instead of the old emoji',
+        (tester) async {
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          // `_seedStandardScenario` gives wall-shared-1 coordinates (45.0,
+          // 7.0) AND one seeded comment (commentCount == 1) -- exactly the
+          // "coords + commentCount > 0" fixture C1e asks for, with no new
+          // seeding helper needed.
+          await tester.runAsync(() => _seedStandardScenario(db));
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          // Default tab is Map -- wall-shared-1 has coordinates, so it
+          // renders a marker whose glyph is the real `boulder_logo` SVG
+          // asset via `MasiIcon`, not the old hand-painted `CustomPaint`.
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byKey(const Key('community-map-marker-wall-shared-1')),
+            findsOneWidget,
+          );
+          expect(
+            _boulderLogoFinder(
+              const Key('community-map-marker-wall-shared-1'),
+            ),
+            findsOneWidget,
+          );
+          // The logo is full-color/multi-tone (see `_BoulderMarker`'s doc in
+          // `community_screen.dart`), so it must render UN-TINTED --
+          // `MasiIcon('boulder_logo', tinted: false)` -- rather than
+          // flattened to one color via `MasiIcon`'s default `srcIn` filter.
+          expect(
+            (tester.widget(
+                  _boulderLogoFinder(
+                    const Key('community-map-marker-wall-shared-1'),
+                  ),
+                )
+                as MasiIcon)
+                .tinted,
+            isFalse,
+          );
+
+          // Switch to Feed -- wall-shared-1's row shows the comment glyph
+          // (MasiIcon) + bare count, replacing the old
+          // `'\u{1F4AC} $count'` emoji text.
+          await tester.tap(find.byKey(const Key('community-feed-toggle')));
+          await _drain(tester);
+
+          expect(
+            find.byKey(const Key('community-topo-row-wall-shared-1')),
+            findsOneWidget,
+          );
+          expect(
+            _commentGlyphFinder(
+              const Key('community-topo-row-wall-shared-1-comments'),
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.descendant(
+              of: find.byKey(
+                const Key('community-topo-row-wall-shared-1-comments'),
+              ),
+              matching: find.text('1'),
+            ),
+            findsOneWidget,
+          );
+        },
+      );
+    },
+  );
 
   group('D2b: search filters feed rows by name', () {
     testWidgets(
