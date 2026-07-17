@@ -52,10 +52,19 @@ const Map<SymbolType, String> _symbolLabels = {
   SymbolType.rest: 'Rest',
 };
 
-/// A row of one control per [SymbolType]. Tapping a control makes it the
-/// [DrawState.activeSymbol] (see [DrawController.setActiveSymbol]) so the
-/// next tap on the topo canvas places that symbol on the currently selected
-/// route; tapping the already-active control clears the active symbol.
+/// A row with a leading "Route" tool (keyed `symbol-tool-route`) followed by
+/// one control per [SymbolType]. The Route tool represents the route-LINE
+/// draw action -- [DrawState.activeSymbol] == null -- rather than a new
+/// [SymbolType] member (there's deliberately no such member: adding one
+/// would ripple into [TopoPainter]/`topo_route.dart`'s symbol-rendering
+/// switches for a tool that isn't a placeable symbol at all). It renders
+/// SELECTED whenever `activeSymbol == null`, which is also [DrawState]'s
+/// default, so a topo freshly switched into draw mode shows Route selected
+/// with no explicit wiring needed. Tapping a [SymbolType] control makes it
+/// the active symbol (see [DrawController.setActiveSymbol]) and visibly
+/// deselects Route; tapping the already-active control clears it (falling
+/// back to Route); tapping Route itself calls `setActiveSymbol(null)`
+/// directly and re-selects it. Exactly one control is ever selected.
 ///
 /// Bug fix ("the symbol palette buttons are unlabeled and users can't tell
 /// what they do"): each control is now icon-over-TEXT-LABEL (in addition to
@@ -92,10 +101,30 @@ class SymbolPaletteBar extends ConsumerWidget {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
           children: [
+            // The Route tool is FIRST, ahead of every SymbolType control —
+            // see the class doc. It has no `SymbolType` of its own, so
+            // unlike the loop below it calls `setActiveSymbol(null)`
+            // directly on tap (rather than toggling against a `type`) and
+            // is marked active by the absence of any active symbol.
+            Expanded(
+              child: _SymbolButton(
+                buttonKey: const Key('symbol-tool-route'),
+                iconBuilder: (color, size) =>
+                    MasiIcon('route', color: color, size: size),
+                label: 'Route',
+                isActive: activeSymbol == null,
+                colorScheme: colorScheme,
+                labelColor: colors.ink2,
+                onTap: () => notifier.setActiveSymbol(null),
+              ),
+            ),
             for (final type in SymbolType.values)
               Expanded(
                 child: _SymbolButton(
-                  type: type,
+                  buttonKey: Key('topo-symbol-${type.name}'),
+                  iconBuilder: (color, size) =>
+                      _symbolIconWidget(type, color: color, size: size),
+                  label: _symbolLabels[type] ?? '',
                   isActive: activeSymbol == type,
                   colorScheme: colorScheme,
                   labelColor: colors.ink2,
@@ -111,16 +140,29 @@ class SymbolPaletteBar extends ConsumerWidget {
   }
 }
 
+/// Shared button shell for both the Route tool and every [SymbolType]
+/// control — generalized (rather than keyed strictly off a `SymbolType`) so
+/// the Route tool can render through the exact same selected/unselected
+/// visuals without needing a `SymbolType` member of its own.
 class _SymbolButton extends StatelessWidget {
   const _SymbolButton({
-    required this.type,
+    required this.buttonKey,
+    required this.iconBuilder,
+    required this.label,
     required this.isActive,
     required this.colorScheme,
     required this.labelColor,
     required this.onTap,
   });
 
-  final SymbolType type;
+  /// Key applied to the tappable [Material] region, e.g.
+  /// `Key('topo-symbol-${type.name}')` or `Key('symbol-tool-route')`.
+  final Key buttonKey;
+
+  /// Builds this button's glyph given its resolved active/inactive [color]
+  /// and icon [size].
+  final Widget Function(Color color, double size) iconBuilder;
+  final String label;
   final bool isActive;
   final ColorScheme colorScheme;
   final Color labelColor;
@@ -130,9 +172,9 @@ class _SymbolButton extends StatelessWidget {
   Widget build(BuildContext context) {
     final activeColor = isActive ? colorScheme.primary : colorScheme.onSurfaceVariant;
     return Tooltip(
-      message: _symbolLabels[type] ?? '',
+      message: label,
       child: Material(
-        key: Key('topo-symbol-${type.name}'),
+        key: buttonKey,
         type: MaterialType.transparency,
         child: InkWell(
           onTap: onTap,
@@ -162,14 +204,14 @@ class _SymbolButton extends StatelessWidget {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _symbolIconWidget(type, color: activeColor, size: 22),
+                  iconBuilder(activeColor, 22),
                   const SizedBox(height: 2),
                   // Caption/Footnote-sized label per DESIGN.md's type scale —
                   // this is the main "unlabeled symbols" fix: a short,
                   // always-visible name under each glyph rather than relying
                   // solely on the (easy-to-miss, long-press-only) Tooltip.
                   Text(
-                    _symbolLabels[type] ?? '',
+                    label,
                     style: Theme.of(context).textTheme.labelMedium?.copyWith(
                       color: isActive ? colorScheme.primary : labelColor,
                       fontSize: 11,

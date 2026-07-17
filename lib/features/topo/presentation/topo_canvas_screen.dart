@@ -1549,12 +1549,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       actions.add(
         IconButton(
           key: const Key('topo-mode-toggle'),
+          // Bug fix ("topo opens showing an eye, reads as read-only"): the
+          // glyph is the AFFORDANCE for what tapping it does, not a mirror
+          // of the current mode — in view mode (the mode every topo opens
+          // in) it shows the edit/pencil glyph ("tap to edit"), and in draw
+          // mode it shows the eye glyph ("tap to preview"). This is the
+          // deliberate INVERSE of the naive `mode == draw ? edit : eye`
+          // reading.
           icon: drawState.mode == DrawMode.draw
-              ? MasiIcon('edit')
-              : MasiIcon('eye'),
-          tooltip: drawState.mode == DrawMode.draw
-              ? 'Switch to view mode'
-              : 'Switch to draw mode',
+              ? MasiIcon('eye')
+              : MasiIcon('edit'),
+          tooltip: drawState.mode == DrawMode.draw ? 'Preview' : 'Edit',
           onPressed: drawNotifier.toggleMode,
           color: colors.accent,
           style: _topRowIconStyle(
