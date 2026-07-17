@@ -173,3 +173,19 @@ GradeBand bandForSortKey(double sortKey) {
   if (sortKey <= _hardMax) return GradeBand.hard;
   return GradeBand.elite;
 }
+
+/// Derives the ordered, deduplicated set of [GradeBand]s spanned by
+/// [sortKeys] -- each a shared-scale value as returned by [gradeSortKey]
+/// (e.g. `TopoRef.routeGradeKeys`, every live graded route's sort key for a
+/// topo). Classifies each key via [bandForSortKey], collapses duplicates
+/// (several routes landing in the same band collapse to one entry), and
+/// returns the surviving bands in easiest-to-hardest order (mirroring
+/// [GradeBand]'s declaration order) regardless of [sortKeys]' own order.
+///
+/// Used by the Topos-home list row to render one colored dot per distinct
+/// difficulty band present on a topo, in place of a single hardest-grade
+/// label. Returns an empty list for an empty/no-graded-routes input.
+List<GradeBand> gradeBandsFor(List<double> sortKeys) {
+  final present = sortKeys.map(bandForSortKey).toSet();
+  return GradeBand.values.where(present.contains).toList();
+}

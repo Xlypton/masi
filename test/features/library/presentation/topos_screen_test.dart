@@ -1721,9 +1721,10 @@ void main() {
     );
   });
 
-  group('A11: grade pill', () {
+  group('A11: grade-band dots (replaces the old single hardest-grade pill)', () {
     testWidgets(
-      'a topo with a top grade shows a pill with the band color and label',
+      'a topo whose routes span two bands shows exactly two dots, colored '
+      'by band, easiest-first',
       (tester) async {
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
@@ -1732,15 +1733,17 @@ void main() {
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
             toposProvider.overrideWith(
-              (ref) => Stream.value(const [
+              (ref) => Stream.value([
                 TopoRef(
-                  wallId: 'wall-graded',
-                  name: 'Graded Wall',
+                  wallId: 'wall-multi-band',
+                  name: 'Multi Band Wall',
                   thumbnailPath: null,
                   routeCount: 3,
                   createdAt: 1000,
-                  topGradeLabel: '7a',
-                  topGradeBand: GradeBand.hard,
+                  routeGradeKeys: [
+                    gradeSortKey(GradeSystem.french, '5a'), // intermediate
+                    gradeSortKey(GradeSystem.french, '7a'), // hard
+                  ],
                 ),
               ]),
             ),
@@ -1751,20 +1754,102 @@ void main() {
         await tester.pumpWidget(_wrap(container, const ToposScreen()));
         await _drain(tester);
 
-        expect(find.text('7a'), findsOneWidget);
         expect(find.text('3 routes'), findsOneWidget);
-
-        final pillContainer = tester.widget<Container>(
-          find
-              .ancestor(of: find.text('7a'), matching: find.byType(Container))
-              .first,
+        expect(
+          find.byKey(
+            const Key('topo-grade-dot-wall-multi-band-intermediate'),
+          ),
+          findsOneWidget,
         );
-        final decoration = pillContainer.decoration as BoxDecoration;
-        expect(decoration.color, MasiColors.light.gradeHard);
+        expect(
+          find.byKey(const Key('topo-grade-dot-wall-multi-band-hard')),
+          findsOneWidget,
+        );
+        // Exactly those two -- no dot for a band that isn't present.
+        expect(find.byKey(const Key('topo-grade-dot-wall-multi-band-beginner')),
+            findsNothing);
+
+        final intermediateDot = tester.widget<Container>(
+          find.byKey(const Key('topo-grade-dot-wall-multi-band-intermediate')),
+        );
+        expect(
+          (intermediateDot.decoration as BoxDecoration).color,
+          MasiColors.light.gradeIntermediate,
+        );
+        final hardDot = tester.widget<Container>(
+          find.byKey(const Key('topo-grade-dot-wall-multi-band-hard')),
+        );
+        expect(
+          (hardDot.decoration as BoxDecoration).color,
+          MasiColors.light.gradeHard,
+        );
+
+        // Easiest-first: laid out left-to-right, the intermediate dot sits
+        // strictly left of the hard dot.
+        final intermediateX = tester
+            .getTopLeft(
+              find.byKey(
+                const Key('topo-grade-dot-wall-multi-band-intermediate'),
+              ),
+            )
+            .dx;
+        final hardX = tester
+            .getTopLeft(
+              find.byKey(const Key('topo-grade-dot-wall-multi-band-hard')),
+            )
+            .dx;
+        expect(intermediateX, lessThan(hardX));
       },
     );
 
-    testWidgets('a topo with no graded routes shows no pill, just "N routes"', (
+    testWidgets(
+      'a topo whose routes are all in one band shows exactly one dot',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            toposProvider.overrideWith(
+              (ref) => Stream.value([
+                TopoRef(
+                  wallId: 'wall-graded',
+                  name: 'Graded Wall',
+                  thumbnailPath: null,
+                  routeCount: 3,
+                  createdAt: 1000,
+                  routeGradeKeys: [
+                    gradeSortKey(GradeSystem.french, '7a'),
+                    gradeSortKey(GradeSystem.french, '7a+'),
+                    gradeSortKey(GradeSystem.french, '7c'),
+                  ],
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.text('3 routes'), findsOneWidget);
+        expect(
+          find.byKey(const Key('topo-grade-dot-wall-graded-hard')),
+          findsOneWidget,
+        );
+        final dot = tester.widget<Container>(
+          find.byKey(const Key('topo-grade-dot-wall-graded-hard')),
+        );
+        expect(
+          (dot.decoration as BoxDecoration).color,
+          MasiColors.light.gradeHard,
+        );
+      },
+    );
+
+    testWidgets('a topo with no graded routes shows no dots, just "N routes"', (
       tester,
     ) async {
       final db = AppDatabase(NativeDatabase.memory());
@@ -1792,8 +1877,13 @@ void main() {
       await _drain(tester);
 
       expect(find.text('2 routes'), findsOneWidget);
-      // No grade label of any kind should render for an ungraded topo.
-      expect(find.textContaining(RegExp(r'^\d+[a-c]\+?$')), findsNothing);
+      // No dot of any band should render for an ungraded topo.
+      for (final band in GradeBand.values) {
+        expect(
+          find.byKey(Key('topo-grade-dot-wall-bare-${band.name}')),
+          findsNothing,
+        );
+      }
     });
   });
 
@@ -3067,7 +3157,7 @@ void main() {
   group(
     'layout overflow regression: AppBar Organize action + _TopoRow at '
     'phone width (regression: an unbounded "Organize" TextButton label in '
-    'the AppBar actions, and an unwrapped grade-pill+routes Row in '
+    'the AppBar actions, and an unwrapped grade-dots+routes Row in '
     '_TopoRow, must not overflow at large text)',
     () {
       Widget wrapWithScale(
@@ -3114,9 +3204,9 @@ void main() {
       testWidgets(
         'a populated topo list at 360x800 @ 3.0x text scale does not '
         'overflow -- neither the AppBar (Organize action) nor a _TopoRow '
-        'with a grade pill + route count (regression: unlike the '
-        '"Filters sheet" group above, this case does NOT dodge the AppBar '
-        'via a wide stressWidth -- 360 is a real phone width)',
+        'with a full 5-band row of grade dots + route count (regression: '
+        'unlike the "Filters sheet" group above, this case does NOT dodge '
+        'the AppBar via a wide stressWidth -- 360 is a real phone width)',
         (tester) async {
           setViewportSize(tester, const Size(360, 800));
           final db = AppDatabase(NativeDatabase.memory());
@@ -3126,15 +3216,21 @@ void main() {
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               toposProvider.overrideWith(
-                (ref) => Stream.value(const [
+                (ref) => Stream.value([
                   TopoRef(
                     wallId: 'wall-stress',
                     name: 'Stress Test Wall',
                     thumbnailPath: null,
                     routeCount: 12,
                     createdAt: 1000,
-                    topGradeLabel: '7a',
-                    topGradeBand: GradeBand.hard,
+                    // All 5 bands present -- the widest the dots row gets.
+                    routeGradeKeys: [
+                      gradeSortKey(GradeSystem.french, '4a'),
+                      gradeSortKey(GradeSystem.french, '5c'),
+                      gradeSortKey(GradeSystem.french, '6b'),
+                      gradeSortKey(GradeSystem.french, '7a'),
+                      gradeSortKey(GradeSystem.french, '8a'),
+                    ],
                   ),
                 ]),
               ),

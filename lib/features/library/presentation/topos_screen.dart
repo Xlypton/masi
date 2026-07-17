@@ -819,6 +819,7 @@ class _TopoRow extends ConsumerWidget {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final routeCount = topo.routeCount;
+    final bands = gradeBandsFor(topo.routeGradeKeys);
 
     return Material(
       key: Key('topo-item-${topo.wallId}'),
@@ -853,12 +854,8 @@ class _TopoRow extends ConsumerWidget {
                       runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        if (topo.topGradeLabel != null &&
-                            topo.topGradeBand != null)
-                          _GradePill(
-                            label: topo.topGradeLabel!,
-                            band: topo.topGradeBand!,
-                          ),
+                        if (bands.isNotEmpty)
+                          _GradeBandDots(wallId: topo.wallId, bands: bands),
                         Text(
                           '$routeCount route${routeCount == 1 ? '' : 's'}',
                           style: textTheme.titleSmall?.copyWith(
@@ -1171,36 +1168,43 @@ class _TopoRow extends ConsumerWidget {
   }
 }
 
-/// Small grade pill shown in a topo row's subtitle (see DESIGN.md "Topos
-/// home"): [band]-color background, white text = [label]. Placed before the
-/// "N routes" text; omitted entirely by the caller when a topo has no
-/// graded route.
-class _GradePill extends StatelessWidget {
-  const _GradePill({required this.label, required this.band});
+/// Row of small colored dots shown in a topo row's subtitle (see DESIGN.md
+/// "Topos home"), one per distinct [GradeBand] present across the topo's
+/// routes ([bands], already deduplicated and ordered easiest-to-hardest by
+/// [gradeBandsFor]) -- replaces the old single hardest-grade pill so a topo
+/// with, say, both a 5a and a 7a route visibly reads as spanning two bands
+/// rather than showing only its hardest. Placed before the "N routes" text;
+/// omitted entirely by the caller when a topo has no graded routes.
+class _GradeBandDots extends StatelessWidget {
+  const _GradeBandDots({required this.wallId, required this.bands});
 
-  final String label;
-  final GradeBand band;
+  final String wallId;
+  final List<GradeBand> bands;
 
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MasiSpacing.sm,
-        vertical: 2,
-      ),
-      decoration: BoxDecoration(
-        color: _colorForGradeBand(colors, band),
-        borderRadius: BorderRadius.circular(MasiRadii.control),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-          color: Colors.white,
-          fontWeight: FontWeight.w600,
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
+    return Semantics(
+      label: 'Grade bands present: ${bands.map((b) => b.name).join(', ')}',
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          for (var i = 0; i < bands.length; i++)
+            Padding(
+              padding: EdgeInsets.only(
+                right: i == bands.length - 1 ? 0 : MasiSpacing.xs,
+              ),
+              child: Container(
+                key: Key('topo-grade-dot-$wallId-${bands[i].name}'),
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: _colorForGradeBand(colors, bands[i]),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

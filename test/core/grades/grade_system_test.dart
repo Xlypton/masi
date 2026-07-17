@@ -233,4 +233,47 @@ void main() {
       expect(keys, equals([...keys]..sort()));
     });
   });
+
+  group('A7: gradeBandsFor (Topos-home grade-dots derivation)', () {
+    test('empty input yields no bands', () {
+      expect(gradeBandsFor(const []), isEmpty);
+    });
+
+    test('a single sort key yields exactly its one band', () {
+      final key = gradeSortKey(GradeSystem.french, '7a');
+      expect(gradeBandsFor([key]), [GradeBand.hard]);
+    });
+
+    test('several keys landing in the same band collapse to one entry', () {
+      final keys = [
+        gradeSortKey(GradeSystem.french, '6a+'),
+        gradeSortKey(GradeSystem.french, '6b'),
+        gradeSortKey(GradeSystem.french, '6c+'),
+      ];
+      expect(gradeBandsFor(keys), [GradeBand.advanced]);
+    });
+
+    test(
+        'keys spanning multiple bands come back deduplicated and sorted '
+        'easiest-to-hardest, regardless of input order', () {
+      final keys = [
+        gradeSortKey(GradeSystem.french, '8a'), // elite
+        gradeSortKey(GradeSystem.french, '4a'), // beginner
+        gradeSortKey(GradeSystem.french, '7a'), // hard
+        gradeSortKey(GradeSystem.french, '4c'), // beginner (dup band)
+      ];
+      expect(
+        gradeBandsFor(keys),
+        [GradeBand.beginner, GradeBand.hard, GradeBand.elite],
+      );
+    });
+
+    test('every band is reachable (beginner..elite) across the full ladder',
+        () {
+      final keys = kFrenchLadder
+          .map((g) => gradeSortKey(GradeSystem.french, g))
+          .toList();
+      expect(gradeBandsFor(keys), GradeBand.values);
+    });
+  });
 }
