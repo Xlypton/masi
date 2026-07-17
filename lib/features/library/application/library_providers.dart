@@ -60,6 +60,31 @@ final wallNameProvider = FutureProvider.family<String?, String>(
 );
 
 // ---------------------------------------------------------------------
+// Map search reads — see `features/community/data/map_search.dart`'s
+// `mapContentSearch`, which combines these with [toposProvider].
+// ---------------------------------------------------------------------
+
+/// Live list of every non-deleted route on a GPS-located wall — see
+/// [LocatedRouteRef]. Backs the map search's route results.
+final locatedRoutesProvider = StreamProvider<List<LocatedRouteRef>>(
+  (ref) => ref.watch(libraryCrudRepositoryProvider).watchLocatedRoutes(),
+);
+
+/// Live list of every non-deleted, non-sentinel sector with at least one
+/// located descendant wall, paired with its centroid — see
+/// [LocatedSectorRef]. Backs the map search's sector results.
+final locatedSectorsProvider = StreamProvider<List<LocatedSectorRef>>(
+  (ref) => ref.watch(libraryCrudRepositoryProvider).watchLocatedSectors(),
+);
+
+/// Live list of every non-deleted, non-sentinel area with at least one
+/// located wall anywhere under its sectors, paired with its centroid — see
+/// [LocatedAreaRef]. Backs the map search's area results.
+final locatedAreasProvider = StreamProvider<List<LocatedAreaRef>>(
+  (ref) => ref.watch(libraryCrudRepositoryProvider).watchLocatedAreas(),
+);
+
+// ---------------------------------------------------------------------
 // Topos-home filtering (Subtask D, ~/.claude/plans/masi-filtering.md)
 // ---------------------------------------------------------------------
 
@@ -115,8 +140,7 @@ class ToposFilter {
       final wantsShared = visibility == ToposVisibilityFilter.shared;
       if ((topo.visibility == 'shared') != wantsShared) return false;
     }
-    if (areaIds.isNotEmpty &&
-        !areaIds.contains(topo.areaId ?? unfiledAreaId)) {
+    if (areaIds.isNotEmpty && !areaIds.contains(topo.areaId ?? unfiledAreaId)) {
       return false;
     }
     return true;

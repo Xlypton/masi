@@ -239,6 +239,150 @@ List<double> _parseGradeKeys(String? raw) {
   return keys;
 }
 
+/// Immutable read model for a single non-deleted [db.Route] whose wall has
+/// recorded GPS coordinates ([db.Walls.latitude]/[longitude] non-null) —
+/// i.e. a route that can be placed on the map. Backs the map search's route
+/// results (see `mapContentSearch` in
+/// `features/community/data/map_search.dart`); returned by
+/// [LibraryCrudRepository.watchLocatedRoutes].
+class LocatedRouteRef {
+  const LocatedRouteRef({
+    required this.routeId,
+    required this.number,
+    this.name,
+    required this.wallId,
+    required this.wallName,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  final String routeId;
+  final int number;
+
+  /// The route's own name, or `null`/empty when the climber never named it.
+  /// See [title] for the display fallback.
+  final String? name;
+
+  final String wallId;
+
+  /// The name of this route's wall (its "topo") — used as the map search
+  /// result's subtitle for a route hit.
+  final String wallName;
+
+  /// This route's wall's GPS coordinates — a route has no coordinates of
+  /// its own (see `db.Routes`' doc in `core/db/tables.dart`), so it is
+  /// placed wherever its wall is.
+  final double latitude;
+  final double longitude;
+
+  /// Display title: [name] if non-empty (after trimming), else `'Route
+  /// &lt;number&gt;'`. Mirrors how `topo_canvas_screen.dart` labels an
+  /// unnamed route in its route list.
+  String get title {
+    final trimmed = name?.trim();
+    return (trimmed != null && trimmed.isNotEmpty) ? trimmed : 'Route $number';
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is LocatedRouteRef &&
+      other.routeId == routeId &&
+      other.number == number &&
+      other.name == name &&
+      other.wallId == wallId &&
+      other.wallName == wallName &&
+      other.latitude == latitude &&
+      other.longitude == longitude;
+
+  @override
+  int get hashCode =>
+      Object.hash(routeId, number, name, wallId, wallName, latitude, longitude);
+
+  @override
+  String toString() =>
+      'LocatedRouteRef(routeId: $routeId, number: $number, name: $name, '
+      'wallId: $wallId, wallName: $wallName, latitude: $latitude, '
+      'longitude: $longitude)';
+}
+
+/// Immutable read model for a non-deleted [db.Sector] that has at least one
+/// located descendant wall ([db.Walls.latitude]/[longitude] non-null) —
+/// [latitude]/[longitude] are the arithmetic-mean centroid over exactly
+/// those located walls (see [LibraryCrudRepository.watchLocatedSectors]). A
+/// sector with zero located walls has no [LocatedSectorRef] at all — there
+/// is deliberately no all-zero/fallback instance.
+class LocatedSectorRef {
+  const LocatedSectorRef({
+    required this.id,
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  final String id;
+  final String name;
+
+  /// Centroid latitude/longitude over this sector's located walls.
+  final double latitude;
+  final double longitude;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LocatedSectorRef &&
+      other.id == id &&
+      other.name == name &&
+      other.latitude == latitude &&
+      other.longitude == longitude;
+
+  @override
+  int get hashCode => Object.hash(id, name, latitude, longitude);
+
+  @override
+  String toString() =>
+      'LocatedSectorRef(id: $id, name: $name, latitude: $latitude, '
+      'longitude: $longitude)';
+}
+
+/// Immutable read model for a non-deleted [db.Area] that has at least one
+/// located wall anywhere under its sectors — [latitude]/[longitude] are the
+/// arithmetic-mean centroid over ALL of the area's located walls across ALL
+/// of its sectors (NOT the mean of each sector's own centroid — see
+/// [LibraryCrudRepository.watchLocatedAreas]). An area with zero located
+/// walls has no [LocatedAreaRef] at all, same exclusion rule as
+/// [LocatedSectorRef].
+class LocatedAreaRef {
+  const LocatedAreaRef({
+    required this.id,
+    required this.name,
+    required this.latitude,
+    required this.longitude,
+  });
+
+  final String id;
+  final String name;
+
+  /// Centroid latitude/longitude over every located wall under this area
+  /// (through all of its sectors).
+  final double latitude;
+  final double longitude;
+
+  @override
+  bool operator ==(Object other) =>
+      other is LocatedAreaRef &&
+      other.id == id &&
+      other.name == name &&
+      other.latitude == latitude &&
+      other.longitude == longitude;
+
+  @override
+  int get hashCode => Object.hash(id, name, latitude, longitude);
+
+  @override
+  String toString() =>
+      'LocatedAreaRef(id: $id, name: $name, latitude: $latitude, '
+      'longitude: $longitude)';
+}
+
 /// CRUD + cascading soft-delete for the Area -> Sector -> Wall library
 /// hierarchy (and the Photos/Routes hanging off a Wall).
 ///
@@ -805,7 +949,8 @@ class LibraryCrudRepository {
   /// ids are random UUIDs this tiebreak is arbitrary but consistent, not a
   /// proxy for "more recent" or "harder".
   Stream<List<TopoRef>> watchTopos() {
-    const sql = '''
+    const sql =
+        '''
       SELECT
         w.id AS wall_id,
         w.name AS wall_name,
@@ -897,6 +1042,155 @@ class LibraryCrudRepository {
   String? _resolveThumbnail(String? storedThumbnailPath) {
     if (storedThumbnailPath == null) return null;
     return _photoFiles.resolvePhotoPathSync(storedThumbnailPath).path;
+  }
+
+  // ---------------------------------------------------------------------
+  // Map search reads (unified map search's data layer — see
+  // `features/community/data/map_search.dart`'s `mapContentSearch`)
+  // ---------------------------------------------------------------------
+
+  /// Live list of every non-deleted [db.Route] on a non-deleted wall that
+  /// has recorded GPS coordinates, newest-wall-first — see [LocatedRouteRef].
+  /// A route with no coordinates of its own is only ever locatable through
+  /// its wall, so a route on a wall with `latitude`/`longitude` still `null`
+  /// is excluded entirely (never surfaced with a `(0, 0)` fallback).
+  ///
+  /// Raw [customSelect], mirroring [watchTopos]'s join style for the same
+  /// reason: a plain Drift `.join()` would be the natural fit here (unlike
+  /// `watchTopos`, there's no one-to-many photo/route aggregate that would
+  /// multiply rows), but a raw query keeps this consistent with the rest of
+  /// this repository's map-facing reads. `readsFrom` is `{routes, walls}` so
+  /// the auto-updating stream re-emits on changes to either table (e.g. a
+  /// wall's coordinates just got set via [setWallCoordinates]).
+  Stream<List<LocatedRouteRef>> watchLocatedRoutes() {
+    const sql = '''
+      SELECT
+        r.id AS route_id,
+        r.number AS route_number,
+        r.name AS route_name,
+        w.id AS wall_id,
+        w.name AS wall_name,
+        w.latitude AS wall_latitude,
+        w.longitude AS wall_longitude
+      FROM routes r
+      JOIN walls w ON w.id = r.wall_id
+      WHERE r.deleted_at IS NULL
+        AND w.deleted_at IS NULL
+        AND w.latitude IS NOT NULL
+        AND w.longitude IS NOT NULL
+      ORDER BY w.created_at DESC, w.id DESC, r.sort_order ASC
+    ''';
+    return _db
+        .customSelect(sql, readsFrom: {_db.routes, _db.walls})
+        .watch()
+        .map((rows) {
+          // Synchronous mapping, same rationale as watchTopos/
+          // watchSharedTopos: an async mapper on a Drift stream wedges under
+          // flutter_test's fake clock.
+          return [
+            for (final row in rows)
+              LocatedRouteRef(
+                routeId: row.read<String>('route_id'),
+                number: row.read<int>('route_number'),
+                name: row.readNullable<String>('route_name'),
+                wallId: row.read<String>('wall_id'),
+                wallName: row.read<String>('wall_name'),
+                latitude: row.read<double>('wall_latitude'),
+                longitude: row.read<double>('wall_longitude'),
+              ),
+          ];
+        });
+  }
+
+  /// Live list of every non-deleted, non-sentinel [db.Sector] that has at
+  /// least one located descendant wall, each paired with the arithmetic-mean
+  /// centroid over exactly those located walls — see [LocatedSectorRef]. A
+  /// sector with zero located walls (either no walls at all, or none with
+  /// coordinates) never appears: the `JOIN` (not `LEFT JOIN`) to `walls`
+  /// combined with the coordinate `WHERE` filter means SQLite's `GROUP BY`
+  /// simply has no rows to group for that sector's id, so no row — and no
+  /// `AVG(NULL)` fallback — is ever emitted for it.
+  ///
+  /// Excludes the hidden `__default__` sentinel Sector, same rationale as
+  /// [_sectorQuery]: it's an internal filing detail for photo-first topos,
+  /// never a real, nameable sector a search should be able to find.
+  Stream<List<LocatedSectorRef>> watchLocatedSectors() {
+    const sql =
+        '''
+      SELECT
+        s.id AS sector_id,
+        s.name AS sector_name,
+        AVG(w.latitude) AS avg_latitude,
+        AVG(w.longitude) AS avg_longitude
+      FROM sectors s
+      JOIN walls w ON w.sector_id = s.id
+      WHERE s.deleted_at IS NULL
+        AND s.name != '$_defaultSectorName'
+        AND w.deleted_at IS NULL
+        AND w.latitude IS NOT NULL
+        AND w.longitude IS NOT NULL
+      GROUP BY s.id
+      ORDER BY s.name
+    ''';
+    return _db
+        .customSelect(sql, readsFrom: {_db.sectors, _db.walls})
+        .watch()
+        .map((rows) {
+          return [
+            for (final row in rows)
+              LocatedSectorRef(
+                id: row.read<String>('sector_id'),
+                name: row.read<String>('sector_name'),
+                latitude: row.read<double>('avg_latitude'),
+                longitude: row.read<double>('avg_longitude'),
+              ),
+          ];
+        });
+  }
+
+  /// Live list of every non-deleted, non-sentinel [db.Area] that has at
+  /// least one located wall anywhere under its sectors, each paired with the
+  /// arithmetic-mean centroid over ALL of those located walls across ALL of
+  /// the area's sectors (a two-level `JOIN` through `sectors`, deliberately
+  /// NOT an average of each sector's own [LocatedSectorRef] centroid — a
+  /// sector with many located walls should pull the area centroid more than
+  /// one with few) — see [LocatedAreaRef]. Same zero-located-walls exclusion
+  /// as [watchLocatedSectors] (inner `JOIN`s + `GROUP BY`, no fallback row),
+  /// and same hidden `__default__` sentinel-Area exclusion as [_areaQuery].
+  Stream<List<LocatedAreaRef>> watchLocatedAreas() {
+    const sql =
+        '''
+      SELECT
+        a.id AS area_id,
+        a.name AS area_name,
+        AVG(w.latitude) AS avg_latitude,
+        AVG(w.longitude) AS avg_longitude
+      FROM areas a
+      JOIN sectors s ON s.area_id = a.id
+      JOIN walls w ON w.sector_id = s.id
+      WHERE a.deleted_at IS NULL
+        AND a.name != '$_defaultAreaName'
+        AND s.deleted_at IS NULL
+        AND w.deleted_at IS NULL
+        AND w.latitude IS NOT NULL
+        AND w.longitude IS NOT NULL
+      GROUP BY a.id
+      ORDER BY a.name
+    ''';
+    return _db
+        .customSelect(sql, readsFrom: {_db.areas, _db.sectors, _db.walls})
+        .watch()
+        .map((rows) {
+          return [
+            for (final row in rows)
+              LocatedAreaRef(
+                id: row.read<String>('area_id'),
+                name: row.read<String>('area_name'),
+                latitude: row.read<double>('avg_latitude'),
+                longitude: row.read<double>('avg_longitude'),
+              ),
+          ];
+        });
   }
 
   /// Finds (or, on first call, creates) the single hidden default
