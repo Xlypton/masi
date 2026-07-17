@@ -13,13 +13,16 @@ import 'package:latlong2/latlong.dart';
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../library/application/library_providers.dart';
 import '../application/community_providers.dart';
+import '../application/map_search_providers.dart';
 import '../data/community_repository.dart';
+import '../data/map_search.dart';
 
 /// Builds the `RetryClient`-wrapped [http.Client] used by
 /// [buildResilientTileProvider] — split out into its own top-level function
@@ -930,6 +933,60 @@ class _MapViewState extends ConsumerState<_MapView> {
   /// why this must be cached rather than rebuilt on every `build()` call.
   NetworkTileProvider? _resilientTileProvider;
 
+  /// Backing state for the unified map-search overlay (`community-map-
+  /// search-field`) — mirrors `set_location_picker.dart`'s
+  /// `_SetLocationPickerState` search fields exactly (same debounce/seq-
+  /// guard/programmatic-suppression skeleton), extended to merge in local
+  /// library content alongside places.
+  ///
+  /// [_searchController] holds the typed/picked text, [_searchFocusNode]
+  /// lets a selection unfocus the field afterward, [_debounce] is the
+  /// in-flight "wait for the user to stop typing" timer (see
+  /// [_onSearchChanged]).
+  final TextEditingController _searchController = TextEditingController();
+  final FocusNode _searchFocusNode = FocusNode();
+  Timer? _debounce;
+
+  /// The last query the debounce timer actually SETTLED on (as opposed to
+  /// every keystroke) — used to `ref.watch(mapContentSearchProvider(...))`
+  /// reactively in [build] rather than one-shot `ref.read`ing it at debounce
+  /// time, so local results stay live (and correctly empty rather than
+  /// falsely-empty) even if the underlying located-topo/route/sector/area
+  /// streams hadn't emitted their first snapshot yet the instant the
+  /// debounce fired. Empty string means "no committed query" — [build]
+  /// treats that as zero local results without even touching the provider.
+  String _committedQuery = '';
+
+  /// The current async place (geocoding) results for [_committedQuery] —
+  /// unlike local results, these can't be a reactive `ref.watch` (a
+  /// [GeocodingService] call is a one-shot Future, not a stream), so they're
+  /// held as plain state and applied by [_runPlaceSearch] once resolved.
+  List<PlaceResult> _placeResults = const [];
+
+  /// Monotonically increasing "which search is current" generation counter —
+  /// see `set_location_picker.dart`'s identically-named field for the full
+  /// rationale (a slow lookup for an earlier query must never clobber a
+  /// faster, more recent one's results). Bumped by every [_onSearchChanged]
+  /// call and by every selection, and checked after every `await` before
+  /// applying a result.
+  int _searchSeq = 0;
+
+  /// The exact (trimmed) query a selection last wrote into
+  /// [_searchController] programmatically, or `null` when the field's
+  /// current text was typed by the user — see `set_location_picker.dart`'s
+  /// identically-named field. [_onSearchChanged] compares against this to
+  /// no-op the synthetic "change" a selection's own `_searchController.text
+  /// =` write fires, rather than kicking off a fresh search for the
+  /// place/entity just picked.
+  String? _lastProgrammaticQuery;
+
+  /// The map location of the most recently selected search result (local or
+  /// place), or `null` when there is none — drives the transient
+  /// `community-map-search-marker` [MarkerLayer] in [build]. Cleared
+  /// whenever the search field is cleared (see [_onSearchChanged]'s
+  /// empty-query branch) or replaced by a fresh selection.
+  LatLng? _selectedSearchResult;
+
   @override
   void initState() {
     super.initState();
@@ -946,6 +1003,9 @@ class _MapViewState extends ConsumerState<_MapView> {
   @override
   void dispose() {
     _mapEventSubscription?.cancel();
+    _debounce?.cancel();
+    _searchController.dispose();
+    _searchFocusNode.dispose();
     if (_ownsController) {
       _mapController.dispose();
     }
@@ -959,6 +1019,109 @@ class _MapViewState extends ConsumerState<_MapView> {
       debugResilientTileClientCloseCount++;
     }
     super.dispose();
+  }
+
+  /// `community-map-search-field`'s `onChanged` handler — see
+  /// `set_location_picker.dart`'s identically-shaped [_onSearchChanged] for
+  /// the full debounce/seq-guard/programmatic-suppression rationale, which
+  /// this mirrors exactly. The only difference: settling on a non-empty
+  /// query here commits [_committedQuery] (driving the reactive local
+  /// results in [build]) AND kicks off [_runPlaceSearch] (the async places
+  /// half), rather than a single async lookup.
+  void _onSearchChanged(String value) {
+    if (value == _lastProgrammaticQuery) {
+      _lastProgrammaticQuery = null;
+      return;
+    }
+    _lastProgrammaticQuery = null;
+    _debounce?.cancel();
+    final query = value.trim();
+    _searchSeq++;
+    final seq = _searchSeq;
+    if (query.isEmpty) {
+      setState(() {
+        _committedQuery = '';
+        _placeResults = const [];
+        _selectedSearchResult = null;
+      });
+      return;
+    }
+    _debounce = Timer(
+      const Duration(milliseconds: 350),
+      () => _settleSearch(query, seq),
+    );
+  }
+
+  /// Runs once [_onSearchChanged]'s debounce timer fires for a non-empty,
+  /// still-current ([seq] still matches [_searchSeq]) query: commits
+  /// [_committedQuery] (so [build]'s `ref.watch(mapContentSearchProvider(...))`
+  /// picks up local results reactively) and fires the async places lookup.
+  void _settleSearch(String query, int seq) {
+    if (!mounted || seq != _searchSeq) return;
+    setState(() => _committedQuery = query);
+    unawaited(_runPlaceSearch(query, seq));
+  }
+
+  /// The places half of a settled search: [GeocodingService.search] never
+  /// throws (see its doc), so no try/catch is needed here. Discards the
+  /// result when [seq] no longer matches [_searchSeq] by the time the
+  /// `await` returns — i.e. a newer query (or a clear, or a selection) has
+  /// superseded this one — so a slow lookup for an old query can never
+  /// clobber a faster, more recent query's results.
+  Future<void> _runPlaceSearch(String query, int seq) async {
+    final service = ref.read(geocodingServiceProvider);
+    final results = await service.search(query);
+    if (!mounted || seq != _searchSeq) return;
+    setState(() => _placeResults = results);
+  }
+
+  /// A local-content search result row's `onTap`: flies the map to it and
+  /// drops the transient `community-map-search-marker`. Mirrors
+  /// [_selectPlaceResult] exactly except for the source of the flown-to
+  /// point; see that method's doc for the programmatic-suppression/seq-bump
+  /// rationale shared by both.
+  void _selectLocalResult(MapSearchResult result) {
+    _debounce?.cancel();
+    _searchSeq++;
+    _mapController.move(result.location, 15);
+    _lastProgrammaticQuery = result.title;
+    _searchController.text = result.title;
+    setState(() {
+      _selectedSearchResult = result.location;
+      _committedQuery = '';
+      _placeResults = const [];
+    });
+    _searchFocusNode.unfocus();
+  }
+
+  /// A place (geocoding) search result row's `onTap` — mirrors
+  /// `set_location_picker.dart`'s `_selectSearchResult`: moves the map to
+  /// the chosen place, then collapses the dropdown and unfocuses the field.
+  ///
+  /// Writes [result.displayName] into [_searchController] so the field
+  /// visibly reflects what was picked. That write fires
+  /// [TextEditingController]'s change notification straight into
+  /// [_onSearchChanged] (the same listener `TextField.onChanged` uses),
+  /// which would otherwise kick off a brand-new debounced search for the
+  /// place's own name — so [_lastProgrammaticQuery] is set to the exact
+  /// string being written FIRST, letting [_onSearchChanged] recognize and
+  /// no-op that one synthetic change. [_searchSeq] is bumped independently
+  /// too, invalidating any search still in flight for whatever the user had
+  /// typed, so a stale in-flight lookup can never resurrect the dropdown
+  /// after this selection.
+  void _selectPlaceResult(PlaceResult result) {
+    final location = LatLng(result.latitude, result.longitude);
+    _debounce?.cancel();
+    _searchSeq++;
+    _mapController.move(location, 15);
+    _lastProgrammaticQuery = result.displayName;
+    _searchController.text = result.displayName;
+    setState(() {
+      _selectedSearchResult = location;
+      _committedQuery = '';
+      _placeResults = const [];
+    });
+    _searchFocusNode.unfocus();
   }
 
   /// The Map tab's [TileLayer.tileProvider]: [widget.tileProvider] when
@@ -1026,6 +1189,21 @@ class _MapViewState extends ConsumerState<_MapView> {
     final filteredTopos = widget.topos.where(filter.matches).toList();
     final colors = MasiColors.of(context);
     final withCoords = filteredTopos.where((t) => t.hasCoordinates).toList();
+
+    // The unified map search's local-content half (B2): reactively watched
+    // (rather than one-shot `ref.read`) so results stay correct even if the
+    // underlying located-topo/route/sector/area streams hadn't emitted their
+    // first snapshot yet the instant `_settleSearch` committed the query —
+    // see `_committedQuery`'s doc. An empty committed query (nothing typed
+    // yet, or the field was just cleared/a result just selected) skips the
+    // provider entirely rather than watching `mapContentSearchProvider('')`
+    // (which would return `[]` anyway, per that provider's doc, but every
+    // OTHER query string still gets its own cached entry there).
+    final localSearchResults = _committedQuery.isEmpty
+        ? const <MapSearchResult>[]
+        : ref.watch(mapContentSearchProvider(_committedQuery));
+    final showSearchDropdown =
+        localSearchResults.isNotEmpty || _placeResults.isNotEmpty;
 
     // "Own" located topos: every local wall (regardless of visibility) that
     // has coordinates AND isn't actually someone else's shared topo pulled
@@ -1319,18 +1497,47 @@ class _MapViewState extends ConsumerState<_MapView> {
             ),
           ),
         ),
-        // A compact "Private" vs "Public" legend, top-left so it never
-        // fights the bottom-right attribution pill for space. Purely
-        // informational (no tap target of its own), like the attribution.
+        // A compact "Private" vs "Public" legend, bottom-left (mirroring the
+        // bottom-right attribution pill) so it never fights the search
+        // overlay now anchored to the TOP of the map (see the outer Stack's
+        // `community-map-search-field` `Positioned`, below) for space.
+        // Purely informational (no tap target of its own), like the
+        // attribution.
         IgnorePointer(
           child: Align(
-            alignment: Alignment.topLeft,
+            alignment: Alignment.bottomLeft,
             child: Padding(
               padding: const EdgeInsets.all(6),
               child: _MapLegend(colors: colors),
             ),
           ),
         ),
+        // The transient "search result" marker (B4): the map location most
+        // recently flown to via a search selection (local content OR a
+        // place), rendered in its OWN `MarkerLayer` added LAST in this list
+        // so it always paints ABOVE every other marker layer above,
+        // including the boulder/"you are here" ones (flutter_map stacks
+        // `FlutterMap.children` in list order) — it's meant to read
+        // unambiguously as "the spot you just searched for", never
+        // confusable with an existing topo pin. Omitted entirely once
+        // `_selectedSearchResult` is cleared (the field is cleared, or a
+        // fresh selection replaces it — see `_onSearchChanged`/
+        // `_selectLocalResult`/`_selectPlaceResult`).
+        if (_selectedSearchResult != null)
+          MarkerLayer(
+            markers: [
+              Marker(
+                point: _selectedSearchResult!,
+                width: 34,
+                height: _SearchResultMarker.totalHeight,
+                alignment: Alignment.topCenter,
+                child: KeyedSubtree(
+                  key: const Key('community-map-search-marker'),
+                  child: _SearchResultMarker(colors: colors),
+                ),
+              ),
+            ],
+          ),
       ],
     );
 
@@ -1343,6 +1550,139 @@ class _MapViewState extends ConsumerState<_MapView> {
     return Stack(
       children: [
         flutterMap,
+        // The unified map-search overlay (B1): a pill search field + its
+        // grouped results dropdown, anchored to the TOP of the map (the
+        // bottom-left/bottom-right legend/attribution below leave this area
+        // free — see their doc). A sibling of the bottom-right find-me/
+        // compass column in this same outer `Stack` (never a child of
+        // `flutterMap` — unlike the marker layers above, this is fixed
+        // screen chrome, not something that should pan/zoom with the map).
+        Positioned(
+          top: MasiSpacing.sm,
+          left: MasiSpacing.lg,
+          right: MasiSpacing.lg,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Material(
+                color: Colors.transparent,
+                child: TextField(
+                  key: const Key('community-map-search-field'),
+                  controller: _searchController,
+                  focusNode: _searchFocusNode,
+                  onChanged: _onSearchChanged,
+                  decoration: InputDecoration(
+                    hintText: 'Search the map',
+                    prefixIcon: MasiIcon(
+                      'search',
+                      size: 20,
+                      color: colors.ink3,
+                    ),
+                    filled: true,
+                    fillColor: colors.surface2,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide(color: colors.separator),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide(color: colors.separator),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide(color: colors.accent, width: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+              // The results dropdown: LOCAL content (topos/routes/sectors/
+              // areas — B3) ranked ABOVE places, simply by list order —
+              // `localSearchResults` (already topos-then-routes-then-
+              // sectors-then-areas per `mapContentSearch`'s doc) come first,
+              // `_placeResults` last. Hidden entirely whenever both are
+              // empty (no query committed yet, or a settled query matched
+              // nothing on either side) — never a separate "loading"/error
+              // state, mirroring `set_location_picker.dart`'s dropdown.
+              if (showSearchDropdown)
+                Container(
+                  margin: const EdgeInsets.only(top: MasiSpacing.xs),
+                  child: Material(
+                    color: colors.surface,
+                    borderRadius: BorderRadius.circular(MasiRadii.control),
+                    clipBehavior: Clip.antiAlias,
+                    elevation: 4,
+                    // Caps how tall the dropdown can grow, mirroring
+                    // `set_location_picker.dart`'s identical
+                    // `_searchResultsMaxHeight` fix — a large `textScaler`
+                    // or many combined local+place rows must scroll rather
+                    // than push the dropdown off the bottom of small
+                    // screens or overflow its `RenderFlex`.
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxHeight: 280),
+                      child: ListView.separated(
+                        shrinkWrap: true,
+                        padding: EdgeInsets.zero,
+                        itemCount:
+                            localSearchResults.length + _placeResults.length,
+                        separatorBuilder: (_, _) =>
+                            Divider(height: 1, color: colors.separator),
+                        itemBuilder: (context, i) {
+                          if (i < localSearchResults.length) {
+                            final result = localSearchResults[i];
+                            return ListTile(
+                              key: Key('community-map-search-result-$i'),
+                              dense: true,
+                              leading: MasiIcon(
+                                _iconForSearchKind(result.kind),
+                                size: 18,
+                                color: colors.ink3,
+                              ),
+                              title: Text(
+                                result.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              subtitle: Text(
+                                result.subtitle != null
+                                    ? '${_labelForSearchKind(result.kind)} · '
+                                          '${result.subtitle}'
+                                    : _labelForSearchKind(result.kind),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              onTap: () => _selectLocalResult(result),
+                            );
+                          }
+                          final place =
+                              _placeResults[i - localSearchResults.length];
+                          return ListTile(
+                            key: Key('community-map-search-result-$i'),
+                            dense: true,
+                            leading: MasiIcon(
+                              'pin',
+                              size: 18,
+                              color: colors.ink3,
+                            ),
+                            title: Text(
+                              place.displayName,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            subtitle: const Text(
+                              'Place',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                            onTap: () => _selectPlaceResult(place),
+                          );
+                        },
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
         Positioned(
           right: 8,
           bottom: 44,
@@ -1533,6 +1873,75 @@ class _MyLocationMarker extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// The transient "search result" marker (B4) `_MapViewState` drops at
+/// `_selectedSearchResult` — a solid pin glyph, deliberately NOT
+/// [_BoulderMarker]'s boulder-logo badge (that would read as "an existing
+/// topo lives here") and NOT [_MyLocationMarker]'s plain dot (that already
+/// means "this is my device"), so a searched-for spot reads unambiguously
+/// as its own third thing on the map.
+class _SearchResultMarker extends StatelessWidget {
+  const _SearchResultMarker({required this.colors});
+
+  final MasiColors colors;
+
+  /// Total height of the enclosing [Marker] box — mirrors
+  /// [_BoulderMarker.totalHeight]'s doc: [MarkerLayer] gives its child TIGHT
+  /// `(width, height)` constraints regardless of the child's own size, so
+  /// this only has to match the call site's `Marker.height`.
+  static const double totalHeight = 34;
+
+  @override
+  Widget build(BuildContext context) {
+    // A white halo behind the glyph keeps it legible over the light CartoDB
+    // basemap regardless of the app's own light/dark theme, mirroring
+    // `set_location_picker.dart`'s crosshair.
+    return Align(
+      alignment: Alignment.bottomCenter,
+      child: Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          MasiIcon('pin_fill', size: totalHeight, color: Colors.white),
+          MasiIcon('pin_fill', size: totalHeight - 6, color: colors.accent),
+        ],
+      ),
+    );
+  }
+}
+
+/// Per-[MapSearchKind] type-hint icon for a `community-map-search-result-$i`
+/// row (B3) — a topo IS a [TopoRef]/wall, hence `'wall'` rather than
+/// [_BoulderMarker]'s full-color `'boulder_logo'` (which would be an
+/// oddly heavy, multi-tone glyph for a small dropdown row).
+String _iconForSearchKind(MapSearchKind kind) {
+  switch (kind) {
+    case MapSearchKind.topo:
+      return 'wall';
+    case MapSearchKind.route:
+      return 'route';
+    case MapSearchKind.sector:
+      return 'signpost';
+    case MapSearchKind.area:
+      return 'mountain';
+  }
+}
+
+/// Per-[MapSearchKind] type-hint label for a `community-map-search-result-$i`
+/// row's subtitle (B3), prefixed onto [MapSearchResult.subtitle] when
+/// present (a route/topo's parent wall/area name) or shown alone (sectors/
+/// areas have no natural subtitle — see that field's doc).
+String _labelForSearchKind(MapSearchKind kind) {
+  switch (kind) {
+    case MapSearchKind.topo:
+      return 'Topo';
+    case MapSearchKind.route:
+      return 'Route';
+    case MapSearchKind.sector:
+      return 'Sector';
+    case MapSearchKind.area:
+      return 'Area';
   }
 }
 
