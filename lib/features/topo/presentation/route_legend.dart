@@ -3,9 +3,30 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
+
+/// #26: display label for [route] — `'<number>. <name>'` when
+/// [TopoRoute.name] is non-empty (after trimming), else the generic
+/// `'Route <number>'` fallback. Appends ` • <grade>` when
+/// [TopoRoute.gradeRaw] is set, regardless of which branch above fired.
+///
+/// Mirrors `LocatedRouteRef.title`'s identical name-vs-number fallback
+/// (`library_crud_repository.dart`) so a route's display name reads
+/// identically everywhere it's shown. Public (rather than a private
+/// function local to [RouteLegend]) so `CommunityTopoDetailScreen`'s own
+/// Routes list can share this exact same label/fallback logic instead of
+/// duplicating it.
+String routeDisplayLabel(TopoRoute route) {
+  final trimmedName = route.name?.trim();
+  final base = (trimmedName != null && trimmedName.isNotEmpty)
+      ? '${route.number}. $trimmedName'
+      : 'Route ${route.number}';
+  final grade = route.gradeRaw;
+  return grade != null ? '$base • $grade' : base;
+}
 
 /// Whether the [RouteLegend] panel is expanded (showing its route rows) or
 /// collapsed (hidden/minimized) — defaults to expanded in view mode. See
@@ -134,7 +155,6 @@ class RouteLegend extends ConsumerWidget {
           final route = drawState.routes[index];
           final isSelected = route.id == drawState.selectedRouteId;
           final color = colorForRoute(route, kRoutePalette);
-          final grade = route.gradeRaw;
 
           // Compact rows (refined alongside #15's floating-overlay legend):
           // `dense` + `VisualDensity.compact` shrink the ListTile's own
@@ -158,7 +178,7 @@ class RouteLegend extends ConsumerWidget {
             onTap: () => notifier.selectRoute(route.id),
             leading: CircleAvatar(backgroundColor: color, radius: 8),
             title: Text(
-              grade != null ? 'Route ${route.number} • $grade' : 'Route ${route.number}',
+              routeDisplayLabel(route),
               style: Theme.of(context).textTheme.bodyMedium,
               // Ellipsize rather than wrap: with up to three trailing
               // IconButtons now possible (log-ascent + visibility + delete),
