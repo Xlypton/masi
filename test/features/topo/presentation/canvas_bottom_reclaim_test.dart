@@ -394,10 +394,10 @@ void main() {
 
       // All 6 trailing glyphs are now simultaneously present: edit-metadata
       // (route selected) + AR (photo + a visible route) + mode-toggle +
-      // slice-mode-entry + edit-location + add-photo — the worst case for
-      // the top pill's trailing action row in view mode (the "Edit
-      // location" glyph joined this row after this test was first written
-      // — see topo_canvas_edit_location_test.dart).
+      // slice-mode-entry + locate-on-map + add-photo — the worst case for
+      // the top pill's trailing action row in view mode (the "locate on
+      // map" glyph is view mode's counterpart to the edit-location button,
+      // which moved to draw mode only — see topo_canvas_edit_location_test.dart).
       expect(
         find.byKey(const Key('topo-edit-metadata-button')),
         findsOneWidget,
@@ -406,7 +406,7 @@ void main() {
       expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
       expect(find.byKey(const Key('topo-slice-mode-button')), findsOneWidget);
       expect(
-        find.byKey(const Key('topo-edit-location-button')),
+        find.byKey(const Key('topo-locate-on-map-button')),
         findsOneWidget,
       );
       expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
@@ -481,7 +481,7 @@ void main() {
       expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
       expect(find.byKey(const Key('topo-slice-mode-button')), findsOneWidget);
       expect(
-        find.byKey(const Key('topo-edit-location-button')),
+        find.byKey(const Key('topo-locate-on-map-button')),
         findsOneWidget,
       );
       expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
@@ -519,7 +519,7 @@ void main() {
         'topo-ar-button',
         'topo-mode-toggle',
         'topo-slice-mode-button',
-        'topo-edit-location-button',
+        'topo-locate-on-map-button',
         'topo-add-photo-button',
       ]) {
         final rect = tester.getRect(find.byKey(Key(key)));

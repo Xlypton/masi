@@ -1451,7 +1451,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   ///  - otherwise: an optional edit-metadata glyph (route selected) + an
   ///    optional AR glyph (view mode, eligible wall) + the draw/view mode
   ///    toggle + (view mode only) the slice-mode entry point and the
-  ///    edit-location entry point.
+  ///    locate-on-map entry point + (draw mode only) the edit-location
+  ///    entry point.
   List<Widget> _topTrailingActions(
     BuildContext context,
     DrawState drawState,
@@ -1587,15 +1588,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
     }
 
-    // Edit/set this wall's map location — the canvas-screen counterpart to
+    // Set/edit this wall's map location — the canvas-screen counterpart to
     // `topos_screen.dart`'s overflow-menu "Set location"/"Edit location"
-    // item (previously the ONLY way to reach this flow). Kept to view mode,
-    // mirroring the AR button's own mode-gating above (see this method's
-    // doc), so draw mode's row stays uncluttered — but, unlike the AR/slice
-    // buttons, NOT gated on `activePhotoId != null`: a wall's location is a
-    // property of the WALL, not of any particular photo, so it's just as
-    // settable before a photo has ever been attached as after.
-    if (!widget.readOnly && drawState.mode == DrawMode.view) {
+    // item (previously the ONLY way to reach this flow). Per user feedback,
+    // this button now lives in DRAW mode only (moved from view mode — see
+    // the view-mode "locate on map" button just below for the mode split):
+    // editing IS a draw-mode action, alongside every other mutating control
+    // in this row (edit-metadata, add-photo, etc). NOT gated on
+    // `activePhotoId != null` like the slice/AR buttons above: a wall's
+    // location is a property of the WALL, not of any particular photo, so
+    // it's just as settable before a photo has ever been attached as after.
+    if (!widget.readOnly && drawState.mode == DrawMode.draw) {
       final hasCoords =
           currentTopo?.latitude != null && currentTopo?.longitude != null;
       actions.add(
@@ -1604,6 +1607,35 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           icon: MasiIcon('pin'),
           tooltip: hasCoords ? 'Edit location' : 'Set location',
           onPressed: () => _handleEditLocation(currentTopo),
+          color: colors.accent,
+          style: _topRowIconStyle(),
+        ),
+      );
+    }
+
+    // Locate this wall ON the map — the view-mode counterpart to the
+    // edit-location button above. Per user feedback ("only show the
+    // location edit button in edit mode, on normal mode use the button to
+    // locate the topo on the map"), view mode's glyph is no longer the
+    // picker: it's a read-only "show me where this is" jump into
+    // `/community`'s Map tab, focused on this wall — the EXACT same
+    // navigation `topos_screen.dart`'s `_handleShowOnMap` uses for its
+    // home-list "Show on map" menu item, reused verbatim so both entry
+    // points behave identically. Disabled (not hidden) when the wall has no
+    // coordinates yet — there's nothing to locate — mirroring
+    // `topos_screen.dart`'s own disabled "Show on map" menu item rather
+    // than making the control disappear.
+    if (!widget.readOnly && drawState.mode == DrawMode.view) {
+      final hasCoords =
+          currentTopo?.latitude != null && currentTopo?.longitude != null;
+      actions.add(
+        IconButton(
+          key: const Key('topo-locate-on-map-button'),
+          icon: MasiIcon('topo_map'),
+          tooltip: hasCoords ? 'Show on map' : 'No location set',
+          onPressed: hasCoords
+              ? () => context.push('/community?tab=map&focus=${widget.wallId}')
+              : null,
           color: colors.accent,
           style: _topRowIconStyle(),
         ),
