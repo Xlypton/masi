@@ -19,13 +19,17 @@ import '../data/map_search.dart';
 /// no results for that kind rather than surfacing an exception to the
 /// search UI.
 ///
-/// A plain (non-`autoDispose`) `Provider.family`: each distinct [query]
-/// string gets its own cached entry, recomputed whenever [query] changes or
-/// any of the four underlying streams re-emits. Tests can override
+/// An `autoDispose` `Provider.family`: each distinct [query] string gets its
+/// own cached entry, recomputed whenever [query] changes or any of the four
+/// underlying streams re-emits, and disposed once nothing is watching it —
+/// so a long session issuing many distinct search queries doesn't
+/// accumulate permanently-cached entries each subscribed to the underlying
+/// Drift streams forever. Tests can override
 /// [toposProvider]/[locatedRoutesProvider]/[locatedSectorsProvider]/
 /// [locatedAreasProvider] to seed fixed data without touching a real
 /// database.
-final mapContentSearchProvider = Provider.family<List<MapSearchResult>, String>(
+final mapContentSearchProvider =
+    Provider.autoDispose.family<List<MapSearchResult>, String>(
   (ref, query) {
     final topos = ref.watch(toposProvider).asData?.value ?? const [];
     final routes = ref.watch(locatedRoutesProvider).asData?.value ?? const [];
