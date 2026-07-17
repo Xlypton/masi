@@ -18,10 +18,12 @@ import '../features/topo/presentation/topo_canvas_screen.dart';
 /// plain query-parameter map, without needing a real [GoRouterState] or
 /// widget tree.
 ///
-/// `tab=map` selects the Map tab; any other value (including absent, which
-/// is every existing `/community` link/push in the app today) leaves `tab`
-/// `null`, matching [CommunityScreen]'s previous unconditional Feed-tab
-/// default exactly.
+/// `tab=map` selects the Map tab; any other value (including absent) leaves
+/// `tab` `null`, which [CommunityScreen] itself now defaults to the Map tab
+/// for — so an absent `tab` query param and an explicit `tab=map` currently
+/// behave identically. Kept `null` (rather than folded into an explicit
+/// `CommunityTab.map` here) so [CommunityScreen]'s own default stays the
+/// single source of truth for what "no `tab` param" means.
 ({CommunityTab? tab, String? focusWallId}) parseCommunityRouteParams(
   Map<String, String> queryParameters,
 ) {

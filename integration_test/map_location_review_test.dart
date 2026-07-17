@@ -201,7 +201,7 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 2));
 
     // ------------------------------------------------------------------
-    // Navigate: Topos home -> Community (feed tab by default).
+    // Navigate: Topos home -> Community (map tab by default).
     // ------------------------------------------------------------------
     final communityButton = find.byKey(const Key('home-community-button'));
     expect(
@@ -241,9 +241,7 @@ void main() {
         reason: 'community-map-marker-$wallId not found',
       );
     }
-    final myLocationMarker = find.byKey(
-      const Key('community-map-my-location'),
-    );
+    final myLocationMarker = find.byKey(const Key('community-map-my-location'));
     expect(
       tester.any(myLocationMarker),
       isTrue,

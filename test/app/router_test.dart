@@ -129,7 +129,18 @@ void main() {
         await _drain(tester);
 
         appRouter.go('/community');
-        await _drain(tester);
+        // Bounded pumps only -- deliberately NOT `_drain` (whose trailing
+        // `pumpAndSettle()` would wait on this route's REAL (production)
+        // `NetworkTileProvider`/`BuiltInMapCachingProviderImpl`, which needs
+        // a real `path_provider` cache directory never available under
+        // `flutter_test` -- see Q4's identical note below). `CommunityScreen`
+        // now opens on the Map tab by default, so this route builds a real
+        // `FlutterMap` immediately; a handful of bounded pumps is enough to
+        // let GoRouter resolve the route and build the widget tree without
+        // needing that tile fetch to settle.
+        for (var i = 0; i < 6; i++) {
+          await tester.pump(const Duration(milliseconds: 30));
+        }
 
         expect(find.byType(CommunityScreen), findsOneWidget);
       });
@@ -204,7 +215,14 @@ void main() {
       expect(find.byType(ToposScreen), findsOneWidget);
 
       await tester.tap(find.byKey(const Key('home-community-button')));
-      await _drain(tester);
+      // Bounded pumps only -- deliberately NOT `_drain` (whose trailing
+      // `pumpAndSettle()` would wait on this route's REAL (production)
+      // `NetworkTileProvider`, which `CommunityScreen` now builds
+      // immediately since it opens on the Map tab by default -- see the
+      // identical note on the D1a `/community` test above.
+      for (var i = 0; i < 6; i++) {
+        await tester.pump(const Duration(milliseconds: 30));
+      }
 
       expect(find.byType(CommunityScreen), findsOneWidget);
     });
@@ -238,7 +256,7 @@ void main() {
       expect(result.focusWallId, isNull);
     });
 
-    test('any non-"map" tab value -> null (defaults to Feed)', () {
+    test('any non-"map" tab value -> null (defaults to Map)', () {
       final result = parseCommunityRouteParams(const {'tab': 'feed'});
       expect(result.tab, isNull);
     });
@@ -259,14 +277,14 @@ void main() {
     });
   });
 
-  group('Q4: /community?tab=map&focus=X builds CommunityScreen focused on X', () {
-    setUp(() => appRouter.go('/'));
+  group(
+    'Q4: /community?tab=map&focus=X builds CommunityScreen focused on X',
+    () {
+      setUp(() => appRouter.go('/'));
 
-    testWidgets(
-      'navigating to /community?tab=map&focus=wall-x builds a '
-      'CommunityScreen with initialTab=CommunityTab.map and '
-      'focusWallId=wall-x',
-      (tester) async {
+      testWidgets('navigating to /community?tab=map&focus=wall-x builds a '
+          'CommunityScreen with initialTab=CommunityTab.map and '
+          'focusWallId=wall-x', (tester) async {
         final container = _makeContainer();
 
         await tester.pumpWidget(_wrapRouter(container));
@@ -294,7 +312,7 @@ void main() {
         );
         expect(screen.initialTab, CommunityTab.map);
         expect(screen.focusWallId, 'wall-x');
-      },
-    );
-  });
+      });
+    },
+  );
 }

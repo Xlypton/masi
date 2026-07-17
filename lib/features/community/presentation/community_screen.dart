@@ -128,7 +128,7 @@ enum CommunityTab { feed, map }
 /// fake so switching to the Map tab never performs real network I/O.
 ///
 /// [initialTab] selects which tab this screen opens on (`null`, the
-/// default, opens on Feed — the screen's previous unconditional behavior).
+/// default, opens on Map — the screen's current unconditional behavior).
 /// [focusWallId], when the Map tab is shown, centers/zooms the map on that
 /// wall's coordinates instead of the combined marker-set center — see
 /// `_MapView`'s `focusWallId` doc.
@@ -170,7 +170,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
   @override
   void initState() {
     super.initState();
-    _tab = widget.initialTab ?? CommunityTab.feed;
+    _tab = widget.initialTab ?? CommunityTab.map;
     _searchController.addListener(_onSearchChanged);
   }
 
@@ -233,8 +233,7 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
                         controller: widget.mapController,
                         tileHttpClientFactory: widget.tileHttpClientFactory,
                       ),
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
+                loading: () => const Center(child: CircularProgressIndicator()),
                 error: (error, stackTrace) =>
                     Center(child: Text('Something went wrong: $error')),
               ),
@@ -986,8 +985,9 @@ class _MapViewState extends ConsumerState<_MapView> {
       // directory `flutter_test` never provides. Production
       // (`testFactory == null`) is completely unaffected and keeps the
       // default on-disk cache.
-      cachingProvider:
-          testFactory != null ? const DisabledMapCachingProvider() : null,
+      cachingProvider: testFactory != null
+          ? const DisabledMapCachingProvider()
+          : null,
     );
     _resilientTileProvider = provider;
     return provider;
@@ -1003,9 +1003,9 @@ class _MapViewState extends ConsumerState<_MapView> {
     final location = await ref.read(locationServiceProvider).currentLocation();
     if (!mounted) return;
     if (location == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location unavailable')),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('Location unavailable')));
       return;
     }
     _mapController.move(LatLng(location.latitude, location.longitude), 14);
@@ -1155,30 +1155,26 @@ class _MapViewState extends ConsumerState<_MapView> {
     // either) deliberately still falls through to the (0,0)/1.5 fallback
     // below rather than silently substituting the device's own location for
     // a link that named a specific, different place.
-    final useMyLocationFallback = widget.focusWallId == null &&
-        myLocation != null;
+    final useMyLocationFallback =
+        widget.focusWallId == null && myLocation != null;
 
     final center =
         focusPoint ??
         (combinedCoords.isEmpty
             ? (useMyLocationFallback
-                ? LatLng(myLocation.latitude, myLocation.longitude)
-                : const LatLng(0, 0))
+                  ? LatLng(myLocation.latitude, myLocation.longitude)
+                  : const LatLng(0, 0))
             : LatLng(
-                combinedCoords.map((p) => p.latitude).reduce(
-                      (a, b) => a + b,
-                    ) /
+                combinedCoords.map((p) => p.latitude).reduce((a, b) => a + b) /
                     combinedCoords.length,
-                combinedCoords.map((p) => p.longitude).reduce(
-                      (a, b) => a + b,
-                    ) /
+                combinedCoords.map((p) => p.longitude).reduce((a, b) => a + b) /
                     combinedCoords.length,
               ));
     final zoom = focusPoint != null
         ? 15.0
         : (combinedCoords.isEmpty
-            ? (useMyLocationFallback ? 12.0 : 1.5)
-            : 11.0);
+              ? (useMyLocationFallback ? 12.0 : 1.5)
+              : 11.0);
 
     final flutterMap = FlutterMap(
       mapController: _mapController,
@@ -1195,7 +1191,8 @@ class _MapViewState extends ConsumerState<_MapView> {
           // re-requested, leaving a permanent gray rectangle even as the
           // user zooms/pans past it. Evicting off-screen error tiles lets
           // them be re-fetched next time they scroll into view.
-          evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
+          evictErrorTileStrategy:
+              EvictErrorTileStrategy.notVisibleRespectMargin,
           // CartoDB's light_all basemap serves real tiles through z20;
           // without this flutter_map stops fetching past its default native
           // zoom and upscales/blurs the last real tile instead.
@@ -1301,9 +1298,9 @@ class _MapViewState extends ConsumerState<_MapView> {
                     key: const Key('community-map-attribution'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: colors.ink2,
-                    ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelSmall?.copyWith(color: colors.ink2),
                   ),
                 ),
               ),
@@ -1490,7 +1487,12 @@ class _MapLegendRow extends StatelessWidget {
           ),
         ),
         const SizedBox(width: 6),
-        Text(label, style: textStyle, maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(
+          label,
+          style: textStyle,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
       ],
     );
   }
@@ -1516,11 +1518,7 @@ class _MyLocationMarker extends StatelessWidget {
         shape: BoxShape.circle,
         border: Border.all(color: Colors.white, width: 3),
         boxShadow: const [
-          BoxShadow(
-            color: Colors.black38,
-            blurRadius: 4,
-            offset: Offset(0, 1),
-          ),
+          BoxShadow(color: Colors.black38, blurRadius: 4, offset: Offset(0, 1)),
         ],
       ),
     );
@@ -1683,10 +1681,8 @@ class _BoulderPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final silhouette = Path()..addPolygon(
-      _silhouette.map((o) => _scale(o, size)).toList(),
-      true,
-    );
+    final silhouette = Path()
+      ..addPolygon(_silhouette.map((o) => _scale(o, size)).toList(), true);
 
     // Soft shadow, a low ellipse just under the boulder's base.
     canvas.drawOval(
