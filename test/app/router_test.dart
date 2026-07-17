@@ -277,14 +277,14 @@ void main() {
     });
   });
 
-  group(
-    'Q4: /community?tab=map&focus=X builds CommunityScreen focused on X',
-    () {
-      setUp(() => appRouter.go('/'));
+  group('Q4: /community?tab=map&focus=X builds CommunityScreen focused on X', () {
+    setUp(() => appRouter.go('/'));
 
-      testWidgets('navigating to /community?tab=map&focus=wall-x builds a '
-          'CommunityScreen with initialTab=CommunityTab.map and '
-          'focusWallId=wall-x', (tester) async {
+    testWidgets(
+      'navigating to /community?tab=map&focus=wall-x builds a '
+      'CommunityScreen with initialTab=CommunityTab.map and '
+      'focusWallId=wall-x',
+      (tester) async {
         final container = _makeContainer();
 
         await tester.pumpWidget(_wrapRouter(container));
@@ -312,7 +312,7 @@ void main() {
         );
         expect(screen.initialTab, CommunityTab.map);
         expect(screen.focusWallId, 'wall-x');
-      });
-    },
-  );
+      },
+    );
+  });
 }

@@ -82,9 +82,7 @@ const List<(String name, double lat, double lng, Color accent)> _mapCrags = [
 /// (`visibility -> 'shared'`) so it shows up on the Community map, and has
 /// its coordinates set via [LibraryCrudRepository.setWallCoordinates].
 /// Returns the seeded wall ids in the same order as [_mapCrags].
-Future<List<String>> _seedMapReviewTopos(
-  String Function(String name) imagePathFor,
-) async {
+Future<List<String>> _seedMapReviewTopos(String Function(String name) imagePathFor) async {
   final docsDir = await getApplicationDocumentsDirectory();
   final dbFile = File(p.join(docsDir.path, 'climbtopo.sqlite'));
   if (await dbFile.exists()) {
@@ -126,76 +124,73 @@ Future<List<String>> _seedMapReviewTopos(
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets(
-    'map review: seeded+published walls with coordinates, community map screenshots',
-    (tester) async {
-      final docsDir = await getApplicationDocumentsDirectory();
+  testWidgets('map review: seeded+published walls with coordinates, community map screenshots', (
+    tester,
+  ) async {
+    final docsDir = await getApplicationDocumentsDirectory();
 
-      final wallIds = await _seedMapReviewTopos(
-        (name) => p.join(
-          docsDir.path,
-          'map_review_${name.toLowerCase().replaceAll(' ', '_')}.png',
-        ),
-      );
-      expect(wallIds, hasLength(3));
+    final wallIds = await _seedMapReviewTopos(
+      (name) => p.join(
+        docsDir.path,
+        'map_review_${name.toLowerCase().replaceAll(' ', '_')}.png',
+      ),
+    );
+    expect(wallIds, hasLength(3));
 
-      app.main();
-      await tester.pumpAndSettle(const Duration(seconds: 2));
+    app.main();
+    await tester.pumpAndSettle(const Duration(seconds: 2));
 
-      // ------------------------------------------------------------------
-      // Navigate: Topos home -> Community (map tab by default).
-      // ------------------------------------------------------------------
-      final communityButton = find.byKey(const Key('home-community-button'));
+    // ------------------------------------------------------------------
+    // Navigate: Topos home -> Community (map tab by default).
+    // ------------------------------------------------------------------
+    final communityButton = find.byKey(const Key('home-community-button'));
+    expect(
+      tester.any(communityButton),
+      isTrue,
+      reason: 'home-community-button not found',
+    );
+    await tester.tap(communityButton);
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+
+    // ------------------------------------------------------------------
+    // Switch to the Map tab.
+    // ------------------------------------------------------------------
+    final mapToggle = find.byKey(const Key('community-map-toggle'));
+    expect(
+      tester.any(mapToggle),
+      isTrue,
+      reason: 'community-map-toggle not found',
+    );
+    await tester.tap(mapToggle);
+    // Do NOT pumpAndSettle: flutter_map's tile fade-in animation never
+    // settles. Pump fixed durations instead to give tiles a chance to load
+    // (real network in the simulator) before screenshotting.
+    await tester.pump(const Duration(milliseconds: 500));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 1));
+
+    // ------------------------------------------------------------------
+    // 01. Community map overview: 3 pin markers over the CartoDB basemap.
+    // ------------------------------------------------------------------
+    for (final wallId in wallIds) {
+      final marker = find.byKey(Key('community-map-marker-$wallId'));
       expect(
-        tester.any(communityButton),
+        tester.any(marker),
         isTrue,
-        reason: 'home-community-button not found',
+        reason: 'community-map-marker-$wallId not found',
       );
-      await tester.tap(communityButton);
-      await tester.pumpAndSettle(const Duration(seconds: 1));
+    }
+    await binding.takeScreenshot('map-01-overview');
 
-      // ------------------------------------------------------------------
-      // Switch to the Map tab.
-      // ------------------------------------------------------------------
-      final mapToggle = find.byKey(const Key('community-map-toggle'));
-      expect(
-        tester.any(mapToggle),
-        isTrue,
-        reason: 'community-map-toggle not found',
-      );
-      await tester.tap(mapToggle);
-      // Do NOT pumpAndSettle: flutter_map's tile fade-in animation never
-      // settles. Pump fixed durations instead to give tiles a chance to load
-      // (real network in the simulator) before screenshotting.
-      await tester.pump(const Duration(milliseconds: 500));
-      await tester.pump(const Duration(seconds: 1));
-      await tester.pump(const Duration(seconds: 1));
-      await tester.pump(const Duration(seconds: 1));
-
-      // ------------------------------------------------------------------
-      // 01. Community map overview: 3 pin markers over the CartoDB basemap.
-      // ------------------------------------------------------------------
-      for (final wallId in wallIds) {
-        final marker = find.byKey(Key('community-map-marker-$wallId'));
-        expect(
-          tester.any(marker),
-          isTrue,
-          reason: 'community-map-marker-$wallId not found',
-        );
-      }
-      await binding.takeScreenshot('map-01-overview');
-
-      // ------------------------------------------------------------------
-      // 02. Tap the first marker. This navigates to the topo detail screen
-      // (see community_screen.dart's `_MapView` marker `onTap`), so
-      // screenshot the detail rather than the map.
-      // ------------------------------------------------------------------
-      final firstMarker = find.byKey(
-        Key('community-map-marker-${wallIds.first}'),
-      );
-      await tester.tap(firstMarker);
-      await tester.pumpAndSettle(const Duration(seconds: 1));
-      await binding.takeScreenshot('map-02-detail');
-    },
-  );
+    // ------------------------------------------------------------------
+    // 02. Tap the first marker. This navigates to the topo detail screen
+    // (see community_screen.dart's `_MapView` marker `onTap`), so
+    // screenshot the detail rather than the map.
+    // ------------------------------------------------------------------
+    final firstMarker = find.byKey(Key('community-map-marker-${wallIds.first}'));
+    await tester.tap(firstMarker);
+    await tester.pumpAndSettle(const Duration(seconds: 1));
+    await binding.takeScreenshot('map-02-detail');
+  });
 }

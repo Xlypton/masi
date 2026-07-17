@@ -241,7 +241,9 @@ void main() {
         reason: 'community-map-marker-$wallId not found',
       );
     }
-    final myLocationMarker = find.byKey(const Key('community-map-my-location'));
+    final myLocationMarker = find.byKey(
+      const Key('community-map-my-location'),
+    );
     expect(
       tester.any(myLocationMarker),
       isTrue,
