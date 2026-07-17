@@ -1564,7 +1564,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       actions.add(
         IconButton(
           key: const Key('topo-ar-button'),
-          icon: MasiIcon('ar_cube'),
+          icon: MasiIcon('ar_peak'),
           tooltip: 'View in AR',
           onPressed: () => context.push('/walls/${widget.wallId}/ar'),
           color: colors.accent,
