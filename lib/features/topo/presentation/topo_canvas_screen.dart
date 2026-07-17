@@ -308,6 +308,7 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
     super.key,
     required this.wallId,
     this.readOnly = false,
+    this.embedded = false,
     @visibleForTesting this.debugInitialImageSize,
     @visibleForTesting this.setLocationTileProvider,
     @visibleForTesting this.setLocationMapController,
@@ -338,6 +339,39 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
   /// this screen exactly (no gate added below ever fires for an existing
   /// call site) — see this class's regression-guard tests.
   final bool readOnly;
+
+  /// When `true`, this screen additionally suppresses its own floating
+  /// chrome: the top [GlassChrome] pill (wall-name title + the
+  /// `topo-back-button` back chevron, plus the symbol palette/photo
+  /// selector that would otherwise share that band) and the floating
+  /// [RouteLegend] overlay (both its expanded card and its collapsed chip)
+  /// are not painted at all. The photo itself and its route overlays
+  /// ([TopoCanvas]/`TopoPainter`) are UNAFFECTED — they render exactly as
+  /// they would with `embedded: false`.
+  ///
+  /// This exists for `CommunityTopoDetailScreen`'s collapsing-header
+  /// preview, which embeds a gesture-inert (`IgnorePointer`-wrapped) copy of
+  /// this screen purely to show the photo/routes: that embed used to still
+  /// PAINT this screen's own back chevron (`topo-back-button`) and route
+  /// legend even though neither was reachable (`IgnorePointer` swallows all
+  /// pointer events for that subtree) — a ghost back button that looks
+  /// identical to a real one, but tapping the header opens the full canvas
+  /// FORWARD rather than going back, which read as a misleading affordance.
+  /// `embedded: true` removes both purely-decorative pieces so only the
+  /// photo/routes preview remains; the header's own real back button
+  /// (`community-detail-back-button`) is unaffected — it lives outside this
+  /// widget entirely.
+  ///
+  /// Independent of [readOnly]: the full-screen canvas
+  /// `CommunityTopoDetailScreen._openFullCanvas` pushes is still `readOnly:
+  /// true` but leaves `embedded` at its default `false`, so it keeps
+  /// showing its normal top pill + legend chrome — only the collapsing
+  /// header's embedded preview goes chromeless.
+  ///
+  /// Defaults to `false`, which preserves every pre-existing call site's
+  /// behavior exactly (no gate added below ever fires unless a caller opts
+  /// in) — see this class's regression-guard tests.
+  final bool embedded;
 
   /// TEST-ONLY seam: when non-null, [_TopoCanvasScreenState.build] uses this
   /// as the resolved natural image size for whatever photo path ends up
@@ -1255,71 +1289,78 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                 ? _buildEmptyState(context)
                 : _buildCanvasArea(imagePath, drawState),
           ),
-          Positioned(
-            top: 0,
-            left: 0,
-            right: 0,
-            child: SafeArea(
-              bottom: false,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(
-                  MasiSpacing.lg,
-                  MasiSpacing.sm,
-                  MasiSpacing.lg,
-                  0,
-                ),
-                // The title row and the (slice-eligible-only) PhotoSelector
-                // now share a SINGLE GlassChrome card (an inner Column keeps
-                // them from overlapping — no transparent gap between them
-                // exposes the full-bleed photo behind). The (draw-mode-only)
-                // symbol palette remains a separate floating sibling below,
-                // in this outer Column, so it still can never overlap the
-                // shared card: its position is always "directly below
-                // whatever's already rendered above it, plus a fixed gap",
-                // which a Column gives for free without needing to know the
-                // other's runtime size.
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    GlassChrome(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 6,
-                        vertical: 4,
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          _buildTopChromeRow(
-                            context,
-                            colors,
-                            title,
-                            drawState,
-                            drawNotifier,
-                            currentTopo,
-                          ),
-                          if (showPhotoSelector) ...[
-                            Divider(
-                              height: MasiSpacing.sm,
-                              thickness: 1,
-                              color: colors.separator,
+          // `embedded` gate (ghost-back-chevron fix — see
+          // TopoCanvasScreen.embedded's doc): this whole block is the top
+          // GlassChrome pill (wall-name title + `topo-back-button`, plus the
+          // symbol palette/photo selector that share its band) — none of it
+          // paints at all when embedded, rather than merely being made
+          // gesture-inert by an ancestor IgnorePointer as before.
+          if (!widget.embedded)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    MasiSpacing.lg,
+                    MasiSpacing.sm,
+                    MasiSpacing.lg,
+                    0,
+                  ),
+                  // The title row and the (slice-eligible-only) PhotoSelector
+                  // now share a SINGLE GlassChrome card (an inner Column keeps
+                  // them from overlapping — no transparent gap between them
+                  // exposes the full-bleed photo behind). The (draw-mode-only)
+                  // symbol palette remains a separate floating sibling below,
+                  // in this outer Column, so it still can never overlap the
+                  // shared card: its position is always "directly below
+                  // whatever's already rendered above it, plus a fixed gap",
+                  // which a Column gives for free without needing to know the
+                  // other's runtime size.
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      GlassChrome(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 6,
+                          vertical: 4,
+                        ),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            _buildTopChromeRow(
+                              context,
+                              colors,
+                              title,
+                              drawState,
+                              drawNotifier,
+                              currentTopo,
                             ),
-                            PhotoSelector(
-                              originalPhotoId: drawState.activePhotoId!,
-                              slices: _slices,
-                            ),
+                            if (showPhotoSelector) ...[
+                              Divider(
+                                height: MasiSpacing.sm,
+                                thickness: 1,
+                                color: colors.separator,
+                              ),
+                              PhotoSelector(
+                                originalPhotoId: drawState.activePhotoId!,
+                                slices: _slices,
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
-                    ),
-                    if (showSymbolPalette) ...[
-                      const SizedBox(height: MasiSpacing.sm),
-                      const SymbolPaletteBar(),
+                      if (showSymbolPalette) ...[
+                        const SizedBox(height: MasiSpacing.sm),
+                        const SymbolPaletteBar(),
+                      ],
                     ],
-                  ],
+                  ),
                 ),
               ),
             ),
-          ),
           Positioned(
             left: 0,
             right: 0,
@@ -1805,6 +1846,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       slices: _slices,
       canvasKey: _canvasKey,
       readOnly: widget.readOnly,
+      // See TopoCanvasScreen.embedded's doc: suppresses TopoCanvasBody's own
+      // floating RouteLegend overlay (both its expanded card and its
+      // collapsed chip) for the community header's embedded preview, while
+      // leaving the photo + route overlays (TopoCanvas/TopoPainter) shown
+      // exactly as they otherwise would be.
+      embedded: widget.embedded,
       // Only ever wired when NOT readOnly: the community (readOnly) canvas
       // has its own separate per-route log-ascent button on
       // CommunityTopoDetailScreen — see RouteLegend.onLogAscent's doc for
@@ -1904,6 +1951,7 @@ class TopoCanvasBody extends ConsumerWidget {
     this.slices = const [],
     this.canvasKey,
     this.readOnly = false,
+    this.embedded = false,
     this.onLogAscent,
   });
 
@@ -1952,6 +2000,16 @@ class TopoCanvasBody extends ConsumerWidget {
   /// Null (the default) preserves every pre-existing call site/test that
   /// doesn't care about [TopoCanvas]'s identity across rebuilds.
   final Key? canvasKey;
+
+  /// See [TopoCanvasScreen.embedded]'s doc. When `true`, [build] never
+  /// paints the floating [RouteLegend] overlay — neither its expanded
+  /// [GlassChrome] card (`topo-route-legend-overlay`) nor its collapsed
+  /// [_LegendChip] (`topo-route-legend-chip`) — regardless of [hasRoutes]/
+  /// [legendExpandedProvider]. The canvas ([TopoCanvas]) and, while
+  /// `sliceMode` is active, [SliceTool] are unaffected: only the legend
+  /// overlay is gated by this flag. Defaults to `false`, preserving every
+  /// pre-existing call site's behavior exactly.
+  final bool embedded;
 
   /// Passed straight through to [RouteLegend.onLogAscent] — see that
   /// field's doc. Null (the default, and always what [TopoCanvasScreen]
@@ -2096,7 +2154,7 @@ class TopoCanvasBody extends ConsumerWidget {
                   // finder for that key is a true "is the full card showing"
                   // signal — absent while only the collapsed chip
                   // (`topo-route-legend-chip`) is present.
-                  if (hasRoutes)
+                  if (hasRoutes && !embedded)
                     Positioned(
                       left: MasiSpacing.md,
                       right: MasiSpacing.md,

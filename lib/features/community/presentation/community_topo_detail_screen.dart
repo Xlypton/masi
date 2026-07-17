@@ -205,16 +205,27 @@ class _CommunityTopoDetailScreenState
                       // same arena-resolution every tappable row inside an
                       // ordinary scrollable list already relies on.
                       //
-                      // Trade-off (flagged for review): the embedded screen
-                      // still draws its OWN top chrome pill (wall name + a
-                      // `chevron_left` back button) — now purely decorative,
-                      // since IgnorePointer makes it inert. This screen's own
-                      // `community-detail-back-button` above is the only
-                      // FUNCTIONAL back control; the embedded pill's chevron
-                      // is a harmless, non-tappable visual duplicate.
+                      // Ghost-chevron fix: the embedded screen used to still
+                      // PAINT its own top chrome pill (wall name + a
+                      // `chevron_left` back button) and floating route
+                      // legend — purely decorative once IgnorePointer made
+                      // them inert, but the back chevron looked identical to
+                      // a REAL back button while tapping the header actually
+                      // goes forward into the full canvas (via the
+                      // GestureDetector below), a misleading affordance. Also
+                      // a visible symptom of legendExpandedProvider/
+                      // drawControllerProvider being app-lifetime globals
+                      // shared with whatever full-screen canvas is
+                      // simultaneously live (see TopoCanvasScreen.embedded's
+                      // doc). `embedded: true` suppresses both — this
+                      // screen's own `community-detail-back-button` above is
+                      // the only FUNCTIONAL back control, and this header
+                      // never showed its own route legend anyway (the
+                      // "Routes" section below does that job).
                       child: TopoCanvasScreen(
                         wallId: wallId,
                         readOnly: true,
+                        embedded: true,
                         // ignore: invalid_use_of_visible_for_testing_member
                         debugInitialImageSize: widget.debugInitialImageSize,
                       ),

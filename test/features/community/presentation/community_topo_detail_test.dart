@@ -10,7 +10,9 @@ import 'package:climbtopo/features/logbook/application/ascents_providers.dart';
 import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
 import 'package:climbtopo/features/topo/data/route_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -204,8 +206,8 @@ void main() {
   }
 
   testWidgets(
-    'D4a: read-only detail hides every editing affordance but keeps the '
-    'route legend',
+    'D4a: read-only detail hides every editing affordance, and (since the '
+    'embedded header is now chromeless) its own floating route legend too',
     (tester) async {
       final seeded = await seedWallWithRoute(tester);
       addTearDown(seeded.db.close);
@@ -252,12 +254,33 @@ void main() {
       // to gate on readOnly too.
       expect(find.textContaining('Publish'), findsNothing);
 
-      // The route legend (routes + swatches) still renders.
-      expect(find.byKey(const Key('topo-route-legend')), findsOneWidget);
-      expect(find.textContaining('Route 1'), findsWidgets);
+      // #31 ghost-chevron/legend-bleed fix: the header's embedded
+      // TopoCanvasScreen is `embedded: true` (see TopoCanvasScreen.embedded's
+      // doc), so it never paints its own floating RouteLegend overlay at
+      // all — neither the expanded card (`topo-route-legend-overlay`, whose
+      // own RouteLegend child carries this `topo-route-legend` key) nor the
+      // collapsed chip (`topo-route-legend-chip`). This used to assert the
+      // opposite ("still renders") before `embedded` existed.
+      expect(find.byKey(const Key('topo-route-legend')), findsNothing);
+      expect(
+        find.byKey(const Key('topo-route-legend-overlay')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('topo-route-legend-chip')), findsNothing);
+
+      // The route is still visible, just via this screen's own "Routes"
+      // section below the header rather than the (now-suppressed) embedded
+      // legend — skipOffstage: false since that section starts below the
+      // initial viewport fold (see scrollKeyIntoView's doc).
+      expect(
+        find.textContaining('Route 1', skipOffstage: false),
+        findsWidgets,
+      );
 
       // The legend's own editing affordances (visibility/delete) are also
-      // hidden in read-only mode.
+      // hidden in read-only mode — moot now that no legend renders at all
+      // in the embedded header, but kept as a belt-and-suspenders guard in
+      // case a future change resurrects it there.
       expect(find.byKey(const Key('topo-route-visibility-1')), findsNothing);
       expect(find.byKey(const Key('topo-route-delete-1')), findsNothing);
     },
@@ -496,11 +519,13 @@ void main() {
       // are pure existence checks (no tap), so skipping that visibility
       // filter is enough — no scrolling needed.
       //
-      // Named + graded route: "1. Sunny Arete • 6a". `findsWidgets` (not
-      // `findsOneWidget`) because the SAME label also renders inside the
-      // collapsing header's own embedded (gesture-disabled) RouteLegend —
-      // see this screen's `_openFullCanvas` doc for why that copy is
-      // intentionally left in the tree, just inert.
+      // Named + graded route: "1. Sunny Arete • 6a". `findsWidgets` (rather
+      // than the stricter `findsOneWidget`) purely to stay tolerant of
+      // exactly how many places this label happens to render — currently
+      // just this screen's own "Routes" section, since #31 made the
+      // collapsing header's embedded TopoCanvasScreen `embedded: true` (see
+      // that flag's doc), which suppresses its own floating RouteLegend
+      // (and hence this same label) entirely.
       expect(
         find.text('1. Sunny Arete • 6a', skipOffstage: false),
         findsWidgets,
@@ -678,6 +703,108 @@ void main() {
       expect(screens.length, greaterThan(countBefore));
       expect(screens.every((w) => w.readOnly), isTrue);
       expect(screens.every((w) => w.wallId == seeded.wallId), isTrue);
+    },
+  );
+
+  testWidgets(
+    '#31: the header\'s embedded canvas is chromeless — no '
+    'topo-back-button, no floating route legend — while the photo + route '
+    'overlays still render',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // Ghost-chevron/legend-bleed fix: the header's embedded
+      // TopoCanvasScreen is `embedded: true` (see TopoCanvasScreen.embedded's
+      // doc) — its own top GlassChrome pill (wall-name title + the
+      // `topo-back-button` chevron) is never painted at all now, not merely
+      // made inert by the ancestor IgnorePointer as it used to be.
+      expect(find.byKey(const Key('topo-back-button')), findsNothing);
+
+      // Nor is its floating RouteLegend overlay, in either form.
+      expect(find.byKey(const Key('topo-route-legend')), findsNothing);
+      expect(
+        find.byKey(const Key('topo-route-legend-overlay')),
+        findsNothing,
+      );
+      expect(find.byKey(const Key('topo-route-legend-chip')), findsNothing);
+
+      // The photo + its route overlays still render: TopoCanvas is mounted
+      // with the resolved image size, and TopoPainter (the actual
+      // photo/route-overlay renderer) is fed the wall's committed route —
+      // only the interactive/floating chrome is suppressed, per
+      // TopoCanvasScreen.embedded's contract.
+      final canvas = tester.widget<TopoCanvas>(find.byType(TopoCanvas));
+      expect(canvas.imageSize, const Size(1000, 2000));
+
+      // Mirrors topo_canvas_fit_test.dart's own `findTopoPainter` idiom.
+      final customPaint = tester.widget<CustomPaint>(
+        find.byWidgetPredicate(
+          (widget) => widget is CustomPaint && widget.painter is TopoPainter,
+        ),
+      );
+      final painter = customPaint.painter as TopoPainter;
+      expect(painter.routes, hasLength(1));
+
+      // This screen's own back button — the only FUNCTIONAL one — is
+      // unaffected by any of the above.
+      expect(
+        find.byKey(const Key('community-detail-back-button')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    '#31: the full-screen canvas pushed via community-detail-open-canvas '
+    'still shows its own top pill + route legend chrome (embedded is only '
+    'ever set on the header\'s copy, never on the pushed one)',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('community-detail-open-canvas')));
+      await tester.pumpAndSettle();
+
+      // The pushed, full-screen TopoCanvasScreen (`_openFullCanvas` leaves
+      // `embedded` at its default `false`) keeps its normal top pill and
+      // route legend — only the header's own embedded preview goes
+      // chromeless. `skipOffstage: false` since the header's now-covered,
+      // still-mounted copy remains in the tree too (see the D2 test's own
+      // doc) and neither of these keys is unique to whichever copy is on
+      // top.
+      expect(
+        find.byKey(const Key('topo-back-button'), skipOffstage: false),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('topo-route-legend'), skipOffstage: false),
+        findsOneWidget,
+      );
     },
   );
 }
