@@ -1979,12 +1979,24 @@ void main() {
           find.byKey(const Key('set-location-crosshair')),
           findsOneWidget,
         );
+        // "New Wall" has no coordinates yet (`initial == null`), so nothing
+        // has been actively chosen the moment the picker opens -- Save must
+        // start disabled rather than ready to silently pop whatever the
+        // camera happens to be centered on (see set_location_picker.dart's
+        // `_locationChosen`/data-integrity fix).
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNull,
+        );
+        expect(find.byKey(const Key('set-location-hint')), findsOneWidget);
       },
     );
 
     testWidgets(
-      'S-L3: panning the map (moving the injected MapController) then '
-      'tapping Save writes the new center via setWallCoordinates and shows '
+      'S-L3: panning the map via a REAL drag gesture then tapping Save '
+      'writes the post-drag camera center via setWallCoordinates and shows '
       'a "Location saved" confirmation SnackBar',
       (tester) async {
         final controller = MapController();
@@ -2013,12 +2025,40 @@ void main() {
         await tester.tap(find.byKey(Key('topo-set-location-$wallId')));
         await tester.pumpAndSettle();
 
-        // Simulate the user panning the map: move the injected controller
-        // directly rather than driving a real drag gesture -- the crosshair
-        // is fixed to the screen center, so "where the pin points" is
-        // exactly wherever `camera.center` ends up.
-        controller.move(const LatLng(47.5, 19.04), 14);
+        // "New Wall" has no coordinates, so the picker opens on the neutral
+        // (0, 0) world view and Save starts disabled (see S-L2).
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNull,
+        );
+
+        // Simulate the user ACTUALLY panning the map: a real drag gesture
+        // on the FlutterMap, which flutter_map reports to
+        // `MapOptions.onPositionChanged` as `hasGesture: true` -- unlike a
+        // programmatic `MapController.move` (what the old, buggy silent
+        // recenter used, and what S-L3 itself used to drive here), this is
+        // what's actually required to flip `_locationChosen` and enable
+        // Save now. The crosshair is fixed to the screen center, so
+        // "where the pin points" is exactly wherever `camera.center` ends
+        // up after the drag.
+        await tester.drag(find.byType(FlutterMap), const Offset(-120, -80));
         await tester.pump();
+
+        final centerAfterDrag = controller.camera.center;
+        // Sanity: the drag actually moved the camera away from the (0, 0)
+        // starting view -- otherwise the assertions below would pass
+        // vacuously even if the drag were a no-op.
+        expect(centerAfterDrag.latitude.abs(), greaterThan(0.01));
+        expect(centerAfterDrag.longitude.abs(), greaterThan(0.01));
+
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNotNull,
+        );
 
         await tester.tap(find.byKey(const Key('set-location-save')));
         await _drain(tester);
@@ -2033,8 +2073,11 @@ void main() {
         final saved = topos.firstWhere((t) => t.wallId == wallId);
         expect(saved.latitude, isNotNull);
         expect(saved.longitude, isNotNull);
-        expect(saved.latitude!, closeTo(47.5, 0.0001));
-        expect(saved.longitude!, closeTo(19.04, 0.0001));
+        // The persisted coordinates are exactly the camera center at the
+        // moment of the (real, gesture-driven) pan -- not some other value
+        // the silent recenter or the neutral fallback might have left it at.
+        expect(saved.latitude!, closeTo(centerAfterDrag.latitude, 0.0001));
+        expect(saved.longitude!, closeTo(centerAfterDrag.longitude, 0.0001));
       },
     );
 
@@ -2080,7 +2123,9 @@ void main() {
     );
 
     testWidgets(
-      'S-L5: "use my location" moves the map to the fake device fix',
+      'S-L5: "use my location" moves the map to the fake device fix, counts '
+      'as an active choice (enabling Save), and Save then pops exactly that '
+      'fix',
       (tester) async {
         final controller = MapController();
         addTearDown(controller.dispose);
@@ -2102,15 +2147,24 @@ void main() {
           ),
         );
 
-        unawaited(
-          showSetLocationPicker(
-            capturedContext,
-            tileProvider: _NoopTileProvider(),
-            controller: controller,
-            locationService: fakeLocation,
-          ),
+        // Captured (rather than `unawaited`) so this test can await it to
+        // completion below, once Save is tapped.
+        final pickerFuture = showSetLocationPicker(
+          capturedContext,
+          tileProvider: _NoopTileProvider(),
+          controller: controller,
+          locationService: fakeLocation,
         );
         await tester.pumpAndSettle();
+
+        // No interaction yet (`initial` is null) -- Save must start
+        // disabled.
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNull,
+        );
 
         await tester.tap(find.byKey(const Key('set-location-my-location')));
         await _drain(tester);
@@ -2118,6 +2172,162 @@ void main() {
         final center = controller.camera.center;
         expect((center.latitude - 40.0).abs(), lessThan(0.01));
         expect((center.longitude - (-3.7)).abs(), lessThan(0.01));
+
+        // Tapping the explicit "use my location" button IS an active
+        // choice (per set_location_picker.dart's `_locationChosen` doc),
+        // unlike the silent initial recenter it otherwise resembles -- so
+        // Save must now be enabled and pop exactly the fake device fix.
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNotNull,
+        );
+
+        await tester.tap(find.byKey(const Key('set-location-save')));
+        await tester.pumpAndSettle();
+
+        final picked = await pickerFuture;
+        expect(picked, isNotNull);
+        expect((picked!.latitude - 40.0).abs(), lessThan(0.01));
+        expect((picked.longitude - (-3.7)).abs(), lessThan(0.01));
+      },
+    );
+
+    testWidgets(
+      'S-L6: THE FIX -- a programmatic camera move (mirroring the silent '
+      'initial recenter) does NOT enable Save, even though it really does '
+      'move the camera; only a real gesture pan does',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        late BuildContext capturedContext;
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: MasiTheme.light,
+            home: Builder(
+              builder: (context) {
+                capturedContext = context;
+                return const SizedBox();
+              },
+            ),
+          ),
+        );
+
+        final pickerFuture = showSetLocationPicker(
+          capturedContext,
+          tileProvider: _NoopTileProvider(),
+          controller: controller,
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNull,
+        );
+
+        // Exactly what `_trySilentInitialRecenter` (and the old, buggy
+        // unconditional Save) relied on: a programmatic
+        // `MapController.move`, which flutter_map reports to
+        // `onPositionChanged` as `hasGesture: false`.
+        controller.move(const LatLng(41.9, 12.5), 12);
+        await tester.pump();
+
+        // The move really did relocate the camera -- so the disabled
+        // assertion below is about the interaction kind, not about nothing
+        // having happened.
+        expect(controller.camera.center.latitude, closeTo(41.9, 0.01));
+        expect(controller.camera.center.longitude, closeTo(12.5, 0.01));
+
+        // THE FIX: still disabled. Before this fix, Save's `onPressed` was
+        // unconditional, so this same programmatic move would have left an
+        // un-panned Save ready to silently persist it.
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNull,
+        );
+
+        // Tapping a disabled Save must be a no-op: the picker stays open,
+        // nothing pops.
+        await tester.tap(find.byKey(const Key('set-location-save')));
+        await tester.pump();
+        expect(find.byKey(const Key('set-location-save')), findsOneWidget);
+
+        // NOW drive a real gesture pan -- this is what must flip the gate.
+        await tester.drag(find.byType(FlutterMap), const Offset(-100, -60));
+        await tester.pump();
+
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNotNull,
+        );
+
+        final centerAfterDrag = controller.camera.center;
+        await tester.tap(find.byKey(const Key('set-location-save')));
+        await tester.pumpAndSettle();
+
+        final picked = await pickerFuture;
+        expect(picked, isNotNull);
+        expect(picked!.latitude, closeTo(centerAfterDrag.latitude, 0.0001));
+        expect(picked.longitude, closeTo(centerAfterDrag.longitude, 0.0001));
+      },
+    );
+
+    testWidgets(
+      'S-L7: editing an EXISTING location (initial != null) -- Save is '
+      'enabled immediately, with no interaction required, and pops that '
+      'location unchanged',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        const existing = LatLng(47.4979, 19.0402);
+        late BuildContext capturedContext;
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: MasiTheme.light,
+            home: Builder(
+              builder: (context) {
+                capturedContext = context;
+                return const SizedBox();
+              },
+            ),
+          ),
+        );
+
+        final pickerFuture = showSetLocationPicker(
+          capturedContext,
+          initial: existing,
+          tileProvider: _NoopTileProvider(),
+          controller: controller,
+        );
+        await tester.pumpAndSettle();
+
+        // There's already a valid coordinate to edit -- unlike S-L2/S-L6's
+        // `initial == null` case, Save must be enabled from the very first
+        // frame, with zero interaction.
+        expect(
+          tester
+              .widget<TextButton>(find.byKey(const Key('set-location-save')))
+              .onPressed,
+          isNotNull,
+        );
+        expect(find.byKey(const Key('set-location-hint')), findsNothing);
+
+        await tester.tap(find.byKey(const Key('set-location-save')));
+        await tester.pumpAndSettle();
+
+        final picked = await pickerFuture;
+        expect(picked, isNotNull);
+        expect(picked!.latitude, closeTo(existing.latitude, 0.001));
+        expect(picked.longitude, closeTo(existing.longitude, 0.001));
       },
     );
   });
