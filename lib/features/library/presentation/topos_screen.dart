@@ -287,8 +287,17 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   }
 
   /// Photo-first "New topo" creation flow: pick a source, pick a photo,
-  /// decode its pixel size, create a wall named after the current topo
-  /// count, attach the photo to it, then navigate straight into the canvas.
+  /// decode its pixel size, prompt for the new topo's name (see
+  /// [_NewTopoNameDialog], prefilled with the `'Topo ${count + 1}'`
+  /// default), create a wall with that name, attach the photo to it, then
+  /// navigate straight into the canvas.
+  ///
+  /// The name prompt sits strictly BEFORE `createTopo` is ever called
+  /// (#25): dismissing/cancelling it aborts the ENTIRE flow (early return,
+  /// no wall/photo row created, no orphan state) rather than falling back
+  /// to the default silently, so a user who backs out of naming their topo
+  /// gets exactly nothing created, not a surprise "Topo N" they didn't ask
+  /// for.
   ///
   /// Deliberately defensive (try/catch + `debugPrint`, no rethrow) to match
   /// the rest of the app's style for picker/decode failures (see
@@ -333,8 +342,31 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       // to loading/error mid-flow.
       final currentTopos = ref.read(toposProvider).asData?.value ?? const [];
       final count = currentTopos.length;
+      final defaultName = 'Topo ${count + 1}';
+
+      // Prompt for the name BEFORE anything is created (#25). Nothing
+      // above this point has touched the database -- only the picked
+      // `xfile` and the decoded width/height, both still just local
+      // values -- so a `null` (cancelled/dismissed) result can return
+      // early with zero cleanup required: no wall, no photo, no orphan
+      // state.
+      if (!mounted) return;
+      final enteredName = await showDialog<String>(
+        context: context,
+        builder: (dialogContext) =>
+            _NewTopoNameDialog(initialValue: defaultName),
+      );
+      if (enteredName == null) return;
+      final trimmedName = enteredName.trim();
+      // The dialog itself already disables its submit action while empty/
+      // whitespace-only (see `_NewTopoNameDialog`'s `_canSubmit`), so this
+      // is belt-and-suspenders: a non-null result should already be
+      // non-empty, but fall back to the default rather than ever creating
+      // a blank-named topo if that invariant is somehow violated.
+      final name = trimmedName.isEmpty ? defaultName : trimmedName;
+
       final repo = ref.read(libraryCrudRepositoryProvider);
-      final wallId = await repo.createTopo('Topo ${count + 1}');
+      final wallId = await repo.createTopo(name);
       await repo.attachPhotoToWall(wallId, xfile.path, width, height);
 
       // Best-effort GPS capture: delegates to the SAME
@@ -1311,6 +1343,98 @@ class _GradientFallback extends StatelessWidget {
           colors: [colors.amethyst300, colors.amethyst500],
         ),
       ),
+    );
+  }
+}
+
+/// Prompts for the new topo's name -- shown by `_handleNewTopo` after a
+/// photo is picked/decoded and strictly BEFORE `createTopo` is ever called
+/// (#25), prefilled with the `'Topo ${count + 1}'` default so accepting
+/// without typing anything reproduces the old auto-numbered behavior.
+///
+/// Mirrors `crud_list_scaffold.dart`'s `_NameDialog` / this file's own
+/// [_TopoNameDialog] (controller, disabled submit while empty/whitespace,
+/// `onSubmitted`) but is a DISTINCT class with its OWN keys
+/// (`topo-name-field` / `topo-name-submit`, per plan #25) rather than
+/// reusing `crud-name-field` / `crud-name-submit`: unlike the rename
+/// dialog (which only ever replaces this screen's own body), this one is
+/// the tail end of the "New topo" flow, which pushes a route once it
+/// resolves -- giving it distinct keys avoids any ambiguity for a test (or
+/// future caller) that might end up with both a name prompt and a rename
+/// dialog reachable in the same widget tree.
+///
+/// Cancelling/dismissing (Cancel button, barrier tap, back gesture) pops
+/// `null` -- the default `showDialog` behavior for an unhandled dismissal
+/// -- which `_handleNewTopo` treats as "abort the entire creation flow":
+/// no wall, no photo, no orphan state of any kind.
+class _NewTopoNameDialog extends StatefulWidget {
+  const _NewTopoNameDialog({required this.initialValue});
+
+  final String initialValue;
+
+  @override
+  State<_NewTopoNameDialog> createState() => _NewTopoNameDialogState();
+}
+
+class _NewTopoNameDialogState extends State<_NewTopoNameDialog> {
+  late final TextEditingController _controller = TextEditingController(
+    text: widget.initialValue,
+  );
+  late bool _canSubmit = _controller.text.trim().isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller.addListener(_onChanged);
+  }
+
+  void _onChanged() {
+    final canSubmit = _controller.text.trim().isNotEmpty;
+    if (canSubmit != _canSubmit) {
+      setState(() => _canSubmit = canSubmit);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.removeListener(_onChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final name = _controller.text.trim();
+    if (name.isEmpty) return;
+    FocusManager.instance.primaryFocus?.unfocus();
+    Navigator.of(context).pop(name);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    return AlertDialog(
+      title: Text('Name this topo', style: textTheme.titleLarge),
+      content: TextField(
+        key: const Key('topo-name-field'),
+        controller: _controller,
+        autofocus: true,
+        decoration: const InputDecoration(hintText: 'Name'),
+        onSubmitted: (_) => _submit(),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            FocusManager.instance.primaryFocus?.unfocus();
+            Navigator.of(context).pop();
+          },
+          child: const Text('Cancel'),
+        ),
+        TextButton(
+          key: const Key('topo-name-submit'),
+          onPressed: _canSubmit ? _submit : null,
+          child: const Text('Create'),
+        ),
+      ],
     );
   }
 }

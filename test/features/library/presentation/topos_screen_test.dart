@@ -201,6 +201,34 @@ Future<void> _drainNoSettle(WidgetTester tester) async {
   }
 }
 
+/// Advances past the `_NewTopoNameDialog` that now blocks `_handleNewTopo`
+/// between the photo being picked/decoded and `createTopo` actually being
+/// called (plan #25). Runs a full [_drain] first -- not just a fake-time
+/// `pump()` -- because the decode step immediately before the dialog
+/// (`ui.instantiateImageCodec`) is REAL async platform work that, like the
+/// rest of `_handleNewTopo`'s Drift/file-IO, only progresses under
+/// `tester.runAsync`'s real event loop; a bare `pump()` here would check
+/// for the dialog before decode has actually finished. `_drain`'s trailing
+/// `pumpAndSettle()` is safe to call even though `_handleNewTopo` is still
+/// suspended awaiting the dialog's `showDialog` future -- the dialog's own
+/// entrance transition settles, then `pumpAndSettle()` simply returns
+/// without ever reaching (or skipping past) the SnackBar/navigation that
+/// only run once this helper's submit tap lets `_handleNewTopo` resume.
+///
+/// Asserts the dialog is actually showing (so a regression that silently
+/// drops the prompt fails loudly here instead of a confusing timeout/no-op
+/// further down), then taps `topo-name-submit` to accept whatever name is
+/// currently in the field -- the prefilled `'Topo N'` default, unless a
+/// test typed over it first -- and pumps once more so the rest of the
+/// flow starts making progress before the caller's own `_drain`/
+/// `_drainNoSettle` continues driving it.
+Future<void> _acceptTopoNameDialog(WidgetTester tester) async {
+  await _drain(tester);
+  expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
+  await tester.tap(find.byKey(const Key('topo-name-submit')));
+  await tester.pump();
+}
+
 /// Runs [body] (which performs real Drift async work) under the real event
 /// loop so its awaits actually complete, capturing the result.
 Future<T> _dbWork<T>(WidgetTester tester, Future<T> Function() body) async {
@@ -564,6 +592,7 @@ void main() {
       await _drain(tester);
 
       await tester.tap(find.byKey(const Key('topos-new-topo')));
+      await _acceptTopoNameDialog(tester);
       await _drain(tester);
       await _drain(tester);
 
@@ -609,6 +638,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
         await _drain(tester);
         await _drain(tester);
 
@@ -662,6 +692,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
         await _drain(tester);
         await _drain(tester);
 
@@ -721,6 +752,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
         await _drain(tester);
         await _drain(tester);
 
@@ -778,6 +810,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
         await _drain(tester);
         await _drain(tester);
 
@@ -842,6 +875,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
         await _drain(tester);
         await _drain(tester);
 
@@ -984,6 +1018,7 @@ void main() {
       await tester.runAsync(() async {
         sourceCompleter.complete(ImageSource.gallery);
       });
+      await _acceptTopoNameDialog(tester);
       await _drain(tester);
       await _drain(tester);
 
@@ -1028,6 +1063,279 @@ void main() {
     );
   });
 
+  group('#25 (Lane B): name prompt shown before a topo is ever created', () {
+    testWidgets(
+      'B1: after a photo is picked/decoded, a topo-name-field/'
+      'topo-name-submit dialog appears BEFORE any topo exists, prefilled '
+      'with the default "Topo N" name; accepting it reproduces the old '
+      'auto-numbered behavior',
+      (tester) async {
+        final container = _makeContainer();
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_name_prompt_test',
+          );
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+
+        // The dialog must be up, prefilled, and NOTHING created yet.
+        expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
+        expect(find.byKey(const Key('topo-name-submit')), findsOneWidget);
+        final field = tester.widget<TextField>(
+          find.byKey(const Key('topo-name-field')),
+        );
+        expect(field.controller!.text, 'Topo 1');
+
+        final toposWhileOpen = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(
+          toposWhileOpen,
+          isEmpty,
+          reason: 'createTopo must not run until the dialog is submitted',
+        );
+
+        await tester.tap(find.byKey(const Key('topo-name-submit')));
+        await _drain(tester);
+        await _drain(tester);
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos.length, 1);
+        expect(topos.single.name, 'Topo 1');
+      },
+    );
+
+    testWidgets(
+      'B2: entering a custom name and submitting reaches repo.createTopo '
+      'with that name, trimmed',
+      (tester) async {
+        final container = _makeContainer();
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_name_prompt_custom_test',
+          );
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
+        await tester.enterText(
+          find.byKey(const Key('topo-name-field')),
+          '  The Roof  ',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('topo-name-submit')));
+        await _drain(tester);
+        await _drain(tester);
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos.length, 1);
+        expect(
+          topos.single.name,
+          'The Roof',
+          reason:
+              'the entered name must be trimmed before reaching createTopo',
+        );
+        // NOT `find.text('The Roof')`: on success `_handleNewTopo` navigates
+        // straight into the new topo's canvas (`context.push('/walls/$wallId')`
+        // -- see that method's doc), so by the time this runs the Topos LIST
+        // (the only place "The Roof" would ever be painted) sits underneath
+        // the pushed `/walls/:wallId` route and is no longer findable via
+        // `find.text` (default `skipOffstage: true`). The DB read above --
+        // mirroring B1's identical "read `watchTopos()`, assert the name"
+        // pattern, which has no such trailing widget-text check either -- is
+        // the real, robust proof that the trimmed name reached
+        // `repo.createTopo`.
+      },
+    );
+
+    testWidgets(
+      'B2b: the submit action is disabled while the field is empty/'
+      'whitespace-only, so a blank name can never reach createTopo',
+      (tester) async {
+        final container = _makeContainer();
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_name_prompt_empty_test',
+          );
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+
+        await tester.enterText(
+          find.byKey(const Key('topo-name-field')),
+          '   ',
+        );
+        await tester.pump();
+
+        final submitButton = tester.widget<TextButton>(
+          find.byKey(const Key('topo-name-submit')),
+        );
+        expect(
+          submitButton.onPressed,
+          isNull,
+          reason: 'whitespace-only name must disable submit',
+        );
+
+        // Cancel out (rather than leaving the dialog open) so this test
+        // doesn't leak a pending route into the next one.
+        await tester.tap(find.text('Cancel'));
+        await _drain(tester);
+      },
+    );
+
+    testWidgets(
+      'B3: cancelling the name dialog aborts creation entirely -- no '
+      'topo/wall row is created, no orphan state, and a fresh flow can '
+      'still be started and completed afterwards',
+      (tester) async {
+        final container = _makeContainer();
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_name_prompt_cancel_test',
+          );
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
+        await tester.tap(find.text('Cancel'));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(find.byKey(const Key('topo-name-field')), findsNothing);
+        expect(find.byKey(const Key('topos-empty-state')), findsOneWidget);
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(
+          topos,
+          isEmpty,
+          reason: 'cancelling must never create a wall/photo row',
+        );
+
+        // The re-entrancy guard must have been released by the `finally`
+        // in `_handleNewTopo` -- the button is enabled again, and a fresh
+        // flow started right after a cancel still completes normally.
+        final button = tester.widget<ElevatedButton>(
+          find.byKey(const Key('topos-new-topo')),
+        );
+        expect(button.onPressed, isNotNull);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+        await tester.tap(find.byKey(const Key('topo-name-submit')));
+        await _drain(tester);
+        await _drain(tester);
+
+        final afterTopos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(afterTopos.length, 1);
+      },
+    );
+  });
+
   group(
     'G5: SnackBar reflects the outcome of best-effort GPS capture '
     '(_handleNewTopo)',
@@ -1066,6 +1374,7 @@ void main() {
           await _drain(tester);
 
           await tester.tap(find.byKey(const Key('topos-new-topo')));
+          await _acceptTopoNameDialog(tester);
           await _drainNoSettle(tester);
 
           expect(find.text('Location found in photo'), findsOneWidget);
@@ -1109,6 +1418,7 @@ void main() {
           await _drain(tester);
 
           await tester.tap(find.byKey(const Key('topos-new-topo')));
+          await _acceptTopoNameDialog(tester);
           await _drainNoSettle(tester);
 
           expect(
@@ -1152,6 +1462,7 @@ void main() {
           await _drain(tester);
 
           await tester.tap(find.byKey(const Key('topos-new-topo')));
+          await _acceptTopoNameDialog(tester);
           await _drainNoSettle(tester);
 
           expect(find.text('No location found in photo'), findsOneWidget);
@@ -1252,6 +1563,7 @@ void main() {
           await _drain(tester);
 
           await tester.tap(find.byKey(const Key('topos-new-topo')));
+          await _acceptTopoNameDialog(tester);
           await _drain(tester);
           await _drain(tester);
 
