@@ -36,12 +36,24 @@ const Map<SymbolType, String> _symbolGlyphAssetNames = {
 /// match the existing marker's on-screen size at paint time.
 Future<Map<SymbolType, ui.Picture>> _loadSymbolPictures() async {
   final pictures = <SymbolType, ui.Picture>{};
-  for (final entry in _symbolGlyphAssetNames.entries) {
-    final info = await vg.loadPicture(
-      SvgAssetLoader('assets/icons/masi/masi_${entry.value}.svg'),
-      null,
-    );
-    pictures[entry.key] = info.picture;
+  try {
+    for (final entry in _symbolGlyphAssetNames.entries) {
+      final info = await vg.loadPicture(
+        SvgAssetLoader('assets/icons/masi/masi_${entry.value}.svg'),
+        null,
+      );
+      pictures[entry.key] = info.picture;
+    }
+  } catch (_) {
+    // A later glyph failed to decode: dispose every picture already
+    // decoded in this call so far (real engine resources) before the
+    // error propagates — otherwise they'd be orphaned, since nothing
+    // downstream (initState's .catchError only sees the error object)
+    // can reach them to dispose them itself.
+    for (final picture in pictures.values) {
+      picture.dispose();
+    }
+    rethrow;
   }
   return pictures;
 }
@@ -402,19 +414,31 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   @override
   void initState() {
     super.initState();
-    _loadSymbolPictures().then((pictures) {
-      if (!mounted) {
-        // Disposed before the load finished: dispose the just-decoded
-        // pictures instead of leaking them (see [ui.Picture.dispose]'s
-        // "caller's responsibility" contract) rather than assigning them to
-        // a field on a widget that's gone.
-        for (final picture in pictures.values) {
-          picture.dispose();
-        }
-        return;
-      }
-      setState(() => _symbolPictures = pictures);
-    });
+    _loadSymbolPictures()
+        .then((pictures) {
+          if (!mounted) {
+            // Disposed before the load finished: dispose the just-decoded
+            // pictures instead of leaking them (see [ui.Picture.dispose]'s
+            // "caller's responsibility" contract) rather than assigning them
+            // to a field on a widget that's gone.
+            for (final picture in pictures.values) {
+              picture.dispose();
+            }
+            return;
+          }
+          setState(() => _symbolPictures = pictures);
+        })
+        .catchError((Object error, StackTrace stackTrace) {
+          // A glyph SVG failing to load/decode (missing asset, corrupt
+          // file, etc.) must not surface as an unhandled async error (which
+          // crashes a debug build / fails a test) nor leave this widget
+          // wedged waiting on a Future that will never resolve
+          // successfully. Swallowing it here simply leaves `_symbolPictures`
+          // at whatever it already was (empty on the very first load
+          // attempt), so every symbol keeps rendering via TopoPainter's
+          // pre-existing hand-drawn fallback geometry (see that class's
+          // doc) instead of ever throwing or hanging.
+        });
   }
 
   @override

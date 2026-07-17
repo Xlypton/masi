@@ -465,10 +465,11 @@ void main() {
     }
 
     test(
-      'D2: a SymbolType with a loaded picture draws it via drawPicture, '
-      'wrapped in a saveLayer whose Paint carries a srcIn ColorFilter of '
-      "the route's resolved color, and skips the old hand-drawn geometry "
-      'for that type entirely',
+      'D2: a SymbolType with a loaded picture draws it via drawPicture '
+      'TWICE -- a white contrast-halo pass at a larger scale, then the '
+      "route's resolved color pass at the normal scale -- each wrapped in "
+      'its own saveLayer with a srcIn ColorFilter, and skips the old '
+      'hand-drawn geometry for that type entirely',
       () {
         final pic = dummyPicture();
         final route = TopoRoute(
@@ -492,10 +493,19 @@ void main() {
 
         painter.paint(canvas, imageSize);
 
-        expect(canvas.drawnPictures, [pic]);
-        expect(canvas.saveLayerPaints, hasLength(1));
+        // The SAME picture is drawn twice: once for the white halo pass
+        // (underneath, at a larger scale), once for the route-colored pass
+        // on top.
+        expect(canvas.drawnPictures, [pic, pic]);
+        expect(canvas.saveLayerPaints, hasLength(2));
+        // First pass (drawn first, underneath): solid white halo.
         expect(
-          canvas.saveLayerPaints.single.colorFilter,
+          canvas.saveLayerPaints[0].colorFilter,
+          const ColorFilter.mode(Color(0xFFFFFFFF), BlendMode.srcIn),
+        );
+        // Second pass (drawn on top): the route's resolved color.
+        expect(
+          canvas.saveLayerPaints[1].colorFilter,
           const ColorFilter.mode(Color(0xFF2E7D32), BlendMode.srcIn),
         );
         // The route itself is a 2-point polyline (drawLine, no circle), so
@@ -507,7 +517,8 @@ void main() {
 
     test(
       'D3: SymbolType.rest ALWAYS keeps its ringed-dot geometry, even when '
-      'a caller (mis-)supplies a loaded picture for it',
+      'a caller (mis-)supplies a loaded picture for it -- now with a white '
+      'contrast-backing circle drawn first, underneath the ring and dot',
       () {
         final pic = dummyPicture();
         final route = TopoRoute(
@@ -533,9 +544,31 @@ void main() {
 
         expect(canvas.drawnPictures, isEmpty);
         expect(canvas.saveLayerPaints, isEmpty);
-        // Ringed-dot: an outline circle (stroke) plus a smaller filled
-        // center dot -- two circles.
-        expect(canvas.circleCenters, hasLength(2));
+        // Ringed-dot, now with a white contrast-backing circle drawn FIRST
+        // (largest radius, solid white fill), then the stroked outline
+        // ring, then the smaller filled center dot -- three circles.
+        expect(canvas.circleCenters, hasLength(3));
+
+        final radii = canvas.circleRadii;
+        // Backing circle is the largest (radius * 1.25), then the ring
+        // (radius), then the smallest center dot (radius / 3).
+        expect(radii[0], greaterThan(radii[1]));
+        expect(radii[1], greaterThan(radii[2]));
+
+        // Backing circle: solid white fill.
+        expect(canvas.circlePaints[0].style, PaintingStyle.fill);
+        expect(
+          canvas.circlePaints[0].color.toARGB32(),
+          const Color(0xFFFFFFFF).toARGB32(),
+        );
+
+        // Outline ring: stroked, in the route's resolved color.
+        expect(canvas.circlePaints[1].style, PaintingStyle.stroke);
+        expect(canvas.circlePaints[1].color.toARGB32(), palette[0].toARGB32());
+
+        // Center dot: filled, in the route's resolved color.
+        expect(canvas.circlePaints[2].style, PaintingStyle.fill);
+        expect(canvas.circlePaints[2].color.toARGB32(), palette[0].toARGB32());
       },
     );
 

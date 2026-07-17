@@ -37,6 +37,23 @@ const double _selectedStrokeMultiplier = 1.4;
 /// Radius (in scene/pixel units) of symbol glyphs.
 const double _symbolRadius = 7.0;
 
+/// Scale factor applied to a masi brand-glyph symbol's white contrast halo
+/// (see [TopoPainter._paintSymbolPicture]) relative to the colored glyph
+/// drawn on top of it, so the halo peeks out from behind on every side.
+/// `34 / 28 ≈ 1.214` matches the ratio already used by the Set-location map
+/// picker's white-halo-behind-accent reticle (two stacked icons at 34pt/
+/// 28pt), reused here so the two "white contrast ring around an accent
+/// glyph" treatments in the app read consistently.
+const double _symbolHaloScaleFactor = 34 / 28;
+
+/// Scale factor applied to [SymbolType.rest]'s hand-drawn ringed-dot radius
+/// to size its white contrast-backing circle (see [TopoPainter._paintSymbol]
+/// 's `rest` case) — deliberately smaller than [_symbolHaloScaleFactor]
+/// since this backs a STROKED ring rather than a filled glyph shape: the
+/// backing only needs to clear the ring's own stroke width, not silhouette
+/// an entire glyph.
+const double _restHaloScaleFactor = 1.25;
+
 /// Font size used for route number labels.
 const double _labelFontSize = 14.0;
 
@@ -101,6 +118,14 @@ const double _labelEdgeMargin = 6.0;
 ///    (a "+" plus an "X", four spokes total).
 ///  - [SymbolType.rest]: a stroked circle outline with a small filled dot at
 ///    its center (always this geometry, never a glyph).
+///
+/// Every glyph — the loaded-Picture path in [_paintSymbolPicture] AND
+/// [SymbolType.rest]'s hand-drawn ringed-dot above — draws a solid WHITE
+/// contrast backing *underneath* the route-colored shape first, so the
+/// marker stays legible even when it sits on top of a route stroke (or a
+/// photo region) in the SAME color: a flat, single-color glyph with no
+/// contrasting rim would otherwise visually dissolve into a same-colored
+/// background.
 class TopoPainter extends CustomPainter {
   const TopoPainter({
     required this.imageSize,
@@ -450,6 +475,16 @@ class TopoPainter extends CustomPainter {
         );
         break;
       case SymbolType.rest:
+        // A white contrast-backing circle (drawn FIRST, underneath) so the
+        // ringed-dot below stays legible over any photo background — the
+        // same "white halo behind accent" contrast idea used for the brand
+        // glyphs in _paintSymbolPicture (and the Set-location reticle),
+        // applied here since `rest` never draws a glyph Picture and so
+        // never goes through that method.
+        final restHaloPaint = Paint()
+          ..color = const Color(0xFFFFFFFF)
+          ..style = PaintingStyle.fill;
+        canvas.drawCircle(center, radius * _restHaloScaleFactor, restHaloPaint);
         // A stroked circle outline with a small filled center dot.
         canvas.drawCircle(center, radius, strokePaint);
         canvas.drawCircle(center, radius / 3, fillPaint);
@@ -473,6 +508,19 @@ class TopoPainter extends CustomPainter {
   /// preserving each pixel's own alpha, so the facet shading survives as
   /// varying opacity of the SAME tint color rather than being flattened to
   /// a single flat blob.
+  ///
+  /// Before drawing the route-colored glyph, the SAME [picture] is drawn a
+  /// second time tinted solid WHITE at a slightly LARGER scale
+  /// ([_symbolHaloScaleFactor]) so a contrasting white rim shows around the
+  /// colored glyph on every background — otherwise a route-colored symbol
+  /// sitting on a same-colored route line (or a similarly colored patch of
+  /// the photo) visually dissolves into it and becomes illegible. This
+  /// mirrors the "white halo behind accent" technique already used by the
+  /// Set-location map picker's reticle (two stacked icons, a larger white
+  /// one behind a smaller accent-colored one) — here reimplemented as two
+  /// stacked `saveLayer`/`drawPicture` passes at two scales instead of two
+  /// stacked widgets, since this is a raw [Canvas] painter rather than a
+  /// widget tree.
   void _paintSymbolPicture(
     Canvas canvas,
     Offset center,
@@ -482,19 +530,40 @@ class TopoPainter extends CustomPainter {
   ) {
     final target = 2 * radius;
     final k = target / 24.0; // The glyph SVGs use a 24x24 viewBox.
+    final haloK = k * _symbolHaloScaleFactor;
+
     canvas.save();
     canvas.translate(center.dx, center.dy);
-    canvas.scale(k);
+
+    // White halo pass: same picture, tinted solid white, drawn slightly
+    // LARGER than the colored glyph below so its rim peeks out from behind
+    // it on every side.
+    canvas.save();
+    canvas.scale(haloK);
     canvas.saveLayer(
       const Rect.fromLTWH(-12, -12, 24, 24),
-      Paint()..colorFilter = ColorFilter.mode(color, BlendMode.srcIn),
+      Paint()..colorFilter = const ColorFilter.mode(Color(0xFFFFFFFF), BlendMode.srcIn),
     );
     // Shift so the glyph's 0..24 viewBox is centered on `center` (already
     // the local origin after the translate above).
     canvas.translate(-12, -12);
     canvas.drawPicture(picture);
+    canvas.restore(); // saveLayer (halo)
+    canvas.restore(); // scale (halo)
+
+    // Route-colored glyph on top, at the original (unhaloed) scale/size.
+    canvas.save();
+    canvas.scale(k);
+    canvas.saveLayer(
+      const Rect.fromLTWH(-12, -12, 24, 24),
+      Paint()..colorFilter = ColorFilter.mode(color, BlendMode.srcIn),
+    );
+    canvas.translate(-12, -12);
+    canvas.drawPicture(picture);
     canvas.restore(); // saveLayer
-    canvas.restore(); // translate+scale
+    canvas.restore(); // scale
+
+    canvas.restore(); // translate
   }
 
   void _paintPolyline(
