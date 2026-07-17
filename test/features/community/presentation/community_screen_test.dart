@@ -1675,8 +1675,8 @@ void main() {
     );
 
     testWidgets(
-      'boulder marker tint encodes visibility: an own PRIVATE topo renders '
-      'isPublic == false, while an own PUBLIC (shared) topo and a '
+      'boulder marker opacity encodes visibility: an own PRIVATE topo '
+      'renders isPublic == false, while an own PUBLIC (shared) topo and a '
       'community topo both render isPublic == true',
       (tester) async {
         final db = AppDatabase(NativeDatabase.memory());
@@ -1698,7 +1698,7 @@ void main() {
           await _seedArea(db, id: 'area-tint', name: 'Area Tint');
           await _seedSector(db, id: 'sector-tint', areaId: 'area-tint', name: 'S');
           // Own, private: never shared, so it's not in the community feed
-          // at all -- must render the DARK (private) boulder.
+          // at all -- must render the FADED (private) boulder logo.
           await _seedWall(
             db,
             id: 'wall-own-private',
@@ -1709,7 +1709,7 @@ void main() {
             ownerId: 'me',
           );
           // Own, public (shared): renders exactly once, as the own marker
-          // (see M3) -- must render the LIGHT (public) boulder.
+          // (see M3) -- must render the FULL-OPACITY (public) boulder logo.
           await _seedWall(
             db,
             id: 'wall-own-public',
@@ -1721,8 +1721,9 @@ void main() {
             ownerId: 'me',
           );
           // Community: someone else's shared topo -- always renders the
-          // LIGHT (public) boulder, per `CommunityRepository.watchSharedTopos`
-          // only ever surfacing `visibility == 'shared'` rows.
+          // FULL-OPACITY (public) boulder logo, per
+          // `CommunityRepository.watchSharedTopos` only ever surfacing
+          // `visibility == 'shared'` rows.
           await _seedWall(
             db,
             id: 'wall-community',
