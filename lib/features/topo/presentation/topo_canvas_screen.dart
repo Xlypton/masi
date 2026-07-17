@@ -2,8 +2,10 @@ import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart' show MapController, TileProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:latlong2/latlong.dart';
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
@@ -11,6 +13,7 @@ import 'package:climbtopo/core/location/location_service.dart';
 import 'package:climbtopo/core/location/photo_gps.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
+import 'package:climbtopo/features/library/presentation/set_location_picker.dart';
 import 'package:climbtopo/features/logbook/presentation/log_ascent_sheet.dart';
 import 'package:climbtopo/features/topo/application/active_view_controller.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
@@ -306,6 +309,9 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
     required this.wallId,
     this.readOnly = false,
     @visibleForTesting this.debugInitialImageSize,
+    @visibleForTesting this.setLocationTileProvider,
+    @visibleForTesting this.setLocationMapController,
+    @visibleForTesting this.setLocationLocationService,
   });
 
   /// The wall this canvas is bound to (from the `/walls/:wallId` route).
@@ -346,6 +352,26 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
   /// untouched.
   @visibleForTesting
   final Size? debugInitialImageSize;
+
+  /// Test-injectable seams for [showSetLocationPicker], invoked by
+  /// [_TopoCanvasScreenState._handleEditLocation] (the canvas's own
+  /// "Edit location"/"Set location" button — see `topo-edit-location-button`
+  /// in [_TopoCanvasScreenState._topTrailingActions]). Mirror
+  /// `topos_screen.dart`'s identically-named `ToposScreen` fields exactly —
+  /// same rationale: production (every real route to this screen) leaves
+  /// all three `null`, letting the picker build its own real tile
+  /// provider/`MapController` and read the real `locationServiceProvider`
+  /// internally; a widget test can inject fakes (a no-network tile
+  /// provider, a directly-inspectable `MapController`, a canned
+  /// [LocationService]) instead.
+  @visibleForTesting
+  final TileProvider? setLocationTileProvider;
+
+  @visibleForTesting
+  final MapController? setLocationMapController;
+
+  @visibleForTesting
+  final LocationService? setLocationLocationService;
 
   @override
   ConsumerState<TopoCanvasScreen> createState() => _TopoCanvasScreenState();
@@ -733,6 +759,69 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     FocusManager.instance.primaryFocus?.unfocus();
   }
 
+  /// "Set location"/"Edit location" flow for the wall this canvas is bound
+  /// to ([TopoCanvasScreen.wallId]) — the canvas-screen counterpart to
+  /// `topos_screen.dart`'s `_handleSetLocation` (the Topos-home overflow
+  /// menu's only previous entry point for this same action). Opens
+  /// [showSetLocationPicker] centered on [currentTopo]'s existing
+  /// coordinates when it has any (`null` otherwise — the picker itself
+  /// decides what to do with an absent `initial`), and on a non-null pick
+  /// writes it via [LibraryCrudRepository.setWallCoordinates]. Mirrors
+  /// `_handleSetLocation`'s shape exactly: await a value-returning picker,
+  /// bail on a null (cancelled) result, then write through the real repo
+  /// inside a try/catch that surfaces a confirmation/error [SnackBar], with
+  /// `mounted` guards across every await.
+  ///
+  /// [currentTopo] is [_TopoCanvasScreenState.build]'s own read of
+  /// [toposProvider] (the same flat, live list `topos_screen.dart` is built
+  /// from — see that provider's doc; there is no single-wall-by-id
+  /// provider) filtered down to [TopoCanvasScreen.wallId], so the picker
+  /// opens on this wall's CURRENT coordinates rather than always starting
+  /// from a neutral view. Since [toposProvider] is a live `StreamProvider`
+  /// backed by a Drift `.watch()` query that reads from the `walls` table
+  /// (see `LibraryCrudRepository.watchTopos`'s `readsFrom`), a successful
+  /// `setWallCoordinates` write below causes that stream to emit a fresh
+  /// list on its own — no manual invalidation needed — so the next time
+  /// this button is pressed, `currentTopo` (and therefore both the
+  /// tooltip's "Set location"/"Edit location" label and the picker's
+  /// `initial` center) already reflects the new coordinates.
+  Future<void> _handleEditLocation(TopoRef? currentTopo) async {
+    if (widget.readOnly) return;
+    final initial =
+        (currentTopo?.latitude != null && currentTopo?.longitude != null)
+        ? LatLng(currentTopo!.latitude!, currentTopo.longitude!)
+        : null;
+
+    final picked = await showSetLocationPicker(
+      context,
+      initial: initial,
+      tileProvider: widget.setLocationTileProvider,
+      controller: widget.setLocationMapController,
+      locationService: widget.setLocationLocationService,
+    );
+    if (picked == null || !mounted) return;
+
+    try {
+      await ref
+          .read(libraryCrudRepositoryProvider)
+          .setWallCoordinates(widget.wallId, picked.latitude, picked.longitude);
+    } catch (e, st) {
+      debugPrint('Failed to set topo location: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't save location — please try again"),
+        ),
+      );
+      return;
+    }
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Location saved')));
+  }
+
   /// Lets the user choose Camera or Library (via [showPhotoSourceSheet]'s
   /// iOS action sheet — see DESIGN.md "Photo source") before picking an
   /// image with [pickPhotoFrom], preserving the exact same
@@ -1077,6 +1166,26 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       orElse: () => 'Topo',
     );
 
+    // Backs the "Edit location"/"Set location" button (_topTrailingActions'
+    // topo-edit-location-button) and _handleEditLocation's `initial` picker
+    // center: there is no single-wall-by-id provider exposing lat/lng (see
+    // that button's doc), so this filters toposProvider's flat, live list —
+    // the same one topos_screen.dart itself is built from — down to this
+    // wall. A live StreamProvider, not a one-shot read: a successful
+    // setWallCoordinates write re-emits this list on its own (see
+    // _handleEditLocation's doc), so this always reflects the wall's
+    // CURRENT coordinates, including right after a save.
+    final topos = ref
+        .watch(toposProvider)
+        .maybeWhen(data: (list) => list, orElse: () => const <TopoRef>[]);
+    TopoRef? currentTopo;
+    for (final t in topos) {
+      if (t.wallId == widget.wallId) {
+        currentTopo = t;
+        break;
+      }
+    }
+
     if (imagePath != null && imagePath != _resolvedForPath) {
       final debugSize = widget.debugInitialImageSize;
       if (debugSize != null) {
@@ -1186,6 +1295,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                             title,
                             drawState,
                             drawNotifier,
+                            currentTopo,
                           ),
                           if (showPhotoSelector) ...[
                             Divider(
@@ -1244,6 +1354,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     String title,
     DrawState drawState,
     DrawController drawNotifier,
+    TopoRef? currentTopo,
   ) {
     return Row(
       children: [
@@ -1260,7 +1371,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             }
           },
           color: colors.accent,
-          style: IconButton.styleFrom(shape: const CircleBorder()),
+          style: _topRowIconStyle(),
         ),
         Expanded(
           child: Padding(
@@ -1277,10 +1388,60 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             ),
           ),
         ),
-        ..._topTrailingActions(context, drawState, drawNotifier),
+        ..._topTrailingActions(context, drawState, drawNotifier, currentTopo),
       ],
     );
   }
+
+  /// A [ButtonStyle] for every glyph in the top chrome's back-button-plus-
+  /// trailing-actions row: [CircleBorder] exactly like before, plus an
+  /// explicit 44x44 [minimumSize] — the iOS HIG minimum tap target (this
+  /// app is iOS-primary; see project CLAUDE.md) — paired with
+  /// [MaterialTapTargetSize.shrinkWrap] so the button's actual footprint is
+  /// exactly 44x44, not Material's own larger 48x48 default.
+  ///
+  /// Accessibility-regression fix: an earlier pass (to make room for the
+  /// "Edit location" glyph — see this row's other docs) shrank this to
+  /// `Size(36, 40)`, BELOW the 44x44 HIG floor, on every glyph in this row.
+  /// 44x44 turns out to still fit the same worst case — the back chevron
+  /// plus up to SIX simultaneous trailing glyphs (edit-metadata + AR +
+  /// mode-toggle + slice-mode + edit-location + add-photo, once a route is
+  /// selected) — at this project's supported minimum width (375px — see
+  /// `canvas_bottom_reclaim_test.dart`'s own regression test): 7 glyphs *
+  /// 44 = 308px against ~331px available inside the top pill's own chrome
+  /// padding (375 - 2*`MasiSpacing.lg` outer padding - 2*6
+  /// `GlassChrome` padding), leaving the title's `Expanded` slot ~23px to
+  /// shrink into (it already ellipsizes — see [_buildTopChromeRow]) rather
+  /// than overflowing. Verified empirically by that same test, with no
+  /// further padding/spacing changes needed.
+  ///
+  /// The visible icon glyph itself is unaffected (still whatever size
+  /// [MasiIcon] renders at, e.g. 24) — only the tappable footprint grows
+  /// back to the accessible minimum.
+  ///
+  /// Applied uniformly to every glyph in THIS row only — never the
+  /// slice-mode overlay row ([_topTrailingActions]'s `_sliceMode` branch,
+  /// only ever 3 glyphs) or the bottom draw-mode cluster
+  /// ([_buildBottomChrome]), neither of which ever gets this crowded — so
+  /// none of this row's glyphs reads as visually inconsistent with its
+  /// neighbors. Purely a size/padding tweak: every button's key, tooltip,
+  /// and `onPressed` behavior is completely unchanged.
+  ButtonStyle _topRowIconStyle({Color? backgroundColor}) =>
+      IconButton.styleFrom(
+        shape: const CircleBorder(),
+        backgroundColor: backgroundColor,
+        minimumSize: const Size(44, 44),
+        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 8),
+        // Without this, Theme.of(context).materialTapTargetSize's default
+        // (MaterialTapTargetSize.padded) silently pads the interactive area
+        // back out to Material's accessibility-minimum 48x48 REGARDLESS of
+        // the smaller minimumSize/padding above — i.e. the shrink above
+        // would otherwise have zero effect on this row's actual layout
+        // width, which is exactly what was observed before this line was
+        // added (still an identical 7.0px overflow). shrinkWrap makes the
+        // button's rendered footprint match minimumSize/padding exactly.
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      );
 
   /// Mode-aware trailing glyphs for [_buildTopChromeRow] — this is what keeps
   /// the top chrome from ever becoming the old crowded AR/X/check/scissors/
@@ -1289,11 +1450,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   ///  - slice mode: clear / commit the pending cuts, or exit slice mode.
   ///  - otherwise: an optional edit-metadata glyph (route selected) + an
   ///    optional AR glyph (view mode, eligible wall) + the draw/view mode
-  ///    toggle + (view mode only) the slice-mode entry point.
+  ///    toggle + (view mode only) the slice-mode entry point and the
+  ///    edit-location entry point.
   List<Widget> _topTrailingActions(
     BuildContext context,
     DrawState drawState,
     DrawController drawNotifier,
+    TopoRef? currentTopo,
   ) {
     final colors = MasiColors.of(context);
     if (_sliceMode) {
@@ -1343,7 +1506,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             _openMetadataSheet(selected);
           },
           color: colors.accent,
-          style: IconButton.styleFrom(shape: const CircleBorder()),
+          style: _topRowIconStyle(),
         ),
       );
     }
@@ -1363,7 +1526,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           tooltip: 'View in AR',
           onPressed: () => context.push('/walls/${widget.wallId}/ar'),
           color: colors.accent,
-          style: IconButton.styleFrom(shape: const CircleBorder()),
+          style: _topRowIconStyle(),
         ),
       );
     }
@@ -1393,11 +1556,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               : 'Switch to draw mode',
           onPressed: drawNotifier.toggleMode,
           color: colors.accent,
-          style: IconButton.styleFrom(
+          style: _topRowIconStyle(
             backgroundColor: drawState.mode == DrawMode.draw
                 ? colors.accent.withValues(alpha: 0.16)
                 : null,
-            shape: const CircleBorder(),
           ),
         ),
       );
@@ -1420,7 +1582,30 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           tooltip: 'Slice this photo into strips',
           onPressed: _toggleSliceMode,
           color: colors.accent,
-          style: IconButton.styleFrom(shape: const CircleBorder()),
+          style: _topRowIconStyle(),
+        ),
+      );
+    }
+
+    // Edit/set this wall's map location — the canvas-screen counterpart to
+    // `topos_screen.dart`'s overflow-menu "Set location"/"Edit location"
+    // item (previously the ONLY way to reach this flow). Kept to view mode,
+    // mirroring the AR button's own mode-gating above (see this method's
+    // doc), so draw mode's row stays uncluttered — but, unlike the AR/slice
+    // buttons, NOT gated on `activePhotoId != null`: a wall's location is a
+    // property of the WALL, not of any particular photo, so it's just as
+    // settable before a photo has ever been attached as after.
+    if (!widget.readOnly && drawState.mode == DrawMode.view) {
+      final hasCoords =
+          currentTopo?.latitude != null && currentTopo?.longitude != null;
+      actions.add(
+        IconButton(
+          key: const Key('topo-edit-location-button'),
+          icon: MasiIcon('pin'),
+          tooltip: hasCoords ? 'Edit location' : 'Set location',
+          onPressed: () => _handleEditLocation(currentTopo),
+          color: colors.accent,
+          style: _topRowIconStyle(),
         ),
       );
     }
@@ -1441,7 +1626,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           tooltip: 'Pick a photo',
           onPressed: _pickImage,
           color: colors.accent,
-          style: IconButton.styleFrom(shape: const CircleBorder()),
+          style: _topRowIconStyle(),
         ),
       );
     }

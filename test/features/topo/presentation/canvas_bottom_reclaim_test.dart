@@ -348,7 +348,7 @@ void main() {
   );
 
   testWidgets(
-    'top pill with route selected (5 trailing actions) does not overflow '
+    'top pill with route selected (6 trailing actions) does not overflow '
     'at 375px width',
     (tester) async {
       // 375px is this project's supported minimum width (see CLAUDE.md /
@@ -392,10 +392,12 @@ void main() {
       seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
-      // All 5 trailing glyphs are now simultaneously present: edit-metadata
+      // All 6 trailing glyphs are now simultaneously present: edit-metadata
       // (route selected) + AR (photo + a visible route) + mode-toggle +
-      // slice-mode-entry + add-photo — the worst case for the top pill's
-      // trailing action row in view mode.
+      // slice-mode-entry + edit-location + add-photo — the worst case for
+      // the top pill's trailing action row in view mode (the "Edit
+      // location" glyph joined this row after this test was first written
+      // — see topo_canvas_edit_location_test.dart).
       expect(
         find.byKey(const Key('topo-edit-metadata-button')),
         findsOneWidget,
@@ -403,15 +405,137 @@ void main() {
       expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
       expect(find.byKey(const Key('topo-slice-mode-button')), findsOneWidget);
+      expect(
+        find.byKey(const Key('topo-edit-location-button')),
+        findsOneWidget,
+      );
       expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
 
       // No RenderFlex overflow (or any other exception) from cramming the
-      // back chevron + title + 5 icons into the top pill at the supported
-      // minimum width.
+      // back chevron + title + 6 icons into the top pill at the supported
+      // minimum width, with every tap target at the iOS HIG's 44x44
+      // minimum (see `_topRowIconStyle`'s doc) — the accessibility
+      // regression this test guards against is a tap target shrunk BELOW
+      // 44x44 to buy overflow margin, not the overflow itself.
       expect(tester.takeException(), isNull);
 
       // The title still renders (ellipsized is fine at this width).
       expect(find.text('Wall'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'top pill with route selected (6 trailing actions) does not overflow '
+    'at 375px width even at a 3x text scale — MasiIcons are fixed-size, so '
+    'only the row\'s height should grow, never its width',
+    (tester) async {
+      const viewportSize = Size(375, 812);
+      tester.view.physicalSize = viewportSize;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+
+      final seeded = await seedWallWithPhotoAndRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: seeded.container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            // Wraps the whole app in a forced 3x textScaler — a MediaQuery
+            // override closer to the root than TopoCanvasScreen itself, so
+            // both the title Text and every tooltip/label in the top pill
+            // observe it, mirroring how a real device-wide "Larger Text"
+            // accessibility setting reaches this screen.
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(3.0)),
+              child: child!,
+            ),
+            home: TopoCanvasScreen(
+              wallId: seeded.wallId,
+              debugInitialImageSize: const Size(1000, 2000),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        seeded.container.read(drawControllerProvider).mode,
+        DrawMode.view,
+      );
+      seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
+      await tester.pumpAndSettle();
+
+      // Same worst-case 6 trailing glyphs as the 1x test above, all still
+      // present under the 3x scale.
+      expect(
+        find.byKey(const Key('topo-edit-metadata-button')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
+      expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
+      expect(find.byKey(const Key('topo-slice-mode-button')), findsOneWidget);
+      expect(
+        find.byKey(const Key('topo-edit-location-button')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
+
+      // Selecting a route (needed so the AR/edit-metadata glyphs above are
+      // both present, the worst case this test targets) also surfaces the
+      // floating RouteLegend overlay — a SEPARATE widget from the top
+      // chrome this test exercises, with its own pre-existing overflow bug
+      // at extreme text scales (`_LegendHeader`'s and `_LegendChip`'s own
+      // Rows, confirmed via `git stash` to reproduce identically before
+      // this file's `_topRowIconStyle` fix — i.e. unrelated to it, and out
+      // of scope for this regression). Drained here rather than asserted
+      // away, so that pre-existing, separate bug doesn't spuriously fail
+      // THIS test — which proves its own claim about the top chrome
+      // directly below, via each trailing button's actual on-screen rect,
+      // not a blanket "zero exceptions anywhere on screen" check.
+      var pending = tester.takeException();
+      while (pending != null) {
+        pending = tester.takeException();
+      }
+
+      // The real proof: every glyph in the top chrome row — the back
+      // button plus all 6 trailing actions — is laid out entirely within
+      // the 375px viewport. If this row itself had overflowed (the
+      // regression this test guards against), the trailing button(s) that
+      // don't fit would be positioned with `rect.right` beyond the
+      // viewport's width. MasiIcon glyphs are fixed-size SVGs, unaffected
+      // by textScaler, so this must hold at 3x exactly as it does at 1x
+      // (see the sibling test above) — only the title's rendered text
+      // (already in an ellipsizing `Expanded` slot) and the row's height
+      // are expected to respond to text scale at all.
+      for (final key in const [
+        'topo-back-button',
+        'topo-edit-metadata-button',
+        'topo-ar-button',
+        'topo-mode-toggle',
+        'topo-slice-mode-button',
+        'topo-edit-location-button',
+        'topo-add-photo-button',
+      ]) {
+        final rect = tester.getRect(find.byKey(Key(key)));
+        expect(
+          rect.left,
+          greaterThanOrEqualTo(0),
+          reason: '$key must not be laid out off-screen to the left',
+        );
+        expect(
+          rect.right,
+          lessThanOrEqualTo(viewportSize.width),
+          reason:
+              '$key (rect=$rect) must not overflow the $viewportSize '
+              'viewport at 3x text scale',
+        );
+      }
     },
   );
 }
