@@ -2526,8 +2526,11 @@ void main() {
       testWidgets(
         'with NO injected tileProvider (only a spy tileHttpClientFactory, '
         'so no real network I/O ever happens), TileLayer.tileProvider stays '
-        'the SAME instance across a rebuild triggered by the compass -- '
-        'proving create-once -- and dispose() closes exactly the client '
+        'the SAME instance across a rebuild triggered by a programmatic '
+        'MapController.rotate() (the internal rotation-tracking setState '
+        'described in _MapViewState._rotationDegrees\' doc -- no on-screen '
+        'control can trigger rotation anymore, see MC4) -- proving '
+        'create-once -- and dispose() closes exactly the client '
         'this widget created',
         (tester) async {
           debugResetResilientTileClientCounters();
@@ -2558,9 +2561,13 @@ void main() {
               .tileProvider;
           expect(firstProvider, isA<NetworkTileProvider>());
 
-          // Trigger a rebuild via the compass's rotation-driven setState --
-          // the exact path MAJOR 2's bug report identifies as the source of
-          // the per-rebuild client leak.
+          // Trigger a rebuild via the internal rotation-tracking setState
+          // (see _MapViewState._rotationDegrees' doc -- the on-screen
+          // compass control that used to drive this was removed once
+          // rotation was disabled, but the setState path itself is kept
+          // for exactly this regression test) -- the exact path MAJOR 2's
+          // bug report identifies as the source of the per-rebuild client
+          // leak.
           controller.rotate(30);
           await tester.pump();
 
@@ -2701,42 +2708,75 @@ void main() {
     );
   });
 
-  group('MC4: compass map control', () {
-    testWidgets(
-      'tapping community-map-compass resets the injected MapController\'s '
-      'rotation to 0',
-      (tester) async {
-        final controller = MapController();
-        addTearDown(controller.dispose);
-        final container = _makeContainer();
-        final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedStandardScenario(db));
+  group(
+    'MC4: rotation is disabled — no compass/reset-north control renders, '
+    'and the two-finger-twist gesture is excluded from the interactive flags',
+    () {
+      testWidgets(
+        'the compass control no longer renders on the Map tab (removed '
+        'once rotation was disabled — nothing left for it to reset)',
+        (tester) async {
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
-              mapController: controller,
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(
+                tileProvider: _NoopTileProvider(),
+                initialTab: CommunityTab.map,
+              ),
             ),
-          ),
-        );
-        await _drain(tester);
+          );
+          await _drain(tester);
 
-        controller.rotate(45);
-        await tester.pump();
+          expect(tester.takeException(), isNull);
+          expect(
+            find.byKey(const Key('community-map-compass')),
+            findsNothing,
+          );
+          // find-me must still be there — only rotation/its control changed.
+          expect(
+            find.byKey(const Key('community-map-find-me')),
+            findsOneWidget,
+          );
+        },
+      );
 
-        expect(controller.camera.rotation, 45);
+      testWidgets(
+        "the FlutterMap's InteractionOptions.flags excludes "
+        'InteractiveFlag.rotate (an accidental two-finger twist must never '
+        'spin the map), while the usual pan/zoom flags stay enabled',
+        (tester) async {
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.tap(find.byKey(const Key('community-map-compass')));
-        await tester.pump();
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(
+                tileProvider: _NoopTileProvider(),
+                initialTab: CommunityTab.map,
+              ),
+            ),
+          );
+          await _drain(tester);
 
-        expect(tester.takeException(), isNull);
-        expect(controller.camera.rotation, 0);
-      },
-    );
-  });
+          expect(tester.takeException(), isNull);
+          final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
+          final flags = flutterMap.options.interactionOptions.flags;
+          expect(InteractiveFlag.hasRotate(flags), isFalse);
+          expect(InteractiveFlag.hasDrag(flags), isTrue);
+          expect(InteractiveFlag.hasPinchZoom(flags), isTrue);
+          expect(InteractiveFlag.hasPinchMove(flags), isTrue);
+          expect(InteractiveFlag.hasDoubleTapZoom(flags), isTrue);
+          expect(InteractiveFlag.hasScrollWheelZoom(flags), isTrue);
+        },
+      );
+    },
+  );
 
   group('MC5: no regression — map controls do not disturb existing behavior', () {
     testWidgets(
@@ -2795,9 +2835,11 @@ void main() {
           find.byKey(const Key('community-map-find-me')),
           findsOneWidget,
         );
+        // The compass/reset-north control was removed once rotation was
+        // disabled (MC4) — there's nothing left for it to reset.
         expect(
           find.byKey(const Key('community-map-compass')),
-          findsOneWidget,
+          findsNothing,
         );
       },
     );

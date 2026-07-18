@@ -588,4 +588,37 @@ void main() {
       },
     );
   });
+
+  group('rotation is disabled on the set-location picker map', () {
+    testWidgets(
+      "the FlutterMap's InteractionOptions.flags excludes "
+      'InteractiveFlag.rotate (an accidental two-finger twist must never '
+      'spin the map), while the usual pan/zoom flags stay enabled',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final geocoding = _FakeGeocodingService(const []);
+
+        final context = await _pumpHarness(tester);
+        final pickerFuture = showSetLocationPicker(
+          context,
+          tileProvider: _NoopTileProvider(),
+          controller: controller,
+          geocodingService: geocoding,
+        );
+        unawaited(pickerFuture);
+        await tester.pumpAndSettle();
+
+        expect(tester.takeException(), isNull);
+        final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
+        final flags = flutterMap.options.interactionOptions.flags;
+        expect(InteractiveFlag.hasRotate(flags), isFalse);
+        expect(InteractiveFlag.hasDrag(flags), isTrue);
+        expect(InteractiveFlag.hasPinchZoom(flags), isTrue);
+        expect(InteractiveFlag.hasPinchMove(flags), isTrue);
+        expect(InteractiveFlag.hasDoubleTapZoom(flags), isTrue);
+        expect(InteractiveFlag.hasScrollWheelZoom(flags), isTrue);
+      },
+    );
+  });
 }

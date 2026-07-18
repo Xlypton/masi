@@ -460,6 +460,20 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
               initialCenter: center,
               initialZoom: zoom,
               onPositionChanged: _handlePositionChanged,
+              // Rotation is disabled outright — an accidental two-finger
+              // twist must never spin the map. Every other usual pan/zoom
+              // gesture stays enabled; only `InteractiveFlag.rotate` is
+              // omitted from the flags that would otherwise default to
+              // `InteractiveFlag.all`.
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.drag |
+                    InteractiveFlag.flingAnimation |
+                    InteractiveFlag.pinchMove |
+                    InteractiveFlag.pinchZoom |
+                    InteractiveFlag.doubleTapZoom |
+                    InteractiveFlag.doubleTapDragZoom |
+                    InteractiveFlag.scrollWheelZoom,
+              ),
             ),
             children: [
               TileLayer(

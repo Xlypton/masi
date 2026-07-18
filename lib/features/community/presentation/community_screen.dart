@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:io';
-import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -382,7 +381,7 @@ class _FeedView extends ConsumerWidget {
                     hintText: 'Search topos',
                     prefixIcon: MasiIcon(
                       'search',
-                      size: 20,
+                      size: 16,
                       color: colors.ink3,
                     ),
                     filled: true,
@@ -851,8 +850,8 @@ class _GradientFallback extends StatelessWidget {
 /// shared set.
 ///
 /// A [ConsumerStatefulWidget] (rather than [ConsumerWidget]) so it can own a
-/// [MapController] for the find-me/compass controls added over the map —
-/// see [_MapViewState].
+/// [MapController] for the find-me control added over the map — see
+/// [_MapViewState].
 class _MapView extends ConsumerStatefulWidget {
   const _MapView({
     required this.topos,
@@ -877,8 +876,10 @@ class _MapView extends ConsumerStatefulWidget {
   final String? focusWallId;
 
   /// Test-injectable [MapController] seam (see `community_screen_test.dart`'s
-  /// MC3/MC4: a test supplies its own controller and reads `controller.camera`
-  /// after driving a tap on `community-map-find-me`/`community-map-compass`).
+  /// MC3: a test supplies its own controller and reads `controller.camera`
+  /// after driving a tap on `community-map-find-me`; FX2a/FX3 similarly
+  /// inject a controller to call `.rotate(...)` directly — no on-screen
+  /// control can trigger rotation anymore, see [_rotationDegrees]'s doc).
   /// Production code (`CommunityScreen`) leaves this null, and
   /// [_MapViewState] creates, owns, and disposes its own instead.
   @visibleForTesting
@@ -906,19 +907,27 @@ class _MapViewState extends ConsumerState<_MapView> {
   StreamSubscription<MapEvent>? _mapEventSubscription;
 
   /// The map's current bearing, mirrored from [MapController.mapEventStream]
-  /// so the compass button's icon can rotate to keep pointing north (see
-  /// `_compassButton`) — kept as widget state (rather than read directly off
+  /// — kept as widget state (rather than read directly off
   /// `_mapController.camera` inside `build`) because a controller-driven
-  /// rotation (a drag gesture, or this same compass button) does not, on its
-  /// own, trigger a rebuild of this widget.
+  /// rotation does not, on its own, trigger a rebuild of this widget. No
+  /// on-screen control reads this value anymore: the compass button that
+  /// used to display/reset it was removed once accidental two-finger-twist
+  /// rotation was disabled via `InteractionOptions.flags` in [build] (at
+  /// which point production code can no longer rotate the camera at all —
+  /// see [_MapControlButton] and this class's `build`). Retained so
+  /// `community_screen_test.dart`'s FX3 (MAJOR 2) regression test still has
+  /// an already-wired, lightweight way to force a [_MapViewState] rebuild
+  /// (via the test's own `MapController.rotate(...)` call) and prove the
+  /// resilient tile provider survives it unchanged.
   double _rotationDegrees = 0;
 
   /// One-shot guard for the imperative device-location auto-center in
   /// [build]'s `ref.listen(myLocationProvider, ...)` — see MAJOR 1 in this
   /// class's fix history. Sticks at `true` for the rest of this
   /// [_MapViewState]'s lifetime once the camera has been auto-centered once,
-  /// so a later, unrelated rebuild (e.g. the compass's rotation-driven
-  /// `setState`) can never re-fight the user by moving the camera back.
+  /// so a later, unrelated rebuild (e.g. the rotation-tracking `setState`
+  /// described in [_rotationDegrees]'s doc) can never re-fight the user by
+  /// moving the camera back.
   bool _didAutoCenter = false;
 
   /// The resilient tile HTTP client THIS state created (see [_tileProvider]),
@@ -1131,9 +1140,10 @@ class _MapViewState extends ConsumerState<_MapView> {
   /// entire lifetime and reused on every subsequent `build()` call — see
   /// MAJOR 2 in this class's fix history: calling `buildResilientTileProvider()`
   /// directly inline inside `build` allocated a brand-new provider +
-  /// `RetryClient` + `http.Client` on EVERY rebuild (and the compass's
-  /// `mapEventStream` listener triggers a `setState` on every rotation
-  /// frame), leaking one never-closed `http.Client` per rebuild — worse,
+  /// `RetryClient` + `http.Client` on EVERY rebuild (and the rotation-
+  /// tracking `mapEventStream` listener — see [_rotationDegrees]'s doc —
+  /// triggers a `setState` on every rotation frame), leaking one
+  /// never-closed `http.Client` per rebuild — worse,
   /// passing an explicit `httpClient:` marks it as externally-owned, so even
   /// flutter_map's own `TileLayer.dispose() -> tileProvider.dispose()` would
   /// never have closed it anyway (see [NetworkTileProvider]'s
@@ -1369,7 +1379,23 @@ class _MapViewState extends ConsumerState<_MapView> {
 
     final flutterMap = FlutterMap(
       mapController: _mapController,
-      options: MapOptions(initialCenter: center, initialZoom: zoom),
+      options: MapOptions(
+        initialCenter: center,
+        initialZoom: zoom,
+        // Rotation is disabled outright — an accidental two-finger twist
+        // must never spin the map. Every other usual pan/zoom gesture stays
+        // enabled; only `InteractiveFlag.rotate` is omitted from the flags
+        // that would otherwise default to `InteractiveFlag.all`.
+        interactionOptions: const InteractionOptions(
+          flags: InteractiveFlag.drag |
+              InteractiveFlag.flingAnimation |
+              InteractiveFlag.pinchMove |
+              InteractiveFlag.pinchZoom |
+              InteractiveFlag.doubleTapZoom |
+              InteractiveFlag.doubleTapDragZoom |
+              InteractiveFlag.scrollWheelZoom,
+        ),
+      ),
       children: [
         TileLayer(
           urlTemplate:
@@ -1538,7 +1564,7 @@ class _MapViewState extends ConsumerState<_MapView> {
       ],
     );
 
-    // Map controls (find-me/compass) are siblings of the FlutterMap in a
+    // Map controls (find-me) are siblings of the FlutterMap in a
     // Stack, ABOVE it — FlutterMap.children are map LAYERS (they scroll/zoom
     // with the map), whereas these controls must stay fixed to the screen.
     // Positioned bottom-right, above the attribution pill (which sits
@@ -1550,8 +1576,8 @@ class _MapViewState extends ConsumerState<_MapView> {
         // The unified map-search overlay (B1): a pill search field + its
         // grouped results dropdown, anchored to the TOP of the map (the
         // bottom-left/bottom-right legend/attribution below leave this area
-        // free — see their doc). A sibling of the bottom-right find-me/
-        // compass column in this same outer `Stack` (never a child of
+        // free — see their doc). A sibling of the bottom-right find-me
+        // column in this same outer `Stack` (never a child of
         // `flutterMap` — unlike the marker layers above, this is fixed
         // screen chrome, not something that should pan/zoom with the map).
         Positioned(
@@ -1687,15 +1713,6 @@ class _MapViewState extends ConsumerState<_MapView> {
             mainAxisSize: MainAxisSize.min,
             children: [
               _MapControlButton(
-                mapControlKey: const Key('community-map-compass'),
-                iconName: 'compass',
-                tooltip: 'Reset north',
-                colors: colors,
-                rotationDegrees: -_rotationDegrees,
-                onPressed: () => _mapController.rotate(0),
-              ),
-              const SizedBox(height: 8),
-              _MapControlButton(
                 mapControlKey: const Key('community-map-find-me'),
                 iconName: 'my_location',
                 tooltip: 'Find my location',
@@ -1710,11 +1727,10 @@ class _MapViewState extends ConsumerState<_MapView> {
   }
 }
 
-/// A compact, theme-aware circular icon button for the Map tab's find-me/
-/// compass controls (`community-map-find-me`/`community-map-compass`) —
-/// styled with [MasiColors] rather than Material's default
-/// `FloatingActionButton` look, to sit consistently with the rest of the
-/// app's chrome.
+/// A compact, theme-aware circular icon button for the Map tab's find-me
+/// control (`community-map-find-me`) — styled with [MasiColors] rather than
+/// Material's default `FloatingActionButton` look, to sit consistently with
+/// the rest of the app's chrome.
 ///
 /// [mapControlKey] (rather than a bare `key` ctor param) so the wrapping
 /// [Material] — the actual hit-testable/keyed widget a test taps — carries
@@ -1728,7 +1744,6 @@ class _MapControlButton extends StatelessWidget {
     required this.tooltip,
     required this.colors,
     required this.onPressed,
-    this.rotationDegrees = 0,
   });
 
   final Key mapControlKey;
@@ -1736,7 +1751,6 @@ class _MapControlButton extends StatelessWidget {
   final String tooltip;
   final MasiColors colors;
   final VoidCallback onPressed;
-  final double rotationDegrees;
 
   @override
   Widget build(BuildContext context) {
@@ -1748,10 +1762,7 @@ class _MapControlButton extends StatelessWidget {
       child: IconButton(
         tooltip: tooltip,
         onPressed: onPressed,
-        icon: Transform.rotate(
-          angle: rotationDegrees * math.pi / 180,
-          child: MasiIcon(iconName, color: colors.ink),
-        ),
+        icon: MasiIcon(iconName, color: colors.ink),
       ),
     );
   }

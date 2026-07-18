@@ -186,10 +186,12 @@ void main() {
         find.byKey(const Key('community-map-search-field')),
         findsOneWidget,
       );
-      // B5: the find-me/compass controls this overlay is a sibling of must
-      // still be present too.
+      // B5: the find-me control this overlay is a sibling of must still be
+      // present too. The compass/reset-north control was removed once
+      // rotation was disabled (see community_screen_test.dart's MC4) --
+      // there's nothing left for it to reset.
       expect(find.byKey(const Key('community-map-find-me')), findsOneWidget);
-      expect(find.byKey(const Key('community-map-compass')), findsOneWidget);
+      expect(find.byKey(const Key('community-map-compass')), findsNothing);
     });
   });
 
