@@ -459,7 +459,7 @@ class _ToposFilterBar extends StatelessWidget {
               controller: searchController,
               decoration: InputDecoration(
                 hintText: 'Search topos',
-                prefixIcon: MasiIcon('search', size: 20, color: colors.ink3),
+                prefixIcon: MasiIcon('search', size: 16, color: colors.ink3),
                 filled: true,
                 fillColor: colors.surface2,
                 border: OutlineInputBorder(
