@@ -1771,11 +1771,11 @@ class _MapControlButton extends StatelessWidget {
 /// The Map tab's "Private"/"Public" key (`community-map-legend`),
 /// explaining [_BoulderMarker]'s visibility-encoded look: since the marker
 /// is now just the bare `boulder_logo` glyph (no ring/disc background --
-/// see that class's doc), the only cue left for visibility is opacity --
-/// a faded swatch (matching [_BoulderMarker.privateOpacity]) for private
-/// topos, a full-opacity one for public -- every marker on the map (own or
-/// community) follows that same rule, regardless of which `MarkerLayer`/
-/// tap-target it belongs to.
+/// see that class's doc), the cue for visibility is color -- a grayscale
+/// swatch (matching [_BoulderMarker.greyscale]/`_privateMuteOpacity`) for
+/// private topos, a full-color one for public -- every marker on the map
+/// (own or community) follows that same rule, regardless of which
+/// `MarkerLayer`/tap-target it belongs to.
 class _MapLegend extends StatelessWidget {
   const _MapLegend({required this.colors});
 
@@ -1799,12 +1799,12 @@ class _MapLegend extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _MapLegendRow(
-              opacity: _BoulderMarker.privateOpacity,
+              isPublic: false,
               label: 'Private',
               textStyle: textStyle,
             ),
             const SizedBox(height: 4),
-            _MapLegendRow(opacity: 1, label: 'Public', textStyle: textStyle),
+            _MapLegendRow(isPublic: true, label: 'Public', textStyle: textStyle),
           ],
         ),
       ),
@@ -1814,24 +1814,30 @@ class _MapLegend extends StatelessWidget {
 
 class _MapLegendRow extends StatelessWidget {
   const _MapLegendRow({
-    required this.opacity,
+    required this.isPublic,
     required this.label,
     this.textStyle,
   });
 
-  final double opacity;
+  final bool isPublic;
   final String label;
   final TextStyle? textStyle;
 
   @override
   Widget build(BuildContext context) {
+    const swatch = MasiIcon('boulder_logo', tinted: false, size: 14);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Opacity(
-          opacity: opacity,
-          child: const MasiIcon('boulder_logo', tinted: false, size: 14),
-        ),
+        isPublic
+            ? swatch
+            : const Opacity(
+                opacity: _BoulderMarker._privateMuteOpacity,
+                child: ColorFiltered(
+                  colorFilter: _BoulderMarker.greyscale,
+                  child: swatch,
+                ),
+              ),
         const SizedBox(width: 6),
         Text(label, style: textStyle, maxLines: 1, overflow: TextOverflow.ellipsis),
       ],
@@ -1948,20 +1954,23 @@ String _labelForSearchKind(MapSearchKind kind) {
 /// circle pin (see [_MapPinBadge]/[_OwnMapPinBadge]). Used by BOTH the
 /// community and own `MarkerLayer`s in [_MapView.build] — the own-vs-
 /// community split still exists (separate layers/tap targets), it just
-/// doesn't change the marker's look beyond [isPublic]'s opacity (below).
+/// doesn't change the marker's look beyond [isPublic]'s color treatment
+/// (below).
 ///
 /// `masi_boulder_logo` is full-color/multi-tone, not a single-color glyph,
 /// so it's rendered via `MasiIcon('boulder_logo', tinted: false)` — opting
 /// out of [MasiIcon]'s default `BlendMode.srcIn` tint (see that widget's
 /// `build`) so the logo shows its own natural colors instead of being
 /// flattened to one. Since an un-tinted render ignores [MasiIcon.color]
-/// entirely, the logo itself can't vary per [isPublic] the way a mono glyph
-/// could, and with no background shape left to carry a color either, the
-/// public/private distinction now lives entirely in opacity: full opacity
-/// for public/shared topos, [privateOpacity] (faded) for private ones — a
-/// subtle cue that still reads directly off the map without needing the
-/// legend (see [_MapLegend], which explains the convention and shares this
-/// exact opacity for its "Private" swatch).
+/// entirely, and there's no background shape left to carry a color either,
+/// the public/private distinction is carried by [greyscale]: public/shared
+/// topos render the full-color glyph as-is, private ones render the SAME
+/// glyph desaturated to grayscale (via [ColorFiltered]) plus a small extra
+/// opacity fade ([_privateMuteOpacity]) for emphasis — color-vs-gray is the
+/// PRIMARY cue (opacity alone, at 0.55, proved too subtle to read at a
+/// glance — see this class's fix history), not opacity alone. Shared with
+/// [_MapLegend]/[_MapLegendRow] so the legend's swatches always match the
+/// marker exactly.
 class _BoulderMarker extends StatelessWidget {
   const _BoulderMarker({required this.isPublic});
 
@@ -1977,30 +1986,46 @@ class _BoulderMarker extends StatelessWidget {
   /// the glyph itself is bottom-anchored inside that box (see [build]),
   /// which is what keeps its visual base sitting on the actual coordinate
   /// per `Alignment.topCenter`'s "anchors the box's bottom edge" semantics.
+  /// Kept comfortably above [_iconSize] so the tap target stays generous
+  /// even though the glyph itself shrank (28 -> 22, per user feedback that
+  /// the marker read as too big).
   static const double totalHeight = 40;
 
-  /// Size of the bare boulder-logo glyph. Sized close to the old ring
-  /// badge's outer diameter (30, before this change) minus its border, so
-  /// removing the ring/disc doesn't shrink the marker's effective tap
-  /// target/visual footprint even though nothing is drawn behind the logo
-  /// anymore.
-  static const double _iconSize = 28;
+  /// Size of the bare boulder-logo glyph. Shrunk from the previous 28 (user
+  /// feedback: "the boulder icon on the map is a bit too big") while
+  /// [totalHeight] stays unchanged, so the tap target doesn't shrink with
+  /// it.
+  static const double _iconSize = 22;
 
-  /// Opacity applied to a PRIVATE topo's glyph. With the ring/disc
-  /// background gone, this is the only cue left distinguishing private
-  /// from public markers: public/shared topos render at full opacity (1),
-  /// private ones fade to this value. Shared with [_MapLegend] so the
-  /// legend's "Private" swatch always matches the marker exactly.
-  static const double privateOpacity = 0.55;
+  /// Luminance-weighted (ITU-R BT.709) grayscale [ColorFilter] applied to a
+  /// PRIVATE topo's glyph — the PRIMARY cue distinguishing private from
+  /// public markers now that opacity alone ([_privateMuteOpacity]'s much
+  /// milder fade) proved too subtle on its own. Shared with
+  /// [_MapLegendRow] so the legend's "Private" swatch always matches the
+  /// marker exactly.
+  static const ColorFilter greyscale = ColorFilter.matrix(<double>[
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0.2126, 0.7152, 0.0722, 0, 0,
+    0, 0, 0, 1, 0,
+  ]);
+
+  /// Small secondary fade layered on top of [greyscale] for a PRIVATE
+  /// glyph, for extra muting — never the primary distinction (that's
+  /// color-vs-gray above).
+  static const double _privateMuteOpacity = 0.85;
 
   @override
   Widget build(BuildContext context) {
+    const glyph = MasiIcon('boulder_logo', tinted: false, size: _iconSize);
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Opacity(
-        opacity: isPublic ? 1 : privateOpacity,
-        child: const MasiIcon('boulder_logo', tinted: false, size: _iconSize),
-      ),
+      child: isPublic
+          ? glyph
+          : const Opacity(
+              opacity: _privateMuteOpacity,
+              child: ColorFiltered(colorFilter: greyscale, child: glyph),
+            ),
     );
   }
 }

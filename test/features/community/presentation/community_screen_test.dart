@@ -434,6 +434,17 @@ Finder _boulderLogoFinder(Key markerKey) => find.descendant(
   ),
 );
 
+/// Matches a `ColorFiltered` wrapper rendered anywhere inside the
+/// `_BoulderMarker` found by [_boulderMarkerFinder] (#38: the
+/// public/private distinction is a grayscale `ColorFiltered` applied ONLY
+/// to a private marker's glyph -- present for private, absent for public --
+/// rather than merely a difference in opacity, which a test/verifier can't
+/// deterministically distinguish from "just faded").
+Finder _boulderColorFilteredFinder(Key markerKey) => find.descendant(
+  of: _boulderMarkerFinder(markerKey),
+  matching: find.byType(ColorFiltered),
+);
+
 /// Matches the `MasiIcon('comment')` glyph rendered inside a feed row's
 /// `-comments`-keyed cell (see `_FeedRow` in `community_screen.dart`) --
 /// C1d replaced the old `'\u{1F4AC} $count'` emoji-text with this icon next
@@ -1675,9 +1686,12 @@ void main() {
     );
 
     testWidgets(
-      'boulder marker opacity encodes visibility: an own PRIVATE topo '
-      'renders isPublic == false, while an own PUBLIC (shared) topo and a '
-      'community topo both render isPublic == true',
+      'boulder marker color encodes visibility: an own PRIVATE topo '
+      'renders isPublic == false plus a grayscale ColorFiltered wrapper '
+      '(#38), while an own PUBLIC (shared) topo and a community topo both '
+      'render isPublic == true with NO ColorFiltered wrapper -- the '
+      'public/private distinction is structural (color-vs-gray), not just '
+      'an opacity value',
       (tester) async {
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
@@ -1769,6 +1783,47 @@ void main() {
             const Key('community-map-marker-wall-community'),
           ),
           isTrue,
+        );
+
+        // #38: the public/private cue must be structural (a grayscale
+        // ColorFiltered wrapper around the glyph), not merely a difference
+        // in opacity -- a verifier can't deterministically assert "looks
+        // less colorful" but CAN assert the ColorFiltered widget's
+        // presence/absence.
+        expect(
+          _boulderColorFilteredFinder(
+            const Key('community-map-own-marker-wall-own-private'),
+          ),
+          findsOneWidget,
+          reason: 'a PRIVATE marker must render a grayscale ColorFiltered',
+        );
+        expect(
+          _boulderColorFilteredFinder(
+            const Key('community-map-own-marker-wall-own-public'),
+          ),
+          findsNothing,
+          reason: 'a PUBLIC marker must render full-color, no ColorFiltered',
+        );
+        expect(
+          _boulderColorFilteredFinder(
+            const Key('community-map-marker-wall-community'),
+          ),
+          findsNothing,
+          reason: 'a PUBLIC marker must render full-color, no ColorFiltered',
+        );
+
+        // A1: the marker glyph shrank from 28 to 22 (user feedback: "the
+        // boulder icon on the map is a bit too big"), while the enclosing
+        // Marker box stays >= 40px so the tap target is unaffected.
+        expect(
+          (tester.widget(
+                _boulderLogoFinder(
+                  const Key('community-map-own-marker-wall-own-private'),
+                ),
+              )
+              as MasiIcon)
+              .size,
+          22.0,
         );
       },
     );
