@@ -2376,7 +2376,7 @@ void main() {
   group('MC1: default map center — device location vs (0,0) fallback', () {
     testWidgets(
       'FX1 (MAJOR 1): no located topos + a device location fix -> the '
-      'CAMERA is imperatively moved to that fix at zoom ~12 once the fix '
+      'CAMERA is imperatively moved to that fix at zoom ~14 once the fix '
       'resolves (not merely `options.initialCenter`, which flutter_map only '
       'honors ONCE at first mount -- before an autoDispose FutureProvider '
       "like `myLocationProvider` has resolved -- so reading the map's "
@@ -2415,7 +2415,7 @@ void main() {
         final camera = controller.camera;
         expect((camera.center.latitude - 51.5).abs(), lessThan(0.01));
         expect((camera.center.longitude - (-0.1)).abs(), lessThan(0.01));
-        expect(camera.zoom, 12);
+        expect(camera.zoom, 14);
       },
     );
 
@@ -2451,8 +2451,8 @@ void main() {
   });
 
   group(
-    'FX2: device-location auto-center is one-shot and never overrides a '
-    'located-topos framing',
+    'FX2: device-location auto-center is one-shot and (user request #39) '
+    'now WINS over a located-topos framing',
     () {
       testWidgets(
         'FX2a: after the auto-center resolves, further map interaction '
@@ -2505,9 +2505,11 @@ void main() {
       );
 
       testWidgets(
-        'FX2b: located topos are already present -> the device-location '
-        'auto-center never fires; the camera stays framed on the topos\' '
-        'combined center, never jumping to the (unrelated) device fix',
+        'FX2b (user request #39): located topos are already present -> the '
+        "device-location auto-center STILL fires; the camera moves to the "
+        "user's own position (51.5, -0.1), never staying framed on the "
+        "(unrelated) topos' combined center -- this deliberately overturns "
+        "the old 'topos win' rule",
         (tester) async {
           final controller = MapController();
           addTearDown(controller.dispose);
@@ -2534,11 +2536,68 @@ void main() {
 
           expect(tester.takeException(), isNull);
           final camera = controller.camera;
-          // wall-shared-1 is the only located topo (45.0, 7.0) -- the
-          // camera must stay framed there, never jumping to the fake
-          // 51.5/-0.1 device fix.
-          expect((camera.center.latitude - 45.0).abs(), lessThan(0.5));
-          expect((camera.center.longitude - 7.0).abs(), lessThan(0.5));
+          // wall-shared-1 is located at (45.0, 7.0), but the user's device
+          // fix (51.5, -0.1) must win -- the camera centers on the user,
+          // not the topos' combined center.
+          expect((camera.center.latitude - 51.5).abs(), lessThan(0.5));
+          expect((camera.center.longitude - (-0.1)).abs(), lessThan(0.5));
+          expect(camera.zoom, 14);
+        },
+      );
+
+      testWidgets(
+        'FX2c (user request #39): an OWN (local, unpublished) located topo '
+        "is present too -- the user's position still wins over that "
+        'centroid, proving the rule applies regardless of whether the '
+        'located topo is own or shared',
+        (tester) async {
+          final controller = MapController();
+          addTearDown(controller.dispose);
+          final container = _makeContainer(
+            locationService: const _FakeLocationService((
+              latitude: 40.0,
+              longitude: -105.0,
+            )),
+          );
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-own-coords', name: 'Own Area');
+            await _seedSector(
+              db,
+              id: 'sector-own-coords',
+              areaId: 'area-own-coords',
+              name: 'S1',
+            );
+            // No `ownerId`/non-shared `visibility` -- this wall is local-
+            // only, i.e. this device's OWN located topo (see `isMine`'s doc
+            // in `community_screen.dart`).
+            await _seedWall(
+              db,
+              id: 'wall-own-coords',
+              sectorId: 'sector-own-coords',
+              name: 'My Own Wall',
+              latitude: 39.7,
+              longitude: -104.9,
+            );
+          });
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityScreen(
+                tileProvider: _NoopTileProvider(),
+                initialTab: CommunityTab.map,
+                mapController: controller,
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          final camera = controller.camera;
+          expect((camera.center.latitude - 40.0).abs(), lessThan(0.01));
+          expect((camera.center.longitude - (-105.0)).abs(), lessThan(0.01));
+          expect(camera.zoom, 14);
         },
       );
     },
@@ -2718,6 +2777,20 @@ void main() {
           ),
         );
         await _drain(tester);
+
+        // The one-shot auto-center (user request #39) has already put us on
+        // the fix during `_drain` above; pan far away so the find-me tap has
+        // something real to undo -- this is what makes the assertion below
+        // actually prove the button works, rather than merely observing the
+        // auto-center that already happened.
+        controller.move(const LatLng(0, 0), 3);
+        await tester.pump();
+        expect((controller.camera.center.latitude - 0).abs(), lessThan(0.01));
+        expect(
+          (controller.camera.center.longitude - 0).abs(),
+          lessThan(0.01),
+        );
+        expect(controller.camera.zoom, 3);
 
         await tester.tap(find.byKey(const Key('community-map-find-me')));
         await _drain(tester);

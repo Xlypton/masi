@@ -1279,37 +1279,38 @@ class _MapViewState extends ConsumerState<_MapView> {
     ];
 
     // Imperative one-shot auto-center on the device's location — see MAJOR 1
-    // in this class's fix history. `myLocation` above comes from
-    // `myLocationProvider`, an autoDispose FutureProvider that's still
-    // `AsyncLoading` (null) on this widget's FIRST build — applying it only
-    // via `MapOptions.initialCenter` (honored by flutter_map exactly ONCE, at
-    // first mount) would leave the map stuck at the (0,0)/1.5 world view
-    // forever once the fix resolves a moment later, since a later rebuild's
-    // freshly-computed `center` below is never re-applied to an
-    // already-mounted map. `ref.listen` instead fires the instant
-    // `myLocationProvider` actually transitions to a resolved value, moving
-    // the (by-then-mounted) map's camera directly.
+    // / user request #39 in this class's fix history. `myLocation` above
+    // comes from `myLocationProvider`, an autoDispose FutureProvider that's
+    // still `AsyncLoading` (null) on this widget's FIRST build — applying it
+    // only via `MapOptions.initialCenter` (honored by flutter_map exactly
+    // ONCE, at first mount) would leave the map stuck at the (0,0)/1.5 world
+    // view (or the topo-centroid frame) forever once the fix resolves a
+    // moment later, since a later rebuild's freshly-computed `center` below
+    // is never re-applied to an already-mounted map. `ref.listen` instead
+    // fires the instant `myLocationProvider` actually transitions to a
+    // resolved value, moving the (by-then-mounted) map's camera directly.
     //
     // Guarded to fire at most once per `_MapViewState` (`_didAutoCenter`),
-    // and only when there are NO located topos to frame instead and no
-    // `focusWallId` deep link is in play — both of those DO work correctly
-    // via `initialCenter`/`initialZoom` below, since `topos` is already
-    // populated by this widget's first build — so it never fights the user
-    // afterward (e.g. after they've since panned/zoomed/rotated away, or
-    // once topos load in and should be framed instead).
+    // and only when no `focusWallId` deep link is in play — deep links DO
+    // work correctly via `initialCenter`/`initialZoom` below, since
+    // `focusPoint` is already resolvable on this widget's first build — so
+    // this never fights an explicit deep link. Deliberately fires REGARDLESS
+    // of `combinedCoords` (user request #39: the map centers on the user's
+    // OWN position even when located topos exist, overturning the previous
+    // "frame the topos instead" rule) — and never fights the user
+    // afterward (e.g. after they've since panned/zoomed/rotated away).
     ref.listen<AsyncValue<DeviceLocation?>>(myLocationProvider, (
       previous,
       next,
     ) {
       if (_didAutoCenter) return;
       if (widget.focusWallId != null) return;
-      if (combinedCoords.isNotEmpty) return;
       final loc = next.asData?.value;
       if (loc == null) return;
       _didAutoCenter = true;
       if (!mounted) return;
       try {
-        _mapController.move(LatLng(loc.latitude, loc.longitude), 12);
+        _mapController.move(LatLng(loc.latitude, loc.longitude), 14);
       } catch (_) {
         // Defensive: a controller detached from its map (e.g. this widget
         // torn down in the same microtask the fix resolved) must never
@@ -1344,38 +1345,38 @@ class _MapViewState extends ConsumerState<_MapView> {
       }
     }
 
-    // When there are no located topos at all AND no `focusWallId` was even
-    // requested, prefer centering on the device's current position (at a
-    // moderate zoom) over the maximally-unhelpful (0,0)/1.5 whole-world
-    // view. A `focusWallId` that failed to resolve to a point (not found /
-    // filtered out / no coordinates, and no OTHER located topos exist
-    // either) deliberately still falls through to the (0,0)/1.5 fallback
-    // below rather than silently substituting the device's own location for
-    // a link that named a specific, different place.
-    final useMyLocationFallback = widget.focusWallId == null &&
-        myLocation != null;
+    // User request #39: the map opens centered on the device's current
+    // position, EVEN when located topos exist to frame instead — the
+    // user's own position now wins over the topo-centroid frame. Priority:
+    // `focusPoint` (an explicit deep link) > the device's location (whenever
+    // no deep link is in play and a fix is available) > the topo centroid
+    // (when located topos exist but no fix is available yet/ever) > the
+    // maximally-unhelpful (0,0)/1.5 whole-world view. A `focusWallId` that
+    // failed to resolve to a point (not found / filtered out / no
+    // coordinates) deliberately still falls through to the location/centroid/
+    // (0,0) chain below rather than silently substituting a DIFFERENT place
+    // for a link that named a specific one.
+    final useMyLocation = widget.focusWallId == null && myLocation != null;
 
     final center =
         focusPoint ??
-        (combinedCoords.isEmpty
-            ? (useMyLocationFallback
-                ? LatLng(myLocation.latitude, myLocation.longitude)
-                : const LatLng(0, 0))
-            : LatLng(
-                combinedCoords.map((p) => p.latitude).reduce(
-                      (a, b) => a + b,
-                    ) /
-                    combinedCoords.length,
-                combinedCoords.map((p) => p.longitude).reduce(
-                      (a, b) => a + b,
-                    ) /
-                    combinedCoords.length,
-              ));
+        (useMyLocation
+            ? LatLng(myLocation.latitude, myLocation.longitude)
+            : (combinedCoords.isEmpty
+                ? const LatLng(0, 0)
+                : LatLng(
+                    combinedCoords.map((p) => p.latitude).reduce(
+                          (a, b) => a + b,
+                        ) /
+                        combinedCoords.length,
+                    combinedCoords.map((p) => p.longitude).reduce(
+                          (a, b) => a + b,
+                        ) /
+                        combinedCoords.length,
+                  )));
     final zoom = focusPoint != null
         ? 15.0
-        : (combinedCoords.isEmpty
-            ? (useMyLocationFallback ? 12.0 : 1.5)
-            : 11.0);
+        : (useMyLocation ? 14.0 : (combinedCoords.isEmpty ? 1.5 : 11.0));
 
     final flutterMap = FlutterMap(
       mapController: _mapController,
