@@ -142,7 +142,8 @@ class RouteRepository {
   }
 
   /// Maps each non-deleted route's stable [TopoRoute.number] to its
-  /// underlying DB row `id` (a UUID) for [wallId].
+  /// underlying DB row `id` (a UUID) for [wallId] — optionally narrowed to
+  /// a single [photoId].
   ///
   /// Unlike [TopoRoute.id] — a locally-reassigned sequential int, see class
   /// doc — a route's real `id` column is the only identity another table
@@ -150,10 +151,32 @@ class RouteRepository {
   /// community feature's "log ascent" action) that need to resolve a
   /// specific route's real id from the same `number` [loadRoutes] already
   /// exposes, without leaking the full DB row shape.
-  Future<Map<int, String>> routeDbIdsByNumber(String wallId) async {
-    final rows = await (_db.select(
-      _db.routes,
-    )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).get();
+  ///
+  /// Multi-photo-per-topo fix: route `number` is only stable PER PHOTO (see
+  /// this class's doc) — a wall with 2+ photos can have several routes each
+  /// numbered `1`, one per photo. A [wallId]-only map (the original,
+  /// unscoped shape of this method) silently collides those into a single
+  /// entry, keyed by whichever row the query happened to return last. Pass
+  /// the CURRENTLY ACTIVE photo's id (e.g. `DrawState.activePhotoId`) here
+  /// to scope the map to just that photo's routes and avoid the collision.
+  ///
+  /// [photoId] is optional (and defaults to `null`, meaning "every photo on
+  /// this wall" — the original, pre-multi-photo behavior) purely so
+  /// existing callers that only ever dealt with a single-photo wall (e.g.
+  /// the community detail screen's own log-ascent resolution) keep
+  /// compiling and behaving exactly as before, without every call site
+  /// needing to thread a photo id through immediately.
+  Future<Map<int, String>> routeDbIdsByNumber(
+    String wallId, [
+    String? photoId,
+  ]) async {
+    final rows = await (_db.select(_db.routes)..where((t) {
+          final predicate = t.wallId.equals(wallId) & t.deletedAt.isNull();
+          return photoId == null
+              ? predicate
+              : predicate & t.photoId.equals(photoId);
+        }))
+        .get();
     return {for (final row in rows) row.number: row.id};
   }
 

@@ -22,6 +22,7 @@ import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
 import 'package:climbtopo/features/topo/presentation/photo_selector.dart';
+import 'package:climbtopo/features/topo/presentation/photo_strip.dart';
 import 'package:climbtopo/features/topo/presentation/photo_source_sheet.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
@@ -747,7 +748,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// without it, the button looked broken with zero feedback.
   Future<void> _openLogAscentSheet(int routeId) async {
     if (widget.readOnly) return;
-    final routes = ref.read(drawControllerProvider).routes;
+    final drawState = ref.read(drawControllerProvider);
+    final routes = drawState.routes;
     TopoRoute? route;
     for (final r in routes) {
       if (r.id == routeId) {
@@ -757,9 +759,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
     String? dbId;
     if (route != null) {
+      // Photo-scoped (D2 fix): a wall with multiple photos can have several
+      // routes numbered the same across DIFFERENT photos (route `number` is
+      // only stable per-photo — see RouteRepository's class doc), so this
+      // must be narrowed to the CURRENTLY ACTIVE photo or it could resolve
+      // to the wrong photo's same-numbered route.
       final dbIds = await ref
           .read(routeRepositoryProvider)
-          .routeDbIdsByNumber(widget.wallId);
+          .routeDbIdsByNumber(widget.wallId, drawState.activePhotoId);
       dbId = dbIds[route.number];
     }
     if (!mounted) return;
@@ -1038,6 +1045,90 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
   }
 
+  /// U2 (photo-strip switch): switches the canvas over to a DIFFERENT
+  /// already-attached original — [PhotoStrip]'s `onSelect` callback.
+  ///
+  /// Selecting [photo.localPath] via `selectedImageProvider` synchronously
+  /// fires [build]'s own `ref.listen<String?>(selectedImageProvider, ...)`
+  /// callback (the same one [loadWallOriginalPhoto]'s `beforeLoadForWall`
+  /// hook relies on for the initial-load path) — which calls
+  /// [DrawController.beginPhotoSwitch] and resets the active view/
+  /// transform/[_slices] BEFORE this method's own `loadForWall` call even
+  /// starts, exactly the same "reset first, load second" sequencing
+  /// [loadWallOriginalPhoto] documents. So the canvas never shows a stale
+  /// mix of the old photo's image with the new photo's routes (or vice
+  /// versa) while this awaits.
+  ///
+  /// No-ops if [photo] is already the active one (nothing to switch to).
+  Future<void> _switchToPhoto(PhotoRef photo) async {
+    if (ref.read(selectedImageProvider) == photo.localPath) return;
+    ref.read(selectedImageProvider.notifier).select(photo.localPath);
+    try {
+      await ref
+          .read(drawControllerProvider.notifier)
+          .loadForWall(widget.wallId, photo.id);
+      if (!mounted || ref.read(selectedImageProvider) != photo.localPath) {
+        return;
+      }
+      await _loadSlicesForOriginal(photo.id);
+    } catch (e, st) {
+      debugPrint('Failed to switch to photo ${photo.id}: $e\n$st');
+    }
+  }
+
+  /// U4 (manage menu): promotes [photo] to [TopoCanvasScreen.wallId]'s
+  /// cover/primary photo. Purely a bookkeeping flag — it does NOT switch
+  /// which photo is currently shown on the canvas (see
+  /// [PhotoRepository.setPrimaryPhoto]'s doc); [wallOriginalsProvider]'s
+  /// live stream re-emits on its own, so the strip's star badge moves to
+  /// [photo] the moment this write lands.
+  Future<void> _handleSetCoverPhoto(PhotoRef photo) async {
+    if (widget.readOnly) return;
+    try {
+      await ref
+          .read(photoRepositoryProvider)
+          .setPrimaryPhoto(widget.wallId, photo.id);
+    } catch (e, st) {
+      debugPrint('Failed to set cover photo ${photo.id}: $e\n$st');
+    }
+  }
+
+  /// U4 (manage menu): deletes [photo] (and, via
+  /// [PhotoRepository.deleteOriginalPhoto]'s cascade, every route drawn on
+  /// it) after the strip's own confirm dialog. If [photo] was the currently
+  /// ACTIVE photo, this then switches the canvas onto whatever
+  /// [PhotoRepository.loadOriginal] reports as the wall's new primary —
+  /// deleting a photo out from under the canvas must never leave it showing
+  /// a dangling image/route set for a photo that no longer exists. Falls
+  /// back to the empty state if the wall has no photos left at all.
+  Future<void> _handleDeletePhoto(PhotoRef photo) async {
+    if (widget.readOnly) return;
+    final wasActive = ref.read(drawControllerProvider).activePhotoId == photo.id;
+    try {
+      await ref.read(photoRepositoryProvider).deleteOriginalPhoto(photo.id);
+    } catch (e, st) {
+      debugPrint('Failed to delete photo ${photo.id}: $e\n$st');
+      return;
+    }
+    if (!mounted || !wasActive) return;
+
+    final remaining = await ref
+        .read(photoRepositoryProvider)
+        .loadOriginal(widget.wallId);
+    if (!mounted) return;
+    if (remaining == null) {
+      // No photos left on this wall at all: fall back to a clean empty
+      // state, mirroring loadWallOriginalPhoto's own unconditional reset
+      // for a photo-less wall.
+      ref.read(drawControllerProvider.notifier).beginPhotoSwitch();
+      ref.read(selectedImageProvider.notifier).clear();
+      ref.read(activeViewProvider.notifier).clear();
+      setState(() => _slices = const []);
+      return;
+    }
+    await _switchToPhoto(remaining);
+  }
+
   /// Decodes the image at [path] purely to learn its natural size, which
   /// [TopoCanvas] needs for percent<->scene coordinate conversion and for
   /// sizing its [CustomPaint]. Guarded by [_resolvedForPath] so repeated
@@ -1270,6 +1361,26 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     final hasSlices = drawState.activePhotoId != null && _slices.isNotEmpty;
     final showPhotoSelector = !widget.readOnly && hasSlices && !_sliceMode;
 
+    // U1/U2/U3/U4 (photo strip): a SEPARATE axis from showPhotoSelector
+    // above — switching between DIFFERENT photos on this wall, rather than
+    // between Original/slice views of ONE photo (see PhotoStrip's class
+    // doc). Hidden during the slice-tool overlay for the same reason
+    // showPhotoSelector is: switching photos mid-slicing would corrupt
+    // SliceTool's crop-fraction math (see _toggleSliceMode's doc). NOT
+    // gated on `widget.readOnly` — a read-only community viewer can still
+    // switch between someone else's photos (see PhotoStrip.readOnly's doc
+    // for what IS suppressed in that case: the add/manage affordances).
+    // PhotoStrip itself renders nothing once the wall's live-original list
+    // (`wallOriginalsProvider`) comes back empty, but the Divider ABOVE it
+    // (this call site's own wrapping, mirroring showPhotoSelector's) is not
+    // PhotoStrip's to skip — so this also watches the same live list to
+    // keep that divider from floating over an empty strip before the
+    // wall's first photo is attached.
+    final wallPhotos = ref
+        .watch(wallOriginalsProvider(widget.wallId))
+        .maybeWhen(data: (list) => list, orElse: () => const <PhotoRef>[]);
+    final showPhotoStrip = !_sliceMode && wallPhotos.isNotEmpty;
+
     // Floating translucent-glass chrome over an edge-to-edge photo, per
     // DESIGN.md "Topo canvas": no opaque AppBar/BottomAppBar — the canvas
     // area (or empty state) fills the whole Scaffold behind a top glass
@@ -1338,6 +1449,26 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                               drawNotifier,
                               currentTopo,
                             ),
+                            if (showPhotoStrip) ...[
+                              Divider(
+                                height: MasiSpacing.sm,
+                                thickness: 1,
+                                color: colors.separator,
+                              ),
+                              PhotoStrip(
+                                wallId: widget.wallId,
+                                activePhotoId: drawState.activePhotoId,
+                                onSelect: _switchToPhoto,
+                                readOnly: widget.readOnly,
+                                onAdd: widget.readOnly ? null : _pickImage,
+                                onSetCover: widget.readOnly
+                                    ? null
+                                    : _handleSetCoverPhoto,
+                                onDelete: widget.readOnly
+                                    ? null
+                                    : _handleDeletePhoto,
+                              ),
+                            ],
                             if (showPhotoSelector) ...[
                               Divider(
                                 height: MasiSpacing.sm,
