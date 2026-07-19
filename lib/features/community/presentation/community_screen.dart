@@ -340,8 +340,12 @@ class _FeedView extends ConsumerWidget {
                     hintText: 'Search topos',
                     prefixIcon: MasiIcon(
                       'search',
-                      size: 13,
+                      size: 16,
                       color: colors.ink3,
+                    ),
+                    prefixIconConstraints: const BoxConstraints.tightFor(
+                      width: 16,
+                      height: 16,
                     ),
                     filled: true,
                     fillColor: colors.surface2,
@@ -1590,8 +1594,12 @@ class _MapViewState extends ConsumerState<_MapView> {
                     hintText: 'Search the map',
                     prefixIcon: MasiIcon(
                       'search',
-                      size: 13,
+                      size: 16,
                       color: colors.ink3,
+                    ),
+                    prefixIconConstraints: const BoxConstraints.tightFor(
+                      width: 16,
+                      height: 16,
                     ),
                     filled: true,
                     fillColor: colors.surface2,

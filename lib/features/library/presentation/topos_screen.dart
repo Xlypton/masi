@@ -204,138 +204,155 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
           ),
         ],
       ),
-      body: SafeArea(
-        bottom: false,
-        child: Column(
-          children: [
-            _ToposFilterBar(
-              searchController: _searchController,
-              isActive: filter.isActive,
-              onTap: () => _showToposFiltersSheet(context),
-            ),
-            Expanded(
-              child: asyncTopos.when(
-                data: (topos) {
-                  // The proximity-sorted list (own + nearby community,
-                  // nearest-first — see `sortedByProximityToposProvider`'s
-                  // doc) is what actually renders; `topos` itself is only
-                  // still needed here to gate the loading/error/empty
-                  // states below on the OWN list specifically (community
-                  // entries can never appear without a location fix, so
-                  // `proximityEntries` degrades to exactly `topos` whenever
-                  // no fix is available — see that provider's doc).
-                  if (proximityEntries.isEmpty) {
-                    return const _EmptyState();
-                  }
-                  // Search narrows first, then the filter facets (mirrors
-                  // `community_screen.dart`'s `_FeedView`), so the two stay
-                  // independently diagnosable: a query that matches nothing
-                  // shows the search-specific empty state even if the
-                  // active filter would otherwise also exclude everything.
-                  final query = _query;
-                  final searchFiltered = query.isEmpty
-                      ? proximityEntries
-                      : proximityEntries
-                            .where((e) => _matchesProximityQuery(e, query))
-                            .toList();
-                  if (searchFiltered.isEmpty) {
-                    return const _SearchEmptyState();
-                  }
-                  // The grade/visibility/area facet filter only ever applied
-                  // to the device's OWN topos (it reasons about
-                  // `TopoRef.areaId`/`visibility`, neither of which a
-                  // community-shared entry carries in the same shape) — a
-                  // nearby community entry always passes it unfiltered.
-                  final filtered = searchFiltered
-                      .where(
-                        (e) =>
-                            e.source == ProximityTopoSource.community ||
-                            filter.matches(e.ownTopo!),
-                      )
-                      .toList();
-                  if (filtered.isEmpty) {
-                    return const _FilteredEmptyState();
-                  }
-                  return _ToposList(
-                    entries: filtered,
-                    bottomInset: bottomChromeInset,
-                    setLocationTileProvider: widget.setLocationTileProvider,
-                    setLocationMapController: widget.setLocationMapController,
-                    setLocationLocationService:
-                        widget.setLocationLocationService,
-                  );
-                },
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (error, stackTrace) => Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('Something went wrong: $error'),
-                      const SizedBox(height: 8),
-                      ElevatedButton(
-                        key: const Key('topos-retry'),
-                        onPressed: () => ref.invalidate(toposProvider),
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
+      // Full-bleed [Stack] (not a single [Column]) so the list fills the
+      // ENTIRE body height and the compact add button floats OVER it as a
+      // second layer, rather than sitting in its own row below an
+      // [Expanded] list that stopped short of the bottom (device feedback:
+      // "the plus button and the nav bar are still on their separate
+      // background — let them float atop of the list"). Layer 1 is the
+      // filter bar + full-height list (exactly the old `Column`, minus the
+      // button); layer 2 is the button, [Positioned] bottom-right and
+      // lifted above the floating glass nav bar by `bottomChromeInset`.
+      body: Stack(
+        children: [
+          SafeArea(
+            bottom: false,
+            child: Column(
+              children: [
+                _ToposFilterBar(
+                  searchController: _searchController,
+                  isActive: filter.isActive,
+                  onTap: () => _showToposFiltersSheet(context),
                 ),
-              ),
-            ),
-            Padding(
-              padding: EdgeInsets.fromLTRB(
-                MasiSpacing.lg,
-                MasiSpacing.md,
-                MasiSpacing.lg,
-                MasiSpacing.lg + bottomChromeInset,
-              ),
-              child: Align(
-                alignment: Alignment.centerRight,
-                // A compact circular plus button (#49), not the previous
-                // full-width "New topo" bar -- device feedback flagged the
-                // full-width button as too visually heavy for what's a
-                // single-tap add affordance. Still an [ElevatedButton] (not
-                // a `FloatingActionButton`) so its `key`/`onPressed` and the
-                // disabled/enabled `ButtonStyle` colors below -- asserted
-                // pixel-for-pixel by `topos_screen_test.dart`'s contrast
-                // tests -- are untouched; only the shape/size/child changed.
-                child: SizedBox(
-                  width: 48,
-                  height: 48,
-                  child: ElevatedButton(
-                    key: const Key('topos-new-topo'),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: colors.accent,
-                      foregroundColor: colors.onAccent,
-                      // Without these, Material's disabled-state fallback
-                      // (onSurface @ ~38% alpha) takes over while the topos
-                      // list is loading or a create is in-flight, reading as
-                      // dark low-contrast text on the still-purple background.
-                      // Keep the accent fill so the button doesn't visibly
-                      // change shape/color, but dim the label just enough to
-                      // read as "disabled" while staying legible.
-                      disabledBackgroundColor: colors.accent,
-                      disabledForegroundColor: colors.onAccent.withValues(
-                        alpha: 0.7,
+                Expanded(
+                  child: asyncTopos.when(
+                    data: (topos) {
+                      // The proximity-sorted list (own + nearby community,
+                      // nearest-first — see `sortedByProximityToposProvider`'s
+                      // doc) is what actually renders; `topos` itself is only
+                      // still needed here to gate the loading/error/empty
+                      // states below on the OWN list specifically (community
+                      // entries can never appear without a location fix, so
+                      // `proximityEntries` degrades to exactly `topos` whenever
+                      // no fix is available — see that provider's doc).
+                      if (proximityEntries.isEmpty) {
+                        return const _EmptyState();
+                      }
+                      // Search narrows first, then the filter facets (mirrors
+                      // `community_screen.dart`'s `_FeedView`), so the two stay
+                      // independently diagnosable: a query that matches nothing
+                      // shows the search-specific empty state even if the
+                      // active filter would otherwise also exclude everything.
+                      final query = _query;
+                      final searchFiltered = query.isEmpty
+                          ? proximityEntries
+                          : proximityEntries
+                                .where((e) => _matchesProximityQuery(e, query))
+                                .toList();
+                      if (searchFiltered.isEmpty) {
+                        return const _SearchEmptyState();
+                      }
+                      // The grade/visibility/area facet filter only ever applied
+                      // to the device's OWN topos (it reasons about
+                      // `TopoRef.areaId`/`visibility`, neither of which a
+                      // community-shared entry carries in the same shape) — a
+                      // nearby community entry always passes it unfiltered.
+                      final filtered = searchFiltered
+                          .where(
+                            (e) =>
+                                e.source == ProximityTopoSource.community ||
+                                filter.matches(e.ownTopo!),
+                          )
+                          .toList();
+                      if (filtered.isEmpty) {
+                        return const _FilteredEmptyState();
+                      }
+                      return _ToposList(
+                        entries: filtered,
+                        // The list now runs full-bleed behind the floating
+                        // add button (see the `Positioned` button below), so
+                        // its bottom padding must clear BOTH the floating nav
+                        // bar (`bottomChromeInset`) AND the button itself
+                        // (48 height + its own bottom margin) so the last row
+                        // can still scroll fully into view instead of ending
+                        // up permanently hidden under the button.
+                        bottomInset: bottomChromeInset + 64,
+                        setLocationTileProvider: widget.setLocationTileProvider,
+                        setLocationMapController: widget.setLocationMapController,
+                        setLocationLocationService:
+                            widget.setLocationLocationService,
+                      );
+                    },
+                    loading: () =>
+                        const Center(child: CircularProgressIndicator()),
+                    error: (error, stackTrace) => Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text('Something went wrong: $error'),
+                          const SizedBox(height: 8),
+                          ElevatedButton(
+                            key: const Key('topos-retry'),
+                            onPressed: () => ref.invalidate(toposProvider),
+                            child: const Text('Retry'),
+                          ),
+                        ],
                       ),
-                      padding: EdgeInsets.zero,
-                      shape: const CircleBorder(),
                     ),
-                    onPressed: canCreate ? _handleNewTopo : null,
-                    // No explicit `color`: `ButtonStyleButton` merges an
-                    // `IconTheme` from this button's own `foregroundColor`/
-                    // `disabledForegroundColor` above (falling back to
-                    // `foregroundColor` since no separate `iconColor` is
-                    // set), so the glyph inherits the SAME onAccent-enabled
-                    // / dimmed-disabled contrast the old `Text('New topo')`
-                    // had -- just on an icon instead of a label.
-                    child: const MasiIcon('add', size: 22),
                   ),
                 ),
+              ],
+            ),
+          ),
+          // The compact circular plus button (#49): a SECOND Stack layer,
+          // floating bottom-right OVER the full-bleed list above (not a
+          // sibling Column row below it, which is what left it "on its own
+          // separate background" per device feedback) -- `Positioned` lifts
+          // it above the floating glass nav bar by `bottomChromeInset`,
+          // exactly like its old bottom padding did. Still an
+          // [ElevatedButton] (not a `FloatingActionButton`) so its
+          // `key`/`onPressed` and the disabled/enabled `ButtonStyle` colors
+          // below -- asserted pixel-for-pixel by `topos_screen_test.dart`'s
+          // contrast tests -- are untouched; only its PARENT changed (from a
+          // Column-child Padding/Align to a Stack-child Positioned).
+          Positioned(
+            right: MasiSpacing.lg,
+            bottom: MasiSpacing.lg + bottomChromeInset,
+            child: SizedBox(
+              width: 48,
+              height: 48,
+              child: ElevatedButton(
+                key: const Key('topos-new-topo'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colors.accent,
+                  foregroundColor: colors.onAccent,
+                  // Without these, Material's disabled-state fallback
+                  // (onSurface @ ~38% alpha) takes over while the topos
+                  // list is loading or a create is in-flight, reading as
+                  // dark low-contrast text on the still-purple background.
+                  // Keep the accent fill so the button doesn't visibly
+                  // change shape/color, but dim the label just enough to
+                  // read as "disabled" while staying legible.
+                  disabledBackgroundColor: colors.accent,
+                  disabledForegroundColor: colors.onAccent.withValues(
+                    alpha: 0.7,
+                  ),
+                  padding: EdgeInsets.zero,
+                  shape: const CircleBorder(),
+                ),
+                onPressed: canCreate ? _handleNewTopo : null,
+                // No explicit `color`: `ButtonStyleButton` merges an
+                // `IconTheme` from this button's own `foregroundColor`/
+                // `disabledForegroundColor` above (falling back to
+                // `foregroundColor` since no separate `iconColor` is
+                // set), so the glyph inherits the SAME onAccent-enabled
+                // / dimmed-disabled contrast the old `Text('New topo')`
+                // had -- just on an icon instead of a label.
+                child: const MasiIcon('add', size: 22),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -527,7 +544,11 @@ class _ToposFilterBar extends StatelessWidget {
               controller: searchController,
               decoration: InputDecoration(
                 hintText: 'Search topos',
-                prefixIcon: MasiIcon('search', size: 13, color: colors.ink3),
+                prefixIcon: MasiIcon('search', size: 16, color: colors.ink3),
+                prefixIconConstraints: const BoxConstraints.tightFor(
+                  width: 16,
+                  height: 16,
+                ),
                 filled: true,
                 fillColor: colors.surface2,
                 border: OutlineInputBorder(
