@@ -77,7 +77,7 @@ class MasiColors extends ThemeExtension<MasiColors> {
     ground: Color(0xFFF3F1F9),
     surface: Color(0xFFFFFFFF),
     surface2: Color(0xFFFBFAFE),
-    chrome: Color(0xB8F9F8FD), // rgba(249,248,253,0.72)
+    chrome: Color(0x8AF9F8FD), // rgba(249,248,253,0.54) — thinner glass tint
     ink: Color(0xFF1B1725),
     ink2: Color(0xFF6A6380),
     ink3: Color(0xFFA29BB6),
@@ -101,7 +101,7 @@ class MasiColors extends ThemeExtension<MasiColors> {
     ground: Color(0xFF100D17),
     surface: Color(0xFF1D1929),
     surface2: Color(0xFF251F34),
-    chrome: Color(0xAE171321), // rgba(23,19,33,0.68)
+    chrome: Color(0x80171321), // rgba(23,19,33,0.50) — thinner glass tint
     ink: Color(0xFFF3F0FA),
     ink2: Color(0xFFABA4C0),
     ink3: Color(0xFF766F8C),

@@ -8,11 +8,14 @@
 // clean — that's the quality bar this fix brings the default path up to.
 //
 // Assertions (A3.1-A3.4 from the fix brief):
-//  - non-strong (default) GlassChrome now ALSO renders a `DecoratedBox`
-//    scrim of `colors.surface`, at alpha ~0.78 (enough to kill saturated
-//    smears, still visibly translucent/glassy) — where before there was
-//    none.
-//  - strong GlassChrome's scrim alpha stays 0.92, unchanged.
+//  - non-strong (default) GlassChrome renders a `DecoratedBox` scrim of
+//    `colors.surface`. Its alpha was later dialled DOWN to ~0.45 (per a
+//    user "make the glass more see-through" request) — still enough neutral
+//    scrim to MUTE saturated smears (not the zero-scrim defect), but
+//    noticeably glassier than the original 0.78.
+//  - strong GlassChrome's scrim alpha is ~0.68 (also reduced from 0.92, a
+//    touch more opaque than the floating pills since the legend is a
+//    content panel that must stay legible).
 //  - in both cases the child content still renders (legibility intact).
 
 import 'package:climbtopo/app/theme.dart';
@@ -67,8 +70,8 @@ Widget _wrap(Widget child) {
 void main() {
   group('GlassChrome content-invariant surface scrim', () {
     testWidgets(
-      'A3.2/A3.4: non-strong (default) GlassChrome now renders a '
-      'colors.surface scrim at alpha ~0.78, and the child still renders',
+      'A3.2/A3.4: non-strong (default) GlassChrome renders a '
+      'colors.surface scrim at alpha ~0.45, and the child still renders',
       (tester) async {
         await tester.pumpWidget(
           _wrap(const GlassChrome(child: Text('x'))),
@@ -89,11 +92,12 @@ void main() {
 
         expect(
           alpha,
-          allOf(greaterThanOrEqualTo(0.75), lessThanOrEqualTo(0.82)),
+          allOf(greaterThanOrEqualTo(0.40), lessThanOrEqualTo(0.50)),
           reason:
-              'non-strong GlassChrome must now carry a surface scrim strong '
-              'enough (~0.78) to kill saturated photo-color smears, but '
-              'still short of the strong path\'s near-opaque 0.92',
+              'non-strong GlassChrome carries a lighter, more see-through '
+              'surface scrim (~0.45) — still enough to MUTE saturated '
+              'photo-color smears, but glassier than the old 0.78 and below '
+              'the strong path',
         );
 
         expect(
@@ -105,8 +109,8 @@ void main() {
     );
 
     testWidgets(
-      'A3.3/A3.4: strong GlassChrome keeps its scrim alpha at 0.92 '
-      '(unchanged), and the child still renders',
+      'A3.3/A3.4: strong GlassChrome keeps its scrim alpha at ~0.68 '
+      '(more see-through, still the more-opaque path), and the child renders',
       (tester) async {
         await tester.pumpWidget(
           _wrap(const GlassChrome(strong: true, child: Text('x'))),
@@ -127,8 +131,10 @@ void main() {
 
         expect(
           alpha,
-          closeTo(0.92, 0.01),
-          reason: 'strong GlassChrome\'s look must stay unchanged at alpha 0.92',
+          closeTo(0.68, 0.02),
+          reason:
+              'strong GlassChrome is more see-through now (~0.68) but stays '
+              'more opaque than the floating pills for legend legibility',
         );
 
         expect(

@@ -102,11 +102,14 @@ class GlassChrome extends StatelessWidget {
     final sigma = strong ? 30.0 : blurSigma;
     // Content-invariant neutral scrim, rendered BEHIND the tinted `chrome`
     // fill in both paths — see [strong]'s doc for the motivating bug. Only
-    // the alpha differs: `strong` uses a near-opaque 0.92 (unchanged look,
-    // e.g. the route legend); the default path uses a lighter 0.78, just
-    // enough to mute a saturated photo region before the semi-transparent
-    // `chrome` tint reaches the surface, while staying visibly glassy.
-    final scrimAlpha = strong ? 0.92 : 0.78;
+    // the alpha differs. Deliberately kept more SEE-THROUGH (per user
+    // request): the default path uses 0.45 and `strong` 0.68 — still enough
+    // neutral scrim to mute (not eliminate) a saturated photo region before
+    // the semi-transparent `chrome` tint reaches the surface, so the old
+    // "blue smear" stays suppressed, but noticeably glassier than the prior
+    // 0.78/0.92. `strong` (route legend, a content panel) stays a touch more
+    // opaque than the floating pills for legibility.
+    final scrimAlpha = strong ? 0.68 : 0.45;
     final tintedCard = Container(
       padding: padding,
       decoration: BoxDecoration(
