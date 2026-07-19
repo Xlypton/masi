@@ -1,7 +1,8 @@
 import 'dart:io';
 
 import 'package:climbtopo/core/db/app_database.dart';
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart'
+    show BooleanExpressionOperators, OrderingTerm, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -919,6 +920,341 @@ void main() {
         expect(newRoute.betaVideoUrl, 'https://example.com/beta');
         expect(newRoute.styleTagsJson, '["dyno"]');
         expect(newRoute.stars, 3);
+      },
+    );
+  });
+
+  group('P5: v5 -> v6 migration (multi-photo-per-topo + #46 fix)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp(
+        'climbtopo_migration_test_',
+      );
+      dbFile = File(p.join(tempDir.path, 'v5.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    /// Hand-builds a v5 (pre-`sortOrder`/`isPrimary`) on-disk database: three
+    /// walls exercising every shape the v5->v6 data migration must handle
+    /// defensively — `wall-two-originals` has accumulated 2 live `'original'`
+    /// photos (the exact #46 bug shape: `attachPhotoToWall` never superseded
+    /// a wall's previous original), `wall-one-original` has exactly 1, and
+    /// `wall-no-photo` has none at all.
+    Future<void> seedV5Database() async {
+      final raw = sqlite3lib.sqlite3.open(dbFile.path);
+      raw.execute('''
+        CREATE TABLE areas (
+          id TEXT NOT NULL PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER NULL,
+          remote_id TEXT NULL,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT NULL,
+          name TEXT NOT NULL,
+          description TEXT NULL,
+          latitude REAL NULL,
+          longitude REAL NULL
+        );
+
+        CREATE TABLE sectors (
+          id TEXT NOT NULL PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER NULL,
+          remote_id TEXT NULL,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT NULL,
+          area_id TEXT NOT NULL REFERENCES areas (id),
+          name TEXT NOT NULL,
+          sort_order INTEGER NOT NULL
+        );
+
+        CREATE TABLE walls (
+          id TEXT NOT NULL PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER NULL,
+          remote_id TEXT NULL,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT NULL,
+          sector_id TEXT NOT NULL REFERENCES sectors (id),
+          name TEXT NOT NULL,
+          sort_order INTEGER NOT NULL,
+          visibility TEXT NOT NULL DEFAULT 'private',
+          latitude REAL NULL,
+          longitude REAL NULL
+        );
+
+        CREATE TABLE photos (
+          id TEXT NOT NULL PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER NULL,
+          remote_id TEXT NULL,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT NULL,
+          wall_id TEXT NOT NULL REFERENCES walls (id),
+          local_path TEXT NOT NULL,
+          kind TEXT NOT NULL,
+          width INTEGER NOT NULL,
+          height INTEGER NOT NULL,
+          parent_photo_id TEXT NULL REFERENCES photos (id),
+          crop_xpct REAL NULL,
+          crop_width_pct REAL NULL
+        );
+
+        CREATE TABLE routes (
+          id TEXT NOT NULL PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER NULL,
+          remote_id TEXT NULL,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT NULL,
+          wall_id TEXT NOT NULL REFERENCES walls (id),
+          photo_id TEXT NOT NULL REFERENCES photos (id),
+          number INTEGER NOT NULL,
+          name TEXT NULL,
+          grade_system TEXT NULL,
+          grade_raw TEXT NULL,
+          grade_sort_key REAL NULL,
+          style TEXT NULL,
+          description TEXT NULL,
+          color_index INTEGER NOT NULL,
+          points_json TEXT NOT NULL,
+          symbols_json TEXT NOT NULL,
+          sort_order INTEGER NOT NULL,
+          visible INTEGER NOT NULL DEFAULT 1,
+          beta_video_url TEXT NULL,
+          style_tags_json TEXT NULL,
+          stars INTEGER NULL
+        );
+
+        CREATE UNIQUE INDEX idx_routes_wall_number_live
+          ON routes (wall_id, number) WHERE deleted_at IS NULL;
+
+        CREATE TABLE comments (
+          id TEXT NOT NULL PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER NULL,
+          remote_id TEXT NULL,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT NULL,
+          wall_id TEXT NOT NULL REFERENCES walls (id),
+          body TEXT NOT NULL,
+          author_name TEXT NULL
+        );
+
+        CREATE TABLE likes (
+          id TEXT NOT NULL PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER NULL,
+          remote_id TEXT NULL,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT NULL,
+          wall_id TEXT NOT NULL REFERENCES walls (id)
+        );
+
+        CREATE TABLE ascents (
+          id TEXT NOT NULL PRIMARY KEY,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          deleted_at INTEGER NULL,
+          remote_id TEXT NULL,
+          dirty INTEGER NOT NULL DEFAULT 0,
+          owner_id TEXT NULL,
+          route_id TEXT NOT NULL REFERENCES routes (id),
+          wall_id TEXT NOT NULL REFERENCES walls (id),
+          climbed_at INTEGER NOT NULL,
+          style TEXT NOT NULL,
+          notes TEXT NULL,
+          grade_opinion TEXT NULL
+        );
+
+        INSERT INTO areas (id, created_at, updated_at, name)
+          VALUES ('area-1', 1000, 1000, 'Pre-migration Area');
+
+        INSERT INTO sectors
+          (id, created_at, updated_at, area_id, name, sort_order)
+          VALUES
+          ('sector-1', 1000, 1000, 'area-1', 'Pre-migration Sector', 0);
+
+        INSERT INTO walls
+          (id, created_at, updated_at, sector_id, name, sort_order)
+          VALUES
+          ('wall-two-originals', 1000, 1000, 'sector-1',
+           'Wall With Two Originals (#46 shape)', 0),
+          ('wall-one-original', 1000, 1000, 'sector-1',
+           'Wall With One Original', 1),
+          ('wall-no-photo', 1000, 1000, 'sector-1',
+           'Wall With No Photo', 2);
+
+        -- wall-two-originals: two live 'original' photos, the exact #46
+        -- accumulation bug shape — nothing on-disk distinguishes them yet.
+        INSERT INTO photos
+          (id, created_at, updated_at, wall_id, local_path, kind, width,
+           height)
+          VALUES
+          ('photo-older', 1000, 1000, 'wall-two-originals',
+           '/tmp/older.jpg', 'original', 100, 200),
+          ('photo-newer', 2000, 2000, 'wall-two-originals',
+           '/tmp/newer.jpg', 'original', 100, 200);
+
+        -- wall-one-original: exactly one live original.
+        INSERT INTO photos
+          (id, created_at, updated_at, wall_id, local_path, kind, width,
+           height)
+          VALUES
+          ('photo-single', 1500, 1500, 'wall-one-original',
+           '/tmp/single.jpg', 'original', 100, 200);
+
+        INSERT INTO routes
+          (id, created_at, updated_at, wall_id, photo_id, number,
+           color_index, points_json, symbols_json, sort_order)
+          VALUES
+          ('route-1', 1000, 1000, 'wall-two-originals', 'photo-older', 1, 0,
+           '[]', '[]', 0);
+
+        PRAGMA user_version = 5;
+      ''');
+      raw.close();
+    }
+
+    test(
+      'ADD COLUMN migration adds sortOrder/isPrimary to photos, replaces '
+      'the wall-scoped route index with the photo-scoped one, and the #46 '
+      'data backfill flags exactly one primary per wall + assigns ordinal '
+      'sortOrder — defensively across 2/1/0-original walls',
+      () async {
+        await seedV5Database();
+
+        // Open the SAME file with the current AppDatabase (schemaVersion
+        // 6). Drift reads the on-disk user_version (5), sees it doesn't
+        // match the target (6), and runs onUpgrade(m, 5, 6) — exercising
+        // only the `if (from < 6)` branch (the earlier branches are no-ops
+        // here since 5 is not < 2/3/4/5).
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        // --- wall-two-originals: the #46 bug shape ---------------------
+        final twoOriginals =
+            await (db.select(db.photos)
+                  ..where(
+                    (t) =>
+                        t.wallId.equals('wall-two-originals') &
+                        t.kind.equals('original'),
+                  )
+                  ..orderBy([(t) => OrderingTerm(expression: t.createdAt)]))
+                .get();
+        expect(twoOriginals, hasLength(2));
+
+        final primaryFlags = twoOriginals.map((p) => p.isPrimary).toList();
+        expect(
+          primaryFlags.where((f) => f).length,
+          1,
+          reason: 'exactly one of the two accumulated originals must be '
+              'flagged primary — no row is ever deleted',
+        );
+        final newest = twoOriginals.firstWhere((p) => p.id == 'photo-newer');
+        expect(
+          newest.isPrimary,
+          isTrue,
+          reason: 'the NEWEST (max createdAt) live original becomes primary',
+        );
+        final older = twoOriginals.firstWhere((p) => p.id == 'photo-older');
+        expect(older.isPrimary, isFalse);
+
+        // sortOrder assigned ascending by createdAt (0, 1, 2...).
+        expect(older.sortOrder, 0);
+        expect(newest.sortOrder, 1);
+
+        // Pre-existing route row survives untouched.
+        final route = await (db.select(
+          db.routes,
+        )..where((t) => t.id.equals('route-1'))).getSingle();
+        expect(route.wallId, 'wall-two-originals');
+        expect(route.photoId, 'photo-older');
+
+        // --- wall-one-original: single original, trivially becomes '01' -
+        final oneOriginal = await (db.select(
+          db.photos,
+        )..where((t) => t.wallId.equals('wall-one-original'))).getSingle();
+        expect(oneOriginal.isPrimary, isTrue);
+        expect(oneOriginal.sortOrder, 0);
+
+        // --- wall-no-photo: zero originals, migration must not crash on --
+        // --- (and produces nothing to assert on) --------------------------
+        final noPhotoRows = await (db.select(
+          db.photos,
+        )..where((t) => t.wallId.equals('wall-no-photo'))).get();
+        expect(noPhotoRows, isEmpty);
+
+        // --- the route unique index moved from wall-scoped to photo------
+        // --- scoped: a second photo on wall-two-originals can now reuse --
+        // --- route number 1 (previously would have violated the old ------
+        // --- wall_id+number index). -------------------------------------
+        await db
+            .into(db.photos)
+            .insert(
+              PhotosCompanion.insert(
+                id: 'photo-post-migration',
+                createdAt: 4000,
+                updatedAt: 4000,
+                wallId: 'wall-two-originals',
+                localPath: '/tmp/post.jpg',
+                kind: 'original',
+                width: 100,
+                height: 200,
+              ),
+            );
+        await db
+            .into(db.routes)
+            .insert(
+              RoutesCompanion.insert(
+                id: 'route-2',
+                createdAt: 4000,
+                updatedAt: 4000,
+                wallId: 'wall-two-originals',
+                photoId: 'photo-post-migration',
+                number: 1,
+                colorIndex: 0,
+                pointsJson: '[]',
+                symbolsJson: '[]',
+                sortOrder: 0,
+              ),
+            );
+        final bothNumberOnes = await (db.select(
+          db.routes,
+        )..where((t) => t.wallId.equals('wall-two-originals'))).get();
+        expect(
+          bothNumberOnes.map((r) => r.number).toList(),
+          [1, 1],
+          reason: 'two different photos on the same wall can each have '
+              'their own route 1 now that the unique index is photo-scoped',
+        );
+
+        // The OLD wall-scoped index must be gone — a duplicate (wall_id,
+        // number) pair across DIFFERENT photos (proven above) would have
+        // violated it were it still present.
+        final indexNames = await db
+            .customSelect(
+              "SELECT name FROM sqlite_master WHERE type = 'index' "
+              "AND tbl_name = 'routes'",
+            )
+            .map((row) => row.read<String>('name'))
+            .get();
+        expect(indexNames, contains('idx_routes_photo_number_live'));
+        expect(indexNames, isNot(contains('idx_routes_wall_number_live')));
       },
     );
   });

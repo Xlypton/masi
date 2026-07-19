@@ -117,9 +117,11 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     final photo = await ref
         .read(photoRepositoryProvider)
         .loadOriginal(widget.wallId);
-    final routes = await ref
-        .read(routeRepositoryProvider)
-        .loadRoutes(widget.wallId);
+    final routes = photo == null
+        ? <TopoRoute>[]
+        : await ref
+            .read(routeRepositoryProvider)
+            .loadRoutes(widget.wallId, photo.id);
     debugPrint(
       'AR_DBG _load photo=${photo != null} routeCount=${routes.length} '
       'visibleCount=${routes.where((r) => r.visible).length}',

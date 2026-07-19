@@ -7,6 +7,14 @@ import '../data/comments_repository.dart';
 import 'comments_providers.dart';
 import 'likes_providers.dart';
 
+// NOTE: routes are now scoped per-photo (a wall/topo can carry several
+// photos, each with its own route overlay — see `RouteRepository`'s class
+// doc). `routeEntriesForWallProvider` isn't multi-photo-aware yet (the
+// Community topo-detail screen only ever shows ONE embedded canvas per
+// wall today), so it resolves the wall's PRIMARY photo via
+// `PhotoRepository.loadOriginal` and reads that photo's routes — the same
+// photo `TopoCanvasScreen` opens by default for this wall.
+
 /// A single non-deleted route on a wall, paired with its real DB row id.
 ///
 /// [TopoRoute.id] is a locally-reassigned sequential int (see that class's
@@ -28,8 +36,11 @@ typedef RouteEntry = ({TopoRoute route, String dbId});
 /// load timing.
 final routeEntriesForWallProvider =
     FutureProvider.family<List<RouteEntry>, String>((ref, wallId) async {
+      final photo = await ref.watch(photoRepositoryProvider).loadOriginal(wallId);
+      if (photo == null) return const [];
+
       final routeRepo = ref.watch(routeRepositoryProvider);
-      final routes = await routeRepo.loadRoutes(wallId);
+      final routes = await routeRepo.loadRoutes(wallId, photo.id);
       final dbIds = await routeRepo.routeDbIdsByNumber(wallId);
       return [
         for (final route in routes)

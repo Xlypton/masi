@@ -9,12 +9,22 @@ import 'route_mapper.dart';
 /// Persists [TopoRoute] domain objects to the `Routes` table.
 ///
 /// Identity choice: a route is identified for upsert/delete purposes by the
-/// pair `(wallId, number)` rather than by a caller-managed uuid. The M2
+/// pair `(photoId, number)` rather than by a caller-managed uuid. The M2
 /// domain model's [TopoRoute.id] is a small sequential int reassigned on
 /// every [loadRoutes] call (1..n, in `number` order) — it is not a stable
-/// identity — so `number` (which the controller treats as stable per wall)
-/// is the natural key. Each route still gets its own uuid `id` column in
-/// the database; callers of this repository never need to see it.
+/// identity — so `number` (which the controller treats as stable per
+/// PHOTO — see the multi-photo-per-topo feature doc on `Routes`'
+/// `@TableIndex.sql` in `tables.dart`) is the natural key. Each route still
+/// gets its own uuid `id` column in the database; callers of this
+/// repository never need to see it.
+///
+/// Per-photo scoping: each photo on a wall has its OWN independent set of
+/// route overlays/numbering (a wall with 3 photos can have 3 different
+/// "route 1"s, one per photo) — [loadRoutes]/[upsertRoute]'s existing-row
+/// lookup/[softDeleteRoute] are all scoped by `photoId`, not just `wallId`.
+/// [wallId] is still carried on every row (denormalized) for cheap
+/// wall-wide aggregates (e.g. `LibraryCrudRepository.watchTopos`'s route
+/// count) that don't care which photo a route lives on.
 class RouteRepository {
   RouteRepository(this._db, {required this.nowMs, this.currentUid = _noUid});
 
@@ -32,7 +42,7 @@ class RouteRepository {
   static const _uuid = Uuid();
 
   /// Inserts a new route row, or updates the existing non-deleted row for
-  /// `(wallId, route.number)` if one exists. Sets `createdAt` only on
+  /// `(photoId, route.number)` if one exists. Sets `createdAt` only on
   /// insert; always refreshes `updatedAt` to `nowMs()`.
   Future<void> upsertRoute(
     String wallId,
@@ -41,7 +51,7 @@ class RouteRepository {
   ) async {
     final existing = await (_db.select(_db.routes)..where(
           (t) =>
-              t.wallId.equals(wallId) &
+              t.photoId.equals(photoId) &
               t.number.equals(route.number) &
               t.deletedAt.isNull(),
         ))
@@ -110,12 +120,19 @@ class RouteRepository {
     }
   }
 
-  /// Loads every non-soft-deleted route for [wallId], ordered by `number`,
-  /// assigning sequential in-memory ids `1..n`. Callers must reseed their
-  /// own "next id" / "next number" counters from the returned list.
-  Future<List<TopoRoute>> loadRoutes(String wallId) async {
+  /// Loads every non-soft-deleted route for [wallId]'s [photoId] (a route
+  /// belongs to the photo it's overlaid on — see this class's doc), ordered
+  /// by `number`, assigning sequential in-memory ids `1..n`. Callers must
+  /// reseed their own "next id" / "next number" counters from the returned
+  /// list.
+  Future<List<TopoRoute>> loadRoutes(String wallId, String photoId) async {
     final rows = await (_db.select(_db.routes)
-          ..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())
+          ..where(
+            (t) =>
+                t.wallId.equals(wallId) &
+                t.photoId.equals(photoId) &
+                t.deletedAt.isNull(),
+          )
           ..orderBy([(t) => OrderingTerm(expression: t.number)]))
         .get();
 
@@ -140,14 +157,24 @@ class RouteRepository {
     return {for (final row in rows) row.number: row.id};
   }
 
-  /// Soft-deletes the non-deleted route identified by `(wallId, number)` by
-  /// setting `deletedAt`/`updatedAt` to `nowMs()`. The row remains
+  /// Soft-deletes the non-deleted route identified by `(photoId, number)`
+  /// by setting `deletedAt`/`updatedAt` to `nowMs()`. The row remains
   /// physically present (tombstone) for future sync.
-  Future<void> softDeleteRoute(String wallId, int number) async {
+  ///
+  /// Scoped by [photoId] (not just [wallId]): since route numbers are now
+  /// per-photo (see this class's doc), a `wallId`-only scope would soft-
+  /// delete every photo's route sharing that `number` on the wall instead
+  /// of just the one the caller meant.
+  Future<void> softDeleteRoute(
+    String wallId,
+    String photoId,
+    int number,
+  ) async {
     final now = nowMs();
     await (_db.update(_db.routes)..where(
           (t) =>
               t.wallId.equals(wallId) &
+              t.photoId.equals(photoId) &
               t.number.equals(number) &
               t.deletedAt.isNull(),
         ))

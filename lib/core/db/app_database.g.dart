@@ -2212,6 +2212,33 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
     type: DriftSqlType.double,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _sortOrderMeta = const VerificationMeta(
+    'sortOrder',
+  );
+  @override
+  late final GeneratedColumn<int> sortOrder = GeneratedColumn<int>(
+    'sort_order',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+    defaultValue: const Constant(0),
+  );
+  static const VerificationMeta _isPrimaryMeta = const VerificationMeta(
+    'isPrimary',
+  );
+  @override
+  late final GeneratedColumn<bool> isPrimary = GeneratedColumn<bool>(
+    'is_primary',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("is_primary" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -2229,6 +2256,8 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
     parentPhotoId,
     cropXpct,
     cropWidthPct,
+    sortOrder,
+    isPrimary,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -2351,6 +2380,18 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
         ),
       );
     }
+    if (data.containsKey('sort_order')) {
+      context.handle(
+        _sortOrderMeta,
+        sortOrder.isAcceptableOrUnknown(data['sort_order']!, _sortOrderMeta),
+      );
+    }
+    if (data.containsKey('is_primary')) {
+      context.handle(
+        _isPrimaryMeta,
+        isPrimary.isAcceptableOrUnknown(data['is_primary']!, _isPrimaryMeta),
+      );
+    }
     return context;
   }
 
@@ -2420,6 +2461,14 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
         DriftSqlType.double,
         data['${effectivePrefix}crop_width_pct'],
       ),
+      sortOrder: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}sort_order'],
+      )!,
+      isPrimary: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}is_primary'],
+      )!,
     );
   }
 
@@ -2445,6 +2494,29 @@ class Photo extends DataClass implements Insertable<Photo> {
   final String? parentPhotoId;
   final double? cropXpct;
   final double? cropWidthPct;
+
+  /// Display order among a wall's live `kind:'original'` photos (the
+  /// multi-photo-per-topo strip) — 0-based, ascending. Meaningless for
+  /// `kind:'slice'` rows (each slice's ordering is [cropXpct] instead).
+  /// Backfilled ascending by `createdAt` for pre-existing rows by the v5->v6
+  /// migration (see `app_database.dart`); set by
+  /// `LibraryCrudRepository.attachPhotoToWall` (append-at-end) and
+  /// `PhotoRepository.setPhotoOrder` (explicit reorder) thereafter.
+  final int sortOrder;
+
+  /// Whether this is the wall's PRIMARY original — the one shown as the
+  /// topo's thumbnail ([LibraryCrudRepository.watchTopos]) and returned by
+  /// [PhotoRepository.loadOriginal] (the canvas's default photo to open).
+  /// At most one live original per wall should ever have this `true` (the
+  /// single-primary invariant enforced by
+  /// [PhotoRepository.setPrimaryPhoto]/[PhotoRepository.deleteOriginalPhoto]
+  /// and by [LibraryCrudRepository.attachPhotoToWall], which only flags a
+  /// freshly-attached photo primary when the wall has no live original yet).
+  /// Meaningless for `kind:'slice'` rows. Backfilled by the v5->v6 migration:
+  /// the newest (max `createdAt`) live original on each wall is flagged
+  /// primary — this SAFELY resolves the #46 bug's accumulated multi-original
+  /// walls without deleting any row.
+  final bool isPrimary;
   const Photo({
     required this.id,
     required this.createdAt,
@@ -2461,6 +2533,8 @@ class Photo extends DataClass implements Insertable<Photo> {
     this.parentPhotoId,
     this.cropXpct,
     this.cropWidthPct,
+    required this.sortOrder,
+    required this.isPrimary,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2492,6 +2566,8 @@ class Photo extends DataClass implements Insertable<Photo> {
     if (!nullToAbsent || cropWidthPct != null) {
       map['crop_width_pct'] = Variable<double>(cropWidthPct);
     }
+    map['sort_order'] = Variable<int>(sortOrder);
+    map['is_primary'] = Variable<bool>(isPrimary);
     return map;
   }
 
@@ -2524,6 +2600,8 @@ class Photo extends DataClass implements Insertable<Photo> {
       cropWidthPct: cropWidthPct == null && nullToAbsent
           ? const Value.absent()
           : Value(cropWidthPct),
+      sortOrder: Value(sortOrder),
+      isPrimary: Value(isPrimary),
     );
   }
 
@@ -2548,6 +2626,8 @@ class Photo extends DataClass implements Insertable<Photo> {
       parentPhotoId: serializer.fromJson<String?>(json['parentPhotoId']),
       cropXpct: serializer.fromJson<double?>(json['cropXpct']),
       cropWidthPct: serializer.fromJson<double?>(json['cropWidthPct']),
+      sortOrder: serializer.fromJson<int>(json['sortOrder']),
+      isPrimary: serializer.fromJson<bool>(json['isPrimary']),
     );
   }
   @override
@@ -2569,6 +2649,8 @@ class Photo extends DataClass implements Insertable<Photo> {
       'parentPhotoId': serializer.toJson<String?>(parentPhotoId),
       'cropXpct': serializer.toJson<double?>(cropXpct),
       'cropWidthPct': serializer.toJson<double?>(cropWidthPct),
+      'sortOrder': serializer.toJson<int>(sortOrder),
+      'isPrimary': serializer.toJson<bool>(isPrimary),
     };
   }
 
@@ -2588,6 +2670,8 @@ class Photo extends DataClass implements Insertable<Photo> {
     Value<String?> parentPhotoId = const Value.absent(),
     Value<double?> cropXpct = const Value.absent(),
     Value<double?> cropWidthPct = const Value.absent(),
+    int? sortOrder,
+    bool? isPrimary,
   }) => Photo(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -2606,6 +2690,8 @@ class Photo extends DataClass implements Insertable<Photo> {
         : this.parentPhotoId,
     cropXpct: cropXpct.present ? cropXpct.value : this.cropXpct,
     cropWidthPct: cropWidthPct.present ? cropWidthPct.value : this.cropWidthPct,
+    sortOrder: sortOrder ?? this.sortOrder,
+    isPrimary: isPrimary ?? this.isPrimary,
   );
   Photo copyWithCompanion(PhotosCompanion data) {
     return Photo(
@@ -2628,6 +2714,8 @@ class Photo extends DataClass implements Insertable<Photo> {
       cropWidthPct: data.cropWidthPct.present
           ? data.cropWidthPct.value
           : this.cropWidthPct,
+      sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
+      isPrimary: data.isPrimary.present ? data.isPrimary.value : this.isPrimary,
     );
   }
 
@@ -2648,7 +2736,9 @@ class Photo extends DataClass implements Insertable<Photo> {
           ..write('height: $height, ')
           ..write('parentPhotoId: $parentPhotoId, ')
           ..write('cropXpct: $cropXpct, ')
-          ..write('cropWidthPct: $cropWidthPct')
+          ..write('cropWidthPct: $cropWidthPct, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('isPrimary: $isPrimary')
           ..write(')'))
         .toString();
   }
@@ -2670,6 +2760,8 @@ class Photo extends DataClass implements Insertable<Photo> {
     parentPhotoId,
     cropXpct,
     cropWidthPct,
+    sortOrder,
+    isPrimary,
   );
   @override
   bool operator ==(Object other) =>
@@ -2689,7 +2781,9 @@ class Photo extends DataClass implements Insertable<Photo> {
           other.height == this.height &&
           other.parentPhotoId == this.parentPhotoId &&
           other.cropXpct == this.cropXpct &&
-          other.cropWidthPct == this.cropWidthPct);
+          other.cropWidthPct == this.cropWidthPct &&
+          other.sortOrder == this.sortOrder &&
+          other.isPrimary == this.isPrimary);
 }
 
 class PhotosCompanion extends UpdateCompanion<Photo> {
@@ -2708,6 +2802,8 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
   final Value<String?> parentPhotoId;
   final Value<double?> cropXpct;
   final Value<double?> cropWidthPct;
+  final Value<int> sortOrder;
+  final Value<bool> isPrimary;
   final Value<int> rowid;
   const PhotosCompanion({
     this.id = const Value.absent(),
@@ -2725,6 +2821,8 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     this.parentPhotoId = const Value.absent(),
     this.cropXpct = const Value.absent(),
     this.cropWidthPct = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.isPrimary = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   PhotosCompanion.insert({
@@ -2743,6 +2841,8 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     this.parentPhotoId = const Value.absent(),
     this.cropXpct = const Value.absent(),
     this.cropWidthPct = const Value.absent(),
+    this.sortOrder = const Value.absent(),
+    this.isPrimary = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -2768,6 +2868,8 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     Expression<String>? parentPhotoId,
     Expression<double>? cropXpct,
     Expression<double>? cropWidthPct,
+    Expression<int>? sortOrder,
+    Expression<bool>? isPrimary,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2786,6 +2888,8 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
       if (parentPhotoId != null) 'parent_photo_id': parentPhotoId,
       if (cropXpct != null) 'crop_xpct': cropXpct,
       if (cropWidthPct != null) 'crop_width_pct': cropWidthPct,
+      if (sortOrder != null) 'sort_order': sortOrder,
+      if (isPrimary != null) 'is_primary': isPrimary,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2806,6 +2910,8 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     Value<String?>? parentPhotoId,
     Value<double?>? cropXpct,
     Value<double?>? cropWidthPct,
+    Value<int>? sortOrder,
+    Value<bool>? isPrimary,
     Value<int>? rowid,
   }) {
     return PhotosCompanion(
@@ -2824,6 +2930,8 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
       parentPhotoId: parentPhotoId ?? this.parentPhotoId,
       cropXpct: cropXpct ?? this.cropXpct,
       cropWidthPct: cropWidthPct ?? this.cropWidthPct,
+      sortOrder: sortOrder ?? this.sortOrder,
+      isPrimary: isPrimary ?? this.isPrimary,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2876,6 +2984,12 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     if (cropWidthPct.present) {
       map['crop_width_pct'] = Variable<double>(cropWidthPct.value);
     }
+    if (sortOrder.present) {
+      map['sort_order'] = Variable<int>(sortOrder.value);
+    }
+    if (isPrimary.present) {
+      map['is_primary'] = Variable<bool>(isPrimary.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2900,6 +3014,8 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
           ..write('parentPhotoId: $parentPhotoId, ')
           ..write('cropXpct: $cropXpct, ')
           ..write('cropWidthPct: $cropWidthPct, ')
+          ..write('sortOrder: $sortOrder, ')
+          ..write('isPrimary: $isPrimary, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -6137,9 +6253,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $CommentsTable comments = $CommentsTable(this);
   late final $LikesTable likes = $LikesTable(this);
   late final $AscentsTable ascents = $AscentsTable(this);
-  late final Index idxRoutesWallNumberLive = Index(
-    'idx_routes_wall_number_live',
-    'CREATE UNIQUE INDEX idx_routes_wall_number_live ON routes (wall_id, number) WHERE deleted_at IS NULL',
+  late final Index idxRoutesPhotoNumberLive = Index(
+    'idx_routes_photo_number_live',
+    'CREATE UNIQUE INDEX idx_routes_photo_number_live ON routes (photo_id, number) WHERE deleted_at IS NULL',
   );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -6154,7 +6270,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     comments,
     likes,
     ascents,
-    idxRoutesWallNumberLive,
+    idxRoutesPhotoNumberLive,
   ];
 }
 
@@ -7988,6 +8104,8 @@ typedef $$PhotosTableCreateCompanionBuilder =
       Value<String?> parentPhotoId,
       Value<double?> cropXpct,
       Value<double?> cropWidthPct,
+      Value<int> sortOrder,
+      Value<bool> isPrimary,
       Value<int> rowid,
     });
 typedef $$PhotosTableUpdateCompanionBuilder =
@@ -8007,6 +8125,8 @@ typedef $$PhotosTableUpdateCompanionBuilder =
       Value<String?> parentPhotoId,
       Value<double?> cropXpct,
       Value<double?> cropWidthPct,
+      Value<int> sortOrder,
+      Value<bool> isPrimary,
       Value<int> rowid,
     });
 
@@ -8139,6 +8259,16 @@ class $$PhotosTableFilterComposer
 
   ColumnFilters<double> get cropWidthPct => $composableBuilder(
     column: $table.cropWidthPct,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get isPrimary => $composableBuilder(
+    column: $table.isPrimary,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -8288,6 +8418,16 @@ class $$PhotosTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<int> get sortOrder => $composableBuilder(
+    column: $table.sortOrder,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get isPrimary => $composableBuilder(
+    column: $table.isPrimary,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$WallsTableOrderingComposer get wallId {
     final $$WallsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -8384,6 +8524,12 @@ class $$PhotosTableAnnotationComposer
     column: $table.cropWidthPct,
     builder: (column) => column,
   );
+
+  GeneratedColumn<int> get sortOrder =>
+      $composableBuilder(column: $table.sortOrder, builder: (column) => column);
+
+  GeneratedColumn<bool> get isPrimary =>
+      $composableBuilder(column: $table.isPrimary, builder: (column) => column);
 
   $$WallsTableAnnotationComposer get wallId {
     final $$WallsTableAnnotationComposer composer = $composerBuilder(
@@ -8504,6 +8650,8 @@ class $$PhotosTableTableManager
                 Value<String?> parentPhotoId = const Value.absent(),
                 Value<double?> cropXpct = const Value.absent(),
                 Value<double?> cropWidthPct = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<bool> isPrimary = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PhotosCompanion(
                 id: id,
@@ -8521,6 +8669,8 @@ class $$PhotosTableTableManager
                 parentPhotoId: parentPhotoId,
                 cropXpct: cropXpct,
                 cropWidthPct: cropWidthPct,
+                sortOrder: sortOrder,
+                isPrimary: isPrimary,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -8540,6 +8690,8 @@ class $$PhotosTableTableManager
                 Value<String?> parentPhotoId = const Value.absent(),
                 Value<double?> cropXpct = const Value.absent(),
                 Value<double?> cropWidthPct = const Value.absent(),
+                Value<int> sortOrder = const Value.absent(),
+                Value<bool> isPrimary = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PhotosCompanion.insert(
                 id: id,
@@ -8557,6 +8709,8 @@ class $$PhotosTableTableManager
                 parentPhotoId: parentPhotoId,
                 cropXpct: cropXpct,
                 cropWidthPct: cropWidthPct,
+                sortOrder: sortOrder,
+                isPrimary: isPrimary,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

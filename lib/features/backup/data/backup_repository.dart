@@ -170,7 +170,19 @@ class BackupRepository {
         ? {for (final r in await _db.select(_db.photos).get()) r.id: r.updatedAt}
         : const <String, int>{};
 
-    final photos = [for (final json in rows) db.Photo.fromJson(json)];
+    // Old backup snapshots predate the `sortOrder`/`isPrimary` columns (added
+    // in schema v6) entirely, so their photo JSON has no such keys. Inject
+    // defaults matching the DB column defaults (sortOrder: 0, isPrimary:
+    // false) before decoding, so importing a legacy snapshot doesn't throw a
+    // null-cast error in the generated `Photo.fromJson`.
+    final photos = [
+      for (final json in rows)
+        db.Photo.fromJson({
+          'sortOrder': 0,
+          'isPrimary': false,
+          ...json,
+        }),
+    ];
     final originals = photos.where((p) => p.parentPhotoId == null);
     final slices = photos.where((p) => p.parentPhotoId != null);
 

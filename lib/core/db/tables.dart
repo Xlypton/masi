@@ -79,21 +79,46 @@ class Photos extends Table with SyncColumns {
   RealColumn get cropXpct => real().nullable()();
   RealColumn get cropWidthPct => real().nullable()();
 
+  /// Display order among a wall's live `kind:'original'` photos (the
+  /// multi-photo-per-topo strip) — 0-based, ascending. Meaningless for
+  /// `kind:'slice'` rows (each slice's ordering is [cropXpct] instead).
+  /// Backfilled ascending by `createdAt` for pre-existing rows by the v5->v6
+  /// migration (see `app_database.dart`); set by
+  /// `LibraryCrudRepository.attachPhotoToWall` (append-at-end) and
+  /// `PhotoRepository.setPhotoOrder` (explicit reorder) thereafter.
+  IntColumn get sortOrder => integer().withDefault(const Constant(0))();
+
+  /// Whether this is the wall's PRIMARY original — the one shown as the
+  /// topo's thumbnail ([LibraryCrudRepository.watchTopos]) and returned by
+  /// [PhotoRepository.loadOriginal] (the canvas's default photo to open).
+  /// At most one live original per wall should ever have this `true` (the
+  /// single-primary invariant enforced by
+  /// [PhotoRepository.setPrimaryPhoto]/[PhotoRepository.deleteOriginalPhoto]
+  /// and by [LibraryCrudRepository.attachPhotoToWall], which only flags a
+  /// freshly-attached photo primary when the wall has no live original yet).
+  /// Meaningless for `kind:'slice'` rows. Backfilled by the v5->v6 migration:
+  /// the newest (max `createdAt`) live original on each wall is flagged
+  /// primary — this SAFELY resolves the #46 bug's accumulated multi-original
+  /// walls without deleting any row.
+  BoolColumn get isPrimary => boolean().withDefault(const Constant(false))();
+
   @override
   Set<Column> get primaryKey => {id};
 }
 
 // Partial unique index enforcing that no two *live* (non-soft-deleted)
-// routes on the same wall share a `number`. Soft-deleted tombstones
-// (deletedAt IS NOT NULL) are excluded so a deleted route's old number can
-// be reused by a new route without violating uniqueness. `TableIndex` in
-// this drift version has no `where:` parameter on its column-list
-// constructor, so the partial index is expressed via the raw-SQL
-// `TableIndex.sql` variant instead (still validated by drift_dev at build
-// time). Column/table names below are the generated snake_case names
-// (`routes`, `wall_id`, `deleted_at`) confirmed against app_database.g.dart.
+// routes on the same PHOTO share a `number` — route numbers are scoped per
+// photo (each photo has its own overlay), not per wall, so two different
+// photos on the same wall may each have their own "route 1". Soft-deleted
+// tombstones (deletedAt IS NOT NULL) are excluded so a deleted route's old
+// number can be reused by a new route without violating uniqueness.
+// `TableIndex` in this drift version has no `where:` parameter on its
+// column-list constructor, so the partial index is expressed via the
+// raw-SQL `TableIndex.sql` variant instead (still validated by drift_dev at
+// build time). Column/table names below are the generated snake_case names
+// (`routes`, `photo_id`, `deleted_at`) confirmed against app_database.g.dart.
 @TableIndex.sql(
-  'CREATE UNIQUE INDEX idx_routes_wall_number_live ON routes (wall_id, number) WHERE deleted_at IS NULL',
+  'CREATE UNIQUE INDEX idx_routes_photo_number_live ON routes (photo_id, number) WHERE deleted_at IS NULL',
 )
 class Routes extends Table with SyncColumns {
   TextColumn get wallId => text().references(Walls, #id)();

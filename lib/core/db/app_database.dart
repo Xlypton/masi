@@ -18,7 +18,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 5;
+  int get schemaVersion => 6;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -66,6 +66,67 @@ class AppDatabase extends _$AppDatabase {
         await m.addColumn(routes, routes.betaVideoUrl);
         await m.addColumn(routes, routes.styleTagsJson);
         await m.addColumn(routes, routes.stars);
+      }
+      // v5 -> v6: multiple photos per topo, each with its own route overlay
+      // (#46 fix + the underlying feature). Three parts:
+      //
+      // 1. ADD COLUMN `sortOrder`/`isPrimary` on Photos (display order among
+      //    a wall's live originals, and which one is the "main" photo).
+      // 2. Route numbers move from per-wall to per-photo uniqueness: the old
+      //    `idx_routes_wall_number_live` partial index is dropped and
+      //    replaced with `idx_routes_photo_number_live` (see `tables.dart`'s
+      //    `@TableIndex.sql` on `Routes`, now expressing the new index — a
+      //    fresh install gets it straight from `onCreate`/`createAll`, but an
+      //    upgrading install needs it created explicitly here since
+      //    `onUpgrade` never re-runs `createAll`).
+      // 3. Data migration for the #46 bug itself: `attachPhotoToWall` always
+      //    INSERTed a new `kind:'original'` row and never superseded the
+      //    previous one, so some walls may already have accumulated 2+ live
+      //    originals with nothing distinguishing them — `PhotoRepository.
+      //    loadOriginal`'s old `getSingleOrNull()` throws on exactly that
+      //    shape, and the canvas silently swallowed the throw (blank
+      //    canvas). This backfill flags the NEWEST (max `createdAt`) live
+      //    original per wall as `isPrimary`, and assigns `sortOrder`
+      //    ascending by `createdAt` (0, 1, 2...) — no rows are deleted or
+      //    altered beyond these two columns; it merely classifies data that
+      //    was always there. Written defensively: walls with zero, one, or
+      //    many live originals are all handled by the same loop.
+      if (from < 6) {
+        await m.addColumn(photos, photos.sortOrder);
+        await m.addColumn(photos, photos.isPrimary);
+
+        await customStatement(
+          'DROP INDEX IF EXISTS idx_routes_wall_number_live',
+        );
+        await customStatement(
+          'CREATE UNIQUE INDEX IF NOT EXISTS '
+          'idx_routes_photo_number_live ON routes (photo_id, number) '
+          'WHERE deleted_at IS NULL',
+        );
+
+        final wallsWithOriginals = await customSelect(
+          "SELECT DISTINCT wall_id FROM photos "
+          "WHERE kind = 'original' AND deleted_at IS NULL",
+        ).get();
+
+        for (final wallRow in wallsWithOriginals) {
+          final wallId = wallRow.read<String>('wall_id');
+          final originals = await customSelect(
+            "SELECT id FROM photos WHERE wall_id = ? AND kind = 'original' "
+            "AND deleted_at IS NULL ORDER BY created_at ASC, id ASC",
+            variables: [Variable<String>(wallId)],
+          ).get();
+
+          for (var i = 0; i < originals.length; i++) {
+            final photoId = originals[i].read<String>('id');
+            final isNewest = i == originals.length - 1;
+            await customStatement(
+              'UPDATE photos SET sort_order = ?, is_primary = ? '
+              'WHERE id = ?',
+              [i, isNewest ? 1 : 0, photoId],
+            );
+          }
+        }
       }
     },
     beforeOpen: (details) async {

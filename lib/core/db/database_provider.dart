@@ -67,3 +67,14 @@ final photoRepositoryProvider = Provider<PhotoRepository>(
     photoFiles: ref.watch(photoFilesProvider),
   ),
 );
+
+/// Live list of a wall's `kind:'original'` photos (the multi-photo strip),
+/// ordered by [PhotoRef.sortOrder] then `createdAt` — a thin
+/// `StreamProvider.autoDispose.family` wrapper around
+/// [PhotoRepository.watchWallOriginals]. `autoDispose` so leaving the
+/// wall/topo whose strip this backs drops the cached subscription rather
+/// than keeping it alive app-lifetime for every wall ever opened.
+final wallOriginalsProvider =
+    StreamProvider.autoDispose.family<List<PhotoRef>, String>(
+  (ref, wallId) => ref.watch(photoRepositoryProvider).watchWallOriginals(wallId),
+);

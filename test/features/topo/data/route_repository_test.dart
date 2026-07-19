@@ -88,7 +88,7 @@ void main() {
       );
 
       await repo.upsertRoute(wallId, photoId, route);
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
 
       expect(loaded, hasLength(1));
       expect(loaded.single.number, 1);
@@ -109,7 +109,7 @@ void main() {
     );
 
     await repo.upsertRoute(wallId, photoId, route);
-    final loaded = await repo.loadRoutes(wallId);
+    final loaded = await repo.loadRoutes(wallId, photoId);
 
     expect(loaded, hasLength(1));
     expect(loaded.single.visible, isFalse);
@@ -125,7 +125,7 @@ void main() {
     );
 
     await repo.upsertRoute(wallId, photoId, route);
-    final loaded = await repo.loadRoutes(wallId);
+    final loaded = await repo.loadRoutes(wallId, photoId);
 
     expect(loaded, hasLength(1));
     expect(loaded.single.visible, isTrue);
@@ -150,7 +150,7 @@ void main() {
       );
       await repo.upsertRoute(wallId, photoId, v2);
 
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
       expect(loaded, hasLength(1));
       expect(loaded.single.visible, isFalse);
     },
@@ -176,7 +176,7 @@ void main() {
     final rows = await db.select(db.routes).get();
     expect(rows, hasLength(1));
 
-    final loaded = await repo.loadRoutes(wallId);
+    final loaded = await repo.loadRoutes(wallId, photoId);
     expect(loaded, hasLength(1));
     expect(loaded.single.colorIndex, 5);
     expect(loaded.single.points, v2.points);
@@ -188,9 +188,9 @@ void main() {
       final route = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
       await repo.upsertRoute(wallId, photoId, route);
 
-      await repo.softDeleteRoute(wallId, 1);
+      await repo.softDeleteRoute(wallId, photoId, 1);
 
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
       expect(loaded, isEmpty);
 
       final raw = await db.select(db.routes).get();
@@ -218,7 +218,7 @@ void main() {
       TopoRoute(id: 3, number: 2, points: const [Offset(0, 0)]),
     );
 
-    final loaded = await repo.loadRoutes(wallId);
+    final loaded = await repo.loadRoutes(wallId, photoId);
 
     expect(loaded.map((r) => r.number).toList(), [1, 2, 3]);
     expect(loaded.map((r) => r.id).toList(), [1, 2, 3]);
@@ -231,7 +231,7 @@ void main() {
     () async {
       final v1 = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
       await repo.upsertRoute(wallId, photoId, v1);
-      await repo.softDeleteRoute(wallId, 1);
+      await repo.softDeleteRoute(wallId, photoId, 1);
 
       final v2 = TopoRoute(
         id: 1,
@@ -241,7 +241,7 @@ void main() {
       );
       await repo.upsertRoute(wallId, photoId, v2);
 
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
       expect(loaded, hasLength(1));
       expect(loaded.single.colorIndex, 2);
       expect(loaded.single.points, v2.points);
@@ -257,7 +257,10 @@ void main() {
 
   test(
     'fix (c): the partial unique index rejects two live rows for the same '
-    '(wallId, number) inserted directly (bypassing the repository)',
+    '(photoId, number) inserted directly (bypassing the repository) — '
+    'wallId is held constant here too, but it is photoId+number that is '
+    'actually enforced (see T-route-per-photo below, where the SAME '
+    'number is allowed across two DIFFERENT photos on the same wall)',
     () async {
       final v1 = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
       await repo.upsertRoute(wallId, photoId, v1);
@@ -305,7 +308,7 @@ void main() {
       );
 
       await repo.upsertRoute(wallId, photoId, route);
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
 
       expect(loaded, hasLength(1));
       final result = loaded.single;
@@ -328,7 +331,7 @@ void main() {
       );
 
       await repo.upsertRoute(wallId, photoId, route);
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
 
       expect(loaded, hasLength(1));
       final result = loaded.single;
@@ -374,7 +377,7 @@ void main() {
       final rows = await db.select(db.routes).get();
       expect(rows, hasLength(1));
 
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
       expect(loaded, hasLength(1));
       final result = loaded.single;
       expect(result.name, 'New Name');
@@ -412,7 +415,7 @@ void main() {
       );
       await repo.upsertRoute(wallId, photoId, v2);
 
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
       expect(loaded, hasLength(1));
       final result = loaded.single;
       expect(result.name, isNull);
@@ -439,7 +442,7 @@ void main() {
       );
 
       await repo.upsertRoute(wallId, photoId, route);
-      final loaded = await repo.loadRoutes(wallId);
+      final loaded = await repo.loadRoutes(wallId, photoId);
 
       expect(loaded, hasLength(1));
       expect(loaded.single.gradeSortKey, 8.5);
@@ -484,7 +487,7 @@ void main() {
         );
 
         await repo.upsertRoute(wallId, photoId, route);
-        final loaded = await repo.loadRoutes(wallId);
+        final loaded = await repo.loadRoutes(wallId, photoId);
 
         expect(loaded, hasLength(1));
         final result = loaded.single;
@@ -510,7 +513,7 @@ void main() {
         final raw = await db.select(db.routes).getSingle();
         expect(raw.styleTagsJson, isNull);
 
-        final loaded = await repo.loadRoutes(wallId);
+        final loaded = await repo.loadRoutes(wallId, photoId);
         expect(loaded.single.styleTags, isEmpty);
       },
     );
@@ -522,7 +525,7 @@ void main() {
         final route = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
 
         await repo.upsertRoute(wallId, photoId, route);
-        final loaded = await repo.loadRoutes(wallId);
+        final loaded = await repo.loadRoutes(wallId, photoId);
 
         expect(loaded, hasLength(1));
         final result = loaded.single;
@@ -559,7 +562,7 @@ void main() {
         final rows = await db.select(db.routes).get();
         expect(rows, hasLength(1));
 
-        final loaded = await repo.loadRoutes(wallId);
+        final loaded = await repo.loadRoutes(wallId, photoId);
         final result = loaded.single;
         expect(result.betaVideoUrl, 'https://example.com/new');
         expect(result.styleTags, ['crimpy', 'juggy']);
@@ -584,7 +587,7 @@ void main() {
         final v2 = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
         await repo.upsertRoute(wallId, photoId, v2);
 
-        final loaded = await repo.loadRoutes(wallId);
+        final loaded = await repo.loadRoutes(wallId, photoId);
         final result = loaded.single;
         expect(result.betaVideoUrl, isNull);
         expect(result.styleTags, isEmpty);
@@ -651,6 +654,120 @@ void main() {
 
         final raw = await db.select(db.routes).getSingle();
         expect(raw.ownerId, 'u1');
+      },
+    );
+  });
+
+  group('T-route-per-photo: routes are scoped per photo, not per wall', () {
+    const photoIdB = 'photo-2';
+
+    setUp(() async {
+      await db
+          .into(db.photos)
+          .insert(
+            PhotosCompanion.insert(
+              id: photoIdB,
+              createdAt: 1000,
+              updatedAt: 1000,
+              wallId: wallId,
+              localPath: '/tmp/photo-b.jpg',
+              kind: 'original',
+              width: 100,
+              height: 200,
+            ),
+          );
+    });
+
+    test(
+      'the SAME number is allowed on two different photos of the same '
+      'wall, and loadRoutes(wallId, photoId) returns only that photo\'s '
+      'route',
+      () async {
+        final routeA = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0, 0)],
+          name: 'Route on A',
+        );
+        final routeB = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(1, 1)],
+          name: 'Route on B',
+        );
+
+        await repo.upsertRoute(wallId, photoId, routeA);
+        await repo.upsertRoute(wallId, photoIdB, routeB);
+
+        final loadedA = await repo.loadRoutes(wallId, photoId);
+        final loadedB = await repo.loadRoutes(wallId, photoIdB);
+
+        expect(loadedA, hasLength(1));
+        expect(loadedA.single.name, 'Route on A');
+        expect(loadedB, hasLength(1));
+        expect(loadedB.single.name, 'Route on B');
+
+        final raw = await db.select(db.routes).get();
+        expect(
+          raw,
+          hasLength(2),
+          reason: 'both photos\' number-1 routes are distinct live rows',
+        );
+      },
+    );
+
+    test(
+      'upsertRoute\'s existing-row lookup is (photoId, number): updating '
+      'photo A\'s route 1 never touches photo B\'s route 1',
+      () async {
+        await repo.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)], name: 'A v1'),
+        );
+        await repo.upsertRoute(
+          wallId,
+          photoIdB,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)], name: 'B v1'),
+        );
+
+        await repo.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(5, 5)], name: 'A v2'),
+        );
+
+        final loadedA = await repo.loadRoutes(wallId, photoId);
+        final loadedB = await repo.loadRoutes(wallId, photoIdB);
+        expect(loadedA.single.name, 'A v2');
+        expect(loadedB.single.name, 'B v1');
+
+        final raw = await db.select(db.routes).get();
+        expect(raw, hasLength(2));
+      },
+    );
+
+    test(
+      'softDeleteRoute(wallId, photoId, number) only tombstones the named '
+      'photo\'s route, leaving the other photo\'s same-numbered route live',
+      () async {
+        await repo.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+        await repo.upsertRoute(
+          wallId,
+          photoIdB,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+
+        await repo.softDeleteRoute(wallId, photoId, 1);
+
+        final loadedA = await repo.loadRoutes(wallId, photoId);
+        final loadedB = await repo.loadRoutes(wallId, photoIdB);
+        expect(loadedA, isEmpty);
+        expect(loadedB, hasLength(1));
       },
     );
   });

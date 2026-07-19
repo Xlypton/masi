@@ -4,7 +4,8 @@ import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/topo/data/photo_files.dart';
-import 'package:drift/drift.dart' show Value;
+import 'package:climbtopo/features/topo/data/photo_repository.dart';
+import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
@@ -361,6 +362,57 @@ void main() {
         expect(photo.width, 640);
         expect(photo.height, 480);
         expect(photo.deletedAt, isNull);
+      },
+    );
+
+    test(
+      'T-attach: the FIRST photo attached to a wall becomes isPrimary '
+      'with sortOrder 0; a SECOND attach is isPrimary:false with sortOrder '
+      '1, and does not flip the first photo\'s primary flag',
+      () async {
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final wall = await repo.createWall(sector.id, 'Wall');
+
+        final firstId = await repo.attachPhotoToWall(
+          wall.id,
+          '/tmp/first.jpg',
+          640,
+          480,
+        );
+        final firstPhoto = await (db.select(
+          db.photos,
+        )..where((t) => t.id.equals(firstId))).getSingle();
+        expect(firstPhoto.isPrimary, isTrue);
+        expect(firstPhoto.sortOrder, 0);
+
+        final secondId = await repo.attachPhotoToWall(
+          wall.id,
+          '/tmp/second.jpg',
+          640,
+          480,
+        );
+        final secondPhoto = await (db.select(
+          db.photos,
+        )..where((t) => t.id.equals(secondId))).getSingle();
+        expect(secondPhoto.isPrimary, isFalse);
+        expect(secondPhoto.sortOrder, 1);
+
+        final firstAfter = await (db.select(
+          db.photos,
+        )..where((t) => t.id.equals(firstId))).getSingle();
+        expect(
+          firstAfter.isPrimary,
+          isTrue,
+          reason: 'attaching a second photo must not un-flag the first, '
+              'still-primary one',
+        );
+
+        // loadOriginal (PhotoRepository) returns the primary — the first
+        // attached photo — until the caller explicitly promotes another.
+        final photoRepo = PhotoRepository(db, nowMs: () => 1000);
+        final loaded = await photoRepo.loadOriginal(wall.id);
+        expect(loaded!.id, firstId);
       },
     );
   });
@@ -1009,8 +1061,9 @@ void main() {
     });
 
     test(
-      'thumbnail subquery tiebreak: two original photos on the same wall '
-      'with identical createdAt resolve deterministically by photo id DESC',
+      'L2: thumbnail subquery prefers the PRIMARY photo — the first '
+      'attached — over a second one, even with identical createdAt, '
+      'regardless of which photo id happens to sort higher',
       () async {
         final tiedRepo = LibraryCrudRepository(db, nowMs: () => 7000);
         final area = await tiedRepo.createArea('Area');
@@ -1037,13 +1090,55 @@ void main() {
           db.photos,
         )..where((t) => t.id.equals(photoId2))).getSingle();
         expect(rawPhoto1.createdAt, rawPhoto2.createdAt);
+        expect(rawPhoto1.isPrimary, isTrue);
+        expect(rawPhoto2.isPrimary, isFalse);
 
-        final expectedPhotoId = [photoId1, photoId2]
-          ..sort((a, b) => b.compareTo(a));
         // Both source paths are missing on disk, so attachPhotoToWall
         // stores the relative photos/<id><ext> form for each, and the
         // default (no path_provider in this test) PhotoFiles used by
         // watchTopos falls back to returning it unchanged.
+        final expectedPath = 'photos/$photoId1.jpg';
+
+        for (var i = 0; i < 3; i++) {
+          final topos = await tiedRepo.watchTopos().first;
+          expect(topos.single.thumbnailPath, expectedPath);
+        }
+      },
+    );
+
+    test(
+      'L2: when NEITHER tied original is flagged primary (legacy data '
+      'shape untouched by the v5->v6 backfill), the thumbnail subquery '
+      'falls back to resolving the tie deterministically by photo id DESC',
+      () async {
+        final tiedRepo = LibraryCrudRepository(db, nowMs: () => 7000);
+        final area = await tiedRepo.createArea('Area');
+        final sector = await tiedRepo.createSector(area.id, 'Sector');
+        final wall = await tiedRepo.createWall(sector.id, 'Wall');
+
+        final photoId1 = await tiedRepo.attachPhotoToWall(
+          wall.id,
+          '/tmp/photo-a.jpg',
+          100,
+          200,
+        );
+        final photoId2 = await tiedRepo.attachPhotoToWall(
+          wall.id,
+          '/tmp/photo-b.jpg',
+          100,
+          200,
+        );
+        // Force both flags off, simulating data that predates the isPrimary
+        // concept entirely (neither ever flagged) — this is exactly the
+        // "none flagged" fallback case `PhotoRepository.loadOriginal`'s doc
+        // and `watchTopos`' doc both call out.
+        await (db.update(db.photos)..where(
+              (t) => t.id.equals(photoId1) | t.id.equals(photoId2),
+            ))
+            .write(const PhotosCompanion(isPrimary: Value(false)));
+
+        final expectedPhotoId = [photoId1, photoId2]
+          ..sort((a, b) => b.compareTo(a));
         final expectedPath = 'photos/${expectedPhotoId.first}.jpg';
 
         for (var i = 0; i < 3; i++) {

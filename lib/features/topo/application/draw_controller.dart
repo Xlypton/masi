@@ -488,11 +488,12 @@ class DrawController extends Notifier<DrawState> {
     );
 
     final wallId = state.activeWallId;
-    if (wallId == null) return;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
     try {
       await ref
           .read(routeRepositoryProvider)
-          .softDeleteRoute(wallId, removedRoute.number);
+          .softDeleteRoute(wallId, photoId, removedRoute.number);
     } catch (e, st) {
       debugPrint('removeRoute: persistence write-through failed: $e\n$st');
     }
@@ -776,7 +777,9 @@ class DrawController extends Notifier<DrawState> {
   /// set, which switches on write-through persistence for
   /// [commitRoute]/[placeSymbol]/[toggleRouteVisibility]/[removeRoute].
   Future<void> loadForWall(String wallId, String photoId) async {
-    final loaded = await ref.read(routeRepositoryProvider).loadRoutes(wallId);
+    final loaded = await ref
+        .read(routeRepositoryProvider)
+        .loadRoutes(wallId, photoId);
 
     final maxNumber = loaded.isEmpty
         ? 0

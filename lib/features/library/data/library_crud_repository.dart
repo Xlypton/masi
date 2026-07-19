@@ -789,6 +789,16 @@ class LibraryCrudRepository {
   /// path portable for cloud backup. The copy is best-effort: if the source
   /// doesn't exist (or the copy fails), [PhotoFiles.importPhoto] returns
   /// [localPath] unchanged so the row is still created.
+  ///
+  /// Multi-photo bookkeeping: this ALWAYS inserts a new original (a wall can
+  /// carry many) rather than replacing a previous one. The new row's
+  /// `isPrimary` is `true` only when [wallId] currently has NO live
+  /// original at all — i.e. the FIRST photo ever attached becomes primary
+  /// by default (the "main" photo shown as the topo's thumbnail/opened by
+  /// the canvas); every subsequent attach is `isPrimary: false` and must be
+  /// promoted explicitly via [PhotoRepository.setPrimaryPhoto]. `sortOrder`
+  /// is the current count of live originals (append-at-end), mirroring
+  /// [createSector]/[createWall]'s sibling-sortOrder pattern.
   Future<String> attachPhotoToWall(
     String wallId,
     String localPath,
@@ -798,6 +808,7 @@ class LibraryCrudRepository {
     final now = nowMs();
     final id = _uuid.v4();
     final ownedPath = await _photoFiles.importPhoto(localPath, id);
+    final liveOriginalCount = await _liveOriginalCount(wallId);
     await _db
         .into(_db.photos)
         .insert(
@@ -810,10 +821,28 @@ class LibraryCrudRepository {
             kind: 'original',
             width: width,
             height: height,
+            sortOrder: Value(liveOriginalCount),
+            isPrimary: Value(liveOriginalCount == 0),
             ownerId: Value(currentUid()),
           ),
         );
     return id;
+  }
+
+  /// The number of live (non-deleted) `kind:'original'` photos currently on
+  /// [wallId] — used by [attachPhotoToWall] to decide the new photo's
+  /// `sortOrder` (append-at-end) and whether it's the wall's first (hence
+  /// primary) original.
+  Future<int> _liveOriginalCount(String wallId) async {
+    final query = _db.selectOnly(_db.photos)
+      ..addColumns([_db.photos.id.count()])
+      ..where(
+        _db.photos.wallId.equals(wallId) &
+            _db.photos.kind.equals('original') &
+            _db.photos.deletedAt.isNull(),
+      );
+    final row = await query.getSingle();
+    return row.read(_db.photos.id.count()) ?? 0;
   }
 
   /// The stored `localPath` of the Photos row [photoId] (regardless of
@@ -912,8 +941,10 @@ class LibraryCrudRepository {
   static const _defaultSectorName = '__default__';
 
   /// Live, flat list of every non-deleted [db.Wall], each paired with its
-  /// most recent non-deleted `kind:'original'` [db.Photo]'s `localPath` (or
-  /// `null` if it has none), a live count of its non-deleted [db.Route]s,
+  /// PRIMARY (or, if none is flagged — e.g. legacy data untouched by the
+  /// v5->v6 migration's backfill — the most recent) non-deleted
+  /// `kind:'original'` [db.Photo]'s `localPath` (or `null` if it has none),
+  /// a live count of its non-deleted [db.Route]s,
   /// the wall's representative grade — the display label
   /// (`gradeRaw`)/[GradeBand] of its hardest non-deleted, graded route (both
   /// `null` if the wall has no graded routes) —, its ancestor Area's id/name
@@ -960,7 +991,7 @@ class LibraryCrudRepository {
         w.longitude AS wall_longitude,
         (SELECT p.local_path FROM photos p
            WHERE p.wall_id = w.id AND p.kind = 'original' AND p.deleted_at IS NULL
-           ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS thumbnail_path,
+           ORDER BY p.is_primary DESC, p.created_at DESC, p.id DESC LIMIT 1) AS thumbnail_path,
         (SELECT COUNT(*) FROM routes r
            WHERE r.wall_id = w.id AND r.deleted_at IS NULL) AS route_count,
         (SELECT r.grade_raw FROM routes r

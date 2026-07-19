@@ -3,7 +3,9 @@ import 'dart:io';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/features/topo/data/photo_files.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
+import 'package:climbtopo/features/topo/data/route_repository.dart';
 import 'package:climbtopo/features/topo/domain/slice_geometry.dart';
+import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -635,5 +637,227 @@ void main() {
         expect(raw.ownerId, isNull);
       },
     );
+  });
+
+  group('multi-photo-per-topo: originals (#46 fix + P1-P6)', () {
+    Future<String> insertOriginal(
+      String id, {
+      int createdAt = 1000,
+      bool isPrimary = false,
+      int sortOrder = 0,
+    }) async {
+      await db
+          .into(db.photos)
+          .insert(
+            PhotosCompanion.insert(
+              id: id,
+              createdAt: createdAt,
+              updatedAt: createdAt,
+              wallId: wallId,
+              localPath: '/tmp/$id.jpg',
+              kind: 'original',
+              width: 100,
+              height: 200,
+              sortOrder: Value(sortOrder),
+              isPrimary: Value(isPrimary),
+            ),
+          );
+      return id;
+    }
+
+    test(
+      '#46 regression: loadOriginal does NOT throw with 2+ live originals '
+      'on the same wall, and returns the one flagged isPrimary',
+      () async {
+        // originalPhotoId (from setUp) is NOT primary; a second and third
+        // original are attached, one of them flagged primary — reproducing
+        // the exact accumulated-multi-original shape the #46 bug produced.
+        await insertOriginal('photo-2', createdAt: 2000);
+        await insertOriginal('photo-3', createdAt: 3000, isPrimary: true);
+
+        final loaded = await repo.loadOriginal(wallId);
+
+        expect(loaded, isNotNull);
+        expect(loaded!.id, 'photo-3');
+        expect(loaded.isPrimary, isTrue);
+      },
+    );
+
+    test(
+      'loadOriginal falls back to the newest (createdAt DESC) when NO '
+      'original is flagged primary',
+      () async {
+        await insertOriginal('photo-2', createdAt: 2000);
+        await insertOriginal('photo-3', createdAt: 3000);
+
+        final loaded = await repo.loadOriginal(wallId);
+
+        expect(loaded!.id, 'photo-3');
+      },
+    );
+
+    test(
+      'loadOriginals returns every live original ordered by sortOrder '
+      'ascending, then createdAt ascending',
+      () async {
+        // originalPhotoId already exists (sortOrder 0, createdAt 1000).
+        await insertOriginal('photo-2', createdAt: 2000, sortOrder: 2);
+        await insertOriginal('photo-3', createdAt: 1500, sortOrder: 1);
+
+        final loaded = await repo.loadOriginals(wallId);
+
+        expect(
+          loaded.map((p) => p.id).toList(),
+          [originalPhotoId, 'photo-3', 'photo-2'],
+        );
+      },
+    );
+
+    test(
+      'watchWallOriginals emits the live set reactively as originals are '
+      'attached',
+      () async {
+        final emissions = <int>[];
+        final sub = repo.watchWallOriginals(wallId).listen(
+          (list) => emissions.add(list.length),
+        );
+        addTearDown(sub.cancel);
+
+        await pumpEventQueue();
+        await insertOriginal('photo-2', createdAt: 2000);
+        await pumpEventQueue();
+
+        expect(emissions, [1, 2]);
+      },
+    );
+
+    test(
+      'setPrimaryPhoto enforces the single-primary invariant: flips the '
+      'target on and every other live original on the wall off',
+      () async {
+        await insertOriginal('photo-2', createdAt: 2000, isPrimary: true);
+        await insertOriginal('photo-3', createdAt: 3000);
+
+        await repo.setPrimaryPhoto(wallId, 'photo-3');
+
+        final rows = await (db.select(
+          db.photos,
+        )..where((t) => t.wallId.equals(wallId) & t.kind.equals('original')))
+            .get();
+        final byId = {for (final r in rows) r.id: r.isPrimary};
+        expect(byId[originalPhotoId], isFalse);
+        expect(byId['photo-2'], isFalse);
+        expect(byId['photo-3'], isTrue);
+      },
+    );
+
+    test(
+      'deleteOriginalPhoto soft-deletes the photo AND cascades to its '
+      'routes and slice children',
+      () async {
+        final route = RouteRepository(db, nowMs: () => 1000);
+        await route.upsertRoute(
+          wallId,
+          originalPhotoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+        await repo.replaceSlices(
+          wallId,
+          originalPhotoId,
+          originalWidth,
+          originalHeight,
+          originalLocalPath,
+          [const SliceSpec(0.0, 1.0)],
+        );
+
+        await repo.deleteOriginalPhoto(originalPhotoId);
+
+        final photoRow = await (db.select(
+          db.photos,
+        )..where((t) => t.id.equals(originalPhotoId))).getSingle();
+        expect(photoRow.deletedAt, isNotNull);
+
+        final routeRows = await (db.select(
+          db.routes,
+        )..where((t) => t.photoId.equals(originalPhotoId))).get();
+        expect(routeRows, hasLength(1));
+        expect(routeRows.single.deletedAt, isNotNull);
+
+        final sliceRows = await (db.select(
+          db.photos,
+        )..where((t) => t.parentPhotoId.equals(originalPhotoId))).get();
+        expect(sliceRows, hasLength(1));
+        expect(sliceRows.single.deletedAt, isNotNull);
+      },
+    );
+
+    test(
+      'deleteOriginalPhoto promotes the newest remaining original to '
+      'primary when the deleted photo was primary',
+      () async {
+        await (db.update(
+          db.photos,
+        )..where((t) => t.id.equals(originalPhotoId))).write(
+          const PhotosCompanion(isPrimary: Value(true)),
+        );
+        await insertOriginal('photo-2', createdAt: 2000);
+        await insertOriginal('photo-3', createdAt: 3000);
+
+        await repo.deleteOriginalPhoto(originalPhotoId);
+
+        final remaining = await (db.select(db.photos)
+              ..where(
+                (t) =>
+                    t.wallId.equals(wallId) &
+                    t.kind.equals('original') &
+                    t.deletedAt.isNull(),
+              ))
+            .get();
+        expect(remaining, hasLength(2));
+        final primary = remaining.where((r) => r.isPrimary).toList();
+        expect(primary, hasLength(1));
+        expect(
+          primary.single.id,
+          'photo-3',
+          reason: 'the newest remaining live original is promoted',
+        );
+      },
+    );
+
+    test(
+      'deleteOriginalPhoto is a no-op on the primary-promotion step when '
+      'the deleted photo was not primary',
+      () async {
+        await insertOriginal('photo-2', createdAt: 2000, isPrimary: true);
+
+        await repo.deleteOriginalPhoto(originalPhotoId);
+
+        final remaining = await (db.select(db.photos)
+              ..where(
+                (t) =>
+                    t.wallId.equals(wallId) &
+                    t.kind.equals('original') &
+                    t.deletedAt.isNull(),
+              ))
+            .getSingle();
+        expect(remaining.id, 'photo-2');
+        expect(remaining.isPrimary, isTrue);
+      },
+    );
+
+    test('setPhotoOrder writes sortOrder = index for each id given', () async {
+      await insertOriginal('photo-2', createdAt: 2000);
+      await insertOriginal('photo-3', createdAt: 3000);
+
+      await repo.setPhotoOrder(wallId, ['photo-3', originalPhotoId, 'photo-2']);
+
+      final rows = await (db.select(
+        db.photos,
+      )..where((t) => t.wallId.equals(wallId))).get();
+      final byId = {for (final r in rows) r.id: r.sortOrder};
+      expect(byId['photo-3'], 0);
+      expect(byId[originalPhotoId], 1);
+      expect(byId['photo-2'], 2);
+    });
   });
 }
