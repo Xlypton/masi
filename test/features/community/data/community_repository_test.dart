@@ -100,6 +100,7 @@ void main() {
     String? gradeRaw,
     double? gradeSortKey,
     String? style,
+    String? styleTagsJson,
     int? deletedAt,
   }) {
     return db
@@ -119,6 +120,7 @@ void main() {
             gradeRaw: Value(gradeRaw),
             gradeSortKey: Value(gradeSortKey),
             style: Value(style),
+            styleTagsJson: Value(styleTagsJson),
             deletedAt: Value(deletedAt),
           ),
         );
@@ -297,6 +299,101 @@ void main() {
 
         final topos = await repo.watchSharedTopos().first;
         expect(topos.any((t) => t.wallId == 'wall-private'), isFalse);
+      },
+    );
+  });
+
+  group('style-tags facet: routeStyleTags on SharedTopo', () {
+    test(
+      'a wall with routes carrying styleTagsJson exposes the de-duped set '
+      'of decoded tag keys across all its live routes',
+      () async {
+        await seedArea('area-tags-1');
+        await seedSector('sector-tags-1', areaId: 'area-tags-1');
+        await seedWall('wall-tags-1', sectorId: 'sector-tags-1');
+        final photoId = await seedPhoto('photo-tags-1', wallId: 'wall-tags-1');
+
+        await seedRoute(
+          'route-tags-1',
+          wallId: 'wall-tags-1',
+          photoId: photoId,
+          number: 1,
+          styleTagsJson: '["dyno","crimpy"]',
+        );
+        await seedRoute(
+          'route-tags-2',
+          wallId: 'wall-tags-1',
+          photoId: photoId,
+          number: 2,
+          // Overlaps with route 1 on "crimpy" -- must be deduplicated.
+          styleTagsJson: '["crimpy","slabby"]',
+        );
+
+        final topos = await repo.watchSharedTopos().first;
+        final topo = topos.singleWhere((t) => t.wallId == 'wall-tags-1');
+
+        expect(topo.routeStyleTags, {'dyno', 'crimpy', 'slabby'});
+      },
+    );
+
+    test(
+      'a wall with no style tags at all (null styleTagsJson, or the empty '
+      'array) exposes an empty routeStyleTags set',
+      () async {
+        await seedArea('area-tags-2');
+        await seedSector('sector-tags-2', areaId: 'area-tags-2');
+        await seedWall('wall-tags-2', sectorId: 'sector-tags-2');
+        final photoId = await seedPhoto('photo-tags-2', wallId: 'wall-tags-2');
+
+        await seedRoute(
+          'route-notags-1',
+          wallId: 'wall-tags-2',
+          photoId: photoId,
+          number: 1,
+        );
+        await seedRoute(
+          'route-notags-2',
+          wallId: 'wall-tags-2',
+          photoId: photoId,
+          number: 2,
+          styleTagsJson: '[]',
+        );
+
+        final topos = await repo.watchSharedTopos().first;
+        final topo = topos.singleWhere((t) => t.wallId == 'wall-tags-2');
+
+        expect(topo.routeStyleTags, isEmpty);
+      },
+    );
+
+    test(
+      'a soft-deleted route\'s style tags are excluded from routeStyleTags',
+      () async {
+        await seedArea('area-tags-3');
+        await seedSector('sector-tags-3', areaId: 'area-tags-3');
+        await seedWall('wall-tags-3', sectorId: 'sector-tags-3');
+        final photoId = await seedPhoto('photo-tags-3', wallId: 'wall-tags-3');
+
+        await seedRoute(
+          'route-tags-live',
+          wallId: 'wall-tags-3',
+          photoId: photoId,
+          number: 1,
+          styleTagsJson: '["dyno"]',
+        );
+        await seedRoute(
+          'route-tags-deleted',
+          wallId: 'wall-tags-3',
+          photoId: photoId,
+          number: 2,
+          styleTagsJson: '["overhang"]',
+          deletedAt: 2000,
+        );
+
+        final topos = await repo.watchSharedTopos().first;
+        final topo = topos.singleWhere((t) => t.wallId == 'wall-tags-3');
+
+        expect(topo.routeStyleTags, {'dyno'});
       },
     );
   });

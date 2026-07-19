@@ -678,6 +678,9 @@ class DrawController extends Notifier<DrawState> {
     String? gradeRaw,
     String? style,
     String? description,
+    String? betaVideoUrl,
+    List<String>? styleTags,
+    int? stars,
   }) async {
     final index = state.routes.indexWhere((r) => r.id == routeId);
     if (index == -1) return;
@@ -701,6 +704,12 @@ class DrawController extends Notifier<DrawState> {
       styleSet: true,
       description: description,
       descriptionSet: true,
+      betaVideoUrl: betaVideoUrl,
+      betaVideoUrlSet: true,
+      styleTags: styleTags ?? const [],
+      styleTagsSet: true,
+      stars: stars,
+      starsSet: true,
     );
     routes[index] = updatedRoute;
     state = state.copyWith(routes: routes);

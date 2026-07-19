@@ -173,10 +173,7 @@ void main() {
       await tester.pumpWidget(
         _wrap(
           container,
-          CommunityScreen(
-            tileProvider: _NoopTileProvider(),
-            initialTab: CommunityTab.map,
-          ),
+          CommunityMapScreen(tileProvider: _NoopTileProvider()),
         ),
       );
       await _drain(tester);
@@ -228,10 +225,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
-            ),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
@@ -310,9 +304,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
                 mapController: controller,
               ),
             ),
@@ -400,9 +393,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
                 mapController: controller,
               ),
             ),
@@ -459,9 +451,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
                 mapController: controller,
               ),
             ),
@@ -516,10 +507,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
-            ),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
@@ -568,10 +556,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
-            ),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);

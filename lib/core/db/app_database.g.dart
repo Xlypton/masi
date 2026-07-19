@@ -3144,6 +3144,37 @@ class $RoutesTable extends Routes with TableInfo<$RoutesTable, Route> {
     ),
     defaultValue: const Constant(true),
   );
+  static const VerificationMeta _betaVideoUrlMeta = const VerificationMeta(
+    'betaVideoUrl',
+  );
+  @override
+  late final GeneratedColumn<String> betaVideoUrl = GeneratedColumn<String>(
+    'beta_video_url',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _styleTagsJsonMeta = const VerificationMeta(
+    'styleTagsJson',
+  );
+  @override
+  late final GeneratedColumn<String> styleTagsJson = GeneratedColumn<String>(
+    'style_tags_json',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _starsMeta = const VerificationMeta('stars');
+  @override
+  late final GeneratedColumn<int> stars = GeneratedColumn<int>(
+    'stars',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -3167,6 +3198,9 @@ class $RoutesTable extends Routes with TableInfo<$RoutesTable, Route> {
     symbolsJson,
     sortOrder,
     visible,
+    betaVideoUrl,
+    styleTagsJson,
+    stars,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -3335,6 +3369,30 @@ class $RoutesTable extends Routes with TableInfo<$RoutesTable, Route> {
         visible.isAcceptableOrUnknown(data['visible']!, _visibleMeta),
       );
     }
+    if (data.containsKey('beta_video_url')) {
+      context.handle(
+        _betaVideoUrlMeta,
+        betaVideoUrl.isAcceptableOrUnknown(
+          data['beta_video_url']!,
+          _betaVideoUrlMeta,
+        ),
+      );
+    }
+    if (data.containsKey('style_tags_json')) {
+      context.handle(
+        _styleTagsJsonMeta,
+        styleTagsJson.isAcceptableOrUnknown(
+          data['style_tags_json']!,
+          _styleTagsJsonMeta,
+        ),
+      );
+    }
+    if (data.containsKey('stars')) {
+      context.handle(
+        _starsMeta,
+        stars.isAcceptableOrUnknown(data['stars']!, _starsMeta),
+      );
+    }
     return context;
   }
 
@@ -3428,6 +3486,18 @@ class $RoutesTable extends Routes with TableInfo<$RoutesTable, Route> {
         DriftSqlType.bool,
         data['${effectivePrefix}visible'],
       )!,
+      betaVideoUrl: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}beta_video_url'],
+      ),
+      styleTagsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}style_tags_json'],
+      ),
+      stars: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}stars'],
+      ),
     );
   }
 
@@ -3459,6 +3529,23 @@ class Route extends DataClass implements Insertable<Route> {
   final String symbolsJson;
   final int sortOrder;
   final bool visible;
+
+  /// External beta-video URL (e.g. a YouTube/Instagram link) for this
+  /// route. Free-form, validated only client-side (see
+  /// `RouteMetadataSheet`) — `null` if unset.
+  final String? betaVideoUrl;
+
+  /// This route's style tags, encoded as a JSON array of strings via
+  /// `core/routes/route_styles.dart`'s `encodeStyleTags`/`decodeStyleTags`
+  /// (curated tags + arbitrary custom ones). `null` (rather than `'[]'`)
+  /// when the route has no tags — `RouteRepository.upsertRoute` writes
+  /// `null` for an empty tag list rather than the encoded empty array, so
+  /// this column stays `null` for every route that predates this feature.
+  final String? styleTagsJson;
+
+  /// 0-3 star quality rating. `null` means unrated (distinct from `0`,
+  /// which is an explicit "0 stars" rating).
+  final int? stars;
   const Route({
     required this.id,
     required this.createdAt,
@@ -3481,6 +3568,9 @@ class Route extends DataClass implements Insertable<Route> {
     required this.symbolsJson,
     required this.sortOrder,
     required this.visible,
+    this.betaVideoUrl,
+    this.styleTagsJson,
+    this.stars,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -3524,6 +3614,15 @@ class Route extends DataClass implements Insertable<Route> {
     map['symbols_json'] = Variable<String>(symbolsJson);
     map['sort_order'] = Variable<int>(sortOrder);
     map['visible'] = Variable<bool>(visible);
+    if (!nullToAbsent || betaVideoUrl != null) {
+      map['beta_video_url'] = Variable<String>(betaVideoUrl);
+    }
+    if (!nullToAbsent || styleTagsJson != null) {
+      map['style_tags_json'] = Variable<String>(styleTagsJson);
+    }
+    if (!nullToAbsent || stars != null) {
+      map['stars'] = Variable<int>(stars);
+    }
     return map;
   }
 
@@ -3566,6 +3665,15 @@ class Route extends DataClass implements Insertable<Route> {
       symbolsJson: Value(symbolsJson),
       sortOrder: Value(sortOrder),
       visible: Value(visible),
+      betaVideoUrl: betaVideoUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(betaVideoUrl),
+      styleTagsJson: styleTagsJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(styleTagsJson),
+      stars: stars == null && nullToAbsent
+          ? const Value.absent()
+          : Value(stars),
     );
   }
 
@@ -3596,6 +3704,9 @@ class Route extends DataClass implements Insertable<Route> {
       symbolsJson: serializer.fromJson<String>(json['symbolsJson']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
       visible: serializer.fromJson<bool>(json['visible']),
+      betaVideoUrl: serializer.fromJson<String?>(json['betaVideoUrl']),
+      styleTagsJson: serializer.fromJson<String?>(json['styleTagsJson']),
+      stars: serializer.fromJson<int?>(json['stars']),
     );
   }
   @override
@@ -3623,6 +3734,9 @@ class Route extends DataClass implements Insertable<Route> {
       'symbolsJson': serializer.toJson<String>(symbolsJson),
       'sortOrder': serializer.toJson<int>(sortOrder),
       'visible': serializer.toJson<bool>(visible),
+      'betaVideoUrl': serializer.toJson<String?>(betaVideoUrl),
+      'styleTagsJson': serializer.toJson<String?>(styleTagsJson),
+      'stars': serializer.toJson<int?>(stars),
     };
   }
 
@@ -3648,6 +3762,9 @@ class Route extends DataClass implements Insertable<Route> {
     String? symbolsJson,
     int? sortOrder,
     bool? visible,
+    Value<String?> betaVideoUrl = const Value.absent(),
+    Value<String?> styleTagsJson = const Value.absent(),
+    Value<int?> stars = const Value.absent(),
   }) => Route(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -3670,6 +3787,11 @@ class Route extends DataClass implements Insertable<Route> {
     symbolsJson: symbolsJson ?? this.symbolsJson,
     sortOrder: sortOrder ?? this.sortOrder,
     visible: visible ?? this.visible,
+    betaVideoUrl: betaVideoUrl.present ? betaVideoUrl.value : this.betaVideoUrl,
+    styleTagsJson: styleTagsJson.present
+        ? styleTagsJson.value
+        : this.styleTagsJson,
+    stars: stars.present ? stars.value : this.stars,
   );
   Route copyWithCompanion(RoutesCompanion data) {
     return Route(
@@ -3706,6 +3828,13 @@ class Route extends DataClass implements Insertable<Route> {
           : this.symbolsJson,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
       visible: data.visible.present ? data.visible.value : this.visible,
+      betaVideoUrl: data.betaVideoUrl.present
+          ? data.betaVideoUrl.value
+          : this.betaVideoUrl,
+      styleTagsJson: data.styleTagsJson.present
+          ? data.styleTagsJson.value
+          : this.styleTagsJson,
+      stars: data.stars.present ? data.stars.value : this.stars,
     );
   }
 
@@ -3732,7 +3861,10 @@ class Route extends DataClass implements Insertable<Route> {
           ..write('pointsJson: $pointsJson, ')
           ..write('symbolsJson: $symbolsJson, ')
           ..write('sortOrder: $sortOrder, ')
-          ..write('visible: $visible')
+          ..write('visible: $visible, ')
+          ..write('betaVideoUrl: $betaVideoUrl, ')
+          ..write('styleTagsJson: $styleTagsJson, ')
+          ..write('stars: $stars')
           ..write(')'))
         .toString();
   }
@@ -3760,6 +3892,9 @@ class Route extends DataClass implements Insertable<Route> {
     symbolsJson,
     sortOrder,
     visible,
+    betaVideoUrl,
+    styleTagsJson,
+    stars,
   ]);
   @override
   bool operator ==(Object other) =>
@@ -3785,7 +3920,10 @@ class Route extends DataClass implements Insertable<Route> {
           other.pointsJson == this.pointsJson &&
           other.symbolsJson == this.symbolsJson &&
           other.sortOrder == this.sortOrder &&
-          other.visible == this.visible);
+          other.visible == this.visible &&
+          other.betaVideoUrl == this.betaVideoUrl &&
+          other.styleTagsJson == this.styleTagsJson &&
+          other.stars == this.stars);
 }
 
 class RoutesCompanion extends UpdateCompanion<Route> {
@@ -3810,6 +3948,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
   final Value<String> symbolsJson;
   final Value<int> sortOrder;
   final Value<bool> visible;
+  final Value<String?> betaVideoUrl;
+  final Value<String?> styleTagsJson;
+  final Value<int?> stars;
   final Value<int> rowid;
   const RoutesCompanion({
     this.id = const Value.absent(),
@@ -3833,6 +3974,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     this.symbolsJson = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.visible = const Value.absent(),
+    this.betaVideoUrl = const Value.absent(),
+    this.styleTagsJson = const Value.absent(),
+    this.stars = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   RoutesCompanion.insert({
@@ -3857,6 +4001,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     required String symbolsJson,
     required int sortOrder,
     this.visible = const Value.absent(),
+    this.betaVideoUrl = const Value.absent(),
+    this.styleTagsJson = const Value.absent(),
+    this.stars = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -3890,6 +4037,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     Expression<String>? symbolsJson,
     Expression<int>? sortOrder,
     Expression<bool>? visible,
+    Expression<String>? betaVideoUrl,
+    Expression<String>? styleTagsJson,
+    Expression<int>? stars,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -3914,6 +4064,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
       if (symbolsJson != null) 'symbols_json': symbolsJson,
       if (sortOrder != null) 'sort_order': sortOrder,
       if (visible != null) 'visible': visible,
+      if (betaVideoUrl != null) 'beta_video_url': betaVideoUrl,
+      if (styleTagsJson != null) 'style_tags_json': styleTagsJson,
+      if (stars != null) 'stars': stars,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -3940,6 +4093,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     Value<String>? symbolsJson,
     Value<int>? sortOrder,
     Value<bool>? visible,
+    Value<String?>? betaVideoUrl,
+    Value<String?>? styleTagsJson,
+    Value<int?>? stars,
     Value<int>? rowid,
   }) {
     return RoutesCompanion(
@@ -3964,6 +4120,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
       symbolsJson: symbolsJson ?? this.symbolsJson,
       sortOrder: sortOrder ?? this.sortOrder,
       visible: visible ?? this.visible,
+      betaVideoUrl: betaVideoUrl ?? this.betaVideoUrl,
+      styleTagsJson: styleTagsJson ?? this.styleTagsJson,
+      stars: stars ?? this.stars,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -4034,6 +4193,15 @@ class RoutesCompanion extends UpdateCompanion<Route> {
     if (visible.present) {
       map['visible'] = Variable<bool>(visible.value);
     }
+    if (betaVideoUrl.present) {
+      map['beta_video_url'] = Variable<String>(betaVideoUrl.value);
+    }
+    if (styleTagsJson.present) {
+      map['style_tags_json'] = Variable<String>(styleTagsJson.value);
+    }
+    if (stars.present) {
+      map['stars'] = Variable<int>(stars.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -4064,6 +4232,9 @@ class RoutesCompanion extends UpdateCompanion<Route> {
           ..write('symbolsJson: $symbolsJson, ')
           ..write('sortOrder: $sortOrder, ')
           ..write('visible: $visible, ')
+          ..write('betaVideoUrl: $betaVideoUrl, ')
+          ..write('styleTagsJson: $styleTagsJson, ')
+          ..write('stars: $stars, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -8504,6 +8675,9 @@ typedef $$RoutesTableCreateCompanionBuilder =
       required String symbolsJson,
       required int sortOrder,
       Value<bool> visible,
+      Value<String?> betaVideoUrl,
+      Value<String?> styleTagsJson,
+      Value<int?> stars,
       Value<int> rowid,
     });
 typedef $$RoutesTableUpdateCompanionBuilder =
@@ -8529,6 +8703,9 @@ typedef $$RoutesTableUpdateCompanionBuilder =
       Value<String> symbolsJson,
       Value<int> sortOrder,
       Value<bool> visible,
+      Value<String?> betaVideoUrl,
+      Value<String?> styleTagsJson,
+      Value<int?> stars,
       Value<int> rowid,
     });
 
@@ -8691,6 +8868,21 @@ class $$RoutesTableFilterComposer
 
   ColumnFilters<bool> get visible => $composableBuilder(
     column: $table.visible,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get betaVideoUrl => $composableBuilder(
+    column: $table.betaVideoUrl,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get styleTagsJson => $composableBuilder(
+    column: $table.styleTagsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get stars => $composableBuilder(
+    column: $table.stars,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -8870,6 +9062,21 @@ class $$RoutesTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get betaVideoUrl => $composableBuilder(
+    column: $table.betaVideoUrl,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get styleTagsJson => $composableBuilder(
+    column: $table.styleTagsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get stars => $composableBuilder(
+    column: $table.stars,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$WallsTableOrderingComposer get wallId {
     final $$WallsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -8995,6 +9202,19 @@ class $$RoutesTableAnnotationComposer
   GeneratedColumn<bool> get visible =>
       $composableBuilder(column: $table.visible, builder: (column) => column);
 
+  GeneratedColumn<String> get betaVideoUrl => $composableBuilder(
+    column: $table.betaVideoUrl,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get styleTagsJson => $composableBuilder(
+    column: $table.styleTagsJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get stars =>
+      $composableBuilder(column: $table.stars, builder: (column) => column);
+
   $$WallsTableAnnotationComposer get wallId {
     final $$WallsTableAnnotationComposer composer = $composerBuilder(
       composer: this,
@@ -9116,6 +9336,9 @@ class $$RoutesTableTableManager
                 Value<String> symbolsJson = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> visible = const Value.absent(),
+                Value<String?> betaVideoUrl = const Value.absent(),
+                Value<String?> styleTagsJson = const Value.absent(),
+                Value<int?> stars = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => RoutesCompanion(
                 id: id,
@@ -9139,6 +9362,9 @@ class $$RoutesTableTableManager
                 symbolsJson: symbolsJson,
                 sortOrder: sortOrder,
                 visible: visible,
+                betaVideoUrl: betaVideoUrl,
+                styleTagsJson: styleTagsJson,
+                stars: stars,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -9164,6 +9390,9 @@ class $$RoutesTableTableManager
                 required String symbolsJson,
                 required int sortOrder,
                 Value<bool> visible = const Value.absent(),
+                Value<String?> betaVideoUrl = const Value.absent(),
+                Value<String?> styleTagsJson = const Value.absent(),
+                Value<int?> stars = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => RoutesCompanion.insert(
                 id: id,
@@ -9187,6 +9416,9 @@ class $$RoutesTableTableManager
                 symbolsJson: symbolsJson,
                 sortOrder: sortOrder,
                 visible: visible,
+                betaVideoUrl: betaVideoUrl,
+                styleTagsJson: styleTagsJson,
+                stars: stars,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

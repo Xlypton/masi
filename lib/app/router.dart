@@ -1,5 +1,6 @@
 import 'package:go_router/go_router.dart';
 
+import 'nav_shell.dart';
 import '../features/account/presentation/account_screen.dart';
 import '../features/ar/presentation/ar_screen.dart';
 import '../features/community/presentation/community_screen.dart';
@@ -11,46 +12,84 @@ import '../features/library/presentation/walls_screen.dart';
 import '../features/logbook/presentation/logbook_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
 
-/// Parses `/community`'s optional `?tab=`/`?focus=` query params (see
-/// [CommunityScreen.initialTab]/[CommunityScreen.focusWallId]) into typed
-/// values. Kept as a standalone pure function (rather than inlined in the
-/// `GoRoute.builder` below) so the parsing itself is unit-testable against a
-/// plain query-parameter map, without needing a real [GoRouterState] or
-/// widget tree.
+/// Where the legacy `/community` deep link (`?tab=`/`?focus=` query params —
+/// see `CommunityScreen`'s old `initialTab`/`focusWallId`, since replaced by
+/// the persistent bottom-nav's separate Map (`/map`) and Feed (`/feed`)
+/// branches — this app's real `home-community-button`/"Show on map" actions
+/// still build this exact path) should redirect to.
 ///
-/// `tab=map` selects the Map tab; any other value (including absent) leaves
-/// `tab` `null`, which [CommunityScreen] itself now defaults to the Map tab
-/// for — so an absent `tab` query param and an explicit `tab=map` currently
-/// behave identically. Kept `null` (rather than folded into an explicit
-/// `CommunityTab.map` here) so [CommunityScreen]'s own default stays the
-/// single source of truth for what "no `tab` param" means.
-({CommunityTab? tab, String? focusWallId}) parseCommunityRouteParams(
-  Map<String, String> queryParameters,
-) {
-  final tab = queryParameters['tab'] == 'map' ? CommunityTab.map : null;
-  return (tab: tab, focusWallId: queryParameters['focus']);
+/// Factored out as a pure function (rather than inlined in the `GoRoute`'s
+/// `redirect` below) so the target-path logic is unit-testable directly
+/// against a plain query-parameter map, without a real [GoRouterState].
+///
+/// `tab=feed` sends the legacy link to the Feed branch (`/feed`); anything
+/// else (including no `tab` at all — `CommunityScreen` used to default to
+/// Map) sends it to the Map branch (`/map`), carrying an optional
+/// `focus=<wallId>` along as `/map`'s own `focus` query param, exactly as
+/// `CommunityScreen.focusWallId` used to.
+String communityRedirectTarget(Map<String, String> queryParameters) {
+  if (queryParameters['tab'] == 'feed') return '/feed';
+  final focus = queryParameters['focus'];
+  return focus != null ? '/map?focus=$focus' : '/map';
 }
 
 final appRouter = GoRouter(
   routes: [
-    GoRoute(path: '/', builder: (context, state) => const ToposScreen()),
+    // The persistent bottom-nav shell (see `nav_shell.dart`'s `NavShell`):
+    // three `IndexedStack` branches — Topos (home, index 0) / Map (index 1)
+    // / Feed (index 2) — each preserving its own navigator/scroll state
+    // across tab switches. Every route BELOW this one is a top-level
+    // sibling instead, so it builds on the ROOT navigator and appears
+    // full-screen, above the bottom bar (see `NavShell`'s doc).
+    StatefulShellRoute.indexedStack(
+      builder: (context, state, navigationShell) =>
+          NavShell(navigationShell: navigationShell),
+      branches: [
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/',
+              builder: (context, state) => const ToposScreen(),
+            ),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/map',
+              builder: (context, state) => CommunityMapScreen(
+                focusWallId: state.uri.queryParameters['focus'],
+              ),
+            ),
+          ],
+        ),
+        StatefulShellBranch(
+          routes: [
+            GoRoute(
+              path: '/feed',
+              builder: (context, state) => const CommunityFeedScreen(),
+            ),
+          ],
+        ),
+      ],
+    ),
+    // The legacy Community discovery path — see [communityRedirectTarget]'s
+    // doc. Kept alive (rather than removed) since it's still built by
+    // `topos_screen.dart`'s "Show on map" action and any old bookmark/deep
+    // link.
+    GoRoute(
+      path: '/community',
+      redirect: (context, state) =>
+          communityRedirectTarget(state.uri.queryParameters),
+    ),
     GoRoute(
       path: '/account',
       builder: (context, state) => const AccountScreen(),
     ),
-    // The Community discovery feed/map (see CommunityScreen's class doc)
-    // and its per-topo read-only detail, reached by `context.push`ing this
-    // exact path from CommunityScreen's feed rows and map markers.
-    GoRoute(
-      path: '/community',
-      builder: (context, state) {
-        final params = parseCommunityRouteParams(state.uri.queryParameters);
-        return CommunityScreen(
-          initialTab: params.tab,
-          focusWallId: params.focusWallId,
-        );
-      },
-    ),
+    // A shared topo's read-only detail — reached by `context.push`ing this
+    // exact path from the Feed/Map screens' rows/markers. Full-screen, above
+    // the bottom nav (see `NavShell`'s doc) — a focused, single-topo view is
+    // not one of the three persistent tabs.
     GoRoute(
       path: '/community/topo/:wallId',
       builder: (context, state) =>

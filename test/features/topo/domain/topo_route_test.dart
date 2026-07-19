@@ -380,6 +380,191 @@ void main() {
     );
   });
 
+  group('TopoRoute per-route metadata (#41/#42/#44) defaults', () {
+    test('betaVideoUrl/stars default to null and styleTags to empty', () {
+      const route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1)],
+      );
+
+      expect(route.betaVideoUrl, isNull);
+      expect(route.styleTags, isEmpty);
+      expect(route.stars, isNull);
+    });
+  });
+
+  group(
+    'TopoRoute betaVideoUrl/styleTags/stars copyWith set-sentinels '
+    '(#41/#42/#44)',
+    () {
+      const base = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1)],
+        betaVideoUrl: 'https://example.com/beta',
+        styleTags: ['dyno', 'custom-tag'],
+        stars: 2,
+      );
+
+      test('no-arg copyWith preserves all three fields', () {
+        final updated = base.copyWith();
+        expect(updated.betaVideoUrl, base.betaVideoUrl);
+        expect(updated.styleTags, base.styleTags);
+        expect(updated.stars, base.stars);
+      });
+
+      test('changing only betaVideoUrl preserves the rest', () {
+        final updated = base.copyWith(
+          betaVideoUrl: 'https://example.com/other',
+        );
+        expect(updated.betaVideoUrl, 'https://example.com/other');
+        expect(updated.styleTags, base.styleTags);
+        expect(updated.stars, base.stars);
+      });
+
+      test(
+        'copyWith(betaVideoUrl: null) without betaVideoUrlSet preserves '
+        'the existing value',
+        () {
+          final updated = base.copyWith(betaVideoUrl: null);
+          expect(updated.betaVideoUrl, base.betaVideoUrl);
+        },
+      );
+
+      test(
+        'copyWith(betaVideoUrl: null, betaVideoUrlSet: true) explicitly '
+        'clears it',
+        () {
+          final updated = base.copyWith(
+            betaVideoUrl: null,
+            betaVideoUrlSet: true,
+          );
+          expect(updated.betaVideoUrl, isNull);
+          expect(updated.styleTags, base.styleTags);
+          expect(updated.stars, base.stars);
+        },
+      );
+
+      test('changing only styleTags preserves the rest', () {
+        final updated = base.copyWith(styleTags: ['juggy']);
+        expect(updated.styleTags, ['juggy']);
+        expect(updated.betaVideoUrl, base.betaVideoUrl);
+        expect(updated.stars, base.stars);
+      });
+
+      test(
+        'copyWith(styleTags: null) without styleTagsSet preserves the '
+        'existing tags',
+        () {
+          final updated = base.copyWith(styleTags: null);
+          expect(updated.styleTags, base.styleTags);
+        },
+      );
+
+      test(
+        'copyWith(styleTags: null, styleTagsSet: true) explicitly clears '
+        'to an empty list (there is no "unset" list state, unlike the '
+        'nullable scalar fields)',
+        () {
+          final updated = base.copyWith(styleTags: null, styleTagsSet: true);
+          expect(updated.styleTags, isEmpty);
+          expect(updated.betaVideoUrl, base.betaVideoUrl);
+          expect(updated.stars, base.stars);
+        },
+      );
+
+      test('changing only stars preserves the rest', () {
+        final updated = base.copyWith(stars: 3);
+        expect(updated.stars, 3);
+        expect(updated.betaVideoUrl, base.betaVideoUrl);
+        expect(updated.styleTags, base.styleTags);
+      });
+
+      test(
+        'copyWith(stars: null) without starsSet preserves the existing '
+        'stars',
+        () {
+          final updated = base.copyWith(stars: null);
+          expect(updated.stars, base.stars);
+        },
+      );
+
+      test(
+        'copyWith(stars: null, starsSet: true) explicitly clears the '
+        'rating back to unrated',
+        () {
+          final updated = base.copyWith(stars: null, starsSet: true);
+          expect(updated.stars, isNull);
+          expect(updated.betaVideoUrl, base.betaVideoUrl);
+          expect(updated.styleTags, base.styleTags);
+        },
+      );
+    },
+  );
+
+  group('TopoRoute value equality (#41/#42/#44)', () {
+    test('equal betaVideoUrl/styleTags/stars produce equal instances', () {
+      const a = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1)],
+        betaVideoUrl: 'https://example.com',
+        styleTags: ['dyno'],
+        stars: 1,
+      );
+      const b = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1)],
+        betaVideoUrl: 'https://example.com',
+        styleTags: ['dyno'],
+        stars: 1,
+      );
+
+      expect(a, b);
+      expect(a.hashCode, b.hashCode);
+    });
+
+    test('different betaVideoUrl makes routes unequal', () {
+      const a = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1)],
+        betaVideoUrl: 'https://example.com/a',
+      );
+      const b = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1)],
+        betaVideoUrl: 'https://example.com/b',
+      );
+      expect(a, isNot(b));
+    });
+
+    test('different styleTags makes routes unequal', () {
+      const a = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1)],
+        styleTags: ['dyno'],
+      );
+      const b = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.1)],
+        styleTags: ['crimpy'],
+      );
+      expect(a, isNot(b));
+    });
+
+    test('different stars makes routes unequal', () {
+      const a = TopoRoute(id: 1, number: 1, points: [Offset(0.1, 0.1)], stars: 1);
+      const b = TopoRoute(id: 1, number: 1, points: [Offset(0.1, 0.1)], stars: 2);
+      expect(a, isNot(b));
+    });
+  });
+
   group('TopoSymbol.copyWith (A2)', () {
     const base = TopoSymbol(type: SymbolType.bolt, position: Offset(0.1, 0.2));
 

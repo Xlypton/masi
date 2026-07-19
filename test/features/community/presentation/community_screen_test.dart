@@ -555,10 +555,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
           ),
         );
         await _drain(tester);
@@ -634,7 +631,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
             ),
           );
           await _drain(tester);
@@ -668,10 +665,13 @@ void main() {
             isFalse,
           );
 
-          // Switch to Feed -- wall-shared-1's row shows the comment glyph
+          // Feed is now a fully separate screen (no in-place toggle) --
+          // pump it fresh. wall-shared-1's row shows the comment glyph
           // (MasiIcon) + bare count, replacing the old
           // `'\u{1F4AC} $count'` emoji text.
-          await tester.tap(find.byKey(const Key('community-feed-toggle')));
+          await tester.pumpWidget(
+            _wrap(container, const CommunityFeedScreen()),
+          );
           await _drain(tester);
 
           expect(
@@ -709,10 +709,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
           ),
         );
         await _drain(tester);
@@ -759,10 +756,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
           ),
         );
         await _drain(tester);
@@ -786,12 +780,11 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -866,12 +859,11 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
             ),
           );
           await _drain(tester);
 
-          await tester.tap(find.byKey(const Key('community-map-toggle')));
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
@@ -944,12 +936,11 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
             ),
           );
           await _drain(tester);
 
-          await tester.tap(find.byKey(const Key('community-map-toggle')));
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
@@ -993,12 +984,11 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
             ),
           );
           await _drain(tester);
 
-          await tester.tap(find.byKey(const Key('community-map-toggle')));
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
@@ -1029,12 +1019,11 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
             ),
           );
           await _drain(tester);
 
-          await tester.tap(find.byKey(const Key('community-map-toggle')));
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
@@ -1102,12 +1091,11 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(tileProvider: _NoopTileProvider()),
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
             ),
           );
           await _drain(tester);
 
-          await tester.tap(find.byKey(const Key('community-map-toggle')));
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
@@ -1150,12 +1138,11 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -1183,12 +1170,11 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -1217,10 +1203,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
           ),
         );
         await _drain(tester);
@@ -1261,10 +1244,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
           ),
         );
         await _drain(tester);
@@ -1304,10 +1284,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
           ),
         );
         await _drain(tester);
@@ -1343,10 +1320,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
           ),
         );
         await _drain(tester);
@@ -1384,10 +1358,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
           ),
         );
         await _drain(tester);
@@ -1463,10 +1434,7 @@ void main() {
         await tester.pumpWidget(
           wrapWithScale(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
             2.5,
           ),
         );
@@ -1491,10 +1459,7 @@ void main() {
         await tester.pumpWidget(
           wrapWithScale(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityFeedScreen(),
             3.0,
           ),
         );
@@ -1515,15 +1480,83 @@ void main() {
       (tester) async {
         final container = _makeContainer();
         final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedFilterScenario(db));
+        // NOT `_seedFilterScenario` (used by the feed-based filter tests
+        // above): that fixture's two walls are a full degree apart, which
+        // is irrelevant to feed-row assertions but -- per M2's fixture doc
+        // above ("flutter_test's tiny default surface only ever shows a
+        // small fraction of a degree at zoom 11") -- would put BOTH
+        // markers outside flutter_map's on-screen culling bounds at the
+        // auto-computed averaged center/zoom, so neither marker (let alone
+        // just the trad one) would ever be found here regardless of
+        // filtering. Seeded inline instead, a hair apart, so this test
+        // actually exercises the filter rather than tripping over culling.
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-filter-map', name: 'Filter Map Area');
+          await _seedSector(
+            db,
+            id: 'sector-filter-map',
+            areaId: 'area-filter-map',
+            name: 'S',
+          );
+          await _seedWall(
+            db,
+            id: 'wall-sport',
+            sectorId: 'sector-filter-map',
+            name: 'Sport Wall',
+            visibility: 'shared',
+            createdAt: 2000,
+            latitude: 45.0,
+            longitude: 7.0,
+            ownerId: _otherOwnerId,
+          );
+          final sportPhoto = await _seedPhoto(
+            db,
+            id: 'photo-sport-map',
+            wallId: 'wall-sport',
+          );
+          await _seedRoute(
+            db,
+            id: 'route-sport-map',
+            wallId: 'wall-sport',
+            photoId: sportPhoto,
+            number: 1,
+            gradeRaw: '6a',
+            gradeSortKey: 7.0,
+            style: 'sport',
+          );
+
+          await _seedWall(
+            db,
+            id: 'wall-trad',
+            sectorId: 'sector-filter-map',
+            name: 'Trad Wall',
+            visibility: 'shared',
+            createdAt: 1000,
+            latitude: 45.001,
+            longitude: 7.001,
+            ownerId: _otherOwnerId,
+          );
+          final tradPhoto = await _seedPhoto(
+            db,
+            id: 'photo-trad-map',
+            wallId: 'wall-trad',
+          );
+          await _seedRoute(
+            db,
+            id: 'route-trad-map',
+            wallId: 'wall-trad',
+            photoId: tradPhoto,
+            number: 1,
+            gradeRaw: '9a',
+            gradeSortKey: 25.0,
+            style: 'trad',
+          );
+        });
 
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
-              tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.feed,
-            ),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
@@ -1531,7 +1564,6 @@ void main() {
         container.read(communityFilterProvider.notifier).setStyles({'trad'});
         await tester.pump();
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -1570,12 +1602,11 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -1635,12 +1666,11 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -1663,12 +1693,11 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -1753,12 +1782,11 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -1838,12 +1866,11 @@ void main() {
         await tester.pumpWidget(
           _wrapWithDetailRoute(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         await tester.tap(
@@ -1879,12 +1906,11 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(tileProvider: _NoopTileProvider()),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-toggle')));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -1975,7 +2001,7 @@ void main() {
           await tester.pumpWidget(
             wrapWithScale(
               container,
-              CommunityScreen(tileProvider: _NoopTileProvider()),
+              CommunityFeedScreen(),
               3.0,
             ),
           );
@@ -2071,10 +2097,7 @@ void main() {
           await tester.pumpWidget(
             wrapWithScale(
               container,
-              CommunityScreen(
-                tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.feed,
-              ),
+              CommunityFeedScreen(),
               1.0,
             ),
           );
@@ -2136,7 +2159,7 @@ void main() {
           await tester.pumpWidget(
             wrapWithScale(
               container,
-              CommunityScreen(tileProvider: _NoopTileProvider()),
+              CommunityFeedScreen(),
               3.0,
             ),
           );
@@ -2210,10 +2233,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
-                tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.feed,
-              ),
+              CommunityFeedScreen(),
             ),
           );
           await _drain(tester);
@@ -2238,8 +2258,8 @@ void main() {
 
   group('Q2/Q3: initialTab + focusWallId deep link', () {
     testWidgets(
-      'CommunityScreen(initialTab: CommunityTab.map, focusWallId: X) opens '
-      'on the Map tab, centered/zoomed on X\'s coordinates (not the '
+      'CommunityMapScreen(focusWallId: X) opens '
+      'centered/zoomed on X\'s coordinates (not the '
       'combined-set center)',
       (tester) async {
         final container = _makeContainer();
@@ -2275,9 +2295,8 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
+            CommunityMapScreen(
               tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
               focusWallId: 'wall-focus',
             ),
           ),
@@ -2285,9 +2304,8 @@ void main() {
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
-        // Opened straight on the Map tab: the Feed's search field is never
-        // shown, and exactly one FlutterMap is built without needing to tap
-        // `community-map-toggle` first.
+        // CommunityMapScreen renders straight into the map: the Feed's
+        // search field is never shown, and exactly one FlutterMap is built.
         expect(find.byKey(const Key('community-search-field')), findsNothing);
         expect(find.byType(FlutterMap), findsOneWidget);
 
@@ -2324,9 +2342,8 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
+            CommunityMapScreen(
               tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
               focusWallId: 'does-not-exist',
             ),
           ),
@@ -2341,13 +2358,14 @@ void main() {
     );
 
     testWidgets(
-      'plain CommunityScreen() (no initialTab/focusWallId) now opens on '
-      'the Map tab by default -- Feed remains reachable via the toggle',
+      'plain CommunityMapScreen() (no focusWallId) renders the map, no '
+      'feed search field -- Map and Feed are now fully independent '
+      'screens (one per bottom-nav branch), not a shared in-screen toggle',
       (tester) async {
         final container = _makeContainer();
 
         await tester.pumpWidget(
-          _wrap(container, CommunityScreen(tileProvider: _NoopTileProvider())),
+          _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
         );
         await _drain(tester);
 
@@ -2357,10 +2375,16 @@ void main() {
           find.byKey(const Key('community-search-field')),
           findsNothing,
         );
+      },
+    );
 
-        // Feed is still reachable by tapping its toggle -- the default
-        // changed, the toggle itself did not.
-        await tester.tap(find.byKey(const Key('community-feed-toggle')));
+    testWidgets(
+      'plain CommunityFeedScreen() renders the feed search field, no map '
+      '-- the Feed bottom-nav branch\'s screen',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -2402,9 +2426,8 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
+            CommunityMapScreen(
               tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
               mapController: controller,
             ),
           ),
@@ -2434,9 +2457,8 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
+            CommunityMapScreen(
               tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
             ),
           ),
         );
@@ -2474,9 +2496,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
                 mapController: controller,
               ),
             ),
@@ -2525,9 +2546,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
                 mapController: controller,
               ),
             ),
@@ -2584,9 +2604,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
                 mapController: controller,
               ),
             ),
@@ -2658,8 +2677,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
-                initialTab: CommunityTab.map,
+              CommunityMapScreen(
                 mapController: controller,
                 tileHttpClientFactory: () => spyClient,
               ),
@@ -2729,9 +2747,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
               ),
             ),
           );
@@ -2769,9 +2786,8 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
+            CommunityMapScreen(
               tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
               mapController: controller,
             ),
           ),
@@ -2818,9 +2834,8 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
+            CommunityMapScreen(
               tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
               mapController: controller,
             ),
           ),
@@ -2851,9 +2866,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
               ),
             ),
           );
@@ -2884,9 +2898,8 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityScreen(
+              CommunityMapScreen(
                 tileProvider: _NoopTileProvider(),
-                initialTab: CommunityTab.map,
               ),
             ),
           );
@@ -2924,9 +2937,8 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityScreen(
+            CommunityMapScreen(
               tileProvider: _NoopTileProvider(),
-              initialTab: CommunityTab.map,
             ),
           ),
         );

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
+import 'package:climbtopo/core/routes/route_styles.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
@@ -86,9 +87,13 @@ class RouteMetadataSheet extends ConsumerStatefulWidget {
 class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
   late final TextEditingController _nameController;
   late final TextEditingController _descriptionController;
+  late final TextEditingController _betaUrlController;
+  late final TextEditingController _customTagController;
   late GradeSystem _gradeSystem;
   String? _grade;
   String? _style;
+  late Set<String> _styleTags;
+  int? _stars;
 
   @override
   void initState() {
@@ -98,16 +103,59 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
     _descriptionController = TextEditingController(
       text: initial?.description ?? '',
     );
+    _betaUrlController = TextEditingController(
+      text: initial?.betaVideoUrl ?? '',
+    );
+    _customTagController = TextEditingController();
     _gradeSystem = initial?.gradeSystem ?? GradeSystem.french;
     _grade = initial?.gradeRaw;
     _style = initial?.style;
+    _styleTags = {...?initial?.styleTags};
+    _stars = initial?.stars;
   }
 
   @override
   void dispose() {
     _nameController.dispose();
     _descriptionController.dispose();
+    _betaUrlController.dispose();
+    _customTagController.dispose();
     super.dispose();
+  }
+
+  /// #41 validation: an empty (after trim) URL clears the field (`null`);
+  /// a non-empty one must be a valid `http`/`https` URL, otherwise it's
+  /// dropped (treated as unset) rather than persisting garbage. Trims
+  /// surrounding whitespace either way.
+  String? _validatedBetaUrl() {
+    final raw = _betaUrlController.text.trim();
+    if (raw.isEmpty) return null;
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !uri.isAbsolute || !(uri.isScheme('http') || uri.isScheme('https'))) {
+      return null;
+    }
+    return raw;
+  }
+
+  void _toggleStyleTag(String key) {
+    setState(() {
+      if (!_styleTags.remove(key)) _styleTags.add(key);
+    });
+  }
+
+  void _addCustomTag() {
+    final raw = _customTagController.text.trim();
+    if (raw.isEmpty) return;
+    setState(() {
+      _styleTags.add(raw.toLowerCase());
+      _customTagController.clear();
+    });
+  }
+
+  /// Tapping the currently-set star clears the rating back to unrated
+  /// (`null`); tapping any other star sets it to that value.
+  void _onStarTapped(int value) {
+    setState(() => _stars = _stars == value ? null : value);
   }
 
   /// Switches the active grading ladder. If the previously-selected grade
@@ -138,6 +186,9 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
           description: _descriptionController.text.trim().isEmpty
               ? null
               : _descriptionController.text.trim(),
+          betaVideoUrl: _validatedBetaUrl(),
+          styleTags: _styleTags.toList(),
+          stars: _stars,
         );
     _pop();
   }
@@ -289,6 +340,92 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
                 colors: colors,
                 minLines: 2,
                 maxLines: 4,
+              ),
+              const SizedBox(height: MasiSpacing.lg),
+              _FieldLabel('Beta video URL', colors),
+              const SizedBox(height: MasiSpacing.xs),
+              _MasiTextField(
+                fieldKey: const Key('topo-meta-beta-url'),
+                controller: _betaUrlController,
+                hintText: 'https://…',
+                colors: colors,
+              ),
+              const SizedBox(height: MasiSpacing.lg),
+              _FieldLabel('Style tags', colors),
+              const SizedBox(height: MasiSpacing.sm),
+              Wrap(
+                spacing: MasiSpacing.sm,
+                runSpacing: MasiSpacing.sm,
+                children: [
+                  for (final routeStyle in kCuratedRouteStyles)
+                    _StyleChip(
+                      key: Key('topo-meta-styletag-${routeStyle.key}'),
+                      label: routeStyle.label,
+                      selected: _styleTags.contains(routeStyle.key),
+                      onPressed: () => _toggleStyleTag(routeStyle.key),
+                    ),
+                  for (final custom
+                      in _styleTags.where(
+                        (t) => curatedStyleForKey(t) == null,
+                      ))
+                    _StyleChip(
+                      key: Key('topo-meta-styletag-$custom'),
+                      label: custom,
+                      selected: true,
+                      onPressed: () => _toggleStyleTag(custom),
+                    ),
+                ],
+              ),
+              const SizedBox(height: MasiSpacing.sm),
+              Row(
+                children: [
+                  Expanded(
+                    child: _MasiTextField(
+                      fieldKey: const Key('topo-meta-styletag-add-field'),
+                      controller: _customTagController,
+                      hintText: 'Add a custom tag',
+                      colors: colors,
+                    ),
+                  ),
+                  const SizedBox(width: MasiSpacing.sm),
+                  SizedBox(
+                    height: 44,
+                    child: ElevatedButton(
+                      key: const Key('topo-meta-styletag-add-button'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: colors.surface2,
+                        foregroundColor: colors.accent,
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(MasiRadii.control),
+                        ),
+                      ),
+                      onPressed: _addCustomTag,
+                      child: MasiIcon('add', size: 18, color: colors.accent),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: MasiSpacing.lg),
+              _FieldLabel('Rating', colors),
+              const SizedBox(height: MasiSpacing.sm),
+              Row(
+                children: [
+                  for (var value = 1; value <= 3; value++) ...[
+                    GestureDetector(
+                      key: Key('topo-meta-stars-$value'),
+                      onTap: () => _onStarTapped(value),
+                      child: MasiIcon(
+                        _stars != null && value <= _stars!
+                            ? 'star_fill'
+                            : 'star',
+                        size: 28,
+                        color: colors.accent,
+                      ),
+                    ),
+                    if (value != 3) const SizedBox(width: MasiSpacing.sm),
+                  ],
+                ],
               ),
               const SizedBox(height: MasiSpacing.xl),
               Row(

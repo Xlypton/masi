@@ -9,6 +9,8 @@ import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/core/location/location_service.dart';
 import 'package:climbtopo/features/account/application/auth_providers.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
+import 'package:climbtopo/features/community/application/community_providers.dart';
+import 'package:climbtopo/features/community/data/community_repository.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/library/presentation/set_location_picker.dart';
@@ -3772,4 +3774,225 @@ void main() {
       },
     );
   });
+
+  group(
+    'N3: proximity-sorted Topos-home list (own + nearby community, '
+    'nearest-first)',
+    () {
+      testWidgets(
+        'own topos with coordinates sort nearest-first ahead of a farther '
+        'one, and an unlocated own topo sorts last',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              locationServiceProvider.overrideWithValue(
+                const _FakeLocationService((latitude: 0.0, longitude: 0.0)),
+              ),
+              toposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  TopoRef(
+                    wallId: 'wall-far',
+                    name: 'Far Topo',
+                    thumbnailPath: null,
+                    routeCount: 0,
+                    createdAt: 1000,
+                    latitude: 10.0,
+                    longitude: 10.0,
+                  ),
+                  TopoRef(
+                    wallId: 'wall-near',
+                    name: 'Near Topo',
+                    thumbnailPath: null,
+                    routeCount: 0,
+                    createdAt: 900,
+                    latitude: 0.01,
+                    longitude: 0.01,
+                  ),
+                  TopoRef(
+                    wallId: 'wall-unlocated',
+                    name: 'Unlocated Topo',
+                    thumbnailPath: null,
+                    routeCount: 0,
+                    createdAt: 800,
+                  ),
+                ]),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(_wrap(container, const ToposScreen()));
+          await _drain(tester);
+
+          final nearTop = tester
+              .getTopLeft(find.byKey(const Key('topo-item-wall-near')))
+              .dy;
+          final farTop = tester
+              .getTopLeft(find.byKey(const Key('topo-item-wall-far')))
+              .dy;
+          final unlocatedTop = tester
+              .getTopLeft(find.byKey(const Key('topo-item-wall-unlocated')))
+              .dy;
+
+          expect(
+            nearTop,
+            lessThan(farTop),
+            reason: 'the nearer own topo must render above the farther one',
+          );
+          expect(
+            farTop,
+            lessThan(unlocatedTop),
+            reason: 'every located topo must render above the unlocated one',
+          );
+
+          // Own topos keep their `topo-item-<wallId>` key/full menu -- the
+          // proximity resort doesn't change what an own row IS, only its
+          // position.
+          expect(
+            find.byKey(const Key('topo-menu-wall-near')),
+            findsOneWidget,
+          );
+        },
+      );
+
+      testWidgets(
+        'a nearby community topo (not already one of this device\'s own) '
+        'appears in the merged list, is visually marked as shared, and '
+        'tapping it navigates to /community/topo/<wallId>',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              locationServiceProvider.overrideWithValue(
+                const _FakeLocationService((latitude: 0.0, longitude: 0.0)),
+              ),
+              toposProvider.overrideWith((ref) => Stream.value(const [])),
+              sharedToposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  SharedTopo(
+                    wallId: 'wall-community',
+                    name: 'Community Boulder',
+                    routeCount: 2,
+                    likeCount: 0,
+                    commentCount: 0,
+                    latitude: 0.02,
+                    longitude: 0.02,
+                  ),
+                ]),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          String? pushedPath;
+          final router = GoRouter(
+            initialLocation: '/',
+            routes: [
+              GoRoute(
+                path: '/',
+                builder: (context, state) => const ToposScreen(),
+              ),
+              GoRoute(
+                path: '/community/topo/:wallId',
+                builder: (context, state) {
+                  pushedPath =
+                      '/community/topo/${state.pathParameters['wallId']}';
+                  return const SizedBox();
+                },
+              ),
+            ],
+          );
+
+          await tester.pumpWidget(
+            UncontrolledProviderScope(
+              container: container,
+              child: MaterialApp.router(
+                theme: MasiTheme.light,
+                routerConfig: router,
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          const rowKey = Key('topo-item-community-wall-community');
+          expect(find.byKey(rowKey), findsOneWidget);
+          expect(
+            find.byKey(const Key('topo-shared-badge-wall-community')),
+            findsOneWidget,
+          );
+          expect(find.text('Community Boulder'), findsOneWidget);
+
+          await tester.tap(find.byKey(rowKey));
+          await _drain(tester);
+
+          expect(pushedPath, '/community/topo/wall-community');
+        },
+      );
+
+      testWidgets(
+        'a community topo whose wallId already matches one of this '
+        'device\'s own topos is never duplicated -- only the own row shows',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              locationServiceProvider.overrideWithValue(
+                const _FakeLocationService((latitude: 0.0, longitude: 0.0)),
+              ),
+              toposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  TopoRef(
+                    wallId: 'wall-published',
+                    name: 'My Published Topo',
+                    thumbnailPath: null,
+                    routeCount: 1,
+                    createdAt: 1000,
+                    latitude: 0.01,
+                    longitude: 0.01,
+                    visibility: 'shared',
+                  ),
+                ]),
+              ),
+              sharedToposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  SharedTopo(
+                    wallId: 'wall-published',
+                    name: 'My Published Topo',
+                    routeCount: 1,
+                    likeCount: 0,
+                    commentCount: 0,
+                    latitude: 0.01,
+                    longitude: 0.01,
+                  ),
+                ]),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(_wrap(container, const ToposScreen()));
+          await _drain(tester);
+
+          expect(
+            find.byKey(const Key('topo-item-wall-published')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('topo-item-community-wall-published')),
+            findsNothing,
+          );
+        },
+      );
+    },
+  );
 }

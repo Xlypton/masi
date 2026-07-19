@@ -16,10 +16,12 @@ import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/email_initials.dart';
+import '../../community/data/community_repository.dart' show SharedTopo;
 import '../../topo/presentation/photo_source_sheet.dart';
 import '../../topo/presentation/topo_canvas_screen.dart'
     show captureWallGpsFromPhoto, gpsCaptureResultSnackBar;
 import '../application/library_providers.dart';
+import '../application/proximity_topos_provider.dart';
 import '../data/library_crud_repository.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import 'move_target_picker.dart';
@@ -118,6 +120,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final asyncTopos = ref.watch(toposProvider);
+    final proximityEntries = ref.watch(sortedByProximityToposProvider);
     final filter = ref.watch(toposFilterProvider);
     // Only an *actually loaded* topo list (AsyncData) is a safe source for
     // the "New topo" count; while still loading or errored there is no
@@ -201,7 +204,15 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
             Expanded(
               child: asyncTopos.when(
                 data: (topos) {
-                  if (topos.isEmpty) {
+                  // The proximity-sorted list (own + nearby community,
+                  // nearest-first — see `sortedByProximityToposProvider`'s
+                  // doc) is what actually renders; `topos` itself is only
+                  // still needed here to gate the loading/error/empty
+                  // states below on the OWN list specifically (community
+                  // entries can never appear without a location fix, so
+                  // `proximityEntries` degrades to exactly `topos` whenever
+                  // no fix is available — see that provider's doc).
+                  if (proximityEntries.isEmpty) {
                     return const _EmptyState();
                   }
                   // Search narrows first, then the filter facets (mirrors
@@ -211,17 +222,30 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   // active filter would otherwise also exclude everything.
                   final query = _query;
                   final searchFiltered = query.isEmpty
-                      ? topos
-                      : topos.where((t) => _matchesQuery(t, query)).toList();
+                      ? proximityEntries
+                      : proximityEntries
+                            .where((e) => _matchesProximityQuery(e, query))
+                            .toList();
                   if (searchFiltered.isEmpty) {
                     return const _SearchEmptyState();
                   }
-                  final filtered = applyToposFilter(searchFiltered, filter);
+                  // The grade/visibility/area facet filter only ever applied
+                  // to the device's OWN topos (it reasons about
+                  // `TopoRef.areaId`/`visibility`, neither of which a
+                  // community-shared entry carries in the same shape) — a
+                  // nearby community entry always passes it unfiltered.
+                  final filtered = searchFiltered
+                      .where(
+                        (e) =>
+                            e.source == ProximityTopoSource.community ||
+                            filter.matches(e.ownTopo!),
+                      )
+                      .toList();
                   if (filtered.isEmpty) {
                     return const _FilteredEmptyState();
                   }
                   return _ToposList(
-                    topos: filtered,
+                    entries: filtered,
                     setLocationTileProvider: widget.setLocationTileProvider,
                     setLocationMapController: widget.setLocationMapController,
                     setLocationLocationService:
@@ -417,6 +441,20 @@ bool _matchesQuery(TopoRef topo, String query) {
   if (grade != null && grade.toLowerCase().contains(query)) return true;
   final area = topo.areaName;
   if (area != null && area.toLowerCase().contains(query)) return true;
+  return false;
+}
+
+/// Like [_matchesQuery], but over a [ProximityTopoEntry] — an own entry
+/// delegates straight to [_matchesQuery] against its [ProximityTopoEntry.
+/// ownTopo]; a community entry (no [TopoRef.areaId]/`topGradeLabel` in the
+/// same shape) matches on its name and, when present, its
+/// [SharedTopo.topGradeLabel].
+bool _matchesProximityQuery(ProximityTopoEntry entry, String query) {
+  final own = entry.ownTopo;
+  if (own != null) return _matchesQuery(own, query);
+  if (entry.name.toLowerCase().contains(query)) return true;
+  final grade = entry.communityTopo?.topGradeLabel;
+  if (grade != null && grade.toLowerCase().contains(query)) return true;
   return false;
 }
 
@@ -768,15 +806,20 @@ class _FilterSegmentLabel extends StatelessWidget {
   }
 }
 
+/// The proximity-sorted Topos-home list (see `sortedByProximityToposProvider`
+/// / [ToposScreen.build]): each [ProximityTopoEntry] renders as either an
+/// own [_TopoRow] ([ProximityTopoEntry.source] `own`) or a nearby
+/// [_CommunityProximityRow] (`community`), nearest-first — [entries] is
+/// already filtered/sorted by the caller.
 class _ToposList extends StatelessWidget {
   const _ToposList({
-    required this.topos,
+    required this.entries,
     this.setLocationTileProvider,
     this.setLocationMapController,
     this.setLocationLocationService,
   });
 
-  final List<TopoRef> topos;
+  final List<ProximityTopoEntry> entries;
   final TileProvider? setLocationTileProvider;
   final MapController? setLocationMapController;
   final LocationService? setLocationLocationService;
@@ -788,15 +831,22 @@ class _ToposList extends StatelessWidget {
         horizontal: MasiSpacing.lg,
         vertical: MasiSpacing.md,
       ),
-      itemCount: topos.length,
+      itemCount: entries.length,
       separatorBuilder: (context, index) =>
           const SizedBox(height: MasiSpacing.sm),
-      itemBuilder: (context, index) => _TopoRow(
-        topo: topos[index],
-        setLocationTileProvider: setLocationTileProvider,
-        setLocationMapController: setLocationMapController,
-        setLocationLocationService: setLocationLocationService,
-      ),
+      itemBuilder: (context, index) {
+        final entry = entries[index];
+        if (entry.source == ProximityTopoSource.own) {
+          return _TopoRow(
+            topo: entry.ownTopo!,
+            distanceKm: entry.distanceKm,
+            setLocationTileProvider: setLocationTileProvider,
+            setLocationMapController: setLocationMapController,
+            setLocationLocationService: setLocationLocationService,
+          );
+        }
+        return _CommunityProximityRow(entry: entry);
+      },
     );
   }
 }
@@ -804,12 +854,20 @@ class _ToposList extends StatelessWidget {
 class _TopoRow extends ConsumerWidget {
   const _TopoRow({
     required this.topo,
+    this.distanceKm,
     this.setLocationTileProvider,
     this.setLocationMapController,
     this.setLocationLocationService,
   });
 
   final TopoRef topo;
+
+  /// Great-circle distance (km) from the device's current position, when
+  /// available — see [ProximityTopoEntry.distanceKm]'s doc. `null` (no
+  /// location fix, or this topo has no coordinates) renders nothing extra;
+  /// existing callers that never pass this (every pre-proximity test) are
+  /// unaffected either way.
+  final double? distanceKm;
   final TileProvider? setLocationTileProvider;
   final MapController? setLocationMapController;
   final LocationService? setLocationLocationService;
@@ -868,6 +926,16 @@ class _TopoRow extends ConsumerWidget {
                           wallId: topo.wallId,
                           isShared: topo.visibility == 'shared',
                         ),
+                        if (distanceKm != null)
+                          Text(
+                            '${distanceKm!.toStringAsFixed(1)} km',
+                            key: Key('topo-distance-${topo.wallId}'),
+                            style: textTheme.titleSmall?.copyWith(
+                              color: colors.ink2,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                       ],
                     ),
                   ],
@@ -1165,6 +1233,132 @@ class _TopoRow extends ConsumerWidget {
     if (confirmed == true) {
       await ref.read(libraryCrudRepositoryProvider).softDeleteWall(topo.wallId);
     }
+  }
+}
+
+/// A nearby COMMUNITY topo's row in the proximity-sorted Topos-home list
+/// (see `_ToposList`/`sortedByProximityToposProvider`) -- visually mirrors
+/// [_TopoRow] (same 52x52 thumbnail) but marked with a `_CommunitySharedBadge`
+/// instead of [_VisibilityBadge] (a community entry is never "mine" to
+/// publish/unpublish/rename/delete -- there is no menu at all), and taps
+/// straight into the read-only `/community/topo/<wallId>` detail rather than
+/// this device's own topo canvas.
+class _CommunityProximityRow extends StatelessWidget {
+  const _CommunityProximityRow({required this.entry});
+
+  final ProximityTopoEntry entry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final SharedTopo topo = entry.communityTopo!;
+    final wallId = entry.wallId;
+
+    return Material(
+      key: Key('topo-item-community-$wallId'),
+      color: colors.surface,
+      borderRadius: BorderRadius.circular(MasiRadii.card),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        onTap: () => context.push('/community/topo/$wallId'),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MasiSpacing.md,
+            vertical: MasiSpacing.sm,
+          ),
+          child: Row(
+            children: [
+              _Thumbnail(path: topo.thumbnailPath),
+              const SizedBox(width: MasiSpacing.md),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      topo.name,
+                      style: textTheme.titleMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Wrap(
+                      spacing: MasiSpacing.xs,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        _CommunitySharedBadge(wallId: wallId),
+                        if (entry.distanceKm != null)
+                          Text(
+                            '${entry.distanceKm!.toStringAsFixed(1)} km',
+                            key: Key('topo-distance-$wallId'),
+                            style: textTheme.titleSmall?.copyWith(
+                              color: colors.ink2,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              MasiIcon('chevron_right', color: colors.ink3),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact badge marking a Topos-home row as a nearby COMMUNITY topo (not
+/// one of this device's own) -- the Topos-home-side counterpart of
+/// `community_screen.dart`'s `_OwnBadge` (which marks the reverse case, an
+/// own topo shown inside the Community feed).
+class _CommunitySharedBadge extends StatelessWidget {
+  const _CommunitySharedBadge({required this.wallId});
+
+  final String wallId;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+
+    return Semantics(
+      label: 'Shared by the community',
+      child: Container(
+        key: Key('topo-shared-badge-$wallId'),
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.xs,
+          vertical: 2,
+        ),
+        decoration: BoxDecoration(
+          color: colors.surface2,
+          borderRadius: BorderRadius.circular(MasiRadii.control),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MasiIcon('compass', size: 12, color: colors.ink3),
+            const SizedBox(width: 2),
+            Flexible(
+              child: Text(
+                'Shared',
+                style: textTheme.labelSmall?.copyWith(
+                  color: colors.ink3,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

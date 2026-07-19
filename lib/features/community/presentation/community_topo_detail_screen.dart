@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/routes/route_styles.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../topo/presentation/route_legend.dart';
@@ -80,6 +82,21 @@ class _CommunityTopoDetailScreenState
     if (!mounted) return;
     _commentController.clear();
     FocusManager.instance.primaryFocus?.unfocus();
+  }
+
+  /// #41: best-effort external launch of a route's beta-video URL. Never
+  /// throws — an unparseable URL or platform launch failure is swallowed,
+  /// mirroring `route_legend.dart`'s identical `launchBetaVideo` helper
+  /// (duplicated here rather than shared since this screen and
+  /// `RouteLegend` are otherwise independent presentation modules).
+  Future<void> _launchBetaVideo(String url) async {
+    final uri = Uri.tryParse(url);
+    if (uri == null) return;
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } catch (_) {
+      // No in-app surface to report this to from here; swallow.
+    }
   }
 
   Future<void> _openLogAscentSheet(String routeId) async {
@@ -343,13 +360,95 @@ class _CommunityTopoDetailScreenState
             ListTile(
               contentPadding: EdgeInsets.zero,
               title: Text(routeDisplayLabel(entry.route)),
-              trailing: OutlinedButton(
-                key: Key('community-log-ascent-${entry.dbId}'),
-                onPressed: () => _openLogAscentSheet(entry.dbId),
-                child: const Text('Log ascent'),
+              subtitle:
+                  (entry.route.styleTags.isEmpty &&
+                          (entry.route.stars ?? 0) <= 0)
+                      ? null
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            if (entry.route.styleTags.isNotEmpty)
+                              Wrap(
+                                spacing: 4,
+                                runSpacing: 4,
+                                children: [
+                                  for (final tag in entry.route.styleTags)
+                                    _RouteStyleTagChip(
+                                      routeId: entry.dbId,
+                                      tag: tag,
+                                    ),
+                                ],
+                              ),
+                            if ((entry.route.stars ?? 0) > 0)
+                              Row(
+                                key: Key('route-stars-${entry.dbId}'),
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  for (
+                                    var i = 0;
+                                    i < entry.route.stars!;
+                                    i++
+                                  )
+                                    const Padding(
+                                      padding: EdgeInsets.only(right: 1),
+                                      child: MasiIcon('star_fill', size: 12),
+                                    ),
+                                ],
+                              ),
+                          ],
+                        ),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (entry.route.betaVideoUrl != null)
+                    IconButton(
+                      key: Key('route-beta-${entry.dbId}'),
+                      tooltip: 'Watch beta video',
+                      icon: MasiIcon('globe'),
+                      onPressed: () =>
+                          _launchBetaVideo(entry.route.betaVideoUrl!),
+                    ),
+                  OutlinedButton(
+                    key: Key('community-log-ascent-${entry.dbId}'),
+                    onPressed: () => _openLogAscentSheet(entry.dbId),
+                    child: const Text('Log ascent'),
+                  ),
+                ],
               ),
             ),
       ],
+    );
+  }
+}
+
+/// A small, non-interactive display chip for one of a route's style tags
+/// (see `core/routes/route_styles.dart`): a curated tag shows its curated
+/// label; an arbitrary custom tag shows its raw stored string. Duplicated
+/// from `route_legend.dart`'s identical private `_RouteStyleTagChip` since
+/// this screen and `RouteLegend` are otherwise independent presentation
+/// modules.
+class _RouteStyleTagChip extends StatelessWidget {
+  const _RouteStyleTagChip({required this.routeId, required this.tag});
+
+  final String routeId;
+  final String tag;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final resolved = resolveStyleTag(tag);
+    return Container(
+      key: Key('route-styletag-$routeId-$tag'),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: colors.surface2,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        resolved.displayLabel,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: colors.ink2),
+      ),
     );
   }
 }

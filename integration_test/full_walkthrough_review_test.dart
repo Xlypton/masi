@@ -356,21 +356,25 @@ void main() {
     // 06/07. Community feed + map.
     // ------------------------------------------------------------------
     await step('06-community-feed + 07-community-map', () async {
+      // `home-community-button` now goes straight to the Map branch
+      // (`/community` redirects to `/map`) -- Feed is a separate, permanent
+      // bottom-nav tab (`nav-tab-feed`) rather than an in-screen toggle.
       final communityButton = find.byKey(const Key('home-community-button'));
       expect(tester.any(communityButton), isTrue, reason: 'home-community-button not found');
       await tester.tap(communityButton);
       await tester.pumpAndSettle(const Duration(seconds: 1));
-      await binding.takeScreenshot('06-community-feed');
+      // flutter_map's tile fade-in never settles -- pump fixed durations.
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      await tester.pump(const Duration(seconds: 1));
+      await binding.takeScreenshot('07-community-map');
 
-      final mapToggle = find.byKey(const Key('community-map-toggle'));
-      if (tester.any(mapToggle)) {
-        await tester.tap(mapToggle);
-        // flutter_map's tile fade-in never settles -- pump fixed durations.
-        await tester.pump(const Duration(milliseconds: 500));
-        await tester.pump(const Duration(seconds: 1));
-        await tester.pump(const Duration(seconds: 1));
-        await tester.pump(const Duration(seconds: 1));
-        await binding.takeScreenshot('07-community-map');
+      final feedTab = find.byKey(const Key('nav-tab-feed'));
+      if (tester.any(feedTab)) {
+        await tester.tap(feedTab);
+        await tester.pumpAndSettle(const Duration(seconds: 1));
+        await binding.takeScreenshot('06-community-feed');
       }
     });
 
@@ -378,11 +382,7 @@ void main() {
     // 08. Community topo detail (from the feed).
     // ------------------------------------------------------------------
     await step('08-community-topo-detail', () async {
-      final feedToggle = find.byKey(const Key('community-feed-toggle'));
-      if (tester.any(feedToggle)) {
-        await tester.tap(feedToggle);
-        await tester.pumpAndSettle(const Duration(seconds: 1));
-      }
+      // Already on the Feed tab from the previous step -- no toggle needed.
       final feedRow = find.byKey(Key('community-topo-row-${seed.sunnyFaceWallId}'));
       expect(tester.any(feedRow), isTrue, reason: 'seeded community feed row not found');
       await tester.tap(feedRow);
@@ -396,9 +396,19 @@ void main() {
       await _goBack(tester);
     });
 
-    // Return to Topos home explicitly (in case the previous step left us
-    // on /community rather than /).
+    // Return to Topos home explicitly (in case the previous step left us on
+    // the Feed/Map bottom-nav branch rather than Topos). The persistent
+    // bottom nav means switching "back" to Topos is a `nav-tab-topos` tap,
+    // not a back-navigation pop (an `IndexedStack` branch has nothing left
+    // to pop once its own pushed routes are gone) -- fall back to the old
+    // pop-based retry loop only if that tab key is ever missing.
     await step('back-to-home', () async {
+      final toposTab = find.byKey(const Key('nav-tab-topos'));
+      if (tester.any(toposTab)) {
+        await tester.tap(toposTab);
+        await tester.pumpAndSettle(const Duration(seconds: 1));
+        return;
+      }
       var attempts = 0;
       while (!tester.any(find.byKey(const Key('home-community-button'))) && attempts < 5) {
         final popped = await _goBack(tester);

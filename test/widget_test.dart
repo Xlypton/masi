@@ -205,6 +205,14 @@ void main() {
         // clear-button interaction below isn't swallowed by the sheet's
         // modal barrier.
         expect(find.byKey(const Key('topo-meta-save')), findsOneWidget);
+        // The sheet grew (beta-URL/style-tags/stars sections) and now
+        // overflows the default 800x600 test surface; its body is a real
+        // SingleChildScrollView (see RouteMetadataSheet.build), so Cancel
+        // must be scrolled into view before tapping it -- otherwise the
+        // tap misses, the modal bottom sheet never closes, and every
+        // subsequent tap in this test hits its (still-present) barrier
+        // instead of the intended widget.
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-cancel')));
         await tester.tap(find.byKey(const Key('topo-meta-cancel')));
         await tester.pumpAndSettle();
 
@@ -1946,6 +1954,11 @@ void main() {
         await tester.tap(find.byKey(const Key('topo-meta-style-sport')));
         await tester.pump();
 
+        // The sheet grew (beta-URL/style-tags/stars sections) and now
+        // overflows the default 800x600 test surface; its body is a real
+        // SingleChildScrollView (see RouteMetadataSheet.build), so Save
+        // must be scrolled into view before tapping it.
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-save')));
         await tester.tap(find.byKey(const Key('topo-meta-save')));
         await tester.pump();
 

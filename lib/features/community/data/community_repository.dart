@@ -1,5 +1,6 @@
 import '../../../core/db/app_database.dart' as db;
 import '../../../core/grades/grade_system.dart';
+import '../../../core/routes/route_styles.dart';
 import '../../topo/data/photo_files.dart';
 
 /// Immutable read model for a single shared topo: a Wall with
@@ -21,6 +22,7 @@ class SharedTopo {
     this.longitude,
     this.routeGradeKeys = const [],
     this.routeStyles = const {},
+    this.routeStyleTags = const {},
   });
 
   final String wallId;
@@ -66,6 +68,21 @@ class SharedTopo {
   /// active style selection iff ANY of its route styles is selected.
   final Set<String> routeStyles;
 
+  /// The distinct, decoded style-TAG keys (see `core/routes/route_styles.dart`
+  /// -- e.g. `'dyno'`, `'crimpy'`) across every live (non-deleted) route on
+  /// this wall, deduplicated -- parsed from the query's
+  /// `route_style_tags_json` `group_concat` column, which carries each
+  /// route's raw `styleTagsJson` (a JSON array) joined by a control-character
+  /// separator (see [_kStyleTagsGroupSeparator]) and is flattened/decoded
+  /// app-side via [decodeStyleTags] rather than unnested in SQL. Empty when
+  /// the wall has no routes with style tags. Distinct from [routeStyles]
+  /// (the older single-value sport/trad/boulder facet, stored in a separate
+  /// column): this is the newer multi-tag facet (see
+  /// `StyleTagFilterChips`/`CommunityFilter.styleTags`). Used to filter the
+  /// Community feed/map: a topo matches an active style-tag selection iff
+  /// ANY of its route style tags is selected.
+  final Set<String> routeStyleTags;
+
   /// Whether this topo has known coordinates and can be placed on the
   /// Community map. The map view must omit — not crash on — any topo where
   /// this is `false`.
@@ -86,7 +103,8 @@ class SharedTopo {
       other.latitude == latitude &&
       other.longitude == longitude &&
       _listEquals(other.routeGradeKeys, routeGradeKeys) &&
-      _setEquals(other.routeStyles, routeStyles);
+      _setEquals(other.routeStyles, routeStyles) &&
+      _setEquals(other.routeStyleTags, routeStyleTags);
 
   @override
   int get hashCode => Object.hash(
@@ -102,6 +120,7 @@ class SharedTopo {
     Object.hash(latitude, longitude),
     Object.hashAll(routeGradeKeys),
     Object.hashAllUnordered(routeStyles),
+    Object.hashAllUnordered(routeStyleTags),
   );
 
   @override
@@ -111,7 +130,7 @@ class SharedTopo {
       'routeCount: $routeCount, likeCount: $likeCount, '
       'commentCount: $commentCount, ownerId: $ownerId, latitude: $latitude, '
       'longitude: $longitude, routeGradeKeys: $routeGradeKeys, '
-      'routeStyles: $routeStyles)';
+      'routeStyles: $routeStyles, routeStyleTags: $routeStyleTags)';
 }
 
 /// Order-sensitive element-wise equality for [SharedTopo.routeGradeKeys]
@@ -164,6 +183,37 @@ Set<String> _parseStyles(String? raw) {
     if (trimmed.isNotEmpty) styles.add(trimmed);
   }
   return styles;
+}
+
+/// Separator used to join multiple routes' raw `styleTagsJson` values within
+/// a single `group_concat` aggregate column (see `watchSharedTopos`'s
+/// `route_style_tags_json` subquery). Deliberately an ASCII control
+/// character (Record Separator, U+001E) rather than a printable delimiter
+/// like `,` or `|`: `styleTagsJson` is itself a JSON array (which contains
+/// commas), and a custom user-typed tag could in principle contain any
+/// printable string, so a control character all but guarantees no collision
+/// with real tag content -- unlike SQLite's own `group_concat` default
+/// separator (`,`), which would corrupt the JSON on split.
+const _kStyleTagsGroupSeparator = '\u001E';
+
+/// Parses the `route_style_tags_json` column -- a
+/// `group_concat(r.style_tags_json, U+001E)` of a wall's live routes' raw
+/// (still JSON-encoded) style-tag lists -- into a flattened, deduplicated
+/// set of decoded tag keys. Each joined segment is independently decoded via
+/// [decodeStyleTags] (app-side, rather than unnesting the JSON in SQL via
+/// `json_each`, which would need the SQLite JSON1 extension and a fragile
+/// hand-rolled unnest query) and folded into one set. `null` (no matching
+/// rows) or an empty string both yield an empty set.
+Set<String> _parseStyleTags(String? raw) {
+  if (raw == null || raw.isEmpty) return const {};
+  final tags = <String>{};
+  for (final segment in raw.split(_kStyleTagsGroupSeparator)) {
+    for (final tag in decodeStyleTags(segment)) {
+      final trimmed = tag.trim().toLowerCase();
+      if (trimmed.isNotEmpty) tags.add(trimmed);
+    }
+  }
+  return tags;
 }
 
 /// Read-only repository backing the Community discovery feed + map: every
@@ -231,7 +281,10 @@ class CommunityRepository {
              AND r.grade_sort_key IS NOT NULL) AS route_grade_keys,
         (SELECT group_concat(DISTINCT r.style) FROM routes r
            WHERE r.wall_id = w.id AND r.deleted_at IS NULL
-             AND r.style IS NOT NULL AND r.style != '') AS route_styles
+             AND r.style IS NOT NULL AND r.style != '') AS route_styles,
+        (SELECT group_concat(r.style_tags_json, '$_kStyleTagsGroupSeparator') FROM routes r
+           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+             AND r.style_tags_json IS NOT NULL) AS route_style_tags_json
       FROM walls w
       JOIN sectors s ON s.id = w.sector_id
       JOIN areas a ON a.id = s.area_id
@@ -283,6 +336,9 @@ class CommunityRepository {
                 ),
                 routeStyles: _parseStyles(
                   row.readNullable<String>('route_styles'),
+                ),
+                routeStyleTags: _parseStyleTags(
+                  row.readNullable<String>('route_style_tags_json'),
                 ),
               ),
           ];

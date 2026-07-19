@@ -469,6 +469,130 @@ void main() {
     expect(afterUpdate.updatedAt, 2000);
   });
 
+  group('per-route metadata (#41 beta-video URL, #42 style tags, #44 stars)', () {
+    test(
+      'upsertRoute(insert path) then loadRoutes round-trips betaVideoUrl, '
+      'styleTags (incl. a custom tag), and stars',
+      () async {
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0, 0)],
+          betaVideoUrl: 'https://example.com/beta',
+          styleTags: const ['dyno', 'my-custom-style'],
+          stars: 3,
+        );
+
+        await repo.upsertRoute(wallId, photoId, route);
+        final loaded = await repo.loadRoutes(wallId);
+
+        expect(loaded, hasLength(1));
+        final result = loaded.single;
+        expect(result.betaVideoUrl, 'https://example.com/beta');
+        expect(result.styleTags, ['dyno', 'my-custom-style']);
+        expect(result.stars, 3);
+      },
+    );
+
+    test(
+      'an empty styleTags list round-trips as a null column (not the '
+      'encoded empty array)',
+      () async {
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0, 0)],
+          styleTags: const [],
+        );
+
+        await repo.upsertRoute(wallId, photoId, route);
+
+        final raw = await db.select(db.routes).getSingle();
+        expect(raw.styleTagsJson, isNull);
+
+        final loaded = await repo.loadRoutes(wallId);
+        expect(loaded.single.styleTags, isEmpty);
+      },
+    );
+
+    test(
+      'a route with no betaVideoUrl/styleTags/stars round-trips as '
+      'null/empty/null',
+      () async {
+        final route = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
+
+        await repo.upsertRoute(wallId, photoId, route);
+        final loaded = await repo.loadRoutes(wallId);
+
+        expect(loaded, hasLength(1));
+        final result = loaded.single;
+        expect(result.betaVideoUrl, isNull);
+        expect(result.styleTags, isEmpty);
+        expect(result.stars, isNull);
+      },
+    );
+
+    test(
+      'upsertRoute(update path) overwrites a previously-set betaVideoUrl/ '
+      'styleTags/stars with new values',
+      () async {
+        final v1 = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0, 0)],
+          betaVideoUrl: 'https://example.com/old',
+          styleTags: const ['dyno'],
+          stars: 1,
+        );
+        await repo.upsertRoute(wallId, photoId, v1);
+
+        final v2 = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0, 0)],
+          betaVideoUrl: 'https://example.com/new',
+          styleTags: const ['crimpy', 'juggy'],
+          stars: 3,
+        );
+        await repo.upsertRoute(wallId, photoId, v2);
+
+        final rows = await db.select(db.routes).get();
+        expect(rows, hasLength(1));
+
+        final loaded = await repo.loadRoutes(wallId);
+        final result = loaded.single;
+        expect(result.betaVideoUrl, 'https://example.com/new');
+        expect(result.styleTags, ['crimpy', 'juggy']);
+        expect(result.stars, 3);
+      },
+    );
+
+    test(
+      'upsertRoute(update path) clears a previously-set betaVideoUrl/ '
+      'styleTags/stars when the new route carries none',
+      () async {
+        final v1 = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0, 0)],
+          betaVideoUrl: 'https://example.com/old',
+          styleTags: const ['dyno'],
+          stars: 2,
+        );
+        await repo.upsertRoute(wallId, photoId, v1);
+
+        final v2 = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
+        await repo.upsertRoute(wallId, photoId, v2);
+
+        final loaded = await repo.loadRoutes(wallId);
+        final result = loaded.single;
+        expect(result.betaVideoUrl, isNull);
+        expect(result.styleTags, isEmpty);
+        expect(result.stars, isNull);
+      },
+    );
+  });
+
   group('P1-b: ownerId stamping on create', () {
     test(
       'upsertRoute(insert path) stamps ownerId with the injected '

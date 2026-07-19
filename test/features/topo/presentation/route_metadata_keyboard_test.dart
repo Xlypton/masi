@@ -77,6 +77,12 @@ void main() {
         );
         expect(tester.testTextInput.hasAnyClients, isTrue);
 
+        // The sheet grew (beta-URL/style-tags/stars sections) and now
+        // overflows the default 800x600 test surface; its body is a real
+        // SingleChildScrollView (see RouteMetadataSheet.build), so Save must
+        // be scrolled into view before tapping it, same as any other
+        // off-screen-but-scrollable control.
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-save')));
         await tester.tap(find.byKey(const Key('topo-meta-save')));
         await tester.pump();
 
@@ -125,6 +131,9 @@ void main() {
         expect(descriptionFieldFocus.hasFocus, isTrue);
         expect(tester.testTextInput.hasAnyClients, isTrue);
 
+        // See the Save test above: the sheet now overflows the test
+        // surface and must be scrolled to reach Cancel.
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-cancel')));
         await tester.tap(find.byKey(const Key('topo-meta-cancel')));
         await tester.pump();
 

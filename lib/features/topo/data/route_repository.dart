@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart' as db;
+import '../../../core/routes/route_styles.dart';
 import '../domain/topo_route.dart';
 import 'route_mapper.dart';
 
@@ -49,6 +50,11 @@ class RouteRepository {
     final now = nowMs();
     final pointsJson = encodePoints(route.points);
     final symbolsJson = encodeSymbols(route.symbols);
+    // `null` (not the encoded `'[]'`) for an empty tag list, so a route
+    // with no style tags stays indistinguishable from one that predates
+    // this column — mirrors `styleTagsJson`'s own doc.
+    final styleTagsJson =
+        route.styleTags.isEmpty ? null : encodeStyleTags(route.styleTags);
 
     if (existing == null) {
       await _db
@@ -73,6 +79,9 @@ class RouteRepository {
               sortOrder: route.number,
               visible: Value(route.visible),
               ownerId: Value(currentUid()),
+              betaVideoUrl: Value(route.betaVideoUrl),
+              styleTagsJson: Value(styleTagsJson),
+              stars: Value(route.stars),
             ),
           );
     } else {
@@ -93,6 +102,9 @@ class RouteRepository {
           symbolsJson: Value(symbolsJson),
           sortOrder: Value(route.number),
           visible: Value(route.visible),
+          betaVideoUrl: Value(route.betaVideoUrl),
+          styleTagsJson: Value(styleTagsJson),
+          stars: Value(route.stars),
         ),
       );
     }

@@ -53,6 +53,9 @@ class TopoRoute {
     this.gradeSortKey,
     this.style,
     this.description,
+    this.betaVideoUrl,
+    this.styleTags = const [],
+    this.stars,
   });
 
   final int id;
@@ -87,6 +90,20 @@ class TopoRoute {
   /// Free-form route description/beta notes. Null if unset.
   final String? description;
 
+  /// External beta-video URL (e.g. a YouTube/Instagram link). Null if
+  /// unset. Not validated at the domain layer — see `RouteMetadataSheet`
+  /// for the basic http(s) client-side check applied before this is set.
+  final String? betaVideoUrl;
+
+  /// This route's style tags (curated + custom, see
+  /// `core/routes/route_styles.dart`). Empty (never null) when the route
+  /// has no tags.
+  final List<String> styleTags;
+
+  /// 0-3 star quality rating. Null means unrated (distinct from `0`, an
+  /// explicit "0 stars" rating).
+  final int? stars;
+
   /// Returns a copy with the given fields replaced.
   ///
   /// Nullable-handling choice: non-metadata fields (`id`, `number`,
@@ -94,9 +111,10 @@ class TopoRoute {
   /// `newValue ?? this.field` pattern.
   ///
   /// Metadata fields (`name`, `gradeSystem`, `gradeRaw`, `gradeSortKey`,
-  /// `style`, `description`) each have an explicit set-sentinel flag
-  /// (`nameSet`, `gradeSystemSet`, `gradeRawSet`, `setGradeSortKey`,
-  /// `styleSet`, `descriptionSet`), mirroring the original
+  /// `style`, `description`, `betaVideoUrl`, `styleTags`, `stars`) each
+  /// have an explicit set-sentinel flag (`nameSet`, `gradeSystemSet`,
+  /// `gradeRawSet`, `setGradeSortKey`, `styleSet`, `descriptionSet`,
+  /// `betaVideoUrlSet`, `styleTagsSet`, `starsSet`), mirroring the original
   /// `setGradeSortKey` design: when a sentinel is `true`, the corresponding
   /// value is used verbatim (including `null`, which clears the field).
   /// When `false` (the default for every sentinel), the usual
@@ -125,6 +143,12 @@ class TopoRoute {
     bool styleSet = false,
     String? description,
     bool descriptionSet = false,
+    String? betaVideoUrl,
+    bool betaVideoUrlSet = false,
+    List<String>? styleTags,
+    bool styleTagsSet = false,
+    int? stars,
+    bool starsSet = false,
   }) {
     return TopoRoute(
       id: id ?? this.id,
@@ -140,6 +164,10 @@ class TopoRoute {
           setGradeSortKey ? gradeSortKey : (gradeSortKey ?? this.gradeSortKey),
       style: styleSet ? style : (style ?? this.style),
       description: descriptionSet ? description : (description ?? this.description),
+      betaVideoUrl:
+          betaVideoUrlSet ? betaVideoUrl : (betaVideoUrl ?? this.betaVideoUrl),
+      styleTags: styleTagsSet ? (styleTags ?? const []) : (styleTags ?? this.styleTags),
+      stars: starsSet ? stars : (stars ?? this.stars),
     );
   }
 
@@ -158,7 +186,10 @@ class TopoRoute {
         other.gradeRaw == gradeRaw &&
         other.gradeSortKey == gradeSortKey &&
         other.style == style &&
-        other.description == description;
+        other.description == description &&
+        other.betaVideoUrl == betaVideoUrl &&
+        listEquals(other.styleTags, styleTags) &&
+        other.stars == stars;
   }
 
   @override
@@ -175,6 +206,9 @@ class TopoRoute {
         gradeSortKey,
         style,
         description,
+        betaVideoUrl,
+        Object.hashAll(styleTags),
+        stars,
       );
 }
 

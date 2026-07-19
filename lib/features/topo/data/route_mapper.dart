@@ -6,6 +6,7 @@ import 'dart:ui';
 
 import '../../../core/db/app_database.dart' as db;
 import '../../../core/grades/grade_system.dart';
+import '../../../core/routes/route_styles.dart';
 import '../domain/topo_route.dart';
 
 /// Parses a persisted `gradeSystem` column value (the enum's `.name`
@@ -84,5 +85,8 @@ TopoRoute rowToDomain(db.Route row, int intId) {
     gradeSortKey: row.gradeSortKey,
     style: row.style,
     description: row.description,
+    betaVideoUrl: row.betaVideoUrl,
+    styleTags: decodeStyleTags(row.styleTagsJson),
+    stars: row.stars,
   );
 }

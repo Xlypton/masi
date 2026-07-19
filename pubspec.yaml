@@ -58,6 +58,9 @@ dependencies:
   # (see `buildResilientTileProvider`) without tripping
   # `depend_on_referenced_packages`.
   http: ^1.6.0
+  # Opens beta-video URLs (#41) externally from the route metadata sheet /
+  # legend / community detail screen.
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:

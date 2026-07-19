@@ -16,6 +16,7 @@ import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
+import '../../../shared/filtering/style_tag_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../library/application/library_providers.dart';
 import '../application/community_providers.dart';
@@ -108,68 +109,110 @@ void debugResetResilientTileClientCounters() {
   debugResilientTileClientCloseCount = 0;
 }
 
-/// Which of the Community screen's two views is currently shown. Public
-/// (unlike the rest of this file's private widgets) so it can be selected
-/// from outside — [CommunityScreen.initialTab], and in turn `/app/router.dart`'s
-/// `/community` route (deep-linked to the Map tab from a topo's "Show on
-/// map" action — see `topos_screen.dart`'s `_TopoRow`).
-enum CommunityTab { feed, map }
-
-/// The Community discovery screen: a segmented Feed/Map toggle over every
-/// shared topo (a Wall with `visibility == 'shared'`). Feed is a searchable
-/// list of rows (thumbnail, name, grade pill, like/comment counts, owner);
-/// Map is an OpenStreetMap [FlutterMap] with one marker per shared topo that
-/// has coordinates (inherited from its ancestor Area).
+/// The Community Map tab (bottom-nav branch `/map`): an OpenStreetMap
+/// [FlutterMap] with one marker per shared topo that has coordinates
+/// (inherited from its ancestor Area), plus the signed-in user's own located
+/// topos — see [_MapView]'s doc for the own-vs-community marker split. This
+/// screen used to be one half of a combined `CommunityScreen`'s segmented
+/// Feed/Map toggle; that toggle is gone (removed along with `CommunityTab`/
+/// `CommunityScreen` entirely) now that the app's persistent bottom
+/// navigation bar (`nav_shell.dart`) gives Map its own permanent branch,
+/// independent of Feed ([CommunityFeedScreen]).
 ///
-/// [tileProvider] is an injectable seam for the Map tab's [TileLayer],
-/// defaulting (when `null`) to the real [NetworkTileProvider] backed by
-/// OpenStreetMap tiles. Widget tests MUST override this with an in-memory
-/// fake so switching to the Map tab never performs real network I/O.
+/// [tileProvider] is an injectable seam for the Map's [TileLayer], defaulting
+/// (when `null`) to the real [NetworkTileProvider] backed by OpenStreetMap
+/// tiles. Widget tests MUST override this with an in-memory fake so this
+/// screen never performs real network I/O.
 ///
-/// [initialTab] selects which tab this screen opens on (`null`, the
-/// default, opens on Map — the screen's current unconditional behavior).
-/// [focusWallId], when the Map tab is shown, centers/zooms the map on that
-/// wall's coordinates instead of the combined marker-set center — see
-/// `_MapView`'s `focusWallId` doc.
-class CommunityScreen extends ConsumerStatefulWidget {
-  const CommunityScreen({
+/// [focusWallId], when given, centers/zooms the map on that wall's
+/// coordinates instead of the combined marker-set center — see [_MapView]'s
+/// `focusWallId` doc. `router.dart`'s `/map` route builder passes this
+/// straight from the `?focus=` query param, which is how the legacy
+/// `/community?tab=map&focus=<id>` deep link (`topos_screen.dart`'s "Show on
+/// map" action) still reaches a specific wall after being redirected here.
+class CommunityMapScreen extends ConsumerStatefulWidget {
+  const CommunityMapScreen({
     super.key,
     this.tileProvider,
-    this.initialTab,
     this.focusWallId,
     this.mapController,
     this.tileHttpClientFactory,
   });
 
   final TileProvider? tileProvider;
-  final CommunityTab? initialTab;
   final String? focusWallId;
 
   /// Test-injectable [MapController] seam, threaded through to [_MapView] —
   /// see that class's `controller` doc. Production code (the app's real
-  /// `/community` route) leaves this null.
+  /// `/map` route) leaves this null.
   @visibleForTesting
   final MapController? mapController;
 
-  /// Test-injectable factory for the INNER [Client] wrapped by the Map tab's
+  /// Test-injectable factory for the INNER [Client] wrapped by the Map's
   /// resilient tile provider, threaded through to [_MapView] — see that
   /// class's `tileHttpClientFactory` doc. Production code leaves this null.
   @visibleForTesting
   final Client Function()? tileHttpClientFactory;
 
   @override
-  ConsumerState<CommunityScreen> createState() => _CommunityScreenState();
+  ConsumerState<CommunityMapScreen> createState() =>
+      _CommunityMapScreenState();
 }
 
-class _CommunityScreenState extends ConsumerState<CommunityScreen> {
-  late CommunityTab _tab;
+class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
+  @override
+  Widget build(BuildContext context) {
+    final asyncSharedTopos = ref.watch(sharedToposProvider);
+
+    return Scaffold(
+      key: const Key('community-map-screen'),
+      appBar: AppBar(
+        title: Text(
+          'Map',
+          style: Theme.of(context).textTheme.displaySmall,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+        centerTitle: false,
+      ),
+      body: SafeArea(
+        child: asyncSharedTopos.when(
+          data: (topos) => _MapView(
+            topos: topos,
+            tileProvider: widget.tileProvider,
+            focusWallId: widget.focusWallId,
+            controller: widget.mapController,
+            tileHttpClientFactory: widget.tileHttpClientFactory,
+          ),
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, stackTrace) =>
+              Center(child: Text('Something went wrong: $error')),
+        ),
+      ),
+    );
+  }
+}
+
+/// The Community Feed tab (bottom-nav branch `/feed`): a searchable list of
+/// every shared topo (thumbnail, name, grade pill, like/comment counts,
+/// owner) — see [_FeedView]. The other half of the former combined
+/// `CommunityScreen`; see [CommunityMapScreen]'s doc for why the two are now
+/// separate, permanent bottom-nav screens rather than a shared toggle.
+class CommunityFeedScreen extends ConsumerStatefulWidget {
+  const CommunityFeedScreen({super.key});
+
+  @override
+  ConsumerState<CommunityFeedScreen> createState() =>
+      _CommunityFeedScreenState();
+}
+
+class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
   final _searchController = TextEditingController();
   String _query = '';
 
   @override
   void initState() {
     super.initState();
-    _tab = widget.initialTab ?? CommunityTab.map;
     _searchController.addListener(_onSearchChanged);
   }
 
@@ -192,10 +235,10 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
     final asyncSharedTopos = ref.watch(sharedToposProvider);
 
     return Scaffold(
-      key: const Key('community-screen'),
+      key: const Key('community-feed-screen'),
       appBar: AppBar(
         title: Text(
-          'Community',
+          'Feed',
           style: Theme.of(context).textTheme.displaySmall,
           maxLines: 1,
           overflow: TextOverflow.ellipsis,
@@ -203,122 +246,15 @@ class _CommunityScreenState extends ConsumerState<CommunityScreen> {
         centerTitle: false,
       ),
       body: SafeArea(
-        child: Column(
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(
-                MasiSpacing.lg,
-                MasiSpacing.md,
-                MasiSpacing.lg,
-                MasiSpacing.sm,
-              ),
-              child: _TabToggle(
-                tab: _tab,
-                onChanged: (tab) => setState(() => _tab = tab),
-              ),
-            ),
-            Expanded(
-              child: asyncSharedTopos.when(
-                data: (topos) => _tab == CommunityTab.feed
-                    ? _FeedView(
-                        topos: topos,
-                        searchController: _searchController,
-                        query: _query,
-                      )
-                    : _MapView(
-                        topos: topos,
-                        tileProvider: widget.tileProvider,
-                        focusWallId: widget.focusWallId,
-                        controller: widget.mapController,
-                        tileHttpClientFactory: widget.tileHttpClientFactory,
-                      ),
-                loading: () =>
-                    const Center(child: CircularProgressIndicator()),
-                error: (error, stackTrace) =>
-                    Center(child: Text('Something went wrong: $error')),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-/// Hand-rolled segmented Feed/Map toggle (rather than Material's
-/// `SegmentedButton`, whose `ButtonSegment` has no per-segment `Key`), so
-/// each side can carry its own stable `community-*-toggle` key for tests.
-class _TabToggle extends StatelessWidget {
-  const _TabToggle({required this.tab, required this.onChanged});
-
-  final CommunityTab tab;
-  final ValueChanged<CommunityTab> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return Container(
-      padding: const EdgeInsets.all(4),
-      decoration: BoxDecoration(
-        color: colors.surface2,
-        borderRadius: BorderRadius.circular(MasiRadii.control),
-      ),
-      child: Row(
-        children: [
-          Expanded(
-            child: _TabButton(
-              key: const Key('community-feed-toggle'),
-              label: 'Feed',
-              selected: tab == CommunityTab.feed,
-              onTap: () => onChanged(CommunityTab.feed),
-            ),
+        child: asyncSharedTopos.when(
+          data: (topos) => _FeedView(
+            topos: topos,
+            searchController: _searchController,
+            query: _query,
           ),
-          const SizedBox(width: 4),
-          Expanded(
-            child: _TabButton(
-              key: const Key('community-map-toggle'),
-              label: 'Map',
-              selected: tab == CommunityTab.map,
-              onTap: () => onChanged(CommunityTab.map),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TabButton extends StatelessWidget {
-  const _TabButton({
-    super.key,
-    required this.label,
-    required this.selected,
-    required this.onTap,
-  });
-
-  final String label;
-  final bool selected;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return Material(
-      color: selected ? colors.accent : Colors.transparent,
-      borderRadius: BorderRadius.circular(MasiRadii.control - 2),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(MasiRadii.control - 2),
-        onTap: onTap,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          child: Text(
-            label,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: selected ? colors.onAccent : colors.ink2,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
+          loading: () => const Center(child: CircularProgressIndicator()),
+          error: (error, stackTrace) =>
+              Center(child: Text('Something went wrong: $error')),
         ),
       ),
     );
@@ -454,10 +390,11 @@ class _FilterButton extends StatelessWidget {
 }
 
 /// The Community feed/map's "Filters" bottom sheet: a [GradeRangePicker] +
-/// [StyleFilterChips] wired directly to [communityFilterProvider], plus a
-/// Clear action. Purely reactive to the provider (no local widget state of
-/// its own), so edits made here are visible live in the feed/map behind it
-/// without needing to close the sheet first.
+/// [StyleFilterChips] + [StyleTagFilterChips] wired directly to
+/// [communityFilterProvider], plus a Clear action. Purely reactive to the
+/// provider (no local widget state of its own), so edits made here are
+/// visible live in the feed/map behind it without needing to close the
+/// sheet first.
 class _CommunityFiltersSheet extends ConsumerWidget {
   const _CommunityFiltersSheet();
 
@@ -520,6 +457,18 @@ class _CommunityFiltersSheet extends ConsumerWidget {
               StyleFilterChips(
                 selected: filter.styles,
                 onChanged: notifier.setStyles,
+              ),
+              const SizedBox(height: MasiSpacing.lg),
+              Text(
+                'Tags',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(color: colors.ink2),
+              ),
+              const SizedBox(height: MasiSpacing.sm),
+              StyleTagFilterChips(
+                selected: filter.styleTags,
+                onChanged: notifier.setStyleTags,
               ),
             ],
           ),

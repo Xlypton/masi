@@ -807,6 +807,134 @@ void main() {
       );
     },
   );
+
+  group(
+    'Routes section per-route metadata (#41 beta-video, #42 style tags, '
+    '#44 stars)',
+    () {
+      testWidgets(
+        'a route with betaVideoUrl shows a route-beta-<dbId> button; a '
+        'route without one does not',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              authRepositoryProvider.overrideWithValue(
+                _FakeAuthRepository(
+                  const AuthSessionState.signedIn('climber@example.com'),
+                ),
+              ),
+            ],
+          );
+          addTearDown(db.close);
+          addTearDown(container.dispose);
+
+          final crud = container.read(libraryCrudRepositoryProvider);
+          final area = await crud.createArea('Area');
+          final sector = await crud.createSector(area.id, 'Sector');
+          final wall = await crud.createWall(sector.id, 'Wall');
+          late String photoId;
+          await tester.runAsync(() async {
+            photoId = await crud.attachPhotoToWall(
+              wall.id,
+              '/tmp/community-detail-metadata-test-photo.jpg',
+              1000,
+              2000,
+            );
+          });
+
+          final routeRepo = RouteRepository(db, nowMs: () => 1000);
+          await routeRepo.upsertRoute(
+            wall.id,
+            photoId,
+            const TopoRoute(
+              id: 1,
+              number: 1,
+              points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+              betaVideoUrl: 'https://example.com/beta',
+              styleTags: ['dyno', 'my-custom-tag'],
+              stars: 2,
+            ),
+          );
+          await routeRepo.upsertRoute(
+            wall.id,
+            photoId,
+            const TopoRoute(
+              id: 2,
+              number: 2,
+              points: [Offset(0.3, 0.3), Offset(0.4, 0.4)],
+            ),
+          );
+          final dbIds = await routeRepo.routeDbIdsByNumber(wall.id);
+
+          await tester.pumpWidget(
+            wrap(
+              container,
+              CommunityTopoDetailScreen(
+                wallId: wall.id,
+                debugInitialImageSize: const Size(1000, 2000),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final withMetaDbId = dbIds[1]!;
+          final withoutMetaDbId = dbIds[2]!;
+
+          await scrollKeyIntoView(
+            tester,
+            Key('community-log-ascent-$withMetaDbId'),
+          );
+
+          expect(
+            find.byKey(Key('route-beta-$withMetaDbId'), skipOffstage: false),
+            findsOneWidget,
+            reason: 'the route with a betaVideoUrl must show its button',
+          );
+          expect(
+            find.byKey(
+              Key('route-beta-$withoutMetaDbId'),
+              skipOffstage: false,
+            ),
+            findsNothing,
+            reason: 'the route without a betaVideoUrl must not',
+          );
+
+          expect(
+            find.byKey(
+              Key('route-styletag-$withMetaDbId-dyno'),
+              skipOffstage: false,
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              Key('route-styletag-$withMetaDbId-my-custom-tag'),
+              skipOffstage: false,
+            ),
+            findsOneWidget,
+          );
+
+          expect(
+            find.byKey(
+              Key('route-stars-$withMetaDbId'),
+              skipOffstage: false,
+            ),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(
+              Key('route-stars-$withoutMetaDbId'),
+              skipOffstage: false,
+            ),
+            findsNothing,
+          );
+        },
+      );
+    },
+  );
 }
 
 /// Whether [FocusManager.instance.primaryFocus] is currently held by a text

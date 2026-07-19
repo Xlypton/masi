@@ -14,6 +14,7 @@ void main() {
     String name = 'Some Topo',
     List<double> routeGradeKeys = const [],
     Set<String> routeStyles = const {},
+    Set<String> routeStyleTags = const {},
   }) {
     return SharedTopo(
       wallId: wallId,
@@ -23,6 +24,7 @@ void main() {
       commentCount: 0,
       routeGradeKeys: routeGradeKeys,
       routeStyles: routeStyles,
+      routeStyleTags: routeStyleTags,
     );
   }
 
@@ -147,6 +149,122 @@ void main() {
       expect(a, b);
       expect(a.hashCode, b.hashCode);
     });
+  });
+
+  group('style-tags facet: CommunityFilter.styleTags', () {
+    test(
+      'a topo with routeStyleTags {dyno, crimpy} passes a filter selecting '
+      '{crimpy} but fails one selecting {slabby}',
+      () {
+        final t = topo(
+          wallId: 'w1',
+          routeStyleTags: {'dyno', 'crimpy'},
+        );
+
+        expect(
+          const CommunityFilter(styleTags: {'crimpy'}).matches(t),
+          isTrue,
+        );
+        expect(
+          const CommunityFilter(styleTags: {'slabby'}).matches(t),
+          isFalse,
+        );
+      },
+    );
+
+    test('an empty styleTags selection always passes, regardless of the '
+        "topo's own tags (including none at all)", () {
+      const filter = CommunityFilter();
+      expect(filter.matches(topo(wallId: 'w-none')), isTrue);
+      expect(
+        filter.matches(topo(wallId: 'w-some', routeStyleTags: {'dyno'})),
+        isTrue,
+      );
+    });
+
+    test(
+      'combines (AND) correctly with an active grade filter: both must '
+      'pass independently',
+      () {
+        final filter = CommunityFilter(
+          grade: const GradeRange(minToken: '6a', maxToken: '7a'),
+          styleTags: const {'crimpy'},
+        );
+
+        // Grade in range AND tag present -> matches.
+        expect(
+          filter.matches(
+            topo(
+              wallId: 'w-both',
+              routeGradeKeys: [9.0],
+              routeStyleTags: {'crimpy'},
+            ),
+          ),
+          isTrue,
+        );
+        // Grade in range but tag missing -> excluded.
+        expect(
+          filter.matches(
+            topo(
+              wallId: 'w-grade-only',
+              routeGradeKeys: [9.0],
+              routeStyleTags: {'slabby'},
+            ),
+          ),
+          isFalse,
+        );
+        // Tag present but grade out of range -> excluded.
+        expect(
+          filter.matches(
+            topo(
+              wallId: 'w-tag-only',
+              routeGradeKeys: [25.0],
+              routeStyleTags: {'crimpy'},
+            ),
+          ),
+          isFalse,
+        );
+      },
+    );
+
+    test('isActive is true when styleTags is non-empty, even with no other '
+        'sub-filter active', () {
+      expect(const CommunityFilter().isActive, isFalse);
+      expect(const CommunityFilter(styleTags: {'dyno'}).isActive, isTrue);
+    });
+
+    test('copyWith replaces only styleTags, leaving grade/styles untouched', () {
+      const base = CommunityFilter(styles: {'sport'});
+      final withTags = base.copyWith(styleTags: {'dyno'});
+
+      expect(withTags.styleTags, {'dyno'});
+      expect(withTags.styles, {'sport'});
+      expect(withTags.grade, const GradeRange());
+    });
+
+    test(
+      'value equality considers styleTags (order-independent) and clear() '
+      'resets it along with grade/styles',
+      () {
+        const a = CommunityFilter(styleTags: {'dyno', 'crimpy'});
+        const b = CommunityFilter(styleTags: {'crimpy', 'dyno'});
+        expect(a, b);
+        expect(a.hashCode, b.hashCode);
+
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(communityFilterProvider.notifier);
+        notifier.setStyleTags({'dyno'});
+        expect(container.read(communityFilterProvider).styleTags, {'dyno'});
+
+        notifier.clear();
+        expect(
+          container.read(communityFilterProvider),
+          const CommunityFilter(),
+        );
+        expect(container.read(communityFilterProvider).styleTags, isEmpty);
+      },
+    );
   });
 
   group('B2: AND with name search (as CommunityScreen._FeedView applies it)', () {

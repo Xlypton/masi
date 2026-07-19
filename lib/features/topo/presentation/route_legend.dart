@@ -1,12 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:climbtopo/app/theme.dart';
+import 'package:climbtopo/core/routes/route_styles.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
+
+/// Best-effort external launch of a route's beta-video URL. Never throws:
+/// an unparseable/invalid [url] or a platform launch failure is swallowed
+/// (there's no useful recovery for a legend row's tap beyond not crashing
+/// the canvas), mirroring this codebase's other fire-and-forget UI
+/// side-effect calls.
+Future<void> launchBetaVideo(String url) async {
+  final uri = Uri.tryParse(url);
+  if (uri == null) return;
+  try {
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
+  } catch (_) {
+    // No in-app surface to report this to from here; swallow.
+  }
+}
 
 /// #26: display label for [route] — `'<number>. <name>'` when
 /// [TopoRoute.name] is non-empty (after trimming), else the generic
@@ -189,56 +206,127 @@ class RouteLegend extends ConsumerWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
             ),
-            // readOnly hides every trailing control entirely (rather than
-            // just disabling their `onPressed`) — a read-only viewer of
-            // someone else's shared topo has no business toggling
-            // visibility, deleting a route, or logging an ascent here (the
-            // community detail screen has its own separate log-ascent
-            // affordance); tap-to-select (`onTap` above) is left enabled
-            // since it mutates no persisted state.
-            trailing: readOnly
+            // #41/#42/#44: style-tag chips + star rating render as a
+            // second line whenever either is present, in BOTH read-only
+            // and edit modes (unlike the trailing edit controls below,
+            // these are display-only, so readOnly doesn't hide them).
+            subtitle: (route.styleTags.isEmpty && (route.stars ?? 0) <= 0)
                 ? null
-                : Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (onLogAscent != null)
-                        IconButton(
-                          key: Key('topo-log-ascent-${route.id}'),
-                          tooltip: 'Log ascent',
-                          iconSize: 18,
-                          visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.all(4),
-                          constraints: const BoxConstraints(),
-                          icon: MasiIcon('send_check', size: 18),
-                          onPressed: () => onLogAscent!(route.id),
-                        ),
-                      IconButton(
-                        key: Key('topo-route-visibility-${route.id}'),
-                        tooltip: route.visible ? 'Hide route' : 'Show route',
-                        iconSize: 18,
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.all(4),
-                        constraints: const BoxConstraints(),
-                        icon: route.visible
-                            ? MasiIcon('eye')
-                            : Icon(Icons.visibility_off_outlined),
-                        onPressed: () =>
-                            notifier.toggleRouteVisibility(route.id),
-                      ),
-                      IconButton(
-                        key: Key('topo-route-delete-${route.id}'),
-                        tooltip: 'Delete route',
-                        iconSize: 18,
-                        visualDensity: VisualDensity.compact,
-                        padding: const EdgeInsets.all(4),
-                        constraints: const BoxConstraints(),
-                        icon: MasiIcon('delete'),
-                        onPressed: () => notifier.removeRoute(route.id),
-                      ),
-                    ],
+                : Padding(
+                    padding: const EdgeInsets.only(top: 2),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (route.styleTags.isNotEmpty)
+                          Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: [
+                              for (final tag in route.styleTags)
+                                _RouteStyleTagChip(routeId: route.id, tag: tag),
+                            ],
+                          ),
+                        if ((route.stars ?? 0) > 0)
+                          Row(
+                            key: Key('route-stars-${route.id}'),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (var i = 0; i < route.stars!; i++)
+                                const Padding(
+                                  padding: EdgeInsets.only(right: 1),
+                                  child: MasiIcon('star_fill', size: 12),
+                                ),
+                            ],
+                          ),
+                      ],
+                    ),
                   ),
+            // Beta-video button renders in BOTH read-only and edit modes
+            // (display-only external launch, not an editing affordance);
+            // the log-ascent/visibility/delete cluster after it stays
+            // gated on `readOnly` exactly as before.
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (route.betaVideoUrl != null)
+                  IconButton(
+                    key: Key('route-beta-${route.id}'),
+                    tooltip: 'Watch beta video',
+                    iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.all(4),
+                    constraints: const BoxConstraints(),
+                    icon: MasiIcon('globe'),
+                    onPressed: () => launchBetaVideo(route.betaVideoUrl!),
+                  ),
+                if (!readOnly) ...[
+                  if (onLogAscent != null)
+                    IconButton(
+                      key: Key('topo-log-ascent-${route.id}'),
+                      tooltip: 'Log ascent',
+                      iconSize: 18,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.all(4),
+                      constraints: const BoxConstraints(),
+                      icon: MasiIcon('send_check', size: 18),
+                      onPressed: () => onLogAscent!(route.id),
+                    ),
+                  IconButton(
+                    key: Key('topo-route-visibility-${route.id}'),
+                    tooltip: route.visible ? 'Hide route' : 'Show route',
+                    iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.all(4),
+                    constraints: const BoxConstraints(),
+                    icon: route.visible
+                        ? MasiIcon('eye')
+                        : Icon(Icons.visibility_off_outlined),
+                    onPressed: () => notifier.toggleRouteVisibility(route.id),
+                  ),
+                  IconButton(
+                    key: Key('topo-route-delete-${route.id}'),
+                    tooltip: 'Delete route',
+                    iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.all(4),
+                    constraints: const BoxConstraints(),
+                    icon: MasiIcon('delete'),
+                    onPressed: () => notifier.removeRoute(route.id),
+                  ),
+                ],
+              ],
+            ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// A small, non-interactive display chip for one of [TopoRoute.styleTags]:
+/// a curated tag (see `core/routes/route_styles.dart`) shows its curated
+/// [RouteStyle.label]; an arbitrary custom tag shows its raw stored string.
+class _RouteStyleTagChip extends StatelessWidget {
+  const _RouteStyleTagChip({required this.routeId, required this.tag});
+
+  final int routeId;
+  final String tag;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final resolved = resolveStyleTag(tag);
+    return Container(
+      key: Key('route-styletag-$routeId-$tag'),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: colors.surface2,
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Text(
+        resolved.displayLabel,
+        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: colors.ink2),
       ),
     );
   }

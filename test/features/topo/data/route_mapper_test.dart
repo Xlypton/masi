@@ -11,6 +11,9 @@ db.Route _row({
   double? gradeSortKey,
   String? style,
   String? description,
+  String? betaVideoUrl,
+  String? styleTagsJson,
+  int? stars,
 }) {
   return db.Route(
     id: 'route-1',
@@ -31,6 +34,9 @@ db.Route _row({
     symbolsJson: '[]',
     sortOrder: 1,
     visible: true,
+    betaVideoUrl: betaVideoUrl,
+    styleTagsJson: styleTagsJson,
+    stars: stars,
   );
 }
 
@@ -136,5 +142,35 @@ void main() {
       expect(route.gradeSystem, GradeSystem.uiaa);
       expect(route.gradeRaw, 'VI+');
     });
+  });
+
+  group('rowToDomain per-route metadata (#41/#42/#44)', () {
+    test('reads betaVideoUrl, styleTags (decoded), and stars', () {
+      final row = _row(
+        betaVideoUrl: 'https://example.com/beta',
+        styleTagsJson: '["dyno","custom-tag"]',
+        stars: 2,
+      );
+
+      final route = rowToDomain(row, 1);
+
+      expect(route.betaVideoUrl, 'https://example.com/beta');
+      expect(route.styleTags, ['dyno', 'custom-tag']);
+      expect(route.stars, 2);
+    });
+
+    test(
+      'a row with all three columns null maps to null betaVideoUrl/stars '
+      'and empty styleTags',
+      () {
+        final row = _row();
+
+        final route = rowToDomain(row, 1);
+
+        expect(route.betaVideoUrl, isNull);
+        expect(route.styleTags, isEmpty);
+        expect(route.stars, isNull);
+      },
+    );
   });
 }

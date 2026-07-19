@@ -18,7 +18,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 4;
+  int get schemaVersion => 5;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -57,6 +57,15 @@ class AppDatabase extends _$AppDatabase {
       if (from < 4) {
         await m.addColumn(walls, walls.latitude);
         await m.addColumn(walls, walls.longitude);
+      }
+      // v4 -> v5: per-route metadata (#41 beta-video URL, #42 style tags,
+      // #44 0-3 star rating) — three nullable ADD COLUMNs on Routes, so
+      // every pre-existing route comes back with all three `null`
+      // (unrated / no tags / no beta link) rather than losing any data.
+      if (from < 5) {
+        await m.addColumn(routes, routes.betaVideoUrl);
+        await m.addColumn(routes, routes.styleTagsJson);
+        await m.addColumn(routes, routes.stars);
       }
     },
     beforeOpen: (details) async {

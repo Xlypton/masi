@@ -251,6 +251,15 @@ void main() {
           find.byKey(const Key('topo-meta-name')),
           'Should Not Persist',
         );
+        // ensureVisible before EVERY targeted tap below (not just Save/
+        // Cancel): RouteMetadataSheet carries no Key, so the second
+        // `_buildSheet` pump further down (the "save path") reuses this
+        // SAME State/scroll-position via Flutter's normal element diffing
+        // rather than mounting fresh -- whatever this block scrolls to
+        // stays scrolled for the next block too, so every control must be
+        // scrolled into view right before it's tapped rather than assumed
+        // reachable from a fresh top-of-sheet scroll offset.
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-grade')));
         await tester.tap(find.byKey(const Key('topo-meta-grade')));
         await tester.pumpAndSettle();
         // '6b' (not '7a'): the dropdown menu overlay only lays out a
@@ -259,6 +268,9 @@ void main() {
         // this subtask's report) -- '6b' is within it.
         await tester.tap(find.text('6b').last);
         await tester.pumpAndSettle();
+        await tester.ensureVisible(
+          find.byKey(const Key('topo-meta-style-trad')),
+        );
         await tester.tap(find.byKey(const Key('topo-meta-style-trad')));
         await tester.pump();
         await tester.enterText(
@@ -266,6 +278,12 @@ void main() {
           'unsaved notes',
         );
 
+        // The sheet grew (beta-URL/style-tags/stars sections) and now
+        // overflows the default 800x600 test surface; its body is a real
+        // SingleChildScrollView (see RouteMetadataSheet.build), so
+        // Save/Cancel must be scrolled into view before tapping, same as
+        // any other off-screen-but-scrollable control.
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-cancel')));
         await tester.tap(find.byKey(const Key('topo-meta-cancel')));
         await tester.pump();
 
@@ -304,10 +322,14 @@ void main() {
           find.byKey(const Key('topo-meta-name')),
           'Le Toit',
         );
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-grade')));
         await tester.tap(find.byKey(const Key('topo-meta-grade')));
         await tester.pumpAndSettle();
         await tester.tap(find.text('6b').last);
         await tester.pumpAndSettle();
+        await tester.ensureVisible(
+          find.byKey(const Key('topo-meta-style-trad')),
+        );
         await tester.tap(find.byKey(const Key('topo-meta-style-trad')));
         await tester.pump();
         await tester.enterText(
@@ -315,6 +337,7 @@ void main() {
           'crux at the roof',
         );
 
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-save')));
         await tester.tap(find.byKey(const Key('topo-meta-save')));
         await tester.pump();
 

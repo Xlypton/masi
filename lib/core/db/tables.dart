@@ -111,6 +111,23 @@ class Routes extends Table with SyncColumns {
   IntColumn get sortOrder => integer()();
   BoolColumn get visible => boolean().withDefault(const Constant(true))();
 
+  /// External beta-video URL (e.g. a YouTube/Instagram link) for this
+  /// route. Free-form, validated only client-side (see
+  /// `RouteMetadataSheet`) — `null` if unset.
+  TextColumn get betaVideoUrl => text().nullable()();
+
+  /// This route's style tags, encoded as a JSON array of strings via
+  /// `core/routes/route_styles.dart`'s `encodeStyleTags`/`decodeStyleTags`
+  /// (curated tags + arbitrary custom ones). `null` (rather than `'[]'`)
+  /// when the route has no tags — `RouteRepository.upsertRoute` writes
+  /// `null` for an empty tag list rather than the encoded empty array, so
+  /// this column stays `null` for every route that predates this feature.
+  TextColumn get styleTagsJson => text().nullable()();
+
+  /// 0-3 star quality rating. `null` means unrated (distinct from `0`,
+  /// which is an explicit "0 stars" rating).
+  IntColumn get stars => integer().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

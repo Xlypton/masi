@@ -153,15 +153,10 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 1));
 
     // ------------------------------------------------------------------
-    // Switch to the Map tab.
+    // `home-community-button` now goes straight to the Map branch
+    // (`/community` redirects to `/map`) -- there is no more in-screen
+    // Feed/Map toggle to tap; just let the map settle.
     // ------------------------------------------------------------------
-    final mapToggle = find.byKey(const Key('community-map-toggle'));
-    expect(
-      tester.any(mapToggle),
-      isTrue,
-      reason: 'community-map-toggle not found',
-    );
-    await tester.tap(mapToggle);
     // Do NOT pumpAndSettle: flutter_map's tile fade-in animation never
     // settles. Pump fixed durations instead to give tiles a chance to load
     // (real network in the simulator) before screenshotting.

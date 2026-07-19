@@ -34,6 +34,7 @@ class CommunityFilter {
   const CommunityFilter({
     this.grade = const GradeRange(),
     this.styles = const {},
+    this.styleTags = const {},
   });
 
   /// The grade-range bound (see `GradeRange.isActive`/`matchesSortKey`).
@@ -43,26 +44,45 @@ class CommunityFilter {
   /// empty means "no style filter" (matches every style).
   final Set<String> styles;
 
-  /// Whether either sub-filter is currently constraining the feed — used to
+  /// The selected style-TAG keys (a subset of `kCuratedRouteStyles`'
+  /// `key`s, e.g. `'dyno'`/`'crimpy'` -- see
+  /// `core/routes/route_styles.dart`); empty means "no style-tag filter"
+  /// (matches every topo regardless of its routes' tags). Distinct from
+  /// [styles]: that's the older single-value sport/trad/boulder facet, this
+  /// is the newer multi-tag facet (`SharedTopo.routeStyleTags` /
+  /// `StyleTagFilterChips`).
+  final Set<String> styleTags;
+
+  /// Whether any sub-filter is currently constraining the feed — used to
   /// show/hide the filter button's active-indicator dot and to pick the
   /// "no topos match your filters" vs. "no shared topos yet" empty state.
-  bool get isActive => grade.isActive || styles.isNotEmpty;
+  bool get isActive =>
+      grade.isActive || styles.isNotEmpty || styleTags.isNotEmpty;
 
-  /// Whether [topo] satisfies both sub-filters (AND): when [grade] is
+  /// Whether [topo] satisfies every sub-filter (AND): when [grade] is
   /// active, at least one of [topo]'s `routeGradeKeys` must fall in range;
   /// when [styles] is non-empty, at least one of [topo]'s `routeStyles`
-  /// must be selected. An inactive sub-filter always matches.
+  /// must be selected; when [styleTags] is non-empty, at least one of
+  /// [topo]'s `routeStyleTags` must be selected. An inactive sub-filter
+  /// always matches.
   bool matches(SharedTopo topo) {
     final gradeOk =
         !grade.isActive || topo.routeGradeKeys.any(grade.matchesSortKey);
     final stylesOk = styles.isEmpty || topo.routeStyles.any(styles.contains);
-    return gradeOk && stylesOk;
+    final styleTagsOk =
+        styleTags.isEmpty || topo.routeStyleTags.any(styleTags.contains);
+    return gradeOk && stylesOk && styleTagsOk;
   }
 
-  CommunityFilter copyWith({GradeRange? grade, Set<String>? styles}) {
+  CommunityFilter copyWith({
+    GradeRange? grade,
+    Set<String>? styles,
+    Set<String>? styleTags,
+  }) {
     return CommunityFilter(
       grade: grade ?? this.grade,
       styles: styles ?? this.styles,
+      styleTags: styleTags ?? this.styleTags,
     );
   }
 
@@ -72,13 +92,21 @@ class CommunityFilter {
       (other is CommunityFilter &&
           other.grade == grade &&
           other.styles.length == styles.length &&
-          other.styles.containsAll(styles));
+          other.styles.containsAll(styles) &&
+          other.styleTags.length == styleTags.length &&
+          other.styleTags.containsAll(styleTags));
 
   @override
-  int get hashCode => Object.hash(grade, Object.hashAllUnordered(styles));
+  int get hashCode => Object.hash(
+    grade,
+    Object.hashAllUnordered(styles),
+    Object.hashAllUnordered(styleTags),
+  );
 
   @override
-  String toString() => 'CommunityFilter(grade: $grade, styles: $styles)';
+  String toString() =>
+      'CommunityFilter(grade: $grade, styles: $styles, '
+      'styleTags: $styleTags)';
 }
 
 /// Holds the current [CommunityFilter] for the Community screen. Riverpod
@@ -100,7 +128,13 @@ class CommunityFilterNotifier extends Notifier<CommunityFilter> {
     state = state.copyWith(styles: styles);
   }
 
-  /// Resets both sub-filters to inactive.
+  /// Replaces the selected style-tag set, e.g. from a
+  /// `StyleTagFilterChips`'s `onChanged`.
+  void setStyleTags(Set<String> styleTags) {
+    state = state.copyWith(styleTags: styleTags);
+  }
+
+  /// Resets every sub-filter (grade, styles, styleTags) to inactive.
   void clear() {
     state = const CommunityFilter();
   }
