@@ -97,4 +97,56 @@ void main() {
       expect(tester.takeException(), isNull);
     },
   );
+
+  testWidgets(
+    'TopoCanvas renders a disabledHold marker (feature #43, always '
+    'hand-drawn -- no masi asset is mapped for it, so this exercises the '
+    "TopoPainter fallback geometry through the real widget, not just "
+    'TopoPainter unit tests) without throwing',
+    (tester) async {
+      const imageSize = Size(400, 300);
+
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final controller = TransformationController();
+      addTearDown(controller.dispose);
+
+      final notifier = container.read(drawControllerProvider.notifier);
+      notifier.setMode(DrawMode.draw);
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.addPoint(const Offset(0.6, 0.6));
+      notifier.setActiveSymbol(SymbolType.disabledHold);
+      await notifier.placeSymbol(const Offset(0.5, 0.5));
+      expect(
+        container.read(drawControllerProvider).currentSymbols,
+        hasLength(1),
+      );
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Scaffold(
+              body: TopoCanvas(
+                imagePath: '/nonexistent/test-topo.jpg',
+                imageSize: imageSize,
+                transformationController: controller,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(tester.takeException(), isNull);
+      expect(find.byType(TopoCanvas), findsOneWidget);
+
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.byType(TopoCanvas), findsOneWidget);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      expect(tester.takeException(), isNull);
+    },
+  );
 }

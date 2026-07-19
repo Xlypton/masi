@@ -28,6 +28,15 @@ const double kSymbolPaletteBarHeight = 68.0;
 /// unambiguously as "rest" once paired with its text label.
 /// [SymbolType.anchor]/[SymbolType.top]/[SymbolType.crux] use Masi
 /// equivalents, while [SymbolType.rest] keeps Material (no equivalent).
+///
+/// [SymbolType.disabledHold] (feature #43, per-route excluded hold) uses
+/// `MasiIcon('close')` -- the brand set has no dedicated "off/no/ban" glyph,
+/// so the "X" close glyph is the closest available match (a substitution,
+/// not a perfect semantic fit, but MasiIcon-only per this app's icon
+/// mandate: no `Icons.`/`CupertinoIcons.` allowed). The on-canvas marker
+/// itself (see `TopoPainter._paintSymbol`) is a distinct hand-drawn
+/// prohibition/no-entry sign (circle + diagonal slash) regardless of this
+/// palette glyph choice.
 Widget _symbolIconWidget(SymbolType type, {Color? color, double? size}) {
   switch (type) {
     case SymbolType.anchor:
@@ -40,6 +49,8 @@ Widget _symbolIconWidget(SymbolType type, {Color? color, double? size}) {
       return MasiIcon('crux', color: color, size: size);
     case SymbolType.rest:
       return Icon(Icons.self_improvement, color: color, size: size);
+    case SymbolType.disabledHold:
+      return MasiIcon('close', color: color, size: size);
   }
 }
 
@@ -50,6 +61,7 @@ const Map<SymbolType, String> _symbolLabels = {
   SymbolType.top: 'Top',
   SymbolType.crux: 'Crux',
   SymbolType.rest: 'Rest',
+  SymbolType.disabledHold: 'Off',
 };
 
 /// A row with a leading "Route" tool (keyed `symbol-tool-route`) followed by

@@ -122,6 +122,32 @@ void main() {
     );
   }
 
+  /// Converts a percent-space point into scene/pixel coordinates using the
+  /// same `percent * imageSize` transform TopoPainter applies internally
+  /// (see `CoordinateTransformer.percentToScene`) -- used below to compute a
+  /// route's own scene-space line endpoints so tests can strip them out of
+  /// `_RecordingCanvas.lines` before asserting on SYMBOL-only line draws.
+  Offset scenePt(Offset percent) =>
+      Offset(percent.dx * imageSize.width, percent.dy * imageSize.height);
+
+  /// Removes every recorded line matching `(p1, p2)` from [lines]. A
+  /// SELECTED route draws its own polyline TWICE -- an emphasis-outline
+  /// pass plus the normal pass (see `TopoPainter.paint`'s `isSelected`
+  /// branch, which intentionally strokes the selected route's spline twice:
+  /// a wider translucent highlight underneath the normal-color stroke) --
+  /// both with identical endpoints when the route is a straight 2-point
+  /// segment, so this strips BOTH occurrences. What remains is only the
+  /// route's SYMBOL glyph line draws (e.g. bolt/crux/disabledHold), so
+  /// tests can assert on those directly instead of coupling to a brittle
+  /// total draw-call count that would also shift if the emphasis-pass
+  /// implementation ever changed.
+  List<({Offset p1, Offset p2})> withoutRouteLine(
+    List<({Offset p1, Offset p2})> lines,
+    Offset p1,
+    Offset p2,
+  ) =>
+      lines.where((l) => !(l.p1 == p1 && l.p2 == p2)).toList();
+
   group('TopoPainter drawing behavior (in-progress route + handles)', () {
     test('A single point paints without throwing and draws a dot', () {
       final painter = buildPainter(currentPoints: const [Offset(0.5, 0.5)]);
@@ -341,7 +367,10 @@ void main() {
 
     test(
       'A3: each SymbolType renders a distinct glyph; a route with 3 '
-      'symbols draws 3 glyphs worth of draw calls',
+      'symbols draws 3 glyphs worth of draw calls (route is SELECTED -- '
+      'feature #43 gates a committed route\'s symbols on selection, so '
+      'this and the tests below now pass selectedRouteId matching the '
+      'route under test)',
       () {
         final route = TopoRoute(
           id: 1,
@@ -354,17 +383,24 @@ void main() {
             TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),
           ],
         );
-        final painter = buildPainter(routes: [route]);
+        final painter = buildPainter(routes: [route], selectedRouteId: 1);
         final canvas = _RecordingCanvas();
 
         painter.paint(canvas, imageSize);
 
         // anchor -> 1 circle, bolt -> 2 lines, top -> 1 path.
-        // The route itself is a 2-point polyline, so it draws 1 line (no
-        // path, no circle), meaning all recorded paths/extra circles come
-        // from the symbols.
+        // The route itself is a 2-point polyline (a drawLine, not a
+        // path/circle) -- and it's SELECTED, so it draws that line TWICE
+        // (an emphasis-outline pass plus the normal pass; see
+        // TopoPainter.paint's isSelected branch). `withoutRouteLine` strips
+        // both copies so what's left is symbol-only line draws.
+        final symbolLines = withoutRouteLine(
+          canvas.lines,
+          scenePt(const Offset(0.1, 0.1)),
+          scenePt(const Offset(0.9, 0.8)),
+        );
         expect(canvas.circleCenters, hasLength(1)); // anchor
-        expect(canvas.lines, hasLength(1 + 2)); // route line + bolt's 2 lines
+        expect(symbolLines, hasLength(2)); // bolt's 2 lines only
         expect(canvas.paths, hasLength(1)); // top triangle
       },
     );
@@ -378,7 +414,9 @@ void main() {
           points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
           symbols: [TopoSymbol(type: type, position: const Offset(0.5, 0.5))],
         );
-        final painter = buildPainter(routes: [route]);
+        // selectedRouteId: 1 -- route 1 must be SELECTED for its symbols to
+        // paint at all under feature #43's selection gating (see A3 above).
+        final painter = buildPainter(routes: [route], selectedRouteId: 1);
         final recorder = ui.PictureRecorder();
         final canvas = Canvas(recorder);
 
@@ -386,6 +424,53 @@ void main() {
         recorder.endRecording();
       }
     });
+
+    test(
+      'A3i (#43): SymbolType.disabledHold paints a distinct prohibition '
+      'glyph -- a stroked circle PLUS exactly one diagonal line -- unlike '
+      'every other hand-drawn glyph (bolt: 2 lines/no circle; rest: 2 '
+      'circles/no line; anchor: 1 filled circle/no line; top: a path)',
+      () {
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: const [
+            TopoSymbol(type: SymbolType.disabledHold, position: Offset(0.5, 0.5)),
+          ],
+        );
+        final painter = buildPainter(routes: [route], selectedRouteId: 1);
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, imageSize);
+
+        // The route is a 2-point polyline (a drawLine, not a path/circle) --
+        // and it's SELECTED, so it draws that line TWICE (emphasis-outline
+        // pass + normal pass; see TopoPainter.paint's isSelected branch).
+        // `withoutRouteLine` strips both copies so the recorded circle +
+        // line below come entirely from the disabledHold glyph itself.
+        final symbolLines = withoutRouteLine(
+          canvas.lines,
+          scenePt(const Offset(0.1, 0.1)),
+          scenePt(const Offset(0.9, 0.8)),
+        );
+        expect(canvas.circleCenters, hasLength(1));
+        expect(canvas.circlePaints.single.style, PaintingStyle.stroke);
+        expect(symbolLines, hasLength(1));
+
+        // The slash spans the circle's diameter (its endpoints sit exactly
+        // on the circle, at +/- radius along a 45 degree diagonal).
+        final center = canvas.circleCenters.single;
+        final radius = canvas.circleRadii.single;
+        final p1 = symbolLines.single.p1;
+        final p2 = symbolLines.single.p2;
+        expect((p1 - center).distance, closeTo(radius, 0.01));
+        expect((p2 - center).distance, closeTo(radius, 0.01));
+        // p1/p2 are diametrically opposite (their midpoint is the center).
+        expect(((p1 + p2) / 2 - center).distance, lessThan(0.01));
+      },
+    );
 
     test(
       'A4: selectedRouteId set to a route id renders it with a wider '
@@ -419,6 +504,184 @@ void main() {
         final unselectedWidth = unselectedCanvas.pathPaints.single.strokeWidth;
         final selectedMaxWidth = selectedCanvas.pathPaints.map((p) => p.strokeWidth).reduce((a, b) => a > b ? a : b);
         expect(selectedMaxWidth, greaterThan(unselectedWidth));
+      },
+    );
+
+    test(
+      'A5 (#43): an UNSELECTED route\'s symbols do NOT paint while its '
+      'line/label still DO -- selectedRouteId null means no committed '
+      'route\'s symbols paint at all',
+      () {
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [
+            Offset(0.1, 0.1),
+            Offset(0.4, 0.5),
+            Offset(0.9, 0.8),
+          ],
+          symbols: const [
+            TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
+            TopoSymbol(type: SymbolType.bolt, position: Offset(0.5, 0.5)),
+          ],
+        );
+
+        // selectedRouteId omitted entirely (null) -- route 1 is visible
+        // but not selected.
+        final canvas = _RecordingCanvas();
+        buildPainter(routes: [route]).paint(canvas, imageSize);
+
+        // The line still paints: a 3-point route draws exactly 1 path.
+        expect(canvas.paths, hasLength(1));
+        // The label still paints (drawParagraph isn't captured by
+        // _RecordingCanvas's noSuchMethod fallback for Paragraph text --
+        // paths/circles/lines below are the reliable signal here): no
+        // symbol draw calls leaked through. anchor -> circle, bolt -> 2
+        // lines; NEITHER shows up because the route isn't selected.
+        expect(canvas.circleCenters, isEmpty);
+        expect(canvas.lines, isEmpty);
+      },
+    );
+
+    test(
+      'A6 (#43): selecting the SAME route makes its symbols paint -- '
+      'toggling selectedRouteId from null to the route\'s id is the only '
+      'difference between the previous test and this one',
+      () {
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [
+            Offset(0.1, 0.1),
+            Offset(0.4, 0.5),
+            Offset(0.9, 0.8),
+          ],
+          symbols: const [
+            TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
+            TopoSymbol(type: SymbolType.bolt, position: Offset(0.5, 0.5)),
+          ],
+        );
+
+        final canvas = _RecordingCanvas();
+        buildPainter(routes: [route], selectedRouteId: 1).paint(canvas, imageSize);
+
+        // The route is a 3-point polyline, so it draws via drawPath (a
+        // Catmull-Rom spline), not drawLine. Selecting it draws that path
+        // TWICE -- an emphasis-outline pass plus the normal pass (see
+        // TopoPainter.paint's isSelected branch; same behavior A4 already
+        // covers for a 4-point route) -- so 2, not 1, is the correct count
+        // here; the route's own draw calls are otherwise unaffected by
+        // selection (still a single path shape, no path-count leak into the
+        // symbol assertions below).
+        expect(canvas.paths, hasLength(2));
+        expect(canvas.circleCenters, hasLength(1)); // anchor
+        expect(canvas.lines, hasLength(2)); // bolt's X
+      },
+    );
+
+    test(
+      'A7 (#43): with TWO visible routes, selecting one paints ONLY that '
+      'route\'s symbols -- the other route\'s line still renders but its '
+      'symbols do not',
+      () {
+        final selected = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: const [
+            TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.5)),
+          ],
+        );
+        final other = TopoRoute(
+          id: 2,
+          number: 2,
+          colorIndex: 1,
+          points: const [Offset(0.2, 0.8), Offset(0.7, 0.2)],
+          symbols: const [
+            TopoSymbol(type: SymbolType.bolt, position: Offset(0.4, 0.4)),
+          ],
+        );
+
+        final canvas = _RecordingCanvas();
+        buildPainter(routes: [selected, other], selectedRouteId: 1).paint(canvas, imageSize);
+
+        // Both routes are 2-point polylines (their own drawLine calls); the
+        // SELECTED route also draws its own line a second time as its
+        // emphasis-outline pass (see TopoPainter.paint's isSelected
+        // branch), so both its route-line entries are stripped below,
+        // alongside the other (unselected) route's own single line, before
+        // asserting on symbol-only draws. What proves the actual intent of
+        // this test -- that the OTHER route's bolt (2 lines) did NOT leak
+        // through -- is that `symbolLines` ends up EMPTY: if selection
+        // gating regressed, it would show 2 leaked lines here instead.
+        final symbolLines = withoutRouteLine(
+          withoutRouteLine(
+            canvas.lines,
+            scenePt(const Offset(0.1, 0.1)),
+            scenePt(const Offset(0.9, 0.8)),
+          ),
+          scenePt(const Offset(0.2, 0.8)),
+          scenePt(const Offset(0.7, 0.2)),
+        );
+        expect(symbolLines, isEmpty);
+        expect(canvas.circleCenters, hasLength(1)); // selected's anchor only
+      },
+    );
+
+    test(
+      'A5 per-route independence (#43/A5): the SAME hold position can be a '
+      'disabledHold marker on one route while a sibling route has no '
+      'symbol at all there -- proven at the painter level via each '
+      'route\'s own (independent) symbols list',
+      () {
+        const holdPosition = Offset(0.5, 0.5);
+        final routeAWithDisabledHold = TopoRoute(
+          id: 1,
+          number: 1,
+          colorIndex: 0,
+          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
+          symbols: const [
+            TopoSymbol(type: SymbolType.disabledHold, position: holdPosition),
+          ],
+        );
+        final routeBUnaffected = TopoRoute(
+          id: 2,
+          number: 2,
+          colorIndex: 1,
+          points: const [Offset(0.2, 0.8), Offset(0.7, 0.2)],
+          symbols: const [],
+        );
+
+        expect(routeAWithDisabledHold.symbols, isNotEmpty);
+        expect(routeBUnaffected.symbols, isEmpty);
+
+        // Select route A: its disabledHold glyph (circle + slash) paints;
+        // route B (no symbols regardless of selection) contributes none.
+        final canvas = _RecordingCanvas();
+        buildPainter(
+          routes: [routeAWithDisabledHold, routeBUnaffected],
+          selectedRouteId: 1,
+        ).paint(canvas, imageSize);
+
+        // Both routes are 2-point polylines (their own drawLine calls); the
+        // SELECTED route A also draws its own line a second time as its
+        // emphasis-outline pass (see TopoPainter.paint's isSelected
+        // branch). `withoutRouteLine` strips both of A's route-line entries
+        // plus B's single route line, leaving only disabledHold's slash.
+        final symbolLines = withoutRouteLine(
+          withoutRouteLine(
+            canvas.lines,
+            scenePt(const Offset(0.1, 0.1)),
+            scenePt(const Offset(0.9, 0.8)),
+          ),
+          scenePt(const Offset(0.2, 0.8)),
+          scenePt(const Offset(0.7, 0.2)),
+        );
+        expect(canvas.circleCenters, hasLength(1)); // disabledHold's ring
+        expect(symbolLines, hasLength(1)); // disabledHold's slash
       },
     );
   });
@@ -485,6 +748,7 @@ void main() {
           routes: [route],
           currentPoints: const [],
           showHandles: false,
+          selectedRouteId: 1,
           palette: palette,
           symbolPictures: {SymbolType.anchor: pic},
         );
@@ -528,6 +792,7 @@ void main() {
           routes: [route],
           currentPoints: const [],
           showHandles: false,
+          selectedRouteId: 1,
           palette: palette,
           symbolPictures: {SymbolType.rest: pic},
         );
@@ -574,6 +839,7 @@ void main() {
           routes: [route],
           currentPoints: const [],
           showHandles: false,
+          selectedRouteId: 1,
           palette: palette,
           // symbolPictures deliberately omitted -> defaults to const {}.
         );
@@ -1093,11 +1359,17 @@ void main() {
             ],
           );
 
-          final at1 = buildPainter(routes: [routeWithAnchor()]);
+          // selectedRouteId: 1 -- the route must be SELECTED for its
+          // anchor symbol to paint at all under feature #43's gating.
+          final at1 = buildPainter(routes: [routeWithAnchor()], selectedRouteId: 1);
           final canvas1 = _RecordingCanvas();
           at1.paint(canvas1, imageSize);
 
-          final at05 = buildPainter(routes: [routeWithAnchor()], scale: 0.5);
+          final at05 = buildPainter(
+            routes: [routeWithAnchor()],
+            selectedRouteId: 1,
+            scale: 0.5,
+          );
           final canvas05 = _RecordingCanvas();
           at05.paint(canvas05, imageSize);
 
@@ -1557,6 +1829,7 @@ void main() {
             TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),
             TopoSymbol(type: SymbolType.crux, position: Offset(0.5, 0.5)),
             TopoSymbol(type: SymbolType.rest, position: Offset(0.2, 0.6)),
+            TopoSymbol(type: SymbolType.disabledHold, position: Offset(0.6, 0.2)),
           ],
         ),
       ],

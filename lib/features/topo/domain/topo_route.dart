@@ -5,7 +5,15 @@ import 'package:flutter/foundation.dart';
 import '../../../core/grades/grade_system.dart';
 
 /// The kind of marker rendered at a point on a [TopoRoute].
-enum SymbolType { anchor, bolt, top, crux, rest }
+///
+/// [disabledHold] (feature #43) marks a hold as OFF/excluded for this
+/// specific route -- e.g. bouldering topos where the same hold is on-route
+/// for one problem but off-route for another sharing the same wall/photo.
+/// It's a marker like any other [SymbolType]: since [TopoRoute.symbols] is
+/// already per-route (not shared across routes), the same hold position can
+/// independently be a [disabledHold] on route A while route B has no such
+/// symbol at all -- no additional plumbing needed beyond this enum member.
+enum SymbolType { anchor, bolt, top, crux, rest, disabledHold }
 
 /// A single marker (e.g. bolt, anchor) placed on a route, in percent space.
 @immutable

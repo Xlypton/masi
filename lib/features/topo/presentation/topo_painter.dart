@@ -104,6 +104,31 @@ const double _labelEdgeMargin = 6.0;
 ///    (a "+" plus an "X", four spokes total).
 ///  - [SymbolType.rest]: a stroked circle outline with a small filled dot at
 ///    its center (always this geometry, never a glyph).
+///  - [SymbolType.disabledHold]: a prohibition/no-entry sign -- a stroked
+///    circle outline with a single diagonal slash through it. Always this
+///    hand-drawn geometry (like [SymbolType.rest]), never a preloaded glyph
+///    -- there is no masi brand asset mapped for it (see `TopoCanvas`'s
+///    `_symbolGlyphAssetNames`), so [symbolPictures] never contains an
+///    entry for it in practice, and [_paintSymbol] force-excludes it from
+///    the picture lookup defensively (same treatment as [SymbolType.rest])
+///    even if a caller ever mis-populated one.
+///
+/// ## Marker visibility is gated by route selection (feature #43)
+///
+/// A committed route's LINE (spline) and number LABEL render whenever
+/// `route.visible` -- unconditionally, regardless of selection, unchanged
+/// from the pre-#43 behavior. Its SYMBOLS (both [SymbolType.disabledHold]
+/// markers and every other [SymbolType]: anchor/bolt/top/crux/rest), by
+/// contrast, render ONLY when that route is ALSO the selected route
+/// (`route.id == selectedRouteId`) -- see [paint]'s committed-route loop.
+/// When [selectedRouteId] is null, no committed route's symbols paint at
+/// all. This keeps a busy multi-route topo legible: markers no longer pile
+/// up for every route at once, only for whichever one the climber is
+/// currently focused on (selected via the legend row or a canvas tap in
+/// view mode). The in-progress route's own symbols
+/// ([currentSymbols], a separate paint path from the committed-route loop)
+/// are UNAFFECTED by this gating -- they always render while being placed,
+/// regardless of [selectedRouteId].
 class TopoPainter extends CustomPainter {
   const TopoPainter({
     required this.imageSize,
@@ -185,8 +210,9 @@ class TopoPainter extends CustomPainter {
   /// mapping" section), keyed by [SymbolType], drawn via
   /// [Canvas.drawPicture] in [_paintSymbol] instead of that method's
   /// hand-drawn primitives for any type present here — EXCEPT
-  /// [SymbolType.rest], which always keeps its hand-drawn geometry even if
-  /// a caller supplied an entry for it. Defaults to empty so every
+  /// [SymbolType.rest] and [SymbolType.disabledHold], which always keep
+  /// their hand-drawn geometry even if a caller supplied an entry for
+  /// them. Defaults to empty so every
   /// pre-existing caller/test that constructs a [TopoPainter] directly
   /// (never passing this) keeps rendering the historical hand-drawn
   /// geometry unchanged, and so does any type whose glyph hasn't finished
@@ -236,8 +262,15 @@ class TopoPainter extends CustomPainter {
         _paintLabel(canvas, size, scenePoints, route.number);
       }
 
-      for (final symbol in route.symbols) {
-        _paintSymbol(canvas, CoordinateTransformer.percentToScene(symbol.position, imageSize), symbol.type, color);
+      // Feature #43: a committed route's symbols (disabled-hold markers +
+      // every other SymbolType) render ONLY while this route is the
+      // selected one -- unlike the line/label above, which always render
+      // for every visible route. This keeps a multi-route topo legible:
+      // markers don't pile up for routes the climber isn't focused on.
+      if (isSelected) {
+        for (final symbol in route.symbols) {
+          _paintSymbol(canvas, CoordinateTransformer.percentToScene(symbol.position, imageSize), symbol.type, color);
+        }
       }
     }
 
@@ -390,13 +423,16 @@ class TopoPainter extends CustomPainter {
     final radius = _symbolRadius / _safeScale;
 
     // Prefer the preloaded masi brand glyph for this type, if one has
-    // loaded — EXCEPT for SymbolType.rest, which has no dedicated brand
-    // icon and always keeps its hand-drawn geometry in the switch below
-    // regardless of what symbolPictures contains for it (defensive: this
-    // guarantees rest's geometry even if a caller ever mis-populated that
-    // entry). Any other type without a loaded picture yet falls through to
-    // the same switch, so a marker is never left blank while loading.
-    final picture = type == SymbolType.rest ? null : symbolPictures[type];
+    // loaded — EXCEPT for SymbolType.rest and SymbolType.disabledHold,
+    // neither of which has a dedicated brand icon; both always keep their
+    // hand-drawn geometry in the switch below regardless of what
+    // symbolPictures contains for them (defensive: this guarantees their
+    // geometry even if a caller ever mis-populated an entry). Any other
+    // type without a loaded picture yet falls through to the same switch,
+    // so a marker is never left blank while loading.
+    final picture = (type == SymbolType.rest || type == SymbolType.disabledHold)
+        ? null
+        : symbolPictures[type];
     if (picture != null) {
       _paintSymbolPicture(canvas, center, picture, color, radius);
       return;
@@ -456,6 +492,16 @@ class TopoPainter extends CustomPainter {
         // A stroked circle outline with a small filled center dot.
         canvas.drawCircle(center, radius, strokePaint);
         canvas.drawCircle(center, radius / 3, fillPaint);
+        break;
+      case SymbolType.disabledHold:
+        // A prohibition/no-entry sign: a stroked circle outline with a
+        // single diagonal slash through it (NW->SE), distinct from every
+        // other glyph above -- unlike bolt's X (two crossed lines, no
+        // circle) or rest's ring+center-dot (two circles, no line), this
+        // is exactly one circle plus one line.
+        canvas.drawCircle(center, radius, strokePaint);
+        final slash = Offset(radius * 0.70710678, radius * 0.70710678);
+        canvas.drawLine(center - slash, center + slash, strokePaint);
         break;
     }
   }

@@ -13,7 +13,7 @@
 //  - Tapping Route re-selects it and clears `activeSymbol` back to null.
 // "Visibly selected" is checked two ways at every step: the controller's
 // `activeSymbol` (the source of truth) AND the actual rendered
-// `BoxDecoration.color` of every one of the six palette controls, to prove
+// `BoxDecoration.color` of every one of the seven palette controls, to prove
 // the "exactly one control is ever visibly selected" invariant holds across
 // the whole row, not just for the two controls under test.
 //
@@ -87,6 +87,8 @@ const _allPaletteKeys = [
   Key('topo-symbol-top'),
   Key('topo-symbol-crux'),
   Key('topo-symbol-rest'),
+  // Feature #43: the per-route disabled/excluded-hold marker tool.
+  Key('topo-symbol-disabledHold'),
 ];
 
 /// Reads the `BoxDecoration.color` of the `Container` inside the
@@ -101,7 +103,7 @@ Color? _decorationColorFor(WidgetTester tester, Key key) {
   return (containerWidget.decoration as BoxDecoration?)?.color;
 }
 
-/// Asserts that, of all six palette controls, ONLY [expected] renders with
+/// Asserts that, of all seven palette controls, ONLY [expected] renders with
 /// a non-null (selected) decoration color -- the "exactly one palette tool
 /// is visibly selected at a time" invariant (A3).
 void _expectOnlySelected(WidgetTester tester, Key expected) {

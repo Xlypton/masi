@@ -566,6 +566,65 @@ void main() {
   );
 
   test(
+    'S3b (#43): a disabledHold marker placed on route A at a given hold '
+    'position leaves a sibling route B (sharing the same photo/wall) '
+    'entirely unaffected at that SAME position -- proves the per-route '
+    "excluded-hold marker doesn't leak across routes (symbols are already "
+    'independent per-TopoRoute, so this needs no new plumbing beyond the '
+    'new SymbolType member)',
+    () async {
+      final notifier = container.read(drawControllerProvider.notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      notifier.commitRoute();
+
+      notifier.addPoint(const Offset(0.3, 0.3));
+      notifier.addPoint(const Offset(0.4, 0.4));
+      notifier.commitRoute();
+
+      final routes = container.read(drawControllerProvider).routes;
+      final routeA = routes[0];
+      final routeB = routes[1];
+      const holdPosition = Offset(0.15, 0.15);
+
+      notifier.selectRoute(routeA.id);
+      notifier.setActiveSymbol(SymbolType.disabledHold);
+      final outcome = await notifier.placeSymbol(holdPosition);
+
+      expect(outcome, SymbolPlacementOutcome.placed);
+
+      final state = container.read(drawControllerProvider);
+      final updatedA = state.routes.firstWhere((r) => r.id == routeA.id);
+      final updatedB = state.routes.firstWhere((r) => r.id == routeB.id);
+
+      // Route A has the hold marked off (disabledHold) at holdPosition...
+      expect(updatedA.symbols, [
+        const TopoSymbol(type: SymbolType.disabledHold, position: holdPosition),
+      ]);
+      // ...while route B has NO symbol at all there (or anywhere) -- the
+      // same physical hold can be off for A and untouched for B.
+      expect(updatedB.symbols, isEmpty);
+
+      // Now mark the SAME position as disabledHold on route B too, and
+      // confirm route A is untouched by that second, independent write.
+      notifier.selectRoute(routeB.id);
+      final outcomeB = await notifier.placeSymbol(holdPosition);
+      expect(outcomeB, SymbolPlacementOutcome.placed);
+
+      final finalState = container.read(drawControllerProvider);
+      final finalA = finalState.routes.firstWhere((r) => r.id == routeA.id);
+      final finalB = finalState.routes.firstWhere((r) => r.id == routeB.id);
+      expect(finalA.symbols, [
+        const TopoSymbol(type: SymbolType.disabledHold, position: holdPosition),
+      ]);
+      expect(finalB.symbols, [
+        const TopoSymbol(type: SymbolType.disabledHold, position: holdPosition),
+      ]);
+    },
+  );
+
+  test(
     'S4: addPoint still appends to currentPoints exactly as before when no '
     'symbol is active -- the line-drawing path is untouched by the '
     'placeSymbol auto-select/hint fix',
