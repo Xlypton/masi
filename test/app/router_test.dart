@@ -440,5 +440,53 @@ void main() {
         );
       },
     );
+
+    testWidgets(
+      '#48: the NavShell Scaffold only sets extendBody while the Map '
+      'branch is active, so the map draws full-bleed behind the '
+      'translucent bar while Topos/Feed keep the bar inset as before',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        // The NavShell's OWN Scaffold is the one holding the bottom-nav
+        // bar -- distinct from ToposScreen's/CommunityMapScreen's own
+        // per-branch Scaffolds, neither of which sets a
+        // `bottomNavigationBar`.
+        Scaffold navShellScaffold() => tester.widget<Scaffold>(
+          find.byWidgetPredicate(
+            (widget) => widget is Scaffold && widget.bottomNavigationBar != null,
+          ),
+        );
+
+        expect(
+          navShellScaffold().extendBody,
+          isFalse,
+          reason: 'Topos (default tab) must keep the bar inset, not full-bleed',
+        );
+
+        await tester.tap(find.byKey(const Key('nav-tab-map')));
+        await _pumpBounded(tester);
+        expect(
+          navShellScaffold().extendBody,
+          isTrue,
+          reason: 'Map must draw full-bleed behind the translucent bar',
+        );
+
+        await tester.tap(find.byKey(const Key('nav-tab-feed')));
+        await _drain(tester);
+        expect(
+          navShellScaffold().extendBody,
+          isFalse,
+          reason: 'Feed must keep the bar inset like Topos, not full-bleed',
+        );
+
+        await tester.tap(find.byKey(const Key('nav-tab-topos')));
+        await _drain(tester);
+        expect(navShellScaffold().extendBody, isFalse);
+      },
+    );
   });
 }

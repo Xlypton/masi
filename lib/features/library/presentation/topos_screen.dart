@@ -276,31 +276,48 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                 MasiSpacing.lg,
                 MasiSpacing.lg,
               ),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  key: const Key('topos-new-topo'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: colors.accent,
-                    foregroundColor: colors.onAccent,
-                    // Without these, Material's disabled-state fallback
-                    // (onSurface @ ~38% alpha) takes over while the topos
-                    // list is loading or a create is in-flight, reading as
-                    // dark low-contrast text on the still-purple background.
-                    // Keep the accent fill so the button doesn't visibly
-                    // change shape/color, but dim the label just enough to
-                    // read as "disabled" while staying legible.
-                    disabledBackgroundColor: colors.accent,
-                    disabledForegroundColor: colors.onAccent.withValues(
-                      alpha: 0.7,
+              child: Align(
+                alignment: Alignment.centerRight,
+                // A compact circular plus button (#49), not the previous
+                // full-width "New topo" bar -- device feedback flagged the
+                // full-width button as too visually heavy for what's a
+                // single-tap add affordance. Still an [ElevatedButton] (not
+                // a `FloatingActionButton`) so its `key`/`onPressed` and the
+                // disabled/enabled `ButtonStyle` colors below -- asserted
+                // pixel-for-pixel by `topos_screen_test.dart`'s contrast
+                // tests -- are untouched; only the shape/size/child changed.
+                child: SizedBox(
+                  width: 48,
+                  height: 48,
+                  child: ElevatedButton(
+                    key: const Key('topos-new-topo'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: colors.accent,
+                      foregroundColor: colors.onAccent,
+                      // Without these, Material's disabled-state fallback
+                      // (onSurface @ ~38% alpha) takes over while the topos
+                      // list is loading or a create is in-flight, reading as
+                      // dark low-contrast text on the still-purple background.
+                      // Keep the accent fill so the button doesn't visibly
+                      // change shape/color, but dim the label just enough to
+                      // read as "disabled" while staying legible.
+                      disabledBackgroundColor: colors.accent,
+                      disabledForegroundColor: colors.onAccent.withValues(
+                        alpha: 0.7,
+                      ),
+                      padding: EdgeInsets.zero,
+                      shape: const CircleBorder(),
                     ),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(13),
-                    ),
+                    onPressed: canCreate ? _handleNewTopo : null,
+                    // No explicit `color`: `ButtonStyleButton` merges an
+                    // `IconTheme` from this button's own `foregroundColor`/
+                    // `disabledForegroundColor` above (falling back to
+                    // `foregroundColor` since no separate `iconColor` is
+                    // set), so the glyph inherits the SAME onAccent-enabled
+                    // / dimmed-disabled contrast the old `Text('New topo')`
+                    // had -- just on an icon instead of a label.
+                    child: const MasiIcon('add', size: 22),
                   ),
-                  onPressed: canCreate ? _handleNewTopo : null,
-                  child: const Text('New topo'),
                 ),
               ),
             ),
@@ -497,7 +514,7 @@ class _ToposFilterBar extends StatelessWidget {
               controller: searchController,
               decoration: InputDecoration(
                 hintText: 'Search topos',
-                prefixIcon: MasiIcon('search', size: 16, color: colors.ink3),
+                prefixIcon: MasiIcon('search', size: 13, color: colors.ink3),
                 filled: true,
                 fillColor: colors.surface2,
                 border: OutlineInputBorder(

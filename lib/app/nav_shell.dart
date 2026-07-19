@@ -19,6 +19,22 @@ import 'theme.dart';
 /// floats, content is king." (a topo canvas or a topo's read-only community
 /// detail is a focused, full-screen task, not one of the three persistent
 /// tabs).
+///
+/// The Map branch (index 1, see `router.dart`) is full-bleed (#48): [build]
+/// sets `Scaffold.extendBody` ONLY while that branch is active, so the
+/// [FlutterMap] draws edge-to-edge behind the translucent [GlassChrome] bar
+/// (matching the bar's own now-see-through look) while Topos/Feed (indices 0
+/// and 2) keep the bar inset above their body exactly as before — least-risk
+/// because `extendBody` toggles per-tab rather than globally, so nothing
+/// about the other two branches' layout/tests changes. The Map view itself
+/// (`community_screen.dart`'s `_MapView`) pads its bottom-anchored overlay
+/// controls (find-me, legend, attribution) by `MediaQuery.of(context)
+/// .padding.bottom` so they still float ABOVE the bar instead of being
+/// obscured by it — under `extendBody`, Flutter's own `Scaffold` computes
+/// that value as the REAL measured `bottomNavigationBar` height (maxed with
+/// the device safe-area inset, see `_BodyBuilder`/`bottomWidgetsHeight` in
+/// `scaffold.dart`), so this stays correct across text-scale/device changes
+/// without a hand-maintained height constant.
 class NavShell extends StatelessWidget {
   const NavShell({super.key, required this.navigationShell});
 
@@ -31,6 +47,10 @@ class NavShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: navigationShell,
+      // Only the Map branch (index 1) extends under the bar (#48) — see
+      // this class's doc. Topos/Feed keep `extendBody: false` (the Scaffold
+      // default), so their body is inset above the bar exactly as before.
+      extendBody: navigationShell.currentIndex == 1,
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(

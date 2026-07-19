@@ -175,7 +175,17 @@ class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
         ),
         centerTitle: false,
       ),
+      // `bottom: false` (#48): this screen's `_MapView` is the full-bleed
+      // Map branch behind `NavShell`'s translucent bar (that Scaffold uses
+      // `extendBody` only for this branch — see its doc), so the bottom
+      // device safe-area inset must NOT be consumed/padded away here. If it
+      // were, the map would stop short at the safe-area edge -- the SAME
+      // footprint as before extendBody -- rather than truly extending
+      // behind the bar. `_MapView` reads that still-live
+      // `MediaQuery.padding.bottom` itself (`bottomChromeInset`) to keep its
+      // OWN bottom-anchored overlay controls floating above the bar instead.
       body: SafeArea(
+        bottom: false,
         child: asyncSharedTopos.when(
           data: (topos) => _MapView(
             topos: topos,
@@ -317,7 +327,7 @@ class _FeedView extends ConsumerWidget {
                     hintText: 'Search topos',
                     prefixIcon: MasiIcon(
                       'search',
-                      size: 16,
+                      size: 13,
                       color: colors.ink3,
                     ),
                     filled: true,
@@ -1149,6 +1159,22 @@ class _MapViewState extends ConsumerState<_MapView> {
     final colors = MasiColors.of(context);
     final withCoords = filteredTopos.where((t) => t.hasCoordinates).toList();
 
+    // The Map branch draws full-bleed behind the floating glass bottom-nav
+    // bar (#48, see `nav_shell.dart`'s `NavShell` doc: it's the only branch
+    // with `Scaffold.extendBody: true`), so this view's OWN bottom-anchored
+    // overlay chrome -- the find-me control below, plus the attribution/
+    // legend pills baked into `flutterMap`'s children -- must add clearance
+    // itself or it renders obscured behind the bar. Under `extendBody`,
+    // Flutter's `Scaffold` already computes exactly that clearance for us:
+    // `MediaQuery.of(context).padding.bottom` here is the REAL measured
+    // `bottomNavigationBar` height (maxed with the device safe-area inset —
+    // see `_BodyBuilder`/`bottomWidgetsHeight` in Flutter's `scaffold.dart`),
+    // reaching this widget unconsumed because `CommunityMapScreen`'s own
+    // `SafeArea` above uses `bottom: false`. No hand-maintained height
+    // constant needed, and it stays correct across text-scale/device
+    // changes.
+    final bottomChromeInset = MediaQuery.of(context).padding.bottom;
+
     // The unified map search's local-content half (B2): reactively watched
     // (rather than one-shot `ref.read`) so results stay correct even if the
     // underlying located-topo/route/sector/area streams hadn't emitted their
@@ -1445,7 +1471,7 @@ class _MapViewState extends ConsumerState<_MapView> {
           child: Align(
             alignment: Alignment.bottomRight,
             child: Padding(
-              padding: const EdgeInsets.all(6),
+              padding: EdgeInsets.fromLTRB(6, 6, 6, 6 + bottomChromeInset),
               child: DecoratedBox(
                 decoration: BoxDecoration(
                   color: colors.surface.withValues(alpha: 0.85),
@@ -1480,7 +1506,7 @@ class _MapViewState extends ConsumerState<_MapView> {
           child: Align(
             alignment: Alignment.bottomLeft,
             child: Padding(
-              padding: const EdgeInsets.all(6),
+              padding: EdgeInsets.fromLTRB(6, 6, 6, 6 + bottomChromeInset),
               child: _MapLegend(colors: colors),
             ),
           ),
@@ -1548,7 +1574,7 @@ class _MapViewState extends ConsumerState<_MapView> {
                     hintText: 'Search the map',
                     prefixIcon: MasiIcon(
                       'search',
-                      size: 16,
+                      size: 13,
                       color: colors.ink3,
                     ),
                     filled: true,
@@ -1658,7 +1684,7 @@ class _MapViewState extends ConsumerState<_MapView> {
         ),
         Positioned(
           right: 8,
-          bottom: 44,
+          bottom: 44 + bottomChromeInset,
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
