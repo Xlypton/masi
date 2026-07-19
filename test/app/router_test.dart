@@ -8,6 +8,7 @@ import 'package:climbtopo/features/library/presentation/areas_screen.dart';
 import 'package:climbtopo/features/library/presentation/topos_screen.dart';
 import 'package:climbtopo/features/logbook/presentation/logbook_screen.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:climbtopo/shared/presentation/masi_icon.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -442,9 +443,9 @@ void main() {
     );
 
     testWidgets(
-      '#48: the NavShell Scaffold only sets extendBody while the Map '
-      'branch is active, so the map draws full-bleed behind the '
-      'translucent bar while Topos/Feed keep the bar inset as before',
+      '#51: the NavShell Scaffold sets extendBody unconditionally, so '
+      'every branch (Topos/Map/Feed) draws full-bleed behind the floating '
+      'translucent bar',
       (tester) async {
         final container = _makeContainer();
 
@@ -463,8 +464,8 @@ void main() {
 
         expect(
           navShellScaffold().extendBody,
-          isFalse,
-          reason: 'Topos (default tab) must keep the bar inset, not full-bleed',
+          isTrue,
+          reason: 'Topos (default tab) must draw full-bleed behind the bar',
         );
 
         await tester.tap(find.byKey(const Key('nav-tab-map')));
@@ -479,13 +480,35 @@ void main() {
         await _drain(tester);
         expect(
           navShellScaffold().extendBody,
-          isFalse,
-          reason: 'Feed must keep the bar inset like Topos, not full-bleed',
+          isTrue,
+          reason: 'Feed must also draw full-bleed behind the bar',
         );
 
         await tester.tap(find.byKey(const Key('nav-tab-topos')));
         await _drain(tester);
-        expect(navShellScaffold().extendBody, isFalse);
+        expect(navShellScaffold().extendBody, isTrue);
+      },
+    );
+
+    testWidgets(
+      '#50: the Topos tab icon is the routes glyph (not the wall glyph), '
+      'while Map/Feed keep their existing glyphs',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        MasiIcon iconInTab(Key tabKey) => tester.widget<MasiIcon>(
+          find.descendant(
+            of: find.byKey(tabKey),
+            matching: find.byType(MasiIcon),
+          ),
+        );
+
+        expect(iconInTab(const Key('nav-tab-topos')).name, 'route');
+        expect(iconInTab(const Key('nav-tab-map')).name, 'topo_map');
+        expect(iconInTab(const Key('nav-tab-feed')).name, 'comment');
       },
     );
   });

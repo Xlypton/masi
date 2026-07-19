@@ -136,7 +136,18 @@ class _FakeLocationService implements LocationService {
 /// flow's post-create push) resolve against a real `GoRouter` instead of
 /// throwing for lack of one. The pushed-to routes only need to exist, not
 /// look like anything real.
-Widget _wrap(ProviderContainer container, Widget screen) {
+/// [bottomChromeInset], when given, overrides the ambient
+/// `MediaQuery.padding.bottom` seen by [screen] — used only by the #51
+/// floating-bar-inset test below to simulate the REAL non-zero clearance
+/// `NavShell`'s `extendBody: true` Scaffold reports to its body in
+/// production (this bare `_wrap` harness has no `NavShell` of its own, so
+/// the ambient inset would otherwise always be 0). Every other existing
+/// call site leaves this null, so its behavior is completely unchanged.
+Widget _wrap(
+  ProviderContainer container,
+  Widget screen, {
+  double? bottomChromeInset,
+}) {
   final router = GoRouter(
     initialLocation: '/',
     routes: [
@@ -164,7 +175,18 @@ Widget _wrap(ProviderContainer container, Widget screen) {
   );
   return UncontrolledProviderScope(
     container: container,
-    child: MaterialApp.router(theme: MasiTheme.light, routerConfig: router),
+    child: MaterialApp.router(
+      theme: MasiTheme.light,
+      routerConfig: router,
+      builder: bottomChromeInset == null
+          ? null
+          : (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(padding: EdgeInsets.only(bottom: bottomChromeInset)),
+              child: child!,
+            ),
+    ),
   );
 }
 
@@ -352,6 +374,55 @@ void main() {
         // error-out/show a broken-image icon) should be present at all —
         // only the gradient fallback container.
         expect(find.byType(Image), findsNothing);
+      },
+    );
+
+    testWidgets(
+      '#51: the topos list folds the floating bottom bar\'s clearance into '
+      'its own bottom padding, so the last row is not left hidden behind it',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            toposProvider.overrideWith(
+              (ref) => Stream.value(const [
+                TopoRef(
+                  wallId: 'wall-1',
+                  name: 'Topo One',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 1000,
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        // Simulates the REAL, non-zero clearance `NavShell`'s
+        // `extendBody: true` Scaffold reports to this screen's body in
+        // production (see `nav_shell.dart`'s doc) -- this bare harness has
+        // no `NavShell` of its own, so without this override the ambient
+        // inset would always be 0 and this test couldn't tell the fold-in
+        // from a no-op.
+        await tester.pumpWidget(
+          _wrap(container, const ToposScreen(), bottomChromeInset: 40),
+        );
+        await _drain(tester);
+
+        final listView = tester.widget<ListView>(find.byType(ListView));
+        final padding = listView.padding as EdgeInsets;
+        expect(
+          padding.bottom,
+          greaterThanOrEqualTo(40),
+          reason:
+              'the list\'s bottom padding must include the floating bar\'s '
+              'clearance so its last row scrolls clear of the bar instead '
+              'of ending up hidden behind it',
+        );
       },
     );
   });

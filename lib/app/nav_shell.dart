@@ -20,21 +20,25 @@ import 'theme.dart';
 /// detail is a focused, full-screen task, not one of the three persistent
 /// tabs).
 ///
-/// The Map branch (index 1, see `router.dart`) is full-bleed (#48): [build]
-/// sets `Scaffold.extendBody` ONLY while that branch is active, so the
-/// [FlutterMap] draws edge-to-edge behind the translucent [GlassChrome] bar
-/// (matching the bar's own now-see-through look) while Topos/Feed (indices 0
-/// and 2) keep the bar inset above their body exactly as before — least-risk
-/// because `extendBody` toggles per-tab rather than globally, so nothing
-/// about the other two branches' layout/tests changes. The Map view itself
-/// (`community_screen.dart`'s `_MapView`) pads its bottom-anchored overlay
-/// controls (find-me, legend, attribution) by `MediaQuery.of(context)
-/// .padding.bottom` so they still float ABOVE the bar instead of being
-/// obscured by it — under `extendBody`, Flutter's own `Scaffold` computes
-/// that value as the REAL measured `bottomNavigationBar` height (maxed with
-/// the device safe-area inset, see `_BodyBuilder`/`bottomWidgetsHeight` in
-/// `scaffold.dart`), so this stays correct across text-scale/device changes
-/// without a hand-maintained height constant.
+/// ALL THREE branches are full-bleed (#48, generalized by #51): [build] sets
+/// `Scaffold.extendBody: true` unconditionally, so every branch's content
+/// draws edge-to-edge behind the translucent [GlassChrome] bar rather than
+/// being inset above it — the bar floats over Topos/Map/Feed alike, matching
+/// DESIGN.md's "Chrome floats, content is king." Each branch's own scrolling
+/// content adds bottom clearance for itself (rather than the Scaffold
+/// insetting the whole body) by reading `MediaQuery.of(context)
+/// .padding.bottom` and folding it into its scroll view's bottom padding:
+/// `community_screen.dart`'s `_MapView` for its bottom-anchored overlay
+/// controls (find-me, legend, attribution), `_FeedView`'s list, and
+/// `topos_screen.dart`'s `_ToposList` + compact add button. Under
+/// `extendBody`, Flutter's own `Scaffold` computes that value as the REAL
+/// measured `bottomNavigationBar` height (maxed with the device safe-area
+/// inset, see `_BodyBuilder`/`bottomWidgetsHeight` in `scaffold.dart`), so
+/// this stays correct across text-scale/device changes without a
+/// hand-maintained height constant. Each screen's own top-level `SafeArea`
+/// uses `bottom: false` so that measured value reaches its scroll view
+/// unconsumed, exactly like `CommunityMapScreen` already did for the Map
+/// branch pre-#51.
 class NavShell extends StatelessWidget {
   const NavShell({super.key, required this.navigationShell});
 
@@ -47,10 +51,9 @@ class NavShell extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       body: navigationShell,
-      // Only the Map branch (index 1) extends under the bar (#48) — see
-      // this class's doc. Topos/Feed keep `extendBody: false` (the Scaffold
-      // default), so their body is inset above the bar exactly as before.
-      extendBody: navigationShell.currentIndex == 1,
+      // Every branch extends under the floating bar now (#51) — see this
+      // class's doc.
+      extendBody: true,
       bottomNavigationBar: SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
@@ -71,7 +74,7 @@ class NavShell extends StatelessWidget {
                 Expanded(
                   child: _NavTab(
                     tabKey: const Key('nav-tab-topos'),
-                    iconName: 'wall',
+                    iconName: 'route',
                     label: 'Topos',
                     selected: navigationShell.currentIndex == 0,
                     onTap: () => navigationShell.goBranch(0),

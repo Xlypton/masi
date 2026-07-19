@@ -7,6 +7,7 @@ import 'package:climbtopo/core/location/location_service.dart';
 import 'package:climbtopo/features/account/application/auth_providers.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/community/application/community_providers.dart';
+import 'package:climbtopo/features/community/data/community_repository.dart';
 import 'package:climbtopo/features/community/presentation/community_screen.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
 import 'package:climbtopo/shared/filtering/grade_range.dart';
@@ -113,7 +114,19 @@ ProviderContainer _makeContainer({LocationService? locationService}) {
 /// Wraps [screen] in a real (minimal) [GoRouter] so `context.push` calls to
 /// `/community/topo/:wallId` resolve against a real router instead of
 /// throwing for lack of one.
-Widget _wrap(ProviderContainer container, Widget screen) {
+///
+/// [bottomChromeInset], when given, overrides the ambient
+/// `MediaQuery.padding.bottom` seen by [screen] — used only by the #51
+/// floating-bar-inset test below to simulate the REAL non-zero clearance
+/// `NavShell`'s `extendBody: true` Scaffold reports to its body in
+/// production (this bare harness has no `NavShell` of its own, so the
+/// ambient inset would otherwise always be 0). Every other existing call
+/// site leaves this null, so its behavior is completely unchanged.
+Widget _wrap(
+  ProviderContainer container,
+  Widget screen, {
+  double? bottomChromeInset,
+}) {
   final router = GoRouter(
     initialLocation: '/',
     routes: [
@@ -126,7 +139,18 @@ Widget _wrap(ProviderContainer container, Widget screen) {
   );
   return UncontrolledProviderScope(
     container: container,
-    child: MaterialApp.router(theme: MasiTheme.light, routerConfig: router),
+    child: MaterialApp.router(
+      theme: MasiTheme.light,
+      routerConfig: router,
+      builder: bottomChromeInset == null
+          ? null
+          : (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(padding: EdgeInsets.only(bottom: bottomChromeInset)),
+              child: child!,
+            ),
+    ),
   );
 }
 
@@ -2392,6 +2416,59 @@ void main() {
         expect(
           find.byKey(const Key('community-search-field')),
           findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      '#51: the feed list folds the floating bottom bar\'s clearance into '
+      'its own bottom padding, so the last row is not left hidden behind it',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            sharedToposProvider.overrideWith(
+              (ref) => Stream.value(const [
+                SharedTopo(
+                  wallId: 'wall-1',
+                  name: 'Shared Wall',
+                  routeCount: 1,
+                  likeCount: 0,
+                  commentCount: 0,
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        // Simulates the REAL, non-zero clearance `NavShell`'s
+        // `extendBody: true` Scaffold reports to this screen's body in
+        // production (see `nav_shell.dart`'s doc) -- this bare harness has
+        // no `NavShell` of its own, so without this override the ambient
+        // inset would always be 0 and this test couldn't tell the fold-in
+        // from a no-op.
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            const CommunityFeedScreen(),
+            bottomChromeInset: 40,
+          ),
+        );
+        await _drain(tester);
+
+        final listView = tester.widget<ListView>(find.byType(ListView));
+        final padding = listView.padding as EdgeInsets;
+        expect(
+          padding.bottom,
+          greaterThanOrEqualTo(40),
+          reason:
+              'the list\'s bottom padding must include the floating bar\'s '
+              'clearance so its last row scrolls clear of the bar instead '
+              'of ending up hidden behind it',
         );
       },
     );

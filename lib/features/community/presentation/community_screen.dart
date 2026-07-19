@@ -175,13 +175,13 @@ class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
         ),
         centerTitle: false,
       ),
-      // `bottom: false` (#48): this screen's `_MapView` is the full-bleed
-      // Map branch behind `NavShell`'s translucent bar (that Scaffold uses
-      // `extendBody` only for this branch — see its doc), so the bottom
-      // device safe-area inset must NOT be consumed/padded away here. If it
-      // were, the map would stop short at the safe-area edge -- the SAME
-      // footprint as before extendBody -- rather than truly extending
-      // behind the bar. `_MapView` reads that still-live
+      // `bottom: false` (#48, now shared by every branch since #51): this
+      // screen's `_MapView` draws full-bleed behind `NavShell`'s translucent
+      // bar (that Scaffold sets `extendBody: true` unconditionally — see its
+      // doc), so the bottom device safe-area inset must NOT be consumed/
+      // padded away here. If it were, the map would stop short at the
+      // safe-area edge -- the SAME footprint as before extendBody -- rather
+      // than truly extending behind the bar. `_MapView` reads that still-live
       // `MediaQuery.padding.bottom` itself (`bottomChromeInset`) to keep its
       // OWN bottom-anchored overlay controls floating above the bar instead.
       body: SafeArea(
@@ -255,7 +255,14 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
         ),
         centerTitle: false,
       ),
+      // `bottom: false` (#51, mirrors `CommunityMapScreen`'s identical
+      // `SafeArea` above): NavShell's Scaffold now extends every branch
+      // full-bleed behind its floating glass bar, so this screen's REAL
+      // measured bottom clearance must reach `_FeedView`'s list unconsumed
+      // rather than being padded away here — see that widget's `build` for
+      // where it's actually applied.
       body: SafeArea(
+        bottom: false,
         child: asyncSharedTopos.when(
           data: (topos) => _FeedView(
             topos: topos,
@@ -295,6 +302,12 @@ class _FeedView extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
     final filter = ref.watch(communityFilterProvider);
+    // The floating bottom bar's occupied height (#51 — see `nav_shell.dart`'s
+    // doc): `CommunityFeedScreen`'s own `SafeArea` above uses `bottom: false`
+    // so this real measured value reaches here unconsumed, then gets folded
+    // into the list's own bottom padding below so its last row scrolls clear
+    // of the bar instead of ending up hidden behind it.
+    final bottomChromeInset = MediaQuery.of(context).padding.bottom;
     final searchFiltered = query.isEmpty
         ? topos
         : topos.where((t) => t.name.toLowerCase().contains(query)).toList();
@@ -356,9 +369,11 @@ class _FeedView extends ConsumerWidget {
           child: emptyMessage != null
               ? _EmptyState(message: emptyMessage)
               : ListView.separated(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: MasiSpacing.lg,
-                    vertical: MasiSpacing.sm,
+                  padding: EdgeInsets.fromLTRB(
+                    MasiSpacing.lg,
+                    MasiSpacing.sm,
+                    MasiSpacing.lg,
+                    MasiSpacing.sm + bottomChromeInset,
                   ),
                   itemCount: filtered.length,
                   separatorBuilder: (context, index) =>
@@ -1160,9 +1175,10 @@ class _MapViewState extends ConsumerState<_MapView> {
     final withCoords = filteredTopos.where((t) => t.hasCoordinates).toList();
 
     // The Map branch draws full-bleed behind the floating glass bottom-nav
-    // bar (#48, see `nav_shell.dart`'s `NavShell` doc: it's the only branch
-    // with `Scaffold.extendBody: true`), so this view's OWN bottom-anchored
-    // overlay chrome -- the find-me control below, plus the attribution/
+    // bar (#48, generalized to every branch by #51 — see `nav_shell.dart`'s
+    // `NavShell` doc: `Scaffold.extendBody: true` unconditionally), so this
+    // view's OWN bottom-anchored overlay chrome -- the find-me control below,
+    // plus the attribution/
     // legend pills baked into `flutterMap`'s children -- must add clearance
     // itself or it renders obscured behind the bar. Under `extendBody`,
     // Flutter's `Scaffold` already computes exactly that clearance for us:

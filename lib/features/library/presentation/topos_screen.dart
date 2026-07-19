@@ -143,6 +143,17 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         ? authSession.email!
         : null;
 
+    // NavShell's Scaffold now extends every branch's body full-bleed behind
+    // its floating glass bottom bar (#51) — this screen's own `SafeArea`
+    // below uses `bottom: false` so this REAL measured clearance (the bar's
+    // occupied height, maxed with the device safe-area inset — see
+    // `nav_shell.dart`'s doc) reaches here unconsumed, exactly like
+    // `community_screen.dart`'s `CommunityMapScreen` already did pre-#51.
+    // Folded into `_ToposList`'s scroll padding and the compact add button's
+    // own bottom padding below so neither the last topo row nor the button
+    // ends up hidden behind the bar.
+    final bottomChromeInset = MediaQuery.of(context).padding.bottom;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -194,6 +205,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         ],
       ),
       body: SafeArea(
+        bottom: false,
         child: Column(
           children: [
             _ToposFilterBar(
@@ -246,6 +258,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   }
                   return _ToposList(
                     entries: filtered,
+                    bottomInset: bottomChromeInset,
                     setLocationTileProvider: widget.setLocationTileProvider,
                     setLocationMapController: widget.setLocationMapController,
                     setLocationLocationService:
@@ -270,11 +283,11 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(
+              padding: EdgeInsets.fromLTRB(
                 MasiSpacing.lg,
                 MasiSpacing.md,
                 MasiSpacing.lg,
-                MasiSpacing.lg,
+                MasiSpacing.lg + bottomChromeInset,
               ),
               child: Align(
                 alignment: Alignment.centerRight,
@@ -831,12 +844,20 @@ class _FilterSegmentLabel extends StatelessWidget {
 class _ToposList extends StatelessWidget {
   const _ToposList({
     required this.entries,
+    this.bottomInset = 0,
     this.setLocationTileProvider,
     this.setLocationMapController,
     this.setLocationLocationService,
   });
 
   final List<ProximityTopoEntry> entries;
+
+  /// Extra bottom clearance (the floating bottom bar's occupied height —
+  /// see `ToposScreen.build`'s `bottomChromeInset`) folded into this list's
+  /// own bottom padding so its last row scrolls clear of the bar instead of
+  /// ending up hidden behind it (#51). Defaults to 0 so any other caller
+  /// (none currently) still gets the old, un-padded behavior.
+  final double bottomInset;
   final TileProvider? setLocationTileProvider;
   final MapController? setLocationMapController;
   final LocationService? setLocationLocationService;
@@ -844,9 +865,11 @@ class _ToposList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListView.separated(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MasiSpacing.lg,
-        vertical: MasiSpacing.md,
+      padding: EdgeInsets.fromLTRB(
+        MasiSpacing.lg,
+        MasiSpacing.md,
+        MasiSpacing.lg,
+        MasiSpacing.md + bottomInset,
       ),
       itemCount: entries.length,
       separatorBuilder: (context, index) =>
