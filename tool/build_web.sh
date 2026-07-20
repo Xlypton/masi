@@ -48,11 +48,16 @@ echo "==> drift/sqlite3 WASM asset check"
 if [[ -f web/sqlite3.wasm && -f web/drift_worker.js ]]; then
   echo "    ok: web/sqlite3.wasm + web/drift_worker.js present"
   if [[ -f web/.drift_asset_versions && -f pubspec.lock ]]; then
-    LOCK_DRIFT="$(awk '/^  drift:/{getline; getline; print}' pubspec.lock | tr -d ' ')"
-    PINNED="$(cat web/.drift_asset_versions)"
-    if [[ "$LOCK_DRIFT" != *"$PINNED"* && -n "$PINNED" ]]; then
-      echo "WARN: pubspec.lock drift version changed but web/ WASM assets may be stale." >&2
-      echo "      re-run: dart run drift_dev make-migrations && refresh web/sqlite3.wasm + web/drift_worker.js" >&2
+    # Resolve the drift version from pubspec.lock (version: is a few lines under `  drift:`).
+    LOCK_DRIFT="$(awk '/^  drift:/{f=1} f&&/^    version:/{gsub(/[" ]/,"",$2); print $2; exit}' pubspec.lock)"
+    PINNED_VER="$(sed 's/^drift //' web/.drift_asset_versions | tr -d ' ')"
+    if [[ -n "$PINNED_VER" && -n "$LOCK_DRIFT" && "$LOCK_DRIFT" != "$PINNED_VER" ]]; then
+      echo "WARN: pubspec.lock has drift $LOCK_DRIFT but web/ assets are pinned to $PINNED_VER." >&2
+      echo "      refresh: cp \$(find ~/.pub-cache -path '*drift-$LOCK_DRIFT/drift_worker.js') web/ &&" >&2
+      echo "               cp \$(find ~/.pub-cache -path '*drift-$LOCK_DRIFT/extension/devtools/build/sqlite3.wasm') web/ &&" >&2
+      echo "               echo 'drift $LOCK_DRIFT' > web/.drift_asset_versions" >&2
+    else
+      echo "    ok: assets match drift $LOCK_DRIFT"
     fi
   fi
 else
