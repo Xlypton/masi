@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
+import 'logbook_screen.dart' show styleLabel;
 
 /// Modal sheet for logging an ascent of one route: an [AscentStyle] picker,
 /// an optional notes field, and a save action that stamps `climbedAt` to
@@ -56,6 +57,11 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
   AscentStyle _style = AscentStyle.redpoint;
   final _notesController = TextEditingController();
 
+  /// Re-entrancy guard for [_save] — without it, a double-tap on the Save
+  /// button (e.g. a slow repo write) fires `logAscent` twice and logs a
+  /// duplicate ascent.
+  bool _saving = false;
+
   @override
   void dispose() {
     _notesController.dispose();
@@ -63,19 +69,27 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
   }
 
   Future<void> _save() async {
-    final notes = _notesController.text.trim();
-    await ref
-        .read(ascentsRepositoryProvider)
-        .logAscent(
-          routeId: widget.routeId,
-          wallId: widget.wallId,
-          climbedAt: DateTime.now(),
-          style: _style,
-          notes: notes.isEmpty ? null : notes,
-        );
-    if (mounted) {
-      FocusManager.instance.primaryFocus?.unfocus();
-      Navigator.of(context).pop();
+    if (_saving) return;
+    setState(() => _saving = true);
+    try {
+      final notes = _notesController.text.trim();
+      await ref
+          .read(ascentsRepositoryProvider)
+          .logAscent(
+            routeId: widget.routeId,
+            wallId: widget.wallId,
+            climbedAt: DateTime.now(),
+            style: _style,
+            notes: notes.isEmpty ? null : notes,
+          );
+      if (mounted) {
+        FocusManager.instance.primaryFocus?.unfocus();
+        Navigator.of(context).pop();
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
     }
   }
 
@@ -101,7 +115,7 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
               for (final style in AscentStyle.values)
                 ChoiceChip(
                   key: Key('${widget.keyPrefix}-ascent-style-${style.name}'),
-                  label: Text(style.name),
+                  label: Text(styleLabel(style)),
                   selected: _style == style,
                   onSelected: (_) => setState(() => _style = style),
                 ),
@@ -118,8 +132,14 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
             width: double.infinity,
             child: ElevatedButton(
               key: Key('${widget.keyPrefix}-ascent-save'),
-              onPressed: _save,
-              child: const Text('Save'),
+              onPressed: _saving ? null : _save,
+              child: _saving
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('Save'),
             ),
           ),
         ],

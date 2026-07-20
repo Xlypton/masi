@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -195,19 +196,41 @@ class _SheetSectionLabel extends StatelessWidget {
 /// from [_EmptyState] (which means there is nothing logged at all) so the
 /// user isn't told to go log a climb when they actually just need to loosen
 /// a filter.
-class _FilteredEmptyState extends StatelessWidget {
+class _FilteredEmptyState extends ConsumerWidget {
   const _FilteredEmptyState();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
+    // A scrollable (rather than a bare Center) so this — icon + heading +
+    // Clear-filters button — doesn't hard-overflow at a small viewport
+    // combined with a large text scale (regression guard: see the
+    // "layout overflow regression" group in logbook_screen_test.dart,
+    // which pumps this screen behind an open Filters sheet at 360x500
+    // @2.5x scale).
     return Center(
       key: const Key('logbook-filtered-empty'),
-      child: Text(
-        'No ascents match your filters',
-        style: Theme.of(
-          context,
-        ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MasiIcon('filter', size: 40, color: colors.ink3),
+            const SizedBox(height: MasiSpacing.md),
+            Text(
+              'No ascents match your filters',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+            ),
+            const SizedBox(height: MasiSpacing.sm),
+            TextButton(
+              key: const Key('logbook-filtered-empty-clear'),
+              onPressed: ref.read(logbookFilterProvider.notifier).clear,
+              child: const Text('Clear filters'),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -219,13 +242,33 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
+    // See the matching comment in `_FilteredEmptyState.build` — same
+    // scrollable guard against the same class of overflow.
     return Center(
       key: const Key('logbook-empty'),
-      child: Text(
-        'No ascents logged yet',
-        style: Theme.of(
-          context,
-        ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MasiIcon('logbook', size: 40, color: colors.ink3),
+            const SizedBox(height: MasiSpacing.md),
+            Text(
+              'No ascents logged yet',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+            ),
+            const SizedBox(height: MasiSpacing.sm),
+            Text(
+              'Log a climb from any route to see it here',
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: colors.ink3),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -318,9 +361,9 @@ class _LogbookRow extends ConsumerWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${_styleLabel(entry.style)} · '
+                    '${styleLabel(entry.style)} · '
                     '${_formatDate(entry.climbedAt)}',
-                    style: textTheme.titleSmall?.copyWith(color: colors.ink3),
+                    style: textTheme.titleSmall?.copyWith(color: colors.ink2),
                   ),
                 ],
               ),
@@ -342,18 +385,21 @@ class _LogbookRow extends ConsumerWidget {
     WidgetRef ref,
     LogbookEntry entry,
   ) async {
-    final confirmed = await showDialog<bool>(
+    final colors = MasiColors.of(context);
+    final confirmed = await showCupertinoDialog<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      builder: (dialogContext) => CupertinoAlertDialog(
         title: const Text('Delete ascent?'),
         content: const Text('This cannot be undone.'),
         actions: [
-          TextButton(
+          CupertinoDialogAction(
             onPressed: () => Navigator.of(dialogContext).pop(false),
             child: const Text('Cancel'),
           ),
-          TextButton(
+          CupertinoDialogAction(
             key: Key('logbook-entry-delete-confirm-${entry.ascentId}'),
+            isDestructiveAction: true,
+            textStyle: TextStyle(color: colors.gradeHard),
             onPressed: () => Navigator.of(dialogContext).pop(true),
             child: const Text('Delete'),
           ),
@@ -414,8 +460,10 @@ Color _colorForGradeBand(MasiColors colors, GradeBand band) {
 }
 
 /// Human-readable label for an [AscentStyle], e.g. `AscentStyle.onsight` ->
-/// `'Onsight'`.
-String _styleLabel(AscentStyle style) {
+/// `'Onsight'`. Public (not library-private) so `LogAscentSheet` can reuse
+/// it for its style [ChoiceChip] labels instead of rendering the raw enum
+/// name (`style.name`, e.g. `'onsight'`).
+String styleLabel(AscentStyle style) {
   switch (style) {
     case AscentStyle.onsight:
       return 'Onsight';
@@ -448,5 +496,13 @@ const List<String> _monthAbbreviations = [
 /// Formats [date] as e.g. `'Jul 1, 2026'`. Hand-rolled (rather than pulling
 /// in `package:intl`, which this project does not currently depend on) since
 /// the Logbook only needs one fixed, locale-agnostic display format.
-String _formatDate(DateTime date) =>
-    '${_monthAbbreviations[date.month - 1]} ${date.day}, ${date.year}';
+///
+/// Converts to local time first (`toLocal()`) — `Ascent.climbedAt` is stored
+/// as UTC, so extracting month/day/year directly off it would show the UTC
+/// calendar day, not the user's local day (e.g. an ascent logged at 00:30
+/// local in UTC+2 would render as the previous date).
+String _formatDate(DateTime date) {
+  final local = date.toLocal();
+  return '${_monthAbbreviations[local.month - 1]} ${local.day}, '
+      '${local.year}';
+}

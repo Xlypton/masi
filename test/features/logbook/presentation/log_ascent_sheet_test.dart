@@ -183,6 +183,77 @@ void main() {
   );
 
   testWidgets(
+    'style chips render capitalized labels (e.g. "Onsight"), not the raw '
+    'enum name ("onsight")',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await pumpHarness(
+        tester,
+        seeded.container,
+        routeId: seeded.routeDbId,
+        wallId: seeded.wallId,
+      );
+
+      await tester.tap(find.byKey(const Key('open-log-ascent-sheet')));
+      await tester.pumpAndSettle();
+
+      for (final style in AscentStyle.values) {
+        expect(
+          find.byKey(Key('test-ascent-style-${style.name}')),
+          findsOneWidget,
+          reason: 'the chip Key must still be the raw enum name',
+        );
+        expect(find.text(style.name), findsNothing);
+      }
+      expect(find.text('Onsight'), findsOneWidget);
+      expect(find.text('Flash'), findsOneWidget);
+      expect(find.text('Redpoint'), findsOneWidget);
+      expect(find.text('Repeat'), findsOneWidget);
+      expect(find.text('Attempt'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    '#16: a fast double-tap on Save only ever logs one ascent '
+    '(re-entrancy guard regression test)',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await pumpHarness(
+        tester,
+        seeded.container,
+        routeId: seeded.routeDbId,
+        wallId: seeded.wallId,
+      );
+
+      await tester.tap(find.byKey(const Key('open-log-ascent-sheet')));
+      await tester.pumpAndSettle();
+
+      // Two taps back-to-back with no `pump` in between: the second tap's
+      // gesture is still delivered to the button's `onPressed` captured at
+      // the PREVIOUS build (still non-null, since no rebuild has happened
+      // yet to disable it) -- exactly the scenario `_save`'s synchronous
+      // `if (_saving) return;` guard at the top of the function must catch.
+      await tester.tap(find.byKey(const Key('test-ascent-save')));
+      await tester.tap(find.byKey(const Key('test-ascent-save')));
+      await tester.pumpAndSettle();
+
+      final ascentsRepo = seeded.container.read(ascentsRepositoryProvider);
+      final ascents = await ascentsRepo.ascentsForRoute(seeded.routeDbId);
+      expect(
+        ascents,
+        hasLength(1),
+        reason: 'a double-tap must not log a duplicate ascent',
+      );
+    },
+  );
+
+  testWidgets(
     'A1b: leaving notes empty logs a null notes field (optional field '
     'contract preserved)',
     (tester) async {

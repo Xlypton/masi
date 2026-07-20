@@ -717,6 +717,117 @@ void main() {
         expect(find.text('No ascents match your filters'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'the filtered-empty state\'s "Clear filters" button resets the '
+      'active filter and restores the full list',
+      (tester) async {
+        final container = _makeContainer();
+        final database = container.read(appDatabaseProvider);
+        final repo = container.read(ascentsRepositoryProvider);
+
+        final s = await _dbWork(
+          tester,
+          () => _seed(database, '1', style: 'sport'),
+        );
+        final ascent = await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: s.routeId,
+            wallId: s.wallId,
+            climbedAt: DateTime.utc(2026, 1, 1),
+            style: AscentStyle.onsight,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('logbook-filter-button')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('filter-style-trad')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('logbook-filtered-empty')), findsOneWidget);
+
+        // The Filters sheet is still open (a modal bottom sheet, so it sits
+        // in front of and intercepts taps on the body behind it) — the
+        // filtered-empty state's own "Clear filters" button only becomes
+        // reachable once the user dismisses the sheet, same as a real user
+        // would have to. Close it via its own Navigator before tapping the
+        // body's Clear button.
+        Navigator.of(
+          tester.element(find.byKey(const Key('logbook-filter-sheet'))),
+        ).pop();
+        await tester.pumpAndSettle();
+
+        await tester.tap(
+          find.byKey(const Key('logbook-filtered-empty-clear')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('logbook-filtered-empty')), findsNothing);
+        expect(
+          find.byKey(Key('logbook-entry-${ascent.id}')),
+          findsOneWidget,
+        );
+        expect(
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
+          findsNothing,
+          reason: 'Clear filters must reset every facet, matching the '
+              'sheet\'s own Clear action',
+        );
+      },
+    );
+  });
+
+  group('#15: local-day date formatting', () {
+    testWidgets(
+      'an ascent logged near local midnight shows the LOCAL calendar day, '
+      'not the UTC one',
+      (tester) async {
+        final container = _makeContainer();
+        final database = container.read(appDatabaseProvider);
+        final repo = container.read(ascentsRepositoryProvider);
+
+        // A UTC instant chosen so that converting to this machine's local
+        // timezone lands on a different calendar day than the raw UTC
+        // components would -- the exact regression #15 describes (an
+        // ascent logged at 00:30 local in UTC+2 showing the previous UTC
+        // date). Deriving the expected label via the SAME `.toLocal()`
+        // conversion (rather than hard-coding a date) keeps this test
+        // correct regardless of the host machine's own timezone.
+        final climbedAtUtc = DateTime.utc(2026, 7, 4, 23, 30);
+        final local = climbedAtUtc.toLocal();
+
+        final s = await _dbWork(
+          tester,
+          () => _seed(database, '1', wallName: 'Midnight Wall'),
+        );
+        await _dbWork(
+          tester,
+          () => repo.logAscent(
+            routeId: s.routeId,
+            wallId: s.wallId,
+            climbedAt: climbedAtUtc,
+            style: AscentStyle.onsight,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        const monthAbbreviations = [
+          'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+        ];
+        final expectedLabel =
+            '${monthAbbreviations[local.month - 1]} ${local.day}, '
+            '${local.year}';
+
+        expect(find.textContaining(expectedLabel), findsOneWidget);
+      },
+    );
   });
 
   group('layout overflow regression: Filters sheet', () {
