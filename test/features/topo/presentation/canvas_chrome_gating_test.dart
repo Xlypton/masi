@@ -10,12 +10,22 @@
 //    title pill.
 //  - A-g (Bug 8): in the no-photo empty state, topo-ar-button is absent
 //    (it needs a photo).
+//
+// Web-port Subtask A (WEB_PORT_BRIEF.md): the AR button must stay VISIBLE
+// once a photo + a visible route exist, but become DISABLED
+// (`onPressed: null`) wherever `isArSupported()` is false. VM tests run on
+// macOS (not iOS), so `isArSupported()` is false in-process here — this is
+// exactly the disabled branch this file exercises; the enabled/iOS branch
+// is unchanged behavior verified on-device per CLAUDE.md.
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/data/route_repository.dart';
+import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
@@ -267,5 +277,87 @@ void main() {
         reason: 'A-g: AR needs a photo (and routes) to align against',
       );
     });
+  });
+
+  group('Web-port Subtask A: AR button is AR-support-gated once visible', () {
+    testWidgets(
+      'with a photo and a visible route in view mode, topo-ar-button is '
+      'present but DISABLED (onPressed null) when isArSupported() is false '
+      '(the in-VM/non-iOS case)',
+      (tester) async {
+        final seeded = await _seedWall();
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
+        final crud = seeded.container.read(libraryCrudRepositoryProvider);
+
+        late String photoId;
+        await tester.runAsync(() async {
+          photoId = await crud.attachPhotoToWall(
+            seeded.wallId,
+            XFile('/tmp/ar-gate-photo.jpg'),
+            400,
+            300,
+          );
+        });
+
+        final routeRepo = RouteRepository(seeded.db, nowMs: () => 1000);
+        await routeRepo.upsertRoute(
+          seeded.wallId,
+          photoId,
+          const TopoRoute(
+            id: 1,
+            number: 1,
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+            gradeSystem: GradeSystem.french,
+            gradeRaw: '6a',
+          ),
+        );
+
+        await seeded.container
+            .read(drawControllerProvider.notifier)
+            .loadForWall(seeded.wallId, photoId);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: seeded.container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: TopoCanvasScreen(
+                wallId: seeded.wallId,
+                debugInitialImageSize: const Size(400, 300),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final arButtonFinder = find.byKey(const Key('topo-ar-button'));
+        expect(
+          arButtonFinder,
+          findsOneWidget,
+          reason:
+              'Web-port A: the AR button must stay VISIBLE once a photo + '
+              'a visible route exist, even where AR is unsupported',
+        );
+
+        final arButton = tester.widget<IconButton>(arButtonFinder);
+        expect(
+          arButton.onPressed,
+          isNull,
+          reason:
+              'Web-port A: with isArSupported() false (VM tests run on '
+              'macOS, not iOS), the AR button must render disabled '
+              '(onPressed: null), never navigate',
+        );
+        expect(
+          arButton.tooltip,
+          'AR is available on iOS only',
+          reason:
+              'Web-port A: the disabled tooltip must explain the iOS-only '
+              'restriction rather than repeating the enabled "View in AR" '
+              'copy',
+        );
+      },
+    );
   });
 }

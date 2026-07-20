@@ -9,6 +9,7 @@ import 'package:latlong2/latlong.dart';
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/platform/ar_support.dart';
 import 'package:climbtopo/core/location/location_service.dart';
 import 'package:climbtopo/core/location/photo_gps.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
@@ -1460,12 +1461,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     if (drawState.mode == DrawMode.view &&
         drawState.activePhotoId != null &&
         drawState.routes.any((r) => r.visible)) {
+      final arSupported = isArSupported();
       actions.add(
         IconButton(
           key: const Key('topo-ar-button'),
           icon: MasiIcon('ar_peak'),
-          tooltip: 'View in AR',
-          onPressed: () => context.push('/walls/${widget.wallId}/ar'),
+          tooltip: arSupported ? 'View in AR' : 'AR is available on iOS only',
+          onPressed: arSupported
+              ? () => context.push('/walls/${widget.wallId}/ar')
+              : null,
           color: colors.accent,
           style: _topRowIconStyle(),
         ),

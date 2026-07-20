@@ -1101,7 +1101,7 @@ void main() {
     //    `activePhotoId` + `routes` for the gating check.
     testWidgets(
       'A4: topo-ar-button appears only once the wall has a photo + >=1 '
-      'route, and navigates to /walls/:wallId/ar',
+      'route, but is disabled off-iOS (visible but not tappable)',
       (tester) async {
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
@@ -1186,17 +1186,21 @@ void main() {
 
         expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
 
+        // Gated on isArSupported(): this test host is non-iOS, so the
+        // button renders VISIBLE but DISABLED (onPressed == null, tooltip
+        // explains why) rather than navigating to the AR route.
+        final arButton = tester.widget<IconButton>(
+          find.byKey(const Key('topo-ar-button')),
+        );
+        expect(arButton.onPressed, isNull);
+        expect(arButton.tooltip, 'AR is available on iOS only');
+
         await tester.tap(find.byKey(const Key('topo-ar-button')));
         await tester.pumpAndSettle();
 
-        expect(find.byType(ArScreen), findsOneWidget);
-        expect(
-          find.byKey(const Key('ar-unsupported-placeholder')),
-          findsOneWidget,
-          reason:
-              'the AR route was reached (this test host is non-iOS, so '
-              "ArScreen's own platform gate renders its placeholder)",
-        );
+        // Disabled button: tapping it is a no-op, so the screen stays put.
+        expect(find.byType(ArScreen), findsNothing);
+        expect(find.byType(TopoCanvasScreen), findsOneWidget);
       },
     );
 
