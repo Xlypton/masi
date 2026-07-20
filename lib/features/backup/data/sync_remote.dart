@@ -135,15 +135,15 @@ String sharedPhotoPath(String photoId, String ext) => 'shared/$photoId$ext';
 
 /// Real [SyncRemote], backed by the Supabase client.
 ///
-/// STUB for this phase — there is no real `areas`/`sectors`/`walls`/
-/// `photos`/`routes`/`comments`/`likes`/`ascents` table on any backend yet
-/// (P0 is deferred), so this class is written to the shape those tables
-/// SHOULD have but is untested against a real Supabase project. [SyncService]
-/// itself is fully tested against `FakeSyncRemote` instead. TODO(P0 backend):
-/// stand up the eight tables (RLS: `owner_id = auth.uid()` for row-level own-data access,
-/// plus a `visibility = 'shared'`-scoped SELECT policy with no owner check
-/// for the shared-topo query below), and the `shared/` Storage policy
-/// described on [SyncRemote.uploadSharedPhoto].
+/// LIVE: all eight tables (`areas`/`sectors`/`walls`/`photos`/`routes`/
+/// `comments`/`likes`/`ascents`) exist on the real Supabase project (see
+/// `supabase/schema.sql`), with RLS (`"ownerId" = auth.uid()::text` for
+/// row-level own-data access, plus a `visibility = 'shared'`-scoped SELECT
+/// policy with no owner check for the shared-topo query below) and the
+/// `shared/` Storage policy described on [SyncRemote.uploadSharedPhoto].
+/// Verified end-to-end against the real backend via a two-account live
+/// smoke test, in addition to [SyncService]'s full `FakeSyncRemote`-backed
+/// unit-test coverage.
 class SupabaseSyncRemote implements SyncRemote {
   SupabaseSyncRemote(this._client);
 
@@ -159,10 +159,9 @@ class SupabaseSyncRemote implements SyncRemote {
     for (final tableName in syncTableNames) {
       final rows = tablesToRows[tableName];
       if (rows == null || rows.isEmpty) continue;
-      // TODO(P0 backend): drift's `toJson()` keys are camelCase
-      // (`ownerId`, `wallId`, ...); confirm the real Postgres tables use
-      // matching camelCase quoted columns, or add a camelCase<->snake_case
-      // key-mapping layer here once the real schema is decided.
+      // Confirmed live: the real Postgres tables (see `supabase/schema.sql`)
+      // use matching camelCase quoted columns (`"ownerId"`, `"wallId"`, ...)
+      // for drift's `toJson()` keys — no snake_case mapping layer needed.
       await _client.from(tableName).upsert(rows);
     }
   }

@@ -229,8 +229,8 @@ A table-driven service in `core/grades`:
 
 ## Out of Scope for v1
 
-Deferred to **v2**: auth, cloud sync, community discovery (map + search), image upload/thumbnails, multi-pitch, **AR route viewer** (see Platform Decision & AR Strategy).
-Deferred indefinitely / not planned: in-app camera or panorama stitching (use native), ascent logbook / ticklist, grade voting / moderation, **3D world-anchored AR** / photogrammetry.
+Deferred to **v2**: auth, cloud sync, community discovery (map + search), image upload/thumbnails, multi-pitch, **AR route viewer** (see Platform Decision & AR Strategy). **Status: v2 has since shipped and is live** — Supabase auth, row-level sync (push/pull, tombstones), shared-topo discovery (map + search), photo upload/thumbnails, comments, likes, an ascent logbook, and the (2D homography) AR route viewer are all implemented and verified end-to-end (two-account live smoke test). Multi-pitch remains the one item here still out of scope.
+Deferred indefinitely / not planned: in-app camera or panorama stitching (use native), grade voting / moderation, **3D world-anchored AR** / photogrammetry. (Ascent logbook / ticklist has since shipped as part of the v2 community suite — no longer out of scope.)
 
 ---
 
@@ -261,7 +261,7 @@ Prioritized by value-per-effort:
 
 **Milestone 6 — CRUD & navigation:** Area / Sector / Wall lists + create/edit/delete, go_router wiring, empty/error states.
 
-> **v2 (separate effort):** Supabase auth → outbox-pattern sync (dirty flags + `updatedAt` cursors, last-write-wins per record + tombstones) → Storage upload with thumbnails → discovery (flutter_map + EXIF GPS + search) → multi-pitch.
+> **v2 (separate effort — shipped and live):** Supabase auth → outbox-pattern sync (dirty flags + `updatedAt` cursors, last-write-wins per record + tombstones) → Storage upload with thumbnails → discovery (flutter_map + EXIF GPS + search) → community features (comments, likes, ascent logbook) → AR route viewer. All implemented and verified end-to-end via a two-account live smoke test; only multi-pitch remains unbuilt from this list.
 
 ---
 
