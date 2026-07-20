@@ -14,6 +14,31 @@ v1 (M0–M6) + v2 AR are code-complete on `main`. Supabase sync is deferred.
 - Package name is `climbtopo`; app entrypoint is `main()` in `lib/main.dart`
   (`runApp(const ProviderScope(child: ClimbTopoApp()))`).
 
+## Web port (in progress — v2 plan)
+
+Porting to Flutter **web/PWA**, mobile-first (phone browsers + installed PWA are the primary target;
+desktop is secondary/post-release). Plan: Obsidian `Masi Project/Flutter Web Port Implementation Plan (v2)`;
+file/line brief: `WEB_PORT_BRIEF.md`.
+
+- **Build:** `tool/build_web.sh` (wasm default) · `tool/build_web.sh --js` (legacy) · `--gate` (grep gate only).
+- **wasm decision (Phase 0):** **wasm is the intended default build.** All plugins are on wasm-ready
+  releases (`package:web`, no `dart:html` legacy): supabase_flutter 2.16, flutter_map 8.3, image_picker(_for_web)
+  1.2/3.1, connectivity_plus 7.2, geolocator 14, url_launcher 6.3, flutter_svg 2.3, drift 2.34, image 4.9.
+  The definitive `flutter build web --wasm` audit runs at the first fully-compilable point (end of Phase 2);
+  JS fallback is a one-flag flip (`--js`) and the code stays wasm-clean regardless. COOP/COEP headers are a
+  hard hosting requirement (wasm + drift OPFS worker).
+- **First build-failure inventory:** top blocker is `dart:ffi` (sqlite3 FFI via `drift/native.dart` in
+  `database_provider.dart`) → fixed by the Phase 1 connection split; then `dart:io` in 11 files → Phases 1–2.
+- **Convention — conditional imports, never `kIsWeb`, for anything touching `dart:io`:**
+  ```dart
+  import 'x_stub.dart' if (dart.library.io) 'x_native.dart' if (dart.library.js_interop) 'x_web.dart';
+  ```
+  `_native.dart` files hold existing code verbatim (iOS/Android stays bit-identical). `kIsWeb` is reserved
+  for behavioral gates on web-capable plugins. **Grep gate (CI + build_web.sh):**
+  `grep -r "dart:io" lib --include="*.dart" | grep -v _native.dart` must be empty (goes green at M2).
+- **CI floor:** `.github/workflows/ci.yml` (analyze+test required; web build + grep gate `continue-on-error`
+  until M2). Repo is local-first / not pushed; the workflow is the spec, `tool/build_web.sh` is the local gate.
+
 ## Fast checks (unit + widget)
 
 ```bash

@@ -1,0 +1,54 @@
+name: CI
+
+# CI floor for the ClimbTopo web port (v2 plan, Phase 0).
+# The repo is local-first and not currently pushed to a remote; this workflow is
+# the enforceable spec for when one exists. The same gates run locally via
+# `tool/build_web.sh` and the standard `flutter analyze` / `flutter test`.
+#
+# NOTE: the `web-build` job (and its dart:io grep gate) only pass once the
+# db/photo pipeline is split behind conditional imports (v2 Phases 1-2). It is
+# marked continue-on-error until M2 so the analyze/test floor stays enforceable
+# from day one without a red pipeline blocking the port.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  FLUTTER_VERSION: "3.44.2"
+
+jobs:
+  analyze-test:
+    name: analyze + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test
+
+  web-build:
+    name: web build + dart:io gate
+    runs-on: ubuntu-latest
+    # Goes green at M2; until then a leaked dart:io / build failure is expected.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+      - run: flutter pub get
+      - name: dart:io grep gate (must be empty)
+        run: |
+          offenders="$(grep -rl 'dart:io' lib --include='*.dart' | grep -v '_native.dart' || true)"
+          if [ -n "$offenders" ]; then
+            echo "dart:io found outside *_native.dart:"; echo "$offenders"; exit 1
+          fi
+      - name: build web (wasm)
+        run: flutter build web --wasm
