@@ -286,6 +286,29 @@ void main() {
     );
 
     testWidgets(
+      'shows an initials avatar derived from the signed-in email (mirrors '
+      "the Topos-home account entry's email_initials.dart usage)",
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedIn('climber@example.com'),
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('account-avatar')), findsOneWidget);
+        // 'climber@example.com' -> single local-part segment 'climber' ->
+        // first two chars, uppercased (see email_initials.dart).
+        expect(find.text('CL'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'S2-b (flip): a signed-out screen rebuilds to signed-in when the '
       'auth stream emits a session while mounted',
       (tester) async {

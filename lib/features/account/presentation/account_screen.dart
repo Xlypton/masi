@@ -3,7 +3,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
 import '../../backup/application/sync_orchestrator.dart';
+import '../../topo/presentation/canvas_chrome.dart';
 import '../application/auth_providers.dart';
+import '../application/email_initials.dart';
 import '../data/auth_repository.dart';
 
 /// The Account screen: magic-link email sign-in when signed out, else the
@@ -203,6 +205,7 @@ class _SignedOutBody extends StatelessWidget {
           decoration: BoxDecoration(
             color: colors.surface,
             borderRadius: BorderRadius.circular(MasiRadii.large),
+            boxShadow: kMasiAmbientShadow,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -221,6 +224,7 @@ class _SignedOutBody extends StatelessWidget {
                 controller: controller,
                 keyboardType: TextInputType.emailAddress,
                 autocorrect: false,
+                autofocus: true,
                 decoration: const InputDecoration(
                   hintText: 'you@example.com',
                 ),
@@ -292,11 +296,28 @@ class _SignedInBody extends StatelessWidget {
           decoration: BoxDecoration(
             color: colors.surface,
             borderRadius: BorderRadius.circular(MasiRadii.large),
+            boxShadow: kMasiAmbientShadow,
           ),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
+              Center(
+                child: CircleAvatar(
+                  key: const Key('account-avatar'),
+                  radius: 24,
+                  backgroundColor: colors.accent,
+                  foregroundColor: colors.onAccent,
+                  child: Text(
+                    emailInitials(email),
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(height: MasiSpacing.md),
               Text(
                 'Signed in as',
                 style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
