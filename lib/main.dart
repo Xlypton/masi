@@ -36,7 +36,7 @@ Future<void> main() async {
   // Pre-warm the shared PhotoFiles' docs-path cache BEFORE the first frame,
   // so the synchronous, cache-backed `resolvePhotoPathSync` (used by
   // `watchTopos`'s thumbnail column and the canvas's first
-  // loadOriginal/loadSlices) resolves stored relative `Photos.localPath`
+  // loadOriginal) resolves stored relative `Photos.localPath`
   // values to absolute paths from the very first render, instead of a cold
   // cache silently passing the bare relative path through (unresolvable
   // against the process CWD) until some later, unrelated resolution
