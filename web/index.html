@@ -18,21 +18,69 @@
 
   <meta charset="UTF-8">
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
-  <meta name="description" content="A new Flutter project.">
+  <meta name="description" content="ClimbTopo — visual-first climbing route topo editor. Document walls, sectors, and routes with photo-based topos.">
 
-  <!-- iOS meta tags & icons -->
+  <!-- Mobile-first viewport: notch/home-indicator-safe (iPhone) via viewport-fit=cover. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#100D17">
+
+  <!-- iOS / PWA meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black">
-  <meta name="apple-mobile-web-app-title" content="climbtopo">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="ClimbTopo">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
   <!-- Favicon -->
   <link rel="icon" type="image/png" href="favicon.png"/>
 
-  <title>climbtopo</title>
+  <title>ClimbTopo</title>
+
+  <!-- Open Graph — shareable topo links unfurl with brand + a real description. -->
+  <meta property="og:title" content="ClimbTopo">
+  <meta property="og:description" content="Visual-first climbing route topo editor — document walls, sectors, and routes with photo-based topos.">
+  <meta property="og:type" content="website">
+  <meta property="og:image" content="icons/Icon-512.png">
+
   <link rel="manifest" href="manifest.json">
+
+  <style>
+    html, body {
+      background: #100D17;
+      height: 100%;
+    }
+
+    /* Branded splash shown while the Flutter engine boots. Removed once the
+       first frame is painted (see the `flutter-first-frame` listener below),
+       so there is never a flash of blank/white background on load. */
+    #splash {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #100D17;
+      z-index: 9999;
+      transition: opacity 0.25s ease-out;
+    }
+
+    #splash img {
+      width: 96px;
+      height: 96px;
+      border-radius: 22px;
+    }
+
+    #splash.splash-hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+  </style>
 </head>
 <body>
+  <div id="splash">
+    <img src="icons/Icon-192.png" alt="ClimbTopo">
+  </div>
+
   <!--
     You can customize the "flutter_bootstrap.js" script.
     This is useful to provide a custom configuration to the Flutter loader
@@ -42,5 +90,19 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+
+  <script>
+    // Flutter web dispatches this event on `window` once the first frame has
+    // been painted. Use it to fade out/remove the branded splash above
+    // instead of leaving it up forever or hiding it on a timer.
+    window.addEventListener('flutter-first-frame', function () {
+      var splash = document.getElementById('splash');
+      if (!splash) return;
+      splash.classList.add('splash-hidden');
+      setTimeout(function () {
+        splash.remove();
+      }, 300);
+    });
+  </script>
 </body>
 </html>

@@ -1,0 +1,25 @@
+# Cloudflare Pages headers file.
+#
+# ClimbTopo's web build uses dart2wasm + drift's OPFS (Origin Private File
+# System) worker. Both require the page to be "cross-origin isolated", which
+# only happens when the top-level document is served with COOP + COEP. See:
+# https://web.dev/articles/coop-coep
+# https://drift.simonbinder.eu/web/#cross-origin-isolation
+#
+# `require-corp` is stricter than `credentialless` but this app has no
+# cross-origin embeds that need the relaxed mode, so pick the safer default.
+#
+# Cloudflare Pages also needs an explicit content-type for *.wasm — without
+# it some edge configs serve wasm as application/octet-stream, which some
+# browsers refuse to `instantiateStreaming()`.
+
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+  Cross-Origin-Resource-Policy: same-origin
+
+/*.wasm
+  Content-Type: application/wasm
+
+/canvaskit/*.wasm
+  Content-Type: application/wasm
