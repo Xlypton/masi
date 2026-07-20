@@ -17,6 +17,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
 /// Stands in for the real `path_provider` platform channel plugin, which has
@@ -152,7 +153,7 @@ void main() {
         await tester.runAsync(() async {
           photoId = await crud.attachPhotoToWall(
             wall.id,
-            '/tmp/wall-photo.jpg',
+            XFile('/tmp/wall-photo.jpg'),
             1000,
             2000,
           );
@@ -458,62 +459,56 @@ void main() {
       },
     );
 
-    testWidgets(
-      'AUTO with a latest alignment reporting tracking:true + '
-      'screenCorners: the composite is fromQuad(refSize corners, '
-      'screenCorners) — mapping the reference photo directly onto the '
-      'ARKit-reported screen corners — not the fitted-ghost fallback, '
-      'confidence 1.0, outline hidden',
-      (tester) async {
-        pinViewSize(tester);
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        final image = (await tester.runAsync(_decode2x2))!;
+    testWidgets('AUTO with a latest alignment reporting tracking:true + '
+        'screenCorners: the composite is fromQuad(refSize corners, '
+        'screenCorners) — mapping the reference photo directly onto the '
+        'ARKit-reported screen corners — not the fitted-ghost fallback, '
+        'confidence 1.0, outline hidden', (tester) async {
+      pinViewSize(tester);
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final image = (await tester.runAsync(_decode2x2))!;
 
-        await tester.pumpWidget(buildStage(container, outline: image));
-        await tester.pump();
+      await tester.pumpWidget(buildStage(container, outline: image));
+      await tester.pump();
 
-        const corners = [
-          Offset(50, 50),
-          Offset(350, 50),
-          Offset(350, 750),
-          Offset(50, 750),
-        ];
-        container.read(arControllerProvider.notifier).onAlignment(
-          ArAlignment(
-            confidence: 0.0,
-            tracking: true,
-            screenCorners: corners,
-          ),
-        );
-        await tester.pump();
+      const corners = [
+        Offset(50, 50),
+        Offset(350, 50),
+        Offset(350, 750),
+        Offset(50, 750),
+      ];
+      container
+          .read(arControllerProvider.notifier)
+          .onAlignment(
+            ArAlignment(
+              confidence: 0.0,
+              tracking: true,
+              screenCorners: corners,
+            ),
+          );
+      await tester.pump();
 
-        final expected = Homography.fromQuad(
-          [
-            Offset.zero,
-            Offset(refSize.width, 0),
-            Offset(refSize.width, refSize.height),
-            Offset(0, refSize.height),
-          ],
-          corners,
-        );
+      final expected = Homography.fromQuad([
+        Offset.zero,
+        Offset(refSize.width, 0),
+        Offset(refSize.width, refSize.height),
+        Offset(0, refSize.height),
+      ], corners);
 
-        expect(currentPainter(tester).homography, expected);
-        expect(currentPainter(tester).confidence, 1.0);
-        expect(currentPainter(tester).outline, isNull);
+      expect(currentPainter(tester).homography, expected);
+      expect(currentPainter(tester).confidence, 1.0);
+      expect(currentPainter(tester).outline, isNull);
 
-        // The reference photo's corners land on (approximately) the
-        // ARKit-reported screen corners.
-        final topLeft = expected.warp(Offset.zero);
-        expect(topLeft.dx, closeTo(50, 1e-6));
-        expect(topLeft.dy, closeTo(50, 1e-6));
-        final bottomRight = expected.warp(
-          Offset(refSize.width, refSize.height),
-        );
-        expect(bottomRight.dx, closeTo(350, 1e-6));
-        expect(bottomRight.dy, closeTo(750, 1e-6));
-      },
-    );
+      // The reference photo's corners land on (approximately) the
+      // ARKit-reported screen corners.
+      final topLeft = expected.warp(Offset.zero);
+      expect(topLeft.dx, closeTo(50, 1e-6));
+      expect(topLeft.dy, closeTo(50, 1e-6));
+      final bottomRight = expected.warp(Offset(refSize.width, refSize.height));
+      expect(bottomRight.dx, closeTo(350, 1e-6));
+      expect(bottomRight.dy, closeTo(750, 1e-6));
+    });
 
     testWidgets(
       'AUTO with a latest alignment reporting tracking:false (even with '
@@ -527,18 +522,20 @@ void main() {
         await tester.pumpWidget(buildStage(container));
         await tester.pump();
 
-        container.read(arControllerProvider.notifier).onAlignment(
-          ArAlignment(
-            confidence: 0.0,
-            tracking: false,
-            screenCorners: [
-              Offset(50, 50),
-              Offset(350, 50),
-              Offset(350, 750),
-              Offset(50, 750),
-            ],
-          ),
-        );
+        container
+            .read(arControllerProvider.notifier)
+            .onAlignment(
+              ArAlignment(
+                confidence: 0.0,
+                tracking: false,
+                screenCorners: [
+                  Offset(50, 50),
+                  Offset(350, 50),
+                  Offset(350, 750),
+                  Offset(50, 750),
+                ],
+              ),
+            );
         await tester.pump();
 
         final center = warpedCenter(tester);
@@ -647,18 +644,20 @@ void main() {
         await tester.pumpWidget(buildStage(container));
         await tester.pump();
 
-        container.read(arControllerProvider.notifier).onAlignment(
-          ArAlignment(
-            confidence: 0.0,
-            tracking: true,
-            screenCorners: [
-              Offset(50, 50),
-              Offset(350, 50),
-              Offset(350, 750),
-              Offset(50, 750),
-            ],
-          ),
-        );
+        container
+            .read(arControllerProvider.notifier)
+            .onAlignment(
+              ArAlignment(
+                confidence: 0.0,
+                tracking: true,
+                screenCorners: [
+                  Offset(50, 50),
+                  Offset(350, 50),
+                  Offset(350, 750),
+                  Offset(50, 750),
+                ],
+              ),
+            );
         await tester.pump();
 
         expect(find.text('Tracking'), findsOneWidget);
@@ -705,18 +704,20 @@ void main() {
         await tester.tap(find.byKey(const Key('ar-lock')));
         await tester.pumpAndSettle();
 
-        container.read(arControllerProvider.notifier).onAlignment(
-          ArAlignment(
-            confidence: 0.0,
-            tracking: true,
-            screenCorners: const [
-              Offset(50, 50),
-              Offset(350, 50),
-              Offset(350, 750),
-              Offset(50, 750),
-            ],
-          ),
-        );
+        container
+            .read(arControllerProvider.notifier)
+            .onAlignment(
+              ArAlignment(
+                confidence: 0.0,
+                tracking: true,
+                screenCorners: const [
+                  Offset(50, 50),
+                  Offset(350, 50),
+                  Offset(350, 750),
+                  Offset(50, 750),
+                ],
+              ),
+            );
         await tester.pump();
 
         expect(find.text('Locked'), findsOneWidget);
@@ -802,34 +803,31 @@ void main() {
         },
       );
 
-      testWidgets(
-        'tapping ar-lock a second time: unlocks again, restoring the '
-        'outline guide and the manual gesture layer',
-        (tester) async {
-          pinViewSize(tester);
-          final container = ProviderContainer();
-          addTearDown(container.dispose);
-          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
-          final image = (await tester.runAsync(_decode2x2))!;
+      testWidgets('tapping ar-lock a second time: unlocks again, restoring the '
+          'outline guide and the manual gesture layer', (tester) async {
+        pinViewSize(tester);
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+        final image = (await tester.runAsync(_decode2x2))!;
 
-          await tester.pumpWidget(buildStage(container, outline: image));
-          await tester.pump();
+        await tester.pumpWidget(buildStage(container, outline: image));
+        await tester.pump();
 
-          await tester.tap(find.byKey(const Key('ar-lock')));
-          await tester.pumpAndSettle();
-          expect(container.read(arLockedProvider), isTrue);
+        await tester.tap(find.byKey(const Key('ar-lock')));
+        await tester.pumpAndSettle();
+        expect(container.read(arLockedProvider), isTrue);
 
-          await tester.tap(find.byKey(const Key('ar-lock')));
-          await tester.pump();
+        await tester.tap(find.byKey(const Key('ar-lock')));
+        await tester.pump();
 
-          expect(container.read(arLockedProvider), isFalse);
-          expect(currentPainter(tester).outline, same(image));
-          expect(
-            find.byKey(const Key('ar-manual-gesture-layer')),
-            findsOneWidget,
-          );
-        },
-      );
+        expect(container.read(arLockedProvider), isFalse);
+        expect(currentPainter(tester).outline, same(image));
+        expect(
+          find.byKey(const Key('ar-manual-gesture-layer')),
+          findsOneWidget,
+        );
+      });
 
       testWidgets(
         'while locked, the reset FAB is hidden but the lock FAB (as an '
@@ -987,19 +985,18 @@ void main() {
         },
       );
 
-      testWidgets(
-        'MANUAL mode: the ar-rescan FAB is not shown',
-        (tester) async {
-          final container = ProviderContainer();
-          addTearDown(container.dispose);
-          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+      testWidgets('MANUAL mode: the ar-rescan FAB is not shown', (
+        tester,
+      ) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        container.read(arControllerProvider.notifier).setMode(ArMode.manual);
 
-          await tester.pumpWidget(buildStage(container));
-          await tester.pump();
+        await tester.pumpWidget(buildStage(container));
+        await tester.pump();
 
-          expect(find.byKey(const Key('ar-rescan')), findsNothing);
-        },
-      );
+        expect(find.byKey(const Key('ar-rescan')), findsNothing);
+      });
     });
   });
 }

@@ -21,6 +21,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// Seeds [count] routes (number 1..count, ids assigned 1..count in the same
 /// order by [RouteRepository.loadRoutes]) through the real Area -> Sector ->
@@ -46,7 +47,7 @@ Future<ProviderContainer> _seedRoutes(WidgetTester tester, int count) async {
   await tester.runAsync(() async {
     photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/tmp/wall-photo.jpg',
+      XFile('/tmp/wall-photo.jpg'),
       1000,
       2000,
     );
@@ -65,10 +66,9 @@ Future<ProviderContainer> _seedRoutes(WidgetTester tester, int count) async {
     );
   }
 
-  await container.read(drawControllerProvider.notifier).loadForWall(
-        wall.id,
-        photoId,
-      );
+  await container
+      .read(drawControllerProvider.notifier)
+      .loadForWall(wall.id, photoId);
 
   return container;
 }
@@ -167,7 +167,8 @@ void main() {
       expect(
         legendSize.height,
         lessThanOrEqualTo(expectedMaxHeight + 0.5),
-        reason: 'the legend must stay capped at <= 40% of the screen height '
+        reason:
+            'the legend must stay capped at <= 40% of the screen height '
             'even with the padding fix',
       );
     },

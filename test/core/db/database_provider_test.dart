@@ -6,6 +6,7 @@ import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
@@ -99,7 +100,7 @@ void main() {
     // resolved" row to resolve from below.
     final photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/does/not/exist.jpg',
+      XFile('/does/not/exist.jpg'),
       100,
       200,
     );

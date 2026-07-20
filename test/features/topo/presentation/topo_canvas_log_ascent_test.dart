@@ -25,6 +25,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// A [RouteRepository] whose [upsertRoute] silently skips persisting any
 /// route whose [TopoRoute.number] is [skipNumber] — simulating Fix 1's
@@ -80,7 +81,7 @@ void main() {
     await tester.runAsync(() async {
       photoId = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/topo-canvas-log-ascent-test-photo.jpg',
+        XFile('/tmp/topo-canvas-log-ascent-test-photo.jpg'),
         1000,
         2000,
       );
@@ -114,9 +115,7 @@ void main() {
   /// [DrawState.routes] synchronously but never lands in the DB — the
   /// exact "just-drawn route whose fire-and-forget DB write hasn't landed"
   /// race the finding describes.
-  Future<
-    ({AppDatabase db, ProviderContainer container, String wallId})
-  >
+  Future<({AppDatabase db, ProviderContainer container, String wallId})>
   seedWallWithUnresolvedSecondRoute(WidgetTester tester) async {
     final db = AppDatabase(NativeDatabase.memory());
     final flakyRepo = _SkipNumberRouteRepository(
@@ -141,7 +140,7 @@ void main() {
     await tester.runAsync(() async {
       photoId = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/topo-canvas-log-ascent-unresolved-test-photo.jpg',
+        XFile('/tmp/topo-canvas-log-ascent-unresolved-test-photo.jpg'),
         1000,
         2000,
       );
@@ -195,7 +194,7 @@ void main() {
     await tester.runAsync(() async {
       photoId = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/topo-canvas-log-ascent-multi-test-photo.jpg',
+        XFile('/tmp/topo-canvas-log-ascent-multi-test-photo.jpg'),
         1000,
         2000,
       );
@@ -260,7 +259,8 @@ void main() {
       expect(
         logAscentButton,
         findsOneWidget,
-        reason: 'the own (non-readOnly) canvas must show the log-ascent '
+        reason:
+            'the own (non-readOnly) canvas must show the log-ascent '
             'button on its route legend row',
       );
 

@@ -40,6 +40,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 const _overlayKey = Key('topo-route-legend-overlay');
 const _chipKey = Key('topo-route-legend-chip');
@@ -65,7 +66,7 @@ _seedWallWithPhotoAndRoute(WidgetTester tester) async {
   await tester.runAsync(() async {
     photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/tmp/legend-reset-on-remount-photo.jpg',
+      XFile('/tmp/legend-reset-on-remount-photo.jpg'),
       400,
       300,
     );
@@ -127,7 +128,8 @@ void main() {
       expect(
         seeded.container.read(drawControllerProvider).mode,
         DrawMode.view,
-        reason: 'sanity: still view mode — the collapse was a manual toggle, '
+        reason:
+            'sanity: still view mode — the collapse was a manual toggle, '
             'not a mode change',
       );
       expect(
@@ -150,7 +152,8 @@ void main() {
       expect(
         seeded.container.read(drawControllerProvider).mode,
         DrawMode.view,
-        reason: 'sanity: mode never transitioned away from view, so the '
+        reason:
+            'sanity: mode never transitioned away from view, so the '
             'ref.listen in build() alone could not have fired',
       );
       expect(

@@ -20,6 +20,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 Future<ProviderContainer> _seedRoutes(
   WidgetTester tester,
@@ -45,7 +46,7 @@ Future<ProviderContainer> _seedRoutes(
   await tester.runAsync(() async {
     photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/tmp/route-legend-log-ascent-test-photo.jpg',
+      XFile('/tmp/route-legend-log-ascent-test-photo.jpg'),
       1000,
       2000,
     );
@@ -68,10 +69,9 @@ Future<ProviderContainer> _seedRoutes(
     );
   }
 
-  await container.read(drawControllerProvider.notifier).loadForWall(
-        wall.id,
-        photoId,
-      );
+  await container
+      .read(drawControllerProvider.notifier)
+      .loadForWall(wall.id, photoId);
 
   return container;
 }
@@ -103,79 +103,71 @@ void _setViewportSize(WidgetTester tester, Size size) {
 }
 
 void main() {
-  testWidgets(
-    'A3: with onLogAscent set and !readOnly, each row shows '
-    'topo-log-ascent-<routeId>, and tapping it invokes the callback with '
-    "that route's real (persisted) TopoRoute.id",
-    (tester) async {
-      final container = await _seedRoutes(tester, 3);
-      final routes = container.read(drawControllerProvider).routes;
-      expect(routes, hasLength(3));
+  testWidgets('A3: with onLogAscent set and !readOnly, each row shows '
+      'topo-log-ascent-<routeId>, and tapping it invokes the callback with '
+      "that route's real (persisted) TopoRoute.id", (tester) async {
+    final container = await _seedRoutes(tester, 3);
+    final routes = container.read(drawControllerProvider).routes;
+    expect(routes, hasLength(3));
 
-      final tapped = <int>[];
-      await _pumpLegend(
-        tester,
-        container,
-        onLogAscent: (routeId) => tapped.add(routeId),
-      );
-      await tester.pump();
+    final tapped = <int>[];
+    await _pumpLegend(
+      tester,
+      container,
+      onLogAscent: (routeId) => tapped.add(routeId),
+    );
+    await tester.pump();
 
-      for (final route in routes) {
-        expect(
-          find.byKey(Key('topo-log-ascent-${route.id}')),
-          findsOneWidget,
-          reason: 'route ${route.id} must show its own log-ascent button',
-        );
-      }
-
-      final target = routes[1];
-      await tester.tap(find.byKey(Key('topo-log-ascent-${target.id}')));
-      await tester.pump();
-
+    for (final route in routes) {
       expect(
-        tapped,
-        [target.id],
-        reason:
-            'tapping row ${target.id}\'s log-ascent button must invoke the '
-            'callback with exactly that id, not an index or a different '
-            "route's id",
+        find.byKey(Key('topo-log-ascent-${route.id}')),
+        findsOneWidget,
+        reason: 'route ${route.id} must show its own log-ascent button',
       );
+    }
 
-      // Tapping a different row's button passes THAT row's id.
-      final other = routes[0];
-      await tester.tap(find.byKey(Key('topo-log-ascent-${other.id}')));
-      await tester.pump();
-      expect(tapped, [target.id, other.id]);
-    },
-  );
+    final target = routes[1];
+    await tester.tap(find.byKey(Key('topo-log-ascent-${target.id}')));
+    await tester.pump();
 
-  testWidgets(
-    'A4: when readOnly == true, no log-ascent button renders even if '
-    'onLogAscent is provided',
-    (tester) async {
-      final container = await _seedRoutes(tester, 2);
-      final routes = container.read(drawControllerProvider).routes;
+    expect(
+      tapped,
+      [target.id],
+      reason:
+          'tapping row ${target.id}\'s log-ascent button must invoke the '
+          'callback with exactly that id, not an index or a different '
+          "route's id",
+    );
 
-      await _pumpLegend(
-        tester,
-        container,
-        readOnly: true,
-        onLogAscent: (_) {},
-      );
-      await tester.pump();
+    // Tapping a different row's button passes THAT row's id.
+    final other = routes[0];
+    await tester.tap(find.byKey(Key('topo-log-ascent-${other.id}')));
+    await tester.pump();
+    expect(tapped, [target.id, other.id]);
+  });
 
-      for (final route in routes) {
-        expect(
-          find.byKey(Key('topo-log-ascent-${route.id}')),
-          findsNothing,
-        );
-      }
-      // The other two editing affordances stay hidden too (existing
-      // readOnly contract, unaffected by this change).
-      expect(find.byKey(Key('topo-route-visibility-${routes.first.id}')), findsNothing);
-      expect(find.byKey(Key('topo-route-delete-${routes.first.id}')), findsNothing);
-    },
-  );
+  testWidgets('A4: when readOnly == true, no log-ascent button renders even if '
+      'onLogAscent is provided', (tester) async {
+    final container = await _seedRoutes(tester, 2);
+    final routes = container.read(drawControllerProvider).routes;
+
+    await _pumpLegend(tester, container, readOnly: true, onLogAscent: (_) {});
+    await tester.pump();
+
+    for (final route in routes) {
+      expect(find.byKey(Key('topo-log-ascent-${route.id}')), findsNothing);
+    }
+    // The other two editing affordances stay hidden too (existing
+    // readOnly contract, unaffected by this change).
+    expect(
+      find.byKey(Key('topo-route-visibility-${routes.first.id}')),
+      findsNothing,
+    );
+    expect(
+      find.byKey(Key('topo-route-delete-${routes.first.id}')),
+      findsNothing,
+    );
+  });
 
   testWidgets(
     'A4b: with onLogAscent == null (existing call sites unchanged), no '

@@ -21,6 +21,7 @@ import 'dart:ui' as ui;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -146,7 +147,7 @@ Future<_ReviewIds> _seedReviewTopo(
     final photoRepo = PhotoRepository(seedDb, nowMs: nowMs);
 
     final wallId = await repo.createTopo('Sunset Wall');
-    final photoId = await repo.attachPhotoToWall(wallId, imagePath, 1200, 1600);
+    final photoId = await repo.attachPhotoToWall(wallId, XFile(imagePath), 1200, 1600);
 
     for (final (number, grade, style) in _gradedRoutes) {
       // Each route is a 4-point polyline, horizontally offset by number so
@@ -183,7 +184,7 @@ Future<_ReviewIds> _seedReviewTopo(
     final slicedWallId = await repo.createTopo('Sliced Wall');
     final slicedPhotoId = await repo.attachPhotoToWall(
       slicedWallId,
-      slicedImagePath,
+      XFile(slicedImagePath),
       1200,
       1600,
     );

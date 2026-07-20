@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart' as db;
@@ -778,7 +779,7 @@ class LibraryCrudRepository {
   // Photos
   // ---------------------------------------------------------------------
 
-  /// Attaches a freshly-picked photo at [localPath] to [wallId] as an
+  /// Attaches a freshly-picked photo [xfile] to [wallId] as an
   /// `original`, returning the new photo's id.
   ///
   /// The picked file is COPIED into the app-owned `photos/` directory under
@@ -788,7 +789,7 @@ class LibraryCrudRepository {
   /// picker cache out from under a row that still references it) and makes the
   /// path portable for cloud backup. The copy is best-effort: if the source
   /// doesn't exist (or the copy fails), [PhotoFiles.importPhoto] returns
-  /// [localPath] unchanged so the row is still created.
+  /// [xfile]'s path unchanged so the row is still created.
   ///
   /// Multi-photo bookkeeping: this ALWAYS inserts a new original (a wall can
   /// carry many) rather than replacing a previous one. The new row's
@@ -801,13 +802,13 @@ class LibraryCrudRepository {
   /// [createSector]/[createWall]'s sibling-sortOrder pattern.
   Future<String> attachPhotoToWall(
     String wallId,
-    String localPath,
+    XFile xfile,
     int width,
     int height,
   ) async {
     final now = nowMs();
     final id = _uuid.v4();
-    final ownedPath = await _photoFiles.importPhoto(localPath, id);
+    final ownedPath = await _photoFiles.importPhoto(xfile, id);
     final liveOriginalCount = await _liveOriginalCount(wallId);
     await _db
         .into(_db.photos)

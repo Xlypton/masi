@@ -34,6 +34,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 const _viewerKey = Key('topo-interactive-viewer');
 const _overlayLegendKey = Key('topo-route-legend-overlay');
@@ -43,9 +44,7 @@ const _chipKey = Key('topo-route-legend-chip');
 Finder _canvasExpandedAncestorFinder() =>
     find.ancestor(of: find.byKey(_viewerKey), matching: find.byType(Expanded));
 
-Future<
-  ({AppDatabase db, ProviderContainer container, String wallId})
->
+Future<({AppDatabase db, ProviderContainer container, String wallId})>
 _seedWallWithPhotoAndRoute(WidgetTester tester) async {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
@@ -62,7 +61,7 @@ _seedWallWithPhotoAndRoute(WidgetTester tester) async {
   await tester.runAsync(() async {
     photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/tmp/zoom-overlay-test-photo.jpg',
+      XFile('/tmp/zoom-overlay-test-photo.jpg'),
       400,
       300,
     );
@@ -119,7 +118,8 @@ void main() {
               matching: find.byKey(_legendKey),
             ),
             findsOneWidget,
-            reason: "RouteLegend's own key must be preserved inside the "
+            reason:
+                "RouteLegend's own key must be preserved inside the "
                 'floating overlay',
           );
           expect(
@@ -147,7 +147,8 @@ void main() {
           expect(
             find.byKey(_overlayLegendKey),
             findsOneWidget,
-            reason: 'zooming in must NOT change anything about the '
+            reason:
+                'zooming in must NOT change anything about the '
                 'permanent overlay legend',
           );
           expect(_canvasExpandedAncestorFinder(), findsNothing);
@@ -159,7 +160,8 @@ void main() {
           expect(
             find.byKey(_overlayLegendKey),
             findsOneWidget,
-            reason: 'zooming back out must NOT change anything about the '
+            reason:
+                'zooming back out must NOT change anything about the '
                 'permanent overlay legend either',
           );
           expect(_canvasExpandedAncestorFinder(), findsNothing);
@@ -232,7 +234,8 @@ void main() {
               matching: find.byKey(_legendKey),
             ),
             findsOneWidget,
-            reason: "RouteLegend's own key must be preserved inside the "
+            reason:
+                "RouteLegend's own key must be preserved inside the "
                 'floating overlay',
           );
           expect(

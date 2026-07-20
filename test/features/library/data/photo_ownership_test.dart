@@ -14,6 +14,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 
 /// S1 (Own the photo files): a picked photo is COPIED into the app-owned
@@ -70,7 +71,7 @@ void main() {
       () async {
         final src = writeSource('picked.jpg');
 
-        final dest = await photoFiles.importPhoto(src.path, 'abc123');
+        final dest = await photoFiles.importPhoto(XFile(src.path), 'abc123');
 
         expect(dest, 'photos/abc123.jpg');
         final absoluteDest = p.join(photosDirPath(), 'abc123.jpg');
@@ -78,7 +79,7 @@ void main() {
 
         // Idempotent: a second import returns the same path and does not
         // create a second file.
-        final dest2 = await photoFiles.importPhoto(src.path, 'abc123');
+        final dest2 = await photoFiles.importPhoto(XFile(src.path), 'abc123');
         expect(dest2, dest);
         expect(Directory(photosDirPath()).listSync(), hasLength(1));
       },
@@ -90,7 +91,7 @@ void main() {
       () async {
         final missing = p.join(srcDir.path, 'gone.jpg');
 
-        final result = await photoFiles.importPhoto(missing, 'id1');
+        final result = await photoFiles.importPhoto(XFile(missing), 'id1');
 
         expect(result, 'photos/id1.jpg');
         expect(Directory(photosDirPath()).existsSync(), isFalse);
@@ -107,7 +108,8 @@ void main() {
         final wall = await seedWall();
         final src = writeSource('camera-roll.jpg');
 
-        final photoId = await repo.attachPhotoToWall(wall.id, src.path, 640, 480);
+        final photoId =
+            await repo.attachPhotoToWall(wall.id, XFile(src.path), 640, 480);
 
         final photo = await PhotoRepository(
           db,
@@ -138,8 +140,12 @@ void main() {
       () async {
         final wall = await seedWall();
 
-        final photoId =
-            await repo.attachPhotoToWall(wall.id, '/tmp/does-not-exist.jpg', 1, 1);
+        final photoId = await repo.attachPhotoToWall(
+          wall.id,
+          XFile('/tmp/does-not-exist.jpg'),
+          1,
+          1,
+        );
 
         final photo = await PhotoRepository(db, nowMs: () => 1000)
             .loadOriginal(wall.id);
@@ -158,8 +164,12 @@ void main() {
       () async {
         final wall = await seedWall();
         final src = writeSource('to-slice.jpg');
-        final originalId =
-            await repo.attachPhotoToWall(wall.id, src.path, 1000, 500);
+        final originalId = await repo.attachPhotoToWall(
+          wall.id,
+          XFile(src.path),
+          1000,
+          500,
+        );
 
         final photoRepo = PhotoRepository(
           db,
@@ -235,7 +245,7 @@ void main() {
           //    id — see its doc).
           final photoId = await repo.attachPhotoToWall(
             wall.id,
-            src.path,
+            XFile(src.path),
             1000,
             500,
           );

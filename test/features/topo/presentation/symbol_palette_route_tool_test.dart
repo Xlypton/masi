@@ -37,6 +37,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// Creates a real in-memory DB + ProviderContainer + a persisted
 /// Area/Sector/Wall with a photo attached and loaded into
@@ -62,7 +63,7 @@ _seedWallWithPhoto(WidgetTester tester) async {
   await tester.runAsync(() async {
     photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/tmp/symbol-palette-route-tool-photo.jpg',
+      XFile('/tmp/symbol-palette-route-tool-photo.jpg'),
       400,
       300,
     );

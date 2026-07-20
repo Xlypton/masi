@@ -48,6 +48,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 const _overlayKey = Key('topo-route-legend-overlay');
 const _chipKey = Key('topo-route-legend-chip');
@@ -74,7 +75,7 @@ _seedWallWithPhotoAndRoute(WidgetTester tester) async {
   await tester.runAsync(() async {
     photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/tmp/legend-expand-collapse-photo.jpg',
+      XFile('/tmp/legend-expand-collapse-photo.jpg'),
       400,
       300,
     );
@@ -111,7 +112,12 @@ _seedWallWithSlicesAndPhoto(WidgetTester tester) async {
 
   const path = '/tmp/legend-expand-collapse-slices-photo.jpg';
   await tester.runAsync(() async {
-    final photoId = await crud.attachPhotoToWall(wall.id, path, 400, 300);
+    final photoId = await crud.attachPhotoToWall(
+      wall.id,
+      XFile(path),
+      400,
+      300,
+    );
     await container.read(photoRepositoryProvider).replaceSlices(
       wall.id,
       photoId,
@@ -146,21 +152,18 @@ void main() {
       expect(container.read(legendExpandedProvider), isTrue);
     });
 
-    test(
-      'setForMode(DrawMode.draw) collapses (false); '
-      'setForMode(DrawMode.view) expands (true)',
-      () {
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        final notifier = container.read(legendExpandedProvider.notifier);
+    test('setForMode(DrawMode.draw) collapses (false); '
+        'setForMode(DrawMode.view) expands (true)', () {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      final notifier = container.read(legendExpandedProvider.notifier);
 
-        notifier.setForMode(DrawMode.draw);
-        expect(container.read(legendExpandedProvider), isFalse);
+      notifier.setForMode(DrawMode.draw);
+      expect(container.read(legendExpandedProvider), isFalse);
 
-        notifier.setForMode(DrawMode.view);
-        expect(container.read(legendExpandedProvider), isTrue);
-      },
-    );
+      notifier.setForMode(DrawMode.view);
+      expect(container.read(legendExpandedProvider), isTrue);
+    });
   });
 
   group('(a) VIEW mode with routes: overlay present, chip absent', () {
@@ -227,126 +230,117 @@ void main() {
     );
   });
 
-  group(
-    '(b) DRAW mode collapses the legend to a chip; tapping the chip '
-    're-expands it',
-    () {
-      testWidgets(
-        'on the real TopoCanvasScreen: entering draw mode shows the chip '
-        'and hides the overlay; tapping the chip shows the overlay and '
-        'hides the chip',
-        (tester) async {
-          final seeded = await _seedWallWithPhotoAndRoute(tester);
-          addTearDown(seeded.db.close);
-          addTearDown(seeded.container.dispose);
+  group('(b) DRAW mode collapses the legend to a chip; tapping the chip '
+      're-expands it', () {
+    testWidgets(
+      'on the real TopoCanvasScreen: entering draw mode shows the chip '
+      'and hides the overlay; tapping the chip shows the overlay and '
+      'hides the chip',
+      (tester) async {
+        final seeded = await _seedWallWithPhotoAndRoute(tester);
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
 
-          await tester.pumpWidget(
-            UncontrolledProviderScope(
-              container: seeded.container,
-              child: MaterialApp(
-                theme: MasiTheme.light,
-                home: TopoCanvasScreen(
-                  wallId: seeded.wallId,
-                  debugInitialImageSize: const Size(400, 300),
-                ),
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: seeded.container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: TopoCanvasScreen(
+                wallId: seeded.wallId,
+                debugInitialImageSize: const Size(400, 300),
               ),
             ),
-          );
-          await tester.pumpAndSettle();
+          ),
+        );
+        await tester.pumpAndSettle();
 
-          expect(
-            find.byKey(_overlayKey),
-            findsOneWidget,
-            reason: 'sanity: the real screen opens in view mode, expanded',
-          );
-          expect(find.byKey(_chipKey), findsNothing);
+        expect(
+          find.byKey(_overlayKey),
+          findsOneWidget,
+          reason: 'sanity: the real screen opens in view mode, expanded',
+        );
+        expect(find.byKey(_chipKey), findsNothing);
 
-          await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-          await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+        await tester.pumpAndSettle();
 
-          expect(
-            find.byKey(_chipKey),
-            findsOneWidget,
-            reason:
-                'entering draw mode must collapse the legend to the chip '
-                '(the mode-change listener calls setForMode(DrawMode.draw))',
-          );
-          expect(find.byKey(_overlayKey), findsNothing);
+        expect(
+          find.byKey(_chipKey),
+          findsOneWidget,
+          reason:
+              'entering draw mode must collapse the legend to the chip '
+              '(the mode-change listener calls setForMode(DrawMode.draw))',
+        );
+        expect(find.byKey(_overlayKey), findsNothing);
 
-          await tester.tap(find.byKey(_chipKey));
-          await tester.pumpAndSettle();
+        await tester.tap(find.byKey(_chipKey));
+        await tester.pumpAndSettle();
 
-          expect(
-            find.byKey(_overlayKey),
-            findsOneWidget,
-            reason: 'tapping the chip must toggle the legend back open',
-          );
-          expect(find.byKey(_chipKey), findsNothing);
-        },
-      );
-    },
-  );
+        expect(
+          find.byKey(_overlayKey),
+          findsOneWidget,
+          reason: 'tapping the chip must toggle the legend back open',
+        );
+        expect(find.byKey(_chipKey), findsNothing);
+      },
+    );
+  });
 
-  group(
-    '(c) FIX 5: sliced wall in DRAW mode — PhotoSelector never overlaps '
-    'SymbolPaletteBar',
-    () {
-      testWidgets(
-        'PhotoSelector floats ABOVE SymbolPaletteBar in the top chrome '
+  group('(c) FIX 5: sliced wall in DRAW mode — PhotoSelector never overlaps '
+      'SymbolPaletteBar', () {
+    testWidgets('PhotoSelector floats ABOVE SymbolPaletteBar in the top chrome '
         'Column once draw mode makes the palette appear, so the two never '
-        'overlap',
-        (tester) async {
-          final seeded = await _seedWallWithSlicesAndPhoto(tester);
-          addTearDown(seeded.db.close);
-          addTearDown(seeded.container.dispose);
+        'overlap', (tester) async {
+      final seeded = await _seedWallWithSlicesAndPhoto(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
 
-          await tester.pumpWidget(
-            UncontrolledProviderScope(
-              container: seeded.container,
-              child: MaterialApp(
-                theme: MasiTheme.light,
-                home: TopoCanvasScreen(
-                  wallId: seeded.wallId,
-                  debugInitialImageSize: const Size(400, 300),
-                ),
-              ),
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: seeded.container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: TopoCanvasScreen(
+              wallId: seeded.wallId,
+              debugInitialImageSize: const Size(400, 300),
             ),
-          );
-          await tester.pumpAndSettle();
-
-          expect(
-            find.byType(PhotoSelector),
-            findsOneWidget,
-            reason:
-                'sanity: persisted slices must show PhotoSelector once '
-                'loaded, in the default view mode',
-          );
-          expect(
-            find.byType(SymbolPaletteBar),
-            findsNothing,
-            reason: 'sanity: the palette is draw-mode only',
-          );
-
-          await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-          await tester.pumpAndSettle();
-
-          expect(find.byType(PhotoSelector), findsOneWidget);
-          expect(find.byType(SymbolPaletteBar), findsOneWidget);
-
-          final photoRect = tester.getRect(find.byType(PhotoSelector));
-          final paletteRect = tester.getRect(find.byType(SymbolPaletteBar));
-          expect(
-            paletteRect.top,
-            greaterThanOrEqualTo(photoRect.bottom - 0.5),
-            reason:
-                'FIX 5 (slice-picker relocation): the top chrome Column '
-                'stacks PhotoSelector directly above SymbolPaletteBar, so '
-                'SymbolPaletteBar must always render AT OR BELOW '
-                "PhotoSelector's bottom edge once draw mode makes it appear "
-                '— the two floating glass elements must never overlap',
-          );
-        },
+          ),
+        ),
       );
-    },
-  );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byType(PhotoSelector),
+        findsOneWidget,
+        reason:
+            'sanity: persisted slices must show PhotoSelector once '
+            'loaded, in the default view mode',
+      );
+      expect(
+        find.byType(SymbolPaletteBar),
+        findsNothing,
+        reason: 'sanity: the palette is draw-mode only',
+      );
+
+      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PhotoSelector), findsOneWidget);
+      expect(find.byType(SymbolPaletteBar), findsOneWidget);
+
+      final photoRect = tester.getRect(find.byType(PhotoSelector));
+      final paletteRect = tester.getRect(find.byType(SymbolPaletteBar));
+      expect(
+        paletteRect.top,
+        greaterThanOrEqualTo(photoRect.bottom - 0.5),
+        reason:
+            'FIX 5 (slice-picker relocation): the top chrome Column '
+            'stacks PhotoSelector directly above SymbolPaletteBar, so '
+            'SymbolPaletteBar must always render AT OR BELOW '
+            "PhotoSelector's bottom edge once draw mode makes it appear "
+            '— the two floating glass elements must never overlap',
+      );
+    });
+  });
 }

@@ -7,6 +7,7 @@ import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// Builds a [ProviderContainer] wired to a fresh in-memory database and
 /// registers teardown of both the container and the database connection.
@@ -152,7 +153,12 @@ void main() {
         final area = await repo.createArea('Area');
         final sector = await repo.createSector(area.id, 'Sector');
         final wall = await repo.createWall(sector.id, 'Wall');
-        await repo.attachPhotoToWall(wall.id, '/tmp/thumb.jpg', 100, 200);
+        await repo.attachPhotoToWall(
+          wall.id,
+          XFile('/tmp/thumb.jpg'),
+          100,
+          200,
+        );
 
         final emissions = _listenAndCollect<List<TopoRef>>(
           container,

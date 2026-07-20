@@ -36,6 +36,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// A tiny valid PNG's bytes, used by [_NoopTileProvider] below. Copied from
 /// `topos_screen_test.dart`'s identical fixture (itself copied from
@@ -91,7 +92,7 @@ _seedWallWithPhotoAndRoute(WidgetTester tester) async {
   await tester.runAsync(() async {
     final photoId = await crud.attachPhotoToWall(
       seeded.wallId,
-      '/tmp/edit-location-photo.jpg',
+      XFile('/tmp/edit-location-photo.jpg'),
       1000,
       2000,
     );
@@ -181,9 +182,9 @@ void main() {
       // is an app-lifetime-global provider, so force it directly to prove
       // the readOnly gate holds regardless of mode, not just at the
       // default view-mode this screen always opens in.
-      seeded.container.read(drawControllerProvider.notifier).setMode(
-        DrawMode.draw,
-      );
+      seeded.container
+          .read(drawControllerProvider.notifier)
+          .setMode(DrawMode.draw);
       await tester.pumpAndSettle();
 
       expect(
@@ -385,114 +386,103 @@ void main() {
       );
     });
 
-    testWidgets(
-      'present in view mode, absent in draw mode',
-      (tester) async {
-        final seeded = await _seedWall();
-        addTearDown(seeded.db.close);
-        addTearDown(seeded.container.dispose);
+    testWidgets('present in view mode, absent in draw mode', (tester) async {
+      final seeded = await _seedWall();
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
 
-        await tester.pumpWidget(
-          _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
-        );
-        await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
+      );
+      await tester.pumpAndSettle();
 
-        expect(
-          find.byKey(const Key('topo-locate-on-map-button')),
-          findsOneWidget,
-          reason: 'view mode (the default) must show the locate button',
-        );
+      expect(
+        find.byKey(const Key('topo-locate-on-map-button')),
+        findsOneWidget,
+        reason: 'view mode (the default) must show the locate button',
+      );
 
-        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-        await tester.pump();
+      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+      await tester.pump();
 
-        expect(
-          find.byKey(const Key('topo-locate-on-map-button')),
-          findsNothing,
-          reason: 'draw mode must hide the locate button',
-        );
-      },
-    );
+      expect(
+        find.byKey(const Key('topo-locate-on-map-button')),
+        findsNothing,
+        reason: 'draw mode must hide the locate button',
+      );
+    });
 
-    testWidgets(
-      'disabled with a "No location set" tooltip for a wall with no '
-      'coordinates, and flips to enabled with "Show on map" once '
-      'coordinates are set',
-      (tester) async {
-        final seeded = await _seedWall();
-        addTearDown(seeded.db.close);
-        addTearDown(seeded.container.dispose);
+    testWidgets('disabled with a "No location set" tooltip for a wall with no '
+        'coordinates, and flips to enabled with "Show on map" once '
+        'coordinates are set', (tester) async {
+      final seeded = await _seedWall();
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
 
-        await tester.pumpWidget(
-          _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
-        );
-        await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
+      );
+      await tester.pumpAndSettle();
 
-        final buttonFinder = find.byKey(
-          const Key('topo-locate-on-map-button'),
-        );
-        expect(
-          tester.widget<IconButton>(buttonFinder).onPressed,
-          isNull,
-          reason: 'nothing to locate on the map without coordinates',
-        );
-        expect(
-          tester.widget<IconButton>(buttonFinder).tooltip,
-          'No location set',
-        );
+      final buttonFinder = find.byKey(const Key('topo-locate-on-map-button'));
+      expect(
+        tester.widget<IconButton>(buttonFinder).onPressed,
+        isNull,
+        reason: 'nothing to locate on the map without coordinates',
+      );
+      expect(
+        tester.widget<IconButton>(buttonFinder).tooltip,
+        'No location set',
+      );
 
-        await _dbWork(
-          tester,
-          () => seeded.container
-              .read(libraryCrudRepositoryProvider)
-              .setWallCoordinates(seeded.wallId, 45.0, 6.0),
-        );
-        await tester.pumpAndSettle();
+      await _dbWork(
+        tester,
+        () => seeded.container
+            .read(libraryCrudRepositoryProvider)
+            .setWallCoordinates(seeded.wallId, 45.0, 6.0),
+      );
+      await tester.pumpAndSettle();
 
-        expect(
-          tester.widget<IconButton>(buttonFinder).onPressed,
-          isNotNull,
-          reason:
-              'the live toposProvider read updating on its own must enable '
-              'the button once the wall has coordinates',
-        );
-        expect(tester.widget<IconButton>(buttonFinder).tooltip, 'Show on map');
-      },
-    );
+      expect(
+        tester.widget<IconButton>(buttonFinder).onPressed,
+        isNotNull,
+        reason:
+            'the live toposProvider read updating on its own must enable '
+            'the button once the wall has coordinates',
+      );
+      expect(tester.widget<IconButton>(buttonFinder).tooltip, 'Show on map');
+    });
 
-    testWidgets(
-      'Q1: tapping the button (with coordinates set) navigates to '
-      '/community?tab=map&focus=<wallId> — the same destination '
-      'topos_screen.dart\'s "Show on map" menu item uses',
-      (tester) async {
-        final seeded = await _seedWall();
-        addTearDown(seeded.db.close);
-        addTearDown(seeded.container.dispose);
-        await _dbWork(
-          tester,
-          () => seeded.container
-              .read(libraryCrudRepositoryProvider)
-              .setWallCoordinates(seeded.wallId, 47.4979, 19.0402),
-        );
+    testWidgets('Q1: tapping the button (with coordinates set) navigates to '
+        '/community?tab=map&focus=<wallId> — the same destination '
+        'topos_screen.dart\'s "Show on map" menu item uses', (tester) async {
+      final seeded = await _seedWall();
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+      await _dbWork(
+        tester,
+        () => seeded.container
+            .read(libraryCrudRepositoryProvider)
+            .setWallCoordinates(seeded.wallId, 47.4979, 19.0402),
+      );
 
-        await tester.pumpWidget(
-          _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
-        );
-        await tester.pumpAndSettle();
+      await tester.pumpWidget(
+        _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
+      );
+      await tester.pumpAndSettle();
 
-        await tester.tap(find.byKey(const Key('topo-locate-on-map-button')));
-        await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('topo-locate-on-map-button')));
+      await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('community-placeholder')), findsOneWidget);
-        expect(
-          find.text('community-map-${seeded.wallId}'),
-          findsOneWidget,
-          reason:
-              'must push the SAME tab=map&focus=<wallId> destination as '
-              'topos_screen.dart\'s _handleShowOnMap',
-        );
-      },
-    );
+      expect(find.byKey(const Key('community-placeholder')), findsOneWidget);
+      expect(
+        find.text('community-map-${seeded.wallId}'),
+        findsOneWidget,
+        reason:
+            'must push the SAME tab=map&focus=<wallId> destination as '
+            'topos_screen.dart\'s _handleShowOnMap',
+      );
+    });
   });
 
   group('no RenderFlex overflow at 375px width in either mode', () {
@@ -508,57 +498,51 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
     }
 
-    testWidgets(
-      'view mode: worst-case trailing row (edit-metadata + AR + '
-      'mode-toggle + slice-mode + locate-on-map + add-photo) does not '
-      'overflow',
-      (tester) async {
-        setViewportSize(tester, const Size(375, 812));
-        final seeded = await _seedWallWithPhotoAndRoute(tester);
-        addTearDown(seeded.db.close);
-        addTearDown(seeded.container.dispose);
-        await _dbWork(
-          tester,
-          () => seeded.container
-              .read(libraryCrudRepositoryProvider)
-              .setWallCoordinates(seeded.wallId, 45.0, 6.0),
-        );
+    testWidgets('view mode: worst-case trailing row (edit-metadata + AR + '
+        'mode-toggle + slice-mode + locate-on-map + add-photo) does not '
+        'overflow', (tester) async {
+      setViewportSize(tester, const Size(375, 812));
+      final seeded = await _seedWallWithPhotoAndRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+      await _dbWork(
+        tester,
+        () => seeded.container
+            .read(libraryCrudRepositoryProvider)
+            .setWallCoordinates(seeded.wallId, 45.0, 6.0),
+      );
 
-        await tester.pumpWidget(
-          _wrap(
-            seeded.container,
-            TopoCanvasScreen(
-              wallId: seeded.wallId,
-              debugInitialImageSize: const Size(1000, 2000),
-            ),
+      await tester.pumpWidget(
+        _wrap(
+          seeded.container,
+          TopoCanvasScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
           ),
-        );
-        await tester.pumpAndSettle();
+        ),
+      );
+      await tester.pumpAndSettle();
 
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
+      seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
+      await tester.pumpAndSettle();
+
+      for (final key in const [
+        'topo-edit-metadata-button',
+        'topo-ar-button',
+        'topo-mode-toggle',
+        'topo-slice-mode-button',
+        'topo-locate-on-map-button',
+        'topo-add-photo-button',
+      ]) {
         expect(
-          seeded.container.read(drawControllerProvider).mode,
-          DrawMode.view,
+          find.byKey(Key(key)),
+          findsOneWidget,
+          reason: '$key must be present for this worst-case row',
         );
-        seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
-        await tester.pumpAndSettle();
-
-        for (final key in const [
-          'topo-edit-metadata-button',
-          'topo-ar-button',
-          'topo-mode-toggle',
-          'topo-slice-mode-button',
-          'topo-locate-on-map-button',
-          'topo-add-photo-button',
-        ]) {
-          expect(
-            find.byKey(Key(key)),
-            findsOneWidget,
-            reason: '$key must be present for this worst-case row',
-          );
-        }
-        expect(tester.takeException(), isNull);
-      },
-    );
+      }
+      expect(tester.takeException(), isNull);
+    });
 
     testWidgets(
       'draw mode: worst-case trailing row (edit-metadata + mode-toggle + '

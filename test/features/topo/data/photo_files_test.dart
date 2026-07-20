@@ -2,6 +2,8 @@ import 'dart:io';
 
 import 'package:climbtopo/features/topo/data/photo_files.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image/image.dart' as img;
+import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider_platform_interface/path_provider_platform_interface.dart';
 
@@ -59,7 +61,7 @@ void main() {
         'RELATIVE form photos/<id><ext>, not an absolute path', () async {
       final src = writeSource('picked.jpg');
 
-      final result = await photoFiles.importPhoto(src.path, 'abc123');
+      final result = await photoFiles.importPhoto(XFile(src.path), 'abc123');
 
       expect(result, 'photos/abc123.jpg');
       expect(p.isAbsolute(result), isFalse);
@@ -72,8 +74,8 @@ void main() {
         'same relative path and does not duplicate the file', () async {
       final src = writeSource('picked.jpg');
 
-      final first = await photoFiles.importPhoto(src.path, 'abc123');
-      final second = await photoFiles.importPhoto(src.path, 'abc123');
+      final first = await photoFiles.importPhoto(XFile(src.path), 'abc123');
+      final second = await photoFiles.importPhoto(XFile(src.path), 'abc123');
 
       expect(second, first);
       expect(Directory(photosDirPath()).listSync(), hasLength(1));
@@ -89,7 +91,10 @@ void main() {
         );
         final missing = p.join(srcDir.path, 'gone.jpg');
 
-        final result = await throwingDocsDir.importPhoto(missing, 'id1');
+        final result = await throwingDocsDir.importPhoto(
+          XFile(missing),
+          'id1',
+        );
 
         expect(result, 'photos/id1.jpg');
         expect(Directory(photosDirPath()).existsSync(), isFalse);
@@ -108,9 +113,53 @@ void main() {
         p.join(photosDirPath(), 'abc123.jpg'),
       ).createSync(recursive: true);
 
-      final result = await photoFiles.importPhoto(src.path, 'abc123');
+      final result = await photoFiles.importPhoto(XFile(src.path), 'abc123');
 
       expect(result, 'photos/abc123.jpg');
+    });
+  });
+
+  group('importPhoto thumbnail generation', () {
+    File writeRealJpegSource(String name) {
+      final f = File(p.join(srcDir.path, name));
+      final image = img.Image(width: 10, height: 10);
+      f.writeAsBytesSync(img.encodeJpg(image));
+      return f;
+    }
+
+    test(
+      'a real image source also produces a readable thumbs/<id>.jpg under '
+      'the injected docsDir',
+      () async {
+        final src = writeRealJpegSource('real.jpg');
+
+        final result = await photoFiles.importPhoto(
+          XFile(src.path),
+          'thumbid',
+        );
+
+        expect(result, 'photos/thumbid.jpg');
+        final thumbPath = p.join(docsDir.path, 'thumbs', 'thumbid.jpg');
+        expect(File(thumbPath).existsSync(), isTrue);
+        expect(File(thumbPath).readAsBytesSync(), isNotEmpty);
+      },
+    );
+  });
+
+  group('readPhotoBytes', () {
+    test('returns the bytes for a stored key that exists', () async {
+      final bytes = List<int>.filled(8, 9);
+      final stored = await photoFiles.writePhotoBytes('rid', '.jpg', bytes);
+
+      final result = await photoFiles.readPhotoBytes(stored);
+
+      expect(result, bytes);
+    });
+
+    test('returns null for a stored key that does not exist', () async {
+      final result = await photoFiles.readPhotoBytes('photos/missing.jpg');
+
+      expect(result, isNull);
     });
   });
 

@@ -11,6 +11,7 @@ import 'dart:ui' as ui;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -59,7 +60,7 @@ Future<List<String>> _seed(String Function(String) imagePathFor) async {
       final wallId = await repo.createTopo(name);
       final imagePath = imagePathFor(name);
       await File(imagePath).writeAsBytes(await _wallImage(const Color(0xFF6E56C6)), flush: true);
-      await repo.attachPhotoToWall(wallId, imagePath, 1200, 1600);
+      await repo.attachPhotoToWall(wallId, XFile(imagePath), 1200, 1600);
       if (publish) await repo.publishTopo(wallId);
       await repo.setWallCoordinates(wallId, lat, lng);
       wallIds.add(wallId);

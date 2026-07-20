@@ -8,6 +8,7 @@ import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 
 void main() {
@@ -95,7 +96,7 @@ void main() {
       final wall = await repo.createWall(sector.id, 'Wall');
       final photoId = await repo.attachPhotoToWall(
         wall.id,
-        '/tmp/photo.jpg',
+        XFile('/tmp/photo.jpg'),
         100,
         200,
       );
@@ -163,13 +164,13 @@ void main() {
 
       final targetPhotoId = await repo.attachPhotoToWall(
         targetWall.id,
-        '/tmp/target.jpg',
+        XFile('/tmp/target.jpg'),
         100,
         200,
       );
       final siblingPhotoId = await repo.attachPhotoToWall(
         siblingWall.id,
-        '/tmp/sibling.jpg',
+        XFile('/tmp/sibling.jpg'),
         100,
         200,
       );
@@ -336,7 +337,7 @@ void main() {
 
         final photoId = await repo.attachPhotoToWall(
           wall.id,
-          '/tmp/photo.jpg',
+          XFile('/tmp/photo.jpg'),
           640,
           480,
         );
@@ -376,7 +377,7 @@ void main() {
 
         final firstId = await repo.attachPhotoToWall(
           wall.id,
-          '/tmp/first.jpg',
+          XFile('/tmp/first.jpg'),
           640,
           480,
         );
@@ -388,7 +389,7 @@ void main() {
 
         final secondId = await repo.attachPhotoToWall(
           wall.id,
-          '/tmp/second.jpg',
+          XFile('/tmp/second.jpg'),
           640,
           480,
         );
@@ -484,7 +485,7 @@ void main() {
         final wallWithPhoto = await repo.createWall(sector.id, 'Photo Wall');
         final thumbPhotoId = await repo.attachPhotoToWall(
           wallWithPhoto.id,
-          '/tmp/thumb.jpg',
+          XFile('/tmp/thumb.jpg'),
           100,
           200,
         );
@@ -545,7 +546,7 @@ void main() {
       final wall = await repo.createWall(sector.id, 'Wall');
       final photoId = await repo.attachPhotoToWall(
         wall.id,
-        '/tmp/photo.jpg',
+        XFile('/tmp/photo.jpg'),
         100,
         200,
       );
@@ -579,7 +580,7 @@ void main() {
         final ungradedWall = await repo.createWall(sector.id, 'Bare Wall');
         final photoId = await repo.attachPhotoToWall(
           gradedWall.id,
-          '/tmp/photo.jpg',
+          XFile('/tmp/photo.jpg'),
           100,
           200,
         );
@@ -736,7 +737,7 @@ void main() {
           final bareWall = await repo.createWall(sector.id, 'Bare Wall');
           final photoId = await repo.attachPhotoToWall(
             wall.id,
-            '/tmp/p.jpg',
+            XFile('/tmp/p.jpg'),
             1,
             1,
           );
@@ -802,7 +803,7 @@ void main() {
           final wall = await repo.createWall(sector.id, 'Wall');
           final photoId = await repo.attachPhotoToWall(
             wall.id,
-            '/tmp/p.jpg',
+            XFile('/tmp/p.jpg'),
             640,
             480,
           );
@@ -1072,13 +1073,13 @@ void main() {
 
         final photoId1 = await tiedRepo.attachPhotoToWall(
           wall.id,
-          '/tmp/photo-a.jpg',
+          XFile('/tmp/photo-a.jpg'),
           100,
           200,
         );
         final photoId2 = await tiedRepo.attachPhotoToWall(
           wall.id,
-          '/tmp/photo-b.jpg',
+          XFile('/tmp/photo-b.jpg'),
           100,
           200,
         );
@@ -1118,13 +1119,13 @@ void main() {
 
         final photoId1 = await tiedRepo.attachPhotoToWall(
           wall.id,
-          '/tmp/photo-a.jpg',
+          XFile('/tmp/photo-a.jpg'),
           100,
           200,
         );
         final photoId2 = await tiedRepo.attachPhotoToWall(
           wall.id,
-          '/tmp/photo-b.jpg',
+          XFile('/tmp/photo-b.jpg'),
           100,
           200,
         );
@@ -1184,7 +1185,7 @@ void main() {
       final wall = await healingRepo.createWall(sector.id, 'Wall');
       final photoId = await healingRepo.attachPhotoToWall(
         wall.id,
-        '/tmp/does-not-exist.jpg',
+        XFile('/tmp/does-not-exist.jpg'),
         1,
         1,
       );
@@ -1225,7 +1226,7 @@ void main() {
       // photos/<id>.jpg form (the container-rotation-proof shape).
       final photoId = await healingRepo.attachPhotoToWall(
         wall.id,
-        '/tmp/does-not-exist.jpg',
+        XFile('/tmp/does-not-exist.jpg'),
         1,
         1,
       );
@@ -1273,7 +1274,7 @@ void main() {
         final wall = await healingRepo.createWall(sector.id, 'Wall');
         final photoId = await healingRepo.attachPhotoToWall(
           wall.id,
-          '/tmp/does-not-exist.jpg',
+          XFile('/tmp/does-not-exist.jpg'),
           1,
           1,
         );
@@ -1302,7 +1303,7 @@ void main() {
       final wall = await owned.createWall(sector.id, 'Wall');
       final photoId = await owned.attachPhotoToWall(
         wall.id,
-        '/tmp/photo.jpg',
+        XFile('/tmp/photo.jpg'),
         100,
         200,
       );
@@ -1349,7 +1350,7 @@ void main() {
       final wall = await repo.createWall(sector.id, 'Wall');
       final photoId = await repo.attachPhotoToWall(
         wall.id,
-        '/tmp/photo.jpg',
+        XFile('/tmp/photo.jpg'),
         100,
         200,
       );
@@ -1684,7 +1685,7 @@ void main() {
       final wallId = await repo.createTopo('Topo');
       final photoId = await repo.attachPhotoToWall(
         wallId,
-        '/tmp/p.jpg',
+        XFile('/tmp/p.jpg'),
         10,
         10,
       );
@@ -1721,7 +1722,7 @@ void main() {
       final siblingWallId = await repo.createTopo('Topo B');
       final siblingPhotoId = await repo.attachPhotoToWall(
         siblingWallId,
-        '/tmp/s.jpg',
+        XFile('/tmp/s.jpg'),
         10,
         10,
       );
@@ -1745,7 +1746,7 @@ void main() {
       final wallId = await repo.createTopo('Topo');
       final photoId = await repo.attachPhotoToWall(
         wallId,
-        '/tmp/p.jpg',
+        XFile('/tmp/p.jpg'),
         10,
         10,
       );
@@ -1770,7 +1771,7 @@ void main() {
       final wallId = await repo.createTopo('Topo');
       final photoId = await repo.attachPhotoToWall(
         wallId,
-        '/tmp/p.jpg',
+        XFile('/tmp/p.jpg'),
         10,
         10,
       );

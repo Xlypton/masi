@@ -18,6 +18,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// Minimal in-memory [AuthRepository] test double: a FIXED signed-in
 /// session (no live emit tracking needed by this suite) — trimmed from
@@ -84,7 +85,7 @@ void main() {
     await tester.runAsync(() async {
       photoId = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/community-detail-test-photo.jpg',
+        XFile('/tmp/community-detail-test-photo.jpg'),
         1000,
         2000,
       );
@@ -155,7 +156,7 @@ void main() {
     await tester.runAsync(() async {
       photoId = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/community-detail-test-photo-2.jpg',
+        XFile('/tmp/community-detail-test-photo-2.jpg'),
         1000,
         2000,
       );
@@ -262,20 +263,14 @@ void main() {
       // collapsed chip (`topo-route-legend-chip`). This used to assert the
       // opposite ("still renders") before `embedded` existed.
       expect(find.byKey(const Key('topo-route-legend')), findsNothing);
-      expect(
-        find.byKey(const Key('topo-route-legend-overlay')),
-        findsNothing,
-      );
+      expect(find.byKey(const Key('topo-route-legend-overlay')), findsNothing);
       expect(find.byKey(const Key('topo-route-legend-chip')), findsNothing);
 
       // The route is still visible, just via this screen's own "Routes"
       // section below the header rather than the (now-suppressed) embedded
       // legend — skipOffstage: false since that section starts below the
       // initial viewport fold (see scrollKeyIntoView's doc).
-      expect(
-        find.textContaining('Route 1', skipOffstage: false),
-        findsWidgets,
-      );
+      expect(find.textContaining('Route 1', skipOffstage: false), findsWidgets);
 
       // The legend's own editing affordances (visibility/delete) are also
       // hidden in read-only mode — moot now that no legend renders at all
@@ -387,9 +382,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final ascentButtonKey = Key(
-        'community-log-ascent-${seeded.routeDbId}',
-      );
+      final ascentButtonKey = Key('community-log-ascent-${seeded.routeDbId}');
       await tester.ensureVisible(find.byKey(ascentButtonKey));
       await tester.pumpAndSettle();
       expect(find.byKey(ascentButtonKey), findsOneWidget);
@@ -406,10 +399,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // The sheet closes on save.
-      expect(
-        find.byKey(const Key('community-log-ascent-sheet')),
-        findsNothing,
-      );
+      expect(find.byKey(const Key('community-log-ascent-sheet')), findsNothing);
 
       final ascentsRepo = seeded.container.read(ascentsRepositoryProvider);
       final ascents = await ascentsRepo.ascentsForRoute(seeded.routeDbId);
@@ -438,9 +428,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final ascentButtonKey = Key(
-        'community-log-ascent-${seeded.routeDbId}',
-      );
+      final ascentButtonKey = Key('community-log-ascent-${seeded.routeDbId}');
       await tester.ensureVisible(find.byKey(ascentButtonKey));
       await tester.pumpAndSettle();
 
@@ -476,10 +464,7 @@ void main() {
       await tester.pumpAndSettle();
 
       // The sheet closes on save...
-      expect(
-        find.byKey(const Key('community-log-ascent-sheet')),
-        findsNothing,
-      );
+      expect(find.byKey(const Key('community-log-ascent-sheet')), findsNothing);
       // ...and the notes field's focus must have been released rather than
       // stranded on a now-disposed field (#20a keyboard-dismiss fix).
       expect(
@@ -613,10 +598,7 @@ void main() {
       // Default expanded: the per-route Log-ascent button already exists
       // with no interaction (existence check only — `skipOffstage: false`,
       // no scroll needed).
-      expect(
-        find.byKey(namedAscentKey, skipOffstage: false),
-        findsOneWidget,
-      );
+      expect(find.byKey(namedAscentKey, skipOffstage: false), findsOneWidget);
 
       // Tapping the header collapses it — `scrollKeyIntoView` first, since
       // an actual `tap()` (unlike the existence checks above) dispatches a
@@ -636,10 +618,7 @@ void main() {
       await scrollKeyIntoView(tester, sectionKeyValue);
       await tester.tap(find.byKey(sectionKeyValue));
       await tester.pumpAndSettle();
-      expect(
-        find.byKey(namedAscentKey, skipOffstage: false),
-        findsOneWidget,
-      );
+      expect(find.byKey(namedAscentKey, skipOffstage: false), findsOneWidget);
     },
   );
 
@@ -674,9 +653,7 @@ void main() {
           .length;
       expect(countBefore, 1);
 
-      final openCanvas = find.byKey(
-        const Key('community-detail-open-canvas'),
-      );
+      final openCanvas = find.byKey(const Key('community-detail-open-canvas'));
       expect(openCanvas, findsOneWidget);
       // `warnIfMissed: true` (the default) would already flag a genuine
       // hit-test miss on the header's tap catcher; asserting the count grew
@@ -706,66 +683,60 @@ void main() {
     },
   );
 
-  testWidgets(
-    '#31: the header\'s embedded canvas is chromeless — no '
-    'topo-back-button, no floating route legend — while the photo + route '
-    'overlays still render',
-    (tester) async {
-      final seeded = await seedWallWithRoute(tester);
-      addTearDown(seeded.db.close);
-      addTearDown(seeded.container.dispose);
+  testWidgets('#31: the header\'s embedded canvas is chromeless — no '
+      'topo-back-button, no floating route legend — while the photo + route '
+      'overlays still render', (tester) async {
+    final seeded = await seedWallWithRoute(tester);
+    addTearDown(seeded.db.close);
+    addTearDown(seeded.container.dispose);
 
-      await tester.pumpWidget(
-        wrap(
-          seeded.container,
-          CommunityTopoDetailScreen(
-            wallId: seeded.wallId,
-            debugInitialImageSize: const Size(1000, 2000),
-          ),
+    await tester.pumpWidget(
+      wrap(
+        seeded.container,
+        CommunityTopoDetailScreen(
+          wallId: seeded.wallId,
+          debugInitialImageSize: const Size(1000, 2000),
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      // Ghost-chevron/legend-bleed fix: the header's embedded
-      // TopoCanvasScreen is `embedded: true` (see TopoCanvasScreen.embedded's
-      // doc) — its own top GlassChrome pill (wall-name title + the
-      // `topo-back-button` chevron) is never painted at all now, not merely
-      // made inert by the ancestor IgnorePointer as it used to be.
-      expect(find.byKey(const Key('topo-back-button')), findsNothing);
+    // Ghost-chevron/legend-bleed fix: the header's embedded
+    // TopoCanvasScreen is `embedded: true` (see TopoCanvasScreen.embedded's
+    // doc) — its own top GlassChrome pill (wall-name title + the
+    // `topo-back-button` chevron) is never painted at all now, not merely
+    // made inert by the ancestor IgnorePointer as it used to be.
+    expect(find.byKey(const Key('topo-back-button')), findsNothing);
 
-      // Nor is its floating RouteLegend overlay, in either form.
-      expect(find.byKey(const Key('topo-route-legend')), findsNothing);
-      expect(
-        find.byKey(const Key('topo-route-legend-overlay')),
-        findsNothing,
-      );
-      expect(find.byKey(const Key('topo-route-legend-chip')), findsNothing);
+    // Nor is its floating RouteLegend overlay, in either form.
+    expect(find.byKey(const Key('topo-route-legend')), findsNothing);
+    expect(find.byKey(const Key('topo-route-legend-overlay')), findsNothing);
+    expect(find.byKey(const Key('topo-route-legend-chip')), findsNothing);
 
-      // The photo + its route overlays still render: TopoCanvas is mounted
-      // with the resolved image size, and TopoPainter (the actual
-      // photo/route-overlay renderer) is fed the wall's committed route —
-      // only the interactive/floating chrome is suppressed, per
-      // TopoCanvasScreen.embedded's contract.
-      final canvas = tester.widget<TopoCanvas>(find.byType(TopoCanvas));
-      expect(canvas.imageSize, const Size(1000, 2000));
+    // The photo + its route overlays still render: TopoCanvas is mounted
+    // with the resolved image size, and TopoPainter (the actual
+    // photo/route-overlay renderer) is fed the wall's committed route —
+    // only the interactive/floating chrome is suppressed, per
+    // TopoCanvasScreen.embedded's contract.
+    final canvas = tester.widget<TopoCanvas>(find.byType(TopoCanvas));
+    expect(canvas.imageSize, const Size(1000, 2000));
 
-      // Mirrors topo_canvas_fit_test.dart's own `findTopoPainter` idiom.
-      final customPaint = tester.widget<CustomPaint>(
-        find.byWidgetPredicate(
-          (widget) => widget is CustomPaint && widget.painter is TopoPainter,
-        ),
-      );
-      final painter = customPaint.painter as TopoPainter;
-      expect(painter.routes, hasLength(1));
+    // Mirrors topo_canvas_fit_test.dart's own `findTopoPainter` idiom.
+    final customPaint = tester.widget<CustomPaint>(
+      find.byWidgetPredicate(
+        (widget) => widget is CustomPaint && widget.painter is TopoPainter,
+      ),
+    );
+    final painter = customPaint.painter as TopoPainter;
+    expect(painter.routes, hasLength(1));
 
-      // This screen's own back button — the only FUNCTIONAL one — is
-      // unaffected by any of the above.
-      expect(
-        find.byKey(const Key('community-detail-back-button')),
-        findsOneWidget,
-      );
-    },
-  );
+    // This screen's own back button — the only FUNCTIONAL one — is
+    // unaffected by any of the above.
+    expect(
+      find.byKey(const Key('community-detail-back-button')),
+      findsOneWidget,
+    );
+  });
 
   testWidgets(
     '#31: the full-screen canvas pushed via community-detail-open-canvas '
@@ -808,133 +779,118 @@ void main() {
     },
   );
 
-  group(
-    'Routes section per-route metadata (#41 beta-video, #42 style tags, '
-    '#44 stars)',
-    () {
-      testWidgets(
-        'a route with betaVideoUrl shows a route-beta-<dbId> button; a '
-        'route without one does not',
-        (tester) async {
-          final db = AppDatabase(NativeDatabase.memory());
-          final container = ProviderContainer(
-            overrides: [
-              appDatabaseProvider.overrideWithValue(db),
-              nowMsProvider.overrideWithValue(() => 1000),
-              authRepositoryProvider.overrideWithValue(
-                _FakeAuthRepository(
-                  const AuthSessionState.signedIn('climber@example.com'),
-                ),
-              ),
-            ],
-          );
-          addTearDown(db.close);
-          addTearDown(container.dispose);
-
-          final crud = container.read(libraryCrudRepositoryProvider);
-          final area = await crud.createArea('Area');
-          final sector = await crud.createSector(area.id, 'Sector');
-          final wall = await crud.createWall(sector.id, 'Wall');
-          late String photoId;
-          await tester.runAsync(() async {
-            photoId = await crud.attachPhotoToWall(
-              wall.id,
-              '/tmp/community-detail-metadata-test-photo.jpg',
-              1000,
-              2000,
-            );
-          });
-
-          final routeRepo = RouteRepository(db, nowMs: () => 1000);
-          await routeRepo.upsertRoute(
-            wall.id,
-            photoId,
-            const TopoRoute(
-              id: 1,
-              number: 1,
-              points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
-              betaVideoUrl: 'https://example.com/beta',
-              styleTags: ['dyno', 'my-custom-tag'],
-              stars: 2,
+  group('Routes section per-route metadata (#41 beta-video, #42 style tags, '
+      '#44 stars)', () {
+    testWidgets('a route with betaVideoUrl shows a route-beta-<dbId> button; a '
+        'route without one does not', (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          authRepositoryProvider.overrideWithValue(
+            _FakeAuthRepository(
+              const AuthSessionState.signedIn('climber@example.com'),
             ),
-          );
-          await routeRepo.upsertRoute(
-            wall.id,
-            photoId,
-            const TopoRoute(
-              id: 2,
-              number: 2,
-              points: [Offset(0.3, 0.3), Offset(0.4, 0.4)],
-            ),
-          );
-          final dbIds = await routeRepo.routeDbIdsByNumber(wall.id);
-
-          await tester.pumpWidget(
-            wrap(
-              container,
-              CommunityTopoDetailScreen(
-                wallId: wall.id,
-                debugInitialImageSize: const Size(1000, 2000),
-              ),
-            ),
-          );
-          await tester.pumpAndSettle();
-
-          final withMetaDbId = dbIds[1]!;
-          final withoutMetaDbId = dbIds[2]!;
-
-          await scrollKeyIntoView(
-            tester,
-            Key('community-log-ascent-$withMetaDbId'),
-          );
-
-          expect(
-            find.byKey(Key('route-beta-$withMetaDbId'), skipOffstage: false),
-            findsOneWidget,
-            reason: 'the route with a betaVideoUrl must show its button',
-          );
-          expect(
-            find.byKey(
-              Key('route-beta-$withoutMetaDbId'),
-              skipOffstage: false,
-            ),
-            findsNothing,
-            reason: 'the route without a betaVideoUrl must not',
-          );
-
-          expect(
-            find.byKey(
-              Key('route-styletag-$withMetaDbId-dyno'),
-              skipOffstage: false,
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.byKey(
-              Key('route-styletag-$withMetaDbId-my-custom-tag'),
-              skipOffstage: false,
-            ),
-            findsOneWidget,
-          );
-
-          expect(
-            find.byKey(
-              Key('route-stars-$withMetaDbId'),
-              skipOffstage: false,
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.byKey(
-              Key('route-stars-$withoutMetaDbId'),
-              skipOffstage: false,
-            ),
-            findsNothing,
-          );
-        },
+          ),
+        ],
       );
-    },
-  );
+      addTearDown(db.close);
+      addTearDown(container.dispose);
+
+      final crud = container.read(libraryCrudRepositoryProvider);
+      final area = await crud.createArea('Area');
+      final sector = await crud.createSector(area.id, 'Sector');
+      final wall = await crud.createWall(sector.id, 'Wall');
+      late String photoId;
+      await tester.runAsync(() async {
+        photoId = await crud.attachPhotoToWall(
+          wall.id,
+          XFile('/tmp/community-detail-metadata-test-photo.jpg'),
+          1000,
+          2000,
+        );
+      });
+
+      final routeRepo = RouteRepository(db, nowMs: () => 1000);
+      await routeRepo.upsertRoute(
+        wall.id,
+        photoId,
+        const TopoRoute(
+          id: 1,
+          number: 1,
+          points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+          betaVideoUrl: 'https://example.com/beta',
+          styleTags: ['dyno', 'my-custom-tag'],
+          stars: 2,
+        ),
+      );
+      await routeRepo.upsertRoute(
+        wall.id,
+        photoId,
+        const TopoRoute(
+          id: 2,
+          number: 2,
+          points: [Offset(0.3, 0.3), Offset(0.4, 0.4)],
+        ),
+      );
+      final dbIds = await routeRepo.routeDbIdsByNumber(wall.id);
+
+      await tester.pumpWidget(
+        wrap(
+          container,
+          CommunityTopoDetailScreen(
+            wallId: wall.id,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final withMetaDbId = dbIds[1]!;
+      final withoutMetaDbId = dbIds[2]!;
+
+      await scrollKeyIntoView(
+        tester,
+        Key('community-log-ascent-$withMetaDbId'),
+      );
+
+      expect(
+        find.byKey(Key('route-beta-$withMetaDbId'), skipOffstage: false),
+        findsOneWidget,
+        reason: 'the route with a betaVideoUrl must show its button',
+      );
+      expect(
+        find.byKey(Key('route-beta-$withoutMetaDbId'), skipOffstage: false),
+        findsNothing,
+        reason: 'the route without a betaVideoUrl must not',
+      );
+
+      expect(
+        find.byKey(
+          Key('route-styletag-$withMetaDbId-dyno'),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          Key('route-styletag-$withMetaDbId-my-custom-tag'),
+          skipOffstage: false,
+        ),
+        findsOneWidget,
+      );
+
+      expect(
+        find.byKey(Key('route-stars-$withMetaDbId'), skipOffstage: false),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(Key('route-stars-$withoutMetaDbId'), skipOffstage: false),
+        findsNothing,
+      );
+    });
+  });
 }
 
 /// Whether [FocusManager.instance.primaryFocus] is currently held by a text

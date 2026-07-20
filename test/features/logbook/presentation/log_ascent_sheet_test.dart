@@ -27,6 +27,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() {
   /// Seeds a real Area -> Sector -> Wall -> Photo -> Route chain and
@@ -34,7 +35,14 @@ void main() {
   /// id `LogAscentSheet.routeId` (and `logAscent`) must be given, NOT
   /// `TopoRoute.id`'s locally-reassigned sequential int (see
   /// `RouteRepository`'s class doc).
-  Future<({AppDatabase db, ProviderContainer container, String wallId, String routeDbId})>
+  Future<
+    ({
+      AppDatabase db,
+      ProviderContainer container,
+      String wallId,
+      String routeDbId,
+    })
+  >
   seedWallWithRoute(WidgetTester tester) async {
     final db = AppDatabase(NativeDatabase.memory());
     final container = ProviderContainer(
@@ -53,7 +61,7 @@ void main() {
     await tester.runAsync(() async {
       photoId = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/log-ascent-sheet-test-photo.jpg',
+        XFile('/tmp/log-ascent-sheet-test-photo.jpg'),
         1000,
         2000,
       );
@@ -71,7 +79,12 @@ void main() {
     );
     final dbIds = await routeRepo.routeDbIdsByNumber(wall.id);
 
-    return (db: db, container: container, wallId: wall.id, routeDbId: dbIds[1]!);
+    return (
+      db: db,
+      container: container,
+      wallId: wall.id,
+      routeDbId: dbIds[1]!,
+    );
   }
 
   /// A minimal harness Scaffold whose button opens [LogAscentSheet] as a

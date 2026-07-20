@@ -10,6 +10,7 @@ import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() {
   late AppDatabase db;
@@ -63,7 +64,7 @@ void main() {
         final wall = await repo.createWall(sector.id, 'Topo Wall');
         final photoId = await repo.attachPhotoToWall(
           wall.id,
-          '/tmp/p.jpg',
+          XFile('/tmp/p.jpg'),
           100,
           200,
         );
@@ -88,7 +89,7 @@ void main() {
       final wall = await repo.createWall(sector.id, 'Wall');
       final photoId = await repo.attachPhotoToWall(
         wall.id,
-        '/tmp/p.jpg',
+        XFile('/tmp/p.jpg'),
         100,
         200,
       );
@@ -109,7 +110,7 @@ void main() {
       final wall = await repo.createWall(sector.id, 'Wall');
       final photoId = await repo.attachPhotoToWall(
         wall.id,
-        '/tmp/p.jpg',
+        XFile('/tmp/p.jpg'),
         100,
         200,
       );
@@ -129,7 +130,7 @@ void main() {
         final wall = await repo.createWall(sector.id, 'Wall');
         final photoId = await repo.attachPhotoToWall(
           wall.id,
-          '/tmp/p.jpg',
+          XFile('/tmp/p.jpg'),
           100,
           200,
         );
@@ -156,7 +157,7 @@ void main() {
       final wall = await repo.createWall(sector.id, 'Wall');
       final photoId = await repo.attachPhotoToWall(
         wall.id,
-        '/tmp/p.jpg',
+        XFile('/tmp/p.jpg'),
         100,
         200,
       );

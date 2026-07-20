@@ -438,7 +438,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
 
       final repo = ref.read(libraryCrudRepositoryProvider);
       final wallId = await repo.createTopo(name);
-      await repo.attachPhotoToWall(wallId, xfile.path, width, height);
+      await repo.attachPhotoToWall(wallId, xfile, width, height);
 
       // Best-effort GPS capture: delegates to the SAME
       // `captureWallGpsFromPhoto` the topo canvas's own add/replace-photo
@@ -457,7 +457,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       final gpsResult = await captureWallGpsFromPhoto(
         repo,
         wallId,
-        xfile.path,
+        xfile,
         locationService: ref.read(locationServiceProvider),
       );
 

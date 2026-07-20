@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart' show MapController, TileProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
 import 'package:climbtopo/app/theme.dart';
@@ -18,6 +19,7 @@ import 'package:climbtopo/features/logbook/presentation/log_ascent_sheet.dart';
 import 'package:climbtopo/features/topo/application/active_view_controller.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/application/slice_controller.dart';
+import 'package:climbtopo/features/topo/data/image_dimensions.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
@@ -215,13 +217,13 @@ enum GpsCaptureResult {
 /// explicit, user-chosen photo data, not an incidental device position.
 ///
 
-/// Extracted as a standalone function taking [libraryRepo] and a plain file
-/// [path] directly — mirroring [loadWallOriginalPhoto]/
+/// Extracted as a standalone function taking [libraryRepo] and a plain
+/// [xfile] directly — mirroring [loadWallOriginalPhoto]/
 /// [resolveAttachedPhotoPath]'s own extraction above — so this is directly
 /// testable against a real [LibraryCrudRepository] and a real (or
-/// hand-built fixture) file on disk: no widget pump, no `FileImage`/
-/// `ui.instantiateImageCodec` decode, and no `image_picker` dependency at
-/// all (see `test/features/topo/presentation/topo_canvas_gps_test.dart`).
+/// hand-built fixture) file on disk: no widget pump and no `FileImage`/
+/// `ui.instantiateImageCodec` decode required
+/// (see `test/features/topo/presentation/topo_canvas_gps_test.dart`).
 ///
 /// Never throws: a missing/unreadable file, bytes with no EXIF GPS AND no
 /// (or no available) device location, resolves to [GpsCaptureResult.none]
@@ -232,11 +234,11 @@ enum GpsCaptureResult {
 Future<GpsCaptureResult> captureWallGpsFromPhoto(
   LibraryCrudRepository libraryRepo,
   String wallId,
-  String path, {
+  XFile xfile, {
   LocationService? locationService,
 }) async {
   try {
-    final bytes = await File(path).readAsBytes();
+    final bytes = await xfile.readAsBytes();
     final gps = extractGpsFromImageBytes(bytes);
     if (gps != null) {
       await libraryRepo.setWallCoordinates(
@@ -490,6 +492,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// [_attachPhotoAndLoad] for a freshly-PICKED photo, never for one being
   /// restored from persistence.
   String? _pendingAttachPath;
+
+  /// The [XFile] most recently handed to [ImagePicker] via [_pickImage],
+  /// mirroring [_pendingAttachPath] (same lifetime/purpose) but retaining
+  /// the actual picked file object so [_resolveImageSize]'s decode-success
+  /// callback can hand it to [decodeImageSize] rather than only ever having
+  /// the bare path string.
+  XFile? _pendingAttachXFile;
 
   @override
   void initState() {
@@ -879,6 +888,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     final xfile = await pickPhotoFrom(source);
     if (xfile == null || !mounted) return;
     _pendingAttachPath = xfile.path;
+    _pendingAttachXFile = xfile;
     ref.read(selectedImageProvider.notifier).select(xfile.path);
   }
 
@@ -928,7 +938,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
   }
 
-  /// Attaches the freshly-picked image at [path] (now that its natural
+  /// Attaches the freshly-picked image at [xfile] (now that its natural
   /// [width]/[height] are known) to [TopoCanvasScreen.wallId] via
   /// [LibraryCrudRepository.attachPhotoToWall], then loads that new photo's
   /// (empty) routes into [drawControllerProvider] via
@@ -954,12 +964,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// wall). The latest-path guard below additionally drops this call
   /// entirely if the user has since moved on to yet another photo, so an
   /// out-of-order resolution can't clobber a newer photo's state.
-  Future<void> _attachPhotoAndLoad(String path, int width, int height) async {
+  Future<void> _attachPhotoAndLoad(XFile xfile, int width, int height) async {
     try {
       final libraryRepo = ref.read(libraryCrudRepositoryProvider);
       final photoId = await libraryRepo.attachPhotoToWall(
         widget.wallId,
-        path,
+        xfile,
         width,
         height,
       );
@@ -973,7 +983,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       final gpsResult = await captureWallGpsFromPhoto(
         libraryRepo,
         widget.wallId,
-        path,
+        xfile,
         locationService: ref.read(locationServiceProvider),
       );
       if (!mounted) return;
@@ -988,7 +998,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // resolution for a photo the user swiped past), bail out instead of
       // calling loadForWall — otherwise this stale load could clobber the
       // CURRENT photo's in-memory state with the wrong wall's routes.
-      if (ref.read(selectedImageProvider) != path) return;
+      if (ref.read(selectedImageProvider) != xfile.path) return;
 
       // Photo-ownership bug fix: attachPhotoToWall already copied the
       // picked file into the app-owned photos/ dir and stored THAT path on
@@ -1000,7 +1010,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         libraryRepo,
         ref.read(selectedImageProvider.notifier),
         photoId,
-        path,
+        xfile.path,
       );
       if (!mounted || ref.read(selectedImageProvider) != ownedPath) return;
 
@@ -1010,8 +1020,21 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       if (!mounted || ref.read(selectedImageProvider) != ownedPath) return;
       await _loadSlicesForOriginal(photoId);
     } catch (e, st) {
-      debugPrint('Failed to attach/load photo for $path: $e\n$st');
+      debugPrint('Failed to attach/load photo for ${xfile.path}: $e\n$st');
     }
+  }
+
+  /// Decodes [xfile]'s natural pixel dimensions via the cross-platform
+  /// [decodeImageSize] utility and hands them to [_attachPhotoAndLoad].
+  /// Called (fire-and-forget) from [_resolveImageSize]'s decode-success
+  /// callback for a freshly-picked photo — see that callback's doc for why
+  /// the width/height fed to the attach call come from here rather than
+  /// from the FileImage stream's own `info.image.width/height` (which still
+  /// separately drives `_imageSize`/display, untouched by this helper).
+  Future<void> _attachPickedPhoto(XFile xfile) async {
+    final size = await decodeImageSize(xfile);
+    if (!mounted) return;
+    await _attachPhotoAndLoad(xfile, size.width.round(), size.height.round());
   }
 
   /// Loads [originalPhotoId]'s persisted slices into [_slices] (shown by
@@ -1182,9 +1205,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         // Only a freshly-PICKED photo (see _pickImage) needs attaching —
         // restoring an already-attached photo via _loadInitialPhotoForWall
         // never sets _pendingAttachPath, so this is a no-op for that path.
+        // The width/height fed to the attach call now come from
+        // decodeImageSize (via _attachPickedPhoto), NOT from this stream's
+        // own info.image.width/height, which continue to drive _imageSize/
+        // display above exactly as before.
         if (_pendingAttachPath == path) {
           _pendingAttachPath = null;
-          _attachPhotoAndLoad(path, width, height);
+          final xfile = _pendingAttachXFile;
+          _pendingAttachXFile = null;
+          if (xfile != null) {
+            _attachPickedPhoto(xfile);
+          }
         }
       },
       onError: (error, stackTrace) {

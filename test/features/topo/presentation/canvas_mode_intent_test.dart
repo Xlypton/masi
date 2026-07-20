@@ -13,6 +13,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// Intended-behavior tests for the canvas's View/Draw modes, the
 /// draw-toolbar's scoping to Draw mode, and the commit->metadata-sheet
@@ -26,9 +27,8 @@ void main() {
   /// Creates a real in-memory DB + ProviderContainer + a persisted
   /// Area/Sector/Wall, mirroring the harness pattern used throughout
   /// test/widget_test.dart's 'TopoCanvasScreen draw-mode controls' group.
-  Future<
-    ({AppDatabase db, ProviderContainer container, String wallId})
-  > seedWall() async {
+  Future<({AppDatabase db, ProviderContainer container, String wallId})>
+  seedWall() async {
     final db = AppDatabase(NativeDatabase.memory());
     final container = ProviderContainer(
       overrides: [
@@ -110,10 +110,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.view,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
       expectClusterAbsent();
 
       // Simulate the wall's photo finishing its load ("a seeded photo"):
@@ -155,10 +152,7 @@ void main() {
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pump();
 
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.draw,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.draw);
       expectClusterPresent();
     },
   );
@@ -256,129 +250,122 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.view,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
       expectClusterAbsent();
     },
   );
 
-  testWidgets(
-    'A1e: with >=1 route present and Draw mode active, the bottom '
-    'toolbar cluster does not overlap the route legend (BUG-1d)',
-    (tester) async {
-      final seeded = await seedWall();
-      addTearDown(seeded.db.close);
-      addTearDown(seeded.container.dispose);
+  testWidgets('A1e: with >=1 route present and Draw mode active, the bottom '
+      'toolbar cluster does not overlap the route legend (BUG-1d)', (
+    tester,
+  ) async {
+    final seeded = await seedWall();
+    addTearDown(seeded.db.close);
+    addTearDown(seeded.container.dispose);
 
-      // RouteLegend only ever mounts inside TopoCanvasBody, which itself
-      // only mounts once TopoCanvasScreen has a non-null imagePath AND a
-      // resolved _imageSize (see _TopoCanvasScreenState._buildCanvasArea) —
-      // so, unlike A1a-A1d, this assertion needs a wall with an attached
-      // photo. Attaching one via attachPhotoToWall (exactly as
-      // topo_canvas_wall_binding_test.dart's A1 does) makes
-      // loadWallOriginalPhoto find it on mount and select its path, but the
-      // real FileImage decode that would normally resolve _imageSize from
-      // that path can't be driven under testWidgets' fake-async clock (see
-      // the project CLAUDE.md's widget-test note) — so this passes
-      // TopoCanvasScreen.debugInitialImageSize to bypass that decode
-      // entirely, a test-only seam that is a no-op in production (defaults
-      // to null).
-      final crud = seeded.container.read(libraryCrudRepositoryProvider);
-      late String photoId;
-      await tester.runAsync(() async {
-        photoId = await crud.attachPhotoToWall(
-          seeded.wallId,
-          '/tmp/a1e-photo.jpg',
-          1000,
-          2000,
-        );
+    // RouteLegend only ever mounts inside TopoCanvasBody, which itself
+    // only mounts once TopoCanvasScreen has a non-null imagePath AND a
+    // resolved _imageSize (see _TopoCanvasScreenState._buildCanvasArea) —
+    // so, unlike A1a-A1d, this assertion needs a wall with an attached
+    // photo. Attaching one via attachPhotoToWall (exactly as
+    // topo_canvas_wall_binding_test.dart's A1 does) makes
+    // loadWallOriginalPhoto find it on mount and select its path, but the
+    // real FileImage decode that would normally resolve _imageSize from
+    // that path can't be driven under testWidgets' fake-async clock (see
+    // the project CLAUDE.md's widget-test note) — so this passes
+    // TopoCanvasScreen.debugInitialImageSize to bypass that decode
+    // entirely, a test-only seam that is a no-op in production (defaults
+    // to null).
+    final crud = seeded.container.read(libraryCrudRepositoryProvider);
+    late String photoId;
+    await tester.runAsync(() async {
+      photoId = await crud.attachPhotoToWall(
+        seeded.wallId,
+        XFile('/tmp/a1e-photo.jpg'),
+        1000,
+        2000,
+      );
 
-        // Seed one persisted route directly against RouteRepository (as
-        // topo_canvas_wall_binding_test.dart's A1 does) so "a route exists"
-        // is already true the moment the screen restores this wall's photo,
-        // without needing a real draw/commit round-trip through the UI.
-        final routeRepo = RouteRepository(seeded.db, nowMs: () => 1000);
-        await routeRepo.upsertRoute(
-          seeded.wallId,
-          photoId,
-          const TopoRoute(
-            id: 1,
-            number: 1,
-            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
-          ),
-        );
-      });
-
-      await tester.pumpWidget(
-        UncontrolledProviderScope(
-          container: seeded.container,
-          child: MaterialApp(
-            theme: MasiTheme.light,
-            home: TopoCanvasScreen(
-              wallId: seeded.wallId,
-              debugInitialImageSize: const Size(1000, 2000),
-            ),
-          ),
+      // Seed one persisted route directly against RouteRepository (as
+      // topo_canvas_wall_binding_test.dart's A1 does) so "a route exists"
+      // is already true the moment the screen restores this wall's photo,
+      // without needing a real draw/commit round-trip through the UI.
+      final routeRepo = RouteRepository(seeded.db, nowMs: () => 1000);
+      await routeRepo.upsertRoute(
+        seeded.wallId,
+        photoId,
+        const TopoRoute(
+          id: 1,
+          number: 1,
+          points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
         ),
       );
-      await tester.pumpAndSettle();
+    });
 
-      expect(seeded.container.read(drawControllerProvider).routes, isNotEmpty);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: seeded.container,
+        child: MaterialApp(
+          theme: MasiTheme.light,
+          home: TopoCanvasScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-      await tester.pumpAndSettle();
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.draw,
-      );
-      expectClusterPresent();
+    expect(seeded.container.read(drawControllerProvider).routes, isNotEmpty);
 
-      // Fix 1/3 (legend expand/collapse) supersedes this assertion's
-      // original target: entering Draw mode now collapses RouteLegend's
-      // fully-expanded card down to the compact `topo-route-legend-chip`
-      // pill (see route_legend.dart's `legendExpandedProvider`/
-      // `LegendExpandedController.setForMode`, wired up by
-      // `_TopoCanvasScreenState.build`'s `ref.listen<DrawMode>` mode-change
-      // listener) — the full `topo-route-legend` ListView is deliberately
-      // NOT mounted while drawing (see `TopoCanvasBody.build`'s mutually
-      // exclusive overlay-card/chip branches, gated on
-      // `legendExpandedProvider`), so BUG-1d's "never occluded" contract is
-      // now checked against the collapsed chip instead of the full card.
-      final legendFinder = find.byKey(const Key('topo-route-legend-chip'));
-      expect(
-        legendFinder,
-        findsOneWidget,
-        reason:
-            'a route exists and Draw mode is active, so the collapsed '
-            'legend chip (Fix 1/3) must be mounted',
-      );
-      expect(
-        find.byKey(const Key('topo-route-legend-overlay')),
-        findsNothing,
-        reason: 'the expanded overlay card must not coexist with the chip',
-      );
+    await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+    await tester.pumpAndSettle();
+    expect(seeded.container.read(drawControllerProvider).mode, DrawMode.draw);
+    expectClusterPresent();
 
-      // The bottom draw-mode cluster's actual GlassChrome container (its
-      // painted rect, including its own padding — not just the bounding
-      // box of the buttons inside it). `_buildTopChrome` also uses a
-      // GlassChrome for the top title pill, so `.last` is the bottom
-      // cluster's: the Stack in TopoCanvasScreen.build lays out the top
-      // chrome's Positioned before the bottom chrome's, so it appears
-      // earlier in the widget tree.
-      final clusterRect = tester.getRect(find.byType(GlassChrome).last);
-      final legendRect = tester.getRect(legendFinder);
+    // Fix 1/3 (legend expand/collapse) supersedes this assertion's
+    // original target: entering Draw mode now collapses RouteLegend's
+    // fully-expanded card down to the compact `topo-route-legend-chip`
+    // pill (see route_legend.dart's `legendExpandedProvider`/
+    // `LegendExpandedController.setForMode`, wired up by
+    // `_TopoCanvasScreenState.build`'s `ref.listen<DrawMode>` mode-change
+    // listener) — the full `topo-route-legend` ListView is deliberately
+    // NOT mounted while drawing (see `TopoCanvasBody.build`'s mutually
+    // exclusive overlay-card/chip branches, gated on
+    // `legendExpandedProvider`), so BUG-1d's "never occluded" contract is
+    // now checked against the collapsed chip instead of the full card.
+    final legendFinder = find.byKey(const Key('topo-route-legend-chip'));
+    expect(
+      legendFinder,
+      findsOneWidget,
+      reason:
+          'a route exists and Draw mode is active, so the collapsed '
+          'legend chip (Fix 1/3) must be mounted',
+    );
+    expect(
+      find.byKey(const Key('topo-route-legend-overlay')),
+      findsNothing,
+      reason: 'the expanded overlay card must not coexist with the chip',
+    );
 
-      expect(
-        clusterRect.overlaps(legendRect),
-        isFalse,
-        reason:
-            'the draw-mode toolbar cluster must never occlude the '
-            '(collapsed) route legend\ncluster=$clusterRect legend=$legendRect',
-      );
-    },
-  );
+    // The bottom draw-mode cluster's actual GlassChrome container (its
+    // painted rect, including its own padding — not just the bounding
+    // box of the buttons inside it). `_buildTopChrome` also uses a
+    // GlassChrome for the top title pill, so `.last` is the bottom
+    // cluster's: the Stack in TopoCanvasScreen.build lays out the top
+    // chrome's Positioned before the bottom chrome's, so it appears
+    // earlier in the widget tree.
+    final clusterRect = tester.getRect(find.byType(GlassChrome).last);
+    final legendRect = tester.getRect(legendFinder);
+
+    expect(
+      clusterRect.overlaps(legendRect),
+      isFalse,
+      reason:
+          'the draw-mode toolbar cluster must never occlude the '
+          '(collapsed) route legend\ncluster=$clusterRect legend=$legendRect',
+    );
+  });
 
   testWidgets(
     'A1f: InteractiveViewer pan/scale are both enabled in View mode; in '

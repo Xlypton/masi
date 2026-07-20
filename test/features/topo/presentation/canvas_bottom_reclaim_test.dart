@@ -27,6 +27,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() {
   /// Seeds a real Area -> Sector -> Wall, attaches a photo, and persists a
@@ -34,9 +35,8 @@ void main() {
   /// canvas_mode_intent_test.dart's A1e and canvas_chrome_gating_test.dart's
   /// A-i group, so both the legend AND the mode-toggle/slice-mode entry
   /// points are reachable.
-  Future<
-    ({AppDatabase db, ProviderContainer container, String wallId})
-  > seedWallWithPhotoAndRoute(WidgetTester tester) async {
+  Future<({AppDatabase db, ProviderContainer container, String wallId})>
+  seedWallWithPhotoAndRoute(WidgetTester tester) async {
     final db = AppDatabase(NativeDatabase.memory());
     final container = ProviderContainer(
       overrides: [
@@ -52,7 +52,7 @@ void main() {
     await tester.runAsync(() async {
       final photoId = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/bottom-reclaim-photo.jpg',
+        XFile('/tmp/bottom-reclaim-photo.jpg'),
         1000,
         2000,
       );
@@ -97,10 +97,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.view,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
       expect(
         find.byTooltip('Pick a photo'),
         findsOneWidget,
@@ -138,10 +135,7 @@ void main() {
       // Draw mode.
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pumpAndSettle();
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.draw,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.draw);
       expect(
         find.byKey(const Key('topo-add-photo-button')),
         findsOneWidget,
@@ -265,10 +259,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pumpAndSettle();
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.draw,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.draw);
 
       expect(find.byKey(const Key('topo-undo-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-redo-button')), findsOneWidget);
@@ -284,44 +275,43 @@ void main() {
     },
   );
 
-  testWidgets(
-    'A5: with no photo yet, the empty state still offers a working '
-    'add-photo affordance (top-bar button) — the user is never stranded',
-    (tester) async {
-      final db = AppDatabase(NativeDatabase.memory());
-      addTearDown(db.close);
-      final container = ProviderContainer(
-        overrides: [
-          appDatabaseProvider.overrideWithValue(db),
-          nowMsProvider.overrideWithValue(() => 1000),
-        ],
-      );
-      addTearDown(container.dispose);
-      final crud = container.read(libraryCrudRepositoryProvider);
-      final area = await crud.createArea('Area');
-      final sector = await crud.createSector(area.id, 'Sector');
-      final wall = await crud.createWall(sector.id, 'Wall');
+  testWidgets('A5: with no photo yet, the empty state still offers a working '
+      'add-photo affordance (top-bar button) — the user is never stranded', (
+    tester,
+  ) async {
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
+    final container = ProviderContainer(
+      overrides: [
+        appDatabaseProvider.overrideWithValue(db),
+        nowMsProvider.overrideWithValue(() => 1000),
+      ],
+    );
+    addTearDown(container.dispose);
+    final crud = container.read(libraryCrudRepositoryProvider);
+    final area = await crud.createArea('Area');
+    final sector = await crud.createSector(area.id, 'Sector');
+    final wall = await crud.createWall(sector.id, 'Wall');
 
-      await tester.pumpWidget(wrap(container, TopoCanvasScreen(wallId: wall.id)));
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(wrap(container, TopoCanvasScreen(wallId: wall.id)));
+    await tester.pumpAndSettle();
 
-      expect(find.byKey(const Key('topo-empty-state')), findsOneWidget);
-      expect(
-        find.byKey(const Key('topo-add-photo-button')),
-        findsOneWidget,
-        reason:
-            'the user must never be stranded with no way to add a first '
-            'photo once the bottom-right FAB is gone',
-      );
+    expect(find.byKey(const Key('topo-empty-state')), findsOneWidget);
+    expect(
+      find.byKey(const Key('topo-add-photo-button')),
+      findsOneWidget,
+      reason:
+          'the user must never be stranded with no way to add a first '
+          'photo once the bottom-right FAB is gone',
+    );
 
-      await tester.tap(find.byKey(const Key('topo-add-photo-button')));
-      await tester.pumpAndSettle();
-      expect(find.byType(CupertinoActionSheet), findsOneWidget);
+    await tester.tap(find.byKey(const Key('topo-add-photo-button')));
+    await tester.pumpAndSettle();
+    expect(find.byType(CupertinoActionSheet), findsOneWidget);
 
-      await tester.tap(find.byKey(const Key('photo-source-cancel')));
-      await tester.pumpAndSettle();
-    },
-  );
+    await tester.tap(find.byKey(const Key('photo-source-cancel')));
+    await tester.pumpAndSettle();
+  });
 
   testWidgets(
     'A7: readOnly hides the add-photo affordance everywhere — neither the '
@@ -376,10 +366,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.view,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
       expect(
         seeded.container.read(drawControllerProvider).routes,
         hasLength(1),
@@ -465,10 +452,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.view,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
       seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
@@ -594,10 +578,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(
-        seeded.container.read(drawControllerProvider).mode,
-        DrawMode.view,
-      );
+      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
 
       // The screen starts with the legend expanded (view mode's default —
       // see LegendExpandedController.build()); force it into the collapsed

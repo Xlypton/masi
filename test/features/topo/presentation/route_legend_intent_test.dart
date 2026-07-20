@@ -39,6 +39,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 /// SPEC grade-band -> color map (H6), independent of wherever
 /// `grade_colors.dart` currently reads its literals from — this is the
@@ -89,7 +90,7 @@ Future<ProviderContainer> _seedRoutes(
   await tester.runAsync(() async {
     photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/tmp/wall-photo.jpg',
+      XFile('/tmp/wall-photo.jpg'),
       1000,
       2000,
     );
@@ -107,16 +108,16 @@ Future<ProviderContainer> _seedRoutes(
         points: const [Offset(0.1, 0.1), Offset(0.2, 0.2)],
         gradeSystem: grade != null ? GradeSystem.french : null,
         gradeRaw: grade,
-        gradeSortKey:
-            grade != null ? gradeSortKey(GradeSystem.french, grade) : null,
+        gradeSortKey: grade != null
+            ? gradeSortKey(GradeSystem.french, grade)
+            : null,
       ),
     );
   }
 
-  await container.read(drawControllerProvider.notifier).loadForWall(
-        wall.id,
-        photoId,
-      );
+  await container
+      .read(drawControllerProvider.notifier)
+      .loadForWall(wall.id, photoId);
 
   return container;
 }
@@ -171,17 +172,10 @@ void main() {
       expect(
         legendRect.bottom,
         lessThanOrEqualTo(screenRect.bottom + 0.5),
-        reason:
-            'the legend must not be clipped below the bottom of the screen',
+        reason: 'the legend must not be clipped below the bottom of the screen',
       );
-      expect(
-        legendRect.left,
-        greaterThanOrEqualTo(screenRect.left - 0.5),
-      );
-      expect(
-        legendRect.right,
-        lessThanOrEqualTo(screenRect.right + 0.5),
-      );
+      expect(legendRect.left, greaterThanOrEqualTo(screenRect.left - 0.5));
+      expect(legendRect.right, lessThanOrEqualTo(screenRect.right + 0.5));
     },
   );
 
@@ -275,9 +269,7 @@ void main() {
         reason: 'sanity check: every seeded route starts visible',
       );
 
-      await tester.tap(
-        find.byKey(Key('topo-route-visibility-${target.id}')),
-      );
+      await tester.tap(find.byKey(Key('topo-route-visibility-${target.id}')));
       await tester.pump();
 
       final after = container.read(drawControllerProvider).routes;
@@ -288,8 +280,7 @@ void main() {
           expect(
             r.visible,
             isTrue,
-            reason:
-                "route ${r.id} was not tapped and must keep its visibility",
+            reason: "route ${r.id} was not tapped and must keep its visibility",
           );
         }
       }
@@ -309,19 +300,12 @@ void main() {
 
       expect(container.read(drawControllerProvider).selectedRouteId, isNull);
 
-      await tester.tap(
-        find.byKey(Key('topo-route-legend-item-${target.id}')),
-      );
+      await tester.tap(find.byKey(Key('topo-route-legend-item-${target.id}')));
       await tester.pump();
 
-      expect(
-        container.read(drawControllerProvider).selectedRouteId,
-        target.id,
-      );
+      expect(container.read(drawControllerProvider).selectedRouteId, target.id);
 
-      await tester.tap(
-        find.byKey(Key('topo-route-legend-item-${other.id}')),
-      );
+      await tester.tap(find.byKey(Key('topo-route-legend-item-${other.id}')));
       await tester.pump();
 
       expect(
@@ -332,55 +316,52 @@ void main() {
     },
   );
 
-  testWidgets(
-    'A2f: a graded route shows its grade in the label, and the leading '
-    'swatch color equals the SPEC grade-band color (H6/G1)',
-    (tester) async {
-      final gradesByNumber = <int, String>{
-        for (var i = 0; i < _representativeGrades.length; i++)
-          i + 1: _representativeGrades[i].grade,
-      };
-      final container = await _seedRoutes(
-        tester,
-        _representativeGrades.length,
-        gradesByNumber: gradesByNumber,
+  testWidgets('A2f: a graded route shows its grade in the label, and the leading '
+      'swatch color equals the SPEC grade-band color (H6/G1)', (tester) async {
+    final gradesByNumber = <int, String>{
+      for (var i = 0; i < _representativeGrades.length; i++)
+        i + 1: _representativeGrades[i].grade,
+    };
+    final container = await _seedRoutes(
+      tester,
+      _representativeGrades.length,
+      gradesByNumber: gradesByNumber,
+    );
+    final routes = container.read(drawControllerProvider).routes;
+    expect(routes, hasLength(_representativeGrades.length));
+
+    await _pumpLegend(tester, container);
+    await tester.pump();
+
+    for (var i = 0; i < routes.length; i++) {
+      final route = routes[i];
+      final expected = _representativeGrades[i];
+      expect(route.gradeRaw, expected.grade);
+
+      expect(
+        find.text('Route ${route.number} • ${expected.grade}'),
+        findsOneWidget,
+        reason:
+            'the label for route ${route.number} must contain its grade '
+            'text (${expected.grade})',
       );
-      final routes = container.read(drawControllerProvider).routes;
-      expect(routes, hasLength(_representativeGrades.length));
 
-      await _pumpLegend(tester, container);
-      await tester.pump();
-
-      for (var i = 0; i < routes.length; i++) {
-        final route = routes[i];
-        final expected = _representativeGrades[i];
-        expect(route.gradeRaw, expected.grade);
-
-        expect(
-          find.text('Route ${route.number} • ${expected.grade}'),
-          findsOneWidget,
-          reason:
-              'the label for route ${route.number} must contain its grade '
-              'text (${expected.grade})',
-        );
-
-        final avatar = tester.widget<CircleAvatar>(
-          find.descendant(
-            of: find.byKey(Key('topo-route-legend-item-${route.id}')),
-            matching: find.byType(CircleAvatar),
-          ),
-        );
-        final expectedColor = _specBandColor[expected.band]!;
-        expect(
-          avatar.backgroundColor?.toARGB32(),
-          expectedColor.toARGB32(),
-          reason:
-              'grade ${expected.grade} (band ${expected.band}) must render '
-              'the SPEC band color 0x${expectedColor.toARGB32().toRadixString(16)}',
-        );
-      }
-    },
-  );
+      final avatar = tester.widget<CircleAvatar>(
+        find.descendant(
+          of: find.byKey(Key('topo-route-legend-item-${route.id}')),
+          matching: find.byType(CircleAvatar),
+        ),
+      );
+      final expectedColor = _specBandColor[expected.band]!;
+      expect(
+        avatar.backgroundColor?.toARGB32(),
+        expectedColor.toARGB32(),
+        reason:
+            'grade ${expected.grade} (band ${expected.band}) must render '
+            'the SPEC band color 0x${expectedColor.toARGB32().toRadixString(16)}',
+      );
+    }
+  });
 
   testWidgets(
     'A2g: tapping topo-route-delete-<id> removes exactly that route',
@@ -404,13 +385,11 @@ void main() {
       expect(
         after.map((r) => r.id).toSet(),
         survivorIds,
-        reason: 'only the tapped route should be removed; the other two '
+        reason:
+            'only the tapped route should be removed; the other two '
             'routes must survive untouched',
       );
-      expect(
-        after.any((r) => r.id == target.id),
-        isFalse,
-      );
+      expect(after.any((r) => r.id == target.id), isFalse);
     },
   );
 
@@ -464,10 +443,7 @@ void main() {
 
       // Keys must be unchanged (still findable, still functional — see the
       // A2d/A2e/A2g groups above for the functional behavior itself).
-      expect(
-        find.byKey(const Key('topo-route-legend')),
-        findsOneWidget,
-      );
+      expect(find.byKey(const Key('topo-route-legend')), findsOneWidget);
       for (final route in routes) {
         expect(
           find.byKey(Key('topo-route-legend-item-${route.id}')),

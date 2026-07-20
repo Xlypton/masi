@@ -28,6 +28,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 void main() {
   /// Seeds a wall with TWO attached original photos (`photo1` attached
@@ -63,13 +64,13 @@ void main() {
     await tester.runAsync(() async {
       photo1Id = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/photo-strip-test-photo-1.jpg',
+        XFile('/tmp/photo-strip-test-photo-1.jpg'),
         1000,
         2000,
       );
       photo2Id = await crud.attachPhotoToWall(
         wall.id,
-        '/tmp/photo-strip-test-photo-2.jpg',
+        XFile('/tmp/photo-strip-test-photo-2.jpg'),
         1000,
         2000,
       );
@@ -106,7 +107,11 @@ void main() {
     );
   }
 
-  Widget wrap(ProviderContainer container, String wallId, {bool readOnly = false}) {
+  Widget wrap(
+    ProviderContainer container,
+    String wallId, {
+    bool readOnly = false,
+  }) {
     return UncontrolledProviderScope(
       container: container,
       child: MaterialApp(
@@ -184,9 +189,7 @@ void main() {
         'photo1-route',
       );
 
-      await tester.tap(
-        find.byKey(Key('photo-strip-item-${seeded.photo2Id}')),
-      );
+      await tester.tap(find.byKey(Key('photo-strip-item-${seeded.photo2Id}')));
       await tester.pumpAndSettle();
 
       // attachPhotoToWall imports the picked file into app storage under an
@@ -205,7 +208,8 @@ void main() {
       expect(
         seeded.container.read(selectedImageProvider),
         photo2.localPath,
-        reason: 'the selected image path must switch to photo2\'s own '
+        reason:
+            'the selected image path must switch to photo2\'s own '
             'owned localPath',
       );
       expect(
@@ -216,7 +220,8 @@ void main() {
       expect(
         seeded.container.read(drawControllerProvider).routes.single.gradeRaw,
         'photo2-route',
-        reason: 'ONLY photo2\'s own route must show — not a stale mix with '
+        reason:
+            'ONLY photo2\'s own route must show — not a stale mix with '
             "photo1's",
       );
     },
@@ -298,62 +303,55 @@ void main() {
     },
   );
 
-  testWidgets(
-    'U4: deleting the ACTIVE (primary) photo lands the canvas on the '
-    "wall's new primary rather than crashing/going blank",
-    (tester) async {
-      final seeded = await seedWallWithTwoPhotos(tester);
-      addTearDown(seeded.db.close);
-      addTearDown(seeded.container.dispose);
+  testWidgets('U4: deleting the ACTIVE (primary) photo lands the canvas on the '
+      "wall's new primary rather than crashing/going blank", (tester) async {
+    final seeded = await seedWallWithTwoPhotos(tester);
+    addTearDown(seeded.db.close);
+    addTearDown(seeded.container.dispose);
 
-      await tester.pumpWidget(wrap(seeded.container, seeded.wallId));
-      await tester.pumpAndSettle();
+    await tester.pumpWidget(wrap(seeded.container, seeded.wallId));
+    await tester.pumpAndSettle();
 
-      // Sanity: opens on photo1 (the primary/active one).
-      expect(
-        seeded.container.read(drawControllerProvider).activePhotoId,
-        seeded.photo1Id,
-      );
+    // Sanity: opens on photo1 (the primary/active one).
+    expect(
+      seeded.container.read(drawControllerProvider).activePhotoId,
+      seeded.photo1Id,
+    );
 
-      await tester.longPress(
-        find.byKey(Key('photo-strip-item-${seeded.photo1Id}')),
-      );
-      await tester.pumpAndSettle();
+    await tester.longPress(
+      find.byKey(Key('photo-strip-item-${seeded.photo1Id}')),
+    );
+    await tester.pumpAndSettle();
 
-      await tester.tap(
-        find.byKey(Key('photo-manage-delete-${seeded.photo1Id}')),
-      );
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('photo-manage-delete-confirm')));
-      await tester.pumpAndSettle();
+    await tester.tap(find.byKey(Key('photo-manage-delete-${seeded.photo1Id}')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('photo-manage-delete-confirm')));
+    await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(Key('photo-strip-item-${seeded.photo1Id}')),
-        findsNothing,
-      );
-      expect(
-        seeded.container.read(drawControllerProvider).activePhotoId,
-        seeded.photo2Id,
-        reason: 'photo2 is the only photo left, so it must be promoted to '
-            'primary and become the active canvas photo',
-      );
+    expect(
+      find.byKey(Key('photo-strip-item-${seeded.photo1Id}')),
+      findsNothing,
+    );
+    expect(
+      seeded.container.read(drawControllerProvider).activePhotoId,
+      seeded.photo2Id,
+      reason:
+          'photo2 is the only photo left, so it must be promoted to '
+          'primary and become the active canvas photo',
+    );
 
-      // As in U2: the selected image must be photo2's own OWNED localPath
-      // (attachPhotoToWall imports into app storage as `photos/<uuid>.jpg`),
-      // not the raw `/tmp/...` seed source path.
-      late final List<PhotoRef> originals;
-      await tester.runAsync(() async {
-        originals = await seeded.container
-            .read(photoRepositoryProvider)
-            .loadOriginals(seeded.wallId);
-      });
-      final photo2 = originals.firstWhere((p) => p.id == seeded.photo2Id);
-      expect(
-        seeded.container.read(selectedImageProvider),
-        photo2.localPath,
-      );
-    },
-  );
+    // As in U2: the selected image must be photo2's own OWNED localPath
+    // (attachPhotoToWall imports into app storage as `photos/<uuid>.jpg`),
+    // not the raw `/tmp/...` seed source path.
+    late final List<PhotoRef> originals;
+    await tester.runAsync(() async {
+      originals = await seeded.container
+          .read(photoRepositoryProvider)
+          .loadOriginals(seeded.wallId);
+    });
+    final photo2 = originals.firstWhere((p) => p.id == seeded.photo2Id);
+    expect(seeded.container.read(selectedImageProvider), photo2.localPath);
+  });
 
   testWidgets(
     'U4: "Set as cover" moves the primary badge without switching the '
@@ -414,7 +412,7 @@ void main() {
       await tester.runAsync(() async {
         await crud.attachPhotoToWall(
           wall.id,
-          '/tmp/photo-strip-single-photo-test.jpg',
+          XFile('/tmp/photo-strip-single-photo-test.jpg'),
           1000,
           2000,
         );

@@ -23,6 +23,7 @@ import 'dart:ui' as ui;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -102,7 +103,7 @@ Future<_SeedResult> _seed(String Function(String name) imagePathFor) async {
     ).writeAsBytes(await _wallImage(accent: const Color(0xFFF9A825)), flush: true);
     final sunnyPhotoId = await libraryRepo.attachPhotoToWall(
       sunnyFace.id,
-      sunnyImagePath,
+      XFile(sunnyImagePath),
       1200,
       1600,
     );
@@ -163,7 +164,7 @@ Future<_SeedResult> _seed(String Function(String name) imagePathFor) async {
     await File(
       shadyImagePath,
     ).writeAsBytes(await _wallImage(accent: const Color(0xFF29B6F6)), flush: true);
-    await libraryRepo.attachPhotoToWall(shadyCorner.id, shadyImagePath, 1200, 1600);
+    await libraryRepo.attachPhotoToWall(shadyCorner.id, XFile(shadyImagePath), 1200, 1600);
     await libraryRepo.setWallCoordinates(shadyCorner.id, 47.5316, 19.0290);
     // left private (default visibility).
 
@@ -178,7 +179,7 @@ Future<_SeedResult> _seed(String Function(String name) imagePathFor) async {
     await File(
       crimperImagePath,
     ).writeAsBytes(await _wallImage(accent: const Color(0xFFAB47BC)), flush: true);
-    await libraryRepo.attachPhotoToWall(crimperWall.id, crimperImagePath, 1200, 1600);
+    await libraryRepo.attachPhotoToWall(crimperWall.id, XFile(crimperImagePath), 1200, 1600);
     // private, no coordinates.
 
     final slabWall = await libraryRepo.createWall(highlands.id, 'Slab Wall');
@@ -186,7 +187,7 @@ Future<_SeedResult> _seed(String Function(String name) imagePathFor) async {
     await File(
       slabImagePath,
     ).writeAsBytes(await _wallImage(accent: const Color(0xFF66BB6A)), flush: true);
-    await libraryRepo.attachPhotoToWall(slabWall.id, slabImagePath, 1200, 1600);
+    await libraryRepo.attachPhotoToWall(slabWall.id, XFile(slabImagePath), 1200, 1600);
     // private, no coordinates.
 
     // -----------------------------------------------------------------

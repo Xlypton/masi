@@ -17,6 +17,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 
 Future<ProviderContainer> _seedOneRoute(
   WidgetTester tester,
@@ -40,7 +41,7 @@ Future<ProviderContainer> _seedOneRoute(
   await tester.runAsync(() async {
     photoId = await crud.attachPhotoToWall(
       wall.id,
-      '/tmp/route-legend-perroute-test-photo.jpg',
+      XFile('/tmp/route-legend-perroute-test-photo.jpg'),
       1000,
       2000,
     );
@@ -126,10 +127,7 @@ void main() {
         await tester.pump();
 
         final routeId = container.read(drawControllerProvider).routes.single.id;
-        expect(
-          find.byKey(Key('route-styletag-$routeId-dyno')),
-          findsOneWidget,
-        );
+        expect(find.byKey(Key('route-styletag-$routeId-dyno')), findsOneWidget);
         expect(
           find.byKey(Key('route-styletag-$routeId-my-custom-tag')),
           findsOneWidget,
@@ -155,10 +153,7 @@ void main() {
       await tester.pump();
 
       final routeId = container.read(drawControllerProvider).routes.single.id;
-      expect(
-        find.byKey(Key('route-styletag-$routeId-dyno')),
-        findsNothing,
-      );
+      expect(find.byKey(Key('route-styletag-$routeId-dyno')), findsNothing);
     });
   });
 

@@ -21,6 +21,7 @@ import 'dart:ui' as ui;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -108,7 +109,7 @@ Future<({String areaId, String sectorId, String wallId})> _seedDemoTopo(
     final area = await repo.createArea('Demo Crag');
     final sector = await repo.createSector(area.id, 'Demo Sector');
     final wall = await repo.createWall(sector.id, 'Demo Wall');
-    await repo.attachPhotoToWall(wall.id, imagePath, 1600, 1200);
+    await repo.attachPhotoToWall(wall.id, XFile(imagePath), 1600, 1200);
     return (areaId: area.id, sectorId: sector.id, wallId: wall.id);
   } finally {
     // Close BEFORE app.main() opens its own connection to the same file, so

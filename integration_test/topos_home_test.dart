@@ -12,6 +12,7 @@ import 'dart:ui' as ui;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -76,7 +77,7 @@ Future<List<String>> _seedTopos() async {
       color: const Color(0xFF2E7D32),
     );
     await File(imagePath1).writeAsBytes(bytes1, flush: true);
-    await repo.attachPhotoToWall(wallId1, imagePath1, 400, 300);
+    await repo.attachPhotoToWall(wallId1, XFile(imagePath1), 400, 300);
     wallIds.add(wallId1);
 
     // Topo 2: also has an attached original photo -> a second real
@@ -90,7 +91,7 @@ Future<List<String>> _seedTopos() async {
       color: const Color(0xFF6A1B9A),
     );
     await File(imagePath2).writeAsBytes(bytes2, flush: true);
-    await repo.attachPhotoToWall(wallId2, imagePath2, 400, 300);
+    await repo.attachPhotoToWall(wallId2, XFile(imagePath2), 400, 300);
     wallIds.add(wallId2);
 
     // Topo 3: deliberately left WITHOUT a photo -> exercises the
