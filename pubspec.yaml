@@ -107,6 +107,11 @@ flutter_launcher_icons:
   ios: true
   android: false
   remove_alpha_ios: true
+  web:
+    generate: true
+    image_path: "assets/icon/masi_icon.png"
+    background_color: "#100D17"
+    theme_color: "#100D17"
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
