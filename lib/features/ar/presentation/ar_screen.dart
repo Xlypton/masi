@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show StandardMessageCodec;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/core/platform/ar_support.dart';
 import 'package:climbtopo/features/ar/application/ar_channel.dart';
@@ -16,6 +17,7 @@ import 'package:climbtopo/features/ar/domain/homography.dart';
 import 'package:climbtopo/features/ar/presentation/ar_overlay_painter.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
@@ -106,6 +108,13 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   /// a session that was really started — never on a platform where AR was
   /// never supported in the first place.
   bool _sessionStarted = false;
+
+  /// Set (to a short, tap-to-retry message) when [_startSession]'s
+  /// `channel.start(...)` call throws — e.g. the user denied the camera
+  /// permission natively. `null` while there's no start failure to show.
+  /// Surfaced by [_ArStatus] in place of its usual mode/tracking readout;
+  /// tapping it calls [_retryStartSession]. See #7b.
+  String? _startError;
 
   StreamSubscription<ArAlignment>? _alignmentSubscription;
 
@@ -243,17 +252,45 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     _sessionStarted = true;
     final channel = ref.read(arChannelProvider);
     debugPrint('AR_DBG _startSession calling channel.start');
-    await channel.start(
-      referenceImagePath: photo.localPath,
-      refWidth: photo.width,
-      refHeight: photo.height,
-      routesJson: _encodeRoutesForAr(routes),
-    );
+    try {
+      await channel.start(
+        referenceImagePath: photo.localPath,
+        refWidth: photo.width,
+        refHeight: photo.height,
+        routesJson: _encodeRoutesForAr(routes),
+      );
+    } catch (error) {
+      // Native start threw (e.g. camera permission denied, or no camera on
+      // this device) — leave the session as never-started so a retry (via
+      // the status pill, see _retryStartSession) can attempt it again,
+      // rather than getting permanently stuck behind `_sessionStarted`.
+      debugPrint('AR_DBG _startSession channel.start threw: $error');
+      _sessionStarted = false;
+      if (mounted) {
+        setState(() => _startError = "Couldn't start AR — tap to retry");
+      }
+      return;
+    }
     if (!mounted) return;
+    if (_startError != null) {
+      setState(() => _startError = null);
+    }
     ref.read(arControllerProvider.notifier).markActive(true);
     _alignmentSubscription = channel.alignments().listen(
       ref.read(arControllerProvider.notifier).onAlignment,
     );
+  }
+
+  /// Retries [_startSession] after a failed native start (see [_startError]
+  /// and #7b). The native `climbtopo/ar` channel handler stays registered
+  /// on the already-mounted `UiKitView` across retries, so — unlike the
+  /// very first call, gated on `onPlatformViewCreated` in [build] — this
+  /// can call [_startSession] directly without waiting for another mount.
+  void _retryStartSession() {
+    final photo = _photo;
+    final routes = _routes;
+    if (photo == null || routes == null || routes.isEmpty) return;
+    unawaited(_startSession(photo, routes));
   }
 
   @override
@@ -305,27 +342,26 @@ class _ArScreenState extends ConsumerState<ArScreen> {
         routes: routes,
         refSize: Size(photo.width.toDouble(), photo.height.toDouble()),
         outline: _outline,
+        startError: _startError,
+        onRetryStart: _startError == null ? null : _retryStartSession,
       ),
     );
   }
 
   Widget _buildUnsupportedPlaceholder(BuildContext context) {
+    final colors = MasiColors.of(context);
     return Center(
       child: Column(
         key: const Key('ar-unsupported-placeholder'),
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          MasiIcon(
-            'phone_off',
-            size: 72,
-            color: Theme.of(context).colorScheme.outline,
-          ),
+          MasiIcon('phone_off', size: 72, color: colors.ink3),
           const SizedBox(height: 16),
           Text(
             'AR live view is iOS-only',
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: Theme.of(context).colorScheme.outline,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: colors.ink2),
           ),
           const SizedBox(height: 16),
           OutlinedButton(
@@ -339,24 +375,21 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   }
 
   Widget _buildMissingDataPlaceholder(BuildContext context) {
+    final colors = MasiColors.of(context);
     return Center(
       child: Column(
         key: const Key('ar-missing-data'),
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          MasiIcon(
-            'image_off',
-            size: 72,
-            color: Theme.of(context).colorScheme.outline,
-          ),
+          MasiIcon('image_off', size: 72, color: colors.ink3),
           const SizedBox(height: 16),
           Text(
             'This wall needs a photo and at least one route before AR '
             'alignment is available',
             textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleMedium?.copyWith(
-              color: Theme.of(context).colorScheme.outline,
-            ),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(color: colors.ink2),
           ),
           const SizedBox(height: 16),
           OutlinedButton(
@@ -401,6 +434,8 @@ class ArAlignmentStage extends ConsumerWidget {
     required this.routes,
     required this.refSize,
     this.outline,
+    this.startError,
+    this.onRetryStart,
   });
 
   /// The live camera surface to render underneath the overlay. In the real
@@ -419,6 +454,16 @@ class ArAlignmentStage extends ConsumerWidget {
   /// extraction hasn't finished (or failed) — the stage simply shows no
   /// ghost yet/at all in that case.
   final ui.Image? outline;
+
+  /// Set (by [ArScreen]) when the native `channel.start` call has thrown —
+  /// see #7b. Forwarded to [_ArStatus], which shows a tap-to-retry
+  /// affordance instead of its usual mode/tracking readout while non-null.
+  final String? startError;
+
+  /// Invoked when the status pill is tapped while [startError] is
+  /// non-null. `null` (and thus the pill non-interactive) whenever
+  /// [startError] is `null`.
+  final VoidCallback? onRetryStart;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -441,6 +486,12 @@ class ArAlignmentStage extends ConsumerWidget {
         final manualComposite = manualHomography.multiply(fit);
 
         Future<void> onToggleLock() async {
+          // Defense-in-depth alongside the `ar-lock` FAB's own `active`
+          // gate below (#7): the native `climbtopo/ar` handler only exists
+          // once the platform view has mounted, so a stray call here
+          // before that (or after `active` flips back false, e.g. a
+          // rebuild racing a failed retry) must never reach the channel.
+          if (!ref.read(arControllerProvider).active) return;
           final channel = ref.read(arChannelProvider);
           final currentlyLocked = ref.read(arLockedProvider);
           if (currentlyLocked) {
@@ -536,6 +587,8 @@ class ArAlignmentStage extends ConsumerWidget {
                 mode: arState.mode,
                 locked: locked,
                 tracking: tracking,
+                error: startError,
+                onRetry: onRetryStart,
               ),
             ),
             Positioned(
@@ -544,6 +597,7 @@ class ArAlignmentStage extends ConsumerWidget {
               child: _ArControls(
                 mode: arState.mode,
                 locked: locked,
+                active: arState.active,
                 onToggleLock: onToggleLock,
               ),
             ),
@@ -564,6 +618,8 @@ class _ArStatus extends StatelessWidget {
     required this.mode,
     required this.locked,
     required this.tracking,
+    this.error,
+    this.onRetry,
   });
 
   final ArMode mode;
@@ -573,12 +629,24 @@ class _ArStatus extends StatelessWidget {
   /// meaningful in [ArMode.auto] — ignored in manual mode).
   final bool tracking;
 
+  /// Set (via [ArAlignmentStage.startError]) when the native `channel.
+  /// start` call has thrown — see #7b. Non-null replaces the usual mode/
+  /// tracking readout below with a tap-to-retry affordance.
+  final String? error;
+
+  /// Invoked when the pill is tapped while [error] is non-null.
+  final VoidCallback? onRetry;
+
   @override
   Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
     final isManual = mode == ArMode.manual;
     final String label;
     final String hint;
-    if (isManual && locked) {
+    if (error != null) {
+      label = "Couldn't start AR";
+      hint = 'Tap to retry';
+    } else if (isManual && locked) {
       label = 'Locked';
       hint = tracking
           ? 'Routes anchored to the wall'
@@ -593,14 +661,14 @@ class _ArStatus extends StatelessWidget {
       label = 'Manual';
       hint = 'Line up the outline with the wall, then Lock';
     }
-    return ConstrainedBox(
+    // Reuses the same translucent-glass chrome pattern (MasiColors.chrome
+    // fill + kMasiAmbientShadow, via GlassChrome) as the topo canvas's own
+    // floating chrome, instead of a hardcoded Colors.black54 pill with raw
+    // white text — see the UX finding this addresses.
+    final pill = ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 200),
-      child: Container(
+      child: GlassChrome(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        decoration: BoxDecoration(
-          color: Colors.black54,
-          borderRadius: BorderRadius.circular(8),
-        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -608,19 +676,22 @@ class _ArStatus extends StatelessWidget {
             Text(
               label,
               key: const Key('ar-mode-label'),
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
+              style: TextStyle(color: colors.ink, fontWeight: FontWeight.bold),
             ),
             Text(
               hint,
               key: const Key('ar-hint'),
-              style: const TextStyle(color: Colors.white, fontSize: 12),
+              style: TextStyle(color: colors.ink2, fontSize: 12),
             ),
           ],
         ),
       ),
+    );
+    if (onRetry == null) return pill;
+    return GestureDetector(
+      key: const Key('ar-status-retry'),
+      onTap: onRetry,
+      child: pill,
     );
   }
 }
@@ -633,11 +704,23 @@ class _ArControls extends ConsumerWidget {
   const _ArControls({
     required this.mode,
     required this.locked,
+    required this.active,
     required this.onToggleLock,
   });
 
   final ArMode mode;
   final bool locked;
+
+  /// Mirrors [ArState.active]: whether the native AR session has actually
+  /// started (i.e. `ArChannel.start` has succeeded — see `ar_screen.dart`'s
+  /// `_startSession`/`markActive`). Every FAB below fires a `climbtopo/ar`
+  /// platform-channel call, either directly ([onToggleLock], re-scan) or
+  /// indirectly (the mode toggle, via `ArController.setMode`). Firing any
+  /// of them before the native `UiKitView` has mounted and registered its
+  /// channel handler is silently dropped (`MissingPluginException`) — so
+  /// every `onPressed` below is gated to `null` (Flutter's standard
+  /// disabled-button look) until [active] flips true. See #7.
+  final bool active;
 
   /// Invoked by the `ar-lock` FAB's `onPressed`. Built by
   /// [ArAlignmentStage.build] (which has access to [viewSize],
@@ -663,7 +746,9 @@ class _ArControls extends ConsumerWidget {
             child: FloatingActionButton.small(
               key: const Key('ar-rescan'),
               tooltip: 'Re-scan the wall',
-              onPressed: () => ref.read(arChannelProvider).rescan(),
+              onPressed: active
+                  ? () => ref.read(arChannelProvider).rescan()
+                  : null,
               child: const MasiIcon('scan'),
             ),
           ),
@@ -673,8 +758,9 @@ class _ArControls extends ConsumerWidget {
             child: FloatingActionButton.small(
               key: const Key('ar-reset'),
               tooltip: 'Reset alignment',
-              onPressed: () =>
-                  ref.read(manualAlignProvider.notifier).reset(),
+              onPressed: active
+                  ? () => ref.read(manualAlignProvider.notifier).reset()
+                  : null,
               child: const MasiIcon('restart'),
             ),
           ),
@@ -684,18 +770,22 @@ class _ArControls extends ConsumerWidget {
             child: FloatingActionButton.small(
               key: const Key('ar-lock'),
               tooltip: locked ? 'Unlock alignment' : 'Lock alignment',
-              onPressed: () {
-                onToggleLock();
-              },
+              onPressed: active
+                  ? () {
+                      onToggleLock();
+                    }
+                  : null,
               child: MasiIcon(locked ? 'lock' : 'lock_open'),
             ),
           ),
         FloatingActionButton.small(
           key: const Key('ar-mode-toggle'),
           tooltip: isManual ? 'Switch to auto alignment' : 'Switch to manual alignment',
-          onPressed: () => ref
-              .read(arControllerProvider.notifier)
-              .setMode(isManual ? ArMode.auto : ArMode.manual),
+          onPressed: active
+              ? () => ref
+                  .read(arControllerProvider.notifier)
+                  .setMode(isManual ? ArMode.auto : ArMode.manual)
+              : null,
           child: Text(
             isManual ? 'M' : 'A',
             style: TextStyle(

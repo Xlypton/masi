@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
+import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/ar/application/ar_channel.dart';
@@ -172,7 +173,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: MaterialApp(home: ArScreen(wallId: wall.id)),
+            child: MaterialApp(theme: MasiTheme.light, home: ArScreen(wallId: wall.id)),
           ),
         );
         await tester.pumpAndSettle();
@@ -214,7 +215,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: MaterialApp(home: ArScreen(wallId: wallA.id)),
+            child: MaterialApp(theme: MasiTheme.light, home: ArScreen(wallId: wallA.id)),
           ),
         );
         await tester.pumpAndSettle();
@@ -258,7 +259,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: MaterialApp(home: ArScreen(wallId: wallB.id)),
+            child: MaterialApp(theme: MasiTheme.light, home: ArScreen(wallId: wallB.id)),
           ),
         );
         await tester.pumpAndSettle();
@@ -304,7 +305,10 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const MaterialApp(home: ArScreen(wallId: 'no-such-wall')),
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: const ArScreen(wallId: 'no-such-wall'),
+            ),
           ),
         );
         await tester.pumpAndSettle();
@@ -332,10 +336,27 @@ void main() {
       points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
     );
 
-    Widget buildStage(ProviderContainer container, {ui.Image? outline}) {
+    /// `active: true` by default: every test in this group besides the
+    /// dedicated gating tests below (#7) is exercising steady-state
+    /// mode-toggle/gesture/lock behavior on a session that has already
+    /// started natively — mirroring `ArState.active` flipping true once
+    /// `ArScreen._startSession`'s `channel.start` call has actually
+    /// succeeded. Pass `active: false` to instead exercise the pre-start
+    /// disabled-controls gate itself.
+    Widget buildStage(
+      ProviderContainer container, {
+      ui.Image? outline,
+      bool active = true,
+      String? startError,
+      VoidCallback? onRetryStart,
+    }) {
+      if (active) {
+        container.read(arControllerProvider.notifier).markActive(true);
+      }
       return UncontrolledProviderScope(
         container: container,
         child: MaterialApp(
+          theme: MasiTheme.light,
           home: Scaffold(
             body: SizedBox(
               width: viewSize.width,
@@ -349,6 +370,8 @@ void main() {
                 routes: [route],
                 refSize: refSize,
                 outline: outline,
+                startError: startError,
+                onRetryStart: onRetryStart,
               ),
             ),
           ),
@@ -997,6 +1020,134 @@ void main() {
 
         expect(find.byKey(const Key('ar-rescan')), findsNothing);
       });
+    });
+
+    group('Native-session gating (#7)', () {
+      testWidgets(
+        'inactive (native channel.start has not yet succeeded): the '
+        'rescan/lock/mode-toggle FABs render disabled (onPressed null) and '
+        'tapping them fires no climbtopo/ar channel call — every AR control '
+        'must be gated on ArState.active so a call never fires before the '
+        'platform view has mounted its native handler',
+        (tester) async {
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          await tester.pumpWidget(buildStage(container, active: false));
+          await tester.pump();
+          // Clears the "setMode" call the ArController.setMode(manual)
+          // above already fired — this test asserts about calls made AFTER
+          // the gated FABs are tapped below, not that setup itself.
+          arCalls.clear();
+
+          expect(
+            tester
+                .widget<FloatingActionButton>(
+                  find.byKey(const Key('ar-mode-toggle')),
+                )
+                .onPressed,
+            isNull,
+          );
+          expect(
+            tester
+                .widget<FloatingActionButton>(find.byKey(const Key('ar-lock')))
+                .onPressed,
+            isNull,
+          );
+          expect(
+            tester
+                .widget<FloatingActionButton>(
+                  find.byKey(const Key('ar-reset')),
+                )
+                .onPressed,
+            isNull,
+          );
+
+          await tester.tap(
+            find.byKey(const Key('ar-lock')),
+            warnIfMissed: false,
+          );
+          await tester.tap(
+            find.byKey(const Key('ar-mode-toggle')),
+            warnIfMissed: false,
+          );
+          await tester.pump();
+
+          expect(arCalls, isEmpty);
+          expect(container.read(arControllerProvider).mode, ArMode.manual);
+        },
+      );
+
+      testWidgets(
+        'once active, the same FABs are enabled again (regression guard: '
+        'the gate must not be a one-way lock)',
+        (tester) async {
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          expect(
+            tester
+                .widget<FloatingActionButton>(
+                  find.byKey(const Key('ar-mode-toggle')),
+                )
+                .onPressed,
+            isNotNull,
+          );
+        },
+      );
+    });
+
+    group('Start-failure retry affordance (#7b)', () {
+      testWidgets(
+        'startError set: the status pill shows a retry message instead of '
+        'the usual mode/tracking readout, and tapping it invokes '
+        'onRetryStart exactly once',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          var retries = 0;
+
+          await tester.pumpWidget(
+            buildStage(
+              container,
+              startError: "Couldn't start AR — tap to retry",
+              onRetryStart: () => retries++,
+            ),
+          );
+          await tester.pump();
+
+          expect(find.text("Couldn't start AR"), findsOneWidget);
+          expect(find.text('Tap to retry'), findsOneWidget);
+          expect(find.byKey(const Key('ar-status-retry')), findsOneWidget);
+
+          await tester.tap(find.byKey(const Key('ar-status-retry')));
+          await tester.pump();
+
+          expect(retries, 1);
+        },
+      );
+
+      testWidgets(
+        'no startError: the status pill shows the normal mode readout and '
+        'is not wrapped in a retry tap target',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          expect(find.byKey(const Key('ar-status-retry')), findsNothing);
+          expect(find.byKey(const Key('ar-mode-label')), findsOneWidget);
+        },
+      );
     });
   });
 }
