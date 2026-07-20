@@ -541,10 +541,13 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                     onChanged: _onSearchChanged,
                     decoration: InputDecoration(
                       hintText: 'Search for a place',
-                      prefixIcon: MasiIcon('search', size: 16, color: colors.ink3),
-                      prefixIconConstraints: const BoxConstraints.tightFor(
-                        width: 16,
-                        height: 16,
+                      prefixIcon: Padding(
+                        padding: const EdgeInsets.only(left: 12, right: 8),
+                        child: MasiIcon('search', size: 20, color: colors.ink3),
+                      ),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 0,
+                        minHeight: 0,
                       ),
                       filled: true,
                       fillColor: colors.surface2,

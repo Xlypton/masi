@@ -359,14 +359,13 @@ class _FeedView extends ConsumerWidget {
                   controller: searchController,
                   decoration: InputDecoration(
                     hintText: 'Search topos',
-                    prefixIcon: MasiIcon(
-                      'search',
-                      size: 16,
-                      color: colors.ink3,
+                    prefixIcon: Padding(
+                      padding: const EdgeInsets.only(left: 12, right: 8),
+                      child: MasiIcon('search', size: 20, color: colors.ink3),
                     ),
-                    prefixIconConstraints: const BoxConstraints.tightFor(
-                      width: 16,
-                      height: 16,
+                    prefixIconConstraints: const BoxConstraints(
+                      minWidth: 0,
+                      minHeight: 0,
                     ),
                     filled: true,
                     fillColor: colors.surface2,
@@ -1610,14 +1609,13 @@ class _MapViewState extends ConsumerState<_MapView> {
                   onChanged: _onSearchChanged,
                   decoration: InputDecoration(
                     hintText: 'Search the map',
-                    prefixIcon: MasiIcon(
-                      'search',
-                      size: 16,
-                      color: colors.ink3,
+                    prefixIcon: Padding(
+                      padding: const EdgeInsets.only(left: 12, right: 8),
+                      child: MasiIcon('search', size: 20, color: colors.ink3),
                     ),
-                    prefixIconConstraints: const BoxConstraints.tightFor(
-                      width: 16,
-                      height: 16,
+                    prefixIconConstraints: const BoxConstraints(
+                      minWidth: 0,
+                      minHeight: 0,
                     ),
                     filled: true,
                     fillColor: colors.surface2,
