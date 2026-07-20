@@ -193,7 +193,7 @@ class PhotoFiles {
   /// skip every photo), and this repo's own await-driven unit tests.
   ///
   /// Repository READ paths that run on a canvas widget mount
-  /// (`loadOriginal`/`loadSlices`/`photoLocalPath`, `watchTopos`) must NOT
+  /// (`loadOriginal`/`photoLocalPath`, `watchTopos`) must NOT
   /// use this — a real `path_provider` call does not complete under the
   /// fake widget clock without `runAsync`, so awaiting it there hard-hangs
   /// `pumpAndSettle`. Those use the synchronous, cache-backed
@@ -256,7 +256,7 @@ class PhotoFiles {
   /// callers that run under a `flutter_test` widget `pump()` and therefore
   /// CANNOT await a real `path_provider` call without hanging: the
   /// repository photo-load paths driven on a canvas mount
-  /// ([PhotoRepository.loadOriginal]/`loadSlices`,
+  /// ([PhotoRepository.loadOriginal],
   /// [LibraryCrudRepository.photoLocalPath]) and the `watchTopos` Drift
   /// stream (which must map synchronously — an async mapper wedges a
   /// `StreamProvider`-backed widget under the fake clock).

@@ -41,9 +41,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/data/route_repository.dart';
-import 'package:climbtopo/features/topo/domain/slice_geometry.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/main.dart' as app;
 
@@ -139,10 +137,9 @@ class _SweepIds {
 ///  - 2 Areas, each with 1 Sector, each Sector with 2 Walls (no photos —
 ///    just enough for the CRUD list screens to show real rows).
 ///  - 1 "topo" (via `createTopo`, filed under the hidden default Area/
-///    Sector) with an attached original photo, 5 committed routes spanning
-///    every grade band, AND 3 persisted slices — so the canvas, legend,
-///    draw/commit flow, and PhotoSelector/slice-mode UI are all exercised
-///    against the SAME wall.
+///    Sector) with an attached original photo and 5 committed routes
+///    spanning every grade band — so the canvas, legend, and draw/commit
+///    flow are all exercised against the SAME wall.
 ///  - 1 more topo (via `createTopo`) deliberately left WITHOUT a photo, to
 ///    reach the canvas's empty state.
 Future<_SweepIds> _seedFullSweep(String imagePath) async {
@@ -157,7 +154,6 @@ Future<_SweepIds> _seedFullSweep(String imagePath) async {
     int nowMs() => DateTime.now().millisecondsSinceEpoch;
     final repo = LibraryCrudRepository(seedDb, nowMs: nowMs);
     final routeRepo = RouteRepository(seedDb, nowMs: nowMs);
-    final photoRepo = PhotoRepository(seedDb, nowMs: nowMs);
 
     // -- 2 Areas x 1 Sector x 2 Walls, so the CRUD list screens are populated.
     final area1 = await repo.createArea('Sweep Area 1');
@@ -170,7 +166,7 @@ Future<_SweepIds> _seedFullSweep(String imagePath) async {
     await repo.createWall(sector2.id, 'Sweep Wall 2A');
     await repo.createWall(sector2.id, 'Sweep Wall 2B');
 
-    // -- The photo-first topo: photo + 5 graded routes + 3 slices.
+    // -- The photo-first topo: photo + 5 graded routes.
     final gradedWallId = await repo.createTopo('Sweep Graded Topo');
     final gradedPhotoId = await repo.attachPhotoToWall(
       gradedWallId,
@@ -200,14 +196,6 @@ Future<_SweepIds> _seedFullSweep(String imagePath) async {
         ),
       );
     }
-    await photoRepo.replaceSlices(
-      gradedWallId,
-      gradedPhotoId,
-      1600,
-      1200,
-      imagePath,
-      slicesFromCuts([0.33, 0.66]),
-    );
 
     // -- A second photo-first topo, deliberately left without a photo.
     final noPhotoWallId = await repo.createTopo('Sweep No Photo');
@@ -418,42 +406,7 @@ void main() {
     await binding.takeScreenshot('12-view-mode-after-commit');
 
     // ------------------------------------------------------------------
-    // 13. PhotoSelector chips (Original + 3 slices), captured in view mode
-    //     BEFORE entering slice mode: PhotoSelector is deliberately HIDDEN
-    //     while `_sliceMode` is true (see topo_canvas_screen.dart's
-    //     `_TopoCanvasState._toggleSliceMode` doc), so this is the only
-    //     state where both the chips and the canvas are visible together.
-    // ------------------------------------------------------------------
-    final photoSelector = find.byKey(const Key('photo-selector'));
-    if (tester.any(photoSelector)) {
-      await binding.takeScreenshot('13-photo-selector-chips');
-    } else {
-      debugPrint(
-        'INFO: photo-selector not found; skipping photo-selector-chips shot.',
-      );
-    }
-
-    // ------------------------------------------------------------------
-    // 14. Slice mode.
-    // ------------------------------------------------------------------
-    final sliceModeButton = find.byKey(const Key('topo-slice-mode-button'));
-    expect(
-      tester.any(sliceModeButton),
-      isTrue,
-      reason: 'topo-slice-mode-button not found',
-    );
-    await tester.tap(sliceModeButton);
-    await tester.pumpAndSettle();
-    await binding.takeScreenshot('14-slice-mode');
-    // Exit slice mode again so it doesn't affect anything after.
-    final exitSliceButton = find.byKey(const Key('topo-slice-mode-button'));
-    if (tester.any(exitSliceButton)) {
-      await tester.tap(exitSliceButton);
-      await tester.pumpAndSettle();
-    }
-
-    // ------------------------------------------------------------------
-    // 15. Canvas empty state (photo-less topo).
+    // 13. Canvas empty state (photo-less topo).
     // ------------------------------------------------------------------
     final canvasBack = find.byKey(const Key('topo-back-button'));
     expect(tester.any(canvasBack), isTrue, reason: 'topo-back-button not found');
@@ -468,10 +421,10 @@ void main() {
     await tester.tap(noPhotoTopoItem);
     await _settle(tester);
     expect(tester.any(find.byKey(const Key('topo-empty-state'))), isTrue);
-    await binding.takeScreenshot('15-canvas-empty-state');
+    await binding.takeScreenshot('13-canvas-empty-state');
 
     // ------------------------------------------------------------------
-    // 16. Photo-source action sheet (Camera / Library / Cancel), then
+    // 14. Photo-source action sheet (Camera / Library / Cancel), then
     //     cancel — never touches the native picker.
     // ------------------------------------------------------------------
     final canvasBack2 = find.byKey(const Key('topo-back-button'));
@@ -485,12 +438,12 @@ void main() {
     expect(tester.any(find.byKey(const Key('photo-source-camera'))), isTrue);
     expect(tester.any(find.byKey(const Key('photo-source-library'))), isTrue);
     expect(tester.any(find.byKey(const Key('photo-source-cancel'))), isTrue);
-    await binding.takeScreenshot('16-photo-source-sheet');
+    await binding.takeScreenshot('14-photo-source-sheet');
     await tester.tap(find.byKey(const Key('photo-source-cancel')));
     await tester.pumpAndSettle();
 
     // ------------------------------------------------------------------
-    // 17. AR screen: intentionally SKIPPED — see the file-level doc comment
+    // 15. AR screen: intentionally SKIPPED — see the file-level doc comment
     // for why (camera-permission system dialog risk on the simulator, per
     // this project's CLAUDE.md hard limit). `topo-ar-button` was already
     // confirmed present in screenshots 07/08's top chrome.

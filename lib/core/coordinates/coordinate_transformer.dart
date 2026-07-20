@@ -55,39 +55,4 @@ class CoordinateTransformer {
     }
     return MatrixUtils.transformPoint(inverse, screenPoint);
   }
-
-  /// Reprojects a point expressed as a percentage of the *original* image
-  /// into a percentage of a cropped slice of that image.
-  ///
-  /// [cropXpct] is the left edge of the crop region and [cropWidthPct] is
-  /// its width, both expressed as a fraction (0.0-1.0) of the original
-  /// image width. The Y axis is unaffected, since cropping is horizontal
-  /// only.
-  ///
-  /// If [cropWidthPct] is zero (or not finite), the crop slice has no
-  /// width and there is no meaningful mapping onto it, so `dx` collapses
-  /// to `0.0` instead of propagating the `NaN`/`Infinity` that dividing by
-  /// zero would otherwise produce into stored route coordinates. `dy` is
-  /// returned untouched.
-  static Offset originalPercentToSlicePercent(
-    Offset p,
-    double cropXpct,
-    double cropWidthPct,
-  ) {
-    if (cropWidthPct == 0 || !cropWidthPct.isFinite) {
-      return Offset(0.0, p.dy);
-    }
-    return Offset((p.dx - cropXpct) / cropWidthPct, p.dy);
-  }
-
-  /// Inverse of [originalPercentToSlicePercent]: maps a point expressed as
-  /// a percentage of the cropped slice back to a percentage of the
-  /// original image.
-  static Offset slicePercentToOriginalPercent(
-    Offset p,
-    double cropXpct,
-    double cropWidthPct,
-  ) {
-    return Offset(p.dx * cropWidthPct + cropXpct, p.dy);
-  }
 }

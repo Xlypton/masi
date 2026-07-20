@@ -4,10 +4,8 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/application/slice_controller.dart';
 import 'package:climbtopo/features/topo/data/photo_files.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
-import 'package:climbtopo/features/topo/domain/slice_geometry.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
@@ -20,8 +18,7 @@ import 'package:path/path.dart' as p;
 /// S1 (Own the photo files): a picked photo is COPIED into the app-owned
 /// `<appDocuments>/photos/<photoId>.<ext>` at attach, and `localPath` stores
 /// that app-owned path — closing the latent local-loss bug (picker cache is
-/// evictable) and making paths portable for backup. Slices reuse the
-/// original's now-app-owned file (no duplicate copy).
+/// evictable) and making paths portable for backup.
 ///
 /// The app-documents directory is injected via [PhotoFiles]'s `docsDir` seam
 /// pointed at a `Directory.systemTemp` sandbox, so these tests exercise REAL
@@ -156,73 +153,14 @@ void main() {
     );
   });
 
-  group('S1-b: a slice reuses the original on-disk file (no duplicate copy)',
-      () {
-    test(
-      'replaceSlices stores the original app-owned localPath verbatim on each '
-      'slice and creates no new file on disk',
-      () async {
-        final wall = await seedWall();
-        final src = writeSource('to-slice.jpg');
-        final originalId = await repo.attachPhotoToWall(
-          wall.id,
-          XFile(src.path),
-          1000,
-          500,
-        );
-
-        final photoRepo = PhotoRepository(
-          db,
-          nowMs: () => 1000,
-          photoFiles: photoFiles,
-        );
-        final original = await photoRepo.loadOriginal(wall.id);
-        final ownedPath = original!.localPath;
-
-        final filesBefore = Directory(photosDirPath()).listSync();
-        expect(filesBefore, hasLength(1), reason: 'just the original file');
-
-        final slices = await photoRepo.replaceSlices(
-          wall.id,
-          originalId,
-          1000,
-          500,
-          ownedPath,
-          const [SliceSpec(0.0, 0.5), SliceSpec(0.5, 0.5)],
-        );
-
-        expect(slices, hasLength(2));
-        for (final slice in slices) {
-          expect(
-            slice.localPath,
-            ownedPath,
-            reason: 'a slice must point at the ORIGINAL app-owned file',
-          );
-        }
-
-        // No second file was written: both slice rows share the original's
-        // single on-disk file.
-        final filesAfter = Directory(photosDirPath()).listSync();
-        expect(filesAfter, hasLength(1));
-        expect(File(ownedPath).existsSync(), isTrue);
-
-        // And reload confirms the persisted slice rows carry the same path.
-        final reloaded = await photoRepo.loadSlices(originalId);
-        expect(reloaded, hasLength(2));
-        expect(reloaded.every((s) => s.localPath == ownedPath), isTrue);
-      },
-    );
-  });
-
   group(
-    'S1 regression (confirmed photo-ownership bug): same-session '
-    'pick→slice-commit persists the owned path',
+    'S1 regression (confirmed photo-ownership bug): same-session pick→'
+    'resolveAttachedPhotoPath persists the owned path',
     () {
       test(
-        'committing a slice right after attaching a photo in the SAME '
-        'session stores the slice\'s localPath under app documents, not '
-        'the transient picker-cache path selectedImageProvider held at '
-        'pick time',
+        'resolving the attached photo path right after picking it in the '
+        'SAME session swaps selectedImageProvider onto the app-owned '
+        'path, not the transient picker-cache path it held at pick time',
         () async {
           final wall = await seedWall();
           final src = writeSource('same-session.jpg');
@@ -273,46 +211,6 @@ void main() {
             reason: 'selectedImageProvider must now hold the owned path, '
                 'not the stale picker path it started with',
           );
-
-          // 4. Simulate _handleSliceCommit: it reads selectedImageProvider
-          //    (whatever it holds RIGHT NOW, post-fix) as originalLocalPath
-          //    and commits through the real SliceController/PhotoRepository
-          //    — the exact same call topo_canvas_screen.dart makes.
-          final photoRepo = PhotoRepository(
-            db,
-            nowMs: () => 1000,
-            photoFiles: photoFiles,
-          );
-          final sliceNotifier = container.read(
-            sliceControllerProvider.notifier,
-          );
-          sliceNotifier.addCut(0.5);
-
-          final committed = await sliceNotifier.commit(
-            photoRepo,
-            wallId: wall.id,
-            originalPhotoId: photoId,
-            originalWidth: 1000,
-            originalHeight: 500,
-            originalLocalPath: container.read(selectedImageProvider)!,
-          );
-          expect(committed, isTrue);
-
-          final slices = await photoRepo.loadSlices(photoId);
-          expect(slices, hasLength(2));
-          for (final slice in slices) {
-            expect(
-              p.isWithin(photosDirPath(), slice.localPath),
-              isTrue,
-              reason:
-                  'BUG: a slice committed in the same session as the pick '
-                  'stored the transient picker path (${src.path}) instead '
-                  'of the app-owned copy — slice.localPath='
-                  '${slice.localPath}',
-            );
-            expect(slice.localPath, isNot(src.path));
-            expect(slice.localPath, ownedPath);
-          }
         },
       );
     },

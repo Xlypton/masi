@@ -29,9 +29,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/data/route_repository.dart';
-import 'package:climbtopo/features/topo/domain/slice_geometry.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/main.dart' as app;
 
@@ -103,36 +101,23 @@ const List<(int number, String grade, String style)> _gradedRoutes = [
   (5, '8a', 'boulder'),
 ];
 
-/// The two topo ids this file's seed produces, so the test body can target
-/// each wall's canvas directly by Key.
+/// The topo id this file's seed produces, so the test body can target the
+/// wall's canvas directly by Key.
 class _ReviewIds {
-  const _ReviewIds({required this.wallId, required this.slicedWallId});
+  const _ReviewIds({required this.wallId});
 
-  /// "Sunset Wall": photo + 5 graded routes, no slices — the "normal" wall
-  /// used for the plain view/zoom-in/draw/zoom-out screenshots.
+  /// "Sunset Wall": photo + 5 graded routes — the wall used for the plain
+  /// view/zoom-in/draw/zoom-out screenshots.
   final String wallId;
-
-  /// "Sliced Wall": photo + 3 persisted slices, no routes — used to verify
-  /// the full-bleed-photo-plus-floating-slice-picker fix.
-  final String slicedWallId;
 }
 
-/// Seeds two photo-first "topos" (walls) directly into the app's real
-/// sqlite file (same file `app.main()` will open), deleting any existing
-/// file first for a clean slate:
-///  - "Sunset Wall": one attached photo plus 5 committed, graded routes
-///    (each a 4-point polyline in percent space spanning the photo), so the
-///    canvas, its route strokes, and the legend are all populated for a
-///    visual review.
-///  - "Sliced Wall": one attached photo plus 3 persisted slices (via
-///    `PhotoRepository.replaceSlices`, same recipe as
-///    `full_sweep_test.dart`'s `_seedFullSweep`), so the sliced-wall canvas
-///    (full-bleed photo + floating slice-picker) can be reviewed too.
-/// Returns both walls' ids.
-Future<_ReviewIds> _seedReviewTopo(
-  String imagePath,
-  String slicedImagePath,
-) async {
+/// Seeds a photo-first "topo" (wall) directly into the app's real sqlite
+/// file (same file `app.main()` will open), deleting any existing file
+/// first for a clean slate: "Sunset Wall" — one attached photo plus 5
+/// committed, graded routes (each a 4-point polyline in percent space
+/// spanning the photo), so the canvas, its route strokes, and the legend
+/// are all populated for a visual review. Returns the wall's id.
+Future<_ReviewIds> _seedReviewTopo(String imagePath) async {
   final docsDir = await getApplicationDocumentsDirectory();
   final dbFile = File(p.join(docsDir.path, 'climbtopo.sqlite'));
   if (await dbFile.exists()) {
@@ -144,7 +129,6 @@ Future<_ReviewIds> _seedReviewTopo(
     int nowMs() => DateTime.now().millisecondsSinceEpoch;
     final repo = LibraryCrudRepository(seedDb, nowMs: nowMs);
     final routeRepo = RouteRepository(seedDb, nowMs: nowMs);
-    final photoRepo = PhotoRepository(seedDb, nowMs: nowMs);
 
     final wallId = await repo.createTopo('Sunset Wall');
     final photoId = await repo.attachPhotoToWall(wallId, XFile(imagePath), 1200, 1600);
@@ -178,26 +162,7 @@ Future<_ReviewIds> _seedReviewTopo(
       );
     }
 
-    // -- Second wall: photo + 3 persisted slices (2 interior cuts), to
-    // review the sliced-wall canvas (full-bleed photo + floating
-    // slice-picker) fix.
-    final slicedWallId = await repo.createTopo('Sliced Wall');
-    final slicedPhotoId = await repo.attachPhotoToWall(
-      slicedWallId,
-      XFile(slicedImagePath),
-      1200,
-      1600,
-    );
-    await photoRepo.replaceSlices(
-      slicedWallId,
-      slicedPhotoId,
-      1200,
-      1600,
-      slicedImagePath,
-      slicesFromCuts([0.33, 0.66]),
-    );
-
-    return _ReviewIds(wallId: wallId, slicedWallId: slicedWallId);
+    return _ReviewIds(wallId: wallId);
   } finally {
     // Close BEFORE app.main() opens its own connection to the same file —
     // see full_sweep_test.dart's identical rationale.
@@ -216,13 +181,8 @@ void main() {
     final pngBytes = await _generateWallImage(width: 1200, height: 1600);
     await File(imagePath).writeAsBytes(pngBytes, flush: true);
 
-    final slicedImagePath = p.join(docsDir.path, 'review_wall_sliced.png');
-    final slicedPngBytes = await _generateWallImage(width: 1200, height: 1600);
-    await File(slicedImagePath).writeAsBytes(slicedPngBytes, flush: true);
-
-    final ids = await _seedReviewTopo(imagePath, slicedImagePath);
+    final ids = await _seedReviewTopo(imagePath);
     final wallId = ids.wallId;
-    final slicedWallId = ids.slicedWallId;
 
     app.main();
     await tester.pumpAndSettle(const Duration(seconds: 2));
@@ -348,64 +308,10 @@ void main() {
     await binding.takeScreenshot('canvas-04-view2');
 
     // ------------------------------------------------------------------
-    // 05. A wall WITH slices: verifies the photo is now full-bleed with a
-    // floating slice-picker, rather than the old letterboxed-with-inline-
-    // chips layout. Navigate back to the Topos home, then into the seeded
-    // "Sliced Wall".
-    // ------------------------------------------------------------------
-    final backButtonToSliced = find.byKey(const Key('topo-back-button'));
-    expect(
-      tester.any(backButtonToSliced),
-      isTrue,
-      reason: 'topo-back-button not found',
-    );
-    await tester.tap(backButtonToSliced);
-    await tester.pumpAndSettle(const Duration(seconds: 1));
-
-    final slicedTopoItem = find.byKey(Key('topo-item-$slicedWallId'));
-    expect(
-      tester.any(slicedTopoItem),
-      isTrue,
-      reason: 'Seeded "Sliced Wall" topo item not found on the Topos home',
-    );
-    await tester.tap(slicedTopoItem);
-    await tester.pumpAndSettle(const Duration(seconds: 1));
-    // Give the freshly-written PNG's ImageStream decode extra time to
-    // resolve, same pacing as the first wall's load above.
-    for (var i = 0; i < 8; i++) {
-      await tester.pump(const Duration(milliseconds: 500));
-    }
-    await tester.pumpAndSettle(const Duration(seconds: 2));
-
-    expect(
-      find.byKey(const Key('topo-interactive-viewer')),
-      findsOneWidget,
-      reason: 'topo-interactive-viewer not found; sliced-wall canvas did not render',
-    );
-    // Soft check (not `findsOneWidget`): the full-bleed-photo +
-    // floating-slice-picker rework is landing concurrently in lib/, and has
-    // been observed to transiently render 2 widgets sharing the
-    // `photo-selector` key (e.g. an old inline selector plus the new
-    // floating one) mid-edit. Any match is enough evidence the
-    // slice-picker is present for this visual review; see this file's
-    // `topo-route-legend-overlay`/`topo-route-legend` soft-check above and
-    // `full_sweep_test.dart`'s `13-photo-selector-chips` for the same
-    // leniency pattern.
-    final photoSelector = find.byKey(const Key('photo-selector'));
-    expect(
-      tester.any(photoSelector),
-      isTrue,
-      reason:
-          'photo-selector not found on the sliced wall; expected the '
-          'floating slice-picker to be present',
-    );
-    await binding.takeScreenshot('canvas-05-sliced');
-
-    // ------------------------------------------------------------------
-    // 06. Zoomed-OUT state on a normal (non-sliced) wall: verifies the
-    // photo can now be shrunk below screen width. Navigate back to the
-    // Topos home, then back into "Sunset Wall", and pinch-IN (pointers
-    // starting apart, moving together) to zoom out.
+    // 06. Zoomed-OUT state: verifies the photo can now be shrunk below
+    // screen width. Navigate back to the Topos home, then back into
+    // "Sunset Wall", and pinch-IN (pointers starting apart, moving
+    // together) to zoom out.
     // ------------------------------------------------------------------
     final backButtonToSunset = find.byKey(const Key('topo-back-button'));
     expect(

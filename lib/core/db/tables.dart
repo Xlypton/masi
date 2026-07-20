@@ -71,21 +71,33 @@ class Walls extends Table with SyncColumns {
 class Photos extends Table with SyncColumns {
   TextColumn get wallId => text().references(Walls, #id)();
   TextColumn get localPath => text()();
-  // 'original' | 'slice'
+  // 'original' | 'slice' — 'slice' is DEPRECATED/DORMANT: the photo
+  // cut/slice feature was removed (2026-07-20); no code path writes
+  // `kind: 'slice'` rows anymore, but any pre-existing ones are left as-is
+  // (soft-delete-only, never queried by current code) rather than migrated,
+  // since a Drift column/value drop needs a risky table-recreate. See
+  // [cropXpct]/[cropWidthPct]'s docs.
   TextColumn get kind => text()();
   IntColumn get width => integer()();
   IntColumn get height => integer()();
   TextColumn get parentPhotoId => text().nullable().references(Photos, #id)();
+
+  /// DEPRECATED/DORMANT (slice feature removed 2026-07-20): only ever
+  /// populated on legacy `kind:'slice'` rows, which are no longer created or
+  /// read by any code path. Left in place (nullable, unused) rather than
+  /// dropped, to avoid a Drift table-recreate migration for two columns that
+  /// cost nothing sitting idle. Do not read or write these in new code.
   RealColumn get cropXpct => real().nullable()();
+
+  /// DEPRECATED/DORMANT — see [cropXpct].
   RealColumn get cropWidthPct => real().nullable()();
 
   /// Display order among a wall's live `kind:'original'` photos (the
-  /// multi-photo-per-topo strip) — 0-based, ascending. Meaningless for
-  /// `kind:'slice'` rows (each slice's ordering is [cropXpct] instead).
-  /// Backfilled ascending by `createdAt` for pre-existing rows by the v5->v6
-  /// migration (see `app_database.dart`); set by
-  /// `LibraryCrudRepository.attachPhotoToWall` (append-at-end) and
-  /// `PhotoRepository.setPhotoOrder` (explicit reorder) thereafter.
+  /// multi-photo-per-topo strip) — 0-based, ascending. Backfilled ascending
+  /// by `createdAt` for pre-existing rows by the v5->v6 migration (see
+  /// `app_database.dart`); set by `LibraryCrudRepository.attachPhotoToWall`
+  /// (append-at-end) and `PhotoRepository.setPhotoOrder` (explicit reorder)
+  /// thereafter.
   IntColumn get sortOrder => integer().withDefault(const Constant(0))();
 
   /// Whether this is the wall's PRIMARY original — the one shown as the
@@ -96,10 +108,9 @@ class Photos extends Table with SyncColumns {
   /// [PhotoRepository.setPrimaryPhoto]/[PhotoRepository.deleteOriginalPhoto]
   /// and by [LibraryCrudRepository.attachPhotoToWall], which only flags a
   /// freshly-attached photo primary when the wall has no live original yet).
-  /// Meaningless for `kind:'slice'` rows. Backfilled by the v5->v6 migration:
-  /// the newest (max `createdAt`) live original on each wall is flagged
-  /// primary — this SAFELY resolves the #46 bug's accumulated multi-original
-  /// walls without deleting any row.
+  /// Backfilled by the v5->v6 migration: the newest (max `createdAt`) live
+  /// original on each wall is flagged primary — this SAFELY resolves the
+  /// #46 bug's accumulated multi-original walls without deleting any row.
   BoolColumn get isPrimary => boolean().withDefault(const Constant(false))();
 
   @override

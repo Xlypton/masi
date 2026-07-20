@@ -120,19 +120,14 @@ class TopoCanvas extends ConsumerStatefulWidget {
     required this.imagePath,
     required this.imageSize,
     required this.transformationController,
-    this.activeCropXpct,
-    this.activeCropWidthPct,
   });
 
   /// Filesystem path of the selected topo photo.
   final String imagePath;
 
-  /// The natural (decoded) size of the image at [imagePath]. This is always
-  /// the ORIGINAL image's size, even while a slice is the active view (see
-  /// [activeCropXpct]) — scene space never shrinks to the slice, only the
-  /// visible viewport is framed to it. That's what lets tap -> scene ->
-  /// percent keep producing ORIGINAL-space percent coordinates with no
-  /// reprojection, whether or not a crop is active.
+  /// The natural (decoded) size of the image at [imagePath]. Needed to
+  /// convert between percent-space route coordinates (see [DrawState]) and
+  /// scene/pixel coordinates.
   final Size imageSize;
 
   /// Shared with the owning screen so pan/zoom state (and coordinate
@@ -140,76 +135,14 @@ class TopoCanvas extends ConsumerStatefulWidget {
   /// draw/view mode switches.
   final TransformationController transformationController;
 
-  /// The left edge of the active crop band, as a fraction (0.0-1.0) of
-  /// [imageSize]'s width, or null to view the full original image.
-  ///
-  /// When non-null (together with [activeCropWidthPct]), this widget frames
-  /// the viewport to the band `[activeCropXpct * imageSize.width,
-  /// (activeCropXpct + activeCropWidthPct) * imageSize.width]` (full height)
-  /// instead of fitting the whole image — see [computeCropTransform] and
-  /// [_TopoCanvasState._reframeIfNeeded].
-  final double? activeCropXpct;
-
-  /// The width of the active crop band, as a fraction (0.0-1.0) of
-  /// [imageSize]'s width. See [activeCropXpct].
-  final double? activeCropWidthPct;
-
-  /// Pure computation of the [Matrix4] that frames the viewport to the crop
-  /// band `[cropXpct * imageSize.width, (cropXpct + cropWidthPct) *
-  /// imageSize.width]` (full height).
-  ///
-  /// CONTAIN-fits the band: `scale = min(viewportSize.width / (cropWidthPct
-  /// * imageSize.width), viewportSize.height / imageSize.height)` — i.e.
-  /// whichever axis is tighter wins, rather than always scaling by width.
-  /// A width-only scale (the pre-Fix-3 behavior) made a thin/tall band
-  /// overflow the viewport vertically; since `panEnabled` is false while
-  /// drawing, the clipped top/bottom were then permanently unreachable.
-  /// Using the smaller of the two candidate scales guarantees the ENTIRE
-  /// band (full height, full band width) fits inside the viewport with
-  /// nothing clipped, in any mode. The band is then centered in BOTH axes
-  /// (not just top/bottom-letterboxed vertically as before): whichever axis
-  /// has slack (band width < viewport width when height was the binding
-  /// constraint, or vice versa) gets that slack split evenly.
-  ///
-  /// Exposed as a static, side-effect-free method (rather than only being
-  /// reachable by pumping the full widget) so its math can be asserted
-  /// directly and deterministically in tests.
-  @visibleForTesting
-  static Matrix4 computeCropTransform({
-    required Size viewportSize,
-    required Size imageSize,
-    required double cropXpct,
-    required double cropWidthPct,
-  }) {
-    final bandWidthPx = cropWidthPct * imageSize.width;
-    final widthScale = bandWidthPx > 0 ? viewportSize.width / bandWidthPx : 1.0;
-    final heightScale = imageSize.height > 0
-        ? viewportSize.height / imageSize.height
-        : 1.0;
-    final scale = widthScale < heightScale ? widthScale : heightScale;
-
-    final bandLeftPx = cropXpct * imageSize.width;
-    final scaledBandWidth = bandWidthPx * scale;
-    final scaledHeight = imageSize.height * scale;
-    final dx = (viewportSize.width - scaledBandWidth) / 2 - bandLeftPx * scale;
-    final dy = (viewportSize.height - scaledHeight) / 2;
-
-    return Matrix4.identity()
-      ..setEntry(0, 0, scale)
-      ..setEntry(1, 1, scale)
-      ..setEntry(2, 2, scale)
-      ..setEntry(0, 3, dx)
-      ..setEntry(1, 3, dy);
-  }
-
   /// Pure computation of the scale at which [imageSize] fits entirely
   /// within a viewport of [viewportSize] (CONTAIN-fit: `min` of the two
   /// axis scales, letterboxed on whichever axis has slack) — the "see the
   /// whole wall" scale.
   ///
-  /// Exposed as a static, side-effect-free method (mirroring
-  /// [computeCropTransform]) so its math can be asserted directly and
-  /// deterministically in tests, independent of any widget/layout timing.
+  /// Exposed as a static, side-effect-free method so its math can be
+  /// asserted directly and deterministically in tests, independent of any
+  /// widget/layout timing.
   /// NOT `@visibleForTesting` (unlike its siblings below): besides tests,
   /// this is also a genuine production dependency of
   /// [_TopoCanvasState._scaleRangeFor] (via [_TopoCanvasState._fitScale]),
@@ -242,8 +175,8 @@ class TopoCanvas extends ConsumerStatefulWidget {
   /// wall even though the photo now opens cropped-to-fill.
   ///
   /// Exposed as a static, side-effect-free method (mirroring
-  /// [computeFitScale]/[computeCropTransform]) so its math can be asserted
-  /// directly and deterministically in tests.
+  /// [computeFitScale]) so its math can be asserted directly and
+  /// deterministically in tests.
   @visibleForTesting
   static double computeFillScale({
     required Size imageSize,
@@ -277,8 +210,8 @@ class TopoCanvas extends ConsumerStatefulWidget {
   /// than writing the resulting matrix entries directly.
   ///
   /// Exposed as a static, side-effect-free method (mirroring
-  /// [computeCropTransform]/[computeFitScale]/[computeFillScale]) for
-  /// direct, deterministic testing.
+  /// [computeFitScale]/[computeFillScale]) for direct, deterministic
+  /// testing.
   @visibleForTesting
   static Matrix4 computeFitTransform({
     required Size imageSize,
@@ -313,14 +246,12 @@ class TopoCanvas extends ConsumerStatefulWidget {
   /// reference "whole wall visible" framing: [_TopoCanvasState._scaleRangeFor]
   /// uses its scale ([computeFitScale]) as [InteractiveViewer]'s `minScale`,
   /// so the user can always pinch OUT from the fill-width default to see the
-  /// entire photo letterboxed. [computeCropTransform] (the slice/crop
-  /// framing) is untouched, and so is [computeFitTransform] (the
+  /// entire photo letterboxed, and so is [computeFitTransform] (the
   /// pre-existing COVER/fill transform, kept alongside this rather than
   /// replaced — see that method's doc).
   ///
   /// Exposed as a static, side-effect-free method (mirroring
-  /// [computeFitTransform]/[computeCropTransform]) for direct, deterministic
-  /// testing.
+  /// [computeFitTransform]) for direct, deterministic testing.
   @visibleForTesting
   static Matrix4 computeContainTransform({
     required Size imageSize,
@@ -351,22 +282,20 @@ class TopoCanvas extends ConsumerStatefulWidget {
   /// than being shrunk further to fit height too.
   ///
   /// This is the canvas-look-rework's (2026-07-15 revision) DEFAULT
-  /// (no-crop) open-framing transform: [_TopoCanvasState._fitMatrix] applies
-  /// this in place of the older [computeContainTransform] (contain/
-  /// letterboxed/centered) so the photo reads as filling the screen width on
-  /// open instead of floating centered with gray bands on the sides — but,
+  /// open-framing transform: [_TopoCanvasState._fitMatrix] applies this in
+  /// place of the older [computeContainTransform] (contain/letterboxed/
+  /// centered) so the photo reads as filling the screen width on open
+  /// instead of floating centered with gray bands on the sides — but,
   /// unlike the transform's previous (top-anchored-always) revision, a
   /// short/landscape photo's leftover vertical slack is now split evenly
   /// above and below rather than dumped entirely below the image.
-  /// [computeCropTransform] (the slice/crop framing) is untouched, and
   /// [computeContainTransform] is RETAINED — not deleted — as the CONTAIN
   /// reference [_TopoCanvasState._scaleRangeFor] uses for
   /// [InteractiveViewer]'s `minScale`: the user can always pinch OUT past
   /// this fill-width default to see the whole photo letterboxed.
   ///
   /// Exposed as a static, side-effect-free method (mirroring
-  /// [computeContainTransform]/[computeCropTransform]) for direct,
-  /// deterministic testing.
+  /// [computeContainTransform]) for direct, deterministic testing.
   @visibleForTesting
   static Matrix4 computeFillWidthTransform({
     required Size imageSize,
@@ -484,30 +413,17 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   Offset? _pendingTapDownPosition;
 
   /// Whether [_reframeIfNeeded] has framed the viewport at least once.
-  /// Reframing (fit-to-viewport, or crop-band framing when a slice is
-  /// active) is meant to run once PER distinct crop — see
-  /// [_framedCropXpct]/[_framedCropWidthPct] — never stomping the user's
-  /// subsequent manual pan/zoom within that same crop.
+  /// Reframing (fit-to-viewport) is meant to run once PER distinct image —
+  /// see [_framedImageSize] — never stomping the user's subsequent manual
+  /// pan/zoom for that same image.
   bool _hasFramed = false;
 
-  /// The `activeCropXpct`/`activeCropWidthPct` this widget was last framed
-  /// for (mirrors [widget.activeCropXpct]/[widget.activeCropWidthPct] at the
-  /// time of the last [_reframeIfNeeded] application), so a rebuild with the
-  /// SAME crop doesn't re-apply (and stomp manual pan/zoom), while a
-  /// genuinely NEW crop (e.g. the user picked a different slice, or
-  /// switched back to Original) does.
-  double? _framedCropXpct;
-  double? _framedCropWidthPct;
-
   /// The `widget.imageSize` this widget was last framed for (Fix 1
-  /// hardening). Tracked alongside [_framedCropXpct]/[_framedCropWidthPct]
-  /// so a genuinely NEW image — even one with the SAME crop value as the
-  /// previous image (most commonly null/null, i.e. both viewing "Original")
-  /// — still forces a fresh reframe rather than being treated as
-  /// "unchanged". Without this, [TopoCanvasScreen] handing this same,
-  /// long-lived [_TopoCanvasState] a new photo (same crop state, different
-  /// natural size) would silently keep showing the PREVIOUS photo's
-  /// fit/crop transform forever.
+  /// hardening) — so a genuinely NEW image still forces a fresh reframe
+  /// rather than being treated as "unchanged". Without this,
+  /// [TopoCanvasScreen] handing this same, long-lived [_TopoCanvasState] a
+  /// new photo would silently keep showing the PREVIOUS photo's fit
+  /// transform forever.
   Size? _framedImageSize;
 
   /// The `viewportSize` this widget was last framed for (reframe-on-resize
@@ -516,22 +432,21 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// `BottomAppBar` settle to their final extents) — without tracking this,
   /// [_hasFramed] flipping true against that bogus size meant the resulting
   /// tiny fit scale stuck forever, rendering the wall photo as a tiny
-  /// top-left thumbnail. Tracked alongside [_framedCropXpct]/
-  /// [_framedCropWidthPct]/[_framedImageSize] so a later, settled viewport
-  /// (differing by more than [_viewportChangeEpsilonPx] on either axis)
-  /// forces a fresh reframe even when the crop/image haven't changed.
+  /// top-left thumbnail. Tracked alongside [_framedImageSize] so a later,
+  /// settled viewport (differing by more than [_viewportChangeEpsilonPx] on
+  /// either axis) forces a fresh reframe even when the image hasn't
+  /// changed.
   Size? _framedViewportSize;
 
   /// The [Matrix4] this widget last wrote into
   /// [TopoCanvas.transformationController] via [_reframeIfNeeded]'s own
-  /// auto-frame (fit-to-viewport or crop-band framing), or null if it has
-  /// never auto-framed.
+  /// auto-frame (fit-to-viewport), or null if it has never auto-framed.
   ///
   /// Used to distinguish "the viewport changed but the controller's value
   /// is still exactly what WE last set" (safe to replace with a fresh fit
   /// for the new viewport) from "the user has since manually panned/zoomed"
   /// (must NOT be stomped by a resize) — see the viewport-changed branch of
-  /// [_reframeIfNeeded]. A crop/image change always reframes unconditionally
+  /// [_reframeIfNeeded]. An image change always reframes unconditionally
   /// regardless of this, matching the pre-existing (M5) behavior.
   Matrix4? _lastAutoFrameMatrix;
 
@@ -581,20 +496,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// `maxScale` is [_maxScaleFor] of the (un-reduced) full-image fit scale,
   /// unchanged.
   ///
-  /// When a crop band is active, this is further widened so the crop's OWN
-  /// applied scale — [TopoCanvas.computeCropTransform]'s `scale`, i.e. what
-  /// the viewport is actually framed to right now — always falls within
-  /// `[minScale, maxScale]`: `maxScale` becomes at least
-  /// `appliedCropScale * 4` and `minScale` becomes at most
-  /// `appliedCropScale`.
-  ///
-  /// Without this, minScale/maxScale were derived purely from the
-  /// full-image fit, so a thin slice's applied (necessarily larger) scale
-  /// could exceed the full-image-derived maxScale; the first pinch then
-  /// caused [InteractiveViewer] to snap the transform back down to its own
-  /// maxScale, discarding the crop framing.
-  ///
-  /// When NO crop is active, the DEFAULT framing's applied scale
+  /// The DEFAULT framing's applied scale
   /// ([TopoCanvas.computeFillWidthTransform]'s fill-width scale) is
   /// STRICTLY GREATER than or equal to `minScale` (which is now at most
   /// `kMinZoomOutFactor` of the contain scale — itself the smaller of the
@@ -618,29 +520,12 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       maxScale = fillWidthScale;
     }
 
-    final cropXpct = widget.activeCropXpct;
-    final cropWidthPct = widget.activeCropWidthPct;
-    if (cropXpct != null && cropWidthPct != null) {
-      final cropMatrix = TopoCanvas.computeCropTransform(
-        viewportSize: viewportSize,
-        imageSize: widget.imageSize,
-        cropXpct: cropXpct,
-        cropWidthPct: cropWidthPct,
-      );
-      final appliedCropScale = cropMatrix.getMaxScaleOnAxis();
-      if (appliedCropScale > 0) {
-        final widenedMax = appliedCropScale * 4;
-        maxScale = maxScale > widenedMax ? maxScale : widenedMax;
-        minScale = minScale < appliedCropScale ? minScale : appliedCropScale;
-      }
-    }
-
     return (minScale, maxScale);
   }
 
-  /// Builds the DEFAULT (no-crop) fit-to-viewport matrix: [widget.imageSize]
-  /// scaled by WIDTH ALONE to span [viewportSize]'s full width, then
-  /// vertically centered within any leftover slack (fill-width — not
+  /// Builds the DEFAULT fit-to-viewport matrix: [widget.imageSize] scaled
+  /// by WIDTH ALONE to span [viewportSize]'s full width, then vertically
+  /// centered within any leftover slack (fill-width — not
   /// CONTAIN/letterboxed on both axes). Delegates to
   /// [TopoCanvas.computeFillWidthTransform] (the pure, directly-testable
   /// form of this same math) — see that method's doc for why the default
@@ -654,16 +539,12 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     viewportSize: viewportSize,
   );
 
-  /// Frames [widget.transformationController] to whichever view is
-  /// currently active: the crop band [widget.activeCropXpct]/
-  /// [widget.activeCropWidthPct] when set (via
-  /// [TopoCanvas.computeCropTransform]), or the whole image fit-to-viewport
-  /// otherwise (via [_fitMatrix]).
+  /// Frames [widget.transformationController] to the whole image
+  /// fit-to-viewport (via [_fitMatrix]).
   ///
-  /// Re-applies whenever the ACTIVE CROP, the image, OR the viewport size
-  /// itself has changed materially (by more than [_viewportChangeEpsilonPx]
-  /// on either axis) since the last application (tracked via
-  /// [_framedCropXpct]/[_framedCropWidthPct]/[_framedImageSize]/
+  /// Re-applies whenever the image, OR the viewport size itself, has
+  /// changed materially (by more than [_viewportChangeEpsilonPx] on either
+  /// axis) since the last application (tracked via [_framedImageSize]/
   /// [_framedViewportSize]).
   ///
   /// The viewport-size trigger (the fix for the "tiny top-left thumbnail"
@@ -681,28 +562,24 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// viewport-only change only reframes if the controller's LIVE value is
   /// still exactly the matrix this method itself last wrote (tracked via
   /// [_lastAutoFrameMatrix]) — i.e. nothing (in particular, no manual
-  /// pan/zoom) has touched it since. A crop or image change, in contrast,
-  /// always reframes unconditionally (matching pre-existing M5 behavior):
-  /// those are deliberate, always-applied overrides.
+  /// pan/zoom) has touched it since. An image change, in contrast, always
+  /// reframes unconditionally (matching pre-existing M5 behavior): that's a
+  /// deliberate, always-applied override.
   ///
-  /// As a special case, on the very first frame with NO crop active, a
-  /// pre-seeded/non-identity [widget.transformationController] (as some
-  /// callers/tests supply) is left exactly as given rather than being
-  /// overwritten with the fit transform — this preserves pre-M5 behavior.
-  /// That escape hatch does not apply once a crop is active, nor once this
-  /// widget has already framed at least once.
+  /// As a special case, on the very first frame, a pre-seeded/non-identity
+  /// [widget.transformationController] (as some callers/tests supply) is
+  /// left exactly as given rather than being overwritten with the fit
+  /// transform — this preserves pre-M5 behavior. That escape hatch does not
+  /// apply once this widget has already framed at least once.
   ///
   /// Because [CoordinateTransformer.sceneToPercent]/`toScene` work off the
   /// controller's *live* matrix (see `TopoCanvas` doc comment / call sites
   /// in [_beginInteraction] etc.), initializing the controller to a pure
   /// scale+translate here does not change what "scene space" means — scene
-  /// space is always `widget.imageSize`-sized pixels (the ORIGINAL image),
-  /// `toScene` just now inverts a matrix that starts pre-zoomed/pre-centered
-  /// (or pre-cropped) instead of at identity. Percent math
-  /// (`sceneToPercent`/`percentToScene`) is unaffected either way since it
-  /// never reads the transform directly — this is exactly what lets a tap
-  /// while a slice is framed still yield ORIGINAL-space percent
-  /// coordinates with no reprojection.
+  /// space is always `widget.imageSize`-sized pixels, `toScene` just now
+  /// inverts a matrix that starts pre-zoomed/pre-centered instead of at
+  /// identity. Percent math (`sceneToPercent`/`percentToScene`) is
+  /// unaffected either way since it never reads the transform directly.
   void _reframeIfNeeded(Size viewportSize) {
     if (viewportSize.width < _minFrameableViewportDimensionPx ||
         viewportSize.height < _minFrameableViewportDimensionPx) {
@@ -713,14 +590,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       return;
     }
 
-    final cropXpct = widget.activeCropXpct;
-    final cropWidthPct = widget.activeCropWidthPct;
-    final hasCrop = cropXpct != null && cropWidthPct != null;
-
-    final sameCropAndImage =
-        _framedCropXpct == cropXpct &&
-        _framedCropWidthPct == cropWidthPct &&
-        _framedImageSize == widget.imageSize;
+    final sameImage = _framedImageSize == widget.imageSize;
     final viewportChanged =
         _framedViewportSize == null ||
         (_framedViewportSize!.width - viewportSize.width).abs() >
@@ -728,11 +598,11 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         (_framedViewportSize!.height - viewportSize.height).abs() >
             _viewportChangeEpsilonPx;
 
-    if (_hasFramed && sameCropAndImage && !viewportChanged) {
+    if (_hasFramed && sameImage && !viewportChanged) {
       return; // Truly unchanged: never stomp a manual pan/zoom.
     }
 
-    if (_hasFramed && sameCropAndImage && viewportChanged) {
+    if (_hasFramed && sameImage && viewportChanged) {
       // Only the viewport moved (the reframe-on-resize fix): re-fit to the
       // NEW viewport unless the user has manually panned/zoomed since the
       // last auto-frame, detected by the controller's live value having
@@ -744,13 +614,10 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
           widget.transformationController.value == _lastAutoFrameMatrix;
       if (!stillAutoFramed) return;
     } else if (!_hasFramed &&
-        !hasCrop &&
         widget.transformationController.value != Matrix4.identity()) {
-      // First frame ever, no crop active, and a test/caller pre-seeded a
-      // non-identity controller: leave it exactly as given.
+      // First frame ever, and a test/caller pre-seeded a non-identity
+      // controller: leave it exactly as given.
       _hasFramed = true;
-      _framedCropXpct = null;
-      _framedCropWidthPct = null;
       _framedImageSize = widget.imageSize;
       _framedViewportSize = viewportSize;
       _lastAutoFrameMatrix = null;
@@ -758,19 +625,10 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     }
 
     _hasFramed = true;
-    _framedCropXpct = cropXpct;
-    _framedCropWidthPct = cropWidthPct;
     _framedImageSize = widget.imageSize;
     _framedViewportSize = viewportSize;
 
-    final matrix = hasCrop
-        ? TopoCanvas.computeCropTransform(
-            viewportSize: viewportSize,
-            imageSize: widget.imageSize,
-            cropXpct: cropXpct,
-            cropWidthPct: cropWidthPct,
-          )
-        : _fitMatrix(viewportSize);
+    final matrix = _fitMatrix(viewportSize);
 
     _lastAutoFrameMatrix = matrix;
 
@@ -1046,8 +904,8 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
           // `constrained: false` is required because the child below is
           // deliberately OVERSIZED relative to the viewport (a full-res
           // photo, often much larger than the screen) and this widget drives
-          // its scale/position entirely itself via `_fitMatrix`/
-          // `computeCropTransform` written into `transformationController`.
+          // its scale/position entirely itself via `_fitMatrix` written into
+          // `transformationController`.
           //
           // With the default `constrained: true`, InteractiveViewer does NOT
           // give the child an unbounded box (no `OverflowBox`) — the child
@@ -1062,9 +920,8 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
           // top-left thumbnail" bug. `constrained: false` wraps the child in
           // an `OverflowBox` with unbounded max constraints instead, so the
           // `SizedBox(width: imageSize.width, height: imageSize.height)`
-          // below lays out at its TRUE natural size, and `_fitMatrix`/
-          // `computeCropTransform`'s scale+translate is the only scaling
-          // ever applied.
+          // below lays out at its TRUE natural size, and `_fitMatrix`'s
+          // scale+translate is the only scaling ever applied.
           constrained: false,
           // Draw mode: `panEnabled` stays OFF — single-finger movement is
           // reserved for tap-to-add-a-point / drag-an-existing-handle,

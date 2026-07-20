@@ -229,42 +229,5 @@ void main() {
       );
       await binding.takeScreenshot('14-canvas-drawn-line');
     }
-
-    // Best-effort extras: slice mode entry. Wrapped so a missing/renamed
-    // widget logs and continues rather than failing the whole run.
-    try {
-      // The canvas's top glass chrome is mode-aware (see
-      // TopoCanvasScreen._topTrailingActions): the slice-mode entry point
-      // only appears in the decluttered View-mode trailing row, not
-      // Draw-mode's (back + name + mode-toggle only). Committing a route
-      // now returns to View mode on its own (see _handleCommitRoute's doc),
-      // so the slice entry point is normally already showing at this point
-      // — but fall back to tapping the mode-toggle glyph (exactly how a
-      // real user would finish drawing before reaching for the slice tool)
-      // in case that ever changes, so this stays robust either way.
-      var sliceButton = find.byKey(const Key('topo-slice-mode-button'));
-      if (!tester.any(sliceButton)) {
-        final modeToggleAfterCommit = find.byKey(
-          const Key('topo-mode-toggle'),
-        );
-        if (tester.any(modeToggleAfterCommit)) {
-          await tester.tap(modeToggleAfterCommit);
-          await tester.pumpAndSettle();
-        }
-        sliceButton = find.byKey(const Key('topo-slice-mode-button'));
-      }
-      if (tester.any(sliceButton)) {
-        await tester.tap(sliceButton);
-        await tester.pumpAndSettle();
-        await binding.takeScreenshot('17-slice-mode');
-        // Exit slice mode again so it doesn't affect anything after.
-        await tester.tap(sliceButton);
-        await tester.pumpAndSettle();
-      } else {
-        debugPrint('INFO: topo-slice-mode-button not found; skipping slice-mode screenshot.');
-      }
-    } catch (e, st) {
-      debugPrint('INFO: slice-mode capture failed, continuing: $e\n$st');
-    }
   });
 }

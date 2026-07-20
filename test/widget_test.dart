@@ -7,18 +7,13 @@ import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/ar/presentation/ar_screen.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/topo/application/active_view_controller.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/application/slice_controller.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/data/route_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
-import 'package:climbtopo/features/topo/presentation/photo_selector.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
-import 'package:climbtopo/features/topo/presentation/slice_tool.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
@@ -962,163 +957,24 @@ void main() {
   // permanently-reserved band) by that same file's "A-f: canvas region is
   // taller in view mode" test.
 
-  group('TopoCanvasBody: slice mode overlay (M5)', () {
-    // Mirrors the "symbol bar mode visibility" harness above: TopoCanvasBody
-    // is pumped directly with an injected fixed imageSize and the sliceMode
-    // flag driven explicitly (rather than through TopoCanvasScreen's own
-    // _sliceMode state, which is gated behind a real async image decode —
-    // see the big NOTE (M3) comment above), so this covers SliceTool's
-    // actual mount/unmount + tap-to-add-cut behavior without needing a real,
-    // decodable image file on disk.
-    Widget buildBody({
-      required ProviderContainer container,
-      required TransformationController controller,
-      required bool sliceMode,
-      Size imageSize = const Size(400, 300),
-    }) {
-      return UncontrolledProviderScope(
-        container: container,
-        // Fix 2 (canvas UI fixes) needs `theme: MasiTheme.light`: this
-        // renders a real `TopoCanvas` (via `TopoCanvasBody`), which now
-        // reads `MasiColors.of(context)` for its viewport frame's hairline
-        // border in every build — see the top-level 'TopoCanvas' group's
-        // buildCanvas for the full rationale.
-        child: MaterialApp(
-          theme: MasiTheme.light,
-          home: Scaffold(
-            body: Consumer(
-              builder: (context, ref, _) {
-                final drawState = ref.watch(drawControllerProvider);
-                return TopoCanvasBody(
-                  imagePath: '/nonexistent/test-topo.jpg',
-                  imageSize: imageSize,
-                  drawState: drawState,
-                  transformationController: controller,
-                  sliceMode: sliceMode,
-                );
-              },
-            ),
-          ),
-        ),
-      );
-    }
-
-    void setViewportSize(WidgetTester tester, Size size) {
-      tester.view.physicalSize = size;
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-    }
-
-    testWidgets(
-      'A2: slice mode shows the SliceTool overlay (absent in normal mode); '
-      'adding 2 cuts renders 2 keyed cut markers',
-      (tester) async {
-        setViewportSize(tester, const Size(400, 356));
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        final controller = TransformationController();
-        addTearDown(controller.dispose);
-
-        await tester.pumpWidget(
-          buildBody(
-            container: container,
-            controller: controller,
-            sliceMode: false,
-          ),
-        );
-        await tester.pump();
-
-        expect(find.byType(SliceTool), findsNothing);
-
-        await tester.pumpWidget(
-          buildBody(
-            container: container,
-            controller: controller,
-            sliceMode: true,
-          ),
-        );
-        await tester.pump();
-
-        expect(find.byType(SliceTool), findsOneWidget);
-        expect(find.byKey(const Key('slice-cut-0')), findsNothing);
-
-        container.read(sliceControllerProvider.notifier)
-          ..addCut(0.3)
-          ..addCut(0.6);
-        await tester.pump();
-
-        expect(find.byKey(const Key('slice-cut-0')), findsOneWidget);
-        expect(find.byKey(const Key('slice-cut-1')), findsOneWidget);
-        expect(find.byKey(const Key('slice-cut-2')), findsNothing);
-      },
-    );
-
-    testWidgets(
-      'tapping the overlay adds a cut at the tapped fraction; tapping near '
-      'an existing cut removes it instead',
-      (tester) async {
-        setViewportSize(tester, const Size(400, 356));
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        final controller = TransformationController();
-        addTearDown(controller.dispose);
-
-        await tester.pumpWidget(
-          buildBody(
-            container: container,
-            controller: controller,
-            sliceMode: true,
-          ),
-        );
-        await tester.pump();
-
-        // Column children (the top clearance spacer, the invisible-but-
-        // still-SIZED symbol bar slot — Fix 3 of the canvas UI fixes
-        // reserves both unconditionally now, see TopoCanvasBody.build's
-        // doc — the Expanded canvas area, RouteLegend) all stretch to the
-        // Column's full WIDTH regardless of their individual heights, so
-        // the Expanded canvas area — and the SliceTool stacked inside it —
-        // spans the full 400px viewport width. SliceTool's cut fraction is
-        // `dx / viewportWidth` (purely horizontal), so it's unaffected by
-        // the Expanded region's now-shifted-down vertical origin: a tap at
-        // GLOBAL (200, 150) still lands at fraction 200/400 = 0.5, whatever
-        // its (irrelevant here) local y ends up being.
-        await tester.tapAt(const Offset(200, 150));
-        await tester.pump();
-
-        expect(container.read(sliceControllerProvider), [closeTo(0.5, 0.01)]);
-
-        // Tapping again at the same spot is within the hit radius of the
-        // existing cut, so it removes it instead of adding a second one.
-        await tester.tapAt(const Offset(200, 150));
-        await tester.pump();
-
-        expect(container.read(sliceControllerProvider), isEmpty);
-      },
-    );
-  });
-
   group(
     'TopoCanvasBody: stable canvas viewport across bar toggles (Fix 3 of '
     'the canvas UI fixes)',
     () {
-      // Bug fix ("not always centered" / "the photo jumps"): PhotoSelector's
-      // and SymbolPaletteBar's slots used to be conditionally INCLUDED in
-      // this Column (`if (showSymbolBar) SymbolPaletteBar()`), so the
-      // Expanded canvas region below them resized every time `showSymbolBar`
-      // flipped — most commonly on every single draw<->view mode toggle
-      // (which `_handleCommitRoute` itself triggers after every committed
-      // route). A resized Expanded region gives TopoCanvas a different
-      // LayoutBuilder viewport, which makes `_reframeIfNeeded` recompute a
-      // fresh fit and visibly re-center/rescale the photo. TopoCanvasBody
-      // now reserves those slots' sizes UNCONDITIONALLY (via
-      // `Visibility(maintainSize: true, ...)`), toggling only their
-      // visibility — so the Expanded region, and therefore TopoCanvas's fit,
-      // must stay pixel-identical across the toggle. See
-      // TopoCanvasBody.build's doc for the full rationale (and the accepted
-      // trade-off: a no-slices wall in view mode no longer extends fully
-      // edge-to-edge behind the top pill).
+      // Bug fix ("not always centered" / "the photo jumps"): SymbolPaletteBar's
+      // slot used to be conditionally INCLUDED in this Column
+      // (`if (showSymbolBar) SymbolPaletteBar()`), so the Expanded canvas
+      // region below it resized every time `showSymbolBar` flipped — most
+      // commonly on every single draw<->view mode toggle (which
+      // `_handleCommitRoute` itself triggers after every committed route). A
+      // resized Expanded region gives TopoCanvas a different LayoutBuilder
+      // viewport, which makes `_reframeIfNeeded` recompute a fresh fit and
+      // visibly re-center/rescale the photo. TopoCanvasBody now reserves
+      // that slot's size UNCONDITIONALLY (via `Visibility(maintainSize:
+      // true, ...)`), toggling only its visibility — so the Expanded
+      // region, and therefore TopoCanvas's fit, must stay pixel-identical
+      // across the toggle. See TopoCanvasBody.build's doc for the full
+      // rationale.
       void setViewportSize(WidgetTester tester, Size size) {
         tester.view.physicalSize = size;
         tester.view.devicePixelRatio = 1.0;
@@ -1130,8 +986,6 @@ void main() {
         required ProviderContainer container,
         required TransformationController controller,
         Size imageSize = const Size(1600, 1200),
-        String? originalPhotoId,
-        List<PhotoRef> slices = const [],
       }) {
         return UncontrolledProviderScope(
           container: container,
@@ -1150,8 +1004,6 @@ void main() {
                     imageSize: imageSize,
                     drawState: drawState,
                     transformationController: controller,
-                    originalPhotoId: originalPhotoId,
-                    slices: slices,
                   );
                 },
               ),
@@ -1162,7 +1014,7 @@ void main() {
 
       testWidgets(
         'toggling draw/view mode does not resize the canvas viewport frame '
-        '(a wall with no slices — only the symbol bar toggles)',
+        '(only the symbol bar toggles)',
         (tester) async {
           setViewportSize(tester, const Size(400, 800));
           final container = ProviderContainer();
@@ -1228,206 +1080,8 @@ void main() {
           expect(controller.value, matrixBefore);
         },
       );
-
-      testWidgets(
-        'a wall WITH slices (PhotoSelector always eligible to show) also '
-        'keeps the canvas viewport stable across draw/view toggles',
-        (tester) async {
-          setViewportSize(tester, const Size(400, 800));
-          final container = ProviderContainer();
-          addTearDown(container.dispose);
-          final controller = TransformationController();
-          addTearDown(controller.dispose);
-          final notifier = container.read(drawControllerProvider.notifier);
-
-          const slice = PhotoRef(
-            id: 'slice-1',
-            wallId: 'wall-1',
-            kind: 'slice',
-            localPath: '/tmp/original.jpg',
-            width: 1000,
-            height: 2000,
-            parentPhotoId: 'orig-1',
-            cropXpct: 0.25,
-            cropWidthPct: 0.5,
-          );
-
-          await tester.pumpWidget(
-            buildBody(
-              container: container,
-              controller: controller,
-              originalPhotoId: 'orig-1',
-              slices: const [slice],
-            ),
-          );
-          await tester.pump();
-
-          final frameFinder = find.byKey(
-            const Key('topo-interactive-viewer'),
-          );
-          final sizeBefore = tester.getSize(frameFinder);
-
-          notifier.setMode(DrawMode.draw);
-          await tester.pump();
-          expect(tester.getSize(frameFinder), sizeBefore);
-
-          notifier.setMode(DrawMode.view);
-          await tester.pump();
-          expect(tester.getSize(frameFinder), sizeBefore);
-        },
-      );
     },
   );
-
-  group('TopoCanvasScreen slice-mode controls', () {
-    // These operate purely on sliceControllerProvider + the screen's local
-    // _sliceMode UI state via the app bar, so — like the draw-mode toggle
-    // and toolbar tests above — they're pumped via the full TopoCanvasScreen
-    // without ever selecting an image: the app bar renders regardless of
-    // imagePath/imageSize (see TopoCanvasScreen.build's AppBar.actions).
-    //
-    // Bug 8 fix (canvas look rework): `topo-slice-mode-button` is now gated
-    // on `drawState.activePhotoId != null` (previously it showed regardless
-    // — the slice tool over an empty canvas). Each test below seeds
-    // `activePhotoId` directly via `drawControllerProvider.notifier
-    // .loadForWall(...)` (a plain SELECT against an unknown wallId is safe —
-    // see `loadForWall`'s doc, and the same seam the "AR entry"/"slice mode
-    // forces Original view" groups elsewhere in this file already use) so
-    // the button exists to tap, without ever touching `selectedImageProvider`
-    // or triggering the real, undriveable-under-fake-time image decode this
-    // file's M3 NOTE describes.
-    Future<void> seedActivePhoto(ProviderContainer container) =>
-        container
-            .read(drawControllerProvider.notifier)
-            .loadForWall('test-wall', 'test-original-photo');
-
-    testWidgets(
-      'the slice-mode toggle shows/hides the Commit and Clear actions',
-      (tester) async {
-        final db = AppDatabase(NativeDatabase.memory());
-        addTearDown(db.close);
-        final container = ProviderContainer(
-          overrides: [
-            appDatabaseProvider.overrideWithValue(db),
-            nowMsProvider.overrideWithValue(() => 1000),
-          ],
-        );
-        addTearDown(container.dispose);
-
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp(
-            theme: MasiTheme.light,
-            home: const TopoCanvasScreen(wallId: 'test-wall'),
-          ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        expect(find.byKey(const Key('topo-slice-commit')), findsNothing);
-        expect(find.byKey(const Key('topo-slice-clear')), findsNothing);
-
-        await seedActivePhoto(container);
-        await tester.pump();
-
-        await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
-        await tester.pump();
-
-        expect(find.byKey(const Key('topo-slice-commit')), findsOneWidget);
-        expect(find.byKey(const Key('topo-slice-clear')), findsOneWidget);
-
-        await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
-        await tester.pump();
-
-        expect(find.byKey(const Key('topo-slice-commit')), findsNothing);
-        expect(find.byKey(const Key('topo-slice-clear')), findsNothing);
-      },
-    );
-
-    testWidgets(
-      'the Clear action empties the pending cut list',
-      (tester) async {
-        final db = AppDatabase(NativeDatabase.memory());
-        addTearDown(db.close);
-        final container = ProviderContainer(
-          overrides: [
-            appDatabaseProvider.overrideWithValue(db),
-            nowMsProvider.overrideWithValue(() => 1000),
-          ],
-        );
-        addTearDown(container.dispose);
-
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp(
-            theme: MasiTheme.light,
-            home: const TopoCanvasScreen(wallId: 'test-wall'),
-          ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        await seedActivePhoto(container);
-        await tester.pump();
-
-        await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
-        await tester.pump();
-
-        container.read(sliceControllerProvider.notifier).addCut(0.5);
-        expect(container.read(sliceControllerProvider), isNotEmpty);
-
-        await tester.tap(find.byKey(const Key('topo-slice-clear')));
-        await tester.pump();
-
-        expect(container.read(sliceControllerProvider), isEmpty);
-      },
-    );
-
-    testWidgets(
-      'A4: committing with no pending cuts is a no-op — a hint is shown and '
-      'slice mode stays active',
-      (tester) async {
-        final db = AppDatabase(NativeDatabase.memory());
-        addTearDown(db.close);
-        final container = ProviderContainer(
-          overrides: [
-            appDatabaseProvider.overrideWithValue(db),
-            nowMsProvider.overrideWithValue(() => 1000),
-          ],
-        );
-        addTearDown(container.dispose);
-
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp(
-            theme: MasiTheme.light,
-            home: const TopoCanvasScreen(wallId: 'test-wall'),
-          ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        await seedActivePhoto(container);
-        await tester.pump();
-
-        await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
-        await tester.pump();
-
-        await tester.tap(find.byKey(const Key('topo-slice-commit')));
-        await tester.pump();
-
-        expect(
-          find.text('Add at least one cut before committing.'),
-          findsOneWidget,
-        );
-        // Still in slice mode: Commit/Clear remain visible.
-        expect(find.byKey(const Key('topo-slice-commit')), findsOneWidget);
-      },
-    );
-  });
 
   group('TopoCanvasScreen AR entry (v2-ar-viewer)', () {
     // topo-ar-button is gated purely on drawControllerProvider state
@@ -1435,7 +1089,7 @@ void main() {
     // selectedImageProvider/imagePath — so, like the draw-mode-controls
     // group at the top of this file, it's exercised without ever selecting
     // a real image. Seeding is done two ways on purpose:
-    //  - a placeholder `Photos` row (kind: 'slice', NOT 'original') is
+    //  - a placeholder `Photos` row (kind: 'other', NOT 'original') is
     //    inserted directly so `Routes.photoId`'s FK is satisfiable, WITHOUT
     //    being discoverable via `photoRepository.loadOriginal` — so the
     //    screen's own initial-load microtask never selects an image path
@@ -1472,7 +1126,7 @@ void main() {
                 updatedAt: 1000,
                 wallId: wall.id,
                 localPath: '/tmp/placeholder.jpg',
-                kind: 'slice',
+                kind: 'other',
                 width: 100,
                 height: 100,
               ),
@@ -1573,7 +1227,7 @@ void main() {
                 updatedAt: 1000,
                 wallId: wall.id,
                 localPath: '/tmp/placeholder.jpg',
-                kind: 'slice',
+                kind: 'other',
                 width: 100,
                 height: 100,
               ),
@@ -2270,318 +1924,13 @@ void main() {
     );
   });
 
-  group('PhotoSelector (M5)', () {
-    // PhotoSelector is pumped directly (mirroring the other presentation
-    // widgets in this file) with a plain ProviderContainer — it only reads
-    // activeViewProvider, no database/photoRepository access — and a fixed
-    // list of PhotoRefs standing in for a wall's persisted slices.
-    const slice0 = PhotoRef(
-      id: 'slice-0',
-      wallId: 'wall-1',
-      kind: 'slice',
-      localPath: '/tmp/original.jpg',
-      width: 1000,
-      height: 2000,
-      parentPhotoId: 'orig-1',
-      cropXpct: 0.0,
-      cropWidthPct: 0.5,
-    );
-    const slice1 = PhotoRef(
-      id: 'slice-1',
-      wallId: 'wall-1',
-      kind: 'slice',
-      localPath: '/tmp/original.jpg',
-      width: 1000,
-      height: 2000,
-      parentPhotoId: 'orig-1',
-      cropXpct: 0.5,
-      cropWidthPct: 0.5,
-    );
-
-    Widget buildSelector(ProviderContainer container) {
-      return UncontrolledProviderScope(
-        container: container,
-        child: MaterialApp(
-          home: Scaffold(
-            body: PhotoSelector(
-              originalPhotoId: 'orig-1',
-              slices: [slice0, slice1],
-            ),
-          ),
-        ),
-      );
-    }
-
-    testWidgets(
-      'A1: lists Original + one chip per persisted slice; tapping a slice '
-      "chip sets activeViewProvider to that slice's crop; tapping Original "
-      'clears it (isOriginal true)',
-      (tester) async {
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-
-        await tester.pumpWidget(buildSelector(container));
-        await tester.pump();
-
-        expect(find.byKey(const Key('photo-sel-original')), findsOneWidget);
-        expect(find.byKey(const Key('photo-sel-slice-0')), findsOneWidget);
-        expect(find.byKey(const Key('photo-sel-slice-1')), findsOneWidget);
-        expect(find.byKey(const Key('photo-sel-slice-2')), findsNothing);
-
-        // Nothing selected yet (null) reads the same as Original.
-        expect(container.read(activeViewProvider), isNull);
-
-        await tester.tap(find.byKey(const Key('photo-sel-slice-1')));
-        await tester.pump();
-
-        final afterSlice = container.read(activeViewProvider);
-        expect(afterSlice, isNotNull);
-        expect(afterSlice!.isOriginal, isFalse);
-        expect(afterSlice.photoId, 'slice-1');
-        expect(afterSlice.cropXpct, 0.5);
-        expect(afterSlice.cropWidthPct, 0.5);
-
-        await tester.tap(find.byKey(const Key('photo-sel-original')));
-        await tester.pump();
-
-        final afterOriginal = container.read(activeViewProvider);
-        expect(afterOriginal, isNotNull);
-        expect(afterOriginal!.isOriginal, isTrue);
-        expect(afterOriginal.photoId, 'orig-1');
-      },
-    );
-  });
-
-  group('TopoCanvas.computeCropTransform (M5, A2)', () {
-    test(
-      'scale == min(viewportWidth/(cropWidthPct*W), viewportHeight/H) '
-      '(Fix 3 contain-fit); with this image/viewport/crop the two '
-      'candidate scales happen to be equal, so the band still maps to '
-      'exactly [0, viewportWidth] on screen',
-      () {
-        const viewportSize = Size(400, 400);
-        const imageSize = Size(2000, 1000);
-        const cropXpct = 0.25;
-        const cropWidthPct = 0.5;
-
-        final matrix = TopoCanvas.computeCropTransform(
-          viewportSize: viewportSize,
-          imageSize: imageSize,
-          cropXpct: cropXpct,
-          cropWidthPct: cropWidthPct,
-        );
-
-        final widthScale = viewportSize.width / (cropWidthPct * imageSize.width);
-        final heightScale = viewportSize.height / imageSize.height;
-        final expectedScale = widthScale < heightScale ? widthScale : heightScale;
-        expect(matrix.getMaxScaleOnAxis(), closeTo(expectedScale, 1e-9));
-
-        final bandLeftScreen = MatrixUtils.transformPoint(
-          matrix,
-          Offset(cropXpct * imageSize.width, 0),
-        );
-        expect(bandLeftScreen.dx, closeTo(0.0, 1e-6));
-
-        final bandRightScreen = MatrixUtils.transformPoint(
-          matrix,
-          Offset((cropXpct + cropWidthPct) * imageSize.width, 0),
-        );
-        expect(bandRightScreen.dx, closeTo(viewportSize.width, 1e-6));
-      },
-    );
-
-    test(
-      'Fix 3: a thin band whose width-only scale would overflow the '
-      'viewport vertically is instead height-bound (contain-fit) and '
-      'centered horizontally, so the whole band fits with no clipping',
-      () {
-        // A 1000x1000 image, a thin 10%-wide band, framed into a 400x400
-        // viewport: width-only scale would be 400/(0.1*1000) = 4.0, which
-        // would scale the full 1000px-tall image to 4000px — massively
-        // overflowing a 400-tall viewport. The height-bound scale
-        // (400/1000 = 0.4) is smaller and must win instead.
-        const viewportSize = Size(400, 400);
-        const imageSize = Size(1000, 1000);
-        const cropXpct = 0.45;
-        const cropWidthPct = 0.1;
-
-        final matrix = TopoCanvas.computeCropTransform(
-          viewportSize: viewportSize,
-          imageSize: imageSize,
-          cropXpct: cropXpct,
-          cropWidthPct: cropWidthPct,
-        );
-
-        const expectedScale = 0.4; // height-bound: 400/1000
-        expect(matrix.getMaxScaleOnAxis(), closeTo(expectedScale, 1e-9));
-
-        // The scaled band (100px wide * 0.4 = 40px) no longer fills the
-        // viewport's width, so it must be centered horizontally rather
-        // than left-aligned to screen x=0.
-        final bandLeftScreen = MatrixUtils.transformPoint(
-          matrix,
-          Offset(cropXpct * imageSize.width, 0),
-        );
-        final bandRightScreen = MatrixUtils.transformPoint(
-          matrix,
-          Offset((cropXpct + cropWidthPct) * imageSize.width, 0),
-        );
-        final expectedBandWidthScreen = cropWidthPct * imageSize.width * expectedScale;
-        expect(
-          bandRightScreen.dx - bandLeftScreen.dx,
-          closeTo(expectedBandWidthScreen, 1e-6),
-        );
-        final expectedLeft =
-            (viewportSize.width - expectedBandWidthScreen) / 2;
-        expect(bandLeftScreen.dx, closeTo(expectedLeft, 1e-6));
-
-        // The full image height, scaled, exactly fills the viewport height
-        // here (1000*0.4 == 400), so the top/bottom edges land exactly on
-        // the viewport bounds with no vertical overflow.
-        final topScreen = MatrixUtils.transformPoint(matrix, const Offset(0, 0));
-        final bottomScreen = MatrixUtils.transformPoint(
-          matrix,
-          Offset(0, imageSize.height),
-        );
-        expect(topScreen.dy, closeTo(0.0, 1e-6));
-        expect(bottomScreen.dy, closeTo(viewportSize.height, 1e-6));
-      },
-    );
-  });
-
-  group('TopoCanvas crop framing (M5)', () {
-    // Mirrors the identity-controller + injected-imageSize harness used by
-    // the 'TopoCanvas' group above: the test surface is resized to exactly
-    // `viewportSize` so LayoutBuilder's constraints are deterministic.
-    void setViewportSize(WidgetTester tester, Size size) {
-      tester.view.physicalSize = size;
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-    }
-
-    Widget buildCanvas({
-      required ProviderContainer container,
-      required TransformationController controller,
-      required Size imageSize,
-      double? activeCropXpct,
-      double? activeCropWidthPct,
-    }) {
-      return UncontrolledProviderScope(
-        container: container,
-        // Fix 2 (canvas UI fixes) needs `theme: MasiTheme.light` — see the
-        // 'TopoCanvas' group's buildCanvas above for why.
-        child: MaterialApp(
-          theme: MasiTheme.light,
-          home: Scaffold(
-            body: TopoCanvas(
-              imagePath: '/nonexistent/test-topo.jpg',
-              imageSize: imageSize,
-              transformationController: controller,
-              activeCropXpct: activeCropXpct,
-              activeCropWidthPct: activeCropWidthPct,
-            ),
-          ),
-        ),
-      );
-    }
-
-    // A 2000x1000 image cropped to cropWidthPct=0.5 (band width 1000px)
-    // framed into a 400x400 viewport: scale = 400/1000 = 0.4, and the
-    // scaled image height (1000*0.4 = 400) exactly matches the viewport
-    // height, so the vertical centering translate is exactly 0 — chosen so
-    // the expected screen<->scene mapping below has no extra letterboxing
-    // term to account for.
-    const imageSize = Size(2000, 1000);
-    const viewportSize = Size(400, 400);
-    const cropXpct = 0.25;
-    const cropWidthPct = 0.5;
-
-    testWidgets(
-      'A2: with a slice active, the controller is framed to exactly '
-      'TopoCanvas.computeCropTransform for the current viewport/image size',
-      (tester) async {
-        setViewportSize(tester, viewportSize);
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        final controller = TransformationController();
-        addTearDown(controller.dispose);
-
-        await tester.pumpWidget(
-          buildCanvas(
-            container: container,
-            controller: controller,
-            imageSize: imageSize,
-            activeCropXpct: cropXpct,
-            activeCropWidthPct: cropWidthPct,
-          ),
-        );
-        await tester.pump();
-
-        final expected = TopoCanvas.computeCropTransform(
-          viewportSize: viewportSize,
-          imageSize: imageSize,
-          cropXpct: cropXpct,
-          cropWidthPct: cropWidthPct,
-        );
-
-        expect(controller.value, expected);
-      },
-    );
-
-    testWidgets(
-      'A3: tapping in draw mode while a slice is active stores the point '
-      "as ORIGINAL % — the framed band's LEFT edge maps to dx≈cropXpct, "
-      'the band CENTER maps to dx≈cropXpct+cropWidthPct/2 (proving '
-      'drawing on a slice needs no reprojection)',
-      (tester) async {
-        setViewportSize(tester, viewportSize);
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        final controller = TransformationController();
-        addTearDown(controller.dispose);
-
-        container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
-
-        await tester.pumpWidget(
-          buildCanvas(
-            container: container,
-            controller: controller,
-            imageSize: imageSize,
-            activeCropXpct: cropXpct,
-            activeCropWidthPct: cropWidthPct,
-          ),
-        );
-        await tester.pump();
-
-        // The band's LEFT edge is framed at screen x≈0 (tap slightly
-        // inside, at x=2, to stay clear of the exact widget boundary).
-        await tester.tapAt(const Offset(2, 200));
-        await tester.pump();
-
-        var points = container.read(drawControllerProvider).currentPoints;
-        expect(points.length, 1);
-        expect(points.last.dx, closeTo(cropXpct, 0.01));
-
-        // The band CENTER is framed at screen x = viewportWidth/2 = 200.
-        await tester.tapAt(const Offset(200, 200));
-        await tester.pump();
-
-        points = container.read(drawControllerProvider).currentPoints;
-        expect(points.length, 2);
-        expect(points.last.dx, closeTo(cropXpct + cropWidthPct / 2, 0.01));
-      },
-    );
-  });
-
   group('TopoCanvas reframe on imageSize change (M5 Fix 1 hardening)', () {
     // Regression coverage for Fix 1's second half: TopoCanvasScreen shares
     // ONE long-lived TransformationController/TopoCanvas position across
-    // photo switches (see the group below for the screen-level half of
-    // Fix 1), so _TopoCanvasState itself must not treat "same crop value
-    // (null->null), different imageSize" as "nothing changed" — that was
-    // exactly how a fresh photo could keep rendering through the previous
-    // photo's stale fit matrix forever.
+    // photo switches, so _TopoCanvasState itself must not treat "different
+    // imageSize at the same widget position" as "nothing changed" — that
+    // was exactly how a fresh photo could keep rendering through the
+    // previous photo's stale fit matrix forever.
     void setViewportSize(WidgetTester tester, Size size) {
       tester.view.physicalSize = size;
       tester.view.devicePixelRatio = 1.0;
@@ -2613,8 +1962,8 @@ void main() {
 
     testWidgets(
       'rebuilding the SAME TopoCanvas position with a different imageSize '
-      '(no crop; crop value unchanged at null->null) re-fits to the NEW '
-      "size instead of keeping the previous imageSize's stale transform",
+      "re-fits to the NEW size instead of keeping the previous imageSize's "
+      'stale transform',
       (tester) async {
         const viewportSize = Size(400, 800);
         setViewportSize(tester, viewportSize);
@@ -2644,8 +1993,7 @@ void main() {
         // fitScale = min(400/2000, 800/4000) = min(0.2, 0.2) = 0.2 — this
         // image's aspect ratio matches the viewport's exactly (no letterbox
         // either way), so CONTAIN and COVER coincide here regardless. A
-        // different image, at the SAME widget position/State, still with
-        // no crop active (null->null, i.e. an "unchanged" crop value).
+        // different image, at the SAME widget position/State.
         const imageSizeB = Size(2000, 4000);
         await tester.pumpWidget(
           buildCanvas(
@@ -2663,218 +2011,6 @@ void main() {
               'must reframe to fit the NEW image size rather than staying '
               "stuck on imageSize A's fit matrix",
         );
-      },
-    );
-  });
-
-  group('TopoCanvas scale range with a crop active (M5 Fix 4)', () {
-    void setViewportSize(WidgetTester tester, Size size) {
-      tester.view.physicalSize = size;
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.resetPhysicalSize);
-      addTearDown(tester.view.resetDevicePixelRatio);
-    }
-
-    testWidgets(
-      'a thin slice whose applied crop scale exceeds the full-image-'
-      "derived maxScale gets minScale/maxScale WIDENED so it's never "
-      'clamped back out of the crop on the first pinch',
-      (tester) async {
-        // A very wide, short image: the full-image fit is width-bound
-        // (fitScale = min(400/4000, 300/50) = 0.1), so the OLD
-        // fitScale-derived maxScale (max(0.1*20, 5.0) = 5.0) undershoots
-        // what a thin crop band actually needs.
-        const viewportSize = Size(400, 300);
-        const imageSize = Size(4000, 50);
-        const cropXpct = 0.5;
-        const cropWidthPct = 0.01; // a 40px-wide band
-
-        setViewportSize(tester, viewportSize);
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        final controller = TransformationController();
-        addTearDown(controller.dispose);
-
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            // Fix 2 (canvas UI fixes) needs `theme: MasiTheme.light` — see
-            // the 'TopoCanvas' group's buildCanvas for why.
-            child: MaterialApp(
-              theme: MasiTheme.light,
-              home: Scaffold(
-                body: TopoCanvas(
-                  imagePath: '/nonexistent/test-topo.jpg',
-                  imageSize: imageSize,
-                  transformationController: controller,
-                  activeCropXpct: cropXpct,
-                  activeCropWidthPct: cropWidthPct,
-                ),
-              ),
-            ),
-          ),
-        );
-        await tester.pump();
-
-        final appliedCropScale = TopoCanvas.computeCropTransform(
-          viewportSize: viewportSize,
-          imageSize: imageSize,
-          cropXpct: cropXpct,
-          cropWidthPct: cropWidthPct,
-        ).getMaxScaleOnAxis();
-
-        // Sanity: this scenario is only meaningful if the crop's applied
-        // scale actually exceeds the OLD hardcoded default of 5.0 —
-        // otherwise the pre-fix maxScale would already have been
-        // permissive enough and this test would prove nothing.
-        expect(appliedCropScale, greaterThan(5.0));
-
-        final viewer = tester.widget<InteractiveViewer>(
-          find.byType(InteractiveViewer),
-        );
-
-        expect(
-          viewer.maxScale,
-          greaterThanOrEqualTo(appliedCropScale),
-          reason:
-              'maxScale must not be smaller than the scale the crop is '
-              'actually framed at, or the first pinch snaps back out',
-        );
-        expect(viewer.minScale, lessThanOrEqualTo(appliedCropScale));
-      },
-    );
-  });
-
-  group('TopoCanvasScreen photo switch resets stale view state (M5 Fix 1)', () {
-    testWidgets(
-      'selecting a NEW image path synchronously resets activeViewProvider '
-      "back to null, mirroring beginPhotoSwitch's synchronous reset",
-      (tester) async {
-        final db = AppDatabase(NativeDatabase.memory());
-        addTearDown(db.close);
-        final container = ProviderContainer(
-          overrides: [
-            appDatabaseProvider.overrideWithValue(db),
-            nowMsProvider.overrideWithValue(() => 1000),
-          ],
-        );
-        addTearDown(container.dispose);
-
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp(
-            theme: MasiTheme.light,
-            home: const TopoCanvasScreen(wallId: 'test-wall'),
-          ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        // Simulate the previous photo having left activeView pointing
-        // somewhere non-null — the Fix 1 symptom: a stale view left over
-        // from a prior photo that a fresh photo could otherwise render
-        // through.
-        container
-            .read(activeViewProvider.notifier)
-            .showOriginal('stale-photo-id');
-        expect(container.read(activeViewProvider), isNotNull);
-
-        // Select a new path directly on the provider (rather than tapping
-        // the "pick a photo" FAB, which would invoke the real image_picker
-        // plugin) and assert BEFORE ever calling `tester.pump()`:
-        // TopoCanvasScreen's `ref.listen` callback fires synchronously as
-        // part of Riverpod's own state-change notification, not gated
-        // behind a Flutter frame, so this catches exactly the synchronous
-        // reset Fix 1 adds without ever triggering a rebuild — and thus
-        // without ever scheduling the real FileImage decode that
-        // `_resolveImageSize` would kick off, which (per the M3 NOTE
-        // above) cannot be reliably driven to completion under
-        // testWidgets.
-        container
-            .read(selectedImageProvider.notifier)
-            .select('/nonexistent/new-photo.jpg');
-
-        expect(
-          container.read(activeViewProvider),
-          isNull,
-          reason:
-              'the moment a new photo path is selected, activeView must '
-              'reset via ActiveViewController.clear() rather than keep '
-              "showing through the PREVIOUS photo's view",
-        );
-      },
-    );
-  });
-
-  group('TopoCanvasScreen slice mode forces Original view (M5 Fix 2)', () {
-    testWidgets(
-      'entering slice mode while a slice is the active view resets '
-      'activeViewProvider back to Original (isOriginal true), so '
-      "SliceTool's dx/viewportWidth cut math is always a true "
-      'original-image fraction',
-      (tester) async {
-        final db = AppDatabase(NativeDatabase.memory());
-        addTearDown(db.close);
-        final container = ProviderContainer(
-          overrides: [
-            appDatabaseProvider.overrideWithValue(db),
-            nowMsProvider.overrideWithValue(() => 1000),
-          ],
-        );
-        addTearDown(container.dispose);
-
-        await tester.pumpWidget(
-          UncontrolledProviderScope(
-            container: container,
-            child: MaterialApp(
-            theme: MasiTheme.light,
-            home: const TopoCanvasScreen(wallId: 'test-wall'),
-          ),
-          ),
-        );
-        await tester.pumpAndSettle();
-
-        // Establish an active photo (mirroring what loadForWall does once
-        // a real photo resolves — a plain SELECT against an unknown
-        // wallId is safe, see loadForWall's doc) and switch the active
-        // view to a slice, as if the user had picked a slice chip via
-        // PhotoSelector before entering slice mode.
-        await container
-            .read(drawControllerProvider.notifier)
-            .loadForWall('test-wall', 'test-original-photo');
-        const slice = PhotoRef(
-          id: 'test-slice',
-          wallId: 'test-wall',
-          kind: 'slice',
-          localPath: '/tmp/original.jpg',
-          width: 1000,
-          height: 2000,
-          parentPhotoId: 'test-original-photo',
-          cropXpct: 0.25,
-          cropWidthPct: 0.5,
-        );
-        container.read(activeViewProvider.notifier).showSlice(slice);
-        expect(container.read(activeViewProvider)!.isOriginal, isFalse);
-
-        // Bug 8 fix (canvas look rework): `topo-slice-mode-button` is now
-        // gated on `drawState.activePhotoId != null` (see that fix's doc),
-        // so — unlike before this gate existed — the widget tree must
-        // actually REBUILD to pick up the `loadForWall` call above before
-        // the button exists to tap.
-        await tester.pump();
-
-        await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
-        await tester.pump();
-
-        final activeView = container.read(activeViewProvider);
-        expect(activeView, isNotNull);
-        expect(
-          activeView!.isOriginal,
-          isTrue,
-          reason: 'entering slice mode must force the view back to Original',
-        );
-        expect(activeView.photoId, 'test-original-photo');
       },
     );
   });

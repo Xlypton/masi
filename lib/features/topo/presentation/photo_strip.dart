@@ -11,15 +11,10 @@ import 'package:climbtopo/shared/presentation/masi_icon.dart';
 /// Horizontal strip of a wall's `original` photos — the "multiple photos
 /// per topo" axis, watching [wallOriginalsProvider] directly (so it stays
 /// live as photos are attached/reordered/deleted, with no manual refresh
-/// needed).
-///
-/// This is a SEPARATE axis from [PhotoSelector] (`photo_selector.dart`),
-/// which switches between the Original/slice VIEWS of a single photo —
-/// [PhotoStrip] switches between DIFFERENT photos entirely, each with its
-/// own independent set of route overlays (see `RouteRepository`'s class
-/// doc). The two are meant to compose, stacked in the same top glass-chrome
-/// band, not to replace one another — see `TopoCanvasScreen.build`'s call
-/// site.
+/// needed). [PhotoStrip] switches between DIFFERENT photos entirely, each
+/// with its own independent set of route overlays (see `RouteRepository`'s
+/// class doc) — see `TopoCanvasScreen.build`'s call site for where it sits
+/// in the top glass-chrome band.
 ///
 /// Renders nothing ([SizedBox.shrink]) while the wall has zero live
 /// originals — a single-photo wall is free to keep showing a one-item

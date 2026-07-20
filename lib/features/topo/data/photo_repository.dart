@@ -1,12 +1,10 @@
 import 'package:drift/drift.dart';
-import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart' as db;
-import '../domain/slice_geometry.dart';
 import 'photo_files.dart';
 
-/// Domain-level view of a `Photos` row (original or slice), independent of
-/// the generated drift data class.
+/// Domain-level view of a `Photos` row, independent of the generated drift
+/// data class.
 class PhotoRef {
   const PhotoRef({
     required this.id,
@@ -16,8 +14,6 @@ class PhotoRef {
     required this.width,
     required this.height,
     this.parentPhotoId,
-    this.cropXpct,
-    this.cropWidthPct,
     this.sortOrder = 0,
     this.isPrimary = false,
   });
@@ -29,18 +25,15 @@ class PhotoRef {
   final int width;
   final int height;
   final String? parentPhotoId;
-  final double? cropXpct;
-  final double? cropWidthPct;
 
   /// Display order among a wall's live `kind:'original'` photos (the
-  /// multi-photo strip) — meaningless for `kind:'slice'` rows. Defaults to
-  /// `0` (matching `Photos.sortOrder`'s column default) so existing
-  /// call sites that don't care about ordering (slices, single-photo walls)
-  /// don't need to pass it.
+  /// multi-photo strip). Defaults to `0` (matching `Photos.sortOrder`'s
+  /// column default) so existing call sites that don't care about ordering
+  /// (single-photo walls) don't need to pass it.
   final int sortOrder;
 
   /// Whether this is the wall's PRIMARY original (see `Photos.isPrimary`'s
-  /// doc) — meaningless for `kind:'slice'` rows. Defaults to `false`.
+  /// doc). Defaults to `false`.
   final bool isPrimary;
 
   @override
@@ -54,8 +47,6 @@ class PhotoRef {
         other.width == width &&
         other.height == height &&
         other.parentPhotoId == parentPhotoId &&
-        other.cropXpct == cropXpct &&
-        other.cropWidthPct == cropWidthPct &&
         other.sortOrder == sortOrder &&
         other.isPrimary == isPrimary;
   }
@@ -69,8 +60,6 @@ class PhotoRef {
         width,
         height,
         parentPhotoId,
-        cropXpct,
-        cropWidthPct,
         sortOrder,
         isPrimary,
       );
@@ -79,17 +68,10 @@ class PhotoRef {
   String toString() =>
       'PhotoRef(id: $id, wallId: $wallId, kind: $kind, localPath: '
       '$localPath, width: $width, height: $height, parentPhotoId: '
-      '$parentPhotoId, cropXpct: $cropXpct, cropWidthPct: $cropWidthPct, '
-      'sortOrder: $sortOrder, isPrimary: $isPrimary)';
+      '$parentPhotoId, sortOrder: $sortOrder, isPrimary: $isPrimary)';
 }
 
-/// Persists sliced [PhotoRef]s (derived from an "original" `Photos` row) to
-/// the `Photos` table.
-///
-/// Slices are replaced as a set: every call to [replaceSlices] soft-deletes
-/// the previous live slices for the given original photo and inserts a
-/// fresh row per [SliceSpec], so callers never have to diff old vs. new
-/// slice geometry themselves.
+/// Reads and writes `Photos` rows.
 class PhotoRepository {
   PhotoRepository(
     this._db, {
@@ -102,14 +84,12 @@ class PhotoRepository {
   final int Function() nowMs;
 
   /// The Supabase Auth uid of the signed-in user (or `null` if signed out),
-  /// read lazily at INSERT time to stamp a new slice photo's `ownerId`.
+  /// read lazily at INSERT time to stamp a newly-attached photo's `ownerId`.
   /// Defaults to always-`null` so existing constructors/tests keep their
   /// pre-sync-pivot signed-out behavior unchanged.
   final String? Function() currentUid;
 
   static String? _noUid() => null;
-
-  static const _uuid = Uuid();
 
   /// Resolves a stored `localPath` (which may be the canonical relative
   /// form, or a legacy/stale absolute one — see [PhotoFiles.resolvePhotoPath])
@@ -118,105 +98,6 @@ class PhotoRepository {
   /// point it at a temp directory without a `path_provider` platform fake;
   /// defaults to the real app-documents-backed [PhotoFiles].
   final PhotoFiles _photoFiles;
-
-  /// Replaces the full set of slices for [originalPhotoId] with one row per
-  /// entry in [slices].
-  ///
-  /// Runs inside a single transaction: existing non-deleted slice rows
-  /// whose `parentPhotoId == originalPhotoId` are soft-deleted (tombstoned
-  /// via `deletedAt`), then a new `Photos` row is inserted for each
-  /// [SliceSpec] (`kind: 'slice'`), carrying over [originalWidth],
-  /// [originalHeight], and [originalLocalPath] from the source image.
-  /// Returns the newly inserted slices as [PhotoRef]s.
-  Future<List<PhotoRef>> replaceSlices(
-    String wallId,
-    String originalPhotoId,
-    int originalWidth,
-    int originalHeight,
-    String originalLocalPath,
-    List<SliceSpec> slices,
-  ) async {
-    // Canonicalize BEFORE the transaction: originalLocalPath may already be
-    // a resolved absolute path (e.g. handed back by
-    // LibraryCrudRepository.photoLocalPath), and every slice row must store
-    // the same rotation-proof relative form the original does. Resolve once
-    // (not per-slice) for the in-memory PhotoRefs returned below, so their
-    // `localPath` matches loadOriginal/loadSlices' always-absolute contract.
-    final stored = await _photoFiles.canonicalStoredPath(originalLocalPath);
-    final resolvedLocalPath = (await _photoFiles.resolvePhotoPath(
-      stored,
-    )).path;
-    return _db.transaction(() async {
-      final now = nowMs();
-
-      await (_db.update(_db.photos)..where(
-            (t) =>
-                t.parentPhotoId.equals(originalPhotoId) &
-                t.kind.equals('slice') &
-                t.deletedAt.isNull(),
-          ))
-          .write(
-            db.PhotosCompanion(
-              deletedAt: Value(now),
-              updatedAt: Value(now),
-            ),
-          );
-
-      final inserted = <PhotoRef>[];
-      for (final slice in slices) {
-        final id = _uuid.v4();
-        await _db
-            .into(_db.photos)
-            .insert(
-              db.PhotosCompanion.insert(
-                id: id,
-                createdAt: now,
-                updatedAt: now,
-                wallId: wallId,
-                localPath: stored,
-                kind: 'slice',
-                width: originalWidth,
-                height: originalHeight,
-                parentPhotoId: Value(originalPhotoId),
-                cropXpct: Value(slice.cropXpct),
-                cropWidthPct: Value(slice.cropWidthPct),
-                ownerId: Value(currentUid()),
-              ),
-            );
-        inserted.add(
-          PhotoRef(
-            id: id,
-            wallId: wallId,
-            kind: 'slice',
-            localPath: resolvedLocalPath,
-            width: originalWidth,
-            height: originalHeight,
-            parentPhotoId: originalPhotoId,
-            cropXpct: slice.cropXpct,
-            cropWidthPct: slice.cropWidthPct,
-          ),
-        );
-      }
-
-      return inserted;
-    });
-  }
-
-  /// Loads every non-soft-deleted slice row whose `parentPhotoId ==
-  /// [originalPhotoId]`, ordered by `cropXpct` ascending.
-  Future<List<PhotoRef>> loadSlices(String originalPhotoId) async {
-    final rows = await (_db.select(_db.photos)
-          ..where(
-            (t) =>
-                t.parentPhotoId.equals(originalPhotoId) &
-                t.kind.equals('slice') &
-                t.deletedAt.isNull(),
-          )
-          ..orderBy([(t) => OrderingTerm(expression: t.cropXpct)]))
-        .get();
-
-    return Future.wait([for (final row in rows) _rowToRef(row)]);
-  }
 
   /// Loads the wall's PRIMARY non-deleted `kind: 'original'` photo, or
   /// `null` if it has none.
@@ -339,8 +220,8 @@ class PhotoRepository {
 
   /// Soft-deletes the original photo [photoId] AND cascades the soft-delete
   /// to its overlay routes (`Routes` rows whose `photoId == photoId`) and
-  /// its slice children (`Photos` rows whose `parentPhotoId == photoId`) —
-  /// deleting a photo takes its whole per-photo overlay with it. If
+  /// any child `Photos` rows (`parentPhotoId == photoId`) — deleting a
+  /// photo takes its whole per-photo overlay with it. If
   /// [photoId] was the wall's primary and other live originals remain on
   /// the same wall, promotes the newest remaining one (`createdAt` DESC) to
   /// primary, preserving the single-primary invariant. Runs in one
@@ -450,13 +331,13 @@ class PhotoRepository {
   /// path is found to have moved.
   ///
   /// Uses [PhotoFiles.resolvePhotoPathSync] (NOT the awaiting
-  /// [PhotoFiles.resolvePhotoPath]): `loadOriginal`/`loadSlices` are driven
-  /// on the canvas widget mount under a `flutter_test` `pump()`, where
-  /// awaiting a real `path_provider` call never completes and hard-hangs
-  /// `pumpAndSettle`. The sync resolver is cache-backed and returns
-  /// immediately; on a cold cache it best-effort returns the stored value
-  /// (and warms for next time), so a first load may be unresolved but never
-  /// hangs. The heal signal it returns is still applied here via the
+  /// [PhotoFiles.resolvePhotoPath]): `loadOriginal`/`loadOriginals` are
+  /// driven on the canvas widget mount under a `flutter_test` `pump()`,
+  /// where awaiting a real `path_provider` call never completes and
+  /// hard-hangs `pumpAndSettle`. The sync resolver is cache-backed and
+  /// returns immediately; on a cold cache it best-effort returns the stored
+  /// value (and warms for next time), so a first load may be unresolved but
+  /// never hangs. The heal signal it returns is still applied here via the
   /// (async) DB write.
   Future<PhotoRef> _rowToRef(db.Photo row) async {
     final resolution = _photoFiles.resolvePhotoPathSync(row.localPath);
@@ -476,8 +357,6 @@ class PhotoRepository {
       width: row.width,
       height: row.height,
       parentPhotoId: row.parentPhotoId,
-      cropXpct: row.cropXpct,
-      cropWidthPct: row.cropWidthPct,
       sortOrder: row.sortOrder,
       isPrimary: row.isPrimary,
     );

@@ -857,10 +857,9 @@ class LibraryCrudRepository {
   /// itself only returns the new photo's id (see its doc) — so
   /// `topo_canvas_screen.dart`'s [resolveAttachedPhotoPath] can swap
   /// `selectedImageProvider` off the transient picker-cache path and onto
-  /// the owned one before any same-session slice commit reads it. This
-  /// closes the confirmed photo-ownership bug where slicing a
-  /// freshly-attached photo in the same session persisted the raw
-  /// picker-cache path onto every slice row instead of the owned copy.
+  /// the owned one. This closes the confirmed photo-ownership bug where
+  /// `selectedImageProvider` kept holding the raw picker-cache path instead
+  /// of the owned copy for the rest of the session.
   Future<String?> photoLocalPath(String photoId) async {
     final row =
         await (_db.select(_db.photos)
@@ -1034,8 +1033,8 @@ class LibraryCrudRepository {
           // absolute path via the synchronous best-effort
           // `resolvePhotoPathSync` (backed by PhotoFiles' memoized docs
           // path); the authoritative stale-path heal happens on the async
-          // open-a-wall paths (loadOriginal/loadSlices/photoLocalPath),
-          // not here. See PhotoFiles.resolvePhotoPathSync for the cold-cache
+          // open-a-wall paths (loadOriginal/photoLocalPath), not here. See
+          // PhotoFiles.resolvePhotoPathSync for the cold-cache
           // fallback (returns the stored value, which the ToposScreen
           // thumbnail gates via File(path).existsSync()).
           return [

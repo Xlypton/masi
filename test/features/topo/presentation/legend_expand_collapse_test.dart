@@ -1,6 +1,4 @@
-// Intended-behavior tests for legend expand/collapse (Fix 1/3) and the
-// floating top-chrome stacking order of PhotoSelector vs. SymbolPaletteBar
-// (FIX 5, updated for the slice-picker relocation bug fix).
+// Intended-behavior tests for legend expand/collapse (Fix 1/3).
 //
 //  - `LegendExpandedController`/`legendExpandedProvider` (route_legend.dart):
 //    `build()` defaults to expanded (`true`); `toggle()` flips it;
@@ -17,32 +15,16 @@
 //    harness — calls `setForMode` whenever `DrawState.mode` actually
 //    changes, so entering draw mode collapses the legend to the chip and
 //    returning to view mode re-expands it.
-//  - FIX 5 (slice-picker relocation bug fix): `PhotoSelector` no longer
-//    lives in-flow inside `TopoCanvasBody`'s Column — it floats in
-//    `_TopoCanvasScreenState.build`'s own top glass chrome Column, stacked
-//    title pill -> PhotoSelector (when the wall has slices) ->
-//    SymbolPaletteBar (draw mode only), each separated by a fixed
-//    `MasiSpacing.sm` gap the Column itself provides, so entering draw mode
-//    (which makes SymbolPaletteBar appear) can never make it overlap
-//    PhotoSelector: it always renders BELOW it.
 //
-// Seeding helpers mirror the existing patterns in this directory:
 // `_seedWallWithPhotoAndRoute` mirrors topo_canvas_zoom_overlay_test.dart's
 // helper of the same name (real DB + a committed route via
-// `DrawController`); `_seedWallWithSlicesAndPhoto` mirrors
-// canvas_chrome_gating_test.dart's "A-h" harness (attach a photo, then
-// persist real slices via `PhotoRepository.replaceSlices`) minus the
-// deliberate late-resolving gate, which isn't needed here.
+// `DrawController`).
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
-import 'package:climbtopo/features/topo/domain/slice_geometry.dart';
-import 'package:climbtopo/features/topo/presentation/photo_selector.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
-import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -86,47 +68,6 @@ _seedWallWithPhotoAndRoute(WidgetTester tester) async {
   notifier.addPoint(const Offset(0.1, 0.1));
   notifier.addPoint(const Offset(0.2, 0.2));
   await notifier.commitRoute();
-
-  return (db: db, container: container, wallId: wall.id);
-}
-
-/// Creates a real in-memory DB + ProviderContainer + a persisted
-/// Area/Sector/Wall, attaches an original photo, and persists real slices
-/// for it via [PhotoRepository.replaceSlices] — mirrors
-/// `canvas_chrome_gating_test.dart`'s "A-h" harness (minus its deliberate
-/// late-resolving gate, which this doesn't need) so [PhotoSelector] renders
-/// once the real [TopoCanvasScreen] loads this wall.
-Future<({AppDatabase db, ProviderContainer container, String wallId})>
-_seedWallWithSlicesAndPhoto(WidgetTester tester) async {
-  final db = AppDatabase(NativeDatabase.memory());
-  final container = ProviderContainer(
-    overrides: [
-      appDatabaseProvider.overrideWithValue(db),
-      nowMsProvider.overrideWithValue(() => 1000),
-    ],
-  );
-  final crud = container.read(libraryCrudRepositoryProvider);
-  final area = await crud.createArea('Area');
-  final sector = await crud.createSector(area.id, 'Sector');
-  final wall = await crud.createWall(sector.id, 'Wall');
-
-  const path = '/tmp/legend-expand-collapse-slices-photo.jpg';
-  await tester.runAsync(() async {
-    final photoId = await crud.attachPhotoToWall(
-      wall.id,
-      XFile(path),
-      400,
-      300,
-    );
-    await container.read(photoRepositoryProvider).replaceSlices(
-      wall.id,
-      photoId,
-      400,
-      300,
-      path,
-      const [SliceSpec(0.0, 0.5), SliceSpec(0.5, 0.5)],
-    );
-  });
 
   return (db: db, container: container, wallId: wall.id);
 }
@@ -287,60 +228,4 @@ void main() {
     );
   });
 
-  group('(c) FIX 5: sliced wall in DRAW mode — PhotoSelector never overlaps '
-      'SymbolPaletteBar', () {
-    testWidgets('PhotoSelector floats ABOVE SymbolPaletteBar in the top chrome '
-        'Column once draw mode makes the palette appear, so the two never '
-        'overlap', (tester) async {
-      final seeded = await _seedWallWithSlicesAndPhoto(tester);
-      addTearDown(seeded.db.close);
-      addTearDown(seeded.container.dispose);
-
-      await tester.pumpWidget(
-        UncontrolledProviderScope(
-          container: seeded.container,
-          child: MaterialApp(
-            theme: MasiTheme.light,
-            home: TopoCanvasScreen(
-              wallId: seeded.wallId,
-              debugInitialImageSize: const Size(400, 300),
-            ),
-          ),
-        ),
-      );
-      await tester.pumpAndSettle();
-
-      expect(
-        find.byType(PhotoSelector),
-        findsOneWidget,
-        reason:
-            'sanity: persisted slices must show PhotoSelector once '
-            'loaded, in the default view mode',
-      );
-      expect(
-        find.byType(SymbolPaletteBar),
-        findsNothing,
-        reason: 'sanity: the palette is draw-mode only',
-      );
-
-      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-      await tester.pumpAndSettle();
-
-      expect(find.byType(PhotoSelector), findsOneWidget);
-      expect(find.byType(SymbolPaletteBar), findsOneWidget);
-
-      final photoRect = tester.getRect(find.byType(PhotoSelector));
-      final paletteRect = tester.getRect(find.byType(SymbolPaletteBar));
-      expect(
-        paletteRect.top,
-        greaterThanOrEqualTo(photoRect.bottom - 0.5),
-        reason:
-            'FIX 5 (slice-picker relocation): the top chrome Column '
-            'stacks PhotoSelector directly above SymbolPaletteBar, so '
-            'SymbolPaletteBar must always render AT OR BELOW '
-            "PhotoSelector's bottom edge once draw mode makes it appear "
-            '— the two floating glass elements must never overlap',
-      );
-    });
-  });
 }

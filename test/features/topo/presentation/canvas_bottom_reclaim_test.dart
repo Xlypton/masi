@@ -32,9 +32,8 @@ import 'package:image_picker/image_picker.dart';
 void main() {
   /// Seeds a real Area -> Sector -> Wall, attaches a photo, and persists a
   /// single 2-point route — the harness shape shared by
-  /// canvas_mode_intent_test.dart's A1e and canvas_chrome_gating_test.dart's
-  /// A-i group, so both the legend AND the mode-toggle/slice-mode entry
-  /// points are reachable.
+  /// canvas_mode_intent_test.dart's A1e, so both the legend AND the
+  /// mode-toggle entry point are reachable.
   Future<({AppDatabase db, ProviderContainer container, String wallId})>
   seedWallWithPhotoAndRoute(WidgetTester tester) async {
     final db = AppDatabase(NativeDatabase.memory());
@@ -110,9 +109,9 @@ void main() {
   );
 
   testWidgets(
-    'A2: topo-add-photo-button shows in view AND draw mode, is absent in '
-    'slice mode, and tapping it invokes the same _pickImage handler the old '
-    'FAB used (opens the photo-source action sheet)',
+    'A2: topo-add-photo-button shows in view AND draw mode, and tapping it '
+    'invokes the same _pickImage handler the old FAB used (opens the '
+    'photo-source action sheet)',
     (tester) async {
       final seeded = await seedWallWithPhotoAndRoute(tester);
       addTearDown(seeded.db.close);
@@ -142,22 +141,8 @@ void main() {
         reason: 'add-photo must still be reachable while drawing',
       );
 
-      // Back to view, then into slice mode.
+      // Back to view, then tap add-photo and confirm it invokes _pickImage.
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-      await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
-      await tester.pumpAndSettle();
-      expect(
-        find.byKey(const Key('topo-add-photo-button')),
-        findsNothing,
-        reason:
-            'slice mode swaps the trailing cluster for clear/commit/exit — '
-            'add-photo must not appear there',
-      );
-
-      // Exit slice mode (same key toggles it off) and confirm the button
-      // reappears and actually invokes _pickImage.
-      await tester.tap(find.byKey(const Key('topo-slice-mode-button')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('topo-add-photo-button')));
       await tester.pumpAndSettle();
@@ -339,7 +324,7 @@ void main() {
   );
 
   testWidgets(
-    'top pill with route selected (6 trailing actions) does not overflow '
+    'top pill with route selected (5 trailing actions) does not overflow '
     'at 375px width',
     (tester) async {
       // 375px is this project's supported minimum width (see CLAUDE.md /
@@ -380,19 +365,18 @@ void main() {
       seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
-      // All 6 trailing glyphs are now simultaneously present: edit-metadata
+      // All 5 trailing glyphs are now simultaneously present: edit-metadata
       // (route selected) + AR (photo + a visible route) + mode-toggle +
-      // slice-mode-entry + locate-on-map + add-photo — the worst case for
-      // the top pill's trailing action row in view mode (the "locate on
-      // map" glyph is view mode's counterpart to the edit-location button,
-      // which moved to draw mode only — see topo_canvas_edit_location_test.dart).
+      // locate-on-map + add-photo — the worst case for the top pill's
+      // trailing action row in view mode (the "locate on map" glyph is
+      // view mode's counterpart to the edit-location button, which moved
+      // to draw mode only — see topo_canvas_edit_location_test.dart).
       expect(
         find.byKey(const Key('topo-edit-metadata-button')),
         findsOneWidget,
       );
       expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
-      expect(find.byKey(const Key('topo-slice-mode-button')), findsOneWidget);
       expect(
         find.byKey(const Key('topo-locate-on-map-button')),
         findsOneWidget,
@@ -400,7 +384,7 @@ void main() {
       expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
 
       // No RenderFlex overflow (or any other exception) from cramming the
-      // back chevron + title + 6 icons into the top pill at the supported
+      // back chevron + title + 5 icons into the top pill at the supported
       // minimum width, with every tap target at the iOS HIG's 44x44
       // minimum (see `_topRowIconStyle`'s doc) — the accessibility
       // regression this test guards against is a tap target shrunk BELOW
@@ -413,7 +397,7 @@ void main() {
   );
 
   testWidgets(
-    'top pill with route selected (6 trailing actions) does not overflow '
+    'top pill with route selected (5 trailing actions) does not overflow '
     'at 375px width even at a 3x text scale — MasiIcons are fixed-size, so '
     'only the row\'s height should grow, never its width',
     (tester) async {
@@ -456,7 +440,7 @@ void main() {
       seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
-      // Same worst-case 6 trailing glyphs as the 1x test above, all still
+      // Same worst-case 5 trailing glyphs as the 1x test above, all still
       // present under the 3x scale.
       expect(
         find.byKey(const Key('topo-edit-metadata-button')),
@@ -464,7 +448,6 @@ void main() {
       );
       expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
-      expect(find.byKey(const Key('topo-slice-mode-button')), findsOneWidget);
       expect(
         find.byKey(const Key('topo-locate-on-map-button')),
         findsOneWidget,
@@ -506,7 +489,7 @@ void main() {
       );
 
       // The real proof: every glyph in the top chrome row — the back
-      // button plus all 6 trailing actions — is laid out entirely within
+      // button plus all 5 trailing actions — is laid out entirely within
       // the 375px viewport. If this row itself had overflowed (the
       // regression this test guards against), the trailing button(s) that
       // don't fit would be positioned with `rect.right` beyond the
@@ -520,7 +503,6 @@ void main() {
         'topo-edit-metadata-button',
         'topo-ar-button',
         'topo-mode-toggle',
-        'topo-slice-mode-button',
         'topo-locate-on-map-button',
         'topo-add-photo-button',
       ]) {

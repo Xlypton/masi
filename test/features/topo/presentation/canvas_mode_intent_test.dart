@@ -43,7 +43,7 @@ void main() {
     return (db: db, container: container, wallId: wall.id);
   }
 
-  /// Inserts a placeholder Photos row (kind: 'slice', NOT 'original') so a
+  /// Inserts a placeholder Photos row (kind: 'other', NOT 'original') so a
   /// photo row "exists" for the wall in the DB without being discoverable
   /// via photoRepository.loadOriginal, then seeds
   /// drawControllerProvider.activePhotoId directly via loadForWall — exactly
@@ -66,7 +66,7 @@ void main() {
             updatedAt: 1000,
             wallId: wallId,
             localPath: '/tmp/placeholder.jpg',
-            kind: 'slice',
+            kind: 'other',
             width: 100,
             height: 100,
           ),

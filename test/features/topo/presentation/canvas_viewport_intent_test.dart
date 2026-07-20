@@ -18,19 +18,17 @@
 //
 // A3a/A3b drive bare `TopoCanvas` directly (mirroring the `buildCanvas`
 // harness in test/widget_test.dart's top-level 'TopoCanvas' group, ~L314-347)
-// since the viewport is owned by that widget. A3c/A3d drive
-// `TopoCanvasBody` (mirroring the two `buildBody` harnesses in
-// test/widget_test.dart, ~L834-862 and ~L935-964) since the centering-
-// stability contract is about the layout `TopoCanvasBody` owns around
-// `TopoCanvas` — that canvas region is now ALWAYS the same
-// `topo-interactive-viewer` rect (no more Column<->Stack/Expanded
-// restructuring across any mode toggle), so `_canvasRegionFinder` below
-// locates the viewer directly rather than hunting for an `Expanded`
+// since the viewport is owned by that widget. A3c drives `TopoCanvasBody`
+// (mirroring the `buildBody` harness in test/widget_test.dart, ~L834-862)
+// since the centering-stability contract is about the layout
+// `TopoCanvasBody` owns around `TopoCanvas` — that canvas region is now
+// ALWAYS the same `topo-interactive-viewer` rect (no more Column<->Stack/
+// Expanded restructuring across any mode toggle), so `_canvasRegionFinder`
+// below locates the viewer directly rather than hunting for an `Expanded`
 // ancestor that no longer exists.
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:flutter/material.dart';
@@ -80,9 +78,6 @@ Widget _buildBody({
   required ProviderContainer container,
   required TransformationController controller,
   Size imageSize = const Size(400, 300),
-  bool sliceMode = false,
-  String? originalPhotoId,
-  List<PhotoRef> slices = const [],
 }) {
   return UncontrolledProviderScope(
     container: container,
@@ -97,9 +92,6 @@ Widget _buildBody({
               imageSize: imageSize,
               drawState: drawState,
               transformationController: controller,
-              sliceMode: sliceMode,
-              originalPhotoId: originalPhotoId,
-              slices: slices,
             );
           },
         ),
@@ -277,89 +269,4 @@ void main() {
     },
   );
 
-  group(
-    'A3d: canvas region does not jump/resize when the slice-mode photo '
-    'selector appears/disappears (BUG-3)',
-    () {
-      const slices = [
-        PhotoRef(
-          id: 'slice-1',
-          wallId: 'wall-1',
-          kind: 'slice',
-          localPath: '/nonexistent/slice-1.jpg',
-          width: 200,
-          height: 300,
-          parentPhotoId: 'original-1',
-          cropXpct: 0.0,
-          cropWidthPct: 0.5,
-        ),
-      ];
-
-      testWidgets(
-        'the canvas region keeps the same rect toggling sliceMode true <-> '
-        'false with slices non-empty',
-        (tester) async {
-          _setViewportSize(tester, const Size(400, 800));
-          final container = ProviderContainer();
-          addTearDown(container.dispose);
-          final controller = TransformationController();
-          addTearDown(controller.dispose);
-
-          await tester.pumpWidget(
-            _buildBody(
-              container: container,
-              controller: controller,
-              sliceMode: false,
-              originalPhotoId: 'original-1',
-              slices: slices,
-            ),
-          );
-          await tester.pump();
-
-          final rectBefore = tester.getRect(_canvasRegionFinder());
-
-          await tester.pumpWidget(
-            _buildBody(
-              container: container,
-              controller: controller,
-              sliceMode: true,
-              originalPhotoId: 'original-1',
-              slices: slices,
-            ),
-          );
-          await tester.pump();
-
-          final rectDuringSlice = tester.getRect(_canvasRegionFinder());
-          expect(
-            rectDuringSlice,
-            rectBefore,
-            reason:
-                'BUG-3: entering slice mode (hiding the PhotoSelector via '
-                'Visibility) must not resize/move the canvas region',
-          );
-
-          await tester.pumpWidget(
-            _buildBody(
-              container: container,
-              controller: controller,
-              sliceMode: false,
-              originalPhotoId: 'original-1',
-              slices: slices,
-            ),
-          );
-          await tester.pump();
-
-          final rectAfter = tester.getRect(_canvasRegionFinder());
-          expect(
-            rectAfter,
-            rectBefore,
-            reason:
-                'BUG-3: leaving slice mode (showing the PhotoSelector again) '
-                'must not resize/move the canvas region either — the slot is '
-                'reserved unconditionally, only its visibility toggles',
-          );
-        },
-      );
-    },
-  );
 }

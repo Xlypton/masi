@@ -499,7 +499,7 @@ void main() {
     }
 
     testWidgets('view mode: worst-case trailing row (edit-metadata + AR + '
-        'mode-toggle + slice-mode + locate-on-map + add-photo) does not '
+        'mode-toggle + locate-on-map + add-photo) does not '
         'overflow', (tester) async {
       setViewportSize(tester, const Size(375, 812));
       final seeded = await _seedWallWithPhotoAndRoute(tester);
@@ -531,7 +531,6 @@ void main() {
         'topo-edit-metadata-button',
         'topo-ar-button',
         'topo-mode-toggle',
-        'topo-slice-mode-button',
         'topo-locate-on-map-button',
         'topo-add-photo-button',
       ]) {
@@ -581,12 +580,11 @@ void main() {
             reason: '$key must be present for this worst-case row',
           );
         }
-        // Draw mode never shows the AR or slice-mode glyphs (both
-        // view-mode-only — see `_topTrailingActions`), so the row here is
-        // never MORE crowded than view mode's; asserted anyway as a direct
-        // regression guard on this change.
+        // Draw mode never shows the AR glyph (view-mode-only — see
+        // `_topTrailingActions`), so the row here is never MORE crowded
+        // than view mode's; asserted anyway as a direct regression guard on
+        // this change.
         expect(find.byKey(const Key('topo-ar-button')), findsNothing);
-        expect(find.byKey(const Key('topo-slice-mode-button')), findsNothing);
         expect(
           find.byKey(const Key('topo-locate-on-map-button')),
           findsNothing,
