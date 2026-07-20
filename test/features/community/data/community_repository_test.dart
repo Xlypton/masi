@@ -72,19 +72,25 @@ void main() {
         );
   }
 
-  Future<String> seedPhoto(String id, {required String wallId}) {
+  Future<String> seedPhoto(
+    String id, {
+    required String wallId,
+    bool isPrimary = false,
+    int createdAt = 1000,
+  }) {
     return db
         .into(db.photos)
         .insert(
           PhotosCompanion.insert(
             id: id,
-            createdAt: 1000,
-            updatedAt: 1000,
+            createdAt: createdAt,
+            updatedAt: createdAt,
             wallId: wallId,
             localPath: '/tmp/$id.jpg',
             kind: 'original',
             width: 100,
             height: 100,
+            isPrimary: Value(isPrimary),
           ),
         )
         .then((_) => id);
@@ -397,6 +403,100 @@ void main() {
       },
     );
   });
+
+  group(
+    '#12/#13: thumbnail + route aggregates scoped to the PRIMARY photo',
+    () {
+      test(
+        '#12: with two live original photos, the thumbnail resolves to the '
+        'one flagged isPrimary, even though it is NOT the newest by '
+        'createdAt (regression: used to always pick the newest photo, '
+        'ignoring is_primary, so the feed thumbnail could disagree with '
+        'the detail screen)',
+        () async {
+          await seedArea('area-primary-1');
+          await seedSector('sector-primary-1', areaId: 'area-primary-1');
+          await seedWall('wall-primary-1', sectorId: 'sector-primary-1');
+          // Older photo, but flagged primary.
+          await seedPhoto(
+            'photo-primary-old',
+            wallId: 'wall-primary-1',
+            isPrimary: true,
+            createdAt: 1000,
+          );
+          // Newer photo, NOT primary -- must NOT win the thumbnail.
+          await seedPhoto(
+            'photo-primary-new',
+            wallId: 'wall-primary-1',
+            createdAt: 2000,
+          );
+
+          final topos = await repo.watchSharedTopos().first;
+          final topo = topos.singleWhere((t) => t.wallId == 'wall-primary-1');
+
+          expect(topo.thumbnailPath, '/tmp/photo-primary-old.jpg');
+        },
+      );
+
+      test(
+        '#13: route_count and topGradeLabel are scoped to the PRIMARY '
+        "photo's live routes only, excluding routes on the wall's other "
+        '(non-primary) live photo (regression: used to aggregate routes '
+        "across every one of the wall's photos)",
+        () async {
+          await seedArea('area-primary-2');
+          await seedSector('sector-primary-2', areaId: 'area-primary-2');
+          await seedWall('wall-primary-2', sectorId: 'sector-primary-2');
+          final primaryPhotoId = await seedPhoto(
+            'photo-primary-2a',
+            wallId: 'wall-primary-2',
+            isPrimary: true,
+            createdAt: 1000,
+          );
+          final otherPhotoId = await seedPhoto(
+            'photo-primary-2b',
+            wallId: 'wall-primary-2',
+            createdAt: 2000,
+          );
+
+          // One route on the primary photo.
+          await seedRoute(
+            'route-primary-2a',
+            wallId: 'wall-primary-2',
+            photoId: primaryPhotoId,
+            number: 1,
+            gradeRaw: '6a',
+            gradeSortKey: 7.0,
+          );
+          // Two routes -- including a harder grade -- on the OTHER
+          // (non-primary) photo; these must not be counted.
+          await seedRoute(
+            'route-primary-2b-1',
+            wallId: 'wall-primary-2',
+            photoId: otherPhotoId,
+            number: 2,
+            gradeRaw: '9a',
+            gradeSortKey: 25.0,
+          );
+          await seedRoute(
+            'route-primary-2b-2',
+            wallId: 'wall-primary-2',
+            photoId: otherPhotoId,
+            number: 3,
+            gradeRaw: '9b',
+            gradeSortKey: 26.0,
+          );
+
+          final topos = await repo.watchSharedTopos().first;
+          final topo = topos.singleWhere((t) => t.wallId == 'wall-primary-2');
+
+          expect(topo.routeCount, 1);
+          expect(topo.topGradeLabel, '6a');
+          expect(topo.routeGradeKeys, [7.0]);
+        },
+      );
+    },
+  );
 
   group('B2: SharedTopo coordinates come from the WALL, not the Area', () {
     test(

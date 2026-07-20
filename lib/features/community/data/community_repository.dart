@@ -196,6 +196,21 @@ Set<String> _parseStyles(String? raw) {
 /// separator (`,`), which would corrupt the JSON on split.
 const _kStyleTagsGroupSeparator = '\u001E';
 
+/// Correlated subquery resolving a wall's PRIMARY live `kind: 'original'`
+/// photo id, ordered `is_primary DESC, created_at DESC, id DESC` -- the same
+/// ordering as `PhotoRepository._liveOriginalsQuery`/`loadOriginal`, which is
+/// what the detail screen's canvas actually opens. Interpolated into each of
+/// `watchSharedTopos`'s route aggregate subqueries (#13) so the feed's
+/// route-count/top-grade badges are scoped to the SAME photo's routes the
+/// detail screen's Routes list shows, rather than every live photo on the
+/// wall. `null` (a wall with no live original) makes every `r.photo_id =
+/// NULL` comparison downstream evaluate to unknown/false, so aggregates
+/// correctly come back empty rather than falling back to all-photos.
+const _kPrimaryPhotoIdSubquery = '''
+          (SELECT p.id FROM photos p
+             WHERE p.wall_id = w.id AND p.kind = 'original' AND p.deleted_at IS NULL
+             ORDER BY p.is_primary DESC, p.created_at DESC, p.id DESC LIMIT 1)''';
+
 /// Parses the `route_style_tags_json` column -- a
 /// `group_concat(r.style_tags_json, U+001E)` of a wall's live routes' raw
 /// (still JSON-encoded) style-tag lists -- into a flattened, deduplicated
@@ -251,6 +266,16 @@ class CommunityRepository {
   /// reach the wall's ancestor chain — coordinates themselves come straight
   /// off the wall row, see [SharedTopo.latitude]/[SharedTopo.longitude]'s
   /// doc) so the auto-updating stream re-emits on changes to any of them.
+  ///
+  /// #12/#13 fix: the thumbnail AND every route aggregate (`route_count`,
+  /// `top_grade_*`, `route_grade_keys`, `route_styles`,
+  /// `route_style_tags_json`) are scoped to the wall's PRIMARY live original
+  /// photo (via [_kPrimaryPhotoIdSubquery]), matching what the detail
+  /// screen's canvas opens and which photo's Routes list it shows. Before
+  /// this fix, the thumbnail picked the newest live photo regardless of
+  /// `is_primary`, and the route aggregates summed routes across ALL of the
+  /// wall's live photos — either could disagree with the detail screen for
+  /// any wall with more than one live original.
   Stream<List<SharedTopo>> watchSharedTopos() {
     const sql = '''
       SELECT
@@ -261,15 +286,18 @@ class CommunityRepository {
         w.longitude AS longitude,
         (SELECT p.local_path FROM photos p
            WHERE p.wall_id = w.id AND p.kind = 'original' AND p.deleted_at IS NULL
-           ORDER BY p.created_at DESC, p.id DESC LIMIT 1) AS thumbnail_path,
+           ORDER BY p.is_primary DESC, p.created_at DESC, p.id DESC LIMIT 1) AS thumbnail_path,
         (SELECT COUNT(*) FROM routes r
-           WHERE r.wall_id = w.id AND r.deleted_at IS NULL) AS route_count,
+           WHERE r.photo_id = $_kPrimaryPhotoIdSubquery
+             AND r.deleted_at IS NULL) AS route_count,
         (SELECT r.grade_raw FROM routes r
-           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+           WHERE r.photo_id = $_kPrimaryPhotoIdSubquery
+             AND r.deleted_at IS NULL
              AND r.grade_sort_key IS NOT NULL
            ORDER BY r.grade_sort_key DESC, r.id DESC LIMIT 1) AS top_grade_raw,
         (SELECT r.grade_sort_key FROM routes r
-           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+           WHERE r.photo_id = $_kPrimaryPhotoIdSubquery
+             AND r.deleted_at IS NULL
              AND r.grade_sort_key IS NOT NULL
            ORDER BY r.grade_sort_key DESC, r.id DESC LIMIT 1) AS top_grade_sort_key,
         (SELECT COUNT(*) FROM likes l
@@ -277,13 +305,16 @@ class CommunityRepository {
         (SELECT COUNT(*) FROM comments c
            WHERE c.wall_id = w.id AND c.deleted_at IS NULL) AS comment_count,
         (SELECT group_concat(DISTINCT r.grade_sort_key) FROM routes r
-           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+           WHERE r.photo_id = $_kPrimaryPhotoIdSubquery
+             AND r.deleted_at IS NULL
              AND r.grade_sort_key IS NOT NULL) AS route_grade_keys,
         (SELECT group_concat(DISTINCT r.style) FROM routes r
-           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+           WHERE r.photo_id = $_kPrimaryPhotoIdSubquery
+             AND r.deleted_at IS NULL
              AND r.style IS NOT NULL AND r.style != '') AS route_styles,
         (SELECT group_concat(r.style_tags_json, '$_kStyleTagsGroupSeparator') FROM routes r
-           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+           WHERE r.photo_id = $_kPrimaryPhotoIdSubquery
+             AND r.deleted_at IS NULL
              AND r.style_tags_json IS NOT NULL) AS route_style_tags_json
       FROM walls w
       JOIN sectors s ON s.id = w.sector_id
