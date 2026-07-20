@@ -98,4 +98,30 @@ void main() {
       expect(pickPhotoFrom, isA<Future<XFile?> Function(ImageSource)>());
     },
   );
+
+  group('A5: showCameraOption gates Camera on mobile-web vs. desktop-web', () {
+    test('native (isWeb=false) always shows Camera, regardless of platform', () {
+      expect(showCameraOption(isWeb: false, platform: TargetPlatform.iOS), isTrue);
+      expect(showCameraOption(isWeb: false, platform: TargetPlatform.android), isTrue);
+      expect(showCameraOption(isWeb: false, platform: TargetPlatform.macOS), isTrue);
+      expect(showCameraOption(isWeb: false, platform: TargetPlatform.windows), isTrue);
+    });
+
+    test('mobile web (iOS/Android) shows Camera', () {
+      expect(showCameraOption(isWeb: true, platform: TargetPlatform.iOS), isTrue);
+      expect(showCameraOption(isWeb: true, platform: TargetPlatform.android), isTrue);
+    });
+
+    test('desktop web (macOS/Windows/Linux/Fuchsia) hides Camera', () {
+      expect(showCameraOption(isWeb: true, platform: TargetPlatform.macOS), isFalse);
+      expect(showCameraOption(isWeb: true, platform: TargetPlatform.windows), isFalse);
+      expect(showCameraOption(isWeb: true, platform: TargetPlatform.linux), isFalse);
+      expect(showCameraOption(isWeb: true, platform: TargetPlatform.fuchsia), isFalse);
+    });
+
+    test('defaults (no overrides) resolve from the real kIsWeb/defaultTargetPlatform '
+        'and, on this native VM test runner, always show Camera', () {
+      expect(showCameraOption(), isTrue);
+    });
+  });
 }

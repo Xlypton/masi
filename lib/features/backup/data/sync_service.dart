@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:path/path.dart' as p;
 
 import '../../../core/db/app_database.dart' as db;
@@ -256,16 +254,6 @@ class SyncService {
         continue; // this on-disk file was already handled via another row
       }
 
-      // `photo.localPath` as stored may be RELATIVE (`photos/<id>.jpg`, the
-      // canonical form since #17) — resolve it against the current app
-      // documents directory before touching the filesystem, so a relative
-      // path doesn't silently resolve (and fail to exist) against the
-      // process CWD instead. `resolvePhotoPath` also passes an already-valid
-      // legacy ABSOLUTE path through unchanged.
-      final resolved = await _photoFiles.resolvePhotoPath(photo.localPath);
-      final file = File(resolved.path);
-      if (!await file.exists()) continue;
-
       final ext = p.extension(photo.localPath);
       final needsPrivate = !alreadyPrivate.contains('$uid/$canonicalId$ext');
       final needsShared =
@@ -273,8 +261,15 @@ class SyncService {
           !alreadyShared.contains(sharedPhotoPath(canonicalId, ext));
       if (!needsPrivate && !needsShared) continue;
 
-      // Read the file at most once even when both copies are missing.
-      final bytes = await file.readAsBytes();
+      // `photo.localPath` as stored may be RELATIVE (`photos/<id>.jpg`, the
+      // canonical form since #17) or an already-valid legacy ABSOLUTE path
+      // — `readPhotoBytes` resolves either against the current platform's
+      // storage (app documents dir natively, byte store on web) rather than
+      // touching `dart:io` directly, and returns `null` (instead of
+      // throwing) when the file can't be found/read. Read at most once even
+      // when both copies are missing.
+      final bytes = await _photoFiles.readPhotoBytes(photo.localPath);
+      if (bytes == null) continue;
       if (needsPrivate) {
         await _remote.uploadPhoto(uid: uid, photoId: canonicalId, ext: ext, bytes: bytes);
       }

@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:path/path.dart' as p;
 
 import '../../account/data/auth_repository.dart';
@@ -175,21 +173,19 @@ class CloudBackupService {
 
       final localPath = photo['localPath'] as String?;
       if (localPath == null) continue;
-      // `localPath` as stored may be RELATIVE (`photos/<id>.jpg`, the
-      // canonical form since #17) — resolve it against the current app
-      // documents directory before touching the filesystem, so a relative
-      // path doesn't silently resolve (and fail to exist) against the
-      // process CWD instead. `resolvePhotoPath` also passes an already-valid
-      // legacy ABSOLUTE path through unchanged.
-      final resolved = await _photoFiles.resolvePhotoPath(localPath);
-      final file = File(resolved.path);
-      if (!await file.exists()) continue;
 
       final ext = p.extension(localPath);
       final objectPath = '$uid/$canonicalId$ext';
       if (alreadyRemote.contains(objectPath)) continue;
 
-      final bytes = await file.readAsBytes();
+      // `localPath` as stored may be RELATIVE (`photos/<id>.jpg`, the
+      // canonical form since #17) or an already-valid legacy ABSOLUTE path
+      // — `readPhotoBytes` resolves either against the current platform's
+      // storage (app documents dir natively, byte store on web) rather than
+      // touching `dart:io` directly, and returns `null` (instead of
+      // throwing) when the file can't be found/read.
+      final bytes = await _photoFiles.readPhotoBytes(localPath);
+      if (bytes == null) continue;
       await _remote.uploadPhoto(
         uid: uid,
         photoId: canonicalId,
