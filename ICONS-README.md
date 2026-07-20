@@ -62,11 +62,16 @@ bolt → `masi_bolt` · anchor → `masi_anchor` · start → `masi_route_start`
 folder_outlined → `masi_folder` (+`_fill`) · explore_outlined → `masi_compass` (+`_fill`) · menu_book_outlined → `masi_logbook` (+`_fill`) · person_outline → `masi_person` (+`_fill`) · search → `masi_search` · tune → `masi_filter`, tune+dot → `masi_filter_active` · CupertinoIcons.chevron_down → `masi_chevron_down` · chevron_left/right → `masi_chevron_left/right` · keyboard_arrow_up/down → `masi_chevron_up/down` · more_vert → `masi_more_horiz` (iOS) or `masi_more_vert` · edit(_outlined) → `masi_edit` · edit_note → `masi_edit_note` · pan_tool_alt_outlined → `masi_eye` · drive_file_move_outlined → `masi_folder_move` · delete_outline → `masi_delete` · public → `masi_globe` · lock/lock_outline → `masi_lock`/`masi_lock_open` · view_in_ar_outlined → `masi_ar_cube` · content_cut(_outlined) → `masi_scissors` · clear/close → `masi_close` · check → `masi_check` · add_photo_alternate_outlined → `masi_image_add` · undo/redo → `masi_undo`/`masi_redo` · photo_size_select_actual_outlined → `masi_image` · broken_image_outlined → `masi_image_broken` · image_not_supported_outlined → `masi_image_off` · place → `masi_pin` (+`_fill`) · phonelink_off_outlined → `masi_phone_off` · center_focus_strong → `masi_scan` · restart_alt → `masi_restart` · my_location → `masi_my_location`
 
 ### Future
-`send_check(_fill)` · `flash` · `project` · `star(_fill)` · `bookmark(_fill)` · `share` · `download`/`upload` · `sync` · `settings` · `info`/`warning` · `sun`/`cloud_rain` · `parking`/`signpost` · `carabiner` · `ruler` · `sort` · `add` · `grid_view`/`list_view` · `camera` · `location_off`
+All glyphs previously listed here (`send_check(_fill)`, `flash`, `project`, `star(_fill)`,
+`bookmark(_fill)`, `share`, `download`/`upload`, `sync`, `settings`, `info`/`warning`,
+`sun`/`cloud_rain`, `parking`/`signpost`, `carabiner`, `ruler`, `sort`, `add`, `grid_view`/`list_view`,
+`camera`, `location_off`) shipped in v5 — see `assets/icons/masi/` for the full 80-glyph set.
 
 ## Extending
 
 `generate.js` is the source of truth (`node generate.js`). Recipe for new glyphs: strokes at full color; facet fills via `U(shape, opacity)` at .45/.25/.14; keep facet edges sharp, container corners rounded (rx 1.5–3); use `band()` to punch stroked shapes out of `_fill` variants.
+
+The generator writes to `masi_icons_v5_svg/svg/`, not directly to the app — newly generated glyphs must be copied from there into `assets/icons/masi/` before `MasiIcon` can reference them.
 
 ## v4 additions — liveness pass
 

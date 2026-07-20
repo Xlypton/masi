@@ -68,7 +68,7 @@ Routes are stored as **percentages of the original photo**, and that photo *is* 
 | UI & canvas | **Flutter** | |
 | Route drawing | **CustomPainter** | Full control, no drawing lib |
 | Zoom/pan | **InteractiveViewer** | + `TransformationController` for coordinate mapping |
-| State | **Riverpod** (v2, `Notifier`/`AsyncNotifier`) | code-gen optional |
+| State | **Riverpod** (v3, `Notifier`/`AsyncNotifier`) | code-gen optional |
 | Local DB | **Drift** (SQLite) | Single source of truth, offline-first |
 | Photo input | **image_picker** | Native camera/library — no custom camera |
 | Image ops | **image** package | Crop / slice / EXIF normalization |
@@ -92,17 +92,27 @@ lib/
     router.dart              # go_router config
     theme.dart
   core/
-    db/                      # Drift database, tables, DAOs, migrations
+    config/                  # Supabase config + providers
     coordinates/             # percent <-> pixel <-> scene transforms (pure, tested)
+    db/                      # Drift database, tables, migrations
+      connection/            # conditional-import DB connection (native/web/stub)
     grades/                  # GradeSystem, conversion + ordering + color banding
-    result/                  # Result/Failure types, shared utils
+    location/                # geocoding, location service, EXIF GPS
+    net/                     # retryable-error helpers (native/web/stub)
+    platform/                # AR-support gating (native/web/stub)
+    routes/                  # route-style constants
   features/
-    areas/      { data/ application/ presentation/ }   # Area + Sector CRUD
-    walls/      { data/ application/ presentation/ }   # Wall, photos, slicing
-    topo/       { data/ application/ presentation/ }   # canvas, painters, draw ctrl
-    routes/     { data/ application/ presentation/ }   # route + metadata form
+    account/    { data/ application/ presentation/ }          # auth, profile
+    ar/         { application/ domain/ presentation/ }        # AR route viewer (ARKit)
+    backup/     { data/ application/ }                        # cloud sync: outbox push/pull,
+                                                                # tombstones (no presentation — headless)
+    community/  { data/ application/ presentation/ }          # map + feed, comments, likes
+    library/    { data/ application/ presentation/ }          # Area/Sector/Wall CRUD
+    logbook/    { data/ application/ presentation/ }          # ascent logbook
+    topo/       { data/ application/ domain/ presentation/ } # canvas, painters, draw ctrl
   shared/
-    widgets/                 # reusable UI
+    filtering/               # shared filter widgets/logic
+    presentation/            # reusable UI
 ```
 
 **Layer rules (kept pragmatic for solo dev):**

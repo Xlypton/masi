@@ -2,7 +2,9 @@
 
 Flutter climbing-route documentation app (visual-first topo editor). Full spec: **`CLIMBTOPO.md`**.
 iOS-primary. Local-first (Drift/SQLite). Riverpod **v3** (use `Notifier`, never `StateProvider`).
-v1 (M0–M6) + v2 AR are code-complete on `main`. Supabase sync is deferred.
+v1 (M0–M6) + v2 AR are code-complete on `main`. Supabase sync is implemented and live —
+outbox push/pull + tombstoned soft-delete sync in `lib/features/backup/` (`sync_service.dart`,
+`sync_orchestrator.dart`, `backup_repository.dart`), verified end-to-end.
 
 ## Toolchain quirks (read first)
 
@@ -11,8 +13,11 @@ v1 (M0–M6) + v2 AR are code-complete on `main`. Supabase sync is deferred.
 - Flutter 3.44.2 · Dart 3.12.2 · Xcode 26.6.
 - **iOS uses Swift Package Manager, not CocoaPods** — there is intentionally no `ios/Podfile`.
   Don't try to `pod install`; it will fail with "No Podfile found" and that is expected.
-- Package name is `climbtopo`; app entrypoint is `main()` in `lib/main.dart`
-  (`runApp(const ProviderScope(child: ClimbTopoApp()))`).
+- Package name is `climbtopo`; app entrypoint is `main()` in `lib/main.dart`. It builds a
+  `ProviderContainer`, awaits `container.read(photoFilesProvider).warmDocsPath()` to pre-warm the
+  photo-path cache before the first frame, then calls
+  `runApp(UncontrolledProviderScope(container: container, child: const ClimbTopoApp()))` —
+  not the plain `ProviderScope(child: ...)` pattern.
 
 ## Web port (in progress — v2 plan)
 

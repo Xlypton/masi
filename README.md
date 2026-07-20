@@ -84,6 +84,10 @@ in [`docs/web-port-backlog.md`](docs/web-port-backlog.md).
 
 - [`CLIMBTOPO.md`](CLIMBTOPO.md) — full product/architecture spec.
 - [`CLAUDE.md`](CLAUDE.md) — project instructions, toolchain quirks, verification loop.
+- [`DESIGN.md`](DESIGN.md) — visual/design language.
+- [`ICONS-README.md`](ICONS-README.md) — masi icon set (MasiIcon usage, generation, migration map).
 - [`WEB_PORT_BRIEF.md`](WEB_PORT_BRIEF.md) — planning brief for the web port.
 - [`HOSTING.md`](HOSTING.md) — PWA hosting/header requirements.
+- [`docs/USER_STORIES.md`](docs/USER_STORIES.md) — user stories.
+- [`docs/DESIGN_RUBRIC.md`](docs/DESIGN_RUBRIC.md) — design review rubric.
 - [`docs/web-port-backlog.md`](docs/web-port-backlog.md) — deferred post-web-port items.
