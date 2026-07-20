@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// Immutable snapshot of the app's auth session: signed-out when [email] is
@@ -85,9 +86,43 @@ class SupabaseAuthRepository implements AuthRepository {
   /// `ios/Runner/Info.plist` and the intent-filter scheme/host registered in
   /// `android/app/src/main/AndroidManifest.xml` — otherwise the OS has
   /// nothing to hand the magic-link tap back to and the deep link falls
-  /// through to a browser instead of reopening the app.
+  /// through to a browser instead of reopening the app. Native-only — web
+  /// uses [resolveMagicLinkRedirect]'s `Uri.base.origin` branch instead,
+  /// since there's no OS-level scheme handler in a browser.
   static const String magicLinkRedirect =
       'io.supabase.climbtopo://login-callback/';
+
+  /// The actual `emailRedirectTo` sent with the magic-link email —
+  /// platform-specific because native and web have no shared notion of
+  /// "hand control back to this app":
+  ///  - native (iOS/Android): [magicLinkRedirect], the custom URL scheme
+  ///    registered in `Info.plist`/`AndroidManifest.xml`.
+  ///  - web: there's no scheme handler, so the redirect must be a real
+  ///    `https://`/`http://` URL the browser can load — this app's own
+  ///    origin (e.g. `https://climbtopo.example.com` in prod,
+  ///    `http://localhost:<port>` in dev). Landing back on the site root is
+  ///    sufficient: `supabase_flutter`'s `SupabaseAuth` (wired up
+  ///    automatically by `Supabase.initialize`'s `detectSessionInUri: true`
+  ///    default, which `main.dart` never overrides) reads the PKCE `code`
+  ///    straight out of `Uri.base` at boot, completes the session via
+  ///    `getSessionFromUrl`, and strips the auth query params from the
+  ///    address bar afterwards — no dedicated `/auth-callback` route or
+  ///    extra app code needed beyond this redirect target.
+  ///
+  /// NOTE for a human: the Supabase project's Auth "Redirect URLs"
+  /// allowlist must include both the web dev origin (e.g.
+  /// `http://localhost:<port>`) and the deployed prod origin, or Supabase
+  /// rejects the redirect at send-time — console-side config, not code.
+  ///
+  /// [isWeb]/[origin] default to the real [kIsWeb]/[Uri.base] and only exist
+  /// so a unit test can exercise the web branch without a real browser test
+  /// runner, where the compile-time [kIsWeb] can't otherwise be flipped —
+  /// mirrors `photo_source_sheet.dart`'s `showCameraOption` seam.
+  @visibleForTesting
+  static String resolveMagicLinkRedirect({bool? isWeb, Uri? origin}) {
+    if (!(isWeb ?? kIsWeb)) return magicLinkRedirect;
+    return (origin ?? Uri.base).origin;
+  }
 
   @override
   Stream<AuthSessionState> authStateChanges() {
@@ -104,7 +139,7 @@ class SupabaseAuthRepository implements AuthRepository {
   Future<void> sendMagicLink(String email) {
     return _client.auth.signInWithOtp(
       email: email,
-      emailRedirectTo: magicLinkRedirect,
+      emailRedirectTo: resolveMagicLinkRedirect(),
     );
   }
 

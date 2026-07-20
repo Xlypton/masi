@@ -69,6 +69,14 @@ dependencies:
   # Web-only thumbnail generation backend (image_ops_web.dart): browser
   # offscreen-canvas decode/resize/encode via dart:js_interop, wasm-clean.
   web: ^1.1.0
+  # Direct dep (was transitive via the Flutter SDK, source: sdk) so
+  # main.dart's `usePathUrlStrategy()` call (path-based browser URLs, e.g.
+  # for shareable /community/topo/:wallId links) doesn't trip
+  # `depend_on_referenced_packages`. `usePathUrlStrategy()` itself no-ops on
+  # native (conditional-import stub picked whenever `dart.library.ui_web`
+  # is unavailable), so this has no native effect.
+  flutter_web_plugins:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app/app.dart';
@@ -8,6 +9,14 @@ import 'core/db/database_provider.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Path-based (rather than the default `#/`-hash) browser URLs, so shared
+  // links like `/community/topo/<wallId>` are real, shareable paths instead
+  // of `/#/community/topo/<wallId>`. `usePathUrlStrategy()` itself is a
+  // no-op on native (see `flutter_web_plugins`' `url_strategy.dart`: it's
+  // conditionally implemented per-platform, `dart.library.ui_web` selecting
+  // the real browser-history version, everything else a no-op stub) — safe
+  // to call unconditionally rather than gating on `kIsWeb`.
+  usePathUrlStrategy();
   // Defensive hardening: a failed/unreachable Supabase init (bad config, no
   // network on first launch, etc.) must never crash app boot — this app is
   // local-first (Drift/SQLite) and fully usable with sync/backup/auth

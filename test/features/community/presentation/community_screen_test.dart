@@ -2727,6 +2727,42 @@ void main() {
         expect(spy.closed, isTrue);
       },
     );
+
+    test(
+      'buildResilientTileProvider(isWeb: true) explicitly disables the '
+      'on-disk BuiltInMapCachingProvider (web port Phase 4, task 3) -- '
+      'DisabledMapCachingProvider.isSupported is false, matching what '
+      "flutter_map's own conditional-import web no-op already does, "
+      'just made deterministic at this call site',
+      () {
+        final provider = buildResilientTileProvider(isWeb: true);
+        expect(provider.cachingProvider, isA<DisabledMapCachingProvider>());
+        expect(provider.cachingProvider!.isSupported, isFalse);
+      },
+    );
+
+    test(
+      'buildResilientTileProvider(isWeb: false) leaves cachingProvider null '
+      '-- native keeps flutter_map\'s default on-disk cache, unchanged',
+      () {
+        final provider = buildResilientTileProvider(isWeb: false);
+        expect(provider.cachingProvider, isNull);
+      },
+    );
+
+    test(
+      'an explicit cachingProvider always wins over the isWeb default -- '
+      "the test-only DisabledMapCachingProvider _MapViewState._tileProvider "
+      'passes under a spy tileHttpClientFactory must not be clobbered by '
+      'the web branch',
+      () {
+        final provider = buildResilientTileProvider(
+          isWeb: true,
+          cachingProvider: const DisabledMapCachingProvider(),
+        );
+        expect(provider.cachingProvider, isA<DisabledMapCachingProvider>());
+      },
+    );
   });
 
   group(

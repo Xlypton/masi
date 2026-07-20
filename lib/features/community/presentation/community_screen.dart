@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -66,23 +67,42 @@ Client buildResilientTileHttpClient({Client? inner}) {
 ///
 /// [cachingProvider] defaults to null, i.e. flutter_map's own default (the
 /// on-disk [BuiltInMapCachingProvider]) — overridden to
-/// [DisabledMapCachingProvider] only by `_MapViewState._tileProvider` when a
+/// [DisabledMapCachingProvider] by `_MapViewState._tileProvider` when a
 /// test's `tileHttpClientFactory` is in play, so that test never performs
 /// real platform-channel/file I/O for a cache directory `flutter_test`
-/// never provides. Production, which never sets `tileHttpClientFactory`, is
-/// completely unaffected and keeps the real on-disk cache.
+/// never provides, AND unconditionally on web (see below). Production
+/// native, which never sets `tileHttpClientFactory`, is completely
+/// unaffected and keeps the real on-disk cache.
+///
+/// Web: [BuiltInMapCachingProvider] already no-ops safely there on its own
+/// (flutter_map's conditional-import split for that class picks a web
+/// implementation that mixes in [DisabledMapCachingProvider] whenever
+/// `dart.library.io` is unavailable — see that class's own "safe to use...
+/// they will noop" doc), so this isn't fixing a crash. It's making that
+/// no-op explicit and deterministic at this call site — every caller here
+/// (this file and `set_location_picker.dart`, both via this shared
+/// function) skips flutter_map's `getOrCreateInstance()` singleton/UUID-
+/// keygen machinery on web entirely, rather than relying on it silently
+/// doing nothing three layers down.
 ///
 /// A named top-level function (rather than an inline `NetworkTileProvider()`
 /// call at the `TileLayer` call site) so this policy is unit-testable on its
 /// own — see `community_screen_test.dart`'s MC2 — without needing to pump a
 /// full widget tree or perform real network I/O.
+///
+/// [isWeb] defaults to the real compile-time [kIsWeb] and only exists so a
+/// unit test can exercise the web branch above without a real browser test
+/// runner — mirrors `photo_source_sheet.dart`'s `showCameraOption` seam.
 NetworkTileProvider buildResilientTileProvider({
   Client? httpClient,
   MapCachingProvider? cachingProvider,
+  bool? isWeb,
 }) {
   return NetworkTileProvider(
     httpClient: httpClient ?? buildResilientTileHttpClient(),
-    cachingProvider: cachingProvider,
+    cachingProvider:
+        cachingProvider ??
+        ((isWeb ?? kIsWeb) ? const DisabledMapCachingProvider() : null),
   );
 }
 
