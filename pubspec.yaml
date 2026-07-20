@@ -61,6 +61,14 @@ dependencies:
   # Opens beta-video URLs (#41) externally from the route metadata sheet /
   # legend / community detail screen.
   url_launcher: ^6.3.2
+  # Web-only photo byte store: cross-platform IndexedDB shim. Its native-web
+  # backend is built on package:web + dart:js_interop (dart2wasm-clean, no
+  # dart:html/dart:indexed_db) and it ships an in-memory factory usable in
+  # plain VM unit tests (see photo_byte_store_test.dart).
+  idb_shim: ^2.9.6+2
+  # Web-only thumbnail generation backend (image_ops_web.dart): browser
+  # offscreen-canvas decode/resize/encode via dart:js_interop, wasm-clean.
+  web: ^1.1.0
 
 dev_dependencies:
   flutter_test:
