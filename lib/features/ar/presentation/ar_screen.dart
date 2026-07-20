@@ -1,14 +1,13 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show StandardMessageCodec;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/core/platform/ar_support.dart';
 import 'package:climbtopo/features/ar/application/ar_channel.dart';
 import 'package:climbtopo/features/ar/application/ar_controller.dart';
 import 'package:climbtopo/features/ar/application/manual_align_controller.dart';
@@ -53,9 +52,12 @@ String _encodeRoutesForAr(List<TopoRoute> routes) {
 /// runs widget tests under) must never attempt to instantiate a
 /// `UiKitView`, which would throw.
 ///
-/// `!kIsWeb &&` guards the [Platform] lookup itself: `dart:io`'s [Platform]
-/// getters are unsupported when compiled for web.
-bool _isArPlatformSupported() => !kIsWeb && Platform.isIOS;
+/// Delegates to [isArSupported] (see `lib/core/platform/ar_support.dart`),
+/// which conditional-imports the right backend per platform — this keeps
+/// `dart:io`'s `Platform` lookup (and its `File` sibling, see [_load]) out of
+/// this screen's own imports entirely, so this file compiles cleanly for web
+/// even though AR itself never runs there.
+bool _isArPlatformSupported() => isArSupported();
 
 /// The AR live-alignment screen for a wall: overlays that wall's routes
 /// (warped through the current camera-alignment [Homography]) on top of a
@@ -152,20 +154,30 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     // routes above — they render immediately; the outline (when it
     // succeeds) fades in a moment later via this second setState.
     //
-    // Gated on a synchronous existence check first: `extractOutline` spawns
-    // a real background isolate (via `compute()`) to read + decode the file,
-    // which is real OS-level async work that never completes under a
-    // widget test's fake-async pump loop (the same hazard `photo_files.dart`
-    // 's `resolvePhotoPath` documents for `File.exists()` vs `existsSync()`)
-    // — without this guard, any wall whose persisted photo path doesn't
+    // Gated on `isArSupported()` first: this whole path only ever matters on
+    // the one platform AR actually runs on (iOS); everywhere else (Android,
+    // web, desktop, and the test host) it must never touch a `File` at all —
+    // both because there's no ghost-outline UI to feed on those platforms,
+    // and because a `dart:io` `File` reference must never even be reachable
+    // from web-compiled code (see `lib/core/platform/ar_support.dart`).
+    //
+    // Then a synchronous existence check: `extractOutline` spawns a real
+    // background isolate (via `compute()`) to read + decode the file, which
+    // is real OS-level async work that never completes under a widget
+    // test's fake-async pump loop (the same hazard `photo_files.dart`'s
+    // `resolvePhotoPath` documents for `File.exists()` vs `existsSync()`) —
+    // without this guard, any wall whose persisted photo path doesn't
     // resolve to a real file on THIS host (e.g. a test seeding a placeholder
     // path with no `path_provider` platform fake registered, so
     // `PhotoRepository.loadOriginal` can't resolve it to an absolute path)
     // hangs `tester.pumpAndSettle()` forever trying to spawn+await that
-    // isolate. `existsSync()` is a cheap local stat (synchronous, no event-
-    // loop turn) so it's safe to call unconditionally; on a real device the
-    // photo file genuinely exists, so this never skips real extraction.
-    if (photo != null && File(photo.localPath).existsSync()) {
+    // isolate. `photoFileExistsSync` is a cheap local stat (synchronous, no
+    // event-loop turn) so it's safe to call unconditionally; on a real
+    // device the photo file genuinely exists, so this never skips real
+    // extraction.
+    if (photo != null &&
+        isArSupported() &&
+        photoFileExistsSync(photo.localPath)) {
       final outline = await extractOutline(photo.localPath);
       if (!mounted) return;
       setState(() => _outline = outline);
