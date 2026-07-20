@@ -41,7 +41,13 @@ final routeEntriesForWallProvider =
 
       final routeRepo = ref.watch(routeRepositoryProvider);
       final routes = await routeRepo.loadRoutes(wallId, photo.id);
-      final dbIds = await routeRepo.routeDbIdsByNumber(wallId);
+      // Scope to the SAME photo as `loadRoutes` above (mirrors
+      // `topo_canvas_screen.dart`'s call) — on a multi-photo wall, routes
+      // are numbered independently per photo (see `RouteRepository`'s class
+      // doc), so an unscoped lookup here could resolve `number` against a
+      // DIFFERENT photo's route and attribute a logged ascent to the wrong
+      // route entirely.
+      final dbIds = await routeRepo.routeDbIdsByNumber(wallId, photo.id);
       return [
         for (final route in routes)
           if (dbIds[route.number] != null)
