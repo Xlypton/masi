@@ -38,6 +38,27 @@ file/line brief: `WEB_PORT_BRIEF.md`.
   `grep -r "dart:io" lib --include="*.dart" | grep -v _native.dart` must be empty (goes green at M2).
 - **CI floor:** `.github/workflows/ci.yml` (analyze+test required; web build + grep gate `continue-on-error`
   until M2). Repo is local-first / not pushed; the workflow is the spec, `tool/build_web.sh` is the local gate.
+- **`dart:io` on web COMPILES (it's stubbed), it does not fail the build.** `flutter build web` and
+  `flutter build web --wasm` both succeed even with `import 'dart:io'` present — Dart 3.12 stubs the library
+  and throws at *runtime*. So the grep gate is a **runtime-correctness guardrail, not a compile gate**: a
+  screen importing dart:io builds and boots on web fine, but `File(...)` calls throw when actually reached
+  (e.g. rendering a photo). Corollary: non-photo flows already run on web; photo rendering needs the display
+  sites conditional-split (Phase 2C) before it works at runtime.
+
+### Web verification loop (agent-autonomous — PROVEN)
+Real app in **headless Chrome** via chromedriver + `integration_test`, screenshots read as images. This is
+the web analogue of the iOS-sim loop and needs no human.
+```bash
+export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && \
+  tool/drive_web.sh integration_test/web_smoke_test.dart   # boots app in headless Chrome, dumps PNGs
+ls build/screenshots/ && # then Read each PNG to inspect
+```
+- Requires `chromedriver` on PATH matching Chrome major version (installed: ChromeDriver 150, Chrome for
+  Testing). `flutter drive -d web-server --browser-name=chrome` is headless by default.
+- `integration_test/web_harness_check_test.dart` = trivial-widget pipeline check; `web_smoke_test.dart` =
+  real app boot → Area→Sector→Wall (drift-on-WASM persistence through real IndexedDB) — **both green**.
+- Same native-picker gap as iOS: photo pick/camera is a native chooser `integration_test` can't drive →
+  override the picker provider / seed state to reach photo flows (seam pending, post-2C).
 
 ## Fast checks (unit + widget)
 
