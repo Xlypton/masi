@@ -198,14 +198,31 @@ class SyncService {
       }
     }
 
-    final areas = await (_db.select(_db.areas)..where((t) => t.ownerId.equals(uid))).get();
-    final sectors = await (_db.select(_db.sectors)..where((t) => t.ownerId.equals(uid))).get();
-    final walls = await (_db.select(_db.walls)..where((t) => t.ownerId.equals(uid))).get();
-    final photos = await (_db.select(_db.photos)..where((t) => t.ownerId.equals(uid))).get();
-    final routes = await (_db.select(_db.routes)..where((t) => t.ownerId.equals(uid))).get();
-    final comments = await (_db.select(_db.comments)..where((t) => t.ownerId.equals(uid))).get();
-    final likes = await (_db.select(_db.likes)..where((t) => t.ownerId.equals(uid))).get();
-    final ascents = await (_db.select(_db.ascents)..where((t) => t.ownerId.equals(uid))).get();
+    // Read every own-table snapshot inside a single transaction so a
+    // concurrent pull's transactional importSnapshot() write can't be
+    // interleaved partway through — without this, the reads below could
+    // observe (say) a wall from before an in-flight pull and a photo from
+    // after it, uploading a cross-table snapshot that never actually existed
+    // locally. This wraps READS only; conflict/LWW resolution (#2) is a
+    // separate, deferred concern.
+    late List<db.Area> areas;
+    late List<db.Sector> sectors;
+    late List<db.Wall> walls;
+    late List<db.Photo> photos;
+    late List<db.Route> routes;
+    late List<db.Comment> comments;
+    late List<db.Like> likes;
+    late List<db.Ascent> ascents;
+    await _db.transaction(() async {
+      areas = await (_db.select(_db.areas)..where((t) => t.ownerId.equals(uid))).get();
+      sectors = await (_db.select(_db.sectors)..where((t) => t.ownerId.equals(uid))).get();
+      walls = await (_db.select(_db.walls)..where((t) => t.ownerId.equals(uid))).get();
+      photos = await (_db.select(_db.photos)..where((t) => t.ownerId.equals(uid))).get();
+      routes = await (_db.select(_db.routes)..where((t) => t.ownerId.equals(uid))).get();
+      comments = await (_db.select(_db.comments)..where((t) => t.ownerId.equals(uid))).get();
+      likes = await (_db.select(_db.likes)..where((t) => t.ownerId.equals(uid))).get();
+      ascents = await (_db.select(_db.ascents)..where((t) => t.ownerId.equals(uid))).get();
+    });
 
     final tablesToRows = <String, List<Map<String, dynamic>>>{
       'areas': [for (final row in areas) row.toJson()],
