@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -23,6 +22,7 @@ import 'package:climbtopo/features/topo/data/image_dimensions.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
+import 'package:climbtopo/features/topo/presentation/photo_image.dart';
 import 'package:climbtopo/features/topo/presentation/photo_selector.dart';
 import 'package:climbtopo/features/topo/presentation/photo_strip.dart';
 import 'package:climbtopo/features/topo/presentation/photo_source_sheet.dart';
@@ -1193,7 +1193,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       previousStream.removeListener(previousListener);
     }
 
-    final stream = FileImage(File(path)).resolve(const ImageConfiguration());
+    final stream = PhotoImageProvider(
+      path,
+      photoFiles: ref.read(photoFilesProvider),
+    ).resolve(const ImageConfiguration());
     final listener = ImageStreamListener(
       (info, _) {
         if (!mounted) return;

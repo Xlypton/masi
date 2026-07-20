@@ -1,11 +1,11 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/features/topo/data/photo_files.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
+import 'package:climbtopo/features/topo/presentation/photo_image.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
 
 /// Horizontal strip of a wall's `original` photos — the "multiple photos
@@ -112,8 +112,10 @@ class PhotoStrip extends ConsumerWidget {
   }
 }
 
-/// A single 52x52 thumbnail in [PhotoStrip]: [Image.file] of
-/// [PhotoRef.localPath], an accent ring when [active], a small star badge
+/// A single 52x52 thumbnail in [PhotoStrip]: a [PhotoImage] of
+/// [PhotoRef.localPath]'s THUMBNAIL variant (via [thumbKeyFor] — a 52px
+/// strip tile has no business decoding/holding the full-resolution
+/// original), an accent ring when [active], a small star badge
 /// when [PhotoRef.isPrimary] (the wall's cover photo), and — unless
 /// [readOnly] — a long-press manage menu (set cover / delete).
 class _PhotoStripItem extends StatelessWidget {
@@ -161,10 +163,10 @@ class _PhotoStripItem extends StatelessWidget {
             Positioned.fill(
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(MasiRadii.control - 2),
-                child: Image.file(
-                  File(photo.localPath),
+                child: PhotoImage(
+                  thumbKeyFor(photo.localPath),
                   fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) => Container(
+                  placeholder: () => Container(
                     color: colors.surface2,
                     child: Center(
                       child: MasiIcon('image', size: 20, color: colors.ink3),

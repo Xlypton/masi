@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -10,6 +9,7 @@ import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/route_hit_test.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
+import 'package:climbtopo/features/topo/presentation/photo_image.dart';
 import 'package:climbtopo/features/topo/presentation/route_palette.dart';
 import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 
@@ -1085,8 +1085,8 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
             height: widget.imageSize.height,
             child: Stack(
               children: [
-                Image.file(
-                  File(widget.imagePath),
+                PhotoImage(
+                  widget.imagePath,
                   fit: BoxFit.contain,
                   width: widget.imageSize.width,
                   height: widget.imageSize.height,
@@ -1095,8 +1095,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   // them propagate as an unhandled exception — see class
                   // doc for why tests can pump this widget without a real
                   // image file.
-                  errorBuilder: (context, error, stackTrace) =>
-                      const SizedBox.shrink(),
+                  placeholder: () => const SizedBox.shrink(),
                 ),
                 // Wrapped in a ListenableBuilder on the transformation
                 // controller (bug fix: "lines are super thin until you tap

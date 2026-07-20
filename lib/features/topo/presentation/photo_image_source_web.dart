@@ -1,0 +1,227 @@
+// Web backend for `photo_image.dart`'s `PhotoImage`/`PhotoImageProvider`.
+//
+// There is no filesystem to point `Image.file`/`FileImage` at on web —
+// photo/thumbnail bytes live in IndexedDB (`PhotoByteStore`, via
+// `PhotoFiles.readPhotoBytes`). Rendering therefore goes bytes -> `Blob` ->
+// object URL (via the shared `PhotoImageCache`, so the same photo referenced
+// from more than one place at once — e.g. a canvas background AND its own
+// dimension probe — shares one cached URL and one IndexedDB read) ->
+// `Image.network`, letting the browser decode the object URL off Flutter's
+// own image-codec path rather than piping raw bytes through `Image.memory`.
+//
+// Wasm-clean: only `dart:js_interop`/`package:web` (via `PhotoImageCache`)
+// and plain Flutter APIs — no `dart:html`.
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import '../../../core/db/database_provider.dart';
+import '../data/photo_files.dart';
+import '../data/photo_image_cache_web.dart';
+import 'photo_image_self_heal_guard.dart';
+
+/// Web rendering: shows [PhotoImageCache]'s cached object URL for
+/// [storedPath] via `Image.network` the moment it's available — synchronously
+/// (no placeholder flash) if already cached, otherwise the [placeholder]
+/// while a background IndexedDB read populates the cache.
+class PlatformPhotoImage extends ConsumerStatefulWidget {
+  const PlatformPhotoImage({
+    super.key,
+    required this.storedPath,
+    required this.fit,
+    this.width,
+    this.height,
+    this.placeholder,
+  });
+
+  final String storedPath;
+  final BoxFit fit;
+  final double? width;
+  final double? height;
+  final Widget Function()? placeholder;
+
+  @override
+  ConsumerState<PlatformPhotoImage> createState() =>
+      _PlatformPhotoImageState();
+}
+
+class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
+  String? _key;
+  String? _url;
+
+  /// Non-null once we've attempted a self-heal re-resolve for the CURRENT
+  /// [_key] (see [_handleLoadError]) — the URL that triggered that attempt.
+  /// Reset to `null` whenever [_key] changes in [_ensureUrl]. Its only job
+  /// is to cap self-heal at one attempt per key: [PhotoImageCache] can evict
+  /// and `URL.revokeObjectURL` an object URL a still-mounted widget (e.g. an
+  /// inactive `IndexedStack` tab) is holding in [_url], which makes
+  /// `Image.network` fail with no built-in retry; the first such failure
+  /// re-resolves through the cache (which re-reads the still-present
+  /// IndexedDB bytes into a fresh Blob/URL) and swaps it in, but a second
+  /// failure for the same key — genuinely-missing bytes, or a re-resolved
+  /// URL that fails again — falls straight through to the placeholder
+  /// instead of retrying forever.
+  String? _failedUrl;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _ensureUrl();
+  }
+
+  @override
+  void didUpdateWidget(PlatformPhotoImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.storedPath != widget.storedPath) _ensureUrl();
+  }
+
+  /// Resolves [PlatformPhotoImage.storedPath] to its cache key and, if it
+  /// changed, either adopts the cache's already-known URL synchronously (the
+  /// fast path — see [PhotoImageCache.photoUrlSync]'s doc) or kicks the async
+  /// cache-through read and swaps `_url` in once it resolves.
+  void _ensureUrl() {
+    final photoFiles = ref.read(photoFilesProvider);
+    final key = photoFiles.resolvePhotoPathSync(widget.storedPath).path;
+    if (key == _key) return;
+    _key = key;
+    _failedUrl = null; // New key: any earlier self-heal attempt is moot.
+
+    final cached = PhotoImageCache.instance.photoUrlSync(key);
+    if (cached != null) {
+      _url = cached;
+      return;
+    }
+    _url = null;
+    unawaited(
+      PhotoImageCache.instance
+          .resolveUrl(key, () => photoFiles.readPhotoBytes(key))
+          .then((url) {
+            if (!mounted || _key != key) return;
+            setState(() => _url = url);
+          }),
+    );
+  }
+
+  /// Called from [Image.network]'s `errorBuilder` when [failedUrl] — the URL
+  /// currently in [_url] — fails to load. The common web-only cause: this
+  /// widget stayed mounted (e.g. its tab went inactive under the nav shell's
+  /// `IndexedStack`) while [PhotoImageCache] revoked that object URL as part
+  /// of its byte-budget LRU eviction, out from under us. Since the
+  /// underlying IndexedDB bytes are still there, re-resolving through the
+  /// cache mints a fresh Blob + object URL and heals the display.
+  ///
+  /// Guarded against looping: bails out (leaving the placeholder from this
+  /// failed frame in place) if the error is stale (no longer for the
+  /// current [_url]/[_key]), if a self-heal was already attempted for this
+  /// key ([_failedUrl] non-null), or if re-resolution comes back `null`
+  /// (bytes genuinely gone) or throws. At most one re-resolve attempt is
+  /// ever made per key.
+  void _handleLoadError(String failedUrl) {
+    if (!mounted) return;
+    final key = _key;
+    if (key == null ||
+        !shouldAttemptPhotoSelfHeal(
+          failedUrl: failedUrl,
+          currentUrl: _url,
+          alreadyAttemptedUrl: _failedUrl,
+        )) {
+      return;
+    }
+    _failedUrl = failedUrl;
+
+    final photoFiles = ref.read(photoFilesProvider);
+    unawaited(
+      PhotoImageCache.instance
+          .resolveUrl(key, () => photoFiles.readPhotoBytes(key))
+          .then((url) {
+            if (!mounted || _key != key) return;
+            if (!isSuccessfulPhotoSelfHeal(
+              resolvedUrl: url,
+              failedUrl: failedUrl,
+            )) {
+              return; // Bytes genuinely gone (or a defensive same-URL echo)
+              // — leave the placeholder from the failed frame in place.
+            }
+            setState(() => _url = url);
+          })
+          .catchError((_) {
+            // Re-resolution itself never throws per its own contract, but
+            // guard anyway: fall through to the placeholder, don't loop.
+          }),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final url = _url;
+    if (url == null) {
+      return widget.placeholder?.call() ?? const SizedBox.shrink();
+    }
+    return Image.network(
+      url,
+      fit: widget.fit,
+      width: widget.width,
+      height: widget.height,
+      errorBuilder: (context, error, stackTrace) {
+        _handleLoadError(url);
+        return widget.placeholder?.call() ?? const SizedBox.shrink();
+      },
+    );
+  }
+}
+
+/// Web dimension-probe: mirrors `FileImage(...).resolve(configuration)`'s
+/// contract (an [ImageStream] that eventually reports an [ImageInfo] with
+/// real `image.width`/`image.height`) by resolving the cached/loaded object
+/// URL and delegating to a real `NetworkImage` for the actual decode —
+/// [OneFrameImageStreamCompleter] handles both the success and error path
+/// (a `null` URL, i.e. no bytes found, surfaces as a stream error, matching
+/// what a genuinely-missing file would do via `FileImage`'s own decode
+/// failure).
+ImageStream resolvePhotoImageStream(
+  String storedPath,
+  ImageConfiguration configuration,
+  PhotoFiles photoFiles,
+) {
+  final key = photoFiles.resolvePhotoPathSync(storedPath).path;
+  final stream = ImageStream();
+  stream.setCompleter(
+    OneFrameImageStreamCompleter(
+      _loadImageInfo(key, configuration, photoFiles),
+    ),
+  );
+  return stream;
+}
+
+Future<ImageInfo> _loadImageInfo(
+  String key,
+  ImageConfiguration configuration,
+  PhotoFiles photoFiles,
+) async {
+  final url =
+      PhotoImageCache.instance.photoUrlSync(key) ??
+      await PhotoImageCache.instance.resolveUrl(
+        key,
+        () => photoFiles.readPhotoBytes(key),
+      );
+  if (url == null) {
+    throw StateError('PhotoImage: no bytes found for "$key"');
+  }
+
+  final completer = Completer<ImageInfo>();
+  final innerStream = NetworkImage(url).resolve(configuration);
+  late final ImageStreamListener listener;
+  listener = ImageStreamListener(
+    (info, synchronousCall) {
+      if (!completer.isCompleted) completer.complete(info);
+      innerStream.removeListener(listener);
+    },
+    onError: (error, stackTrace) {
+      if (!completer.isCompleted) completer.completeError(error, stackTrace);
+      innerStream.removeListener(listener);
+    },
+  );
+  innerStream.addListener(listener);
+  return completer.future;
+}

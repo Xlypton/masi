@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -19,6 +18,8 @@ import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/filtering/style_tag_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../library/application/library_providers.dart';
+import '../../../core/net/retryable_error.dart';
+import '../../topo/presentation/photo_image.dart';
 import '../application/community_providers.dart';
 import '../application/map_search_providers.dart';
 import '../data/community_repository.dart';
@@ -52,7 +53,7 @@ Client buildResilientTileHttpClient({Client? inner}) {
     when: (response) =>
         response.statusCode == 429 || response.statusCode >= 500,
     whenError: (error, stackTrace) =>
-        error is SocketException || error is ClientException,
+        isSocketException(error) || error is ClientException,
     delay: (retryCount) => Duration(milliseconds: 200 * (1 << retryCount)),
   );
 }
@@ -763,7 +764,8 @@ Color _colorForGradeBand(MasiColors colors, GradeBand band) {
 
 /// 52x52 rounded thumbnail, mirroring `topos_screen.dart`'s `_Thumbnail`:
 /// the topo's original photo when readable, else an amethyst gradient
-/// placeholder (never a broken-image icon).
+/// placeholder (never a broken-image icon) — see that class's doc for what
+/// [PhotoImage]'s `placeholder` covers.
 class _Thumbnail extends StatelessWidget {
   const _Thumbnail({required this.path});
 
@@ -775,19 +777,15 @@ class _Thumbnail extends StatelessWidget {
     final radius = BorderRadius.circular(10);
     final thumbnailPath = path;
 
-    Widget child;
-    if (thumbnailPath != null && File(thumbnailPath).existsSync()) {
-      child = Image.file(
-        File(thumbnailPath),
-        width: 52,
-        height: 52,
-        fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) =>
-            _GradientFallback(colors: colors),
-      );
-    } else {
-      child = _GradientFallback(colors: colors);
-    }
+    final child = thumbnailPath == null
+        ? _GradientFallback(colors: colors)
+        : PhotoImage(
+            thumbnailPath,
+            width: 52,
+            height: 52,
+            fit: BoxFit.cover,
+            placeholder: () => _GradientFallback(colors: colors),
+          );
 
     return ClipRRect(
       borderRadius: radius,
