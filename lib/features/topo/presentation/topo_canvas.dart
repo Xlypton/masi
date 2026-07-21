@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
@@ -741,6 +743,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     if (hitIndex != null) {
       _draggingIndex = hitIndex;
       _pendingTapDownPosition = null;
+      unawaited(HapticFeedback.selectionClick());
       return;
     }
     // No handle hit: this MIGHT be a tap-to-add, but don't commit it yet —
@@ -814,6 +817,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       scene,
       widget.imageSize,
     );
+    unawaited(HapticFeedback.selectionClick());
     ref.read(drawControllerProvider(widget.wallId).notifier).addPoint(percent);
   }
 
@@ -868,18 +872,30 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     final scene = widget.transformationController.toScene(
       viewportLocalPosition,
     );
-    final percent = CoordinateTransformer.sceneToPercent(
-      scene,
-      widget.imageSize,
-    );
     final scale = _currentScale;
     final thresholdScenePx = _handleHitRadiusPx / (scale == 0 ? 1 : scale);
-    final thresholdPercent =
-        thresholdScenePx /
-        (widget.imageSize.width == 0 ? 1 : widget.imageSize.width);
 
     final drawState = ref.read(drawControllerProvider(widget.wallId));
-    final hitId = hitTestRoute(percent, drawState.routes, thresholdPercent);
+    // Hit-test in true scene-pixel space rather than [CoordinateTransformer]'s
+    // normalized "percent" space: percent.dx is a fraction of `imageSize
+    // .width` while percent.dy is a fraction of `imageSize.height`
+    // independently, so on a non-square photo one percent-unit is a
+    // different physical distance on each axis. Comparing a single scalar
+    // threshold against a percent-space distance would make the hit
+    // tolerance anisotropic (tighter on the shorter axis). Converting both
+    // the tap and every route point to real scene pixels first makes the
+    // distance calculation isotropic, so `thresholdScenePx` applies
+    // symmetrically on both axes.
+    final scenePointRoutes = [
+      for (final route in drawState.routes)
+        route.copyWith(
+          points: [
+            for (final p in route.points)
+              CoordinateTransformer.percentToScene(p, widget.imageSize),
+          ],
+        ),
+    ];
+    final hitId = hitTestRoute(scene, scenePointRoutes, thresholdScenePx);
     ref.read(drawControllerProvider(widget.wallId).notifier).selectRoute(hitId);
   }
 

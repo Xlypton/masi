@@ -972,6 +972,160 @@ void main() {
   });
 
   group(
+    'TopoCanvas view-mode tap-to-select hit tolerance is ISOTROPIC for '
+    'non-square images (BUG #8 fix)',
+    () {
+      // For a 1200x1600 portrait image, `CoordinateTransformer.sceneToPercent`
+      // normalizes dx by width (1200) and dy by height (1600) independently
+      // (see coordinate_transformer.dart), so comparing a percent-space tap
+      // distance against a single scalar threshold used to make the hit
+      // tolerance TALLER-axis-generous: the same physical (scene-pixel) tap
+      // offset lands at a SMALLER percent-space distance on the taller axis
+      // than on the narrower one. `_endViewTap` now hit-tests entirely in
+      // true scene-pixel space instead (converting every route point via
+      // `CoordinateTransformer.percentToScene` before calling
+      // `hitTestRoute`), which is inherently isotropic since both axes share
+      // the same physical unit. This reproduces the exact scenario the old
+      // code got wrong: a tap physically just OUTSIDE the intended pixel
+      // radius, purely along the taller (y) axis.
+      const imageSize = Size(1200, 1600);
+      const viewportSize = Size(400, 800);
+
+      void setViewportSize(WidgetTester tester, Size size) {
+        tester.view.physicalSize = size;
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
+
+      Future<TransformationController> pumpViewModeCanvas(
+        WidgetTester tester,
+        ProviderContainer container,
+      ) async {
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: Scaffold(
+                body: TopoCanvas(
+                  wallId: _testWallId,
+                  imagePath: '/nonexistent/test-topo.jpg',
+                  imageSize: imageSize,
+                  transformationController: controller,
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+        return controller;
+      }
+
+      testWidgets(
+        'a tap physically just outside the hit radius is rejected the same '
+        'way on the x- and y-axis (not over-generous vertically for this '
+        'portrait photo), while a tap well inside still selects the route',
+        (tester) async {
+          setViewportSize(tester, viewportSize);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          // FIX #6 (autoDispose pending-timer gotcha): see the L1 test above.
+          container.listen(drawControllerProvider(_testWallId), (_, _) {});
+
+          final notifier = container.read(
+            drawControllerProvider(_testWallId).notifier,
+          );
+          // A degenerate (zero-length) two-point route at the image center:
+          // `commitRoute` requires >= 2 points, and a zero-length segment is
+          // handled as a point-to-point distance (see
+          // `route_hit_test.dart`'s `_distancePointToSegment`), so this
+          // behaves exactly like hit-testing a single point.
+          notifier.addPoint(const Offset(0.5, 0.5));
+          notifier.addPoint(const Offset(0.5, 0.5));
+          notifier.commitRoute();
+          final routeId = container
+              .read(drawControllerProvider(_testWallId))
+              .routes
+              .single
+              .id;
+
+          final controller = await pumpViewModeCanvas(tester, container);
+
+          // Fill-width default: width-bound for this 3:4 portrait image, so
+          // scale == 400/1200 == 1/3 exactly.
+          final scale = controller.value.getMaxScaleOnAxis();
+          expect(scale, closeTo(1 / 3, 1e-9));
+
+          // The handle hit radius is 20 screen px (see `_handleHitRadiusPx`),
+          // so the intended physical tolerance in scene pixels is 20/scale.
+          final thresholdScenePx = 20.0 / scale;
+          expect(thresholdScenePx, closeTo(60.0, 1e-9));
+          final justOutsideScenePx = thresholdScenePx + 5; // 65
+          final wellInsideScenePx = thresholdScenePx - 5; // 55
+
+          final routeScreen = MatrixUtils.transformPoint(
+            controller.value,
+            CoordinateTransformer.percentToScene(
+              const Offset(0.5, 0.5),
+              imageSize,
+            ),
+          );
+
+          // A tap `justOutsideScenePx` scene-pixels below the route, purely
+          // along y — converted to screen space via the live scale.
+          await tester.tapAt(
+            routeScreen + Offset(0, justOutsideScenePx * scale),
+          );
+          await tester.pump();
+          expect(
+            container
+                .read(drawControllerProvider(_testWallId))
+                .selectedRouteId,
+            isNull,
+            reason:
+                'a tap 65 scene-px below the route (physically outside the '
+                '60px tolerance) must NOT select it — pre-fix, the percent-'
+                'space threshold (thresholdScenePx/width == 0.05) compared '
+                'against a percent-space y-distance of 65/1600 ≈ 0.0406 '
+                'would have wrongly accepted this as a hit, since percent-'
+                'space stretches the taller (y) axis',
+          );
+
+          // The identical physical scene-pixel offset along x must be
+          // rejected too — proving the tolerance is symmetric across axes.
+          await tester.tapAt(
+            routeScreen + Offset(justOutsideScenePx * scale, 0),
+          );
+          await tester.pump();
+          expect(
+            container
+                .read(drawControllerProvider(_testWallId))
+                .selectedRouteId,
+            isNull,
+          );
+
+          // Positive control: a tap well WITHIN the tolerance still selects
+          // the route — the fix isn't just stricter across the board, it's
+          // consistent.
+          await tester.tapAt(
+            routeScreen + Offset(0, wellInsideScenePx * scale),
+          );
+          await tester.pump();
+          expect(
+            container
+                .read(drawControllerProvider(_testWallId))
+                .selectedRouteId,
+            routeId,
+          );
+        },
+      );
+    },
+  );
+
+  group(
     'TopoCanvas InteractiveViewer sizing (regression: tiny top-left '
     'thumbnail)',
     () {
