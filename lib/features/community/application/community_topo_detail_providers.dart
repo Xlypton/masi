@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/database_provider.dart';
@@ -6,6 +7,7 @@ import '../../topo/domain/topo_route.dart';
 import '../data/comments_repository.dart';
 import 'comments_providers.dart';
 import 'likes_providers.dart';
+import 'shared_wall_hydration_providers.dart';
 
 // NOTE: routes are now scoped per-photo (a wall/topo can carry several
 // photos, each with its own route overlay — see `RouteRepository`'s class
@@ -82,6 +84,26 @@ final commentsForWallProvider = StreamProvider.family<List<Comment>, String>(
       ref.watch(commentsRepositoryProvider).watchCommentsForWall(wallId),
 );
 
+/// The `ownerId` stamped on wall [wallId]'s row (or `null` if it's unowned,
+/// doesn't exist, or has been soft-deleted). Backs `CommunityTopoDetailScreen`'s
+/// "by `<author>`" byline via [profileDisplayNameProvider] — Feature #15 Wave
+/// 3's whole point is a cold/signed-out visitor landing on a shared topo,
+/// who has no other way to tell whose it is. Mirrors
+/// `community_feed_screen.dart`'s `_FeedRow`/`_AscentFeedRow` owner-name
+/// resolution (same `profileDisplayNameProvider` + "Unknown climber"-style
+/// fallback convention), just resolving the wall's owner directly rather
+/// than reading it off an already-loaded feed row.
+final wallOwnerIdProvider = FutureProvider.autoDispose.family<String?, String>(
+  (ref, wallId) async {
+    final db = ref.watch(appDatabaseProvider);
+    final row = await (db.select(db.walls)
+          ..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())
+          ..limit(1))
+        .getSingleOrNull();
+    return row?.ownerId;
+  },
+);
+
 /// Live count of ACTIVE likes on the ascent log [ascentId] — ascent-targeted
 /// mirror of [likeCountForWallProvider] (Feature #12: public opt-in ascent
 /// logs can be liked like shared topos), wrapping
@@ -128,3 +150,41 @@ final currentAuthorNameProvider = Provider<String>((ref) {
   final at = email.indexOf('@');
   return at > 0 ? email.substring(0, at) : email;
 });
+
+/// Feature #15 Wave 3: gates `CommunityTopoDetailScreen`'s cold-visitor
+/// hydration. Resolves to `true` once wall [wallId] is (or already was)
+/// present in local Drift, or `false` if hydration ran and it's STILL not
+/// there — meaning the link doesn't point at a real, currently-shared topo
+/// (not found, or exists but `visibility != 'shared'`; anon RLS makes those
+/// two indistinguishable — see [SharedWallHydrator.ensureSharedWallLocal]'s
+/// doc). The screen renders a graceful "not found" state for `false` rather
+/// than crashing or hanging on an indefinitely-empty canvas.
+///
+/// Deliberately checks local presence FIRST via a bare Drift query, and
+/// only falls through to [ensureSharedWallLocalProvider] — which, the
+/// moment it's watched AT ALL (even on its own fast no-op path), eagerly
+/// constructs the Supabase-wired `sharedWallHydratorProvider` ->
+/// `sharedWallRemoteProvider` -> `supabaseClientProvider` chain, since that
+/// chain is built from plain (non-async) `Provider`s evaluated at first
+/// read — when the wall is genuinely absent locally. This keeps the common
+/// case (a signed-in owner viewing their own already-local wall, or a
+/// visitor re-opening an already-hydrated one) from ever touching
+/// `supabaseClientProvider`, matching every existing (signed-in,
+/// no-Supabase-override) test in this suite, and avoids a redundant
+/// network round trip on every rebuild (the hydrator's own fast-path
+/// already short-circuits per-call, but this skips even the ATTEMPT).
+final wallReadyForDetailProvider =
+    FutureProvider.autoDispose.family<bool, String>((ref, wallId) async {
+      final db = ref.watch(appDatabaseProvider);
+      Future<bool> existsLocally() async {
+        final row = await (db.select(db.walls)
+              ..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())
+              ..limit(1))
+            .getSingleOrNull();
+        return row != null;
+      }
+
+      if (await existsLocally()) return true;
+      await ref.watch(ensureSharedWallLocalProvider(wallId).future);
+      return existsLocally();
+    });

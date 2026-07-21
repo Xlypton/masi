@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/routes/route_styles.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../account/application/auth_providers.dart';
+import '../../account/application/profile_providers.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../topo/presentation/route_legend.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
@@ -140,10 +143,100 @@ class _CommunityTopoDetailScreenState
     );
   }
 
+  /// Feature #15 Wave 3: navigates the CTA below to the app's sign-in
+  /// surface (`AccountScreen`, mounted at `/account` — see
+  /// `lib/app/router.dart`; there is no separate dedicated sign-in screen,
+  /// it renders a magic-link form itself when signed out). `context.push`
+  /// (not `.go`) matches every other cross-feature navigation in this
+  /// screen's siblings (e.g. `community_feed_screen.dart`'s row taps) —
+  /// pushed on top so "back" returns here rather than replacing this route.
+  void _goToSignIn() => context.push('/account');
+
   @override
   Widget build(BuildContext context) {
     final wallId = widget.wallId;
     final colors = MasiColors.of(context);
+    // Feature #15 Wave 3: a cold/signed-out visitor's local Drift is empty
+    // for this wall — gate the whole screen on `wallReadyForDetailProvider`,
+    // which (a) is an instant true for the already-local case (signed-in
+    // owner, or a previously-hydrated visitor — see that provider's doc for
+    // why it never touches Supabase in that path) and (b) triggers +awaits
+    // the anon hydrator otherwise. Every provider below this point already
+    // reads LOCAL Drift reactively, so once hydration lands they render with
+    // zero further changes.
+    final wallReady = ref.watch(wallReadyForDetailProvider(wallId));
+    return wallReady.when(
+      loading: () => _buildLoading(colors),
+      error: (_, _) => _buildNotFound(context, colors),
+      data: (ready) =>
+          ready ? _buildDetail(context, wallId, colors) : _buildNotFound(context, colors),
+    );
+  }
+
+  /// Shown while [wallReadyForDetailProvider] is still resolving (either the
+  /// initial local-presence check, or the anon hydration fetch it triggered
+  /// for a genuinely cold wall) — a plain centered spinner rather than a
+  /// blank/empty screen.
+  Widget _buildLoading(MasiColors colors) {
+    return Scaffold(
+      key: Key('community-detail-${widget.wallId}'),
+      backgroundColor: colors.ground,
+      body: const Center(
+        child: CircularProgressIndicator(key: Key('community-detail-loading')),
+      ),
+    );
+  }
+
+  /// Shown once hydration has run and the wall STILL isn't local — the
+  /// shared link doesn't point at a real, currently-shared topo (not found,
+  /// or no longer `visibility == 'shared'`; anon RLS makes those two
+  /// indistinguishable, see `SharedWallHydrator.ensureSharedWallLocal`'s
+  /// doc). A graceful terminal state rather than a crash or an
+  /// indefinitely-blank canvas — keeps this screen's own back affordance so
+  /// a visitor isn't stranded.
+  Widget _buildNotFound(BuildContext context, MasiColors colors) {
+    return Scaffold(
+      key: Key('community-detail-${widget.wallId}'),
+      backgroundColor: colors.ground,
+      body: SafeArea(
+        child: Stack(
+          children: [
+            Center(
+              key: const Key('community-detail-not-found'),
+              child: Padding(
+                padding: const EdgeInsets.all(MasiSpacing.lg),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    MasiIcon('warning', size: 32, color: colors.ink2),
+                    const SizedBox(height: MasiSpacing.sm),
+                    Text(
+                      'Topo not found or no longer shared',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            Positioned(
+              top: MasiSpacing.sm,
+              left: MasiSpacing.sm,
+              child: IconButton(
+                key: const Key('community-detail-back-button'),
+                icon: MasiIcon('chevron_left'),
+                tooltip: 'Back',
+                color: colors.accent,
+                onPressed: () => Navigator.of(context).maybePop(),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDetail(BuildContext context, String wallId, MasiColors colors) {
     final likeCount = ref.watch(likeCountForWallProvider(wallId)).value ?? 0;
     final hasLiked = ref.watch(hasLikedWallProvider(wallId)).value ?? false;
     final comments =
@@ -169,6 +262,23 @@ class _CommunityTopoDetailScreenState
     // AsyncLoading (no email yet), silently falling back to 'Anonymous'
     // even for a signed-in user.
     ref.watch(currentAuthorNameProvider);
+    // Feature #15 Wave 3: a signed-out visitor (the whole point of the
+    // anon-hydrated cold-load path above) can view but not like/comment —
+    // `AuthSessionState.isSignedIn` is `email != null`, the same signal
+    // `currentAuthorNameProvider` above already keys its 'Anonymous'
+    // fallback off of.
+    final isSignedIn =
+        ref.watch(authStateProvider).asData?.value.isSignedIn ?? false;
+    // Feature #15 Wave 3: a cold/signed-out visitor has no other way to see
+    // whose topo this is (unlike the Feed, there's no already-loaded row to
+    // fall back to) — resolve it the same way `community_feed_screen.dart`'s
+    // `_FeedRow`/`_AscentFeedRow` do (`profileDisplayNameProvider`, same
+    // "Unknown climber" fallback stance). `null`/empty collapses to nothing
+    // rendered rather than a raw uid or an awkward empty byline.
+    final ownerId = ref.watch(wallOwnerIdProvider(wallId)).value;
+    final authorName = ownerId != null
+        ? ref.watch(profileDisplayNameProvider(ownerId)).asData?.value
+        : null;
 
     return Scaffold(
       key: Key('community-detail-$wallId'),
@@ -287,23 +397,42 @@ class _CommunityTopoDetailScreenState
               padding: const EdgeInsets.all(MasiSpacing.lg),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
-                  Row(
-                    children: [
-                      IconButton(
-                        key: const Key('community-like-button'),
-                        tooltip: hasLiked ? 'Unlike' : 'Like',
-                        icon: hasLiked
-                            ? MasiIcon('heart_fill', color: colors.accent)
-                            : MasiIcon('heart', color: colors.ink2),
-                        onPressed: _toggleLike,
+                  if (authorName != null && authorName.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: MasiSpacing.sm),
+                      child: Text(
+                        'by $authorName',
+                        key: const Key('community-detail-author'),
+                        style: Theme.of(context).textTheme.bodyMedium
+                            ?.copyWith(color: colors.ink2),
                       ),
-                      Text(
-                        '$likeCount',
-                        key: const Key('community-like-count'),
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                    ],
-                  ),
+                    ),
+                  if (isSignedIn)
+                    Row(
+                      children: [
+                        IconButton(
+                          key: const Key('community-like-button'),
+                          tooltip: hasLiked ? 'Unlike' : 'Like',
+                          icon: hasLiked
+                              ? MasiIcon('heart_fill', color: colors.accent)
+                              : MasiIcon('heart', color: colors.ink2),
+                          onPressed: _toggleLike,
+                        ),
+                        Text(
+                          '$likeCount',
+                          key: const Key('community-like-count'),
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                      ],
+                    )
+                  else
+                    // Feature #15 Wave 3: replaces BOTH the like button
+                    // above and the comment composer below with a single
+                    // CTA — a signed-out visitor (anon or otherwise) can
+                    // still read the topo + existing comments, just not
+                    // interact, so this is the one control shown in place
+                    // of the two interactive ones.
+                    _SignInToInteractCta(onTap: _goToSignIn),
                   const Divider(),
                   Text(
                     'Comments',
@@ -322,45 +451,49 @@ class _CommunityTopoDetailScreenState
                     for (final comment in comments)
                       _CommentRow(comment: comment),
                   const SizedBox(height: MasiSpacing.sm),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          key: const Key('community-comment-field'),
-                          controller: _commentController,
-                          decoration: const InputDecoration(
-                            hintText: 'Add a comment',
+                  // Signed-out: no composer at all — the single CTA above
+                  // (in the like row's slot) already covers "sign in to
+                  // comment" too, per this section's own doc.
+                  if (isSignedIn)
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            key: const Key('community-comment-field'),
+                            controller: _commentController,
+                            decoration: const InputDecoration(
+                              hintText: 'Add a comment',
+                            ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: MasiSpacing.sm),
-                      // Disabled/inert state for an empty/whitespace-only
-                      // draft: rebuilt straight off the controller (rather
-                      // than gated on comments-list state) so it reacts to
-                      // every keystroke, not just a comment actually posting.
-                      ValueListenableBuilder<TextEditingValue>(
-                        valueListenable: _commentController,
-                        builder: (context, value, _) {
-                          final canSubmit = value.text.trim().isNotEmpty;
-                          return IconButton(
-                            key: const Key('community-comment-submit'),
-                            tooltip: 'Post comment',
-                            // D4: masi_send.svg doesn't exist in
-                            // assets/icons/masi/ (only masi_send_check*) —
-                            // keep the existing glyph per that assertion's
-                            // fallback.
-                            icon: MasiIcon(
-                              'send_check',
-                              color: canSubmit ? colors.accent : colors.ink2,
-                            ),
-                            onPressed: canSubmit ? _submitComment : null,
-                          );
-                        },
-                      ),
-                    ],
-                  ),
+                        const SizedBox(width: MasiSpacing.sm),
+                        // Disabled/inert state for an empty/whitespace-only
+                        // draft: rebuilt straight off the controller (rather
+                        // than gated on comments-list state) so it reacts to
+                        // every keystroke, not just a comment actually posting.
+                        ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _commentController,
+                          builder: (context, value, _) {
+                            final canSubmit = value.text.trim().isNotEmpty;
+                            return IconButton(
+                              key: const Key('community-comment-submit'),
+                              tooltip: 'Post comment',
+                              // D4: masi_send.svg doesn't exist in
+                              // assets/icons/masi/ (only masi_send_check*) —
+                              // keep the existing glyph per that assertion's
+                              // fallback.
+                              icon: MasiIcon(
+                                'send_check',
+                                color: canSubmit ? colors.accent : colors.ink2,
+                              ),
+                              onPressed: canSubmit ? _submitComment : null,
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   const Divider(),
-                  _buildRoutesSection(context, colors, routeEntries),
+                  _buildRoutesSection(context, colors, routeEntries, isSignedIn),
                 ]),
               ),
             ),
@@ -375,10 +508,17 @@ class _CommunityTopoDetailScreenState
   /// identity (`community-routes-section`) and its toggle tap target;
   /// per-route rows keep their pre-existing `community-log-ascent-<dbId>`
   /// keys/behavior untouched.
+  ///
+  /// [isSignedIn] gates the per-route "Log ascent" button (a
+  /// personal-logbook write) using the SAME `authStateProvider`-derived
+  /// signal `build()` uses for the like button/comment composer above — a
+  /// signed-out visitor must not be able to open the log-ascent sheet and
+  /// save an ownerless ascent.
   Widget _buildRoutesSection(
     BuildContext context,
     MasiColors colors,
     List<RouteEntry> routeEntries,
+    bool isSignedIn,
   ) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -456,24 +596,73 @@ class _CommunityTopoDetailScreenState
                       onPressed: () =>
                           _launchBetaVideo(entry.route.betaVideoUrl!),
                     ),
-                  OutlinedButton(
-                    key: Key('community-log-ascent-${entry.dbId}'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: colors.accent,
-                      side: BorderSide(color: colors.accent),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(
-                          MasiRadii.control,
+                  // Signed-out: this personal-logbook action stays hidden —
+                  // the same `_SignInToInteractCta` above already covers the
+                  // "sign in to participate" affordance for a read-only
+                  // visitor, so this doesn't add a second CTA in its place.
+                  if (isSignedIn)
+                    OutlinedButton(
+                      key: Key('community-log-ascent-${entry.dbId}'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: colors.accent,
+                        side: BorderSide(color: colors.accent),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(
+                            MasiRadii.control,
+                          ),
                         ),
                       ),
+                      onPressed: () => _openLogAscentSheet(entry.dbId),
+                      child: const Text('Log ascent'),
                     ),
-                    onPressed: () => _openLogAscentSheet(entry.dbId),
-                    child: const Text('Log ascent'),
-                  ),
                 ],
               ),
             ),
       ],
+    );
+  }
+}
+
+/// Feature #15 Wave 3: the "Sign in to like & comment" CTA shown in place of
+/// BOTH the like button and the comment composer for a signed-out visitor
+/// (see `_CommunityTopoDetailScreenState.build`'s `isSignedIn` branch).
+/// Stateless/non-const-friendly since it just needs a tap callback — no
+/// screen-local state of its own.
+class _SignInToInteractCta extends StatelessWidget {
+  const _SignInToInteractCta({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Material(
+      key: const Key('community-signin-cta'),
+      color: colors.surface2,
+      borderRadius: BorderRadius.circular(MasiRadii.control),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(MasiRadii.control),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MasiSpacing.md,
+            vertical: MasiSpacing.sm,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              MasiIcon('lock', color: colors.accent),
+              const SizedBox(width: MasiSpacing.sm),
+              Text(
+                'Sign in to like & comment',
+                style: Theme.of(
+                  context,
+                ).textTheme.titleSmall?.copyWith(color: colors.ink),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

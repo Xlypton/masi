@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/account/application/auth_providers.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/community/application/comments_providers.dart';
+import 'package:climbtopo/features/community/application/shared_wall_hydration_providers.dart';
 import 'package:climbtopo/features/community/presentation/community_topo_detail_screen.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/logbook/application/ascents_providers.dart';
@@ -14,10 +17,12 @@ import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 
 /// Minimal in-memory [AuthRepository] test double: a FIXED signed-in
@@ -116,6 +121,33 @@ void main() {
     return UncontrolledProviderScope(
       container: container,
       child: MaterialApp(theme: MasiTheme.light, home: child),
+    );
+  }
+
+  /// Feature #15 Wave 3: a real (minimal) [GoRouter] wrapper — mirrors
+  /// `community_feed_union_test.dart`'s own `_wrap` helper — so the
+  /// sign-in CTA's `context.push('/account')` resolves against a real
+  /// router (to a keyed placeholder standing in for `AccountScreen`)
+  /// instead of throwing for lack of a `GoRouter` ancestor, which the
+  /// plain `wrap()` above (bare `MaterialApp(home: ...)`, no router) can't
+  /// provide.
+  Widget wrapWithRouter(ProviderContainer container, Widget screen) {
+    final router = GoRouter(
+      initialLocation: '/',
+      routes: [
+        GoRoute(path: '/', builder: (context, state) => screen),
+        GoRoute(
+          path: '/account',
+          builder: (context, state) => const Text(
+            'account-placeholder',
+            key: Key('account-placeholder'),
+          ),
+        ),
+      ],
+    );
+    return UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp.router(theme: MasiTheme.light, routerConfig: router),
     );
   }
 
@@ -1027,6 +1059,353 @@ void main() {
         findsNothing,
       );
     });
+  });
+
+  group('Feature #15 Wave 3: anon shareable-topo landing', () {
+    testWidgets(
+      'cold load: an empty local DB triggers ensureSharedWallLocalProvider '
+      '(shown as a loading state first), and once it resolves the screen '
+      'renders the hydrated wall name, routes, and author byline',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        const wallId = 'cold-wall-1';
+        const ownerId = 'owner-cold';
+        // Hold hydration open so the loading frame is deterministic — a real
+        // cold visitor's hydration is a Supabase round-trip, so the spinner
+        // genuinely shows; without this gate the in-memory DB inserts race to
+        // completion before the first pump and the loading frame is missed.
+        final hydrationGate = Completer<void>();
+
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            authRepositoryProvider.overrideWithValue(
+              _FakeAuthRepository(const AuthSessionState.signedOut()),
+            ),
+            // Stands in for Wave 2's real SharedWallHydrator (which talks
+            // to Supabase) — this test is only about the SCREEN's render
+            // path once hydration lands, not the hydrator itself (see
+            // shared_wall_hydrator_test.dart for that), so it seeds the
+            // exact same tables directly into the SAME overridden `db`.
+            ensureSharedWallLocalProvider.overrideWith((ref, id) async {
+              await hydrationGate.future;
+              await db.into(db.profiles).insert(
+                ProfilesCompanion.insert(
+                  id: ownerId,
+                  createdAt: 1000,
+                  updatedAt: 1000,
+                  displayName: const Value('Alex Cold'),
+                ),
+              );
+              await db.into(db.areas).insert(
+                AreasCompanion.insert(
+                  id: 'area-cold',
+                  createdAt: 1000,
+                  updatedAt: 1000,
+                  name: 'Cold Area',
+                  ownerId: const Value(ownerId),
+                ),
+              );
+              await db.into(db.sectors).insert(
+                SectorsCompanion.insert(
+                  id: 'sector-cold',
+                  createdAt: 1000,
+                  updatedAt: 1000,
+                  areaId: 'area-cold',
+                  name: 'Cold Sector',
+                  sortOrder: 0,
+                  ownerId: const Value(ownerId),
+                ),
+              );
+              await db.into(db.walls).insert(
+                WallsCompanion.insert(
+                  id: id,
+                  createdAt: 1000,
+                  updatedAt: 1000,
+                  sectorId: 'sector-cold',
+                  name: 'Cold Wall',
+                  sortOrder: 0,
+                  visibility: const Value('shared'),
+                  ownerId: const Value(ownerId),
+                ),
+              );
+              await db.into(db.photos).insert(
+                PhotosCompanion.insert(
+                  id: 'photo-cold',
+                  createdAt: 1000,
+                  updatedAt: 1000,
+                  wallId: id,
+                  localPath: 'photos/photo-cold.jpg',
+                  kind: 'original',
+                  width: 1000,
+                  height: 2000,
+                  ownerId: const Value(ownerId),
+                ),
+              );
+              await db.into(db.routes).insert(
+                RoutesCompanion.insert(
+                  id: 'route-cold',
+                  createdAt: 1000,
+                  updatedAt: 1000,
+                  wallId: id,
+                  photoId: 'photo-cold',
+                  number: 1,
+                  colorIndex: 0,
+                  pointsJson: '[]',
+                  symbolsJson: '[]',
+                  sortOrder: 0,
+                  ownerId: const Value(ownerId),
+                ),
+              );
+            }),
+          ],
+        );
+        addTearDown(db.close);
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          wrap(
+            container,
+            const CommunityTopoDetailScreen(
+              wallId: wallId,
+              debugInitialImageSize: Size(1000, 2000),
+            ),
+          ),
+        );
+
+        // Before hydration resolves: a loading state, not a blank screen.
+        await tester.pump();
+        expect(
+          find.byKey(const Key('community-detail-loading')),
+          findsOneWidget,
+        );
+
+        // Release hydration → the seeded wall lands locally and the screen
+        // rebuilds into its content state.
+        hydrationGate.complete();
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('community-detail-loading')),
+          findsNothing,
+        );
+        final titleWidget = tester.widget<Text>(
+          find.byKey(
+            const Key('community-detail-title'),
+            skipOffstage: false,
+          ),
+        );
+        expect(titleWidget.data, 'Cold Wall');
+
+        expect(
+          find.textContaining('Route 1', skipOffstage: false),
+          findsWidgets,
+        );
+
+        expect(
+          find.text('by Alex Cold', skipOffstage: false),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'hydration-returns-nothing: a not-found/not-shared wall renders a '
+      'graceful not-found state — no crash, no indefinite spinner',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            authRepositoryProvider.overrideWithValue(
+              _FakeAuthRepository(const AuthSessionState.signedOut()),
+            ),
+            // Mirrors SharedWallHydrator.ensureSharedWallLocal's own
+            // documented silent no-op for a not-found/not-shared wall: it
+            // resolves without writing anything locally.
+            ensureSharedWallLocalProvider.overrideWith((ref, id) async {}),
+          ],
+        );
+        addTearDown(db.close);
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          wrap(
+            container,
+            const CommunityTopoDetailScreen(wallId: 'does-not-exist'),
+          ),
+        );
+
+        // pumpAndSettle completing AT ALL is itself part of the assertion —
+        // a provider stuck rebuilding on a perpetual AsyncLoading would
+        // time this out instead.
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(
+            const Key('community-detail-not-found'),
+            skipOffstage: false,
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-detail-loading')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'signed-out: the like button + comment composer are replaced by a '
+      'single sign-in CTA, and tapping it navigates to /account',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            authRepositoryProvider.overrideWithValue(
+              _FakeAuthRepository(const AuthSessionState.signedOut()),
+            ),
+          ],
+        );
+        addTearDown(db.close);
+        addTearDown(container.dispose);
+
+        final crud = container.read(libraryCrudRepositoryProvider);
+        final area = await crud.createArea('Area');
+        final sector = await crud.createSector(area.id, 'Sector');
+        final wall = await crud.createWall(sector.id, 'Wall');
+        late String photoId;
+        await tester.runAsync(() async {
+          photoId = await crud.attachPhotoToWall(
+            wall.id,
+            XFile('/tmp/community-detail-signedout-test-photo.jpg'),
+            1000,
+            2000,
+          );
+        });
+        final routeRepo = RouteRepository(db, nowMs: () => 1000);
+        await routeRepo.upsertRoute(
+          wall.id,
+          photoId,
+          const TopoRoute(
+            id: 1,
+            number: 1,
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+          ),
+        );
+        final dbIds = await routeRepo.routeDbIdsByNumber(wall.id);
+        final routeDbId = dbIds[1]!;
+
+        await tester.pumpWidget(
+          wrapWithRouter(
+            container,
+            CommunityTopoDetailScreen(
+              wallId: wall.id,
+              debugInitialImageSize: const Size(1000, 2000),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('community-signin-cta'), skipOffstage: false),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('community-like-button'), skipOffstage: false),
+          findsNothing,
+        );
+        expect(
+          find.byKey(
+            const Key('community-comment-field'),
+            skipOffstage: false,
+          ),
+          findsNothing,
+        );
+        expect(
+          find.byKey(
+            const Key('community-comment-submit'),
+            skipOffstage: false,
+          ),
+          findsNothing,
+        );
+        // The per-route "Log ascent" button is a personal-logbook write —
+        // gated on the same isSignedIn signal as the like/comment controls
+        // above, so a signed-out visitor must not see it (or be able to
+        // open the sheet and save an ownerless ascent). The single sign-in
+        // CTA already asserted above covers the affordance in its place —
+        // this must NOT add a second one.
+        expect(
+          find.byKey(
+            Key('community-log-ascent-$routeDbId'),
+            skipOffstage: false,
+          ),
+          findsNothing,
+        );
+
+        await scrollKeyIntoView(tester, const Key('community-signin-cta'));
+        await tester.tap(find.byKey(const Key('community-signin-cta')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('account-placeholder')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'signed-in: no sign-in CTA renders — the normal like/comment '
+      'controls are present (regression guard for the existing D4b/D4c '
+      'coverage above)',
+      (tester) async {
+        final seeded = await seedWallWithRoute(tester);
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
+
+        await tester.pumpWidget(
+          wrap(
+            seeded.container,
+            CommunityTopoDetailScreen(
+              wallId: seeded.wallId,
+              debugInitialImageSize: const Size(1000, 2000),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('community-signin-cta'), skipOffstage: false),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('community-like-button'), skipOffstage: false),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(
+            const Key('community-comment-field'),
+            skipOffstage: false,
+          ),
+          findsOneWidget,
+        );
+        // Guard against over-hiding: gating "Log ascent" on isSignedIn must
+        // not hide it for a SIGNED-IN viewer too — it should render exactly
+        // as before this fix.
+        await scrollKeyIntoView(
+          tester,
+          Key('community-log-ascent-${seeded.routeDbId}'),
+        );
+        expect(
+          find.byKey(
+            Key('community-log-ascent-${seeded.routeDbId}'),
+            skipOffstage: false,
+          ),
+          findsOneWidget,
+        );
+      },
+    );
   });
 }
 
