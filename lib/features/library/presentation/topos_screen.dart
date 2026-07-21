@@ -236,7 +236,9 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                       // `proximityEntries` degrades to exactly `topos` whenever
                       // no fix is available — see that provider's doc).
                       if (proximityEntries.isEmpty) {
-                        return const _EmptyState();
+                        return _EmptyState(
+                          onNewTopo: canCreate ? _handleNewTopo : null,
+                        );
                       }
                       // Search narrows first, then the filter facets (mirrors
                       // `community_screen.dart`'s `_FeedView`), so the two stay
@@ -293,6 +295,10 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                           const SizedBox(height: 8),
                           ElevatedButton(
                             key: const Key('topos-retry'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: colors.accent,
+                              foregroundColor: colors.onAccent,
+                            ),
                             onPressed: () => ref.invalidate(toposProvider),
                             child: const Text('Retry'),
                           ),
@@ -347,8 +353,15 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                 // `foregroundColor` since no separate `iconColor` is
                 // set), so the glyph inherits the SAME onAccent-enabled
                 // / dimmed-disabled contrast the old `Text('New topo')`
-                // had -- just on an icon instead of a label.
-                child: const MasiIcon('add', size: 22),
+                // had -- just on an icon instead of a label. Wrapped in
+                // `Semantics` since the icon alone carries no accessible
+                // label for VoiceOver/TalkBack -- the button's own `key`
+                // is not a substitute.
+                child: Semantics(
+                  label: 'New topo',
+                  button: true,
+                  child: const MasiIcon('add', size: 22),
+                ),
               ),
             ),
           ),
@@ -539,34 +552,60 @@ class _ToposFilterBar extends StatelessWidget {
       child: Row(
         children: [
           Expanded(
-            child: TextField(
-              key: const Key('topos-search-field'),
-              controller: searchController,
-              decoration: InputDecoration(
-                hintText: 'Search topos',
-                prefixIcon: Padding(
-                  padding: const EdgeInsets.only(left: 12, right: 8),
-                  child: MasiIcon('search', size: 20, color: colors.ink3),
-                ),
-                prefixIconConstraints: const BoxConstraints(
-                  minWidth: 0,
-                  minHeight: 0,
-                ),
-                filled: true,
-                fillColor: colors.surface2,
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide(color: colors.separator),
-                ),
-                enabledBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide(color: colors.separator),
-                ),
-                focusedBorder: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(24),
-                  borderSide: BorderSide(color: colors.accent, width: 1.5),
-                ),
-              ),
+            // `ValueListenableBuilder` (not a bare `TextField`) so the
+            // clear ('x') suffix can appear/disappear as the controller's
+            // text goes non-empty/empty, without this whole bar needing to
+            // become stateful -- `TextEditingController` is itself a
+            // `ValueListenable<TextEditingValue>`.
+            child: ValueListenableBuilder<TextEditingValue>(
+              valueListenable: searchController,
+              builder: (context, value, _) {
+                return TextField(
+                  key: const Key('topos-search-field'),
+                  controller: searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Search topos',
+                    prefixIcon: Padding(
+                      padding: const EdgeInsets.only(left: 12, right: 8),
+                      child: MasiIcon('search', size: 20, color: colors.ink3),
+                    ),
+                    prefixIconConstraints: const BoxConstraints(
+                      minWidth: 0,
+                      minHeight: 0,
+                    ),
+                    suffixIcon: value.text.isEmpty
+                        ? null
+                        : IconButton(
+                            key: const Key('topos-search-clear'),
+                            icon: MasiIcon(
+                              'close',
+                              size: 16,
+                              color: colors.ink3,
+                            ),
+                            tooltip: 'Clear search',
+                            onPressed: searchController.clear,
+                          ),
+                    suffixIconConstraints: const BoxConstraints(
+                      minWidth: 0,
+                      minHeight: 0,
+                    ),
+                    filled: true,
+                    fillColor: colors.surface2,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide(color: colors.separator),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide(color: colors.separator),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(24),
+                      borderSide: BorderSide(color: colors.accent, width: 1.5),
+                    ),
+                  ),
+                );
+              },
             ),
           ),
           const SizedBox(width: MasiSpacing.sm),
@@ -594,7 +633,15 @@ class _ToposFilterBar extends StatelessWidget {
 }
 
 class _EmptyState extends StatelessWidget {
-  const _EmptyState();
+  const _EmptyState({this.onNewTopo});
+
+  /// Wired straight to `_ToposScreenState._handleNewTopo`, gated on the
+  /// SAME `canCreate` guard the floating `topos-new-topo` button uses (see
+  /// `ToposScreen.build`) -- `null` while the topos list hasn't finished
+  /// loading yet or a create is already in flight, which this button
+  /// renders as visually disabled rather than omitted, mirroring the
+  /// floating button's own disabled treatment.
+  final VoidCallback? onNewTopo;
 
   @override
   Widget build(BuildContext context) {
@@ -609,6 +656,16 @@ class _EmptyState extends StatelessWidget {
             style: Theme.of(
               context,
             ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+          ),
+          const SizedBox(height: MasiSpacing.md),
+          ElevatedButton(
+            key: const Key('topos-empty-new-topo'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: colors.accent,
+              foregroundColor: colors.onAccent,
+            ),
+            onPressed: onNewTopo,
+            child: const Text('New topo'),
           ),
         ],
       ),
@@ -700,8 +757,11 @@ class _ToposFiltersSheet extends ConsumerWidget {
         padding: const EdgeInsets.all(MasiSpacing.lg),
         decoration: BoxDecoration(
           color: colors.surface,
+          // `MasiRadii.large` (not `.card`) per DESIGN.md's radius token
+          // table: a full-screen modal sheet's top corners use the larger
+          // radius, `.card` is reserved for in-list row surfaces.
           borderRadius: const BorderRadius.vertical(
-            top: Radius.circular(MasiRadii.card),
+            top: Radius.circular(MasiRadii.large),
           ),
         ),
         child: SingleChildScrollView(
@@ -1005,92 +1065,11 @@ class _TopoRow extends ConsumerWidget {
                   ],
                 ),
               ),
-              PopupMenuButton<String>(
+              IconButton(
                 key: Key('topo-menu-${topo.wallId}'),
                 icon: MasiIcon('more_horiz', color: colors.ink3),
-                onSelected: (value) {
-                  switch (value) {
-                    case 'rename':
-                      _handleRename(context, ref, topo);
-                    case 'move':
-                      _handleMove(context, ref, topo);
-                    case 'publish':
-                      _handlePublish(context, ref, topo);
-                    case 'unpublish':
-                      _handleUnpublish(ref, topo);
-                    case 'show-on-map':
-                      _handleShowOnMap(context, topo);
-                    case 'set-location':
-                      _handleSetLocation(context, ref, topo);
-                    case 'delete':
-                      _handleDelete(context, ref, topo);
-                  }
-                },
-                itemBuilder: (context) {
-                  final isShared = topo.visibility == 'shared';
-                  final hasCoords =
-                      topo.latitude != null && topo.longitude != null;
-                  return [
-                    PopupMenuItem(
-                      key: Key('topo-rename-${topo.wallId}'),
-                      value: 'rename',
-                      child: const Text('Rename'),
-                    ),
-                    PopupMenuItem(
-                      key: Key('topo-move-${topo.wallId}'),
-                      value: 'move',
-                      child: const Text('Move to…'),
-                    ),
-                    PopupMenuItem(
-                      key: Key('topo-publish-${topo.wallId}'),
-                      value: isShared ? 'unpublish' : 'publish',
-                      child: Text(isShared ? 'Unpublish' : 'Publish'),
-                    ),
-                    // Enabled only when the wall actually has coordinates
-                    // (from EXIF/device GPS capture at photo-attach time —
-                    // see `setWallCoordinates`); a located topo pushes
-                    // straight into `/community`'s Map tab, focused on this
-                    // wall (see `_handleShowOnMap`). Rather than omitting the
-                    // item entirely when unlocated, it stays visible but
-                    // disabled with a "No location set" hint, so a user
-                    // isn't left wondering why the action is missing.
-                    PopupMenuItem(
-                      key: Key('topo-show-on-map-${topo.wallId}'),
-                      value: 'show-on-map',
-                      enabled: hasCoords,
-                      child: hasCoords
-                          ? const Text('Show on map')
-                          : Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                const Text('Show on map'),
-                                Text(
-                                  'No location set',
-                                  style: textTheme.labelSmall?.copyWith(
-                                    color: colors.ink3,
-                                  ),
-                                ),
-                              ],
-                            ),
-                    ),
-                    // Always enabled -- unlike "Show on map" above, a topo
-                    // can be GIVEN a location whether or not it has one
-                    // already, so this item is never disabled; the label
-                    // just flips to "Edit location" once coordinates exist,
-                    // so the menu reads as "add" vs "change" appropriately.
-                    PopupMenuItem(
-                      key: Key('topo-set-location-${topo.wallId}'),
-                      value: 'set-location',
-                      child: Text(hasCoords ? 'Edit location' : 'Set location'),
-                    ),
-                    PopupMenuItem(
-                      key: Key('topo-delete-${topo.wallId}'),
-                      value: 'delete',
-                      child: const Text('Delete'),
-                    ),
-                  ];
-                },
+                tooltip: 'More',
+                onPressed: () => _showMenu(context, ref, topo),
               ),
               MasiIcon('chevron_right', color: colors.ink3),
             ],
@@ -1098,6 +1077,131 @@ class _TopoRow extends ConsumerWidget {
         ),
       ),
     );
+  }
+
+  /// The `topo-menu-<wallId>` row action sheet -- an iOS-style
+  /// [CupertinoActionSheet] (mirrors `crud_list_scaffold.dart`'s delete
+  /// confirm sheet idiom) rather than a Material [PopupMenuButton], per
+  /// DESIGN.md's iOS-idiom bar. Every action keeps its PRE-EXISTING key
+  /// (`topo-rename-<wallId>`, `topo-move-<wallId>`, etc.) so this is a pure
+  /// presentation swap -- no test-facing key/behavior changed other than
+  /// the surface itself.
+  ///
+  /// "Show on map" stays visually muted (and its `onPressed` a no-op)
+  /// rather than omitted when [topo] has no coordinates, exactly like the
+  /// old `PopupMenuItem`'s `enabled: false` did -- [CupertinoActionSheetAction]
+  /// has no built-in disabled state (`onPressed` is non-nullable), so the
+  /// muted style + no-op callback recreate it. "Set location"/"Edit
+  /// location" stays always-enabled either way (see its own doc below).
+  Future<void> _showMenu(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+  ) async {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final isShared = topo.visibility == 'shared';
+    final hasCoords = topo.latitude != null && topo.longitude != null;
+
+    final action = await showCupertinoModalPopup<String>(
+      context: context,
+      // See `crud_list_scaffold.dart`'s identical `_handleDelete` comment:
+      // the default barrier is too weak to fully obscure this screen's own
+      // bottom-pinned accent-filled add button bleeding through the gap
+      // between the action group and the Cancel button.
+      barrierColor: Colors.black45,
+      builder: (sheetContext) => CupertinoActionSheet(
+        actions: [
+          CupertinoActionSheetAction(
+            key: Key('topo-rename-${topo.wallId}'),
+            onPressed: () => Navigator.of(sheetContext).pop('rename'),
+            child: const Text('Rename'),
+          ),
+          CupertinoActionSheetAction(
+            key: Key('topo-move-${topo.wallId}'),
+            onPressed: () => Navigator.of(sheetContext).pop('move'),
+            child: const Text('Move to…'),
+          ),
+          CupertinoActionSheetAction(
+            key: Key('topo-publish-${topo.wallId}'),
+            onPressed: () => Navigator.of(
+              sheetContext,
+            ).pop(isShared ? 'unpublish' : 'publish'),
+            child: Text(isShared ? 'Unpublish' : 'Publish'),
+          ),
+          // Enabled only when the wall actually has coordinates (from
+          // EXIF/device GPS capture at photo-attach time — see
+          // `setWallCoordinates`); a located topo pushes straight into
+          // `/community`'s Map tab, focused on this wall (see
+          // `_handleShowOnMap`). Rather than omitting the action entirely
+          // when unlocated, it stays visible but muted with a "No location
+          // set" hint and a no-op `onPressed`, so a user isn't left
+          // wondering why the action is missing.
+          CupertinoActionSheetAction(
+            key: Key('topo-show-on-map-${topo.wallId}'),
+            onPressed: hasCoords
+                ? () => Navigator.of(sheetContext).pop('show-on-map')
+                : () {},
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Show on map',
+                  style: hasCoords
+                      ? null
+                      : TextStyle(color: colors.ink3),
+                ),
+                if (!hasCoords)
+                  Text(
+                    'No location set',
+                    style: textTheme.labelSmall?.copyWith(
+                      color: colors.ink3,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          // Always enabled -- unlike "Show on map" above, a topo can be
+          // GIVEN a location whether or not it has one already, so this
+          // action is never muted; the label just flips to "Edit location"
+          // once coordinates exist, so the menu reads as "add" vs "change"
+          // appropriately.
+          CupertinoActionSheetAction(
+            key: Key('topo-set-location-${topo.wallId}'),
+            onPressed: () => Navigator.of(sheetContext).pop('set-location'),
+            child: Text(hasCoords ? 'Edit location' : 'Set location'),
+          ),
+          CupertinoActionSheetAction(
+            key: Key('topo-delete-${topo.wallId}'),
+            isDestructiveAction: true,
+            onPressed: () => Navigator.of(sheetContext).pop('delete'),
+            child: Text('Delete', style: TextStyle(color: colors.gradeHard)),
+          ),
+        ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.of(sheetContext).pop(),
+          child: const Text('Cancel'),
+        ),
+      ),
+    );
+
+    if (!context.mounted || action == null) return;
+    switch (action) {
+      case 'rename':
+        await _handleRename(context, ref, topo);
+      case 'move':
+        await _handleMove(context, ref, topo);
+      case 'publish':
+        await _handlePublish(context, ref, topo);
+      case 'unpublish':
+        await _handleUnpublish(ref, topo);
+      case 'show-on-map':
+        _handleShowOnMap(context, topo);
+      case 'set-location':
+        await _handleSetLocation(context, ref, topo);
+      case 'delete':
+        await _handleDelete(context, ref, topo);
+    }
   }
 
   Future<void> _handleRename(
@@ -1180,30 +1284,35 @@ class _TopoRow extends ConsumerWidget {
   /// [_handleDelete]'s confirm-then-act shape — it asks first rather than
   /// firing straight off the menu tap). [_handleUnpublish] (the reverse
   /// direction) needs no such confirmation.
+  ///
+  /// An iOS-style [CupertinoActionSheet] (mirrors `crud_list_scaffold.dart`'s
+  /// delete-confirm idiom and this row's own [_handleDelete] below) rather
+  /// than a Material [AlertDialog], per DESIGN.md's iOS-idiom bar.
   Future<void> _handlePublish(
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
   ) async {
-    final confirmed = await showDialog<bool>(
+    final confirmed = await showCupertinoModalPopup<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      barrierColor: Colors.black45,
+      builder: (sheetContext) => CupertinoActionSheet(
         title: const Text('Publish to Community?'),
-        content: Text(
+        message: Text(
           '"${topo.name}" will become visible to everyone in Community. '
           'You can unpublish it again at any time.',
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
+          CupertinoActionSheetAction(
             key: Key('topo-publish-confirm-${topo.wallId}'),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
+            onPressed: () => Navigator.of(sheetContext).pop(true),
             child: const Text('Publish'),
           ),
         ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.of(sheetContext).pop(false),
+          child: const Text('Cancel'),
+        ),
       ),
     );
     if (confirmed == true) {
@@ -1271,27 +1380,35 @@ class _TopoRow extends ConsumerWidget {
     ).showSnackBar(const SnackBar(content: Text('Location saved')));
   }
 
+  /// An iOS-style [CupertinoActionSheet] confirm (mirrors
+  /// `crud_list_scaffold.dart`'s identical delete-confirm sheet: a single
+  /// destructive action rendered in `MasiColors.gradeHard`, per DESIGN.md's
+  /// Buttons spec, plus a Cancel button) rather than a Material
+  /// [AlertDialog].
   Future<void> _handleDelete(
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
   ) async {
-    final confirmed = await showDialog<bool>(
+    final colors = MasiColors.of(context);
+    final confirmed = await showCupertinoModalPopup<bool>(
       context: context,
-      builder: (dialogContext) => AlertDialog(
+      barrierColor: Colors.black45,
+      builder: (sheetContext) => CupertinoActionSheet(
         title: const Text('Delete?'),
-        content: Text('Delete "${topo.name}"? This cannot be undone.'),
+        message: Text('Delete "${topo.name}"? This cannot be undone.'),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
+          CupertinoActionSheetAction(
             key: Key('topo-delete-confirm-${topo.wallId}'),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Delete'),
+            isDestructiveAction: true,
+            onPressed: () => Navigator.of(sheetContext).pop(true),
+            child: Text('Delete', style: TextStyle(color: colors.gradeHard)),
           ),
         ],
+        cancelButton: CupertinoActionSheetAction(
+          onPressed: () => Navigator.of(sheetContext).pop(false),
+          child: const Text('Cancel'),
+        ),
       ),
     );
     if (confirmed == true) {
@@ -1487,7 +1604,11 @@ class _VisibilityBadge extends StatelessWidget {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final label = isShared ? 'Published' : 'Private';
-    final foreground = isShared ? colors.onAccent : colors.ink3;
+    // `ink2` (not `ink3`) for the Private variant: `ink3` read as
+    // low-contrast against `surface2` (DESIGN.md review) -- `ink2` is the
+    // same tone every other secondary-metadata piece in this row (route
+    // count, distance) already uses.
+    final foreground = isShared ? colors.onAccent : colors.ink2;
     final background = isShared ? colors.accent : colors.surface2;
 
     return Semantics(

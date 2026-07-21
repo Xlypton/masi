@@ -326,6 +326,108 @@ void main() {
         expect(find.byKey(const Key('topos-new-topo')), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'the empty state\'s inline "New topo" button starts New topo flow '
+      '(reuses _handleNewTopo, same as the floating button)',
+      (tester) async {
+        final container = _makeContainer();
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp(
+            'topos_screen_empty_state_new_topo_test',
+          );
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) {
+            tempDir.deleteSync(recursive: true);
+          }
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topos-empty-new-topo')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('topos-empty-new-topo')));
+        await _acceptTopoNameDialog(tester);
+        await _drain(tester);
+        await _drain(tester);
+
+        final topos = await _dbWork(
+          tester,
+          () => container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos.length, 1);
+      },
+    );
+
+    testWidgets(
+      'the empty state\'s inline "New topo" button is disabled while a '
+      'creation flow is already in flight (same `canCreate`/`_creating` '
+      'guard the floating button uses)',
+      (tester) async {
+        final container = _makeContainer();
+        var sourcePickerCalls = 0;
+        final sourceCompleter = Completer<ImageSource?>();
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async {
+                sourcePickerCalls++;
+                return sourceCompleter.future;
+              },
+              photoPicker: (source) async =>
+                  throw StateError('must not be called'),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        final buttonBefore = tester.widget<ElevatedButton>(
+          find.byKey(const Key('topos-empty-new-topo')),
+        );
+        expect(buttonBefore.onPressed, isNotNull);
+
+        // Start a flow via the FLOATING button and suspend on the
+        // (uncompleted) source-picker future -- the re-entrancy flag is
+        // set synchronously before that await (see `_handleNewTopo`), so
+        // the INLINE empty-state button, which shares the exact same
+        // `canCreate` guard, must now render disabled too.
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await tester.pump();
+
+        expect(sourcePickerCalls, 1);
+        final buttonDuring = tester.widget<ElevatedButton>(
+          find.byKey(const Key('topos-empty-new-topo')),
+        );
+        expect(
+          buttonDuring.onPressed,
+          isNull,
+          reason:
+              'the empty-state button must disable while a creation flow '
+              'from either trigger is in flight',
+        );
+
+        await tester.runAsync(() async {
+          sourceCompleter.complete(null);
+        });
+        await _drain(tester);
+      },
+    );
   });
 
   group('A2: populated list rendering', () {
@@ -2318,10 +2420,6 @@ void main() {
 
         final itemFinder = find.byKey(Key('topo-show-on-map-$wallId'));
         expect(itemFinder, findsOneWidget);
-        expect(
-          tester.widget<PopupMenuItem<String>>(itemFinder).enabled,
-          isTrue,
-        );
         expect(find.text('No location set'), findsNothing);
 
         await tester.tap(itemFinder);
@@ -2333,7 +2431,7 @@ void main() {
     );
 
     testWidgets(
-      'a topo WITHOUT coordinates shows a disabled "Show on map" item '
+      'a topo WITHOUT coordinates shows a muted "Show on map" action '
       '(never navigates)',
       (tester) async {
         final container = _makeContainer();
@@ -2352,11 +2450,17 @@ void main() {
 
         final itemFinder = find.byKey(Key('topo-show-on-map-$wallId'));
         expect(itemFinder, findsOneWidget);
-        expect(
-          tester.widget<PopupMenuItem<String>>(itemFinder).enabled,
-          isFalse,
-        );
         expect(find.text('No location set'), findsOneWidget);
+
+        // The action sheet's `CupertinoActionSheetAction` has no built-in
+        // disabled state (unlike the old `PopupMenuItem.enabled`), so this
+        // is recreated with a no-op `onPressed` -- tapping it must never
+        // navigate, and the sheet must simply stay open.
+        await tester.tap(itemFinder);
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('community-placeholder')), findsNothing);
+        expect(itemFinder, findsOneWidget);
       },
     );
   });
@@ -2387,10 +2491,6 @@ void main() {
 
         final itemFinder = find.byKey(Key('topo-set-location-$wallId'));
         expect(itemFinder, findsOneWidget);
-        expect(
-          tester.widget<PopupMenuItem<String>>(itemFinder).enabled,
-          isTrue,
-        );
         expect(find.text('Edit location'), findsOneWidget);
       },
     );
@@ -2415,10 +2515,6 @@ void main() {
 
         final itemFinder = find.byKey(Key('topo-set-location-$wallId'));
         expect(itemFinder, findsOneWidget);
-        expect(
-          tester.widget<PopupMenuItem<String>>(itemFinder).enabled,
-          isTrue,
-        );
         expect(find.text('Set location'), findsOneWidget);
       },
     );
@@ -3450,6 +3546,64 @@ void main() {
 
         expect(find.text('Moonrise Slab'), findsOneWidget);
         expect(find.text('Sunset Arete'), findsNothing);
+      },
+    );
+  });
+
+  group('S1b: search field clear affordance', () {
+    testWidgets(
+      'the clear ("x") button is hidden while the search field is empty, '
+      'appears once text is entered, and tapping it clears the field and '
+      'restores the unfiltered list',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            toposProvider.overrideWith(
+              (ref) => Stream.value(const [
+                TopoRef(
+                  wallId: 'wall-sunset',
+                  name: 'Sunset Arete',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 1000,
+                ),
+                TopoRef(
+                  wallId: 'wall-moonrise',
+                  name: 'Moonrise Slab',
+                  thumbnailPath: null,
+                  routeCount: 0,
+                  createdAt: 900,
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topos-search-clear')), findsNothing);
+
+        await tester.enterText(
+          find.byKey(const Key('topos-search-field')),
+          'moon',
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('topos-search-clear')), findsOneWidget);
+        expect(find.text('Sunset Arete'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('topos-search-clear')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('topos-search-clear')), findsNothing);
+        expect(find.text('Sunset Arete'), findsOneWidget);
+        expect(find.text('Moonrise Slab'), findsOneWidget);
       },
     );
   });
