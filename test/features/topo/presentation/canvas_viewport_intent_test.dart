@@ -29,11 +29,17 @@
 
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently everywhere this file constructs `TopoCanvas`/
+/// `TopoCanvasBody` or reads the provider directly.
+const _testWallId = 'test-wall';
 
 const _frameKey = Key('topo-canvas-viewport-frame');
 const _viewerKey = Key('topo-interactive-viewer');
@@ -61,6 +67,7 @@ Widget _buildCanvas({
       theme: MasiTheme.light,
       home: Scaffold(
         body: TopoCanvas(
+          wallId: _testWallId,
           imagePath: '/nonexistent/test-topo.jpg',
           imageSize: imageSize,
           transformationController: controller,
@@ -86,8 +93,9 @@ Widget _buildBody({
       home: Scaffold(
         body: Consumer(
           builder: (context, ref, _) {
-            final drawState = ref.watch(drawControllerProvider);
+            final drawState = ref.watch(drawControllerProvider(_testWallId));
             return TopoCanvasBody(
+              wallId: _testWallId,
               imagePath: '/nonexistent/test-topo.jpg',
               imageSize: imageSize,
               drawState: drawState,
@@ -238,16 +246,24 @@ void main() {
           _setViewportSize(tester, const Size(400, 800));
           final container = ProviderContainer();
           addTearDown(container.dispose);
+          // FIX #6 (autoDispose pending-timer gotcha): keep both family
+          // members alive via permanent listeners -- the widget's own
+          // final unmount happens at the framework's own teardown, too
+          // late for any pump we could still call from inside this test.
+          // See route_legend_gap_test.dart's `_seedRoutes` for the fuller
+          // explanation.
+          container.listen(drawControllerProvider(_testWallId), (_, _) {});
+          container.listen(legendExpandedProvider(_testWallId), (_, _) {});
           final controller = TransformationController();
           addTearDown(controller.dispose);
-          final notifier = container.read(drawControllerProvider.notifier);
+          final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
           await tester.pumpWidget(
             _buildBody(container: container, controller: controller),
           );
           await tester.pump();
 
-          expect(container.read(drawControllerProvider).mode, DrawMode.view);
+          expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
           final rectBefore = tester.getRect(_canvasRegionFinder());
 
           notifier.setMode(DrawMode.draw);

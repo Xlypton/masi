@@ -36,6 +36,11 @@ const _overlayKey = Key('topo-route-legend-overlay');
 const _chipKey = Key('topo-route-legend-chip');
 const _legendKey = Key('topo-route-legend');
 
+/// FIX #6 (family-keyed `drawControllerProvider`/`legendExpandedProvider`):
+/// stand-in wallId for the tests below that don't seed a real wall (the
+/// seeded-wall tests use `seeded.wallId` instead, consistently).
+const _testWallId = 'test-wall';
+
 /// Creates a real in-memory DB + ProviderContainer + a persisted
 /// Area/Sector/Wall, attaches a photo, and commits one route via
 /// [DrawController] — mirrors
@@ -63,7 +68,7 @@ _seedWallWithPhotoAndRoute(WidgetTester tester) async {
     );
   });
 
-  final notifier = container.read(drawControllerProvider.notifier);
+  final notifier = container.read(drawControllerProvider(wall.id).notifier);
   await notifier.loadForWall(wall.id, photoId);
   notifier.addPoint(const Offset(0.1, 0.1));
   notifier.addPoint(const Offset(0.2, 0.2));
@@ -78,32 +83,32 @@ void main() {
       final container = ProviderContainer();
       addTearDown(container.dispose);
 
-      expect(container.read(legendExpandedProvider), isTrue);
+      expect(container.read(legendExpandedProvider(_testWallId)), isTrue);
     });
 
     test('toggle() flips the state', () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
-      final notifier = container.read(legendExpandedProvider.notifier);
+      final notifier = container.read(legendExpandedProvider(_testWallId).notifier);
 
-      expect(container.read(legendExpandedProvider), isTrue);
+      expect(container.read(legendExpandedProvider(_testWallId)), isTrue);
       notifier.toggle();
-      expect(container.read(legendExpandedProvider), isFalse);
+      expect(container.read(legendExpandedProvider(_testWallId)), isFalse);
       notifier.toggle();
-      expect(container.read(legendExpandedProvider), isTrue);
+      expect(container.read(legendExpandedProvider(_testWallId)), isTrue);
     });
 
     test('setForMode(DrawMode.draw) collapses (false); '
         'setForMode(DrawMode.view) expands (true)', () {
       final container = ProviderContainer();
       addTearDown(container.dispose);
-      final notifier = container.read(legendExpandedProvider.notifier);
+      final notifier = container.read(legendExpandedProvider(_testWallId).notifier);
 
       notifier.setForMode(DrawMode.draw);
-      expect(container.read(legendExpandedProvider), isFalse);
+      expect(container.read(legendExpandedProvider(_testWallId)), isFalse);
 
       notifier.setForMode(DrawMode.view);
-      expect(container.read(legendExpandedProvider), isTrue);
+      expect(container.read(legendExpandedProvider(_testWallId)), isTrue);
     });
   });
 
@@ -117,12 +122,16 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider.notifier);
+        // FIX #6 (autoDispose pending-timer gotcha): keep this family
+        // member alive for the whole test -- see route_legend_gap_test.dart's
+        // `_seedRoutes` for the full explanation.
+        container.listen(drawControllerProvider(_testWallId), (_, _) {});
+        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         await notifier.commitRoute();
         expect(
-          container.read(drawControllerProvider).mode,
+          container.read(drawControllerProvider(_testWallId)).mode,
           DrawMode.view,
           reason: 'sanity: DrawState.mode defaults to view',
         );
@@ -135,8 +144,9 @@ void main() {
               home: Scaffold(
                 body: Consumer(
                   builder: (context, ref, _) {
-                    final drawState = ref.watch(drawControllerProvider);
+                    final drawState = ref.watch(drawControllerProvider(_testWallId));
                     return TopoCanvasBody(
+                      wallId: _testWallId,
                       imagePath: '/nonexistent/test-topo.jpg',
                       imageSize: const Size(400, 300),
                       drawState: drawState,

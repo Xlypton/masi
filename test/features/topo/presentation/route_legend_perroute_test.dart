@@ -1,7 +1,7 @@
 // Display tests for RouteLegend's #41 (beta-video button), #42 (style-tag
 // chips), and #44 (star rating) per-route rendering. Seeding mirrors
 // route_legend_intent_test.dart's `_seedRoutes` (real Area -> Sector ->
-// Wall -> Photo -> Route chain, loaded into drawControllerProvider via
+// Wall -> Photo -> Route chain, loaded into drawControllerProvider(_testWallId) via
 // DrawController.loadForWall — exactly the path TopoCanvasScreen drives).
 
 import 'package:climbtopo/app/theme.dart';
@@ -19,6 +19,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently everywhere this file constructs `RouteLegend` or reads the
+/// provider directly.
+const _testWallId = 'test-wall';
+
 Future<ProviderContainer> _seedOneRoute(
   WidgetTester tester,
   TopoRoute route,
@@ -32,6 +37,10 @@ Future<ProviderContainer> _seedOneRoute(
     ],
   );
   addTearDown(container.dispose);
+  // FIX #6 (autoDispose pending-timer gotcha): keep this family member
+  // alive for the whole test -- see route_legend_gap_test.dart's
+  // `_seedRoutes` for the full explanation.
+  container.listen(drawControllerProvider(_testWallId), (_, _) {});
 
   final crud = container.read(libraryCrudRepositoryProvider);
   final area = await crud.createArea('Area');
@@ -51,7 +60,7 @@ Future<ProviderContainer> _seedOneRoute(
   await routeRepo.upsertRoute(wall.id, photoId, route);
 
   await container
-      .read(drawControllerProvider.notifier)
+      .read(drawControllerProvider(_testWallId).notifier)
       .loadForWall(wall.id, photoId);
 
   return container;
@@ -63,7 +72,7 @@ Future<void> _pumpLegend(WidgetTester tester, ProviderContainer container) {
       container: container,
       child: MaterialApp(
         theme: MasiTheme.light,
-        home: const Scaffold(body: RouteLegend()),
+        home: const Scaffold(body: RouteLegend(wallId: _testWallId)),
       ),
     ),
   );
@@ -86,7 +95,7 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
       expect(find.byKey(Key('route-beta-$routeId')), findsOneWidget);
     });
 
@@ -104,7 +113,7 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
       expect(find.byKey(Key('route-beta-$routeId')), findsNothing);
     });
   });
@@ -126,7 +135,7 @@ void main() {
         await _pumpLegend(tester, container);
         await tester.pump();
 
-        final routeId = container.read(drawControllerProvider).routes.single.id;
+        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
         expect(find.byKey(Key('route-styletag-$routeId-dyno')), findsOneWidget);
         expect(
           find.byKey(Key('route-styletag-$routeId-my-custom-tag')),
@@ -152,7 +161,7 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
       expect(find.byKey(Key('route-styletag-$routeId-dyno')), findsNothing);
     });
   });
@@ -173,7 +182,7 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
       final starsRow = find.byKey(Key('route-stars-$routeId'));
       expect(starsRow, findsOneWidget);
       expect(
@@ -196,7 +205,7 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
       expect(find.byKey(Key('route-stars-$routeId')), findsNothing);
     });
 
@@ -213,7 +222,7 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
       expect(find.byKey(Key('route-stars-$routeId')), findsNothing);
     });
   });

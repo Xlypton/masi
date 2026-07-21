@@ -89,6 +89,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently with every `TopoCanvas(wallId: ...)` pumped in this file.
+const _testWallId = 'test-wall';
+
 void main() {
   group('TopoCanvas.computeFitScale / computeFitTransform (A1/A2)', () {
     const imageSize = Size(1600, 1200);
@@ -513,6 +517,7 @@ void main() {
           theme: MasiTheme.light,
           home: Scaffold(
             body: TopoCanvas(
+              wallId: _testWallId,
               imagePath: '/nonexistent/test-topo.jpg',
               imageSize: imageSize,
               transformationController: controller,
@@ -728,6 +733,7 @@ void main() {
           theme: MasiTheme.light,
           home: Scaffold(
             body: TopoCanvas(
+              wallId: _testWallId,
               imagePath: '/nonexistent/test-topo.jpg',
               imageSize: imageSize,
               transformationController: controller,
@@ -758,14 +764,19 @@ void main() {
 
         final container = ProviderContainer();
         addTearDown(container.dispose);
+        // FIX #6 (autoDispose pending-timer gotcha): keep this family
+        // member alive via a permanent listener -- see
+        // route_legend_gap_test.dart's `_seedRoutes` for the fuller
+        // explanation.
+        container.listen(drawControllerProvider(_testWallId), (_, _) {});
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider.notifier);
+        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.8, 0.8));
         notifier.commitRoute();
-        expect(container.read(drawControllerProvider).routes, hasLength(1));
+        expect(container.read(drawControllerProvider(_testWallId)).routes, hasLength(1));
 
         await tester.pumpWidget(
           buildCanvas(
@@ -815,10 +826,12 @@ void main() {
 
         final container = ProviderContainer();
         addTearDown(container.dispose);
+        // FIX #6 (autoDispose pending-timer gotcha): see the L1 test above.
+        container.listen(drawControllerProvider(_testWallId), (_, _) {});
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider.notifier);
+        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.8, 0.8));
         notifier.commitRoute();
@@ -892,9 +905,11 @@ void main() {
 
       final container = ProviderContainer();
       addTearDown(container.dispose);
+      // FIX #6 (autoDispose pending-timer gotcha): see the L1 test above.
+      container.listen(drawControllerProvider(_testWallId), (_, _) {});
       final controller = TransformationController();
       addTearDown(controller.dispose);
-      container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
+      container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
 
       await tester.pumpWidget(
         UncontrolledProviderScope(
@@ -905,6 +920,7 @@ void main() {
             theme: MasiTheme.light,
             home: Scaffold(
               body: TopoCanvas(
+                wallId: _testWallId,
                 imagePath: '/nonexistent/test-topo.jpg',
                 imageSize: imageSize,
                 transformationController: controller,
@@ -948,7 +964,7 @@ void main() {
       await tester.tapAt(tapPoint);
       await tester.pump();
 
-      final points = container.read(drawControllerProvider).currentPoints;
+      final points = container.read(drawControllerProvider(_testWallId)).currentPoints;
       expect(points, hasLength(1));
       expect(points.first.dx, closeTo(0.5, 0.01));
       expect(points.first.dy, closeTo(0.5, 0.01));
@@ -1008,6 +1024,7 @@ void main() {
                 theme: MasiTheme.light,
                 home: Scaffold(
                   body: TopoCanvas(
+                    wallId: _testWallId,
                     imagePath: '/nonexistent/test-topo.jpg',
                     imageSize: imageSize,
                     transformationController: controller,
@@ -1061,6 +1078,7 @@ void main() {
                 theme: MasiTheme.light,
                 home: Scaffold(
                   body: TopoCanvas(
+                    wallId: _testWallId,
                     imagePath: '/nonexistent/test-topo.jpg',
                     imageSize: imageSize,
                     transformationController: controller,
@@ -1155,6 +1173,7 @@ void main() {
                 theme: MasiTheme.light,
                 home: Scaffold(
                   body: TopoCanvas(
+                    wallId: _testWallId,
                     imagePath: '/nonexistent/test-topo.jpg',
                     imageSize: imageSize,
                     transformationController: controller,
@@ -1250,6 +1269,7 @@ void main() {
                 theme: MasiTheme.light,
                 home: Scaffold(
                   body: TopoCanvas(
+                    wallId: _testWallId,
                     imagePath: '/nonexistent/test-topo.jpg',
                     imageSize: imageSize,
                     transformationController: controller,
@@ -1338,6 +1358,7 @@ void main() {
                 theme: MasiTheme.light,
                 home: Scaffold(
                   body: TopoCanvas(
+                    wallId: _testWallId,
                     imagePath: '/nonexistent/test-topo.jpg',
                     imageSize: imageSize,
                     transformationController: controller,
@@ -1429,6 +1450,7 @@ void main() {
           theme: MasiTheme.light,
           home: Scaffold(
             body: TopoCanvas(
+              wallId: _testWallId,
               imagePath: '/nonexistent/test-topo.jpg',
               imageSize: imageSize,
               transformationController: controller,
@@ -1505,6 +1527,7 @@ void main() {
               theme: MasiTheme.dark,
               home: Scaffold(
                 body: TopoCanvas(
+                  wallId: _testWallId,
                   imagePath: '/nonexistent/test-topo.jpg',
                   imageSize: imageSize,
                   transformationController: controller,

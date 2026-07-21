@@ -69,7 +69,16 @@ String gradeBandLabel(GradeBand band) {
 /// it in `showModalBottomSheet` themselves; this widget only needs a
 /// [Navigator] ancestor to pop itself on Save/Cancel.
 class RouteMetadataSheet extends ConsumerStatefulWidget {
-  const RouteMetadataSheet({super.key, required this.routeId, this.initial});
+  const RouteMetadataSheet({
+    super.key,
+    required this.wallId,
+    required this.routeId,
+    this.initial,
+  });
+
+  /// FIX #6: family key for [drawControllerProvider] — see that provider's
+  /// doc. Always the same wallId as the owning [TopoCanvasScreen].
+  final String wallId;
 
   /// The id of the [TopoRoute] (in [DrawState.routes]) this sheet edits.
   final int routeId;
@@ -174,7 +183,7 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
 
   void _save() {
     ref
-        .read(drawControllerProvider.notifier)
+        .read(drawControllerProvider(widget.wallId).notifier)
         .setRouteMetadata(
           widget.routeId,
           name: _nameController.text.trim().isEmpty

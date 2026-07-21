@@ -72,7 +72,7 @@ _seedWallWithPhotoAndRoute(WidgetTester tester) async {
     );
   });
 
-  final notifier = container.read(drawControllerProvider.notifier);
+  final notifier = container.read(drawControllerProvider(wall.id).notifier);
   await notifier.loadForWall(wall.id, photoId);
   notifier.addPoint(const Offset(0.1, 0.1));
   notifier.addPoint(const Offset(0.2, 0.2));
@@ -108,7 +108,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        seeded.container.read(drawControllerProvider).mode,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
         DrawMode.view,
         reason: 'sanity: the real screen opens in view mode',
       );
@@ -122,11 +122,11 @@ void main() {
       // --- Simulate the stale manual collapse, entirely within view mode. ---
       // No draw-mode transition happens here — this is the scenario the
       // transition-gated `ref.listen` cannot see.
-      seeded.container.read(legendExpandedProvider.notifier).toggle();
+      seeded.container.read(legendExpandedProvider(seeded.wallId).notifier).toggle();
       await tester.pump();
 
       expect(
-        seeded.container.read(drawControllerProvider).mode,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
         DrawMode.view,
         reason:
             'sanity: still view mode — the collapse was a manual toggle, '
@@ -150,7 +150,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        seeded.container.read(drawControllerProvider).mode,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
         DrawMode.view,
         reason:
             'sanity: mode never transitioned away from view, so the '

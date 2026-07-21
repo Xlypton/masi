@@ -15,6 +15,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path/path.dart' as p;
 
+/// FIX #6 (family-keyed `drawControllerProvider`): stand-in wallId, paired
+/// consistently everywhere this file constructs `TopoCanvasBody` or reads
+/// the provider directly.
+const _testWallId = 'test-wall';
+
 /// S1 (Own the photo files): a picked photo is COPIED into the app-owned
 /// `<appDocuments>/photos/<photoId>.<ext>` at attach, and `localPath` stores
 /// that app-owned path — closing the latent local-loss bug (picker cache is
@@ -233,8 +238,9 @@ void main() {
               home: Scaffold(
                 body: Consumer(
                   builder: (context, ref, _) {
-                    final drawState = ref.watch(drawControllerProvider);
+                    final drawState = ref.watch(drawControllerProvider(_testWallId));
                     return TopoCanvasBody(
+                      wallId: _testWallId,
                       imagePath: ownedPath,
                       imageSize: const Size(400, 300),
                       drawState: drawState,

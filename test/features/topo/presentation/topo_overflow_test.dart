@@ -1,11 +1,17 @@
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
+import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently everywhere this file constructs `TopoCanvasBody`/
+/// `SymbolPaletteBar` or reads the provider directly.
+const _testWallId = 'test-wall';
 
 /// Regression tests for two layout-overflow bugs (see
 /// `~/.claude/plans/topo-overflow-bugs.md`):
@@ -31,7 +37,7 @@ void main() {
             ).copyWith(textScaler: TextScaler.linear(textScale)),
             child: child!,
           ),
-          home: const Scaffold(body: SymbolPaletteBar()),
+          home: const Scaffold(body: SymbolPaletteBar(wallId: _testWallId)),
         ),
       );
     }
@@ -64,6 +70,15 @@ void main() {
         for (final scale in [1.0, 2.0]) {
           final container = ProviderContainer();
           addTearDown(container.dispose);
+          // FIX #6 (autoDispose pending-timer gotcha): keep this family
+          // member alive via a permanent listener -- both the mid-loop
+          // unmount (when the next iteration's `pumpWidget` replaces this
+          // tree) and the final-teardown unmount (for the last iteration)
+          // would otherwise schedule an autoDispose teardown Timer with no
+          // remaining duration-based pump to flush it. See
+          // route_legend_gap_test.dart's `_seedRoutes` for the fuller
+          // explanation.
+          container.listen(drawControllerProvider(_testWallId), (_, _) {});
 
           await tester.pumpWidget(buildPaletteBar(container, scale));
           await tester.pumpAndSettle();
@@ -91,8 +106,9 @@ void main() {
           home: Scaffold(
             body: Consumer(
               builder: (context, ref, _) {
-                final drawState = ref.watch(drawControllerProvider);
+                final drawState = ref.watch(drawControllerProvider(_testWallId));
                 return TopoCanvasBody(
+                  wallId: _testWallId,
                   imagePath: '/nonexistent/test-topo.jpg',
                   imageSize: imageSize,
                   drawState: drawState,
@@ -117,7 +133,7 @@ void main() {
     /// `DrawController.commitRoute`'s doc) and switches to Draw mode, so
     /// both `SymbolPaletteBar` and a multi-row `RouteLegend` are showing.
     void seedRoutesAndDrawMode(ProviderContainer container, int count) {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       for (var i = 0; i < count; i++) {
         final y = 0.1 + i * 0.05;
         notifier.addPoint(Offset(0.1, y));
@@ -208,6 +224,12 @@ void main() {
           setViewportSize(tester, size);
           final container = ProviderContainer();
           addTearDown(container.dispose);
+          // FIX #6 (autoDispose pending-timer gotcha): keep both family
+          // members alive via permanent listeners -- see
+          // route_legend_gap_test.dart's `_seedRoutes` for the fuller
+          // explanation.
+          container.listen(drawControllerProvider(_testWallId), (_, _) {});
+          container.listen(legendExpandedProvider(_testWallId), (_, _) {});
           final controller = TransformationController();
           addTearDown(controller.dispose);
           seedRoutesAndDrawMode(container, 3);
@@ -251,8 +273,9 @@ void main() {
               home: Scaffold(
                 body: Consumer(
                   builder: (context, ref, _) {
-                    final drawState = ref.watch(drawControllerProvider);
+                    final drawState = ref.watch(drawControllerProvider(_testWallId));
                     return TopoCanvasBody(
+                      wallId: _testWallId,
                       imagePath: '/nonexistent/test-topo.jpg',
                       imageSize: const Size(400, 300),
                       drawState: drawState,

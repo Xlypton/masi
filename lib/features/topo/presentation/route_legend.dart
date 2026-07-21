@@ -50,6 +50,16 @@ String routeDisplayLabel(TopoRoute route) {
 /// [LegendExpandedController.setForMode] for the mode-aware reset used when
 /// switching between view and draw modes.
 class LegendExpandedController extends Notifier<bool> {
+  /// FIX #6 (HIGH, CONFIRMED — multi-instance state bleed): [wallId] is the
+  /// family key [legendExpandedProvider] was looked up with — required by
+  /// [NotifierProvider.family]'s factory signature, so every wall gets its
+  /// own expanded/collapsed flag instead of one shared app-lifetime global.
+  /// Not read by any method below; kept for instance identity/debugging
+  /// parity with [DrawController.wallId].
+  LegendExpandedController(this.wallId);
+
+  final String wallId;
+
   @override
   bool build() => true; // view-mode default = expanded
 
@@ -59,8 +69,15 @@ class LegendExpandedController extends Notifier<bool> {
   void setForMode(DrawMode mode) => state = mode == DrawMode.view;
 }
 
+/// FIX #6: keyed by wallId, `autoDispose`, mirroring [drawControllerProvider]
+/// — see that provider's doc for why (two simultaneously-mounted canvases
+/// must not share one collapsed/expanded flag; a fresh mount of the same
+/// wall should reset to the mode-appropriate default rather than keep
+/// whatever a long-gone previous mount left behind).
 final legendExpandedProvider =
-    NotifierProvider<LegendExpandedController, bool>(LegendExpandedController.new);
+    NotifierProvider.autoDispose.family<LegendExpandedController, bool, String>(
+  LegendExpandedController.new,
+);
 
 /// Fraction of the screen height the [RouteLegend] panel is capped at once
 /// it has enough routes to need it. Below this cap the panel just shrink-
@@ -91,10 +108,15 @@ const double kLegendMaxHeightFraction = 0.4;
 class RouteLegend extends ConsumerWidget {
   const RouteLegend({
     super.key,
+    required this.wallId,
     this.maxHeight,
     this.readOnly = false,
     this.onLogAscent,
   });
+
+  /// FIX #6: family key for [drawControllerProvider] — see that provider's
+  /// doc. Always the same wallId as the owning [TopoCanvasScreen].
+  final String wallId;
 
   /// Explicit height cap, overriding the default `kLegendMaxHeightFraction *
   /// MediaQuery.sizeOf(context).height` fallback below.
@@ -134,8 +156,8 @@ class RouteLegend extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final drawState = ref.watch(drawControllerProvider);
-    final notifier = ref.read(drawControllerProvider.notifier);
+    final drawState = ref.watch(drawControllerProvider(wallId));
+    final notifier = ref.read(drawControllerProvider(wallId).notifier);
 
     if (drawState.routes.isEmpty) {
       return const SizedBox.shrink();

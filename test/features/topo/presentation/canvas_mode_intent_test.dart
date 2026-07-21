@@ -23,6 +23,12 @@ import 'package:image_picker/image_picker.dart';
 /// A1-A3, plus BUG-1's toolbar-scoping report) — never from the current,
 /// known-buggy implementation. A failing test here is a bug signal to be
 /// fixed in lib/, never a reason to weaken the assertion.
+
+/// FIX #6 (family-keyed `drawControllerProvider`): stand-in wallId for the
+/// tests below that don't seed a real wall (the seeded-wall tests use
+/// `seeded.wallId` instead, consistently).
+const _testWallId = 'test-wall';
+
 void main() {
   /// Creates a real in-memory DB + ProviderContainer + a persisted
   /// Area/Sector/Wall, mirroring the harness pattern used throughout
@@ -72,7 +78,7 @@ void main() {
           ),
         );
     await container
-        .read(drawControllerProvider.notifier)
+        .read(drawControllerProvider(wallId).notifier)
         .loadForWall(wallId, photoId);
     return photoId;
   }
@@ -110,7 +116,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
       expectClusterAbsent();
 
       // Simulate the wall's photo finishing its load ("a seeded photo"):
@@ -120,7 +126,7 @@ void main() {
       await tester.pump();
 
       expect(
-        seeded.container.read(drawControllerProvider).mode,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
         DrawMode.view,
         reason:
             'loading a photo must never itself switch the canvas into '
@@ -152,7 +158,7 @@ void main() {
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pump();
 
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.draw);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.draw);
       expectClusterPresent();
     },
   );
@@ -179,20 +185,20 @@ void main() {
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pump();
 
-      final notifier = seeded.container.read(drawControllerProvider.notifier);
+      final notifier = seeded.container.read(drawControllerProvider(seeded.wallId).notifier);
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       await tester.pump();
 
       final routesBefore = seeded.container
-          .read(drawControllerProvider)
+          .read(drawControllerProvider(seeded.wallId))
           .routes
           .length;
 
       await tester.tap(find.byKey(const Key('topo-commit-button')));
       await tester.pumpAndSettle();
 
-      final state = seeded.container.read(drawControllerProvider);
+      final state = seeded.container.read(drawControllerProvider(seeded.wallId));
       expect(state.routes.length, routesBefore + 1);
       expect(state.currentPoints, isEmpty);
       expect(state.mode, DrawMode.view);
@@ -223,7 +229,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pump();
-      final notifier = seeded.container.read(drawControllerProvider.notifier);
+      final notifier = seeded.container.read(drawControllerProvider(seeded.wallId).notifier);
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       await tester.pump();
@@ -250,7 +256,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
       expectClusterAbsent();
     },
   );
@@ -316,11 +322,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(seeded.container.read(drawControllerProvider).routes, isNotEmpty);
+    expect(seeded.container.read(drawControllerProvider(seeded.wallId)).routes, isNotEmpty);
 
     await tester.tap(find.byKey(const Key('topo-mode-toggle')));
     await tester.pumpAndSettle();
-    expect(seeded.container.read(drawControllerProvider).mode, DrawMode.draw);
+    expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.draw);
     expectClusterPresent();
 
     // Fix 1/3 (legend expand/collapse) supersedes this assertion's
@@ -384,6 +390,7 @@ void main() {
             theme: MasiTheme.light,
             home: Scaffold(
               body: TopoCanvas(
+                wallId: _testWallId,
                 imagePath: '/nonexistent/test-topo.jpg',
                 imageSize: const Size(400, 300),
                 transformationController: controller,
@@ -398,11 +405,11 @@ void main() {
         find.byKey(const Key('topo-interactive-viewer')),
       );
 
-      expect(container.read(drawControllerProvider).mode, DrawMode.view);
+      expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
       expect(viewer().panEnabled, isTrue);
       expect(viewer().scaleEnabled, isTrue);
 
-      container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
+      container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
       await tester.pump();
 
       expect(

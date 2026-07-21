@@ -31,6 +31,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently everywhere this file constructs `TopoCanvas` or reads the
+/// provider directly.
+const _testWallId = 'test-wall';
+
 void main() {
   testWidgets(
     'TopoCanvas renders a placed symbol (masi glyph marker) without '
@@ -44,7 +49,7 @@ void main() {
       final controller = TransformationController();
       addTearDown(controller.dispose);
 
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       notifier.setMode(DrawMode.draw);
       // An in-progress (uncommitted) route with a placed anchor symbol --
       // exercises the exact same TopoPainter._paintSymbol codepath a
@@ -56,7 +61,7 @@ void main() {
       notifier.setActiveSymbol(SymbolType.anchor);
       await notifier.placeSymbol(const Offset(0.5, 0.5));
       expect(
-        container.read(drawControllerProvider).currentSymbols,
+        container.read(drawControllerProvider(_testWallId)).currentSymbols,
         hasLength(1),
       );
 
@@ -67,6 +72,7 @@ void main() {
             theme: MasiTheme.light,
             home: Scaffold(
               body: TopoCanvas(
+                wallId: _testWallId,
                 imagePath: '/nonexistent/test-topo.jpg',
                 imageSize: imageSize,
                 transformationController: controller,
@@ -111,14 +117,14 @@ void main() {
       final controller = TransformationController();
       addTearDown(controller.dispose);
 
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       notifier.setMode(DrawMode.draw);
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.addPoint(const Offset(0.6, 0.6));
       notifier.setActiveSymbol(SymbolType.disabledHold);
       await notifier.placeSymbol(const Offset(0.5, 0.5));
       expect(
-        container.read(drawControllerProvider).currentSymbols,
+        container.read(drawControllerProvider(_testWallId)).currentSymbols,
         hasLength(1),
       );
 
@@ -129,6 +135,7 @@ void main() {
             theme: MasiTheme.light,
             home: Scaffold(
               body: TopoCanvas(
+                wallId: _testWallId,
                 imagePath: '/nonexistent/test-topo.jpg',
                 imageSize: imageSize,
                 transformationController: controller,

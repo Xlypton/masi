@@ -183,7 +183,7 @@ void main() {
       // the readOnly gate holds regardless of mode, not just at the
       // default view-mode this screen always opens in.
       seeded.container
-          .read(drawControllerProvider.notifier)
+          .read(drawControllerProvider(seeded.wallId).notifier)
           .setMode(DrawMode.draw);
       await tester.pumpAndSettle();
 
@@ -523,8 +523,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
-      seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
+      seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
       for (final key in const [
@@ -565,7 +565,7 @@ void main() {
 
         await tester.tap(find.byKey(const Key('topo-mode-toggle')));
         await tester.pumpAndSettle();
-        seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
+        seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
         await tester.pumpAndSettle();
 
         for (final key in const [

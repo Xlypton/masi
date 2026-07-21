@@ -117,10 +117,15 @@ const double kMinZoomOutFactor = 0.5;
 class TopoCanvas extends ConsumerStatefulWidget {
   const TopoCanvas({
     super.key,
+    required this.wallId,
     required this.imagePath,
     required this.imageSize,
     required this.transformationController,
   });
+
+  /// FIX #6: family key for [drawControllerProvider] — see that provider's
+  /// doc. Always the same wallId as the owning [TopoCanvasScreen].
+  final String wallId;
 
   /// Filesystem path of the selected topo photo.
   final String imagePath;
@@ -698,7 +703,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     final scene = widget.transformationController.toScene(
       viewportLocalPosition,
     );
-    final drawState = ref.read(drawControllerProvider);
+    final drawState = ref.read(drawControllerProvider(widget.wallId));
 
     if (drawState.activeSymbol != null) {
       // Symbol-placement mode: a tap places a symbol of the active type
@@ -716,7 +721,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         widget.imageSize,
       );
       final outcome = await ref
-          .read(drawControllerProvider.notifier)
+          .read(drawControllerProvider(widget.wallId).notifier)
           .placeSymbol(percent);
       // This method is now async (awaiting placeSymbol above), so `mounted`
       // must be re-checked before touching `context` below — the widget may
@@ -768,7 +773,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         widget.imageSize,
       );
       ref
-          .read(drawControllerProvider.notifier)
+          .read(drawControllerProvider(widget.wallId).notifier)
           .movePoint(draggingIndex, percent);
       return;
     }
@@ -809,7 +814,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       scene,
       widget.imageSize,
     );
-    ref.read(drawControllerProvider.notifier).addPoint(percent);
+    ref.read(drawControllerProvider(widget.wallId).notifier).addPoint(percent);
   }
 
   /// Clears any in-progress draw interaction (pending tap-to-add or handle
@@ -873,9 +878,9 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         thresholdScenePx /
         (widget.imageSize.width == 0 ? 1 : widget.imageSize.width);
 
-    final drawState = ref.read(drawControllerProvider);
+    final drawState = ref.read(drawControllerProvider(widget.wallId));
     final hitId = hitTestRoute(percent, drawState.routes, thresholdPercent);
-    ref.read(drawControllerProvider.notifier).selectRoute(hitId);
+    ref.read(drawControllerProvider(widget.wallId).notifier).selectRoute(hitId);
   }
 
   /// Clears any in-progress view-mode tap tracking for [pointerId] without
@@ -889,7 +894,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
 
   @override
   Widget build(BuildContext context) {
-    final drawState = ref.watch(drawControllerProvider);
+    final drawState = ref.watch(drawControllerProvider(widget.wallId));
     final isDrawMode = drawState.mode == DrawMode.draw;
 
     return LayoutBuilder(

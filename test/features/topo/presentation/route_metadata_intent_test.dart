@@ -17,6 +17,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider`): stand-in wallId, paired
+/// consistently everywhere this file constructs `RouteMetadataSheet` or
+/// reads the provider directly.
+const _testWallId = 'test-wall';
+
 /// Pumps [RouteMetadataSheet] directly with a seeded [drawControllerProvider]
 /// inside a [ProviderScope] + [MaterialApp], per the sheet's class-doc
 /// testability contract: no image decode, no real canvas/photo path.
@@ -30,7 +35,11 @@ Widget _buildSheet({
     child: MaterialApp(
       theme: MasiTheme.light,
       home: Scaffold(
-        body: RouteMetadataSheet(routeId: routeId, initial: initial),
+        body: RouteMetadataSheet(
+          wallId: _testWallId,
+          routeId: routeId,
+          initial: initial,
+        ),
       ),
     ),
   );
@@ -39,11 +48,20 @@ Widget _buildSheet({
 /// Seeds [container] with a single committed route (≥2 points, per
 /// `commitRoute`'s no-op-under-2-points contract) and returns its id.
 int _seedRoute(ProviderContainer container) {
-  final notifier = container.read(drawControllerProvider.notifier);
+  // FIX #6 (autoDispose pending-timer gotcha): keep this family member
+  // alive for the whole test -- mirrors what a mounted RouteMetadataSheet's
+  // `ref.watch` does; without it, the bare `.notifier`/state reads below
+  // (and any later assertion-time reads) each schedule an autoDispose
+  // teardown `Timer(Duration.zero, ...)` that must be flushed by a
+  // duration-based pump before the test ends, or flutter_test's
+  // `!timersPending` invariant trips. See route_legend_gap_test.dart's
+  // `_seedRoutes` for the fuller explanation.
+  container.listen(drawControllerProvider(_testWallId), (_, _) {});
+  final notifier = container.read(drawControllerProvider(_testWallId).notifier);
   notifier.addPoint(const Offset(0.1, 0.1));
   notifier.addPoint(const Offset(0.2, 0.2));
   notifier.commitRoute();
-  return container.read(drawControllerProvider).routes.single.id;
+  return container.read(drawControllerProvider(_testWallId)).routes.single.id;
 }
 
 void main() {
@@ -238,7 +256,7 @@ void main() {
         final container = ProviderContainer();
         addTearDown(container.dispose);
         final routeId = _seedRoute(container);
-        final before = container.read(drawControllerProvider).routes.single;
+        final before = container.read(drawControllerProvider(_testWallId)).routes.single;
 
         // --- Cancel path: edits typed in but never saved must not mutate
         // the route in drawControllerProvider's state.
@@ -288,7 +306,7 @@ void main() {
         await tester.pump();
 
         final afterCancel =
-            container.read(drawControllerProvider).routes.single;
+            container.read(drawControllerProvider(_testWallId)).routes.single;
         expect(
           afterCancel.name,
           before.name,
@@ -341,7 +359,7 @@ void main() {
         await tester.tap(find.byKey(const Key('topo-meta-save')));
         await tester.pump();
 
-        final afterSave = container.read(drawControllerProvider).routes.single;
+        final afterSave = container.read(drawControllerProvider(_testWallId)).routes.single;
         expect(afterSave.name, 'Le Toit');
         expect(afterSave.gradeSystem, GradeSystem.french);
         expect(afterSave.gradeRaw, '6b');
@@ -365,14 +383,14 @@ void main() {
         // so this exercises the setRouteMetadata/TopoRoute contract that
         // RouteMetadataSheet._save itself relies on, rather than routing
         // through UI that structurally cannot type arbitrary casing.
-        final notifier = container.read(drawControllerProvider.notifier);
+        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
         await notifier.setRouteMetadata(
           routeId,
           gradeSystem: GradeSystem.french,
           gradeRaw: '6A+',
         );
 
-        final route = container.read(drawControllerProvider).routes.single;
+        final route = container.read(drawControllerProvider(_testWallId)).routes.single;
         expect(
           route.gradeRaw,
           '6A+',

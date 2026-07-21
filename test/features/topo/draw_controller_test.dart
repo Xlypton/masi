@@ -5,6 +5,11 @@ import 'package:climbtopo/core/grades/grade_system.dart';
 import 'package:climbtopo/features/topo/application/draw_controller.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId — every
+/// test here gets its own fresh [container] in `setUp`, so one shared key is
+/// safe.
+const _testWallId = 'test-wall';
+
 void main() {
   late ProviderContainer container;
 
@@ -14,7 +19,7 @@ void main() {
   });
 
   test('initial state is view mode with empty points/routes', () {
-    final state = container.read(drawControllerProvider);
+    final state = container.read(drawControllerProvider(_testWallId));
 
     expect(state.mode, DrawMode.view);
     expect(state.currentPoints, isEmpty);
@@ -26,40 +31,40 @@ void main() {
   });
 
   test('toggleMode flips view <-> draw', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
-    expect(container.read(drawControllerProvider).mode, DrawMode.view);
-
-    notifier.toggleMode();
-    expect(container.read(drawControllerProvider).mode, DrawMode.draw);
+    expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
 
     notifier.toggleMode();
-    expect(container.read(drawControllerProvider).mode, DrawMode.view);
+    expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.draw);
+
+    notifier.toggleMode();
+    expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
   });
 
   test('setMode sets mode explicitly', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.setMode(DrawMode.draw);
-    expect(container.read(drawControllerProvider).mode, DrawMode.draw);
+    expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.draw);
 
     notifier.setMode(DrawMode.draw);
-    expect(container.read(drawControllerProvider).mode, DrawMode.draw);
+    expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.draw);
 
     notifier.setMode(DrawMode.view);
-    expect(container.read(drawControllerProvider).mode, DrawMode.view);
+    expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
   });
 
   test('addPoint appends and increments length', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
-    expect(container.read(drawControllerProvider).currentPoints, [
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
       const Offset(0.1, 0.1),
     ]);
 
     notifier.addPoint(const Offset(0.2, 0.2));
-    expect(container.read(drawControllerProvider).currentPoints, [
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
       const Offset(0.1, 0.1),
       const Offset(0.2, 0.2),
     ]);
@@ -68,38 +73,38 @@ void main() {
   test(
     'undo/redo round trip; new addPoint after undo clears redo stack',
     () {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
-      expect(container.read(drawControllerProvider).currentPoints.length, 2);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints.length, 2);
 
       notifier.undo();
-      expect(container.read(drawControllerProvider).currentPoints, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
         const Offset(0.1, 0.1),
       ]);
 
       notifier.redo();
-      expect(container.read(drawControllerProvider).currentPoints, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
         const Offset(0.1, 0.1),
         const Offset(0.2, 0.2),
       ]);
 
       // Undo again, then add a new point: redo stack must be cleared.
       notifier.undo();
-      expect(container.read(drawControllerProvider).currentPoints, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
         const Offset(0.1, 0.1),
       ]);
 
       notifier.addPoint(const Offset(0.3, 0.3));
-      expect(container.read(drawControllerProvider).currentPoints, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
         const Offset(0.1, 0.1),
         const Offset(0.3, 0.3),
       ]);
 
       // Redo should now be a no-op since the redo stack was cleared.
       notifier.redo();
-      expect(container.read(drawControllerProvider).currentPoints, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
         const Offset(0.1, 0.1),
         const Offset(0.3, 0.3),
       ]);
@@ -107,25 +112,25 @@ void main() {
   );
 
   test('undo is a no-op when currentPoints is empty', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.undo();
-    expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
   });
 
   test('redo is a no-op when redo stack is empty', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.redo();
-    expect(container.read(drawControllerProvider).currentPoints, [
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
       const Offset(0.1, 0.1),
     ]);
   });
 
   test('commitRoute moves >=2 points into routes and empties '
       'currentPoints', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
@@ -133,7 +138,7 @@ void main() {
 
     notifier.commitRoute();
 
-    final state = container.read(drawControllerProvider);
+    final state = container.read(drawControllerProvider(_testWallId));
     expect(state.currentPoints, isEmpty);
     expect(state.routes.length, 1);
     expect(state.routes.first.points, [
@@ -144,21 +149,21 @@ void main() {
   });
 
   test('commitRoute with <2 points is a no-op', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
-    final before = container.read(drawControllerProvider);
+    final before = container.read(drawControllerProvider(_testWallId));
 
     notifier.commitRoute();
 
-    final after = container.read(drawControllerProvider);
+    final after = container.read(drawControllerProvider(_testWallId));
     expect(after.currentPoints, before.currentPoints);
     expect(after.routes, before.routes);
     expect(after.routes, isEmpty);
   });
 
   test('commitRoute clears the redo stack', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
@@ -168,11 +173,11 @@ void main() {
 
     // Redo stack should be empty post-commit, so redo is a no-op.
     notifier.redo();
-    expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
   });
 
   test('movePoint replaces the point at index, others unchanged', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
@@ -180,7 +185,7 @@ void main() {
 
     notifier.movePoint(0, const Offset(0.9, 0.9));
 
-    expect(container.read(drawControllerProvider).currentPoints, [
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
       const Offset(0.9, 0.9),
       const Offset(0.2, 0.2),
       const Offset(0.3, 0.3),
@@ -190,18 +195,18 @@ void main() {
   test(
     'movePoint with an out-of-range index is a safe no-op (does not throw)',
     () {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
-      final before = container.read(drawControllerProvider);
+      final before = container.read(drawControllerProvider(_testWallId));
 
       expect(
         () => notifier.movePoint(5, const Offset(0.9, 0.9)),
         returnsNormally,
       );
       expect(
-        container.read(drawControllerProvider).currentPoints,
+        container.read(drawControllerProvider(_testWallId)).currentPoints,
         before.currentPoints,
       );
 
@@ -210,21 +215,21 @@ void main() {
         returnsNormally,
       );
       expect(
-        container.read(drawControllerProvider).currentPoints,
+        container.read(drawControllerProvider(_testWallId)).currentPoints,
         before.currentPoints,
       );
     },
   );
 
   test('commitRoute pushes a copy, not a reference, of currentPoints', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
     notifier.commitRoute();
 
     final firstCommitted = container
-        .read(drawControllerProvider)
+        .read(drawControllerProvider(_testWallId))
         .routes
         .first
         .points;
@@ -238,7 +243,7 @@ void main() {
     expect(
       identical(
         firstCommitted,
-        container.read(drawControllerProvider).currentPoints,
+        container.read(drawControllerProvider(_testWallId)).currentPoints,
       ),
       isFalse,
     );
@@ -246,7 +251,7 @@ void main() {
 
     notifier.commitRoute();
 
-    final state = container.read(drawControllerProvider);
+    final state = container.read(drawControllerProvider(_testWallId));
     expect(state.routes.length, 2);
     expect(
       identical(state.routes[0].points, state.routes[1].points),
@@ -263,13 +268,13 @@ void main() {
   });
 
   test('commitRoute at exactly 2 points commits successfully (boundary)', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
     notifier.commitRoute();
 
-    final state = container.read(drawControllerProvider);
+    final state = container.read(drawControllerProvider(_testWallId));
     expect(state.currentPoints, isEmpty);
     expect(state.routes.length, 1);
     expect(state.routes.first.points, [
@@ -280,7 +285,7 @@ void main() {
 
   test('undo/redo preserves original order: addPoint(A,B); undo x2; redo x2 '
       '=> [A, B]', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
     const a = Offset(0.1, 0.1);
     const b = Offset(0.2, 0.2);
 
@@ -291,22 +296,22 @@ void main() {
     notifier.redo();
     notifier.redo();
 
-    expect(container.read(drawControllerProvider).currentPoints, [a, b]);
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [a, b]);
   });
 
   test('clearCurrent empties currentPoints and the redo stack', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
     notifier.undo();
 
     notifier.clearCurrent();
-    expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
 
     // Redo stack cleared too.
     notifier.redo();
-    expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+    expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
   });
 
   // --- M2: multi-route, selection, visibility, symbols ---------------------
@@ -315,19 +320,19 @@ void main() {
     'A1: committing two routes assigns sequential ids/numbers and '
     'palette-derived colorIndex, and advances nextId/nextNumber',
     () {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
 
       notifier.addPoint(const Offset(0.3, 0.3));
       notifier.addPoint(const Offset(0.4, 0.4));
       notifier.commitRoute();
-      expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
 
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       expect(state.routes.length, 2);
 
       expect(state.routes[0].number, 1);
@@ -343,32 +348,32 @@ void main() {
 
   test('A3: selectRoute sets an existing id, null clears it, and an absent '
       'id is a no-op', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
     notifier.commitRoute();
-    final routeId = container.read(drawControllerProvider).routes.first.id;
+    final routeId = container.read(drawControllerProvider(_testWallId)).routes.first.id;
 
     notifier.selectRoute(routeId);
-    expect(container.read(drawControllerProvider).selectedRouteId, routeId);
+    expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, routeId);
 
     // Absent id: no-op, selection unchanged.
     notifier.selectRoute(routeId + 999);
-    expect(container.read(drawControllerProvider).selectedRouteId, routeId);
+    expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, routeId);
 
     notifier.selectRoute(null);
-    expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+    expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
 
     // Absent id while nothing is selected: still a no-op (stays null).
     notifier.selectRoute(routeId + 999);
-    expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+    expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
   });
 
   test(
     'A4: toggleRouteVisibility flips only the targeted route\'s visible flag',
     () {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
@@ -378,43 +383,43 @@ void main() {
       notifier.addPoint(const Offset(0.4, 0.4));
       notifier.commitRoute();
 
-      final before = container.read(drawControllerProvider).routes;
+      final before = container.read(drawControllerProvider(_testWallId)).routes;
       final firstId = before[0].id;
       expect(before[0].visible, isTrue);
       expect(before[1].visible, isTrue);
 
       notifier.toggleRouteVisibility(firstId);
 
-      final after = container.read(drawControllerProvider).routes;
+      final after = container.read(drawControllerProvider(_testWallId)).routes;
       expect(after[0].visible, isFalse);
       expect(after[1].visible, isTrue);
       // Toggling back.
       notifier.toggleRouteVisibility(firstId);
       expect(
-        container.read(drawControllerProvider).routes[0].visible,
+        container.read(drawControllerProvider(_testWallId)).routes[0].visible,
         isTrue,
       );
     },
   );
 
   test('toggleRouteVisibility with an absent id is a no-op', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
     notifier.commitRoute();
-    final before = container.read(drawControllerProvider).routes;
+    final before = container.read(drawControllerProvider(_testWallId)).routes;
 
     notifier.toggleRouteVisibility(9999);
 
-    expect(container.read(drawControllerProvider).routes, before);
+    expect(container.read(drawControllerProvider(_testWallId)).routes, before);
   });
 
   test(
     'A5: placeSymbol with a selection and active symbol appends to the '
     'selected route only',
     () {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
@@ -424,7 +429,7 @@ void main() {
       notifier.addPoint(const Offset(0.4, 0.4));
       notifier.commitRoute();
 
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final targetId = routes[0].id;
 
       notifier.selectRoute(targetId);
@@ -433,7 +438,7 @@ void main() {
       const placedAt = Offset(0.15, 0.15);
       notifier.placeSymbol(placedAt);
 
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       final target = state.routes.firstWhere((r) => r.id == targetId);
       final other = state.routes.firstWhere((r) => r.id != targetId);
 
@@ -469,7 +474,7 @@ void main() {
     'S1: placeSymbol with no route selected but routes non-empty '
     'auto-selects routes.last and places the symbol there',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
@@ -479,10 +484,10 @@ void main() {
       notifier.addPoint(const Offset(0.4, 0.4));
       notifier.commitRoute();
 
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final r1 = routes[0];
       final r2 = routes[1];
-      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
 
       notifier.setActiveSymbol(SymbolType.bolt);
       const placedAt = Offset(0.5, 0.5);
@@ -490,7 +495,7 @@ void main() {
 
       expect(outcome, SymbolPlacementOutcome.autoSelectedAndPlaced);
 
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       expect(state.selectedRouteId, r2.id);
       final updatedR2 = state.routes.firstWhere((r) => r.id == r2.id);
       final updatedR1 = state.routes.firstWhere((r) => r.id == r1.id);
@@ -508,15 +513,15 @@ void main() {
     'only kicks in once currentPoints is non-empty, so this "nothing to '
     'place onto at all" case is unchanged)',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       notifier.setActiveSymbol(SymbolType.bolt);
-      expect(container.read(drawControllerProvider).routes, isEmpty);
-      expect(container.read(drawControllerProvider).currentPoints, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
 
       final outcome = await notifier.placeSymbol(const Offset(0.5, 0.5));
 
       expect(outcome, SymbolPlacementOutcome.noRouteAvailable);
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       expect(state.routes, isEmpty);
       expect(state.selectedRouteId, isNull);
     },
@@ -528,7 +533,7 @@ void main() {
     'unchanged, and returns the plain placed outcome (distinguishable from '
     'auto-selected)',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
@@ -538,7 +543,7 @@ void main() {
       notifier.addPoint(const Offset(0.4, 0.4));
       notifier.commitRoute();
 
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final r1 = routes[0];
       final r2 = routes[1];
 
@@ -554,7 +559,7 @@ void main() {
       expect(outcome, SymbolPlacementOutcome.placed);
       expect(outcome, isNot(SymbolPlacementOutcome.autoSelectedAndPlaced));
 
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       expect(state.selectedRouteId, r1.id);
       final updatedR1 = state.routes.firstWhere((r) => r.id == r1.id);
       final updatedR2 = state.routes.firstWhere((r) => r.id == r2.id);
@@ -573,7 +578,7 @@ void main() {
     'independent per-TopoRoute, so this needs no new plumbing beyond the '
     'new SymbolType member)',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
@@ -583,7 +588,7 @@ void main() {
       notifier.addPoint(const Offset(0.4, 0.4));
       notifier.commitRoute();
 
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final routeA = routes[0];
       final routeB = routes[1];
       const holdPosition = Offset(0.15, 0.15);
@@ -594,7 +599,7 @@ void main() {
 
       expect(outcome, SymbolPlacementOutcome.placed);
 
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       final updatedA = state.routes.firstWhere((r) => r.id == routeA.id);
       final updatedB = state.routes.firstWhere((r) => r.id == routeB.id);
 
@@ -612,7 +617,7 @@ void main() {
       final outcomeB = await notifier.placeSymbol(holdPosition);
       expect(outcomeB, SymbolPlacementOutcome.placed);
 
-      final finalState = container.read(drawControllerProvider);
+      final finalState = container.read(drawControllerProvider(_testWallId));
       final finalA = finalState.routes.firstWhere((r) => r.id == routeA.id);
       final finalB = finalState.routes.firstWhere((r) => r.id == routeB.id);
       expect(finalA.symbols, [
@@ -629,16 +634,16 @@ void main() {
     'symbol is active -- the line-drawing path is untouched by the '
     'placeSymbol auto-select/hint fix',
     () {
-      final notifier = container.read(drawControllerProvider.notifier);
-      expect(container.read(drawControllerProvider).activeSymbol, isNull);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+      expect(container.read(drawControllerProvider(_testWallId)).activeSymbol, isNull);
 
       notifier.addPoint(const Offset(0.7, 0.7));
-      expect(container.read(drawControllerProvider).currentPoints, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
         const Offset(0.7, 0.7),
       ]);
 
       notifier.addPoint(const Offset(0.8, 0.8));
-      expect(container.read(drawControllerProvider).currentPoints, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
         const Offset(0.7, 0.7),
         const Offset(0.8, 0.8),
       ]);
@@ -649,20 +654,20 @@ void main() {
     'S4b: placeSymbol with no active symbol returns noActiveSymbol and '
     'makes no state change, even with a route already selected',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.first.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.first.id;
       notifier.selectRoute(routeId);
-      expect(container.read(drawControllerProvider).activeSymbol, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).activeSymbol, isNull);
 
-      final before = container.read(drawControllerProvider);
+      final before = container.read(drawControllerProvider(_testWallId));
       final outcome = await notifier.placeSymbol(const Offset(0.5, 0.5));
 
       expect(outcome, SymbolPlacementOutcome.noActiveSymbol);
-      final after = container.read(drawControllerProvider);
+      final after = container.read(drawControllerProvider(_testWallId));
       expect(after.routes, before.routes);
       expect(after.selectedRouteId, before.selectedRouteId);
       expect(after.currentPoints, before.currentPoints);
@@ -673,16 +678,16 @@ void main() {
     'placeSymbol with no active symbol is a no-op and returns '
     'noActiveSymbol even with no route selected and no routes at all',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
-      expect(container.read(drawControllerProvider).activeSymbol, isNull);
-      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
-      expect(container.read(drawControllerProvider).routes, isEmpty);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+      expect(container.read(drawControllerProvider(_testWallId)).activeSymbol, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
 
       final outcome = await notifier.placeSymbol(const Offset(0.5, 0.5));
 
       expect(outcome, SymbolPlacementOutcome.noActiveSymbol);
-      expect(container.read(drawControllerProvider).routes, isEmpty);
-      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
     },
   );
 
@@ -695,12 +700,12 @@ void main() {
     'places onto currentSymbols instead of returning noRouteAvailable, and '
     'commitRoute folds it into the new route',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       notifier.setMode(DrawMode.draw);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
-      expect(container.read(drawControllerProvider).routes, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
 
       notifier.setActiveSymbol(SymbolType.crux);
       const placedAt = Offset(0.5, 0.5);
@@ -708,7 +713,7 @@ void main() {
 
       expect(outcome, SymbolPlacementOutcome.placed);
       expect(outcome, isNot(SymbolPlacementOutcome.noRouteAvailable));
-      final midDraw = container.read(drawControllerProvider);
+      final midDraw = container.read(drawControllerProvider(_testWallId));
       expect(midDraw.currentSymbols, [
         const TopoSymbol(type: SymbolType.crux, position: placedAt),
       ]);
@@ -717,7 +722,7 @@ void main() {
 
       await notifier.commitRoute();
 
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       expect(state.routes.single.symbols, [
         const TopoSymbol(type: SymbolType.crux, position: placedAt),
       ]);
@@ -728,7 +733,7 @@ void main() {
   test(
     'U2: undo/redo a draw-time (pre-commit) symbol placement',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       notifier.setMode(DrawMode.draw);
 
       notifier.addPoint(const Offset(0.1, 0.1));
@@ -737,21 +742,21 @@ void main() {
       const placedAt = Offset(0.5, 0.5);
       await notifier.placeSymbol(placedAt);
       expect(
-        container.read(drawControllerProvider).currentSymbols,
+        container.read(drawControllerProvider(_testWallId)).currentSymbols,
         hasLength(1),
       );
 
       await notifier.undo();
-      expect(container.read(drawControllerProvider).currentSymbols, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).currentSymbols, isEmpty);
       // The two points drawn before the symbol are untouched by undoing
       // the symbol placement.
-      expect(container.read(drawControllerProvider).currentPoints, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [
         const Offset(0.1, 0.1),
         const Offset(0.2, 0.2),
       ]);
 
       await notifier.redo();
-      expect(container.read(drawControllerProvider).currentSymbols, [
+      expect(container.read(drawControllerProvider(_testWallId)).currentSymbols, [
         const TopoSymbol(type: SymbolType.bolt, position: placedAt),
       ]);
     },
@@ -763,12 +768,12 @@ void main() {
     'restores it; see draw_controller_persistence_test.dart for the '
     'equivalent coverage that the removal/restoration also re-persists',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       await notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
 
       notifier.setActiveSymbol(SymbolType.bolt);
       const placedAt = Offset(0.15, 0.15);
@@ -776,18 +781,18 @@ void main() {
       final outcome = await notifier.placeSymbol(placedAt);
       expect(outcome, SymbolPlacementOutcome.autoSelectedAndPlaced);
       expect(
-        container.read(drawControllerProvider).routes.single.symbols,
+        container.read(drawControllerProvider(_testWallId)).routes.single.symbols,
         hasLength(1),
       );
 
       await notifier.undo();
       expect(
-        container.read(drawControllerProvider).routes.single.symbols,
+        container.read(drawControllerProvider(_testWallId)).routes.single.symbols,
         isEmpty,
       );
 
       await notifier.redo();
-      final restored = container.read(drawControllerProvider).routes
+      final restored = container.read(drawControllerProvider(_testWallId)).routes
           .firstWhere((r) => r.id == routeId);
       expect(restored.symbols, [
         const TopoSymbol(type: SymbolType.bolt, position: placedAt),
@@ -805,7 +810,7 @@ void main() {
     'whenever any committed route existed, defeating the draw-time '
     'placement feature entirely once a wall had >=1 route.',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       notifier.setMode(DrawMode.draw);
 
       // Commit one route first, so state.routes is non-empty.
@@ -813,17 +818,17 @@ void main() {
       notifier.addPoint(const Offset(0.2, 0.2));
       await notifier.commitRoute();
       final committedRoute = container
-          .read(drawControllerProvider)
+          .read(drawControllerProvider(_testWallId))
           .routes
           .single;
-      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
 
       // Start drawing a NEW route -- currentPoints becomes non-empty again
       // -- with no explicit selection.
       notifier.addPoint(const Offset(0.5, 0.1));
       notifier.addPoint(const Offset(0.6, 0.1));
       expect(
-        container.read(drawControllerProvider).currentPoints,
+        container.read(drawControllerProvider(_testWallId)).currentPoints,
         hasLength(2),
       );
 
@@ -834,7 +839,7 @@ void main() {
       expect(outcome, SymbolPlacementOutcome.placed);
       expect(outcome, isNot(SymbolPlacementOutcome.autoSelectedAndPlaced));
 
-      final midDraw = container.read(drawControllerProvider);
+      final midDraw = container.read(drawControllerProvider(_testWallId));
       expect(midDraw.currentSymbols, [
         const TopoSymbol(type: SymbolType.bolt, position: placedAt),
       ]);
@@ -848,7 +853,7 @@ void main() {
       // After commitRoute, the NEW route carries the bolt and the first
       // route still has none.
       await notifier.commitRoute();
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       expect(state.routes, hasLength(2));
       final firstRoute = state.routes.firstWhere(
         (r) => r.id == committedRoute.id,
@@ -870,21 +875,21 @@ void main() {
     'flow, since step 3 (in-progress draw) requires currentPoints to be '
     'non-empty and is skipped here.',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       await notifier.commitRoute();
-      final route = container.read(drawControllerProvider).routes.single;
-      expect(container.read(drawControllerProvider).currentPoints, isEmpty);
-      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+      final route = container.read(drawControllerProvider(_testWallId)).routes.single;
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
 
       notifier.setActiveSymbol(SymbolType.bolt);
       const placedAt = Offset(0.5, 0.5);
       final outcome = await notifier.placeSymbol(placedAt);
 
       expect(outcome, SymbolPlacementOutcome.autoSelectedAndPlaced);
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       expect(state.selectedRouteId, route.id);
       expect(state.routes.single.symbols, [
         const TopoSymbol(type: SymbolType.bolt, position: placedAt),
@@ -899,7 +904,7 @@ void main() {
     'symbol, then B (point) -- leaving currentSymbols empty and only A in '
     'currentPoints',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       notifier.setMode(DrawMode.draw);
 
       const a = Offset(0.1, 0.1);
@@ -913,40 +918,40 @@ void main() {
       await notifier.placeSymbol(symbolAt);
       notifier.addPoint(c);
 
-      expect(container.read(drawControllerProvider).currentPoints, [a, b, c]);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [a, b, c]);
       expect(
-        container.read(drawControllerProvider).currentSymbols,
+        container.read(drawControllerProvider(_testWallId)).currentSymbols,
         hasLength(1),
       );
 
       // Pop 1: the most recent op is addPoint(C).
       await notifier.undo();
-      expect(container.read(drawControllerProvider).currentPoints, [a, b]);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [a, b]);
       expect(
-        container.read(drawControllerProvider).currentSymbols,
+        container.read(drawControllerProvider(_testWallId)).currentSymbols,
         hasLength(1),
       );
 
       // Pop 2: the symbol placement.
       await notifier.undo();
-      expect(container.read(drawControllerProvider).currentPoints, [a, b]);
-      expect(container.read(drawControllerProvider).currentSymbols, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [a, b]);
+      expect(container.read(drawControllerProvider(_testWallId)).currentSymbols, isEmpty);
 
       // Pop 3: addPoint(B).
       await notifier.undo();
-      expect(container.read(drawControllerProvider).currentPoints, [a]);
-      expect(container.read(drawControllerProvider).currentSymbols, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [a]);
+      expect(container.read(drawControllerProvider(_testWallId)).currentSymbols, isEmpty);
 
       // Redo replays the exact same sequence in reverse.
       await notifier.redo();
-      expect(container.read(drawControllerProvider).currentPoints, [a, b]);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [a, b]);
       await notifier.redo();
       expect(
-        container.read(drawControllerProvider).currentSymbols,
+        container.read(drawControllerProvider(_testWallId)).currentSymbols,
         hasLength(1),
       );
       await notifier.redo();
-      expect(container.read(drawControllerProvider).currentPoints, [a, b, c]);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, [a, b, c]);
     },
   );
 
@@ -954,7 +959,7 @@ void main() {
     'A6: removeRoute removes the route and clears selectedRouteId iff it '
     'pointed at the removed route',
     () {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
@@ -964,7 +969,7 @@ void main() {
       notifier.addPoint(const Offset(0.4, 0.4));
       notifier.commitRoute();
 
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final firstId = routes[0].id;
       final secondId = routes[1].id;
 
@@ -972,30 +977,30 @@ void main() {
       notifier.selectRoute(secondId);
       notifier.removeRoute(firstId);
 
-      var state = container.read(drawControllerProvider);
+      var state = container.read(drawControllerProvider(_testWallId));
       expect(state.routes.length, 1);
       expect(state.routes.first.id, secondId);
       expect(state.selectedRouteId, secondId);
 
       // Removing the selected route clears the selection.
       notifier.removeRoute(secondId);
-      state = container.read(drawControllerProvider);
+      state = container.read(drawControllerProvider(_testWallId));
       expect(state.routes, isEmpty);
       expect(state.selectedRouteId, isNull);
     },
   );
 
   test('removeRoute with an absent id is a no-op', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
     notifier.commitRoute();
-    final before = container.read(drawControllerProvider);
+    final before = container.read(drawControllerProvider(_testWallId));
 
     notifier.removeRoute(9999);
 
-    final after = container.read(drawControllerProvider);
+    final after = container.read(drawControllerProvider(_testWallId));
     expect(after.routes, before.routes);
     expect(after.selectedRouteId, before.selectedRouteId);
   });
@@ -1004,27 +1009,139 @@ void main() {
     'U11: removeRoute clears the undo/redo history stacks, so no op '
     'survives its route\'s deletion',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       await notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
 
       notifier.setActiveSymbol(SymbolType.bolt);
       await notifier.placeSymbol(const Offset(0.15, 0.15));
       await notifier.placeSymbol(const Offset(0.25, 0.25));
-      expect(container.read(drawControllerProvider).undoStack, hasLength(2));
+      expect(container.read(drawControllerProvider(_testWallId)).undoStack, hasLength(2));
 
       await notifier.undo();
-      expect(container.read(drawControllerProvider).undoStack, hasLength(1));
-      expect(container.read(drawControllerProvider).redoStack, hasLength(1));
+      expect(container.read(drawControllerProvider(_testWallId)).undoStack, hasLength(1));
+      expect(container.read(drawControllerProvider(_testWallId)).redoStack, hasLength(1));
 
       await notifier.removeRoute(routeId);
 
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       expect(state.undoStack, isEmpty);
       expect(state.redoStack, isEmpty);
+    },
+  );
+
+  test(
+    'FIX #9 (MED, CONFIRMED): removeRoute drops ONLY the removed route\'s '
+    'own AddCommittedSymbolOp entries from undoStack/redoStack, leaving an '
+    'unrelated in-progress draw (AddPointOp/AddCurrentSymbolOp) AND another '
+    "route's own AddCommittedSymbolOp entries intact -- it must not wipe the "
+    'whole history',
+    () async {
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+
+      // Route A: committed, then a symbol placed on it (AddCommittedSymbolOp
+      // for A).
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      await notifier.commitRoute();
+      final routeAId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+      notifier.selectRoute(routeAId);
+      notifier.setActiveSymbol(SymbolType.bolt);
+      await notifier.placeSymbol(const Offset(0.15, 0.15));
+
+      // Route B: committed, then its OWN symbol placed on it
+      // (AddCommittedSymbolOp for B) -- unrelated to A.
+      notifier.addPoint(const Offset(0.5, 0.5));
+      notifier.addPoint(const Offset(0.6, 0.6));
+      await notifier.commitRoute();
+      final routeBId = container
+          .read(drawControllerProvider(_testWallId))
+          .routes
+          .firstWhere((r) => r.id != routeAId)
+          .id;
+      notifier.selectRoute(routeBId);
+      await notifier.placeSymbol(const Offset(0.55, 0.55));
+
+      // Plus an unrelated in-progress draw: an AddPointOp with nothing to
+      // do with either committed route.
+      notifier.addPoint(const Offset(0.9, 0.9));
+
+      final beforeRemove = container.read(drawControllerProvider(_testWallId));
+      expect(
+        beforeRemove.undoStack,
+        hasLength(3),
+        reason: '2 AddCommittedSymbolOp (A, B) + 1 AddPointOp',
+      );
+
+      await notifier.removeRoute(routeAId);
+
+      final state = container.read(drawControllerProvider(_testWallId));
+      // ONLY route A's AddCommittedSymbolOp is gone.
+      expect(
+        state.undoStack,
+        hasLength(2),
+        reason: "route B's symbol-placement op and the unrelated "
+            'in-progress AddPointOp must both survive',
+      );
+      expect(
+        state.undoStack.whereType<AddCommittedSymbolOp>().map((op) => op.routeId),
+        isNot(contains(routeAId)),
+      );
+      expect(
+        state.undoStack.whereType<AddCommittedSymbolOp>().single.routeId,
+        routeBId,
+      );
+      expect(state.undoStack.whereType<AddPointOp>(), hasLength(1));
+
+      // And the surviving ops still function: undoing pops the unrelated
+      // AddPointOp, restoring currentPoints -- it was never touched by the
+      // removal.
+      await notifier.undo();
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
+    },
+  );
+
+  test(
+    'FIX #9: removeRoute also filters redoStack selectively (only the '
+    "removed route's own AddCommittedSymbolOp entries are dropped)",
+    () async {
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.2, 0.2));
+      await notifier.commitRoute();
+      final routeAId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+      notifier.selectRoute(routeAId);
+      notifier.setActiveSymbol(SymbolType.bolt);
+      await notifier.placeSymbol(const Offset(0.15, 0.15));
+
+      notifier.addPoint(const Offset(0.5, 0.5));
+      notifier.addPoint(const Offset(0.6, 0.6));
+      await notifier.commitRoute();
+      final routeBId = container
+          .read(drawControllerProvider(_testWallId))
+          .routes
+          .firstWhere((r) => r.id != routeAId)
+          .id;
+      notifier.selectRoute(routeBId);
+      await notifier.placeSymbol(const Offset(0.55, 0.55));
+
+      // Undo both placements: both AddCommittedSymbolOp land in redoStack.
+      await notifier.undo();
+      await notifier.undo();
+      expect(container.read(drawControllerProvider(_testWallId)).redoStack, hasLength(2));
+
+      await notifier.removeRoute(routeAId);
+
+      final redoStack = container.read(drawControllerProvider(_testWallId)).redoStack;
+      expect(redoStack, hasLength(1));
+      expect(
+        (redoStack.single as AddCommittedSymbolOp).routeId,
+        routeBId,
+      );
     },
   );
 
@@ -1034,7 +1151,7 @@ void main() {
     'A1: setRouteMetadata sets name/grade and computes gradeSortKey from '
     'the grade service; other routes are unchanged',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
@@ -1044,7 +1161,7 @@ void main() {
       notifier.addPoint(const Offset(0.4, 0.4));
       notifier.commitRoute();
 
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final targetId = routes[0].id;
       final otherBefore = routes[1];
 
@@ -1055,7 +1172,7 @@ void main() {
         gradeRaw: '6a+',
       );
 
-      final state = container.read(drawControllerProvider);
+      final state = container.read(drawControllerProvider(_testWallId));
       final target = state.routes.firstWhere((r) => r.id == targetId);
       final other = state.routes.firstWhere((r) => r.id != targetId);
 
@@ -1075,12 +1192,12 @@ void main() {
     'A2: setRouteMetadata with an invalid grade leaves gradeSortKey null '
     'without throwing, while still setting other provided fields',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
 
       await notifier.setRouteMetadata(
         routeId,
@@ -1089,7 +1206,7 @@ void main() {
         gradeRaw: 'zzz',
       );
 
-      final route = container.read(drawControllerProvider).routes.single;
+      final route = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(route.name, 'Bad Grade Route');
       expect(route.gradeSystem, GradeSystem.french);
       expect(route.gradeRaw, 'zzz');
@@ -1101,29 +1218,29 @@ void main() {
     'A4: setRouteMetadata mutates state synchronously before any await '
     '(un-awaited call still shows the update immediately)',
     () {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
 
       // Deliberately not awaited.
       // ignore: unawaited_futures
       notifier.setRouteMetadata(routeId, name: 'Immediate');
 
-      final route = container.read(drawControllerProvider).routes.single;
+      final route = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(route.name, 'Immediate');
     },
   );
 
   test('A5: setRouteMetadata with an unknown id is a no-op (no throw)', () async {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.addPoint(const Offset(0.1, 0.1));
     notifier.addPoint(const Offset(0.2, 0.2));
     notifier.commitRoute();
-    final before = container.read(drawControllerProvider).routes;
+    final before = container.read(drawControllerProvider(_testWallId)).routes;
 
     await notifier.setRouteMetadata(
       9999,
@@ -1132,26 +1249,26 @@ void main() {
       gradeRaw: '6a',
     );
 
-    expect(container.read(drawControllerProvider).routes, before);
+    expect(container.read(drawControllerProvider(_testWallId)).routes, before);
   });
 
   test(
     'A10: setRouteMetadata with a valid grade followed by an invalid grade '
     'clears the stale gradeSortKey instead of leaving it stale',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
 
       await notifier.setRouteMetadata(
         routeId,
         gradeSystem: GradeSystem.french,
         gradeRaw: '6a+',
       );
-      final graded = container.read(drawControllerProvider).routes.single;
+      final graded = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(graded.gradeSortKey, isNotNull);
 
       await notifier.setRouteMetadata(
@@ -1160,7 +1277,7 @@ void main() {
         gradeRaw: 'zzz',
       );
 
-      final route = container.read(drawControllerProvider).routes.single;
+      final route = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(route.gradeRaw, 'zzz');
       expect(route.gradeSortKey, isNull);
     },
@@ -1172,19 +1289,19 @@ void main() {
     'since RouteMetadataSheet always sends the full sheet state and '
     'omitted now means "cleared", not "unchanged"',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
 
       await notifier.setRouteMetadata(
         routeId,
         gradeSystem: GradeSystem.french,
         gradeRaw: '6a+',
       );
-      final graded = container.read(drawControllerProvider).routes.single;
+      final graded = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(graded.gradeSortKey, isNotNull);
 
       // A save with name + grade both provided sets both.
@@ -1194,7 +1311,7 @@ void main() {
         gradeSystem: GradeSystem.french,
         gradeRaw: '7a',
       );
-      final namedAndGraded = container.read(drawControllerProvider).routes.single;
+      final namedAndGraded = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(namedAndGraded.name, 'Named And Graded');
       expect(namedAndGraded.gradeRaw, '7a');
       expect(namedAndGraded.gradeSortKey, gradeSortKey(GradeSystem.french, '7a'));
@@ -1203,7 +1320,7 @@ void main() {
       // dropdown cleared would send) clears the grade entirely.
       await notifier.setRouteMetadata(routeId, name: 'Name Only');
 
-      final route = container.read(drawControllerProvider).routes.single;
+      final route = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(route.name, 'Name Only');
       expect(route.gradeSystem, isNull);
       expect(route.gradeRaw, isNull);
@@ -1216,22 +1333,22 @@ void main() {
     'the sheet\'s name field having been emptied) instead of preserving '
     'the old name',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
 
       await notifier.setRouteMetadata(routeId, name: 'Has A Name');
       expect(
-        container.read(drawControllerProvider).routes.single.name,
+        container.read(drawControllerProvider(_testWallId)).routes.single.name,
         'Has A Name',
       );
 
       await notifier.setRouteMetadata(routeId, name: null);
 
-      expect(container.read(drawControllerProvider).routes.single.name, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).routes.single.name, isNull);
     },
   );
 
@@ -1239,25 +1356,25 @@ void main() {
     'setRouteMetadata clears style and description when passed null, '
     'matching the sheet fields having been emptied',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
 
       await notifier.setRouteMetadata(
         routeId,
         style: 'trad',
         description: 'Some beta notes.',
       );
-      final withMeta = container.read(drawControllerProvider).routes.single;
+      final withMeta = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(withMeta.style, 'trad');
       expect(withMeta.description, 'Some beta notes.');
 
       await notifier.setRouteMetadata(routeId, style: null, description: null);
 
-      final cleared = container.read(drawControllerProvider).routes.single;
+      final cleared = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(cleared.style, isNull);
       expect(cleared.description, isNull);
     },
@@ -1267,13 +1384,13 @@ void main() {
     'setRouteMetadata with no active wall updates in-memory state and does '
     'not throw (no DB touched)',
     () async {
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final routeId = container.read(drawControllerProvider).routes.single.id;
-      expect(container.read(drawControllerProvider).activeWallId, isNull);
+      final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+      expect(container.read(drawControllerProvider(_testWallId)).activeWallId, isNull);
 
       await expectLater(
         notifier.setRouteMetadata(
@@ -1285,7 +1402,7 @@ void main() {
         completes,
       );
 
-      final route = container.read(drawControllerProvider).routes.single;
+      final route = container.read(drawControllerProvider(_testWallId)).routes.single;
       expect(route.name, 'No Wall');
       expect(route.gradeSystem, GradeSystem.uiaa);
       expect(route.gradeRaw, 'VI+');
@@ -1294,15 +1411,15 @@ void main() {
   );
 
   test('setActiveSymbol sets and clears the active symbol', () {
-    final notifier = container.read(drawControllerProvider.notifier);
+    final notifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     notifier.setActiveSymbol(SymbolType.crux);
     expect(
-      container.read(drawControllerProvider).activeSymbol,
+      container.read(drawControllerProvider(_testWallId)).activeSymbol,
       SymbolType.crux,
     );
 
     notifier.setActiveSymbol(null);
-    expect(container.read(drawControllerProvider).activeSymbol, isNull);
+    expect(container.read(drawControllerProvider(_testWallId)).activeSymbol, isNull);
   });
 }

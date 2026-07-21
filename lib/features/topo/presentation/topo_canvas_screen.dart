@@ -94,6 +94,18 @@ final selectedImageProvider = NotifierProvider<SelectedImageNotifier, String?>(
 /// invoked twice — once unconditionally above, once via that listener when
 /// [beforeLoadForWall] selects the path — which is harmless: the second call
 /// finds state already clear, then `loadForWall` proceeds exactly as before.)
+///
+/// FIX #4 (continued): the no-photo branch calls
+/// [DrawController.cancelPhotoSwitch] before returning — [beginPhotoSwitch]
+/// above opens a switch that, with no photo to load, [DrawController
+/// .loadForWall] will never run to close out. Without this call
+/// [DrawState.isSwitchingPhoto] would stay stuck `true`, and the NEXT
+/// [DrawController.beginPhotoSwitch] (for whatever wall is entered after
+/// this photo-less one) would wrongly treat that stale flag as "a switch
+/// is still in flight" and carry forward any stray routes committed on
+/// this photo-less wall's empty canvas into the NEXT wall's freshly-loaded
+/// state instead of discarding them — see [DrawController.cancelPhotoSwitch]'s
+/// doc for the full regression this closes.
 Future<PhotoRef?> loadWallOriginalPhoto(
   PhotoRepository photoRepository,
   DrawController drawController,
@@ -101,11 +113,14 @@ Future<PhotoRef?> loadWallOriginalPhoto(
   void Function(PhotoRef photo)? beforeLoadForWall,
   void Function()? onReset,
 }) async {
-  drawController.beginPhotoSwitch();
+  final generation = drawController.beginPhotoSwitch();
   onReset?.call();
 
   final photo = await photoRepository.loadOriginal(wallId);
-  if (photo == null) return null;
+  if (photo == null) {
+    drawController.cancelPhotoSwitch(generation);
+    return null;
+  }
   beforeLoadForWall?.call(photo);
   await drawController.loadForWall(wallId, photo.id);
   return photo;
@@ -521,7 +536,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// [DrawController.beginPhotoSwitch], which deliberately preserves mode
   /// across an in-screen photo swap.
   void _resetToViewMode() {
-    ref.read(drawControllerProvider.notifier).setMode(DrawMode.view);
+    ref.read(drawControllerProvider(widget.wallId).notifier).setMode(DrawMode.view);
     // Bug fix (stale collapsed legend leaking across walls): legendExpandedProvider
     // is, like drawControllerProvider, a single app-lifetime global rather than
     // scoped per wall/screen. The `ref.listen` in build() only resets it via
@@ -532,7 +547,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // every subsequently opened wall. Unconditionally re-asserting the
     // view-mode default here, once per fresh mount, closes that the same way
     // setMode(DrawMode.view) above closes it for draw mode.
-    ref.read(legendExpandedProvider.notifier).setForMode(DrawMode.view);
+    ref.read(legendExpandedProvider(widget.wallId).notifier).setForMode(DrawMode.view);
   }
 
   /// Defensive re-entry point for [widget.wallId] changing on an EXISTING
@@ -594,12 +609,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// also returns the canvas to view mode.
   Future<void> _handleCommitRoute() async {
     if (widget.readOnly) return;
-    final notifier = ref.read(drawControllerProvider.notifier);
-    final countBefore = ref.read(drawControllerProvider).routes.length;
+    final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+    final countBefore = ref.read(drawControllerProvider(widget.wallId)).routes.length;
     await notifier.commitRoute();
     if (!mounted) return;
 
-    final routes = ref.read(drawControllerProvider).routes;
+    final routes = ref.read(drawControllerProvider(widget.wallId)).routes;
     if (routes.length <= countBefore) return;
 
     notifier.setMode(DrawMode.view);
@@ -613,7 +628,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     await showModalBottomSheet<void>(
       context: context,
       isScrollControlled: true,
-      builder: (_) => RouteMetadataSheet(routeId: route.id, initial: route),
+      builder: (_) => RouteMetadataSheet(
+        wallId: widget.wallId,
+        routeId: route.id,
+        initial: route,
+      ),
     );
     // #20a keyboard-dismiss fix: RouteMetadataSheet's own Save/Cancel/`_pop`
     // already unfocus before popping themselves (see that file), but a
@@ -649,7 +668,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// without it, the button looked broken with zero feedback.
   Future<void> _openLogAscentSheet(int routeId) async {
     if (widget.readOnly) return;
-    final drawState = ref.read(drawControllerProvider);
+    final drawState = ref.read(drawControllerProvider(widget.wallId));
     final routes = drawState.routes;
     TopoRoute? route;
     for (final r in routes) {
@@ -813,7 +832,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     try {
       await loadWallOriginalPhoto(
         ref.read(photoRepositoryProvider),
-        ref.read(drawControllerProvider.notifier),
+        ref.read(drawControllerProvider(widget.wallId).notifier),
         wallId,
         onReset: () {
           ref.read(selectedImageProvider.notifier).clear();
@@ -852,7 +871,32 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// wall). The latest-path guard below additionally drops this call
   /// entirely if the user has since moved on to yet another photo, so an
   /// out-of-order resolution can't clobber a newer photo's state.
+  ///
+  /// FIX #4 (continued, CONFIRMED — "an early-return/exception path here can
+  /// leave isSwitchingPhoto stuck true"): [generation] is captured up front,
+  /// before any `await` -- the `ref.listen` in [build] has already called
+  /// [DrawController.beginPhotoSwitch] synchronously by the time this method
+  /// runs (see this doc's paragraph above), so [DrawState.switchGeneration]
+  /// at entry IS the generation that switch opened. [DrawController
+  /// .loadForWall] at the bottom is the ONLY call in this method that
+  /// settles [DrawState.isSwitchingPhoto] on success; every OTHER way out of
+  /// this method (the mounted/latest-path guards returning early, or the
+  /// catch-all below, which covers [LibraryCrudRepository.attachPhotoToWall]
+  /// throwing, [DrawController.loadForWall] itself throwing, or anything
+  /// else in between) must instead call [DrawController.cancelPhotoSwitch]
+  /// with this SAME [generation] so the switch this call opened is always
+  /// settled one way or the other -- [cancelPhotoSwitch] is itself a no-op
+  /// if a NEWER switch has since superseded [generation], so this is always
+  /// safe to call even on a stale/superseded path. The two `!mounted`
+  /// returns (right after the GPS-capture await, and folded into the
+  /// owned-path check below) are the exception: once unmounted, [ref] itself
+  /// is no longer safe to use (mirrors every other post-await unmount guard
+  /// in this class), so those two paths return without settling -- if
+  /// nothing else is watching this wallId's [drawControllerProvider], it
+  /// will be torn down (autoDispose) along with the stuck flag anyway.
   Future<void> _attachPhotoAndLoad(XFile xfile, int width, int height) async {
+    final generation =
+        ref.read(drawControllerProvider(widget.wallId)).switchGeneration;
     try {
       final libraryRepo = ref.read(libraryCrudRepositoryProvider);
       final photoId = await libraryRepo.attachPhotoToWall(
@@ -886,7 +930,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // resolution for a photo the user swiped past), bail out instead of
       // calling loadForWall — otherwise this stale load could clobber the
       // CURRENT photo's in-memory state with the wrong wall's routes.
-      if (ref.read(selectedImageProvider) != xfile.path) return;
+      // Settling this call's own switch here is harmless even though the
+      // user has moved on: cancelPhotoSwitch no-ops if the newer switch
+      // already bumped the generation past ours.
+      if (ref.read(selectedImageProvider) != xfile.path) {
+        ref
+            .read(drawControllerProvider(widget.wallId).notifier)
+            .cancelPhotoSwitch(generation);
+        return;
+      }
 
       // Photo-ownership bug fix: attachPhotoToWall already copied the
       // picked file into the app-owned photos/ dir and stored THAT path on
@@ -898,13 +950,32 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         photoId,
         xfile.path,
       );
-      if (!mounted || ref.read(selectedImageProvider) != ownedPath) return;
+      if (!mounted) return;
+      if (ref.read(selectedImageProvider) != ownedPath) {
+        ref
+            .read(drawControllerProvider(widget.wallId).notifier)
+            .cancelPhotoSwitch(generation);
+        return;
+      }
 
       await ref
-          .read(drawControllerProvider.notifier)
+          .read(drawControllerProvider(widget.wallId).notifier)
           .loadForWall(widget.wallId, photoId);
     } catch (e, st) {
       debugPrint('Failed to attach/load photo for ${xfile.path}: $e\n$st');
+      // FIX #4 (continued): settle the switch this call opened even when
+      // attaching/loading blew up mid-flight (e.g. attachPhotoToWall or
+      // loadForWall's own repository read throwing) -- without this,
+      // DrawState.isSwitchingPhoto stays stuck true forever, corrupting the
+      // NEXT beginPhotoSwitch's routes handling exactly like the no-photo
+      // and delete-photo cases this same FIX already covers elsewhere. Only
+      // if still mounted -- see this method's doc for why ref is unsafe to
+      // touch otherwise.
+      if (mounted) {
+        ref
+            .read(drawControllerProvider(widget.wallId).notifier)
+            .cancelPhotoSwitch(generation);
+      }
     }
   }
 
@@ -935,13 +1006,29 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// new photo's routes (or vice versa) while this awaits.
   ///
   /// No-ops if [photo] is already the active one (nothing to switch to).
+  ///
+  /// Latest-selection guard (mirrors [_attachPhotoAndLoad]'s own
+  /// `ref.read(selectedImageProvider) != xfile.path` check): if the user
+  /// has since switched to yet ANOTHER photo while this call's
+  /// [DrawController.loadForWall] was still awaiting (e.g. rapid taps
+  /// across [PhotoStrip]), applying this call's result is already made
+  /// SAFE internally by [DrawController.loadForWall]'s own
+  /// `switchGeneration` guard (see that method's doc) -- it silently
+  /// no-ops rather than clobbering the newer photo's state. This guard is
+  /// the screen-side half: it stops THIS method from doing anything
+  /// further on behalf of a switch that's already been superseded, so a
+  /// burst of rapid taps coalesces onto whichever photo the user actually
+  /// landed on instead of each stale call independently retrying/logging.
   Future<void> _switchToPhoto(PhotoRef photo) async {
     if (ref.read(selectedImageProvider) == photo.localPath) return;
     ref.read(selectedImageProvider.notifier).select(photo.localPath);
     try {
       await ref
-          .read(drawControllerProvider.notifier)
+          .read(drawControllerProvider(widget.wallId).notifier)
           .loadForWall(widget.wallId, photo.id);
+      if (!mounted || ref.read(selectedImageProvider) != photo.localPath) {
+        return;
+      }
     } catch (e, st) {
       debugPrint('Failed to switch to photo ${photo.id}: $e\n$st');
     }
@@ -972,16 +1059,40 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// deleting a photo out from under the canvas must never leave it showing
   /// a dangling image/route set for a photo that no longer exists. Falls
   /// back to the empty state if the wall has no photos left at all.
+  ///
+  /// FIX #4 (continued, CONFIRMED — "deleting the photo you are currently
+  /// switching TO is unaware its target is gone"): [wasActiveOrInFlight]
+  /// treats [photo] as needing this settle-and-redirect handling if it
+  /// matches EITHER [DrawState.activePhotoId] (the ordinary case) OR
+  /// [DrawState.switchTargetPhotoId] — the latter catches deleting [photo]
+  /// while an in-flight [DrawController.loadForWall] is still awaiting ITS
+  /// routes (mid photo-switch, [DrawState.activePhotoId] is null for the
+  /// whole window, so checking only that would silently no-op here, leaving
+  /// [DrawState.isSwitchingPhoto] stuck `true` and that stale load free to
+  /// apply once it resolves — see [DrawState.switchTargetPhotoId]'s doc for
+  /// the full regression). In that mid-switch case, the redirect below
+  /// (`_switchToPhoto`/the no-photo branch) itself calls
+  /// [DrawController.beginPhotoSwitch] again, which — since
+  /// [DrawState.isSwitchingPhoto] is already `true` — bumps
+  /// [DrawState.switchGeneration] (invalidating the stale in-flight
+  /// [DrawController.loadForWall] for the now-deleted target so it can't
+  /// apply once it resolves) while carrying forward [DrawState.routes]
+  /// (any route committed mid-switch), which the subsequent
+  /// [DrawController.loadForWall] call then merges in and persists against
+  /// the REDIRECTED wall/photo exactly like an ordinary mid-switch commit —
+  /// nothing is discarded.
   Future<void> _handleDeletePhoto(PhotoRef photo) async {
     if (widget.readOnly) return;
-    final wasActive = ref.read(drawControllerProvider).activePhotoId == photo.id;
+    final drawState = ref.read(drawControllerProvider(widget.wallId));
+    final wasActiveOrInFlight = drawState.activePhotoId == photo.id ||
+        drawState.switchTargetPhotoId == photo.id;
     try {
       await ref.read(photoRepositoryProvider).deleteOriginalPhoto(photo.id);
     } catch (e, st) {
       debugPrint('Failed to delete photo ${photo.id}: $e\n$st');
       return;
     }
-    if (!mounted || !wasActive) return;
+    if (!mounted || !wasActiveOrInFlight) return;
 
     final remaining = await ref
         .read(photoRepositoryProvider)
@@ -990,8 +1101,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     if (remaining == null) {
       // No photos left on this wall at all: fall back to a clean empty
       // state, mirroring loadWallOriginalPhoto's own unconditional reset
-      // for a photo-less wall.
-      ref.read(drawControllerProvider.notifier).beginPhotoSwitch();
+      // for a photo-less wall. FIX #4 (continued): cancelPhotoSwitch right
+      // after beginPhotoSwitch -- there is no loadForWall coming for THIS
+      // switch (the wall has no photo to load), so without settling it
+      // here DrawState.isSwitchingPhoto would stay stuck true and corrupt
+      // the NEXT beginPhotoSwitch's routes handling (see that method's
+      // doc).
+      final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+      final generation = notifier.beginPhotoSwitch();
+      notifier.cancelPhotoSwitch(generation);
       ref.read(selectedImageProvider.notifier).clear();
       return;
     }
@@ -1079,7 +1197,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // persisting against the previous photo's wall.
     ref.listen<String?>(selectedImageProvider, (previous, next) {
       if (next != null && next != previous) {
-        ref.read(drawControllerProvider.notifier).beginPhotoSwitch();
+        ref.read(drawControllerProvider(widget.wallId).notifier).beginPhotoSwitch();
         // Fix 1 (M5 hardening): also reset the shared
         // transformationController synchronously, right alongside
         // beginPhotoSwitch above. Without this, a fresh TopoCanvas for the
@@ -1110,17 +1228,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // listener above / its own microtask-deferral doc for the same
     // Riverpod rule).
     ref.listen<DrawMode>(
-      drawControllerProvider.select((s) => s.mode),
+      drawControllerProvider(widget.wallId).select((s) => s.mode),
       (previous, next) {
         if (previous != next) {
-          ref.read(legendExpandedProvider.notifier).setForMode(next);
+          ref.read(legendExpandedProvider(widget.wallId).notifier).setForMode(next);
         }
       },
     );
 
     final imagePath = ref.watch(selectedImageProvider);
-    final drawState = ref.watch(drawControllerProvider);
-    final drawNotifier = ref.read(drawControllerProvider.notifier);
+    final drawState = ref.watch(drawControllerProvider(widget.wallId));
+    final drawNotifier = ref.read(drawControllerProvider(widget.wallId).notifier);
     // The topo/wall name backs the canvas title (DESIGN.md "Topo canvas"):
     // AsyncValue.maybeWhen falls back to "Topo" both while this is still
     // loading and if the wall genuinely has no name (or doesn't exist —
@@ -1291,7 +1409,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                       ),
                       if (showSymbolPalette) ...[
                         const SizedBox(height: MasiSpacing.sm),
-                        const SymbolPaletteBar(),
+                        SymbolPaletteBar(wallId: widget.wallId),
                       ],
                     ],
                   ),
@@ -1718,6 +1836,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
     }
     return TopoCanvasBody(
+      wallId: widget.wallId,
       imagePath: imagePath,
       imageSize: imageSize,
       drawState: drawState,
@@ -1808,6 +1927,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 class TopoCanvasBody extends ConsumerWidget {
   const TopoCanvasBody({
     super.key,
+    required this.wallId,
     required this.imagePath,
     required this.imageSize,
     required this.drawState,
@@ -1817,6 +1937,11 @@ class TopoCanvasBody extends ConsumerWidget {
     this.embedded = false,
     this.onLogAscent,
   });
+
+  /// FIX #6: family key for [drawControllerProvider]/[legendExpandedProvider]
+  /// — see [drawControllerProvider]'s doc. Always the same wallId as the
+  /// owning [TopoCanvasScreen].
+  final String wallId;
 
   final String imagePath;
   final Size imageSize;
@@ -1856,7 +1981,7 @@ class TopoCanvasBody extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final hasRoutes = drawState.routes.isNotEmpty;
-    final legendExpanded = ref.watch(legendExpandedProvider);
+    final legendExpanded = ref.watch(legendExpandedProvider(wallId));
 
     // Bottom clearance reserved above the floating RouteLegend overlay, so
     // both the legend's Padding AND its maxHeight cap (below) can share the
@@ -1921,6 +2046,7 @@ class TopoCanvasBody extends ConsumerWidget {
 
               final canvasStack = TopoCanvas(
                 key: canvasKey,
+                wallId: wallId,
                 imagePath: imagePath,
                 imageSize: imageSize,
                 transformationController: transformationController,
@@ -1974,10 +2100,11 @@ class TopoCanvasBody extends ConsumerWidget {
                                     _LegendHeader(
                                       routeCount: drawState.routes.length,
                                       onToggle: () => ref
-                                          .read(legendExpandedProvider.notifier)
+                                          .read(legendExpandedProvider(wallId).notifier)
                                           .toggle(),
                                     ),
                                     RouteLegend(
+                                      wallId: wallId,
                                       maxHeight: overlayLegendMaxHeight,
                                       readOnly: readOnly,
                                       onLogAscent: onLogAscent,
@@ -1992,7 +2119,7 @@ class TopoCanvasBody extends ConsumerWidget {
                                 key: const Key('topo-route-legend-chip'),
                                 routeCount: drawState.routes.length,
                                 onTap: () => ref
-                                    .read(legendExpandedProvider.notifier)
+                                    .read(legendExpandedProvider(wallId).notifier)
                                     .toggle(),
                               ),
                             ),

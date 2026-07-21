@@ -44,6 +44,12 @@ const _viewerKey = Key('topo-interactive-viewer');
 /// the canvas region.
 Finder _canvasRegionFinder() => find.byKey(_viewerKey);
 
+/// FIX #6 (family-keyed `drawControllerProvider`): stand-in wallId for the
+/// tests below that construct `SymbolPaletteBar`/`TopoCanvasBody` directly
+/// without a seeded real wall (the seeded-wall tests use `seeded.wallId`
+/// instead, consistently).
+const _testWallId = 'test-wall';
+
 void _setViewportSize(WidgetTester tester, Size size) {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
@@ -81,7 +87,7 @@ void main() {
           ProviderScope(
             child: MaterialApp(
               theme: MasiTheme.light,
-              home: const Scaffold(body: SymbolPaletteBar()),
+              home: const Scaffold(body: SymbolPaletteBar(wallId: _testWallId)),
             ),
           ),
         );
@@ -135,8 +141,9 @@ void main() {
               home: Scaffold(
                 body: Consumer(
                   builder: (context, ref, _) {
-                    final drawState = ref.watch(drawControllerProvider);
+                    final drawState = ref.watch(drawControllerProvider(_testWallId));
                     return TopoCanvasBody(
+                      wallId: _testWallId,
                       imagePath: '/nonexistent/test-topo.jpg',
                       imageSize: imageSize,
                       drawState: drawState,
@@ -166,7 +173,7 @@ void main() {
               'nothing needed it',
         );
 
-        container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
+        container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
         await tester.pump();
 
         final drawRect = tester.getRect(_canvasRegionFinder());
@@ -314,7 +321,7 @@ void main() {
         );
 
         await seeded.container
-            .read(drawControllerProvider.notifier)
+            .read(drawControllerProvider(seeded.wallId).notifier)
             .loadForWall(seeded.wallId, photoId);
 
         await tester.pumpWidget(

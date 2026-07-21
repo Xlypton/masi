@@ -96,14 +96,18 @@ const Map<SymbolType, String> _symbolLabels = {
 /// space for it — see that screen's `build` for the floating placement and
 /// the removed reserved slot.
 class SymbolPaletteBar extends ConsumerWidget {
-  const SymbolPaletteBar({super.key});
+  const SymbolPaletteBar({super.key, required this.wallId});
+
+  /// FIX #6: family key for [drawControllerProvider] — see that provider's
+  /// doc. Always the same wallId as the owning [TopoCanvasScreen].
+  final String wallId;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final activeSymbol = ref.watch(
-      drawControllerProvider.select((s) => s.activeSymbol),
+      drawControllerProvider(wallId).select((s) => s.activeSymbol),
     );
-    final notifier = ref.read(drawControllerProvider.notifier);
+    final notifier = ref.read(drawControllerProvider(wallId).notifier);
     final colorScheme = Theme.of(context).colorScheme;
     final colors = MasiColors.of(context);
 

@@ -8,7 +8,7 @@
 // test.dart:30-77`: a real in-memory [AppDatabase] + [ProviderContainer],
 // Area -> Sector -> Wall -> attachPhotoToWall via the real
 // [libraryCrudRepositoryProvider], routes written with a real
-// [RouteRepository.upsertRoute], then loaded into [drawControllerProvider]
+// [RouteRepository.upsertRoute], then loaded into [drawControllerProvider(_testWallId)]
 // via [DrawController.loadForWall] — exactly the path
 // `TopoCanvasScreen._loadInitialPhotoForWall` drives in production. No
 // image is ever decoded (RouteLegend never touches the photo), so plain
@@ -41,6 +41,14 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently everywhere this file constructs `RouteLegend` or reads the
+/// provider directly (the real seeded wall's own id is never returned out of
+/// `_seedRoutes`, so this fixed key is used for provider identity instead —
+/// it doesn't need to match the real wall id, only be consistent within a
+/// given test's container).
+const _testWallId = 'test-wall';
+
 /// SPEC grade-band -> color map (H6), independent of wherever
 /// `grade_colors.dart` currently reads its literals from — this is the
 /// contract the test asserts against, not a mirror of the implementation.
@@ -64,7 +72,7 @@ const List<({String grade, GradeBand band})> _representativeGrades = [
 /// Seeds [count] routes (number 1..count, ids assigned 1..count in the same
 /// order by [RouteRepository.loadRoutes]) through the real Area -> Sector ->
 /// Wall -> Photo -> Route repository chain, then loads them into
-/// [drawControllerProvider] exactly as [TopoCanvasScreen] does on open.
+/// [drawControllerProvider(_testWallId)] exactly as [TopoCanvasScreen] does on open.
 /// [gradesByNumber] optionally assigns a French grade token to route
 /// `number` (1-based); routes without an entry stay ungraded.
 Future<ProviderContainer> _seedRoutes(
@@ -81,6 +89,10 @@ Future<ProviderContainer> _seedRoutes(
     ],
   );
   addTearDown(container.dispose);
+  // FIX #6 (autoDispose pending-timer gotcha): keep this family member
+  // alive for the whole test -- see route_legend_gap_test.dart's
+  // `_seedRoutes` for the full explanation.
+  container.listen(drawControllerProvider(_testWallId), (_, _) {});
 
   final crud = container.read(libraryCrudRepositoryProvider);
   final area = await crud.createArea('Area');
@@ -116,7 +128,7 @@ Future<ProviderContainer> _seedRoutes(
   }
 
   await container
-      .read(drawControllerProvider.notifier)
+      .read(drawControllerProvider(_testWallId).notifier)
       .loadForWall(wall.id, photoId);
 
   return container;
@@ -128,7 +140,7 @@ Future<void> _pumpLegend(WidgetTester tester, ProviderContainer container) {
       container: container,
       child: MaterialApp(
         theme: MasiTheme.light,
-        home: const Scaffold(body: RouteLegend()),
+        home: const Scaffold(body: RouteLegend(wallId: _testWallId)),
       ),
     ),
   );
@@ -211,7 +223,7 @@ void main() {
       _setViewportSize(tester, const Size(400, 800));
 
       final container = await _seedRoutes(tester, 12);
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       expect(routes, hasLength(12));
 
       await _pumpLegend(tester, container);
@@ -256,7 +268,7 @@ void main() {
     'visibility, leaving other routes unchanged (F1)',
     (tester) async {
       final container = await _seedRoutes(tester, 3);
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       expect(routes, hasLength(3));
       final target = routes[1];
 
@@ -264,7 +276,7 @@ void main() {
       await tester.pump();
 
       expect(
-        container.read(drawControllerProvider).routes.every((r) => r.visible),
+        container.read(drawControllerProvider(_testWallId)).routes.every((r) => r.visible),
         isTrue,
         reason: 'sanity check: every seeded route starts visible',
       );
@@ -272,7 +284,7 @@ void main() {
       await tester.tap(find.byKey(Key('topo-route-visibility-${target.id}')));
       await tester.pump();
 
-      final after = container.read(drawControllerProvider).routes;
+      final after = container.read(drawControllerProvider(_testWallId)).routes;
       for (final r in after) {
         if (r.id == target.id) {
           expect(r.visible, isFalse, reason: 'the tapped route must toggle');
@@ -291,25 +303,25 @@ void main() {
     'A2e: tapping topo-route-legend-item-<id> selects that route (E1)',
     (tester) async {
       final container = await _seedRoutes(tester, 2);
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final target = routes[0];
       final other = routes[1];
 
       await _pumpLegend(tester, container);
       await tester.pump();
 
-      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
 
       await tester.tap(find.byKey(Key('topo-route-legend-item-${target.id}')));
       await tester.pump();
 
-      expect(container.read(drawControllerProvider).selectedRouteId, target.id);
+      expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, target.id);
 
       await tester.tap(find.byKey(Key('topo-route-legend-item-${other.id}')));
       await tester.pump();
 
       expect(
-        container.read(drawControllerProvider).selectedRouteId,
+        container.read(drawControllerProvider(_testWallId)).selectedRouteId,
         other.id,
         reason: 'selecting a different item must move the selection to it',
       );
@@ -327,7 +339,7 @@ void main() {
       _representativeGrades.length,
       gradesByNumber: gradesByNumber,
     );
-    final routes = container.read(drawControllerProvider).routes;
+    final routes = container.read(drawControllerProvider(_testWallId)).routes;
     expect(routes, hasLength(_representativeGrades.length));
 
     await _pumpLegend(tester, container);
@@ -367,7 +379,7 @@ void main() {
     'A2g: tapping topo-route-delete-<id> removes exactly that route',
     (tester) async {
       final container = await _seedRoutes(tester, 3);
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final target = routes[1];
       final survivorIds = routes
           .where((r) => r.id != target.id)
@@ -380,7 +392,7 @@ void main() {
       await tester.tap(find.byKey(Key('topo-route-delete-${target.id}')));
       await tester.pump();
 
-      final after = container.read(drawControllerProvider).routes;
+      final after = container.read(drawControllerProvider(_testWallId)).routes;
       expect(after, hasLength(2));
       expect(
         after.map((r) => r.id).toSet(),
@@ -404,7 +416,7 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       final firstId = routes.first.id;
 
       final tile = tester.widget<ListTile>(

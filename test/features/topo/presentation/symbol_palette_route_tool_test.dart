@@ -69,7 +69,7 @@ _seedWallWithPhoto(WidgetTester tester) async {
     );
   });
   await container
-      .read(drawControllerProvider.notifier)
+      .read(drawControllerProvider(wall.id).notifier)
       .loadForWall(wall.id, photoId);
 
   return (db: db, container: container, wallId: wall.id);
@@ -164,7 +164,7 @@ void main() {
       // about toggling modes touches it, so this holds with no dedicated
       // reset-on-enter-draw-mode wiring.
       expect(
-        seeded.container.read(drawControllerProvider).activeSymbol,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).activeSymbol,
         isNull,
       );
       _expectOnlySelected(tester, _routeKey);
@@ -174,7 +174,7 @@ void main() {
       await tester.pump();
 
       expect(
-        seeded.container.read(drawControllerProvider).activeSymbol,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).activeSymbol,
         SymbolType.bolt,
       );
       _expectOnlySelected(tester, _boltKey);
@@ -184,7 +184,7 @@ void main() {
       await tester.pump();
 
       expect(
-        seeded.container.read(drawControllerProvider).activeSymbol,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).activeSymbol,
         isNull,
       );
       _expectOnlySelected(tester, _routeKey);

@@ -96,7 +96,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
       expect(
         find.byTooltip('Pick a photo'),
         findsOneWidget,
@@ -134,7 +134,7 @@ void main() {
       // Draw mode.
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pumpAndSettle();
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.draw);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.draw);
       expect(
         find.byKey(const Key('topo-add-photo-button')),
         findsOneWidget,
@@ -181,6 +181,19 @@ void main() {
       Future<double> legendBottomOffsetFor(DrawMode mode) async {
         final container = ProviderContainer();
         addTearDown(container.dispose);
+        // FIX #6 (autoDispose pending-timer gotcha): keep this family
+        // member alive via a permanent listener so its EVENTUAL widget
+        // unmount (mid-test, when the next call's `pumpWidget` replaces
+        // this tree; or at the framework's own final teardown, for the
+        // last call) never drops the ref count to zero and so never
+        // schedules an autoDispose teardown `Timer(Duration.zero, ...)` --
+        // that Timer only gets fired by a duration-based
+        // `tester.pump`/`pumpAndSettle`, and the final-teardown unmount
+        // happens AFTER this test body returns, too late for any pump we
+        // could still call. See route_legend_gap_test.dart's `_seedRoutes`
+        // for the fuller explanation.
+        container.listen(drawControllerProvider('test-wall'), (_, _) {});
+        container.listen(legendExpandedProvider('test-wall'), (_, _) {});
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
@@ -191,6 +204,7 @@ void main() {
               theme: MasiTheme.light,
               home: Scaffold(
                 body: TopoCanvasBody(
+                  wallId: 'test-wall',
                   imagePath: '/nonexistent/test-topo.jpg',
                   imageSize: const Size(400, 300),
                   drawState: DrawState(mode: mode, routes: const [route]),
@@ -244,7 +258,7 @@ void main() {
 
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pumpAndSettle();
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.draw);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.draw);
 
       expect(find.byKey(const Key('topo-undo-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-redo-button')), findsOneWidget);
@@ -351,9 +365,9 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
       expect(
-        seeded.container.read(drawControllerProvider).routes,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).routes,
         hasLength(1),
       );
 
@@ -362,7 +376,7 @@ void main() {
       // the gate the edit-metadata glyph needs (`selectedRouteId != null`),
       // and is far less fiddly than hit-testing the canvas's route-tap
       // detection to select it via a real tap.
-      seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
+      seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
       // All 5 trailing glyphs are now simultaneously present: edit-metadata
@@ -436,8 +450,8 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
-      seeded.container.read(drawControllerProvider.notifier).selectRoute(1);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
+      seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
       // Same worst-case 5 trailing glyphs as the 1x test above, all still
@@ -560,14 +574,14 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(seeded.container.read(drawControllerProvider).mode, DrawMode.view);
+      expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
 
       // The screen starts with the legend expanded (view mode's default —
       // see LegendExpandedController.build()); force it into the collapsed
       // `_LegendChip` form directly via the provider, the same seam
       // legend_reset_on_remount_test.dart uses, rather than hunting for a
       // tappable chevron.
-      seeded.container.read(legendExpandedProvider.notifier).toggle();
+      seeded.container.read(legendExpandedProvider(seeded.wallId).notifier).toggle();
       await tester.pumpAndSettle();
 
       expect(

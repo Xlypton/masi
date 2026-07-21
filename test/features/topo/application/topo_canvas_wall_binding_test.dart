@@ -25,6 +25,15 @@ import 'package:image_picker/image_picker.dart';
 /// dependencies directly (a [PhotoRepository], a [DrawController]) rather
 /// than a `WidgetRef`, since `WidgetRef` is `sealed` in riverpod 3 and so
 /// cannot be faked in a plain `test()`.
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): a stand-in wallId for
+/// resolving the family member under test. Each test below reads/creates
+/// exactly one notifier per [ProviderContainer] up front and reuses it
+/// throughout (even across multiple [DrawController.loadForWall] calls for
+/// DIFFERENT real wall ids, mirroring pre-family test structure) — using one
+/// fixed key here is correct because it's always paired with the SAME
+/// notifier instance within a given container/test.
+const _testWallId = 'test-wall';
+
 void main() {
   late AppDatabase db;
 
@@ -48,7 +57,7 @@ void main() {
   });
 
   test('A1: loadWallOriginalPhoto(ref, wallId) loads a persisted original '
-      "photo's routes into drawControllerProvider (activeWallId == wallId, "
+      "photo's routes into drawControllerProvider(_testWallId) (activeWallId == wallId, "
       'both seeded routes present) — no widget, no image decode', () async {
     final container = makeContainer();
     final crud = container.read(libraryCrudRepositoryProvider);
@@ -87,7 +96,7 @@ void main() {
     // function TopoCanvasScreen._loadInitialPhotoForWall calls on init.
     final photo = await loadWallOriginalPhoto(
       container.read(photoRepositoryProvider),
-      container.read(drawControllerProvider.notifier),
+      container.read(drawControllerProvider(_testWallId).notifier),
       wall.id,
     );
 
@@ -102,7 +111,7 @@ void main() {
     expect(photo.localPath, matches(RegExp(r'^photos/.*\.jpg$')));
     expect(photo.localPath, isNot('/tmp/wall-photo.jpg'));
 
-    final state = container.read(drawControllerProvider);
+    final state = container.read(drawControllerProvider(_testWallId));
     expect(state.activeWallId, wall.id);
     expect(state.activePhotoId, photoId);
     expect(state.routes, hasLength(2));
@@ -110,7 +119,7 @@ void main() {
   });
 
   test(
-    'A1b: loadWallOriginalPhoto returns null and leaves drawControllerProvider '
+    'A1b: loadWallOriginalPhoto returns null and leaves drawControllerProvider(_testWallId) '
     'untouched when the wall has no original photo yet',
     () async {
       final container = makeContainer();
@@ -121,12 +130,12 @@ void main() {
 
       final photo = await loadWallOriginalPhoto(
         container.read(photoRepositoryProvider),
-        container.read(drawControllerProvider.notifier),
+        container.read(drawControllerProvider(_testWallId).notifier),
         wall.id,
       );
 
       expect(photo, isNull);
-      expect(container.read(drawControllerProvider).activeWallId, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).activeWallId, isNull);
     },
   );
 
@@ -188,7 +197,7 @@ void main() {
   });
 
   // T1/T2 (HIGH data-corruption fix regression): `selectedImageProvider` and
-  // `drawControllerProvider` are app-lifetime globals — a single
+  // `drawControllerProvider(_testWallId)` are app-lifetime globals — a single
   // ProviderContainer/DrawController instance is reused across BOTH wall
   // loads below, exactly like the real app reuses one screen's/app's
   // provider container across wall navigations. A1/A1b/A2 above each make
@@ -201,12 +210,25 @@ void main() {
   test('T1: entering a photo-less wall B right after a has-photo wall A '
       "does NOT leak wall A's routes/activeWallId into B — the "
       'unconditional pre-load reset in loadWallOriginalPhoto clears '
-      'drawControllerProvider (and, via onReset, selectedImageProvider) even '
+      'drawControllerProvider(_testWallId) (and, via onReset, selectedImageProvider) even '
       'when the new wall has no photo', () async {
     final container = makeContainer();
+    // FIX #6 (autoDispose): keep the family member alive across the many
+    // real `await`s below -- this is a plain `test()`, so autoDispose's
+    // `Timer(Duration.zero, ...)` teardown runs for real on the next event-
+    // loop turn, not just at a fake-async pump. A bare `.notifier` read
+    // (like the one below) doesn't keep it alive; without this `listen`,
+    // the captured `drawNotifier` goes stale ("disposed") the moment any
+    // intervening `await` lets that Timer fire, mirroring what a mounted
+    // TopoCanvasScreen's `ref.watch` does for the whole test's duration.
+    final keepAlive = container.listen(
+      drawControllerProvider(_testWallId),
+      (_, _) {},
+    );
+    addTearDown(keepAlive.close);
     final crud = container.read(libraryCrudRepositoryProvider);
     final photoRepo = container.read(photoRepositoryProvider);
-    final drawNotifier = container.read(drawControllerProvider.notifier);
+    final drawNotifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     final area = await crud.createArea('Area');
     final sector = await crud.createSector(area.id, 'Sector');
@@ -259,7 +281,7 @@ void main() {
     );
 
     expect(photoA, isNotNull);
-    final stateA = container.read(drawControllerProvider);
+    final stateA = container.read(drawControllerProvider(_testWallId));
     expect(stateA.activeWallId, wallA.id);
     expect(stateA.routes, hasLength(2));
     // #17 (photo-ownership fix): beforeLoadForWall receives the loaded
@@ -271,7 +293,7 @@ void main() {
 
     // Now enter wall B (the photo-less case) on the SAME container/
     // notifier — this is the real-app scenario: navigating from A to B
-    // never gets a fresh drawControllerProvider/selectedImageProvider.
+    // never gets a fresh drawControllerProvider(_testWallId)/selectedImageProvider.
     final photoB = await loadWallOriginalPhoto(
       photoRepo,
       drawNotifier,
@@ -282,7 +304,7 @@ void main() {
 
     expect(photoB, isNull, reason: 'wall B has no original photo');
 
-    final stateB = container.read(drawControllerProvider);
+    final stateB = container.read(drawControllerProvider(_testWallId));
     // The bug: without the unconditional reset, stateB here would still
     // be wall A's state (activeWallId == wallA.id, 2 routes).
     expect(
@@ -313,9 +335,16 @@ void main() {
       'committing a route does NOT persist to wall A — a fresh '
       "loadForWall(A) still returns exactly A's original 2 routes", () async {
     final container = makeContainer();
+    // FIX #6 (autoDispose): see T1's comment above -- keep this family
+    // member alive for the whole test.
+    final keepAlive = container.listen(
+      drawControllerProvider(_testWallId),
+      (_, _) {},
+    );
+    addTearDown(keepAlive.close);
     final crud = container.read(libraryCrudRepositoryProvider);
     final photoRepo = container.read(photoRepositoryProvider);
-    final drawNotifier = container.read(drawControllerProvider.notifier);
+    final drawNotifier = container.read(drawControllerProvider(_testWallId).notifier);
 
     final area = await crud.createArea('Area');
     final sector = await crud.createSector(area.id, 'Sector');
@@ -357,7 +386,7 @@ void main() {
       wallB.id,
     );
     expect(photoB, isNull);
-    expect(container.read(drawControllerProvider).activeWallId, isNull);
+    expect(container.read(drawControllerProvider(_testWallId)).activeWallId, isNull);
 
     // Simulate a stray in-flight draw + commit landing on wall B's (clean,
     // wall-less) screen state.
@@ -370,7 +399,7 @@ void main() {
     // never reached the database. Re-loading wall A from scratch must
     // still show exactly its original 2 routes: no phantom 3rd route from
     // B's stray commit.
-    final freshDrawNotifier = container.read(drawControllerProvider.notifier);
+    final freshDrawNotifier = container.read(drawControllerProvider(_testWallId).notifier);
     final reloadedA = await loadWallOriginalPhoto(
       photoRepo,
       freshDrawNotifier,
@@ -378,7 +407,7 @@ void main() {
     );
 
     expect(reloadedA, isNotNull);
-    final finalStateA = container.read(drawControllerProvider);
+    final finalStateA = container.read(drawControllerProvider(_testWallId));
     expect(finalStateA.activeWallId, wallA.id);
     expect(finalStateA.routes, hasLength(2));
     expect(finalStateA.routes.map((r) => r.number), containsAll([1, 2]));

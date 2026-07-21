@@ -7,6 +7,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently everywhere this file constructs `TopoCanvas`/
+/// `SymbolPaletteBar` or reads the provider directly.
+const _testWallId = 'test-wall';
+
 /// Widget-level regression test for the "silent no-op when placing a topo
 /// symbol with no route selected" bug (see
 /// lib/features/topo/application/draw_controller.dart's `placeSymbol` doc
@@ -42,7 +47,7 @@ void main() {
 
       // Draw mode, zero routes -- exactly the "user activates a symbol
       // before ever drawing a route" scenario the bug report describes.
-      container.read(drawControllerProvider.notifier).setMode(DrawMode.draw);
+      container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
 
       await tester.pumpWidget(
         UncontrolledProviderScope(
@@ -52,9 +57,10 @@ void main() {
             home: Scaffold(
               body: Column(
                 children: [
-                  const SymbolPaletteBar(),
+                  SymbolPaletteBar(wallId: _testWallId),
                   Expanded(
                     child: TopoCanvas(
+                      wallId: _testWallId,
                       imagePath: '/nonexistent/test-topo.jpg',
                       imageSize: imageSize,
                       transformationController: controller,
@@ -68,13 +74,13 @@ void main() {
       );
       await tester.pump();
 
-      expect(container.read(drawControllerProvider).routes, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
       expect(find.byType(SnackBar), findsNothing);
 
       await tester.tap(find.byKey(const Key('topo-symbol-bolt')));
       await tester.pump();
       expect(
-        container.read(drawControllerProvider).activeSymbol,
+        container.read(drawControllerProvider(_testWallId)).activeSymbol,
         SymbolType.bolt,
       );
 
@@ -97,8 +103,8 @@ void main() {
 
       // No route existed to place onto, so state must be unchanged: no
       // route gained a symbol (there are none), and nothing got selected.
-      expect(container.read(drawControllerProvider).routes, isEmpty);
-      expect(container.read(drawControllerProvider).selectedRouteId, isNull);
+      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
     },
   );
 
@@ -123,7 +129,7 @@ void main() {
       final controller = TransformationController();
       addTearDown(controller.dispose);
 
-      final notifier = container.read(drawControllerProvider.notifier);
+      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
       notifier.setMode(DrawMode.draw);
       // An in-progress (uncommitted) route: routes stays empty, but
       // currentPoints is not.
@@ -138,9 +144,10 @@ void main() {
             home: Scaffold(
               body: Column(
                 children: [
-                  const SymbolPaletteBar(),
+                  SymbolPaletteBar(wallId: _testWallId),
                   Expanded(
                     child: TopoCanvas(
+                      wallId: _testWallId,
                       imagePath: '/nonexistent/test-topo.jpg',
                       imageSize: imageSize,
                       transformationController: controller,
@@ -154,14 +161,14 @@ void main() {
       );
       await tester.pump();
 
-      expect(container.read(drawControllerProvider).routes, isEmpty);
-      expect(container.read(drawControllerProvider).currentPoints, isNotEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isNotEmpty);
       expect(find.byType(SnackBar), findsNothing);
 
       await tester.tap(find.byKey(const Key('topo-symbol-bolt')));
       await tester.pump();
       expect(
-        container.read(drawControllerProvider).activeSymbol,
+        container.read(drawControllerProvider(_testWallId)).activeSymbol,
         SymbolType.bolt,
       );
 
@@ -170,10 +177,10 @@ void main() {
 
       expect(find.byType(SnackBar), findsNothing);
       expect(
-        container.read(drawControllerProvider).currentSymbols,
+        container.read(drawControllerProvider(_testWallId)).currentSymbols,
         hasLength(1),
       );
-      expect(container.read(drawControllerProvider).routes, isEmpty);
+      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
     },
   );
 }

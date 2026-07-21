@@ -12,6 +12,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider`): stand-in wallId, paired
+/// consistently everywhere this file constructs `RouteMetadataSheet` or
+/// reads the provider directly.
+const _testWallId = 'test-wall';
+
 Widget _buildSheet({
   required ProviderContainer container,
   required int routeId,
@@ -22,23 +27,31 @@ Widget _buildSheet({
     child: MaterialApp(
       theme: MasiTheme.light,
       home: Scaffold(
-        body: RouteMetadataSheet(routeId: routeId, initial: initial),
+        body: RouteMetadataSheet(
+          wallId: _testWallId,
+          routeId: routeId,
+          initial: initial,
+        ),
       ),
     ),
   );
 }
 
 int _seedRoute(ProviderContainer container) {
-  final notifier = container.read(drawControllerProvider.notifier);
+  // FIX #6 (autoDispose pending-timer gotcha): keep this family member
+  // alive for the whole test -- see route_legend_gap_test.dart's
+  // `_seedRoutes` for the full explanation.
+  container.listen(drawControllerProvider(_testWallId), (_, _) {});
+  final notifier = container.read(drawControllerProvider(_testWallId).notifier);
   notifier.addPoint(const Offset(0.1, 0.1));
   notifier.addPoint(const Offset(0.2, 0.2));
   notifier.commitRoute();
-  return container.read(drawControllerProvider).routes.single.id;
+  return container.read(drawControllerProvider(_testWallId)).routes.single.id;
 }
 
 TopoRoute _routeById(ProviderContainer container, int routeId) {
   return container
-      .read(drawControllerProvider)
+      .read(drawControllerProvider(_testWallId))
       .routes
       .firstWhere((r) => r.id == routeId);
 }

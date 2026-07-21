@@ -251,7 +251,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final routes = seeded.container.read(drawControllerProvider).routes;
+      final routes = seeded.container.read(drawControllerProvider(seeded.wallId)).routes;
       expect(routes, hasLength(1));
       final routeLocalId = routes.single.id;
 
@@ -313,7 +313,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final routes = seeded.container.read(drawControllerProvider).routes;
+      final routes = seeded.container.read(drawControllerProvider(seeded.wallId)).routes;
       expect(routes, hasLength(1));
       expect(
         find.byKey(Key('topo-log-ascent-${routes.single.id}')),
@@ -350,13 +350,13 @@ void main() {
       // write-through goes through the flaky repo (skipNumber: 2) and
       // never lands, but the in-memory route (per `commitRoute`'s doc)
       // appears immediately.
-      final notifier = seeded.container.read(drawControllerProvider.notifier);
+      final notifier = seeded.container.read(drawControllerProvider(seeded.wallId).notifier);
       notifier.addPoint(const Offset(0.3, 0.3));
       notifier.addPoint(const Offset(0.4, 0.4));
       await notifier.commitRoute();
       await tester.pumpAndSettle();
 
-      final routes = seeded.container.read(drawControllerProvider).routes;
+      final routes = seeded.container.read(drawControllerProvider(seeded.wallId)).routes;
       expect(routes, hasLength(2));
       final unresolvedRoute = routes.firstWhere((r) => r.number == 2);
 
@@ -415,7 +415,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      final routes = seeded.container.read(drawControllerProvider).routes;
+      final routes = seeded.container.read(drawControllerProvider(seeded.wallId)).routes;
       expect(routes, hasLength(3));
       final route2Local = routes.firstWhere((r) => r.number == 2);
 

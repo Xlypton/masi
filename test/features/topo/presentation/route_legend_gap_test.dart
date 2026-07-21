@@ -23,10 +23,15 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently everywhere this file constructs `RouteLegend` or reads the
+/// provider directly.
+const _testWallId = 'test-wall';
+
 /// Seeds [count] routes (number 1..count, ids assigned 1..count in the same
 /// order by [RouteRepository.loadRoutes]) through the real Area -> Sector ->
 /// Wall -> Photo -> Route repository chain, then loads them into
-/// [drawControllerProvider] exactly as [TopoCanvasScreen] does on open. Copy
+/// [drawControllerProvider(_testWallId)] exactly as [TopoCanvasScreen] does on open. Copy
 /// of `_seedRoutes` in `route_legend_intent_test.dart`.
 Future<ProviderContainer> _seedRoutes(WidgetTester tester, int count) async {
   final db = AppDatabase(NativeDatabase.memory());
@@ -38,6 +43,15 @@ Future<ProviderContainer> _seedRoutes(WidgetTester tester, int count) async {
     ],
   );
   addTearDown(container.dispose);
+  // FIX #6 (autoDispose pending-timer gotcha): keep this family member
+  // alive for the whole test via a permanent listener, mirroring what a
+  // mounted RouteLegend's `ref.watch` does -- otherwise every bare
+  // `container.read(...)` below (before any widget is pumped) schedules an
+  // autoDispose teardown `Timer(Duration.zero, ...)` that only fires on a
+  // duration-based `tester.pump`/`pumpAndSettle`; one scheduled AFTER the
+  // test's last such pump is still "pending" when the test ends, tripping
+  // flutter_test's `!timersPending` invariant.
+  container.listen(drawControllerProvider(_testWallId), (_, _) {});
 
   final crud = container.read(libraryCrudRepositoryProvider);
   final area = await crud.createArea('Area');
@@ -67,7 +81,7 @@ Future<ProviderContainer> _seedRoutes(WidgetTester tester, int count) async {
   }
 
   await container
-      .read(drawControllerProvider.notifier)
+      .read(drawControllerProvider(_testWallId).notifier)
       .loadForWall(wall.id, photoId);
 
   return container;
@@ -84,7 +98,7 @@ Future<void> _pumpLegend(WidgetTester tester, ProviderContainer container) {
       container: container,
       child: MaterialApp(
         theme: MasiTheme.light,
-        home: const Scaffold(body: RouteLegend()),
+        home: const Scaffold(body: RouteLegend(wallId: _testWallId)),
       ),
     ),
   );
@@ -106,7 +120,7 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
 
       final container = await _seedRoutes(tester, 2);
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       expect(routes, hasLength(2));
 
       await _pumpLegend(tester, container);
@@ -144,7 +158,7 @@ void main() {
       addTearDown(tester.view.resetPadding);
 
       final container = await _seedRoutes(tester, 12);
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       expect(routes, hasLength(12));
 
       await _pumpLegend(tester, container);

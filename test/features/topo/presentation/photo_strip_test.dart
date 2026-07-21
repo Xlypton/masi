@@ -181,11 +181,11 @@ void main() {
 
       // Sanity: opens on photo1 (the primary) with photo1's route.
       expect(
-        seeded.container.read(drawControllerProvider).activePhotoId,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).activePhotoId,
         seeded.photo1Id,
       );
       expect(
-        seeded.container.read(drawControllerProvider).routes.single.gradeRaw,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).routes.single.gradeRaw,
         'photo1-route',
       );
 
@@ -213,12 +213,12 @@ void main() {
             'owned localPath',
       );
       expect(
-        seeded.container.read(drawControllerProvider).activePhotoId,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).activePhotoId,
         seeded.photo2Id,
         reason: 'loadForWall must have been called for photo2',
       );
       expect(
-        seeded.container.read(drawControllerProvider).routes.single.gradeRaw,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).routes.single.gradeRaw,
         'photo2-route',
         reason:
             'ONLY photo2\'s own route must show — not a stale mix with '
@@ -297,7 +297,7 @@ void main() {
       // The canvas was never showing photo2 (photo1 is the active/primary
       // one) so deleting it must not have touched the active selection.
       expect(
-        seeded.container.read(drawControllerProvider).activePhotoId,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).activePhotoId,
         seeded.photo1Id,
       );
     },
@@ -314,7 +314,7 @@ void main() {
 
     // Sanity: opens on photo1 (the primary/active one).
     expect(
-      seeded.container.read(drawControllerProvider).activePhotoId,
+      seeded.container.read(drawControllerProvider(seeded.wallId)).activePhotoId,
       seeded.photo1Id,
     );
 
@@ -333,7 +333,7 @@ void main() {
       findsNothing,
     );
     expect(
-      seeded.container.read(drawControllerProvider).activePhotoId,
+      seeded.container.read(drawControllerProvider(seeded.wallId)).activePhotoId,
       seeded.photo2Id,
       reason:
           'photo2 is the only photo left, so it must be promoted to '
@@ -385,7 +385,7 @@ void main() {
       // Purely a bookkeeping flag: the canvas must still be showing photo1
       // (the photo the user had open), unaffected by which photo is "cover".
       expect(
-        seeded.container.read(drawControllerProvider).activePhotoId,
+        seeded.container.read(drawControllerProvider(seeded.wallId)).activePhotoId,
         seeded.photo1Id,
       );
     },

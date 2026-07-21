@@ -22,6 +22,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
+/// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId, paired
+/// consistently everywhere this file constructs `RouteLegend` or reads the
+/// provider directly.
+const _testWallId = 'test-wall';
+
 Future<ProviderContainer> _seedRoutes(
   WidgetTester tester,
   int count, {
@@ -37,6 +42,10 @@ Future<ProviderContainer> _seedRoutes(
     ],
   );
   addTearDown(container.dispose);
+  // FIX #6 (autoDispose pending-timer gotcha): keep this family member
+  // alive for the whole test -- see route_legend_gap_test.dart's
+  // `_seedRoutes` for the full explanation.
+  container.listen(drawControllerProvider(_testWallId), (_, _) {});
 
   final crud = container.read(libraryCrudRepositoryProvider);
   final area = await crud.createArea('Area');
@@ -70,7 +79,7 @@ Future<ProviderContainer> _seedRoutes(
   }
 
   await container
-      .read(drawControllerProvider.notifier)
+      .read(drawControllerProvider(_testWallId).notifier)
       .loadForWall(wall.id, photoId);
 
   return container;
@@ -88,7 +97,11 @@ Future<void> _pumpLegend(
       child: MaterialApp(
         theme: MasiTheme.light,
         home: Scaffold(
-          body: RouteLegend(readOnly: readOnly, onLogAscent: onLogAscent),
+          body: RouteLegend(
+            wallId: _testWallId,
+            readOnly: readOnly,
+            onLogAscent: onLogAscent,
+          ),
         ),
       ),
     ),
@@ -107,7 +120,7 @@ void main() {
       'topo-log-ascent-<routeId>, and tapping it invokes the callback with '
       "that route's real (persisted) TopoRoute.id", (tester) async {
     final container = await _seedRoutes(tester, 3);
-    final routes = container.read(drawControllerProvider).routes;
+    final routes = container.read(drawControllerProvider(_testWallId)).routes;
     expect(routes, hasLength(3));
 
     final tapped = <int>[];
@@ -149,7 +162,7 @@ void main() {
   testWidgets('A4: when readOnly == true, no log-ascent button renders even if '
       'onLogAscent is provided', (tester) async {
     final container = await _seedRoutes(tester, 2);
-    final routes = container.read(drawControllerProvider).routes;
+    final routes = container.read(drawControllerProvider(_testWallId)).routes;
 
     await _pumpLegend(tester, container, readOnly: true, onLogAscent: (_) {});
     await tester.pump();
@@ -174,7 +187,7 @@ void main() {
     'log-ascent button renders, even with readOnly == false',
     (tester) async {
       final container = await _seedRoutes(tester, 1);
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
 
       await _pumpLegend(tester, container);
       await tester.pump();
@@ -232,7 +245,7 @@ void main() {
 
       expect(tester.takeException(), isNull);
 
-      final routes = container.read(drawControllerProvider).routes;
+      final routes = container.read(drawControllerProvider(_testWallId)).routes;
       expect(
         find.byKey(Key('topo-log-ascent-${routes.single.id}')),
         findsOneWidget,
