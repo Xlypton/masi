@@ -216,8 +216,11 @@ class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
             tileHttpClientFactory: widget.tileHttpClientFactory,
           ),
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, stackTrace) =>
-              Center(child: Text('Something went wrong: $error')),
+          error: (error, stackTrace) => const _CommunityErrorState(
+            stateKey: Key('community-map-error-state'),
+            retryKey: Key('community-map-retry'),
+            message: "Couldn't load the community map",
+          ),
         ),
       ),
     );
@@ -291,9 +294,78 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
             query: _query,
           ),
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, stackTrace) =>
-              Center(child: Text('Something went wrong: $error')),
+          error: (error, stackTrace) => const _CommunityErrorState(
+            stateKey: Key('community-feed-error-state'),
+            retryKey: Key('community-feed-retry'),
+            message: "Couldn't load the community feed",
+          ),
         ),
+      ),
+    );
+  }
+}
+
+/// Friendly themed error state for [CommunityMapScreen]/[CommunityFeedScreen]
+/// when [sharedToposProvider] fails — replaces the earlier bare
+/// `Text('Something went wrong: $error')`, which leaked the raw exception
+/// string straight to the user, with a short screen-specific message plus a
+/// "Try again" affordance that invalidates [sharedToposProvider] to retry
+/// the fetch. Mirrors `topo_canvas_screen.dart`'s `_buildImageErrorState`
+/// (icon + message + "Tinted" button per DESIGN.md "Buttons").
+class _CommunityErrorState extends ConsumerWidget {
+  const _CommunityErrorState({
+    required this.stateKey,
+    required this.retryKey,
+    required this.message,
+  });
+
+  final Key stateKey;
+  final Key retryKey;
+  final String message;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    return Center(
+      child: Column(
+        key: stateKey,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MasiIcon('warning', size: 56, color: colors.gradeHard),
+          const SizedBox(height: MasiSpacing.lg),
+          Text(
+            message,
+            style: Theme.of(
+              context,
+            ).textTheme.bodyLarge?.copyWith(color: colors.gradeHard),
+          ),
+          const SizedBox(height: MasiSpacing.lg),
+          // "Tinted" secondary button per DESIGN.md "Buttons": accent text
+          // on a faint accent wash, matching `_buildImageErrorState`'s
+          // "Choose another photo" button.
+          Material(
+            color: colors.accent.withValues(alpha: 0.16),
+            borderRadius: BorderRadius.circular(MasiRadii.control),
+            child: InkWell(
+              key: retryKey,
+              onTap: () => ref.invalidate(sharedToposProvider),
+              borderRadius: BorderRadius.circular(MasiRadii.control),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: MasiSpacing.lg,
+                  vertical: MasiSpacing.md,
+                ),
+                child: Text(
+                  'Try again',
+                  style: TextStyle(
+                    color: colors.accent,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1871,18 +1943,29 @@ class _MyLocationMarker extends StatelessWidget {
 
   static const double size = 18;
 
+  /// Fixed "you are here" dot color — the conventional device-position
+  /// blue, kept deliberately independent of light/dark [MasiColors] (this
+  /// sits on top of OSM map tiles, which stay the same light color
+  /// regardless of the app's own theme, so the marker needs to keep its own
+  /// fixed contrast against the map rather than following app chrome).
+  /// Named consts here rather than bare `Colors.*` literals so this widget
+  /// no longer reaches into Material's default palette directly.
+  static const Color _dotColor = Color(0xFF2196F3);
+  static const Color _ringColor = Color(0xFFFFFFFF);
+  static const Color _shadowColor = Color(0x61000000); // ~38% black
+
   @override
   Widget build(BuildContext context) {
     return Container(
       width: size,
       height: size,
-      decoration: BoxDecoration(
-        color: Colors.blue,
+      decoration: const BoxDecoration(
+        color: _dotColor,
         shape: BoxShape.circle,
-        border: Border.all(color: Colors.white, width: 3),
-        boxShadow: const [
+        border: Border.fromBorderSide(BorderSide(color: _ringColor, width: 3)),
+        boxShadow: [
           BoxShadow(
-            color: Colors.black38,
+            color: _shadowColor,
             blurRadius: 4,
             offset: Offset(0, 1),
           ),

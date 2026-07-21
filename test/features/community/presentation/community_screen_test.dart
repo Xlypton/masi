@@ -3115,4 +3115,108 @@ void main() {
       },
     );
   });
+
+  group('UX: friendly themed error state (replaces raw exception text)', () {
+    testWidgets(
+      'CommunityMapScreen: sharedToposProvider failing renders a friendly '
+      'message + Try again button, never the raw exception text',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          // Riverpod 3's `ProviderContainer.defaultRetry` auto-retries a
+          // failed Stream/FutureProvider up to 10x with exponential backoff
+          // (200ms.. capped at 6.4s) BEFORE settling into a terminal
+          // `AsyncError` -- so `sharedToposProvider` would sit in
+          // `AsyncLoading(error: ...)` (spinner, not the friendly error UI)
+          // for far longer than this test's short `_drain` window. Disabling
+          // retry makes the deliberately-always-failing override above
+          // surface as `AsyncError` on the very first emission, which is
+          // what this test is actually exercising.
+          retry: (retryCount, error) => null,
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            sharedToposProvider.overrideWith(
+              (ref) =>
+                  Stream<List<SharedTopo>>.error(Exception('boom-network')),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-map-error-state')),
+          findsOneWidget,
+        );
+        expect(find.text("Couldn't load the community map"), findsOneWidget);
+        expect(find.textContaining('boom-network'), findsNothing);
+        expect(find.text('Try again'), findsOneWidget);
+
+        // Tapping "Try again" invalidates sharedToposProvider without
+        // throwing (the override still errors on re-fetch, so the friendly
+        // error state simply re-renders rather than crashing).
+        await tester.tap(find.byKey(const Key('community-map-retry')));
+        await _drain(tester);
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('community-map-error-state')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'CommunityFeedScreen: sharedToposProvider failing renders a friendly '
+      'message + Try again button, never the raw exception text',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          // Riverpod 3's `ProviderContainer.defaultRetry` auto-retries a
+          // failed Stream/FutureProvider up to 10x with exponential backoff
+          // (200ms.. capped at 6.4s) BEFORE settling into a terminal
+          // `AsyncError` -- so `sharedToposProvider` would sit in
+          // `AsyncLoading(error: ...)` (spinner, not the friendly error UI)
+          // for far longer than this test's short `_drain` window. Disabling
+          // retry makes the deliberately-always-failing override above
+          // surface as `AsyncError` on the very first emission, which is
+          // what this test is actually exercising.
+          retry: (retryCount, error) => null,
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            sharedToposProvider.overrideWith(
+              (ref) =>
+                  Stream<List<SharedTopo>>.error(Exception('boom-network')),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-feed-error-state')),
+          findsOneWidget,
+        );
+        expect(find.text("Couldn't load the community feed"), findsOneWidget);
+        expect(find.textContaining('boom-network'), findsNothing);
+        expect(find.text('Try again'), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('community-feed-retry')));
+        await _drain(tester);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
 }
