@@ -148,11 +148,13 @@ void main() {
     Duration debounce = const Duration(milliseconds: 25),
     bool wifiOnly = false,
     NetworkStatus connectivity = NetworkStatus.wifi,
+    int Function()? nowMs,
   }) {
     final container = ProviderContainer(
       overrides: [
         appDatabaseProvider.overrideWithValue(db),
         syncDebounceDurationProvider.overrideWithValue(debounce),
+        if (nowMs != null) nowMsProvider.overrideWithValue(nowMs),
         authStateProvider.overrideWith(
           (ref) => authStream ?? Stream.value(const AuthSessionState.signedOut()),
         ),
@@ -389,6 +391,191 @@ void main() {
         // push once the (long) debounce window eventually elapses.
         await Future<void>.delayed(const Duration(milliseconds: 60));
         expect(remote.pushCallCount, 1);
+      },
+    );
+  });
+
+  group('#57: pullNow() (manual/resume refresh trigger)', () {
+    test(
+      'pullNow() invokes pullOwnAndShared() through the SAME path as '
+      'pull-on-sign-in, exactly once per call',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+
+        expect(remote.pullCallCount, 1);
+      },
+    );
+
+    test(
+      'pullNow() is a safe no-op (never throws, never reaches the remote, '
+      'status never becomes error) when signed out',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(const AuthSessionState.signedOut()),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+
+        expect(remote.pullCallCount, 0);
+        expect(
+          container.read(syncOrchestratorProvider).status,
+          isNot(SyncStatus.error),
+        );
+      },
+    );
+
+    test(
+      'two overlapping pullNow() calls collapse into exactly ONE '
+      'pullOwnAndShared() call (the second returns the SAME in-flight '
+      'Future rather than starting a redundant pull); a later call made '
+      'once that pull has completed starts a fresh one',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+
+        // Two calls fired back-to-back, BEFORE either has had a chance to
+        // complete, must be coalesced into one underlying pull.
+        final first = notifier.pullNow();
+        final second = notifier.pullNow();
+        expect(
+          identical(first, second),
+          isTrue,
+          reason: 'an overlapping call must return the SAME in-flight '
+              'Future, not a second independent one',
+        );
+
+        await Future.wait([first, second]);
+        expect(
+          remote.pullCallCount,
+          1,
+          reason: '2 overlapping pullNow() calls must trigger exactly one '
+              'pullOwnAndShared() call',
+        );
+
+        // The guard must release once the in-flight pull settles — a call
+        // made afterward starts a genuinely NEW pull rather than replaying
+        // the stale, already-completed Future.
+        await notifier.pullNow();
+        expect(remote.pullCallCount, 2);
+      },
+    );
+  });
+
+  group('#57 follow-up: pullNow(throttled: true) resume throttle', () {
+    test(
+      'two throttled pullNow() calls within the throttle window collapse '
+      'into ONE pullOwnAndShared() call; a call made once the injected '
+      'clock has advanced past the window pulls again',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        var nowMs = 1000;
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          nowMs: () => nowMs,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+
+        await notifier.pullNow(throttled: true);
+        expect(remote.pullCallCount, 1);
+
+        // A second throttled call, clock unchanged (well inside the 30s
+        // window), must be skipped as a no-op rather than pulling again.
+        await notifier.pullNow(throttled: true);
+        expect(
+          remote.pullCallCount,
+          1,
+          reason: 'a throttled call inside the resume-throttle window must '
+              'be a no-op',
+        );
+
+        // Advance the injected clock past the throttle window — the next
+        // throttled call must pull again.
+        nowMs += const Duration(seconds: 31).inMilliseconds;
+        await notifier.pullNow(throttled: true);
+        expect(remote.pullCallCount, 2);
+      },
+    );
+
+    test(
+      'pullNow() (unthrottled, the default) always pulls regardless of how '
+      'recently the last pull started — two sequential unthrottled calls, '
+      'each awaited to completion, each pull even though the injected '
+      'clock never advances',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          nowMs: () => 1000,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+
+        await notifier.pullNow();
+        expect(remote.pullCallCount, 1);
+
+        await notifier.pullNow();
+        expect(
+          remote.pullCallCount,
+          2,
+          reason: 'unthrottled callers (pull-to-refresh, the map refresh '
+              'button, "Try again", the sign-in-edge listener) must never '
+              'be silently skipped, no matter how recently the last pull '
+              'started',
+        );
       },
     );
   });

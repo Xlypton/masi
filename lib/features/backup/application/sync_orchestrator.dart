@@ -98,6 +98,35 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   Timer? _debounceTimer;
   StreamSubscription<void>? _dbSubscription;
 
+  /// The currently in-flight [pullNow] call's [Future], or `null` when no
+  /// pull is running — [pullNow]'s own concurrency guard (see that method's
+  /// doc). The sign-in-edge listener in [build] now ALSO funnels through
+  /// [pullNow] (rather than calling `_runPull()` directly), so every pull
+  /// trigger in this class — sign-in, resume, pull-to-refresh, the map
+  /// refresh button, "Try again" — shares this single guard and no two of
+  /// them can ever run [_runPull] concurrently.
+  Future<void>? _pullInFlight;
+
+  /// Window after a pull ACTUALLY STARTS during which a further
+  /// `pullNow(throttled: true)` call is skipped as a no-op. Exists solely
+  /// for the app-resume trigger in `app.dart`: on web, `AppLifecycleState
+  /// .resumed` fires on every browser tab-focus (not just a genuine app
+  /// relaunch), so an unconditional resume-pull would hammer Supabase every
+  /// time the user merely alt-tabs back to the tab. Explicit user-initiated
+  /// pulls (pull-to-refresh, the map refresh button, "Try again") always
+  /// call [pullNow] with the default `throttled: false` and are NEVER
+  /// subject to this window — the user asked for a refresh and must always
+  /// get one.
+  static const Duration _resumePullThrottle = Duration(seconds: 30);
+
+  /// Wall-clock moment the most recent pull ACTUALLY STARTED (i.e. was
+  /// neither skipped by [_resumePullThrottle] nor coalesced into an
+  /// already-running [_pullInFlight]) — read via the same [nowMsProvider]
+  /// clock seam [_now] uses for `lastSyncedAt` everywhere else in this
+  /// class, so tests can control it exactly the same way. `null` until the
+  /// first pull of the app run.
+  DateTime? _lastPullStartedAt;
+
   @override
   SyncOrchestratorState build() {
     final db = ref.watch(appDatabaseProvider);
@@ -116,7 +145,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       final previousUid = previous?.asData?.value.uid;
       final nextUid = next.asData?.value.uid;
       if (previousUid == null && nextUid != null) {
-        unawaited(_runPull());
+        unawaited(pullNow());
       }
     });
 
@@ -162,6 +191,61 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       debugPrint('SyncOrchestrator: pushOwn failed: $e\n$st');
       state = state.copyWith(status: SyncStatus.error);
     }
+  }
+
+  /// #57 fix — public re-entry point for the SAME pull path [build]'s
+  /// sign-in-edge listener fires (which now calls THIS method too, rather
+  /// than `_runPull()` directly), for every OTHER moment "other users'
+  /// shared content may have changed" (app-resume — see `app.dart`'s
+  /// `didChangeAppLifecycleState` — and the Community feed/map's manual
+  /// pull-to-refresh / "Try again" retry). Before this, `pullOwnAndShared()`
+  /// only ever ran once, on the signed-out -> signed-in edge, so another
+  /// user's newly-published topo stayed invisible until the next full
+  /// sign-in.
+  ///
+  /// [throttled]: pass `true` ONLY from the app-resume trigger. When `true`
+  /// AND a pull last actually started less than [_resumePullThrottle] ago,
+  /// this call is a no-op that resolves immediately without touching the
+  /// network — see that field's doc for why (web's resume-on-tab-focus
+  /// spam). Defaults to `false`, which ALWAYS pulls: the sign-in-edge
+  /// listener, pull-to-refresh, the map refresh button, and "Try again" all
+  /// rely on that — none of them may ever be silently throttled.
+  ///
+  /// Guarded against overlapping runs: a call made while an earlier
+  /// [pullNow] is still in flight returns THAT SAME [Future] instead of
+  /// starting a second, redundant pull — mirrors [_scheduleDebouncedPush]'s
+  /// "N rapid triggers collapse into one call" shape, just without the
+  /// debounce delay (a refresh gesture/resume wants to run immediately, not
+  /// wait out a window). A call made once the in-flight pull has completed
+  /// starts a fresh one. This guard and the throttle above are independent:
+  /// the throttle can skip a call before it would even reach this guard.
+  ///
+  /// Never throws and is a safe no-op when signed out or Supabase is
+  /// unavailable — it runs through the exact same [_runPull] (and, beneath
+  /// that, the already-gated [syncServiceProvider]/[SyncService]) as the
+  /// sign-in trigger; see that method's and this class's doc for how that
+  /// degrades rather than crashes.
+  Future<void> pullNow({bool throttled = false}) {
+    if (throttled) {
+      final lastStarted = _lastPullStartedAt;
+      if (lastStarted != null &&
+          _now().difference(lastStarted) < _resumePullThrottle) {
+        return Future<void>.value();
+      }
+    }
+    final inFlight = _pullInFlight;
+    if (inFlight != null) return inFlight;
+    _lastPullStartedAt = _now();
+    final future = _runPull();
+    _pullInFlight = future;
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_pullInFlight, future)) {
+          _pullInFlight = null;
+        }
+      }),
+    );
+    return future;
   }
 
   Future<void> _runPull() async {

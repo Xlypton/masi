@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -38,6 +40,26 @@ class _ClimbTopoAppState extends ConsumerState<ClimbTopoApp>
     // since the last sync.
     if (state == AppLifecycleState.paused) {
       ref.read(syncOrchestratorProvider.notifier).onAppPaused();
+    }
+    // #57: re-pull own+shared data whenever the app returns to the
+    // foreground. Without this, the ONLY pull trigger is the signed-out ->
+    // signed-in edge (see `SyncOrchestrator.build`'s doc) — an
+    // already-signed-in user who simply backgrounds and resumes the app
+    // never re-syncs, so another user's newly-published topo (rendered from
+    // the LOCAL `watchSharedTopos()` query, not fetched live) stays
+    // invisible until a full sign-out/sign-in. `pullNow()` self-guards
+    // against overlapping calls and is already a safe no-op when signed
+    // out / Supabase is unavailable (see its doc) — no extra gating needed
+    // here. `throttled: true` because on web `resumed` also fires on plain
+    // browser tab-focus (not just a genuine relaunch) — see `pullNow`'s doc
+    // for the throttle window; explicit user-initiated pulls elsewhere
+    // (pull-to-refresh, map refresh, "Try again") stay unthrottled.
+    // Fire-and-forget (`unawaited`): this lifecycle callback must return
+    // immediately, never block on network I/O.
+    if (state == AppLifecycleState.resumed) {
+      unawaited(
+        ref.read(syncOrchestratorProvider.notifier).pullNow(throttled: true),
+      );
     }
   }
 

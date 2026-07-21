@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../backup/application/sync_orchestrator.dart';
 import '../../logbook/application/ascents_providers.dart';
 import '../application/community_providers.dart';
 
@@ -50,7 +51,16 @@ class CommunityErrorState extends ConsumerWidget {
             borderRadius: BorderRadius.circular(MasiRadii.control),
             child: InkWell(
               key: retryKey,
-              onTap: () {
+              // #57: re-run the actual REMOTE pull first, not just a local
+              // Drift re-query — before this fix, "Try again" only ever
+              // invalidated the local providers below, so it could never
+              // recover from data that's missing locally because it was
+              // never pulled in the first place (the original bug: nothing
+              // besides sign-in ever called `pullOwnAndShared()`). `pullNow`
+              // never throws (safe no-op when signed out / Supabase is
+              // unavailable — see its doc), so no try/catch is needed here.
+              onTap: () async {
+                await ref.read(syncOrchestratorProvider.notifier).pullNow();
                 ref.invalidate(sharedToposProvider);
                 // Also invalidate the ascent half of the Feed's union (#12
                 // Wave 3, ST5) — harmless no-op for `CommunityMapScreen`

@@ -7,11 +7,113 @@ import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/account/application/auth_providers.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/backup/application/sync_orchestrator.dart';
+import 'package:climbtopo/features/backup/application/sync_providers.dart';
+import 'package:climbtopo/features/backup/data/backup_repository.dart';
+import 'package:climbtopo/features/backup/data/connectivity_service.dart';
+import 'package:climbtopo/features/backup/data/sync_remote.dart';
+import 'package:climbtopo/features/backup/data/sync_service.dart';
 import 'package:climbtopo/features/library/presentation/topos_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show StringCodec;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// A [SyncRemote] that does no real work but counts pull-side
+/// (`fetchOwnRows`) calls — every `pullOwnAndShared()` call that gets past
+/// `SyncService`'s signed-out guard calls `fetchOwnRows` exactly once, so
+/// this is a reliable proxy for "how many times did `SyncOrchestrator`
+/// actually invoke `pullOwnAndShared()`". Duplicated locally from
+/// `sync_orchestrator_test.dart`'s identically-named, file-private class
+/// (mirrors `community_feed_union_test.dart`'s stated convention of
+/// duplicating rather than sharing file-private test doubles).
+class _CountingSyncRemote implements SyncRemote {
+  int pullCallCount = 0;
+
+  @override
+  Future<void> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {}
+
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchOwnRows(String uid) async {
+    pullCallCount++;
+    return {for (final t in syncTableNames) t: <Map<String, dynamic>>[]};
+  }
+
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
+    return {
+      for (final t in syncTableNames)
+        if (t != 'ascents') t: <Map<String, dynamic>>[],
+    };
+  }
+
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents() async {
+    return {'ascents': <Map<String, dynamic>>[]};
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async => const [];
+
+  @override
+  Future<void> uploadPhoto({
+    required String uid,
+    required String photoId,
+    required String ext,
+    required List<int> bytes,
+  }) async {}
+
+  @override
+  Future<List<int>?> downloadPhoto({required String uid, required String objectPath}) async =>
+      null;
+
+  @override
+  Future<Set<String>> listPhotoObjectPaths(String uid) async => {};
+
+  @override
+  Future<void> uploadSharedPhoto({
+    required String photoId,
+    required String ext,
+    required List<int> bytes,
+  }) async {}
+
+  @override
+  Future<List<int>?> downloadSharedPhoto(String objectPath) async => null;
+
+  @override
+  Future<Set<String>> listSharedPhotoObjectPaths() async => {};
+}
+
+/// Minimal [AuthRepository] test double standing in for the auth session
+/// [SyncService] itself reads (`currentSession.uid`) — duplicated locally
+/// from `sync_orchestrator_test.dart`'s identically-named class.
+class _FakeAuthRepository implements AuthRepository {
+  _FakeAuthRepository(this.currentSession);
+
+  @override
+  AuthSessionState currentSession;
+
+  @override
+  Stream<AuthSessionState> authStateChanges() => const Stream.empty();
+
+  @override
+  Future<void> sendMagicLink(String email) async {}
+
+  @override
+  Future<void> signOut() async {}
+}
+
+/// Always-wifi [ConnectivityService] double — duplicated locally from
+/// `sync_orchestrator_test.dart`'s identically-named class. [SyncService]'s
+/// constructor requires one even though `pullOwnAndShared()` (the only path
+/// this file's new #57 test exercises) never actually reads it.
+class _FakeConnectivityService implements ConnectivityService {
+  @override
+  Future<NetworkStatus> currentStatus() async => NetworkStatus.wifi;
+}
 
 /// Mirrors `router_test.dart`'s `_makeContainer`: a fresh in-memory database
 /// so `ToposScreen` (the `/` route) has something real to watch, without
@@ -61,6 +163,32 @@ Future<void> _drain(WidgetTester tester) async {
     await tester.pump(const Duration(milliseconds: 30));
   }
   await tester.pumpAndSettle();
+}
+
+/// Simulates the engine delivering an app-lifecycle transition, the way a
+/// real OS foreground/background event would — via the SAME `flutter/
+/// lifecycle` platform channel `WidgetsFlutterBinding` really listens on
+/// (`ServicesBinding.initInstances`'s `SystemChannels.lifecycle
+/// .setMessageHandler(_handleLifecycleMessage)`), rather than calling
+/// `WidgetsBinding`'s own `handleAppLifecycleStateChanged` directly — that
+/// method is `@protected` (only callable from within the binding's own
+/// class hierarchy), so an external test calling it directly would trip
+/// the analyzer's `invalid_use_of_protected_member` check. Going through
+/// `TestDefaultBinaryMessenger.handlePlatformMessage` (the documented,
+/// non-deprecated, test-sanctioned entry point for "send a mock message to
+/// the framework as if it came from the platform") exercises the exact
+/// same code path a real transition would, INCLUDING the framework's own
+/// synthesized intermediate states (e.g. paused -> resumed synthesizes
+/// through `hidden`/`inactive` first — see `ServicesBinding
+/// ._generateStateTransitions`) — harmless here since `ClimbTopoApp.
+/// didChangeAppLifecycleState` only ever reacts to the terminal `paused`/
+/// `resumed` states this helper's caller actually asks for.
+Future<void> _setAppLifecycleState(WidgetTester tester, AppLifecycleState state) async {
+  await tester.binding.defaultBinaryMessenger.handlePlatformMessage(
+    'flutter/lifecycle',
+    const StringCodec().encodeMessage(state.toString()),
+    null,
+  );
 }
 
 void main() {
@@ -230,6 +358,178 @@ void main() {
           2000,
           reason: 'the claim must fire only once, on the actual '
               'signed-out -> signed-in edge, not on every re-emission',
+        );
+      },
+    );
+  });
+
+  group('#57: resumed lifecycle triggers a pull', () {
+    testWidgets(
+      'AppLifecycleState.resumed calls pullNow(throttled: true) — a real '
+      'pullOwnAndShared() reaches the remote once the resume-pull throttle '
+      'window has elapsed since the last pull; AppLifecycleState.paused '
+      'never pulls',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        // Mutable (not a fixed closure) so the test can advance the clock
+        // PAST `SyncOrchestrator._resumePullThrottle` (30s) between resume
+        // events below — with a clock that never moves, every resume after
+        // the first would be throttled as a no-op (by design: it's the
+        // same guard that stops web tab-focus from hammering Supabase).
+        var nowMs = 1000;
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => nowMs),
+            // Starts already signed-in: `SyncOrchestrator`'s edge-detector
+            // treats the loading -> signed-in FIRST emission as an edge
+            // too (see its doc: "signed-out (or unknown, e.g. still-
+            // loading)... -> signed-in"), so mounting fires exactly ONE
+            // pull immediately, before this test ever touches the
+            // lifecycle — accounted for below rather than worked around,
+            // since it's real, correct, pre-existing behavior this test
+            // must not disturb.
+            authStateProvider.overrideWith(
+              (ref) => Stream.value(
+                const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+              ),
+            ),
+            syncDebounceDurationProvider.overrideWithValue(
+              const Duration(milliseconds: 5),
+            ),
+            syncServiceProvider.overrideWithValue(
+              SyncService(
+                db: db,
+                backupRepository: BackupRepository(db),
+                remote: remote,
+                authRepository: _FakeAuthRepository(
+                  const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+                ),
+                connectivity: _FakeConnectivityService(),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const ClimbTopoApp(),
+          ),
+        );
+        await _drain(tester);
+
+        expect(
+          remote.pullCallCount,
+          1,
+          reason: 'the mount-time signed-in edge already pulled once, '
+              'before any lifecycle event fires',
+        );
+
+        // Backgrounding the app must still never pull (only push).
+        await _setAppLifecycleState(tester, AppLifecycleState.paused);
+        await _drain(tester);
+        expect(
+          remote.pullCallCount,
+          1,
+          reason: 'paused must push, never pull',
+        );
+
+        // Returning to the foreground, once the throttle window has
+        // elapsed since the mount-time pull, must trigger exactly one more
+        // pull.
+        nowMs += const Duration(seconds: 31).inMilliseconds;
+        await _setAppLifecycleState(tester, AppLifecycleState.resumed);
+        await _drain(tester);
+        expect(remote.pullCallCount, 2);
+
+        // A second resume (e.g. a later background/foreground cycle),
+        // again once the throttle window has elapsed, must trigger another
+        // pull too — this is a plain re-invocation, not a one-shot edge
+        // like the sign-in trigger.
+        await _setAppLifecycleState(tester, AppLifecycleState.paused);
+        await _drain(tester);
+        nowMs += const Duration(seconds: 31).inMilliseconds;
+        await _setAppLifecycleState(tester, AppLifecycleState.resumed);
+        await _drain(tester);
+        expect(remote.pullCallCount, 3);
+      },
+    );
+
+    testWidgets(
+      'a resume that fires again BEFORE the resume-pull throttle window has '
+      'elapsed since the last pull is a no-op — it never reaches the '
+      'remote a second time',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        // Fixed clock: with the throttle in play, every resume in this
+        // test after the mount-time pull is deliberately made WITHIN the
+        // 30s window (see `_resumePullThrottle`'s doc), so it must be
+        // skipped as a no-op.
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            authStateProvider.overrideWith(
+              (ref) => Stream.value(
+                const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+              ),
+            ),
+            syncDebounceDurationProvider.overrideWithValue(
+              const Duration(milliseconds: 5),
+            ),
+            syncServiceProvider.overrideWithValue(
+              SyncService(
+                db: db,
+                backupRepository: BackupRepository(db),
+                remote: remote,
+                authRepository: _FakeAuthRepository(
+                  const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+                ),
+                connectivity: _FakeConnectivityService(),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const ClimbTopoApp(),
+          ),
+        );
+        await _drain(tester);
+
+        expect(
+          remote.pullCallCount,
+          1,
+          reason: 'the mount-time signed-in edge already pulled once',
+        );
+
+        // Two rapid resumes, clock unchanged — the SECOND must be
+        // throttled, exactly the web tab-focus-spam scenario this guard
+        // exists for.
+        await _setAppLifecycleState(tester, AppLifecycleState.paused);
+        await _drain(tester);
+        await _setAppLifecycleState(tester, AppLifecycleState.resumed);
+        await _drain(tester);
+        await _setAppLifecycleState(tester, AppLifecycleState.paused);
+        await _drain(tester);
+        await _setAppLifecycleState(tester, AppLifecycleState.resumed);
+        await _drain(tester);
+
+        expect(
+          remote.pullCallCount,
+          1,
+          reason: 'rapid resumes within the throttle window must collapse '
+              'into the single already-completed mount-time pull, not '
+              'trigger a second network round-trip',
         );
       },
     );

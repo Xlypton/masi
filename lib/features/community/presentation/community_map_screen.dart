@@ -14,6 +14,7 @@ import '../../../shared/presentation/masi_icon.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../account/application/auth_providers.dart';
+import '../../backup/application/sync_orchestrator.dart';
 import '../../library/application/library_providers.dart';
 import '../../../core/net/retryable_error.dart';
 import '../application/community_providers.dart';
@@ -579,6 +580,18 @@ class _MapViewState extends ConsumerState<_MapView> {
     _mapController.move(LatLng(location.latitude, location.longitude), 14);
   }
 
+  /// `community-map-refresh`'s handler (#57): the map has no scrollable
+  /// surface to hang a `RefreshIndicator` off of (unlike
+  /// `CommunityFeedScreen`'s pull-to-refresh list), so this is a plain
+  /// button re-running the same remote pull instead. `sharedToposProvider`
+  /// is a `StreamProvider` watching Drift, so once the pull writes fresh
+  /// rows locally the marker set updates on its own — no explicit
+  /// invalidate needed here. `pullNow()` never throws (see its doc), so no
+  /// try/catch/SnackBar is needed the way `_onFindMePressed`'s
+  /// denied/unavailable case needs one.
+  Future<void> _onRefreshPressed() =>
+      ref.read(syncOrchestratorProvider.notifier).pullNow();
+
   @override
   Widget build(BuildContext context) {
     final filter = ref.watch(communityFilterProvider);
@@ -1119,6 +1132,18 @@ class _MapViewState extends ConsumerState<_MapView> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
+              // #57: manual refresh — re-runs the same remote pull the
+              // signed-out -> signed-in edge used to be the only trigger
+              // for, so another user's newly-published/updated topo can
+              // show up without waiting for a resume or a fresh sign-in.
+              _MapControlButton(
+                mapControlKey: const Key('community-map-refresh'),
+                iconName: 'sync',
+                tooltip: 'Refresh',
+                colors: colors,
+                onPressed: _onRefreshPressed,
+              ),
+              const SizedBox(height: MasiSpacing.sm),
               _MapControlButton(
                 mapControlKey: const Key('community-map-find-me'),
                 iconName: 'my_location',

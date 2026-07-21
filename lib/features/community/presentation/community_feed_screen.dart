@@ -10,6 +10,7 @@ import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/filtering/style_tag_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
+import '../../backup/application/sync_orchestrator.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
 import '../../topo/presentation/photo_image.dart';
@@ -233,25 +234,55 @@ class _FeedView extends ConsumerWidget {
           ),
         ),
         Expanded(
-          child: emptyMessage != null
-              ? _EmptyState(message: emptyMessage)
-              : ListView.separated(
-                  padding: EdgeInsets.fromLTRB(
-                    MasiSpacing.lg,
-                    MasiSpacing.sm,
-                    MasiSpacing.lg,
-                    MasiSpacing.sm + bottomChromeInset,
-                  ),
-                  itemCount: filtered.length,
-                  separatorBuilder: (context, index) =>
-                      const SizedBox(height: MasiSpacing.sm),
-                  itemBuilder: (context, index) => switch (filtered[index]) {
-                    TopoFeedItem(:final topo) => _FeedRow(topo: topo),
-                    AscentFeedItem(:final entry) => _AscentFeedRow(
-                      entry: entry,
+          // #57: pull-to-refresh re-runs the SAME remote pull the
+          // signed-out -> signed-in edge used to be the only trigger for
+          // (see `SyncOrchestrator.pullNow`'s doc) — `sharedToposProvider`/
+          // `sharedAscentsProvider` are plain `StreamProvider`s watching
+          // Drift, so once the pull writes fresh rows locally they emit on
+          // their own; no explicit invalidate needed here.
+          child: RefreshIndicator(
+            key: const Key('community-feed-refresh'),
+            onRefresh: () =>
+                ref.read(syncOrchestratorProvider.notifier).pullNow(),
+            child: emptyMessage != null
+                // `RefreshIndicator` needs an `AlwaysScrollableScrollPhysics`
+                // scrollable ancestor to arm its overscroll gesture even
+                // when there's nothing to scroll — a bare, non-scrollable
+                // `_EmptyState` (the previous body here) could never be
+                // pulled. `LayoutBuilder` + a height-matched `SizedBox`
+                // keeps `_EmptyState`'s own `Center` filling/centering in
+                // exactly the same visual spot as before, now inside a
+                // (trivially) scrollable `ListView`.
+                ? LayoutBuilder(
+                    builder: (context, constraints) => ListView(
+                      physics: const AlwaysScrollableScrollPhysics(),
+                      children: [
+                        SizedBox(
+                          height: constraints.maxHeight,
+                          child: _EmptyState(message: emptyMessage),
+                        ),
+                      ],
                     ),
-                  },
-                ),
+                  )
+                : ListView.separated(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(
+                      MasiSpacing.lg,
+                      MasiSpacing.sm,
+                      MasiSpacing.lg,
+                      MasiSpacing.sm + bottomChromeInset,
+                    ),
+                    itemCount: filtered.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: MasiSpacing.sm),
+                    itemBuilder: (context, index) => switch (filtered[index]) {
+                      TopoFeedItem(:final topo) => _FeedRow(topo: topo),
+                      AscentFeedItem(:final entry) => _AscentFeedRow(
+                        entry: entry,
+                      ),
+                    },
+                  ),
+          ),
         ),
       ],
     );
