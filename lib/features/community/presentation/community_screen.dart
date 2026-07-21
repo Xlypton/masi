@@ -21,8 +21,12 @@ import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
 import '../../library/application/library_providers.dart';
 import '../../../core/net/retryable_error.dart';
+import '../../logbook/application/ascents_providers.dart';
+import '../../logbook/data/ascents_repository.dart';
+import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
 import '../../topo/presentation/photo_image.dart';
 import '../application/community_providers.dart';
+import '../application/community_topo_detail_providers.dart';
 import '../application/map_search_providers.dart';
 import '../data/community_repository.dart';
 import '../data/map_search.dart';
@@ -267,7 +271,8 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final asyncSharedTopos = ref.watch(sharedToposProvider);
+    final colors = MasiColors.of(context);
+    final asyncFeedItems = ref.watch(feedItemsProvider);
 
     return Scaffold(
       key: const Key('community-feed-screen'),
@@ -279,6 +284,18 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
           overflow: TextOverflow.ellipsis,
         ),
         centerTitle: false,
+        actions: [
+          // #12 Wave 3, ST5: the home-screen's own Logbook icon is removed
+          // in this wave, so the Feed — the screen a "shared ascent" row
+          // now links a climber's other activity from — carries the entry
+          // point back to the personal Logbook instead.
+          IconButton(
+            key: const Key('feed-logbook-button'),
+            icon: MasiIcon('logbook', color: colors.ink),
+            tooltip: 'My logbook',
+            onPressed: () => context.push('/logbook'),
+          ),
+        ],
       ),
       // `bottom: false` (#51, mirrors `CommunityMapScreen`'s identical
       // `SafeArea` above): NavShell's Scaffold now extends every branch
@@ -288,9 +305,9 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
       // where it's actually applied.
       body: SafeArea(
         bottom: false,
-        child: asyncSharedTopos.when(
-          data: (topos) => _FeedView(
-            topos: topos,
+        child: asyncFeedItems.when(
+          data: (items) => _FeedView(
+            items: items,
             searchController: _searchController,
             query: _query,
           ),
@@ -349,7 +366,15 @@ class _CommunityErrorState extends ConsumerWidget {
             borderRadius: BorderRadius.circular(MasiRadii.control),
             child: InkWell(
               key: retryKey,
-              onTap: () => ref.invalidate(sharedToposProvider),
+              onTap: () {
+                ref.invalidate(sharedToposProvider);
+                // Also invalidate the ascent half of the Feed's union (#12
+                // Wave 3, ST5) — harmless no-op for `CommunityMapScreen`
+                // (which never watches `sharedAscentsProvider` at all), and
+                // means the Feed's "Try again" recovers BOTH halves of
+                // `feedItemsProvider`, not just the topo one.
+                ref.invalidate(sharedAscentsProvider);
+              },
               borderRadius: BorderRadius.circular(MasiRadii.control),
               child: Padding(
                 padding: const EdgeInsets.symmetric(
@@ -372,25 +397,58 @@ class _CommunityErrorState extends ConsumerWidget {
   }
 }
 
-/// The Feed tab: a search field + filter button over a list of [_FeedRow]s,
-/// or [_EmptyState] when there are no shared topos at all (or none matching
-/// the search / the [communityFilterProvider] grade+style filter).
+/// The Feed tab: a search field + filter button over a list of [_FeedRow]s
+/// (shared topos) interleaved with [_AscentFeedRow]s (shared ascent-log
+/// entries, #12 Wave 3 ST5), or [_EmptyState] when there's nothing shared at
+/// all (or nothing matching the search / the [communityFilterProvider]
+/// grade+style filter).
 ///
 /// Name search and the grade/style filter are ANDed together but kept as
 /// two independently-diagnosable empty states (search narrows first, then
 /// the filter) so a user who typed a matching name but filtered out every
 /// result sees "No topos match your filters" rather than the more generic
 /// "No topos match your search".
+///
+/// The grade/style [CommunityFilter] only ever applies to [TopoFeedItem]s —
+/// [CommunityFilter.matches] takes a [SharedTopo] and reads its
+/// route-grade/style/style-tag aggregates, none of which a [SharedAscentEntry]
+/// carries in a comparable shape (its own `style` is the CLIMB style —
+/// onsight/flash/redpoint/… — an entirely different axis from a route's
+/// sport/trad/boulder [CommunityFilter.styles]). Rather than silently
+/// dropping every ascent row the instant any grade/style filter is active,
+/// [AscentFeedItem]s are exempted from that filter entirely and always pass
+/// it; name search, by contrast, DOES apply to both — an ascent matches by
+/// its route or wall name (see [_matchesQuery]) since there's no comparably
+/// natural "name" field on an ascent otherwise.
 class _FeedView extends ConsumerWidget {
   const _FeedView({
-    required this.topos,
+    required this.items,
     required this.searchController,
     required this.query,
   });
 
-  final List<SharedTopo> topos;
+  final List<FeedItem> items;
   final TextEditingController searchController;
   final String query;
+
+  bool _matchesQuery(FeedItem item) {
+    if (query.isEmpty) return true;
+    return switch (item) {
+      TopoFeedItem(:final topo) => topo.name.toLowerCase().contains(query),
+      AscentFeedItem(:final entry) =>
+        (entry.routeName?.toLowerCase().contains(query) ?? false) ||
+            entry.wallName.toLowerCase().contains(query),
+    };
+  }
+
+  bool _matchesFilter(FeedItem item, CommunityFilter filter) {
+    return switch (item) {
+      TopoFeedItem(:final topo) => filter.matches(topo),
+      // Ascents sit outside the topo grade/style filter's axes entirely —
+      // see this class's doc — so they always pass it.
+      AscentFeedItem() => true,
+    };
+  }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -402,12 +460,12 @@ class _FeedView extends ConsumerWidget {
     // into the list's own bottom padding below so its last row scrolls clear
     // of the bar instead of ending up hidden behind it.
     final bottomChromeInset = MediaQuery.of(context).padding.bottom;
-    final searchFiltered = query.isEmpty
-        ? topos
-        : topos.where((t) => t.name.toLowerCase().contains(query)).toList();
-    final filtered = searchFiltered.where(filter.matches).toList();
+    final searchFiltered = items.where(_matchesQuery).toList();
+    final filtered = searchFiltered
+        .where((item) => _matchesFilter(item, filter))
+        .toList();
 
-    final String? emptyMessage = topos.isEmpty
+    final String? emptyMessage = items.isEmpty
         ? 'No shared topos yet'
         : searchFiltered.isEmpty
         ? 'No topos match your search'
@@ -475,8 +533,12 @@ class _FeedView extends ConsumerWidget {
                   itemCount: filtered.length,
                   separatorBuilder: (context, index) =>
                       const SizedBox(height: MasiSpacing.sm),
-                  itemBuilder: (context, index) =>
-                      _FeedRow(topo: filtered[index]),
+                  itemBuilder: (context, index) => switch (filtered[index]) {
+                    TopoFeedItem(:final topo) => _FeedRow(topo: topo),
+                    AscentFeedItem(:final entry) => _AscentFeedRow(
+                      entry: entry,
+                    ),
+                  },
                 ),
         ),
       ],
@@ -770,6 +832,251 @@ class _FeedRow extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// A single shared-ascent-log row (#12 Wave 3, ST5): the [FeedItem] union's
+/// other variant alongside [_FeedRow] — a climber's opt-in-`shared`
+/// [SharedAscentEntry] rather than a shared topo. Visually echoes
+/// `logbook_screen.dart`'s `_LogbookEntryRow` (grade swatch + title/grade +
+/// wall + "style · date" line — reusing that screen's public [styleLabel]
+/// helper for the exact same style label text) PLUS [_FeedRow]'s
+/// like/comment-count + attributed-owner line, since a Feed row needs both
+/// the climb's own metadata AND community engagement counts that a purely
+/// personal Logbook entry never shows.
+///
+/// A [ConsumerWidget] so it can watch [profileDisplayNameProvider] (the same
+/// #18 owner-name resolution [_FeedRow] uses — "Unknown climber" is the
+/// identical fallback, never a raw uid) and the ascent-scoped
+/// `likeCountForAscentProvider`/`commentsForAscentProvider` live.
+class _AscentFeedRow extends ConsumerWidget {
+  const _AscentFeedRow({required this.entry});
+
+  final SharedAscentEntry entry;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final ascentId = entry.ascentId;
+
+    // #18-style resolution (see `_FeedRow`'s identical block above): `null`
+    // ownerId, no profile row yet, or an empty name all collapse to the same
+    // "Unknown climber" fallback — the raw uid must never render.
+    final ownerId = entry.ownerId;
+    final climberName = ownerId != null
+        ? ref.watch(profileDisplayNameProvider(ownerId)).asData?.value
+        : null;
+
+    final likeCount =
+        ref.watch(likeCountForAscentProvider(ascentId)).asData?.value ?? 0;
+    final commentCount =
+        ref.watch(commentsForAscentProvider(ascentId)).asData?.value.length ??
+        0;
+
+    final routeName = entry.routeName;
+    final title = (routeName != null && routeName.isNotEmpty)
+        ? routeName
+        : 'Route ${entry.routeNumber ?? '?'}';
+
+    return Material(
+      key: Key('community-ascent-row-$ascentId'),
+      color: colors.surface,
+      borderRadius: BorderRadius.circular(MasiRadii.card),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        onTap: () {
+          FocusManager.instance.primaryFocus?.unfocus();
+          context.push('/community/ascent/$ascentId');
+        },
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MasiSpacing.md,
+            vertical: MasiSpacing.sm,
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              _AscentGradeSwatch(band: entry.gradeBand),
+              const SizedBox(width: MasiSpacing.md),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Flexible(
+                          child: Text(
+                            title,
+                            style: textTheme.titleMedium,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        if (entry.gradeLabel != null) ...[
+                          const SizedBox(width: MasiSpacing.xs),
+                          Flexible(
+                            child: Text(
+                              entry.gradeLabel!,
+                              style: textTheme.titleSmall?.copyWith(
+                                color: colors.ink2,
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      entry.wallName,
+                      style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '${styleLabel(entry.style)} · '
+                      '${_formatAscentDate(entry.climbedAt)}',
+                      style: textTheme.titleSmall?.copyWith(
+                        color: colors.ink2,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Flexible(
+                          child: Row(
+                            key: Key(
+                              'community-ascent-row-$ascentId-likes',
+                            ),
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              MasiIcon('heart', size: 16, color: colors.ink3),
+                              const SizedBox(width: 2),
+                              Text(
+                                '$likeCount',
+                                style: textTheme.titleSmall?.copyWith(
+                                  color: colors.ink2,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: MasiSpacing.sm),
+                        Flexible(
+                          child: Row(
+                            key: Key(
+                              'community-ascent-row-$ascentId-comments',
+                            ),
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              MasiIcon(
+                                'comment',
+                                size: 16,
+                                color: colors.ink3,
+                              ),
+                              const SizedBox(width: 2),
+                              Text(
+                                '$commentCount',
+                                style: textTheme.titleSmall?.copyWith(
+                                  color: colors.ink2,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(width: MasiSpacing.sm),
+                        Expanded(
+                          child: Text(
+                            (climberName != null && climberName.isNotEmpty)
+                                ? 'by $climberName'
+                                : 'Unknown climber',
+                            style: textTheme.bodySmall?.copyWith(
+                              color: colors.ink3,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              MasiIcon('chevron_right', color: colors.ink3),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Small rounded grade-band swatch, colored via [_colorForGradeBand] —
+/// mirrors `logbook_screen.dart`'s private `_GradeSwatch` exactly (not
+/// reused directly: that one is library-private to `logbook_screen.dart`,
+/// and this file already carries its own [_colorForGradeBand] helper for
+/// [_GradePill]). A `null` [band] (no graded route resolved for this ascent)
+/// renders a neutral placeholder fill.
+class _AscentGradeSwatch extends StatelessWidget {
+  const _AscentGradeSwatch({required this.band});
+
+  final GradeBand? band;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final gradeBand = band;
+    final color = gradeBand == null
+        ? colors.surface2
+        : _colorForGradeBand(colors, gradeBand);
+    return Container(
+      width: 40,
+      height: 40,
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(MasiRadii.control),
+      ),
+    );
+  }
+}
+
+const List<String> _ascentMonthAbbreviations = [
+  'Jan',
+  'Feb',
+  'Mar',
+  'Apr',
+  'May',
+  'Jun',
+  'Jul',
+  'Aug',
+  'Sep',
+  'Oct',
+  'Nov',
+  'Dec',
+];
+
+/// Formats [date] as e.g. `'Jul 1, 2026'` — mirrors `logbook_screen.dart`'s
+/// private `_formatDate` exactly (not reused directly: that one is
+/// library-private). Converts to local time first (`toLocal()`) —
+/// `SharedAscentEntry.climbedAt` is stored as UTC, so extracting
+/// month/day/year directly off it would show the UTC calendar day, not the
+/// user's local day.
+String _formatAscentDate(DateTime date) {
+  final local = date.toLocal();
+  return '${_ascentMonthAbbreviations[local.month - 1]} ${local.day}, '
+      '${local.year}';
 }
 
 /// Compact "Yours" badge marking a feed row as one of the signed-in user's

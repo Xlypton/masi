@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/database_provider.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range.dart';
+import '../../logbook/application/ascents_providers.dart';
+import '../../logbook/data/ascents_repository.dart';
 import '../data/community_repository.dart';
 
 /// The [CommunityRepository] wired to the shared [appDatabaseProvider] /
@@ -21,6 +23,105 @@ final communityRepositoryProvider = Provider<CommunityRepository>(
 final sharedToposProvider = StreamProvider<List<SharedTopo>>(
   (ref) => ref.watch(communityRepositoryProvider).watchSharedTopos(),
 );
+
+/// One entry in the Community Feed's UNION of shared topos + shared ascent
+/// logs (#12 Wave 3, ST5) — the Feed used to render [SharedTopo]s only; it
+/// now also surfaces every opt-in-`shared` [SharedAscentEntry], since Wave 3
+/// removes the logbook's dedicated home-screen icon (see `feedItemsProvider`
+/// for where the "My logbook" entry point moved instead). A sealed class
+/// (Dart 3 pattern-matching, per this codebase's `Notifier`/modern-Dart
+/// conventions) rather than a plain enum-tagged record, so `_FeedView`'s
+/// `itemBuilder` can `switch` on the concrete variant exhaustively.
+sealed class FeedItem {
+  const FeedItem();
+
+  /// Millisecond sort key shared across both variants, used to interleave
+  /// them newest-first in [feedItemsProvider] — a topo's [SharedTopo.createdAt]
+  /// (when the wall it wraps has one; see that field's doc) or an ascent's
+  /// [SharedAscentEntry.climbedAt].
+  int get sortKeyMs;
+}
+
+/// A [FeedItem] wrapping a shared topo — renders as the existing `_FeedRow`
+/// in `community_screen.dart`, completely unchanged.
+class TopoFeedItem extends FeedItem {
+  const TopoFeedItem(this.topo);
+
+  final SharedTopo topo;
+
+  @override
+  int get sortKeyMs => topo.createdAt;
+
+  @override
+  bool operator ==(Object other) =>
+      other is TopoFeedItem && other.topo == topo;
+
+  @override
+  int get hashCode => topo.hashCode;
+}
+
+/// A [FeedItem] wrapping a shared ascent-log entry — renders as
+/// `community_screen.dart`'s new `_AscentFeedRow`.
+class AscentFeedItem extends FeedItem {
+  const AscentFeedItem(this.entry);
+
+  final SharedAscentEntry entry;
+
+  @override
+  int get sortKeyMs => entry.climbedAt.millisecondsSinceEpoch;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AscentFeedItem && other.entry == entry;
+
+  @override
+  int get hashCode => entry.hashCode;
+}
+
+/// The Community Feed's combined data source (#12 Wave 3, ST5): a UNION of
+/// [sharedToposProvider] + [sharedAscentsProvider], merged into one
+/// newest-first [FeedItem] list by [FeedItem.sortKeyMs].
+///
+/// A plain (non-stream) [Provider] rather than a `StreamProvider` combining
+/// two streams manually (e.g. via `Rx.combineLatest2`, which this project
+/// doesn't depend on): Riverpod already re-runs this provider's body
+/// whenever either upstream `ref.watch` dependency emits a new value, so a
+/// plain synchronous combinator gets the same "re-emits on either source
+/// updating" behavior for free. Kept NON-`autoDispose` to match
+/// [sharedToposProvider]/[sharedAscentsProvider] (both plain, app-lifetime
+/// `StreamProvider`s) — the Feed screen watches this for as long as it's
+/// mounted, same as before.
+///
+/// Error/loading propagate from whichever upstream source hit them first
+/// (checked topos-then-ascents, an arbitrary but deterministic order) so
+/// `CommunityFeedScreen`'s existing `asyncFeedItems.when(...)` friendly
+/// error/loading states keep working unchanged — see
+/// `community_screen_test.dart`'s "UX: friendly themed error state" group,
+/// which fails `sharedToposProvider` specifically and expects exactly this.
+final feedItemsProvider = Provider<AsyncValue<List<FeedItem>>>((ref) {
+  final toposAsync = ref.watch(sharedToposProvider);
+  final ascentsAsync = ref.watch(sharedAscentsProvider);
+
+  if (toposAsync.hasError) {
+    return AsyncValue.error(toposAsync.error!, toposAsync.stackTrace!);
+  }
+  if (ascentsAsync.hasError) {
+    return AsyncValue.error(ascentsAsync.error!, ascentsAsync.stackTrace!);
+  }
+
+  final topos = toposAsync.asData?.value;
+  final ascents = ascentsAsync.asData?.value;
+  if (topos == null || ascents == null) {
+    return const AsyncValue.loading();
+  }
+
+  final items = <FeedItem>[
+    for (final topo in topos) TopoFeedItem(topo),
+    for (final ascent in ascents) AscentFeedItem(ascent),
+  ]..sort((a, b) => b.sortKeyMs.compareTo(a.sortKeyMs));
+
+  return AsyncValue.data(items);
+});
 
 /// The Community feed/map's grade-range + style filter, held independently
 /// of the (Dart-side, in-widget) name search — see `CommunityScreen`'s

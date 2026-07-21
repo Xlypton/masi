@@ -23,6 +23,7 @@ class SharedTopo {
     this.routeGradeKeys = const [],
     this.routeStyles = const {},
     this.routeStyleTags = const {},
+    this.createdAt = 0,
   });
 
   final String wallId;
@@ -83,6 +84,17 @@ class SharedTopo {
   /// ANY of its route style tags is selected.
   final Set<String> routeStyleTags;
 
+  /// The wall's `created_at` ms-epoch timestamp — the same column
+  /// [CommunityRepository.watchSharedTopos] already orders by (`ORDER BY
+  /// w.created_at DESC`), just also projected here so a caller merging this
+  /// feed with another newest-first source (e.g. the Community Feed's
+  /// [FeedItem] union with [SharedAscentEntry]'s `climbedAt`) has a real
+  /// timestamp to sort by instead of relying on this list's own order.
+  /// Defaults to `0` for the few tests that construct a [SharedTopo]
+  /// directly without a real wall row — those never exercise cross-source
+  /// sorting.
+  final int createdAt;
+
   /// Whether this topo has known coordinates and can be placed on the
   /// Community map. The map view must omit — not crash on — any topo where
   /// this is `false`.
@@ -104,7 +116,8 @@ class SharedTopo {
       other.longitude == longitude &&
       _listEquals(other.routeGradeKeys, routeGradeKeys) &&
       _setEquals(other.routeStyles, routeStyles) &&
-      _setEquals(other.routeStyleTags, routeStyleTags);
+      _setEquals(other.routeStyleTags, routeStyleTags) &&
+      other.createdAt == createdAt;
 
   @override
   int get hashCode => Object.hash(
@@ -121,6 +134,7 @@ class SharedTopo {
     Object.hashAll(routeGradeKeys),
     Object.hashAllUnordered(routeStyles),
     Object.hashAllUnordered(routeStyleTags),
+    createdAt,
   );
 
   @override
@@ -130,7 +144,8 @@ class SharedTopo {
       'routeCount: $routeCount, likeCount: $likeCount, '
       'commentCount: $commentCount, ownerId: $ownerId, latitude: $latitude, '
       'longitude: $longitude, routeGradeKeys: $routeGradeKeys, '
-      'routeStyles: $routeStyles, routeStyleTags: $routeStyleTags)';
+      'routeStyles: $routeStyles, routeStyleTags: $routeStyleTags, '
+      'createdAt: $createdAt)';
 }
 
 /// Order-sensitive element-wise equality for [SharedTopo.routeGradeKeys]
@@ -284,6 +299,7 @@ class CommunityRepository {
         w.owner_id AS owner_id,
         w.latitude AS latitude,
         w.longitude AS longitude,
+        w.created_at AS created_at,
         (SELECT p.local_path FROM photos p
            WHERE p.wall_id = w.id AND p.kind = 'original' AND p.deleted_at IS NULL
            ORDER BY p.is_primary DESC, p.created_at DESC, p.id DESC LIMIT 1) AS thumbnail_path,
@@ -371,6 +387,7 @@ class CommunityRepository {
                 routeStyleTags: _parseStyleTags(
                   row.readNullable<String>('route_style_tags_json'),
                 ),
+                createdAt: row.read<int>('created_at'),
               ),
           ];
         });
