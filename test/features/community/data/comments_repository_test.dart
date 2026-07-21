@@ -35,6 +35,62 @@ void main() {
     return wall.id;
   }
 
+  /// Seeds a full Wall->Photo->Route->Ascent chain (every table in it is a
+  /// Drift FK, and this `AppDatabase` enforces `PRAGMA foreign_keys = ON`)
+  /// and returns the Ascent row's id, so ascent-targeted comment tests have
+  /// a real row `Comments.ascentId` can point at.
+  Future<String> seedAscent(String name) async {
+    final wallId = await seedWall(name);
+    const now = 1000;
+    final photoId = 'photo-for-$name';
+    await db
+        .into(db.photos)
+        .insert(
+          PhotosCompanion.insert(
+            id: photoId,
+            createdAt: now,
+            updatedAt: now,
+            wallId: wallId,
+            localPath: '/tmp/$name.jpg',
+            kind: 'original',
+            width: 100,
+            height: 100,
+          ),
+        );
+    final routeId = 'route-for-$name';
+    await db
+        .into(db.routes)
+        .insert(
+          RoutesCompanion.insert(
+            id: routeId,
+            createdAt: now,
+            updatedAt: now,
+            wallId: wallId,
+            photoId: photoId,
+            number: 1,
+            colorIndex: 0,
+            pointsJson: '[]',
+            symbolsJson: '[]',
+            sortOrder: 0,
+          ),
+        );
+    final ascentId = 'ascent-for-$name';
+    await db
+        .into(db.ascents)
+        .insert(
+          AscentsCompanion.insert(
+            id: ascentId,
+            createdAt: now,
+            updatedAt: now,
+            routeId: routeId,
+            wallId: wallId,
+            climbedAt: now,
+            style: 'onsight',
+          ),
+        );
+    return ascentId;
+  }
+
   group('B1a: addComment', () {
     test(
       'persists a row with the given wallId+body+authorName, a non-null id, '
@@ -145,6 +201,100 @@ void main() {
         await repo.softDeleteComment(comment.id);
 
         expect(await repo.commentsForWall(wallId), isEmpty);
+
+        final rawRow = await (db.select(
+          db.comments,
+        )..where((t) => t.id.equals(comment.id))).getSingle();
+        expect(rawRow.deletedAt, isNotNull);
+        expect(rawRow.dirty, isTrue);
+      },
+    );
+  });
+
+  group('Feature #12: ascent-targeted comments', () {
+    test(
+      'addAscentComment persists a row with ascentId set, wallId NULL, and '
+      'the given body/authorName/ownerId, and it round-trips through '
+      'commentsForAscent WITHOUT crashing (the wallId! force-unwrap '
+      'regression this feature introduced)',
+      () async {
+        final ascentId = await seedAscent('Ascent Wall');
+
+        final comment = await repo.addAscentComment(
+          ascentId: ascentId,
+          body: 'Nice send!',
+          authorName: 'Alex',
+        );
+
+        expect(comment.id, isNotEmpty);
+        expect(comment.ascentId, ascentId);
+        expect(comment.wallId, isNull);
+        expect(comment.body, 'Nice send!');
+        expect(comment.authorName, 'Alex');
+        expect(comment.ownerId, 'user-1');
+
+        final rows = await repo.commentsForAscent(ascentId);
+        expect(rows, hasLength(1));
+        expect(rows.single.id, comment.id);
+        expect(rows.single.ascentId, ascentId);
+        expect(rows.single.wallId, isNull);
+
+        final rawRow = await (db.select(
+          db.comments,
+        )..where((t) => t.id.equals(comment.id))).getSingle();
+        expect(rawRow.wallId, isNull);
+        expect(rawRow.ascentId, ascentId);
+      },
+    );
+
+    test(
+      'commentsForAscent/watchCommentsForAscent are scoped INDEPENDENTLY '
+      'of wall comments — a wall comment on an unrelated wall never leaks '
+      'into an ascent thread and vice versa',
+      () async {
+        final ascentId = await seedAscent('Ascent Wall 2');
+        final otherWallId = await seedWall('Other Wall');
+
+        await repo.addComment(wallId: otherWallId, body: 'Wall comment');
+        expect(await repo.commentsForAscent(ascentId), isEmpty);
+
+        final emissions = <int>[];
+        final sub = repo
+            .watchCommentsForAscent(ascentId)
+            .listen((rows) => emissions.add(rows.length));
+        await pumpEventQueue();
+
+        await repo.addAscentComment(ascentId: ascentId, body: 'Ascent one');
+        await pumpEventQueue();
+
+        // The ascent thread must not include the earlier wall comment.
+        final ascentRows = await repo.commentsForAscent(ascentId);
+        expect(ascentRows, hasLength(1));
+        expect(ascentRows.single.body, 'Ascent one');
+
+        // And the wall thread is unaffected by the ascent comment.
+        final wallRows = await repo.commentsForWall(otherWallId);
+        expect(wallRows, hasLength(1));
+        expect(wallRows.single.body, 'Wall comment');
+
+        await sub.cancel();
+        expect(emissions.last, 1);
+      },
+    );
+
+    test(
+      'softDeleteComment works for an ascent-attached comment: it '
+      'disappears from commentsForAscent but the tombstone row remains',
+      () async {
+        final ascentId = await seedAscent('Ascent Wall 3');
+        final comment = await repo.addAscentComment(
+          ascentId: ascentId,
+          body: 'Body',
+        );
+
+        await repo.softDeleteComment(comment.id);
+
+        expect(await repo.commentsForAscent(ascentId), isEmpty);
 
         final rawRow = await (db.select(
           db.comments,

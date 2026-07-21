@@ -50,30 +50,62 @@ class LikesRepository {
   /// both observe "no existing row" and both insert — the second call's
   /// transaction blocks until the first commits, and then sees (and flips)
   /// the row the first one created, rather than inserting a duplicate.
-  Future<bool> toggleLike(String wallId) async {
+  Future<bool> toggleLike(String wallId) {
+    return _toggle(
+      match: (t) => t.wallId.equals(wallId) & t.ascentId.isNull(),
+      buildInsert: (uid, now) => db.LikesCompanion.insert(
+        id: _uuid.v4(),
+        createdAt: now,
+        updatedAt: now,
+        wallId: Value(wallId),
+        ownerId: Value(uid),
+        dirty: const Value(true),
+      ),
+    );
+  }
+
+  /// Ascent-targeted mirror of [toggleLike]: toggles the current owner's
+  /// like on the ascent-log row [ascentId] (Feature #12 — public opt-in
+  /// ascent logs can be liked like shared topos), writing `ascentId` set and
+  /// `wallId` left `NULL` so ascent-likes never mix with wall-likes for the
+  /// same owner. Same one-active-row-per-(owner, target) invariant and
+  /// atomicity guarantee as [toggleLike] — see its doc for details.
+  Future<bool> toggleAscentLike(String ascentId) {
+    return _toggle(
+      match: (t) => t.ascentId.equals(ascentId) & t.wallId.isNull(),
+      buildInsert: (uid, now) => db.LikesCompanion.insert(
+        id: _uuid.v4(),
+        createdAt: now,
+        updatedAt: now,
+        ascentId: Value(ascentId),
+        ownerId: Value(uid),
+        dirty: const Value(true),
+      ),
+    );
+  }
+
+  /// Shared toggle machinery for [toggleLike]/[toggleAscentLike]: looks up
+  /// the current owner's (at most one, by construction) existing row
+  /// matching [match] — active or tombstoned — and flips its `deletedAt`,
+  /// or inserts a fresh row via [buildInsert] if none exists yet. Wrapped in
+  /// a single `_db.transaction` for the same race-atomicity reason
+  /// documented on [toggleLike].
+  Future<bool> _toggle({
+    required Expression<bool> Function(db.$LikesTable t) match,
+    required db.LikesCompanion Function(String? uid, int now) buildInsert,
+  }) async {
     final uid = currentUid();
     final now = nowMs();
 
     return _db.transaction(() async {
       final existing =
           await (_db.select(_db.likes)
-                ..where((t) => _ownerMatch(t, uid) & t.wallId.equals(wallId))
+                ..where((t) => _ownerMatch(t, uid) & match(t))
                 ..limit(1))
               .getSingleOrNull();
 
       if (existing == null) {
-        await _db
-            .into(_db.likes)
-            .insert(
-              db.LikesCompanion.insert(
-                id: _uuid.v4(),
-                createdAt: now,
-                updatedAt: now,
-                wallId: Value(wallId),
-                ownerId: Value(uid),
-                dirty: const Value(true),
-              ),
-            );
+        await _db.into(_db.likes).insert(buildInsert(uid, now));
         return true;
       }
 
@@ -91,26 +123,46 @@ class LikesRepository {
   }
 
   /// Count of ACTIVE likes on [wallId], across all owners.
-  Future<int> likeCountForWall(String wallId) async {
+  Future<int> likeCountForWall(String wallId) {
+    return _count((t) => t.wallId.equals(wallId) & t.ascentId.isNull());
+  }
+
+  /// Count of ACTIVE likes on the ascent log [ascentId], across all owners.
+  /// Ascent-targeted mirror of [likeCountForWall] — see class doc.
+  Future<int> likeCountForAscent(String ascentId) {
+    return _count((t) => t.ascentId.equals(ascentId) & t.wallId.isNull());
+  }
+
+  Future<int> _count(Expression<bool> Function(db.$LikesTable t) where) async {
     final countExp = _db.likes.id.count();
     final query = _db.selectOnly(_db.likes)
       ..addColumns([countExp])
-      ..where(_db.likes.wallId.equals(wallId) & _db.likes.deletedAt.isNull());
+      ..where(where(_db.likes) & _db.likes.deletedAt.isNull());
     final row = await query.getSingle();
     return row.read(countExp) ?? 0;
   }
 
   /// Whether the current owner (`currentUid()`, or this device if signed
   /// out) has an ACTIVE like on [wallId].
-  Future<bool> hasLiked(String wallId) async {
+  Future<bool> hasLiked(String wallId) {
+    return _hasActive((t) => t.wallId.equals(wallId) & t.ascentId.isNull());
+  }
+
+  /// Whether the current owner (`currentUid()`, or this device if signed
+  /// out) has an ACTIVE like on the ascent log [ascentId]. Ascent-targeted
+  /// mirror of [hasLiked] — see class doc.
+  Future<bool> hasLikedAscent(String ascentId) {
+    return _hasActive((t) => t.ascentId.equals(ascentId) & t.wallId.isNull());
+  }
+
+  Future<bool> _hasActive(
+    Expression<bool> Function(db.$LikesTable t) match,
+  ) async {
     final uid = currentUid();
     final row =
         await (_db.select(_db.likes)
               ..where(
-                (t) =>
-                    _ownerMatch(t, uid) &
-                    t.wallId.equals(wallId) &
-                    t.deletedAt.isNull(),
+                (t) => _ownerMatch(t, uid) & match(t) & t.deletedAt.isNull(),
               )
               ..limit(1))
             .getSingleOrNull();
@@ -119,10 +171,22 @@ class LikesRepository {
 
   /// Live, auto-updating count of ACTIVE likes on [wallId].
   Stream<int> watchLikeCountForWall(String wallId) {
+    return _watchCount((t) => t.wallId.equals(wallId) & t.ascentId.isNull());
+  }
+
+  /// Live, auto-updating count of ACTIVE likes on the ascent log [ascentId].
+  /// Ascent-targeted mirror of [watchLikeCountForWall] — see class doc.
+  Stream<int> watchLikeCountForAscent(String ascentId) {
+    return _watchCount(
+      (t) => t.ascentId.equals(ascentId) & t.wallId.isNull(),
+    );
+  }
+
+  Stream<int> _watchCount(Expression<bool> Function(db.$LikesTable t) where) {
     final countExp = _db.likes.id.count();
     final query = _db.selectOnly(_db.likes)
       ..addColumns([countExp])
-      ..where(_db.likes.wallId.equals(wallId) & _db.likes.deletedAt.isNull());
+      ..where(where(_db.likes) & _db.likes.deletedAt.isNull());
     return query.watch().map((rows) => rows.first.read(countExp) ?? 0);
   }
 

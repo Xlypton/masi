@@ -82,6 +82,34 @@ final commentsForWallProvider = StreamProvider.family<List<Comment>, String>(
       ref.watch(commentsRepositoryProvider).watchCommentsForWall(wallId),
 );
 
+/// Live count of ACTIVE likes on the ascent log [ascentId] — ascent-targeted
+/// mirror of [likeCountForWallProvider] (Feature #12: public opt-in ascent
+/// logs can be liked like shared topos), wrapping
+/// [LikesRepository.watchLikeCountForAscent].
+final likeCountForAscentProvider = StreamProvider.family<int, String>(
+  (ref, ascentId) =>
+      ref.watch(likesRepositoryProvider).watchLikeCountForAscent(ascentId),
+);
+
+/// Whether the current owner (or this device, if signed out) has an ACTIVE
+/// like on the ascent log [ascentId] right now — ascent-targeted mirror of
+/// [hasLikedWallProvider]. A one-shot read, same invalidate-after-toggle
+/// pattern as [hasLikedWallProvider] — see its doc.
+final hasLikedAscentProvider = FutureProvider.family<bool, String>(
+  (ref, ascentId) =>
+      ref.watch(likesRepositoryProvider).hasLikedAscent(ascentId),
+);
+
+/// Live list of non-deleted comments on the ascent log [ascentId] —
+/// ascent-targeted mirror of [commentsForWallProvider], wrapping
+/// [CommentsRepository.watchCommentsForAscent].
+final commentsForAscentProvider =
+    StreamProvider.family<List<Comment>, String>(
+      (ref, ascentId) => ref
+          .watch(commentsRepositoryProvider)
+          .watchCommentsForAscent(ascentId),
+    );
+
 /// Display name derived from the signed-in user's email (the local part,
 /// before '@'), or `'Anonymous'` when signed out / no email is known.
 ///

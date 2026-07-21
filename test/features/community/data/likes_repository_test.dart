@@ -47,6 +47,63 @@ void main() {
         );
   }
 
+  /// Seeds a full Area->Sector->Wall->Photo->Route->Ascent chain (every
+  /// table in it is a Drift FK, and this `AppDatabase` enforces
+  /// `PRAGMA foreign_keys = ON`) and returns the Ascent row's id, so
+  /// ascent-targeted like tests have a real row `Likes.ascentId` can point
+  /// at.
+  Future<String> seedAscent(String forWallId) async {
+    await seedWall(forWallId);
+    const now = 1000;
+    final photoId = 'photo-for-$forWallId';
+    await db
+        .into(db.photos)
+        .insert(
+          PhotosCompanion.insert(
+            id: photoId,
+            createdAt: now,
+            updatedAt: now,
+            wallId: forWallId,
+            localPath: '/tmp/$forWallId.jpg',
+            kind: 'original',
+            width: 100,
+            height: 100,
+          ),
+        );
+    final routeId = 'route-for-$forWallId';
+    await db
+        .into(db.routes)
+        .insert(
+          RoutesCompanion.insert(
+            id: routeId,
+            createdAt: now,
+            updatedAt: now,
+            wallId: forWallId,
+            photoId: photoId,
+            number: 1,
+            colorIndex: 0,
+            pointsJson: '[]',
+            symbolsJson: '[]',
+            sortOrder: 0,
+          ),
+        );
+    final ascentId = 'ascent-for-$forWallId';
+    await db
+        .into(db.ascents)
+        .insert(
+          AscentsCompanion.insert(
+            id: ascentId,
+            createdAt: now,
+            updatedAt: now,
+            routeId: routeId,
+            wallId: forWallId,
+            climbedAt: now,
+            style: 'onsight',
+          ),
+        );
+    return ascentId;
+  }
+
   setUp(() async {
     db = AppDatabase(NativeDatabase.memory());
     repo = LikesRepository(db, nowMs: () => 1000);
@@ -380,6 +437,101 @@ void main() {
         expect(await u1.hasLiked(wallId), isTrue);
         // repo (default currentUid, signed-out/null) is a distinct owner.
         expect(await repo.hasLiked(wallId), isFalse);
+      },
+    );
+  });
+
+  group('Feature #12: ascent-targeted likes', () {
+    test(
+      'toggleAscentLike toggles like <-> unlike (like -> unlike -> like '
+      'leaves exactly one active row) mirroring toggleLike',
+      () async {
+        final ascentId = await seedAscent('wall-for-ascent-1');
+        final owned = LikesRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+        );
+
+        final liked1 = await owned.toggleAscentLike(ascentId);
+        final unliked = await owned.toggleAscentLike(ascentId);
+        final liked2 = await owned.toggleAscentLike(ascentId);
+
+        expect(liked1, isTrue);
+        expect(unliked, isFalse);
+        expect(liked2, isTrue);
+
+        final allRows = await db.select(db.likes).get();
+        final activeRows = allRows.where((r) => r.deletedAt == null).toList();
+        expect(allRows, hasLength(1));
+        expect(activeRows, hasLength(1));
+        expect(activeRows.single.ascentId, ascentId);
+        expect(activeRows.single.wallId, isNull);
+      },
+    );
+
+    test(
+      'likeCountForAscent/hasLikedAscent/watchLikeCountForAscent reflect '
+      'ascent-targeted toggles, INDEPENDENT of a wall-like by the same '
+      'owner on a different wall (no cross-contamination between the two '
+      'kinds of target)',
+      () async {
+        final ascentId = await seedAscent('wall-for-ascent-2');
+        final owned = LikesRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+        );
+
+        // Seed a WALL like by the same owner first — this must not leak
+        // into the ascent-scoped counters below.
+        await owned.toggleLike(wallId);
+        expect(await owned.likeCountForAscent(ascentId), 0);
+        expect(await owned.hasLikedAscent(ascentId), isFalse);
+        // And the wall side must still read correctly too.
+        expect(await owned.likeCountForWall(wallId), 1);
+        expect(await owned.hasLiked(wallId), isTrue);
+
+        final counts = <int>[];
+        final sub = owned.watchLikeCountForAscent(ascentId).listen(counts.add);
+        await pumpEventQueue();
+
+        await owned.toggleAscentLike(ascentId);
+        await pumpEventQueue();
+
+        expect(await owned.likeCountForAscent(ascentId), 1);
+        expect(await owned.hasLikedAscent(ascentId), isTrue);
+        // The wall-side counters are unaffected by the ascent-like.
+        expect(await owned.likeCountForWall(wallId), 1);
+
+        await owned.toggleAscentLike(ascentId); // unlike
+        await pumpEventQueue();
+        expect(await owned.likeCountForAscent(ascentId), 0);
+        expect(await owned.hasLikedAscent(ascentId), isFalse);
+
+        await sub.cancel();
+        expect(counts, [0, 1, 0]);
+      },
+    );
+
+    test(
+      'a like/wall row with wallId NULL round-trips through raw reads '
+      'without crashing (the ascentId FK / nullable-wallId regression '
+      'this feature introduced)',
+      () async {
+        final ascentId = await seedAscent('wall-for-ascent-3');
+        final owned = LikesRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+        );
+        await owned.toggleAscentLike(ascentId);
+
+        final row = await (db.select(
+          db.likes,
+        )..where((t) => t.ascentId.equals(ascentId))).getSingle();
+        expect(row.wallId, isNull);
+        expect(row.ascentId, ascentId);
       },
     );
   });
