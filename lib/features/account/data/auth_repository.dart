@@ -85,6 +85,30 @@ abstract class AuthRepository {
   /// sent to an unapproved address regardless of the toggle.
   Future<void> sendMagicLink(String email);
 
+  /// Verifies the numeric email OTP [code] Supabase sent alongside the magic
+  /// link from [sendMagicLink] (`mailer_otp_length=8`, 1h expiry) and, on
+  /// success, establishes the session in-context — no browser/deep-link
+  /// round-trip required.
+  ///
+  /// This is the **iOS-PWA-safe sign-in path** (bug #58): once the app is
+  /// added to the Home Screen, the installed PWA and Safari are separate
+  /// storage contexts, so tapping the emailed magic link opens Safari (not
+  /// the installed app) and the resulting session never reaches the PWA.
+  /// Entering the code here instead completes auth entirely within the
+  /// running app — [authStateChanges] emits signed-in the moment this
+  /// resolves, exactly as it would after a magic-link tap. Additive
+  /// alternative to the link, not a replacement: the link keeps working
+  /// as-is (e.g. on desktop).
+  ///
+  /// [code] is trimmed/normalized (internal whitespace stripped) before
+  /// being sent, so a copy-paste with stray spaces still verifies.
+  ///
+  /// Inherits [sendMagicLink]'s approved-login guarantee for free: an
+  /// unapproved email was never issued a code (the `/otp` send throws first,
+  /// per `shouldCreateUser: false`), so there is nothing valid to verify
+  /// here for that address and this simply fails like any wrong code would.
+  Future<void> verifyEmailOtp(String email, String code);
+
   /// Signs out the current session, if any.
   Future<void> signOut();
 }
@@ -165,6 +189,21 @@ class SupabaseAuthRepository implements AuthRepository {
       email: email,
       emailRedirectTo: resolveMagicLinkRedirect(),
       shouldCreateUser: false,
+    );
+  }
+
+  @override
+  Future<void> verifyEmailOtp(String email, String code) {
+    // `OtpType.email` is the numeric-code counterpart sent by
+    // `signInWithOtp`'s `/otp` email flow — distinct from
+    // `OtpType.magiclink`, which verifies the token embedded in the link URL
+    // instead. Internal whitespace is stripped (not just trimmed) so a
+    // code copy-pasted with a stray space (e.g. "1234 5678") still matches.
+    final normalized = code.replaceAll(RegExp(r'\s+'), '');
+    return _client.auth.verifyOTP(
+      email: email,
+      token: normalized,
+      type: OtpType.email,
     );
   }
 

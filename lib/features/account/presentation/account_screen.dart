@@ -52,9 +52,20 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   bool _notApproved = false;
   String? _error;
 
+  /// Additive OTP-code entry (bug #58, iOS-PWA-safe sign-in path) — a
+  /// second `TextEditingController` alongside [_emailController] rather than
+  /// re-parsing the email field, mirroring how [_nameController] in
+  /// [_SignedInBodyState] is its own controller distinct from the account
+  /// email. Only ever shown/used once [_linkSent] is true (see
+  /// [_SignedOutBody]).
+  final _otpController = TextEditingController();
+  bool _verifying = false;
+  String? _otpError;
+
   @override
   void dispose() {
     _emailController.dispose();
+    _otpController.dispose();
     super.dispose();
   }
 
@@ -71,6 +82,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
         _linkSent = false;
         _notApproved = false;
         _error = 'Enter a valid email address.';
+        _otpError = null;
       });
       return;
     }
@@ -89,6 +101,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       _linkSent = false;
       _notApproved = false;
       _error = null;
+      _otpError = null;
     });
     try {
       await ref.read(authRepositoryProvider).sendMagicLink(email);
@@ -111,6 +124,43 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     } finally {
       if (mounted) {
         setState(() => _sending = false);
+      }
+    }
+  }
+
+  /// The iOS-PWA-safe alternative to tapping the magic link (bug #58):
+  /// verifies the 8-digit code the same email carries, via
+  /// [AuthRepository.verifyEmailOtp]. Only reachable once [_linkSent] is
+  /// true (see [_SignedOutBody] — the OTP section is gated on it), so
+  /// [_emailController] already holds the address the code was sent to.
+  ///
+  /// On success, deliberately does NOT navigate: [authStateProvider]'s
+  /// stream (driven by [AuthRepository.authStateChanges]) emits signed-in
+  /// on its own once the session is established, and [build]'s
+  /// `asyncAuth.when` swaps to [_SignedInBody] exactly as it does for a
+  /// tapped magic link — a second, redundant transition here would race it.
+  Future<void> _handleVerifyOtp() async {
+    final email = _emailController.text.trim();
+    final code = _otpController.text.trim();
+    if (email.isEmpty || code.isEmpty || _verifying) return;
+
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    setState(() {
+      _verifying = true;
+      _otpError = null;
+    });
+    try {
+      await ref.read(authRepositoryProvider).verifyEmailOtp(email, code);
+      // Success: nothing else to do here — see doc comment above.
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _otpError = "That code didn't work — check it or request a new one.";
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _verifying = false);
       }
     }
   }
@@ -172,6 +222,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                   notApproved: _notApproved,
                   error: _error,
                   onSend: _handleSendLink,
+                  otpController: _otpController,
+                  verifying: _verifying,
+                  otpError: _otpError,
+                  onVerifyOtp: _handleVerifyOtp,
                 ),
           loading: () => const Center(child: CircularProgressIndicator()),
           // A permanent, value-less AsyncError here (e.g. main()'s
@@ -190,6 +244,10 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
             notApproved: _notApproved,
             error: _error,
             onSend: _handleSendLink,
+            otpController: _otpController,
+            verifying: _verifying,
+            otpError: _otpError,
+            onVerifyOtp: _handleVerifyOtp,
           ),
         ),
       ),
@@ -209,6 +267,10 @@ class _SignedOutBody extends StatelessWidget {
     required this.notApproved,
     required this.error,
     required this.onSend,
+    required this.otpController,
+    required this.verifying,
+    required this.otpError,
+    required this.onVerifyOtp,
   });
 
   final TextEditingController controller;
@@ -222,6 +284,21 @@ class _SignedOutBody extends StatelessWidget {
   final bool notApproved;
   final String? error;
   final VoidCallback onSend;
+
+  /// The additive OTP-code entry (bug #58) — holds the 8-digit code typed
+  /// from the emailed code, distinct from [controller]'s email address.
+  final TextEditingController otpController;
+
+  /// Whether an [onVerifyOtp] call is in flight — disables the submit
+  /// button, mirroring [sending]/[onSend].
+  final bool verifying;
+
+  /// Set when the last [onVerifyOtp] attempt failed (e.g. a wrong/expired
+  /// code) — renders the `account-otp-error` message. Reset at the start of
+  /// every verify attempt and whenever a new link/code is sent, mirroring
+  /// [error]'s reset discipline.
+  final String? otpError;
+  final VoidCallback onVerifyOtp;
 
   @override
   Widget build(BuildContext context) {
@@ -287,6 +364,56 @@ class _SignedOutBody extends StatelessWidget {
                   style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
                   textAlign: TextAlign.center,
                 ),
+                // Additive iOS-PWA-safe alternative (bug #58): entering the
+                // emailed numeric code completes sign-in without leaving the
+                // installed app, unlike tapping the link (which opens
+                // Safari — a separate storage jar from the installed PWA).
+                // Only shown once a link/code has actually been requested.
+                const SizedBox(height: MasiSpacing.lg),
+                Text(
+                  'Opened this in an installed app? Enter the 8-digit code '
+                  'from the email instead:',
+                  style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: MasiSpacing.sm),
+                TextField(
+                  key: const Key('account-otp-field'),
+                  controller: otpController,
+                  keyboardType: TextInputType.number,
+                  autocorrect: false,
+                  decoration: const InputDecoration(hintText: '8-digit code'),
+                  onSubmitted: (_) => onVerifyOtp(),
+                ),
+                const SizedBox(height: MasiSpacing.sm),
+                ElevatedButton(
+                  key: const Key('account-otp-submit'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.accent,
+                    foregroundColor: colors.onAccent,
+                    disabledBackgroundColor: colors.accent,
+                    disabledForegroundColor: colors.onAccent.withValues(
+                      alpha: 0.7,
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                  ),
+                  onPressed: verifying ? null : onVerifyOtp,
+                  child: const Text('Sign in'),
+                ),
+                if (otpError != null) ...[
+                  const SizedBox(height: MasiSpacing.md),
+                  Text(
+                    otpError!,
+                    key: const Key('account-otp-error'),
+                    style: textTheme.bodyMedium?.copyWith(
+                      color: colors.gradeHard,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ],
               if (notApproved) ...[
                 const SizedBox(height: MasiSpacing.md),

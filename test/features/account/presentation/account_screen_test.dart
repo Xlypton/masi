@@ -73,6 +73,14 @@ class FakeAuthRepository implements AuthRepository {
   /// the MAJOR-1 stale-"link sent"-plus-error regression test below).
   Object? sendMagicLinkError;
 
+  /// Every `(email, code)` pair passed to [verifyEmailOtp], in call order —
+  /// the bug #58 OTP-code counterpart to [sendMagicLinkCalls].
+  final List<(String, String)> verifyEmailOtpCalls = [];
+
+  /// When non-null, the next call(s) to [verifyEmailOtp] throw this instead
+  /// of succeeding — lets a test simulate a wrong/expired code.
+  Object? verifyEmailOtpError;
+
   @override
   Stream<AuthSessionState> authStateChanges() => _controller.stream;
 
@@ -80,6 +88,15 @@ class FakeAuthRepository implements AuthRepository {
   Future<void> sendMagicLink(String email) async {
     sendMagicLinkCalls.add(email);
     final error = sendMagicLinkError;
+    if (error != null) {
+      throw error;
+    }
+  }
+
+  @override
+  Future<void> verifyEmailOtp(String email, String code) async {
+    verifyEmailOtpCalls.add((email, code));
+    final error = verifyEmailOtpError;
     if (error != null) {
       throw error;
     }
@@ -273,6 +290,121 @@ void main() {
               'must be cleared once a new send attempt fails',
         );
         expect(find.textContaining('Could not send the link'), findsOneWidget);
+      },
+    );
+  });
+
+  group('#58: OTP-code entry (iOS-PWA-safe alternative to the magic link)', () {
+    testWidgets(
+      'the OTP field/submit are absent before a link has been sent, and '
+      'appear once account-link-sent shows',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('account-otp-field')), findsNothing);
+        expect(find.byKey(const Key('account-otp-submit')), findsNothing);
+
+        await tester.enterText(
+          find.byKey(const Key('account-email-field')),
+          'climber@example.com',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('account-send-link')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('account-link-sent')), findsOneWidget);
+        expect(find.byKey(const Key('account-otp-field')), findsOneWidget);
+        expect(find.byKey(const Key('account-otp-submit')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'entering a code and tapping submit calls verifyEmailOtp with the '
+      'email and code',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('account-email-field')),
+          'climber@example.com',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('account-send-link')));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('account-otp-field')),
+          '12345678',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('account-otp-submit')));
+        await tester.pumpAndSettle();
+
+        expect(fakeRepo.verifyEmailOtpCalls, [
+          ('climber@example.com', '12345678'),
+        ]);
+      },
+    );
+
+    testWidgets(
+      'a throwing verifyEmailOtp shows account-otp-error and does NOT '
+      'flip the screen to signed-in',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        fakeRepo.verifyEmailOtpError = Exception('invalid token');
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('account-email-field')),
+          'climber@example.com',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('account-send-link')));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('account-otp-field')),
+          '00000000',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('account-otp-submit')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('account-otp-error')), findsOneWidget);
+        // No false success: still signed-out, never flipped to the
+        // signed-in body.
+        expect(find.byKey(const Key('account-email-label')), findsNothing);
+        expect(find.byKey(const Key('account-sign-out')), findsNothing);
+        expect(find.byKey(const Key('account-otp-field')), findsOneWidget);
       },
     );
   });

@@ -250,6 +250,9 @@ class FakeAuthRepository implements AuthRepository {
   Future<void> sendMagicLink(String email) async {}
 
   @override
+  Future<void> verifyEmailOtp(String email, String code) async {}
+
+  @override
   Future<void> signOut() async {}
 }
 
