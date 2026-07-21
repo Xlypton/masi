@@ -69,7 +69,7 @@ class LikesRepository {
                 id: _uuid.v4(),
                 createdAt: now,
                 updatedAt: now,
-                wallId: wallId,
+                wallId: Value(wallId),
                 ownerId: Value(uid),
                 dirty: const Value(true),
               ),

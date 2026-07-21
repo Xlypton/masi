@@ -271,7 +271,7 @@ Future<void> _seedLike(AppDatabase db, {required String id, required String wall
           id: id,
           createdAt: 1000,
           updatedAt: 1000,
-          wallId: wallId,
+          wallId: Value(wallId),
         ),
       );
 }
@@ -289,7 +289,7 @@ Future<void> _seedComment(
           id: id,
           createdAt: 1000,
           updatedAt: 1000,
-          wallId: wallId,
+          wallId: Value(wallId),
           body: body,
         ),
       );

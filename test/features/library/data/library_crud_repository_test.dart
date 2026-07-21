@@ -329,7 +329,7 @@ void main() {
                 id: 'comment-target',
                 createdAt: 1000,
                 updatedAt: 1000,
-                wallId: targetWall.id,
+                wallId: Value(targetWall.id),
                 body: 'nice',
               ),
             );
@@ -340,7 +340,7 @@ void main() {
                 id: 'like-target',
                 createdAt: 1000,
                 updatedAt: 1000,
-                wallId: targetWall.id,
+                wallId: Value(targetWall.id),
               ),
             );
 
@@ -1765,7 +1765,7 @@ void main() {
               id: 'comment-null',
               createdAt: seedNow,
               updatedAt: seedNow,
-              wallId: 'wall-null',
+              wallId: Value('wall-null'),
               body: 'Unowned comment',
             ),
           );
@@ -1776,7 +1776,7 @@ void main() {
               id: 'like-null',
               createdAt: seedNow,
               updatedAt: seedNow,
-              wallId: 'wall-null',
+              wallId: Value('wall-null'),
             ),
           );
       await db
@@ -1812,7 +1812,7 @@ void main() {
               id: 'like-other',
               createdAt: seedNow,
               updatedAt: seedNow,
-              wallId: 'wall-null',
+              wallId: Value('wall-null'),
               ownerId: const Value('other'),
             ),
           );
@@ -1836,7 +1836,7 @@ void main() {
               id: 'comment-deleted',
               createdAt: seedNow,
               updatedAt: seedNow,
-              wallId: 'wall-null',
+              wallId: Value('wall-null'),
               body: 'Deleted unowned comment',
               deletedAt: const Value(9999),
             ),

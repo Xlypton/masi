@@ -100,7 +100,7 @@ class CommentsRepository {
             id: id,
             createdAt: now,
             updatedAt: now,
-            wallId: wallId,
+            wallId: Value(wallId),
             body: body,
             authorName: Value(authorName),
             ownerId: Value(ownerId),
@@ -158,7 +158,13 @@ class CommentsRepository {
 
   Comment _fromRow(db.Comment row) => Comment(
     id: row.id,
-    wallId: row.wallId,
+    // Non-null assertion: this repository only ever creates/queries
+    // wall-attached comments (filtered by `t.wallId.equals(wallId)`), so
+    // `wallId` is guaranteed non-null on every row it returns even though
+    // the column itself became nullable when Feature #12 (public opt-in
+    // ascent logs) added the ascent-attached alternative — see
+    // `core/db/tables.dart`'s `Comments.wallId`/`ascentId` doc comments.
+    wallId: row.wallId!,
     body: row.body,
     authorName: row.authorName,
     ownerId: row.ownerId,

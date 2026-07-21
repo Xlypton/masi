@@ -213,34 +213,14 @@ CREATE POLICY "topo_photos_shared_upd" ON storage.objects FOR UPDATE TO authenti
   WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
 
 -- ============================================================================
--- Community features: comments, likes, ascents (personal logbook)
+-- Community features: comments, likes, ascents (personal logbook, optionally
+-- shared publicly — Feature #12)
 -- ============================================================================
 
 -- ---------- TABLES ----------
-CREATE TABLE IF NOT EXISTS public.comments (
-  "id" TEXT PRIMARY KEY NOT NULL,
-  "createdAt" BIGINT NOT NULL,
-  "updatedAt" BIGINT NOT NULL,
-  "deletedAt" BIGINT,
-  "remoteId" TEXT,
-  "dirty" BOOLEAN NOT NULL DEFAULT false,
-  "ownerId" TEXT,
-  "wallId" TEXT NOT NULL,
-  "body" TEXT NOT NULL,
-  "authorName" TEXT
-);
-
-CREATE TABLE IF NOT EXISTS public.likes (
-  "id" TEXT PRIMARY KEY NOT NULL,
-  "createdAt" BIGINT NOT NULL,
-  "updatedAt" BIGINT NOT NULL,
-  "deletedAt" BIGINT,
-  "remoteId" TEXT,
-  "dirty" BOOLEAN NOT NULL DEFAULT false,
-  "ownerId" TEXT,
-  "wallId" TEXT NOT NULL
-);
-
+-- ascents is created first in this section: comments/likes below carry an
+-- "ascentId" FK into it, and a forward reference to a not-yet-created table
+-- would fail Postgres's CREATE TABLE on a fresh run.
 CREATE TABLE IF NOT EXISTS public.ascents (
   "id" TEXT PRIMARY KEY NOT NULL,
   "createdAt" BIGINT NOT NULL,
@@ -254,7 +234,35 @@ CREATE TABLE IF NOT EXISTS public.ascents (
   "climbedAt" BIGINT NOT NULL,
   "style" TEXT NOT NULL,
   "notes" TEXT,
-  "gradeOpinion" TEXT
+  "gradeOpinion" TEXT,
+  "visibility" TEXT NOT NULL DEFAULT 'private',
+  "authorName" TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.comments (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "createdAt" BIGINT NOT NULL,
+  "updatedAt" BIGINT NOT NULL,
+  "deletedAt" BIGINT,
+  "remoteId" TEXT,
+  "dirty" BOOLEAN NOT NULL DEFAULT false,
+  "ownerId" TEXT,
+  "wallId" TEXT,
+  "ascentId" TEXT REFERENCES public.ascents("id"),
+  "body" TEXT NOT NULL,
+  "authorName" TEXT
+);
+
+CREATE TABLE IF NOT EXISTS public.likes (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "createdAt" BIGINT NOT NULL,
+  "updatedAt" BIGINT NOT NULL,
+  "deletedAt" BIGINT,
+  "remoteId" TEXT,
+  "dirty" BOOLEAN NOT NULL DEFAULT false,
+  "ownerId" TEXT,
+  "wallId" TEXT,
+  "ascentId" TEXT REFERENCES public.ascents("id")
 );
 
 -- ---------- PRIVILEGES (RLS still restricts WHICH rows) ----------
@@ -269,8 +277,9 @@ ALTER TABLE public.ascents  ENABLE ROW LEVEL SECURITY;
 
 -- ---------- ROW POLICIES ----------
 -- comments
-DROP POLICY IF EXISTS "comments_owner_all"     ON public.comments;
-DROP POLICY IF EXISTS "comments_shared_select" ON public.comments;
+DROP POLICY IF EXISTS "comments_owner_all"          ON public.comments;
+DROP POLICY IF EXISTS "comments_shared_select"       ON public.comments;
+DROP POLICY IF EXISTS "comments_ascent_shared_select" ON public.comments;
 CREATE POLICY "comments_owner_all" ON public.comments FOR ALL TO authenticated
   USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
 CREATE POLICY "comments_shared_select" ON public.comments FOR SELECT TO authenticated
@@ -278,10 +287,16 @@ CREATE POLICY "comments_shared_select" ON public.comments FOR SELECT TO authenti
     SELECT 1 FROM public.walls w
     WHERE w."id" = comments."wallId" AND w."visibility" = 'shared'
   ));
+CREATE POLICY "comments_ascent_shared_select" ON public.comments FOR SELECT TO authenticated
+  USING (EXISTS (
+    SELECT 1 FROM public.ascents a
+    WHERE a."id" = comments."ascentId" AND a."visibility" = 'shared'
+  ));
 
 -- likes
-DROP POLICY IF EXISTS "likes_owner_all"     ON public.likes;
-DROP POLICY IF EXISTS "likes_shared_select" ON public.likes;
+DROP POLICY IF EXISTS "likes_owner_all"          ON public.likes;
+DROP POLICY IF EXISTS "likes_shared_select"       ON public.likes;
+DROP POLICY IF EXISTS "likes_ascent_shared_select" ON public.likes;
 CREATE POLICY "likes_owner_all" ON public.likes FOR ALL TO authenticated
   USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
 CREATE POLICY "likes_shared_select" ON public.likes FOR SELECT TO authenticated
@@ -289,8 +304,17 @@ CREATE POLICY "likes_shared_select" ON public.likes FOR SELECT TO authenticated
     SELECT 1 FROM public.walls w
     WHERE w."id" = likes."wallId" AND w."visibility" = 'shared'
   ));
+CREATE POLICY "likes_ascent_shared_select" ON public.likes FOR SELECT TO authenticated
+  USING (EXISTS (
+    SELECT 1 FROM public.ascents a
+    WHERE a."id" = likes."ascentId" AND a."visibility" = 'shared'
+  ));
 
--- ascents (private logbook — owner-only, no shared select)
-DROP POLICY IF EXISTS "ascents_owner_all" ON public.ascents;
+-- ascents (private logbook by default; owner can opt a row into "shared" to
+-- publish it to the Community feed)
+DROP POLICY IF EXISTS "ascents_owner_all"     ON public.ascents;
+DROP POLICY IF EXISTS "ascents_shared_select" ON public.ascents;
 CREATE POLICY "ascents_owner_all" ON public.ascents FOR ALL TO authenticated
   USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
+CREATE POLICY "ascents_shared_select" ON public.ascents FOR SELECT TO authenticated
+  USING ("visibility" = 'shared');

@@ -781,7 +781,7 @@ void main() {
             createdAt: 100,
             updatedAt: 100,
             ownerId: const Value(_uidU1),
-            wallId: 'wall-1',
+            wallId: const Value('wall-1'),
             body: 'Nice line!',
             authorName: const Value('u1'),
           ),
@@ -792,7 +792,7 @@ void main() {
             createdAt: 100,
             updatedAt: 100,
             ownerId: const Value(_uidU1),
-            wallId: 'wall-1',
+            wallId: const Value('wall-1'),
           ),
         );
         await c.db.into(c.db.ascents).insert(
@@ -903,7 +903,7 @@ void main() {
             createdAt: 100,
             updatedAt: 100,
             ownerId: const Value(_uidU2),
-            wallId: 'wall-shared',
+            wallId: const Value('wall-shared'),
             body: 'Great topo!',
           ),
         );
@@ -913,7 +913,7 @@ void main() {
             createdAt: 100,
             updatedAt: 100,
             ownerId: const Value(_uidU2),
-            wallId: 'wall-shared',
+            wallId: const Value('wall-shared'),
           ),
         );
         await containerU2.service.pushOwn();
@@ -964,7 +964,7 @@ void main() {
             createdAt: 100,
             updatedAt: 100,
             ownerId: const Value(_uidU1),
-            wallId: 'wall-1',
+            wallId: const Value('wall-1'),
             body: 'From cloud (older)',
           ),
         );
@@ -987,7 +987,7 @@ void main() {
             createdAt: 100,
             updatedAt: 500,
             ownerId: const Value(_uidU1),
-            wallId: 'wall-1',
+            wallId: const Value('wall-1'),
             body: 'Local edit (newer)',
           ),
         );

@@ -169,16 +169,36 @@ class Routes extends Table with SyncColumns {
 }
 
 class Comments extends Table with SyncColumns {
-  TextColumn get wallId => text().references(Walls, #id)();
+  /// Nullable as of Feature #12 (public opt-in ascent logs): a comment now
+  /// attaches to EITHER a wall (topo) OR an ascent, never both — see
+  /// [ascentId]. Pre-existing rows keep their wallId; only newly-created
+  /// ascent comments leave this `null`.
+  TextColumn get wallId => text().nullable().references(Walls, #id)();
   TextColumn get body => text()();
   TextColumn get authorName => text().nullable()();
+
+  /// FK making this comment attach to an ascent log rather than a wall —
+  /// see [wallId]. App-level invariant "exactly one of wallId/ascentId is
+  /// set" is enforced by the repositories, NOT a DB CHECK constraint.
+  /// `null` for every pre-Feature-#12 comment (all wall-attached).
+  TextColumn get ascentId => text().nullable().references(Ascents, #id)();
 
   @override
   Set<Column> get primaryKey => {id};
 }
 
 class Likes extends Table with SyncColumns {
-  TextColumn get wallId => text().references(Walls, #id)();
+  /// Nullable as of Feature #12 (public opt-in ascent logs): a like now
+  /// attaches to EITHER a wall (topo) OR an ascent, never both — see
+  /// [ascentId]. Pre-existing rows keep their wallId; only newly-created
+  /// ascent likes leave this `null`.
+  TextColumn get wallId => text().nullable().references(Walls, #id)();
+
+  /// FK making this like attach to an ascent log rather than a wall — see
+  /// [wallId]. App-level invariant "exactly one of wallId/ascentId is set"
+  /// is enforced by the repositories, NOT a DB CHECK constraint. `null`
+  /// for every pre-Feature-#12 like (all wall-attached).
+  TextColumn get ascentId => text().nullable().references(Ascents, #id)();
 
   @override
   Set<Column> get primaryKey => {id};
@@ -191,6 +211,20 @@ class Ascents extends Table with SyncColumns {
   TextColumn get style => text()();
   TextColumn get notes => text().nullable()();
   TextColumn get gradeOpinion => text().nullable()();
+
+  /// Cloud-sharing visibility for this logged ascent, added by Feature #12
+  /// (public opt-in ascent logs): `'private'` (default; owner-only, the
+  /// original ascent-logbook behavior) or `'shared'` (visible on the
+  /// Community ascent feed). Same shape as [Walls.visibility] — app
+  /// enforces the two values, no DB CHECK constraint.
+  TextColumn get visibility =>
+      text().withDefault(const Constant('private'))();
+
+  /// Optional display name of the ascent's author, shown alongside a
+  /// `'shared'` ascent on the Community feed. Mirrors
+  /// [Comments.authorName]'s shape/purpose. `null` for every pre-Feature-#12
+  /// ascent and for any private one that never sets it.
+  TextColumn get authorName => text().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};

@@ -18,7 +18,7 @@ class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 6;
+  int get schemaVersion => 7;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -127,6 +127,49 @@ class AppDatabase extends _$AppDatabase {
             );
           }
         }
+      }
+      // v6 -> v7: Feature #12 (public opt-in ascent logs). Adds an
+      // owner-controlled `visibility`/`authorName` pair to Ascents (same
+      // shape as Walls' existing sharing flag — 'private' default, app
+      // enforces the two values, no DB CHECK) so a climber can choose to
+      // publish an ascent log to the Community feed. Comments and Likes
+      // gain a nullable `ascentId` FK so either can attach to an ascent
+      // log instead of only a wall (topo); their `wallId` is relaxed from
+      // NOT NULL to nullable to make room for that (app-level invariant
+      // "exactly one of wallId/ascentId set" is enforced by the
+      // repositories, not the DB). Ascents' two new columns are plain
+      // nullable/defaulted ADD COLUMNs — lossless by construction. Likes
+      // and Comments need a full `TableMigration`/`m.alterTable` rebuild
+      // instead (drift's ADD COLUMN can't relax an existing NOT NULL), but
+      // it's still lossless: `newColumns: [ascentId]` tells drift that
+      // column doesn't exist in the old on-disk table, so the rebuild's
+      // copy-INSERT only copies columns present on both sides (every
+      // existing column, including `wallId`, by name) while `ascentId`
+      // comes back `null` on every pre-existing row; the rebuilt table's
+      // CREATE TABLE is sourced from the (already-edited) `tables.dart`,
+      // so `wallId` lands nullable in the new schema with nothing left to
+      // violate even though old rows still have it populated.
+      //
+      // Guarded on `from >= 3`: Comments/Likes/Ascents didn't exist before
+      // v2->v3, where they're brought into being via `m.createTable`, which
+      // stamps them from the CURRENT (already-edited) `tables.dart`
+      // definitions — i.e. any upgrade path that passes through the
+      // `from < 3` branch above already creates these three tables with
+      // `visibility`/`authorName`/`ascentId` baked in from the start. Re-running
+      // the ADD COLUMN/alterTable steps below on such a fresh table would
+      // fail (`duplicate column name`), so they only run for a database
+      // that already had the pre-v7 (two-column-short) shape on disk, i.e.
+      // one that reached v3+ before this migration was introduced.
+      if (from < 7 && from >= 3) {
+        await m.addColumn(ascents, ascents.visibility);
+        await m.addColumn(ascents, ascents.authorName);
+
+        await m.alterTable(
+          TableMigration(likes, newColumns: [likes.ascentId]),
+        );
+        await m.alterTable(
+          TableMigration(comments, newColumns: [comments.ascentId]),
+        );
       }
     },
     beforeOpen: (details) async {

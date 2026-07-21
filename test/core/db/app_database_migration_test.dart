@@ -412,7 +412,7 @@ void main() {
                 id: 'comment-1',
                 createdAt: 3000,
                 updatedAt: 3000,
-                wallId: 'wall-1',
+                wallId: const Value('wall-1'),
                 body: 'Nice line!',
               ),
             );
@@ -432,7 +432,7 @@ void main() {
                 id: 'like-1',
                 createdAt: 3000,
                 updatedAt: 3000,
-                wallId: 'wall-1',
+                wallId: const Value('wall-1'),
               ),
             );
         final like = await (db.select(
@@ -1259,6 +1259,315 @@ void main() {
     );
   });
 
+  group(
+    'P6: v6 -> v7 migration (ascent visibility + likes/comments ascentId)',
+    () {
+      late Directory tempDir;
+      late File dbFile;
+
+      setUp(() async {
+        tempDir = await Directory.systemTemp.createTemp(
+          'climbtopo_migration_test_',
+        );
+        dbFile = File(p.join(tempDir.path, 'v6.sqlite'));
+      });
+
+      tearDown(() async {
+        if (await tempDir.exists()) {
+          await tempDir.delete(recursive: true);
+        }
+      });
+
+      test(
+        'ADD COLUMN migration adds visibility/authorName to ascents, and '
+        'the alterTable rebuild of likes/comments adds a nullable ascentId '
+        'while preserving every pre-existing row (wallId intact, ascentId '
+        'null) — post-migration inserts can attach a like/comment to an '
+        'ascent instead of a wall',
+        () async {
+          final raw = sqlite3lib.sqlite3.open(dbFile.path);
+          raw.execute('''
+          CREATE TABLE areas (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            latitude REAL NULL,
+            longitude REAL NULL
+          );
+
+          CREATE TABLE sectors (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            area_id TEXT NOT NULL REFERENCES areas (id),
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL
+          );
+
+          CREATE TABLE walls (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            sector_id TEXT NOT NULL REFERENCES sectors (id),
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            visibility TEXT NOT NULL DEFAULT 'private',
+            latitude REAL NULL,
+            longitude REAL NULL
+          );
+
+          CREATE TABLE photos (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            local_path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            parent_photo_id TEXT NULL REFERENCES photos (id),
+            crop_xpct REAL NULL,
+            crop_width_pct REAL NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_primary INTEGER NOT NULL DEFAULT 0
+          );
+
+          CREATE TABLE routes (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            photo_id TEXT NOT NULL REFERENCES photos (id),
+            number INTEGER NOT NULL,
+            name TEXT NULL,
+            grade_system TEXT NULL,
+            grade_raw TEXT NULL,
+            grade_sort_key REAL NULL,
+            style TEXT NULL,
+            description TEXT NULL,
+            color_index INTEGER NOT NULL,
+            points_json TEXT NOT NULL,
+            symbols_json TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            visible INTEGER NOT NULL DEFAULT 1,
+            beta_video_url TEXT NULL,
+            style_tags_json TEXT NULL,
+            stars INTEGER NULL
+          );
+
+          CREATE UNIQUE INDEX idx_routes_photo_number_live
+            ON routes (photo_id, number) WHERE deleted_at IS NULL;
+
+          CREATE TABLE comments (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            body TEXT NOT NULL,
+            author_name TEXT NULL
+          );
+
+          CREATE TABLE likes (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id)
+          );
+
+          CREATE TABLE ascents (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            route_id TEXT NOT NULL REFERENCES routes (id),
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            climbed_at INTEGER NOT NULL,
+            style TEXT NOT NULL,
+            notes TEXT NULL,
+            grade_opinion TEXT NULL
+          );
+
+          INSERT INTO areas (id, created_at, updated_at, name)
+            VALUES ('area-1', 1000, 1000, 'Pre-migration Area');
+
+          INSERT INTO sectors
+            (id, created_at, updated_at, area_id, name, sort_order)
+            VALUES
+            ('sector-1', 1000, 1000, 'area-1', 'Pre-migration Sector', 0);
+
+          INSERT INTO walls
+            (id, created_at, updated_at, sector_id, name, sort_order)
+            VALUES
+            ('wall-1', 1000, 1000, 'sector-1', 'Pre-migration Wall', 0);
+
+          INSERT INTO photos
+            (id, created_at, updated_at, wall_id, local_path, kind, width,
+             height)
+            VALUES
+            ('photo-1', 1000, 1000, 'wall-1', '/tmp/p.jpg', 'original', 100,
+             200);
+
+          INSERT INTO routes
+            (id, created_at, updated_at, wall_id, photo_id, number,
+             color_index, points_json, symbols_json, sort_order)
+            VALUES
+            ('route-1', 1000, 1000, 'wall-1', 'photo-1', 1, 0, '[]', '[]', 0);
+
+          INSERT INTO ascents
+            (id, created_at, updated_at, route_id, wall_id, climbed_at, style)
+            VALUES
+            ('ascent-1', 1000, 1000, 'route-1', 'wall-1', 1000, 'redpoint');
+
+          INSERT INTO likes
+            (id, created_at, updated_at, wall_id)
+            VALUES
+            ('like-1', 1000, 1000, 'wall-1');
+
+          INSERT INTO comments
+            (id, created_at, updated_at, wall_id, body)
+            VALUES
+            ('comment-1', 1000, 1000, 'wall-1', 'Nice line!');
+
+          PRAGMA user_version = 6;
+        ''');
+          raw.close();
+
+          // Open the SAME file with the current AppDatabase (schemaVersion
+          // 7). Drift reads the on-disk user_version (6), sees it doesn't
+          // match the target (7), and runs onUpgrade(m, 6, 7) — exercising
+          // only the `if (from < 7)` branch (the earlier branches are
+          // no-ops here since 6 is not < 2/3/4/5/6).
+          final db = AppDatabase(NativeDatabase(dbFile));
+          addTearDown(db.close);
+
+          // Pre-existing Likes row survives with wallId intact, ascentId
+          // null (the alterTable rebuild's copy-INSERT only copies columns
+          // present in the old table, by name).
+          final like = await (db.select(
+            db.likes,
+          )..where((t) => t.id.equals('like-1'))).getSingle();
+          expect(
+            like.wallId,
+            'wall-1',
+            reason:
+                'the alterTable rebuild must preserve every pre-existing '
+                "like's wallId",
+          );
+          expect(like.ascentId, isNull);
+
+          // Pre-existing Comments row survives with wallId intact, ascentId
+          // null.
+          final comment = await (db.select(
+            db.comments,
+          )..where((t) => t.id.equals('comment-1'))).getSingle();
+          expect(
+            comment.wallId,
+            'wall-1',
+            reason:
+                'the alterTable rebuild must preserve every pre-existing '
+                "comment's wallId",
+          );
+          expect(comment.ascentId, isNull);
+          expect(comment.body, 'Nice line!');
+
+          // Pre-existing Ascents row survives, and the two new ADD COLUMNs
+          // land with visibility's default ('private') and authorName
+          // null — SQLite's ADD COLUMN ... DEFAULT applies retroactively.
+          final ascent = await (db.select(
+            db.ascents,
+          )..where((t) => t.id.equals('ascent-1'))).getSingle();
+          expect(
+            ascent.style,
+            'redpoint',
+            reason: 'pre-existing row must survive the migration',
+          );
+          expect(
+            ascent.visibility,
+            'private',
+            reason:
+                'the new visibility column must ADD COLUMN with its '
+                'default for pre-existing rows',
+          );
+          expect(ascent.authorName, isNull);
+
+          // Post-migration: a new Like AND a new Comment can each attach to
+          // an ascent instead of a wall (ascentId set, wallId null) with no
+          // constraint violation — proves the nullability relaxation and
+          // the new FK are both wired into the generated Companions, not
+          // just physically present in SQLite.
+          await db
+              .into(db.likes)
+              .insert(
+                LikesCompanion.insert(
+                  id: 'like-2',
+                  createdAt: 2000,
+                  updatedAt: 2000,
+                  wallId: const Value(null),
+                  ascentId: const Value('ascent-1'),
+                ),
+              );
+          final newLike = await (db.select(
+            db.likes,
+          )..where((t) => t.id.equals('like-2'))).getSingle();
+          expect(newLike.wallId, isNull);
+          expect(newLike.ascentId, 'ascent-1');
+
+          await db
+              .into(db.comments)
+              .insert(
+                CommentsCompanion.insert(
+                  id: 'comment-2',
+                  createdAt: 2000,
+                  updatedAt: 2000,
+                  body: 'Sent it!',
+                  wallId: const Value(null),
+                  ascentId: const Value('ascent-1'),
+                ),
+              );
+          final newComment = await (db.select(
+            db.comments,
+          )..where((t) => t.id.equals('comment-2'))).getSingle();
+          expect(newComment.wallId, isNull);
+          expect(newComment.ascentId, 'ascent-1');
+          expect(newComment.body, 'Sent it!');
+        },
+      );
+    },
+  );
+
   group('fresh onCreate (schemaVersion 4)', () {
     test('builds all 8 tables, each carrying the full SyncColumns set', () async {
       final db = AppDatabase(NativeDatabase.memory());
@@ -1363,7 +1672,7 @@ void main() {
               id: 'comment-1',
               createdAt: now,
               updatedAt: now,
-              wallId: 'wall-1',
+              wallId: const Value('wall-1'),
               body: 'Great route',
               authorName: const Value('Alex'),
               deletedAt: const Value(6000),
@@ -1392,7 +1701,7 @@ void main() {
               id: 'like-1',
               createdAt: now,
               updatedAt: now,
-              wallId: 'wall-1',
+              wallId: const Value('wall-1'),
               deletedAt: const Value(6000),
               remoteId: const Value('remote-like-1'),
               dirty: const Value(true),
