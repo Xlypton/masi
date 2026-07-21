@@ -286,8 +286,24 @@ void main() {
           const AuthSessionState.signedIn('climber@example.com'),
         );
         addTearDown(fakeRepo.dispose);
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
         final container = ProviderContainer(
-          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+          overrides: [
+            authRepositoryProvider.overrideWithValue(fakeRepo),
+            appDatabaseProvider.overrideWithValue(db),
+            // A real `appDatabaseProvider` override means the REAL
+            // `SyncOrchestrator` would otherwise see this test's own
+            // writes via its `db.tableUpdates()` subscription and
+            // schedule a real 2s debounced push `Timer` that outlives the
+            // test (flutter_test's "Timer still pending" failure) — swap
+            // in the fixed, listener-free fake used by the `E1d`/`#18`
+            // groups; this test only cares about the signed-in body/sign
+            // out button, not sync.
+            syncOrchestratorProvider.overrideWith(
+              () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+            ),
+          ],
         );
         addTearDown(container.dispose);
 
@@ -319,8 +335,24 @@ void main() {
           const AuthSessionState.signedIn('climber@example.com'),
         );
         addTearDown(fakeRepo.dispose);
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
         final container = ProviderContainer(
-          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+          overrides: [
+            authRepositoryProvider.overrideWithValue(fakeRepo),
+            appDatabaseProvider.overrideWithValue(db),
+            // A real `appDatabaseProvider` override means the REAL
+            // `SyncOrchestrator` would otherwise see this test's own
+            // writes via its `db.tableUpdates()` subscription and
+            // schedule a real 2s debounced push `Timer` that outlives the
+            // test (flutter_test's "Timer still pending" failure) — swap
+            // in the fixed, listener-free fake used by the `E1d`/`#18`
+            // groups; this test only cares about the avatar initials, not
+            // sync.
+            syncOrchestratorProvider.overrideWith(
+              () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+            ),
+          ],
         );
         addTearDown(container.dispose);
 
@@ -342,8 +374,25 @@ void main() {
           const AuthSessionState.signedOut(),
         );
         addTearDown(fakeRepo.dispose);
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
         final container = ProviderContainer(
-          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+          overrides: [
+            authRepositoryProvider.overrideWithValue(fakeRepo),
+            appDatabaseProvider.overrideWithValue(db),
+            // The stream flip below lands this screen on the signed-in
+            // body, so a real `appDatabaseProvider` would otherwise let
+            // the REAL `SyncOrchestrator` see this test's writes via its
+            // `db.tableUpdates()` subscription and schedule a real 2s
+            // debounced push `Timer` that outlives the test (flutter_test's
+            // "Timer still pending" failure) — swap in the fixed,
+            // listener-free fake used by the `E1d`/`#18` groups; this test
+            // only cares about the live signed-out->signed-in rebuild, not
+            // sync.
+            syncOrchestratorProvider.overrideWith(
+              () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+            ),
+          ],
         );
         addTearDown(container.dispose);
 
@@ -423,8 +472,24 @@ void main() {
           const AuthSessionState.signedOut(),
         );
         addTearDown(fakeRepo.dispose);
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
         final container = ProviderContainer(
-          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+          overrides: [
+            authRepositoryProvider.overrideWithValue(fakeRepo),
+            appDatabaseProvider.overrideWithValue(db),
+            // The stream flip below lands this screen on the signed-in
+            // body, so a real `appDatabaseProvider` would otherwise let
+            // the REAL `SyncOrchestrator` see this test's writes via its
+            // `db.tableUpdates()` subscription and schedule a real 2s
+            // debounced push `Timer` that outlives the test (flutter_test's
+            // "Timer still pending" failure) — swap in the fixed,
+            // listener-free fake used by the `E1d`/`#18` groups; this test
+            // only cares about focus/keyboard dismissal, not sync.
+            syncOrchestratorProvider.overrideWith(
+              () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+            ),
+          ],
         );
         addTearDown(container.dispose);
 
@@ -522,9 +587,12 @@ void main() {
         const AuthSessionState.signedIn('climber@example.com'),
       );
       addTearDown(fakeRepo.dispose);
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
           authRepositoryProvider.overrideWithValue(fakeRepo),
+          appDatabaseProvider.overrideWithValue(db),
           syncOrchestratorProvider.overrideWith(
             () => _FixedSyncOrchestrator(fixedState),
           ),
@@ -616,10 +684,23 @@ void main() {
         const AuthSessionState.signedIn('climber@example.com'),
       );
       addTearDown(fakeRepo.dispose);
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
       final container = ProviderContainer(
         overrides: [
           authRepositoryProvider.overrideWithValue(fakeRepo),
           pwaInstallStatusProvider.overrideWithValue(status),
+          appDatabaseProvider.overrideWithValue(db),
+          // A real `appDatabaseProvider` override means the REAL
+          // `SyncOrchestrator` would otherwise see this test's own writes
+          // via its `db.tableUpdates()` subscription and schedule a real
+          // 2s debounced push `Timer` that outlives the test (flutter_test's
+          // "Timer still pending" failure) — swap in the fixed,
+          // listener-free fake used by the `E1d`/`#18` groups; this group
+          // only cares about the PWA install affordance, not sync.
+          syncOrchestratorProvider.overrideWith(
+            () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+          ),
         ],
       );
       addTearDown(container.dispose);
