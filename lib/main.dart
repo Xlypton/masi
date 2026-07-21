@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
@@ -7,7 +8,26 @@ import 'app/app.dart';
 import 'core/config/supabase_config.dart';
 import 'core/db/database_provider.dart';
 
-Future<void> main() async {
+Future<void> main() => bootApp();
+
+/// Guards [usePathUrlStrategy] so it's only ever invoked once per page.
+/// `usePathUrlStrategy()` sets a one-time browser global (`dart:ui_web`) and
+/// throws "Cannot set URL strategy a second time or after the app has been
+/// initialized." if called twice on the same page. Production `main()` calls
+/// `bootApp()` exactly once (unaffected), but tests/integration tests may
+/// call `bootApp()` multiple times in one headless-Chrome page.
+bool _urlStrategyConfigured = false;
+
+/// Does everything `main()` needs to boot the real app, with the container's
+/// [overrides] exposed as a seam — production code (`main()` below) always
+/// calls this with the default empty list, so its behavior is byte-identical
+/// to the inline `main()` this was extracted from; `integration_test/` files
+/// call it directly with real overrides (e.g. `webAuthGateEnabledProvider` or
+/// a fake `authRepositoryProvider`) to reach app states a plain `app.main()`
+/// can't (see `web_smoke_test.dart` / `web_boot_stability_test.dart`), since
+/// `main()` previously built its `ProviderContainer` with no way to inject
+/// overrides at all.
+Future<void> bootApp({List<Override> overrides = const []}) async {
   WidgetsFlutterBinding.ensureInitialized();
   // Path-based (rather than the default `#/`-hash) browser URLs, so shared
   // links like `/community/topo/<wallId>` are real, shareable paths instead
@@ -16,7 +36,10 @@ Future<void> main() async {
   // conditionally implemented per-platform, `dart.library.ui_web` selecting
   // the real browser-history version, everything else a no-op stub) — safe
   // to call unconditionally rather than gating on `kIsWeb`.
-  usePathUrlStrategy();
+  if (!_urlStrategyConfigured) {
+    usePathUrlStrategy();
+    _urlStrategyConfigured = true;
+  }
   // Defensive hardening: a failed/unreachable Supabase init (bad config, no
   // network on first launch, etc.) must never crash app boot — this app is
   // local-first (Drift/SQLite) and fully usable with sync/backup/auth
@@ -46,7 +69,7 @@ Future<void> main() async {
   // DB; the container is then handed to the app via
   // UncontrolledProviderScope so every provider still resolves against this
   // same container/cache.
-  final container = ProviderContainer();
+  final container = ProviderContainer(overrides: overrides);
   await container.read(photoFilesProvider).warmDocsPath();
   runApp(
     UncontrolledProviderScope(

@@ -1,13 +1,15 @@
 // Real-app web smoke test: Area -> Sector -> Wall creation, driven headless
 // in Chrome via `tool/drive_web.sh`.
 //
-// IMPORTANT — this does NOT run green yet. `package:climbtopo/main.dart`
-// still pulls in `dart:io` (see `tool/build_web.sh`'s grep gate / the
-// dart:io-removal phases in WEB_PORT_BRIEF.md), so this file cannot compile
-// to a web bundle today. It analyzes fine on the Dart VM (`flutter analyze
-// integration_test/web_smoke_test.dart`) — it's kept here, well-formed and
-// ready, so it goes green with zero changes the moment the app compiles for
-// web. At that point, run it with:
+// Runs via `bootApp(overrides: [...])`, disabling the web-only auth wall
+// (`webAuthGateEnabledProvider.overrideWithValue(false)`) rather than
+// plain `app.main()` — the wall (`webAuthGateEnabledProvider` defaults to
+// `kIsWeb`, see `auth_providers.dart`) would otherwise redirect straight to
+// the sign-in view (`/account`) before any of the Topos/Areas/Sectors/Walls
+// flow below is reachable. Disabling the gate here reaches Topos home
+// exactly as this flow did before the wall existed; the gate itself
+// (on/off, signed-in/out) is exercised by `web_boot_stability_test.dart`.
+// Run with:
 //
 //   tool/drive_web.sh integration_test/web_smoke_test.dart
 //
@@ -22,7 +24,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:climbtopo/main.dart' as app;
+import 'package:climbtopo/features/account/application/auth_providers.dart';
+import 'package:climbtopo/main.dart' show bootApp;
 
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -30,7 +33,9 @@ void main() {
   testWidgets('boots to Topos home, then creates Area -> Sector -> Wall', (
     tester,
   ) async {
-    app.main();
+    bootApp(
+      overrides: [webAuthGateEnabledProvider.overrideWithValue(false)],
+    );
     await tester.pumpAndSettle(const Duration(seconds: 2));
     await binding.takeScreenshot('01-topos-home');
 

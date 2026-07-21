@@ -12,11 +12,28 @@
 # Cloudflare Pages also needs an explicit content-type for *.wasm — without
 # it some edge configs serve wasm as application/octet-stream, which some
 # browsers refuse to `instantiateStreaming()`.
+#
+# Anti-stale-shell reload fix (#55): Flutter's default cleanup service worker
+# (`flutter_service_worker.js`) calls `client.navigate(client.url)` on
+# activate for any returning visitor still holding an old caching SW — a
+# real, user-visible reload. Without an explicit Cache-Control, Cloudflare's
+# default heuristic caching lets a stale `flutter_bootstrap.js`/`index.html`/
+# `main.dart.wasm` etc. linger in the browser/edge cache, so a returning
+# visitor's shell and app code disagree and this reload-reconciliation dance
+# repeats. `no-cache` (NOT `no-store`, and deliberately NOT `immutable` —
+# Flutter does not content-hash these filenames per build, so `immutable`
+# would pin stale code forever) means "cache it, but always revalidate via
+# ETag first": a cheap 304 when nothing changed, always-fresh the moment a
+# new build lands. Applied via the blanket `/*` block below (same block that
+# sets COOP/COEP) rather than enumerating every shell/asset path individually
+# — it's simpler and every file under this build is unversioned, so there is
+# no asset here that legitimately wants long-lived immutable caching anyway.
 
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
   Cross-Origin-Resource-Policy: same-origin
+  Cache-Control: no-cache
 
 /*.wasm
   Content-Type: application/wasm
