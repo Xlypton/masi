@@ -127,6 +127,17 @@ GRANT SELECT, INSERT, UPDATE, DELETE
   ON public.areas, public.sectors, public.walls, public.photos, public.routes
   TO authenticated;
 
+-- Feature #15 (Wave 1): a signed-OUT anon-key client can read published
+-- (shared) topos + their author's display name via the anon SELECT-only
+-- policies below (gated through an EXISTS on a wall with
+-- "visibility" = 'shared' — never a blanket "true"). Table-level SELECT is
+-- a precondition to RLS: without it PostgREST denies anon before policies
+-- are even consulted.
+GRANT USAGE ON SCHEMA public TO anon;
+GRANT SELECT
+  ON public.areas, public.sectors, public.walls, public.photos, public.routes, public.profiles
+  TO anon;
+
 -- ---------- ENABLE ROW LEVEL SECURITY ----------
 ALTER TABLE public.areas   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.sectors ENABLE ROW LEVEL SECURITY;
@@ -147,7 +158,14 @@ CREATE POLICY "areas_shared_select" ON public.areas FOR SELECT TO authenticated
   USING (EXISTS (
     SELECT 1 FROM public.walls w
     JOIN public.sectors s ON w."sectorId" = s."id"
-    WHERE s."areaId" = areas."id" AND w."visibility" = 'shared'
+    WHERE s."areaId" = areas."id" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
+  ));
+DROP POLICY IF EXISTS "areas_anon_shared_select" ON public.areas;
+CREATE POLICY "areas_anon_shared_select" ON public.areas FOR SELECT TO anon
+  USING (EXISTS (
+    SELECT 1 FROM public.walls w
+    JOIN public.sectors s ON w."sectorId" = s."id"
+    WHERE s."areaId" = areas."id" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
   ));
 
 -- sectors
@@ -158,7 +176,13 @@ CREATE POLICY "sectors_owner_all" ON public.sectors FOR ALL TO authenticated
 CREATE POLICY "sectors_shared_select" ON public.sectors FOR SELECT TO authenticated
   USING (EXISTS (
     SELECT 1 FROM public.walls w
-    WHERE w."sectorId" = sectors."id" AND w."visibility" = 'shared'
+    WHERE w."sectorId" = sectors."id" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
+  ));
+DROP POLICY IF EXISTS "sectors_anon_shared_select" ON public.sectors;
+CREATE POLICY "sectors_anon_shared_select" ON public.sectors FOR SELECT TO anon
+  USING (EXISTS (
+    SELECT 1 FROM public.walls w
+    WHERE w."sectorId" = sectors."id" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
   ));
 
 -- walls
@@ -168,6 +192,9 @@ CREATE POLICY "walls_owner_all" ON public.walls FOR ALL TO authenticated
   USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
 CREATE POLICY "walls_shared_select" ON public.walls FOR SELECT TO authenticated
   USING ("visibility" = 'shared');
+DROP POLICY IF EXISTS "walls_anon_shared_select" ON public.walls;
+CREATE POLICY "walls_anon_shared_select" ON public.walls FOR SELECT TO anon
+  USING ("visibility" = 'shared' AND "deletedAt" IS NULL);
 
 -- photos
 DROP POLICY IF EXISTS "photos_owner_all"     ON public.photos;
@@ -177,7 +204,13 @@ CREATE POLICY "photos_owner_all" ON public.photos FOR ALL TO authenticated
 CREATE POLICY "photos_shared_select" ON public.photos FOR SELECT TO authenticated
   USING (EXISTS (
     SELECT 1 FROM public.walls w
-    WHERE w."id" = photos."wallId" AND w."visibility" = 'shared'
+    WHERE w."id" = photos."wallId" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
+  ));
+DROP POLICY IF EXISTS "photos_anon_shared_select" ON public.photos;
+CREATE POLICY "photos_anon_shared_select" ON public.photos FOR SELECT TO anon
+  USING (EXISTS (
+    SELECT 1 FROM public.walls w
+    WHERE w."id" = photos."wallId" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
   ));
 
 -- routes
@@ -188,7 +221,13 @@ CREATE POLICY "routes_owner_all" ON public.routes FOR ALL TO authenticated
 CREATE POLICY "routes_shared_select" ON public.routes FOR SELECT TO authenticated
   USING (EXISTS (
     SELECT 1 FROM public.walls w
-    WHERE w."id" = routes."wallId" AND w."visibility" = 'shared'
+    WHERE w."id" = routes."wallId" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
+  ));
+DROP POLICY IF EXISTS "routes_anon_shared_select" ON public.routes;
+CREATE POLICY "routes_anon_shared_select" ON public.routes FOR SELECT TO anon
+  USING (EXISTS (
+    SELECT 1 FROM public.walls w
+    WHERE w."id" = routes."wallId" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
   ));
 
 -- ---------- STORAGE POLICIES (bucket: topo-photos) ----------
@@ -197,12 +236,19 @@ DROP POLICY IF EXISTS "topo_photos_own_all"      ON storage.objects;
 DROP POLICY IF EXISTS "topo_photos_shared_read"  ON storage.objects;
 DROP POLICY IF EXISTS "topo_photos_shared_write" ON storage.objects;
 DROP POLICY IF EXISTS "topo_photos_shared_upd"   ON storage.objects;
+DROP POLICY IF EXISTS "topo_photos_anon_shared_read" ON storage.objects;
 
 CREATE POLICY "topo_photos_own_all" ON storage.objects FOR ALL TO authenticated
   USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = auth.uid()::text)
   WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = auth.uid()::text);
 
 CREATE POLICY "topo_photos_shared_read" ON storage.objects FOR SELECT TO authenticated
+  USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
+
+-- Feature #15 (Wave 1): anon mirror of topo_photos_shared_read above.
+-- SELECT-only — anon bucket stays private; no anon insert/update/delete
+-- policy exists on storage.objects.
+CREATE POLICY "topo_photos_anon_shared_read" ON storage.objects FOR SELECT TO anon
   USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
 
 CREATE POLICY "topo_photos_shared_write" ON storage.objects FOR INSERT TO authenticated
@@ -355,6 +401,7 @@ ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
 -- ---------- ROW POLICIES ----------
 DROP POLICY IF EXISTS "profiles_owner_write" ON public.profiles;
 DROP POLICY IF EXISTS "profiles_any_select"  ON public.profiles;
+DROP POLICY IF EXISTS "profiles_anon_shared_select" ON public.profiles;
 
 -- Owner: full CRUD on their own row (matched by "id", which for this table
 -- IS the owning uid — "ownerId" is kept in lockstep by the client but "id"
@@ -368,3 +415,14 @@ CREATE POLICY "profiles_owner_write" ON public.profiles FOR ALL TO authenticated
 -- whatever is currently on screen.
 CREATE POLICY "profiles_any_select" ON public.profiles FOR SELECT TO authenticated
   USING (true);
+
+-- Feature #15 (Wave 1): unlike profiles_any_select above (blanket "true" for
+-- authenticated), anon gets a GATED read — only the display name of an
+-- owner who has >=1 published (shared, non-deleted) wall is resolvable, so
+-- an anonymous topo-landing visitor can show "shared by <name>" without
+-- exposing every profile in the system to the open internet.
+CREATE POLICY "profiles_anon_shared_select" ON public.profiles FOR SELECT TO anon
+  USING (EXISTS (
+    SELECT 1 FROM public.walls w
+    WHERE w."ownerId" = profiles."id" AND w."visibility" = 'shared' AND w."deletedAt" IS NULL
+  ));
