@@ -478,3 +478,175 @@ class SupabaseSyncRemote implements SyncRemote {
     return [for (final row in rows) Map<String, dynamic>.from(row)];
   }
 }
+
+// ============================================================================
+// Feature #15 (Wave 2): anon shareable topo landing — fetching a SINGLE
+// shared wall's full render graph for a cold, signed-OUT visitor.
+// ============================================================================
+
+/// Plain data holder for one shared wall's full render context: the wall
+/// itself, its ancestor sector + area, its photo row(s), its routes, and its
+/// owner's profile (for a display-name byline) — everything the existing
+/// detail/canvas render path needs once hydrated into local Drift, exactly
+/// mirroring the row-json shape [SyncRemote.fetchSharedTopos] hands to
+/// `BackupRepository.importSnapshot` (so the same `db.Wall.fromJson` etc.
+/// decoding applies unchanged), just scoped to ONE wall instead of every
+/// shared wall on the backend.
+///
+/// [authorProfile] is `null` only in the (should-be-rare) case the wall's
+/// `ownerId` has no matching `profiles` row (e.g. the owner never set a
+/// display name AND their profile row was never created) — callers should
+/// treat that as "no author byline available", not as an error.
+class SharedWallGraph {
+  const SharedWallGraph({
+    required this.wall,
+    required this.sector,
+    required this.area,
+    required this.photos,
+    required this.routes,
+    required this.authorProfile,
+  });
+
+  final Map<String, dynamic> wall;
+  final Map<String, dynamic> sector;
+  final Map<String, dynamic> area;
+  final List<Map<String, dynamic>> photos;
+  final List<Map<String, dynamic>> routes;
+  final Map<String, dynamic>? authorProfile;
+}
+
+/// Seam for fetching a single shared wall's full graph ANONYMOUSLY (no
+/// signed-in session required) — Feature #15 Wave 2's "cold visitor opens a
+/// shareable topo link" path.
+///
+/// Deliberately a SEPARATE, narrow interface from [SyncRemote] (the row-batch
+/// push/pull sync engine used by the signed-in app): a signed-out visitor
+/// only ever needs this one scoped read plus a photo-bytes fetch, never the
+/// full sync surface — keeping it separate means [SyncRemote]'s existing
+/// implementers ([SupabaseSyncRemote], and the `FakeSyncRemote` test double)
+/// never have to grow unrelated methods just to satisfy this one, and this
+/// seam's own fake (`FakeSharedWallRemote` in
+/// `test/features/community/data/shared_wall_hydrator_test.dart`) stays
+/// equally small.
+///
+/// Backed live by Supabase's Wave-1 anon-role RLS policies (see
+/// `supabase/migrations/20260722_anon_shared_read.sql` /
+/// `supabase/schema.sql`'s `*_anon_shared_select` policies +
+/// `topo_photos_anon_shared_read`): every read below is SELECT-only and
+/// scoped to rows reachable from a `visibility = 'shared'` wall, exactly
+/// like the `authenticated`-role mirror policies [SyncRemote.fetchSharedTopos]
+/// relies on — nothing here needs a signed-in session to succeed.
+abstract class SharedWallRemote {
+  /// Fetches wall [wallId]'s full graph, or `null` if no such wall exists OR
+  /// it exists but isn't `visibility == 'shared'` (RLS makes the two
+  /// indistinguishable to an anon client — both simply return no row, which
+  /// is exactly the right behavior: an anon visitor must never learn a
+  /// private wall id even exists).
+  Future<SharedWallGraph?> fetchSharedWallGraph(String wallId);
+
+  /// A time-limited signed URL for the shared-bucket object at [objectPath]
+  /// (see [sharedPhotoPath]), or `null` if the object doesn't exist / isn't
+  /// readable. Useful for a caller that wants to hand a URL straight to an
+  /// `Image.network`-style widget without a separate byte download.
+  Future<String?> signedUrlForSharedPhoto(
+    String objectPath, {
+    int expiresInSeconds = 3600,
+  });
+
+  /// Downloads the raw bytes of the shared-bucket object at [objectPath], or
+  /// `null` if it doesn't exist. This is what [SharedWallHydrator] actually
+  /// uses to pull photo bytes down to hydrate locally — a separate method
+  /// from [SyncRemote.downloadSharedPhoto] (rather than reusing it directly)
+  /// purely so this seam never depends on [SyncRemote] at all, even though
+  /// the real implementation ends up making the identical anon-safe Storage
+  /// call (see [SupabaseSharedWallRemote]'s doc for why no session is
+  /// actually required here).
+  Future<List<int>?> downloadSharedPhotoAnon(String objectPath);
+}
+
+/// Real [SharedWallRemote], backed by the Supabase client.
+///
+/// IMPORTANT: this class never checks or requires an auth session. A
+/// `supabase_flutter` client with no active session sends every request
+/// under the `anon` Postgres/Storage role automatically (the anon API key,
+/// no `Authorization: Bearer <jwt>` header) — so calling these methods from
+/// a signed-out app is not a special case here at all, it's just what
+/// happens when [_client] has no session. Every table/Storage read this
+/// class performs is covered by the Wave-1 `anon`-role RLS policies (see
+/// this file's [SharedWallRemote] doc) — the SAME [_client] a signed-in call
+/// site would use, just exercising its anon-role path.
+class SupabaseSharedWallRemote implements SharedWallRemote {
+  SupabaseSharedWallRemote(this._client);
+
+  final SupabaseClient _client;
+
+  // Mirrors `SupabaseSyncRemote._bucket` — duplicated rather than shared so
+  // this class stays fully independent of `SupabaseSyncRemote`/`SyncRemote`.
+  static const String _bucket = 'topo-photos';
+
+  @override
+  Future<SharedWallGraph?> fetchSharedWallGraph(String wallId) async {
+    final wallRows = await _client
+        .from('walls')
+        .select()
+        .eq('id', wallId)
+        .eq('visibility', 'shared');
+    if (wallRows.isEmpty) return null;
+    final wall = Map<String, dynamic>.from(wallRows.first);
+
+    final sectorId = wall['sectorId'] as String;
+    final sectorRows = await _client.from('sectors').select().eq('id', sectorId);
+    if (sectorRows.isEmpty) return null;
+    final sector = Map<String, dynamic>.from(sectorRows.first);
+
+    final areaId = sector['areaId'] as String;
+    final areaRows = await _client.from('areas').select().eq('id', areaId);
+    if (areaRows.isEmpty) return null;
+    final area = Map<String, dynamic>.from(areaRows.first);
+
+    final photoRows = await _client.from('photos').select().eq('wallId', wallId);
+    final photos = [for (final row in photoRows) Map<String, dynamic>.from(row)];
+
+    final routeRows = await _client.from('routes').select().eq('wallId', wallId);
+    final routes = [for (final row in routeRows) Map<String, dynamic>.from(row)];
+
+    Map<String, dynamic>? authorProfile;
+    final ownerId = wall['ownerId'] as String?;
+    if (ownerId != null) {
+      final profileRows = await _client.from('profiles').select().eq('id', ownerId);
+      if (profileRows.isNotEmpty) {
+        authorProfile = Map<String, dynamic>.from(profileRows.first);
+      }
+    }
+
+    return SharedWallGraph(
+      wall: wall,
+      sector: sector,
+      area: area,
+      photos: photos,
+      routes: routes,
+      authorProfile: authorProfile,
+    );
+  }
+
+  @override
+  Future<String?> signedUrlForSharedPhoto(
+    String objectPath, {
+    int expiresInSeconds = 3600,
+  }) async {
+    try {
+      return await _client.storage.from(_bucket).createSignedUrl(objectPath, expiresInSeconds);
+    } on StorageException {
+      return null;
+    }
+  }
+
+  @override
+  Future<List<int>?> downloadSharedPhotoAnon(String objectPath) async {
+    try {
+      return await _client.storage.from(_bucket).download(objectPath);
+    } on StorageException {
+      return null;
+    }
+  }
+}
