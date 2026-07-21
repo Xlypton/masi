@@ -233,41 +233,6 @@ void main() {
     },
   );
 
-  group('D1b: Home nav entry points to Community/Logbook', () {
-    setUp(() => appRouter.go('/'));
-
-    testWidgets(
-      'tapping home-community-button navigates from ToposScreen to '
-      'CommunityMapScreen (via the /community -> /map redirect)',
-      (tester) async {
-        final container = _makeContainer();
-
-        await tester.pumpWidget(_wrapRouter(container));
-        await _drain(tester);
-        expect(find.byType(ToposScreen), findsOneWidget);
-
-        await tester.tap(find.byKey(const Key('home-community-button')));
-        await _pumpBounded(tester);
-
-        expect(find.byType(CommunityMapScreen), findsOneWidget);
-      },
-    );
-
-    testWidgets('tapping home-logbook-button navigates from ToposScreen to '
-        'LogbookScreen', (tester) async {
-      final container = _makeContainer();
-
-      await tester.pumpWidget(_wrapRouter(container));
-      await _drain(tester);
-      expect(find.byType(ToposScreen), findsOneWidget);
-
-      await tester.tap(find.byKey(const Key('home-logbook-button')));
-      await _drain(tester);
-
-      expect(find.byType(LogbookScreen), findsOneWidget);
-    });
-  });
-
   group('communityRedirectTarget: pure redirect-target logic', () {
     test('no query params -> /map (matches the old Map-default behavior)', () {
       expect(communityRedirectTarget(const {}), '/map');

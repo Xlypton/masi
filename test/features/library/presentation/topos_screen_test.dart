@@ -2166,10 +2166,11 @@ void main() {
     );
   });
 
-  group('D1b: Community/Logbook nav buttons on the app bar', () {
+  group('D1b: Community/Logbook nav buttons removed from the app bar', () {
     testWidgets(
-      'home-community-button and home-logbook-button are present in the '
-      'trailing app-bar slot alongside the existing Organize action',
+      'home-community-button and home-logbook-button are no longer present '
+      'in the app bar (Community is reachable via the bottom-nav Map/Feed '
+      'tabs; Logbook via feed-logbook-button) -- Organize/Account remain',
       (tester) async {
         final container = _makeContainer();
 
@@ -2181,17 +2182,18 @@ void main() {
             of: find.byType(AppBar),
             matching: find.byKey(const Key('home-community-button')),
           ),
-          findsOneWidget,
+          findsNothing,
         );
         expect(
           find.descendant(
             of: find.byType(AppBar),
             matching: find.byKey(const Key('home-logbook-button')),
           ),
-          findsOneWidget,
+          findsNothing,
         );
-        // The existing Organize action must still be intact.
+        // The existing Organize/Account actions must still be intact.
         expect(find.byKey(const Key('topos-organize')), findsOneWidget);
+        expect(find.byKey(const Key('topos-account-button')), findsOneWidget);
       },
     );
   });

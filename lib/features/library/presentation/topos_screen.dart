@@ -171,18 +171,6 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
             onPressed: () => context.push('/areas'),
           ),
           IconButton(
-            key: const Key('home-community-button'),
-            icon: MasiIcon('compass', color: colors.accent),
-            tooltip: 'Community',
-            onPressed: () => context.push('/community'),
-          ),
-          IconButton(
-            key: const Key('home-logbook-button'),
-            icon: MasiIcon('logbook', color: colors.accent),
-            tooltip: 'Logbook',
-            onPressed: () => context.push('/logbook'),
-          ),
-          IconButton(
             key: const Key('topos-account-button'),
             icon: signedInEmail != null
                 ? CircleAvatar(
