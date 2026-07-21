@@ -133,6 +133,20 @@ abstract class SyncRemote {
 /// the leading dot, e.g. `.jpg`).
 String sharedPhotoPath(String photoId, String ext) => 'shared/$photoId$ext';
 
+/// True when a LOCAL row (with `updatedAt` [localUpdatedAt]) should be
+/// pushed up to the cloud, given the cloud's current `updatedAt` for that
+/// same row ([remoteUpdatedAt], `null` if no cloud row exists yet) — i.e. a
+/// row is skipped only when a remote row exists AND its `updatedAt` is
+/// strictly newer than the local row's. Local wins ties (`>=`), since local
+/// is the side being pushed (client-side last-writer-wins on push, #2).
+///
+/// Mirrors `BackupRepository._shouldWriteLww`'s predicate shape (used on the
+/// pull/import side) so the two conflict-resolution rules stay consistent;
+/// shared here (rather than duplicated) so [SupabaseSyncRemote] and the
+/// `FakeSyncRemote` test double apply the identical rule.
+bool shouldPushLww({required int localUpdatedAt, required int? remoteUpdatedAt}) =>
+    remoteUpdatedAt == null || localUpdatedAt >= remoteUpdatedAt;
+
 /// Real [SyncRemote], backed by the Supabase client.
 ///
 /// LIVE: all eight tables (`areas`/`sectors`/`walls`/`photos`/`routes`/
@@ -159,10 +173,31 @@ class SupabaseSyncRemote implements SyncRemote {
     for (final tableName in syncTableNames) {
       final rows = tablesToRows[tableName];
       if (rows == null || rows.isEmpty) continue;
+
+      // Client-side last-writer-wins guard on push (#2): fetch the remote's
+      // current id+updatedAt for exactly the ids about to be pushed (one
+      // batched round trip per table, not one per row), and drop any row a
+      // strictly-newer remote row would otherwise get clobbered by. See
+      // [shouldPushLww].
+      final ids = [for (final row in rows) row['id'] as String];
+      final remoteRows = await _client.from(tableName).select('id, updatedAt').inFilter('id', ids);
+      final remoteUpdatedAt = <String, int>{
+        for (final r in remoteRows) r['id'] as String: r['updatedAt'] as int,
+      };
+      final survivors = [
+        for (final row in rows)
+          if (shouldPushLww(
+            localUpdatedAt: row['updatedAt'] as int,
+            remoteUpdatedAt: remoteUpdatedAt[row['id']],
+          ))
+            row,
+      ];
+      if (survivors.isEmpty) continue;
+
       // Confirmed live: the real Postgres tables (see `supabase/schema.sql`)
       // use matching camelCase quoted columns (`"ownerId"`, `"wallId"`, ...)
       // for drift's `toJson()` keys — no snake_case mapping layer needed.
-      await _client.from(tableName).upsert(rows);
+      await _client.from(tableName).upsert(survivors);
     }
   }
 

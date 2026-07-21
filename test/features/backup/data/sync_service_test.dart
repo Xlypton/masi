@@ -42,6 +42,16 @@ class FakeSyncRemote implements SyncRemote {
           'upsertOwnRows($uid): row ${row['id']} in $tableName has ownerId '
           '${row['ownerId']}',
         );
+        // Client-side LWW guard on push (#2), mirroring
+        // SupabaseSyncRemote.upsertOwnRows: drop the row if a cloud row
+        // already exists here with a strictly newer updatedAt.
+        final remote = _rows[tableName]![row['id'] as String];
+        if (!shouldPushLww(
+          localUpdatedAt: row['updatedAt'] as int,
+          remoteUpdatedAt: remote?['updatedAt'] as int?,
+        )) {
+          continue;
+        }
         _rows[tableName]![row['id'] as String] = Map<String, dynamic>.from(row);
       }
     }
@@ -752,6 +762,107 @@ void main() {
           'From cloud (newer)',
           reason: 'once the cloud row is newer, a subsequent pull must '
               'overwrite the local row',
+        );
+      },
+    );
+  });
+
+  group('push LWW safety (#2)', () {
+    test(
+      'a local row strictly OLDER than the cloud row is dropped on push '
+      '(cloud keeps its newer value); a newer, equal, or brand-new local '
+      'row IS pushed',
+      () async {
+        final remote = FakeSyncRemote();
+        final auth = FakeAuthRepository(_signedInU1);
+
+        // Container A seeds the cloud with a row at updatedAt=500.
+        final containerA = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerA.db.close());
+        await containerA.db.into(containerA.db.areas).insert(
+          AreasCompanion.insert(
+            id: 'area-1',
+            createdAt: 100,
+            updatedAt: 500,
+            ownerId: const Value(_uidU1),
+            name: 'Cloud (newer)',
+          ),
+        );
+        await containerA.service.pushOwn();
+
+        // Container B has a STALE local copy of the same row (older
+        // updatedAt=100) and pushes it.
+        final containerB = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerB.db.close());
+        await containerB.db.into(containerB.db.areas).insert(
+          AreasCompanion.insert(
+            id: 'area-1',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            name: 'Local (stale)',
+          ),
+        );
+        await containerB.service.pushOwn();
+
+        var cloudRows = await remote.fetchOwnRows(_uidU1);
+        var cloudArea = cloudRows['areas']!.firstWhere((r) => r['id'] == 'area-1');
+        expect(
+          cloudArea['name'],
+          'Cloud (newer)',
+          reason: 'a strictly older local row must not overwrite a newer cloud row',
+        );
+
+        // Bump the local row to be EQUAL to the cloud's updatedAt: ties go
+        // to the pusher, so it IS pushed.
+        await (containerB.db.update(
+          containerB.db.areas,
+        )..where((t) => t.id.equals('area-1'))).write(
+          const AreasCompanion(updatedAt: Value(500), name: Value('Local (equal)')),
+        );
+        await containerB.service.pushOwn();
+
+        cloudRows = await remote.fetchOwnRows(_uidU1);
+        cloudArea = cloudRows['areas']!.firstWhere((r) => r['id'] == 'area-1');
+        expect(
+          cloudArea['name'],
+          'Local (equal)',
+          reason: 'a local row equal in updatedAt to the cloud row must still be pushed',
+        );
+
+        // Bump the local row to be strictly NEWER: pushed.
+        await (containerB.db.update(
+          containerB.db.areas,
+        )..where((t) => t.id.equals('area-1'))).write(
+          const AreasCompanion(updatedAt: Value(900), name: Value('Local (newer)')),
+        );
+        await containerB.service.pushOwn();
+
+        cloudRows = await remote.fetchOwnRows(_uidU1);
+        cloudArea = cloudRows['areas']!.firstWhere((r) => r['id'] == 'area-1');
+        expect(
+          cloudArea['name'],
+          'Local (newer)',
+          reason: 'a strictly newer local row must overwrite the cloud row',
+        );
+
+        // A brand-new row (absent from the cloud) is always pushed.
+        await containerB.db.into(containerB.db.areas).insert(
+          AreasCompanion.insert(
+            id: 'area-2',
+            createdAt: 1,
+            updatedAt: 1,
+            ownerId: const Value(_uidU1),
+            name: 'Brand new',
+          ),
+        );
+        await containerB.service.pushOwn();
+
+        cloudRows = await remote.fetchOwnRows(_uidU1);
+        expect(
+          cloudRows['areas']!.any((r) => r['id'] == 'area-2'),
+          isTrue,
+          reason: 'a row absent from the cloud must always be pushed',
         );
       },
     );
