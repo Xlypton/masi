@@ -48,6 +48,25 @@
     html, body {
       background: #100D17;
       height: 100%;
+      margin: 0;
+      padding: 0;
+      /* Mobile-web polish: the page itself never scrolls, rubber-bands, or
+         pull-to-refreshes — the Flutter app owns all scrolling and gestures. */
+      overflow: hidden;
+      overscroll-behavior: none;
+      /* Canvas drags must not become text selection or long-press callouts. */
+      user-select: none;
+      -webkit-user-select: none;
+      -webkit-touch-callout: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Dynamic viewport height so the app fills the screen as mobile browser
+       chrome expands/collapses (falls back to height:100% where unsupported). */
+    @supports (height: 100dvh) {
+      html, body {
+        height: 100dvh;
+      }
     }
 
     /* Branded splash shown while the Flutter engine boots. Removed once the
@@ -102,6 +121,12 @@
       setTimeout(function () {
         splash.remove();
       }, 300);
+    });
+
+    // Long-press / right-click context menu must never interrupt canvas
+    // interaction on web.
+    window.addEventListener('contextmenu', function (e) {
+      e.preventDefault();
     });
   </script>
 </body>
