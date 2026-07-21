@@ -933,6 +933,13 @@ void main() {
                   ),
                 ),
               ),
+              // `LibraryCrudRepository.watchTopos` (bug #1's own-or-unowned
+              // filter, see `library_crud_repository.dart`) reads the uid
+              // via `currentUidProvider`, NOT `authStateProvider` (the two
+              // are deliberately decoupled — see that provider's doc) — so
+              // simulating "signed in as me" for the OWN marker to include
+              // an explicitly `ownerId: 'me'` wall needs this override too.
+              currentUidProvider.overrideWithValue(() => 'me'),
             ],
           );
           addTearDown(container.dispose);
@@ -1757,6 +1764,10 @@ void main() {
                 const AuthSessionState.signedIn('me@example.com', uid: 'me'),
               ),
             ),
+            // See the identical override in the M3 test above: `watchTopos`'
+            // own-or-unowned filter (bug #1) reads `currentUidProvider`, not
+            // `authStateProvider`.
+            currentUidProvider.overrideWithValue(() => 'me'),
           ],
         );
         addTearDown(container.dispose);
@@ -2217,6 +2228,13 @@ void main() {
                   ),
                 ),
               ),
+              // `LibraryCrudRepository.watchTopos` (bug #1's own-or-unowned
+              // filter, see `library_crud_repository.dart`) reads the uid
+              // via `currentUidProvider`, NOT `authStateProvider` (the two
+              // are deliberately decoupled — see that provider's doc) — so
+              // simulating "signed in as me" for the OWN marker to include
+              // an explicitly `ownerId: 'me'` wall needs this override too.
+              currentUidProvider.overrideWithValue(() => 'me'),
             ],
           );
           addTearDown(container.dispose);

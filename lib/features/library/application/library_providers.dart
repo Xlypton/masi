@@ -47,9 +47,26 @@ final wallsProvider = StreamProvider.family<List<WallRef>, String>(
 /// Live flat list of every non-deleted wall (a "topo"), each paired with its
 /// thumbnail path and route count, ordered newest-first. Backs the flat
 /// Topos-home list.
-final toposProvider = StreamProvider<List<TopoRef>>(
-  (ref) => ref.watch(libraryCrudRepositoryProvider).watchTopos(),
-);
+///
+/// Reactive to auth (Hole A, adversarial-review 2026-07-21): `ref.watch`es
+/// the CURRENT uid off [authStateProvider] and passes it to
+/// [LibraryCrudRepository.watchTopos] on every build, rather than letting
+/// the repository read a `currentUid` closure once and freeze it into the
+/// stream forever. Riverpod rebuilds this provider (dropping the old
+/// subscription and opening a fresh one with the new uid) whenever
+/// [authStateProvider] emits a new session — including an in-app account
+/// switch (sign out -> sign in as someone else, no app restart, since this
+/// app is local-first with one on-device SQLite store) and first sign-in
+/// (where [LibraryCrudRepository.watchTopos]'s own-or-unowned predicate
+/// already includes the caller's not-yet-claimed unowned rows, so nothing
+/// has to wait for `claimOwnership` to land before it's visible).
+/// `.asData?.value.uid` degrades to `null` (same as signed-out) while
+/// [authStateProvider] is loading/erroring, matching [currentUidProvider]'s
+/// "unavailable auth -> signed-out" stance elsewhere in this app.
+final toposProvider = StreamProvider<List<TopoRef>>((ref) {
+  final ownerUid = ref.watch(authStateProvider).asData?.value.uid;
+  return ref.watch(libraryCrudRepositoryProvider).watchTopos(ownerUid);
+});
 
 /// The display name of a single wall (a "topo"), or `null` if it has none /
 /// doesn't exist. Backs the topo canvas screen's title chrome — see

@@ -384,6 +384,15 @@ class LocatedAreaRef {
       'longitude: $longitude)';
 }
 
+/// Sentinel default value for [LibraryCrudRepository.watchTopos]'s optional
+/// `ownerUid` parameter — lets that method distinguish "caller omitted the
+/// argument" (fall back to invoking `currentUid`) from "caller explicitly
+/// passed `null`" (a genuinely signed-out scope, used as-is), which a plain
+/// `= null` default parameter value can't tell apart. See that method's doc.
+/// A marker string that is never a real Supabase Auth uid (a v4 UUID), so
+/// it can't collide with a legitimate `ownerUid` argument.
+const _unsetOwnerUid = '__unset_owner_uid__';
+
 /// CRUD + cascading soft-delete for the Area -> Sector -> Wall library
 /// hierarchy (and the Photos/Routes hanging off a Wall).
 ///
@@ -412,6 +421,66 @@ class LibraryCrudRepository {
 
   static String? _noUid() => null;
 
+  /// Write-time own-or-unowned guard (Hole B, adversarial-review
+  /// 2026-07-21): every wall/topo mutation reachable from the Topos home
+  /// (rename, soft-delete, coordinates, publish/unpublish, move) must
+  /// require this in its UPDATE's WHERE, not just `id` + `deletedAt`.
+  /// Without it, a foreign-owned wall that ever leaked into a local read
+  /// (e.g. a synced-down shared topo, or a stale-uid stream — see
+  /// [watchTopos]'s Hole-A doc) would still be fully editable/deletable.
+  ///
+  /// Same null-collapses-to-IS-NULL shape as [watchTopos]'s SQL predicate:
+  /// when [currentUid] is `null` (signed out), this reduces to exactly
+  /// `ownerId IS NULL` (a foreign row can never match); a legitimately
+  /// unowned row (`ownerId IS NULL`) is always writable regardless of who,
+  /// if anyone, is signed in.
+  Expression<bool> _ownOrUnowned(TextColumn ownerId) {
+    final uid = currentUid();
+    return uid == null
+        ? ownerId.isNull()
+        : (ownerId.isNull() | ownerId.equals(uid));
+  }
+
+  /// Whether the (possibly nonexistent or already soft-deleted) [db.Wall]
+  /// [wallId] is own-or-unowned (see [_ownOrUnowned]) — the existence-check
+  /// half of the write-time guard for mutations that cascade to more than
+  /// one row/table (e.g. [softDeleteWall]/[_setWallVisibility]), where the
+  /// guard can't simply be inlined into a single UPDATE's WHERE because a
+  /// foreign wall's photos/routes must never be touched even though they
+  /// don't carry the wall's ownership check themselves.
+  Future<bool> _isOwnOrUnownedWall(String wallId) async {
+    final row =
+        await (_db.select(_db.walls)
+              ..where((t) => t.id.equals(wallId) & _ownOrUnowned(t.ownerId))
+              ..limit(1))
+            .getSingleOrNull();
+    return row != null;
+  }
+
+  /// Same existence-check guard as [_isOwnOrUnownedWall], for the
+  /// [db.Area] entry point of [softDeleteArea]'s cascade (Hole B follow-up,
+  /// adversarial-review 2026-07-21): checked BEFORE the cascade starts so a
+  /// foreign-owned area is never touched at all, at any level.
+  Future<bool> _isOwnOrUnownedArea(String areaId) async {
+    final row =
+        await (_db.select(_db.areas)
+              ..where((t) => t.id.equals(areaId) & _ownOrUnowned(t.ownerId))
+              ..limit(1))
+            .getSingleOrNull();
+    return row != null;
+  }
+
+  /// Same existence-check guard as [_isOwnOrUnownedWall], for the
+  /// [db.Sector] entry point of [softDeleteSector]'s cascade.
+  Future<bool> _isOwnOrUnownedSector(String sectorId) async {
+    final row =
+        await (_db.select(_db.sectors)
+              ..where((t) => t.id.equals(sectorId) & _ownOrUnowned(t.ownerId))
+              ..limit(1))
+            .getSingleOrNull();
+    return row != null;
+  }
+
   /// Owns the on-disk lifecycle of attached photo files (copies a picked
   /// file into the app-documents `photos/` dir and, on load, relocates any
   /// legacy picker-cache path in). Injectable so tests can point it at a
@@ -425,7 +494,15 @@ class LibraryCrudRepository {
   // Areas
   // ---------------------------------------------------------------------
 
-  Future<AreaRef> createArea(String name, {String? description}) async {
+  Future<AreaRef> createArea(String name, {String? description}) {
+    _rejectReservedName(name);
+    return _insertArea(name, description: description);
+  }
+
+  /// Unvalidated insert shared by [createArea] and [_ensureDefaultAreaId] —
+  /// the latter must be able to create the hidden `__default__` sentinel
+  /// itself, which [_rejectReservedName] would otherwise block.
+  Future<AreaRef> _insertArea(String name, {String? description}) async {
     final now = nowMs();
     final id = _uuid.v4();
     await _db
@@ -444,9 +521,15 @@ class LibraryCrudRepository {
   }
 
   Future<void> renameArea(String id, String name) async {
+    _rejectReservedName(name);
     final now = nowMs();
     await (_db.update(_db.areas)
-          ..where((t) => t.id.equals(id) & t.deletedAt.isNull()))
+          ..where(
+            (t) =>
+                t.id.equals(id) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
         .write(db.AreasCompanion(name: Value(name), updatedAt: Value(now)));
   }
 
@@ -463,6 +546,12 @@ class LibraryCrudRepository {
 
   Future<void> softDeleteArea(String id) {
     return _db.transaction(() async {
+      // Hole B guard (Area/Sector follow-up, adversarial-review 2026-07-21):
+      // bail before the cascade even starts on a FOREIGN-owned area — the
+      // per-row selects/updates inside the cascade key off `areaId` alone,
+      // so a check-then-act existence guard up front, mirroring
+      // [softDeleteWall]'s, is what actually protects the whole subtree.
+      if (!await _isOwnOrUnownedArea(id)) return;
       await _cascadeSoftDeleteAreaSubtree(id, nowMs());
     });
   }
@@ -502,7 +591,14 @@ class LibraryCrudRepository {
   // Sectors
   // ---------------------------------------------------------------------
 
-  Future<SectorRef> createSector(String areaId, String name) async {
+  Future<SectorRef> createSector(String areaId, String name) {
+    _rejectReservedName(name);
+    return _insertSector(areaId, name);
+  }
+
+  /// Unvalidated insert shared by [createSector] and
+  /// [_ensureDefaultSectorId] — see [_insertArea]'s identical rationale.
+  Future<SectorRef> _insertSector(String areaId, String name) async {
     final now = nowMs();
     final id = _uuid.v4();
     final sortOrder = await _nextSortOrder(
@@ -527,9 +623,15 @@ class LibraryCrudRepository {
   }
 
   Future<void> renameSector(String id, String name) async {
+    _rejectReservedName(name);
     final now = nowMs();
     await (_db.update(_db.sectors)
-          ..where((t) => t.id.equals(id) & t.deletedAt.isNull()))
+          ..where(
+            (t) =>
+                t.id.equals(id) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
         .write(db.SectorsCompanion(name: Value(name), updatedAt: Value(now)));
   }
 
@@ -546,6 +648,8 @@ class LibraryCrudRepository {
 
   Future<void> softDeleteSector(String id) {
     return _db.transaction(() async {
+      // Hole B guard, same rationale as [softDeleteArea]'s.
+      if (!await _isOwnOrUnownedSector(id)) return;
       await _cascadeSoftDeleteSectorSubtree(id, nowMs());
     });
   }
@@ -612,7 +716,12 @@ class LibraryCrudRepository {
   Future<void> renameWall(String id, String name) async {
     final now = nowMs();
     await (_db.update(_db.walls)
-          ..where((t) => t.id.equals(id) & t.deletedAt.isNull()))
+          ..where(
+            (t) =>
+                t.id.equals(id) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
         .write(db.WallsCompanion(name: Value(name), updatedAt: Value(now)));
   }
 
@@ -629,6 +738,11 @@ class LibraryCrudRepository {
 
   Future<void> softDeleteWall(String id) {
     return _db.transaction(() async {
+      // Hole B guard: bail before the cascade even starts on a
+      // FOREIGN-owned wall — the per-row updates below key off `wallId`
+      // alone, with no ownership check of their own, so a check-then-act
+      // existence guard up front is what actually protects them.
+      if (!await _isOwnOrUnownedWall(id)) return;
       await _cascadeSoftDeleteWallSubtree(id, nowMs());
     });
   }
@@ -668,16 +782,20 @@ class LibraryCrudRepository {
     double longitude,
   ) async {
     final now = nowMs();
-    await (_db.update(
-      _db.walls,
-    )..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())).write(
-      db.WallsCompanion(
-        latitude: Value(latitude),
-        longitude: Value(longitude),
-        updatedAt: Value(now),
-        dirty: const Value(true),
-      ),
-    );
+    await (_db.update(_db.walls)..where(
+          (t) =>
+              t.id.equals(wallId) &
+              t.deletedAt.isNull() &
+              _ownOrUnowned(t.ownerId),
+        ))
+        .write(
+          db.WallsCompanion(
+            latitude: Value(latitude),
+            longitude: Value(longitude),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+          ),
+        );
   }
 
   /// Re-parents [wallId] to [newSectorId]: updates its `sectorId`,
@@ -707,16 +825,20 @@ class LibraryCrudRepository {
         sortOrderColumn: _db.walls.sortOrder,
         scope: _db.walls.sectorId.equals(newSectorId),
       );
-      await (_db.update(
-        _db.walls,
-      )..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())).write(
-        db.WallsCompanion(
-          sectorId: Value(newSectorId),
-          sortOrder: Value(sortOrder),
-          updatedAt: Value(now),
-          dirty: const Value(true),
-        ),
-      );
+      await (_db.update(_db.walls)..where(
+            (t) =>
+                t.id.equals(wallId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.WallsCompanion(
+              sectorId: Value(newSectorId),
+              sortOrder: Value(sortOrder),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          );
     });
   }
 
@@ -739,20 +861,29 @@ class LibraryCrudRepository {
         sortOrderColumn: _db.sectors.sortOrder,
         scope: _db.sectors.areaId.equals(newAreaId),
       );
-      await (_db.update(
-        _db.sectors,
-      )..where((t) => t.id.equals(sectorId) & t.deletedAt.isNull())).write(
-        db.SectorsCompanion(
-          areaId: Value(newAreaId),
-          sortOrder: Value(sortOrder),
-          updatedAt: Value(now),
-          dirty: const Value(true),
-        ),
-      );
+      await (_db.update(_db.sectors)..where(
+            (t) =>
+                t.id.equals(sectorId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.SectorsCompanion(
+              areaId: Value(newAreaId),
+              sortOrder: Value(sortOrder),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          );
     });
   }
 
   Future<void> _setWallVisibility(String wallId, String visibility) async {
+    // Hole B guard: bail before touching the wall OR its photos/routes on a
+    // FOREIGN-owned wall — same check-then-act rationale as
+    // [softDeleteWall], since the photos/routes updates below key off
+    // `wallId` alone with no ownership check of their own.
+    if (!await _isOwnOrUnownedWall(wallId)) return;
     final now = nowMs();
     await (_db.update(
       _db.walls,
@@ -809,24 +940,34 @@ class LibraryCrudRepository {
     final now = nowMs();
     final id = _uuid.v4();
     final ownedPath = await _photoFiles.importPhoto(xfile, id);
-    final liveOriginalCount = await _liveOriginalCount(wallId);
-    await _db
-        .into(_db.photos)
-        .insert(
-          db.PhotosCompanion.insert(
-            id: id,
-            createdAt: now,
-            updatedAt: now,
-            wallId: wallId,
-            localPath: ownedPath,
-            kind: 'original',
-            width: width,
-            height: height,
-            sortOrder: Value(liveOriginalCount),
-            isPrimary: Value(liveOriginalCount == 0),
-            ownerId: Value(currentUid()),
-          ),
-        );
+    // Bug #10: the live-original count-read and the insert deciding
+    // isPrimary off it are check-then-act — without serialization, a fast
+    // double-attach (e.g. a double-tap) could have both calls read "0
+    // existing" and both insert isPrimary:true, giving the wall two
+    // primaries. Wrapping in one transaction relies on drift serializing
+    // `transaction` calls on a connection (see [createTopo]'s identical
+    // rationale), so the second concurrent call's count-read can't run
+    // until the first call's insert has committed.
+    await _db.transaction(() async {
+      final liveOriginalCount = await _liveOriginalCount(wallId);
+      await _db
+          .into(_db.photos)
+          .insert(
+            db.PhotosCompanion.insert(
+              id: id,
+              createdAt: now,
+              updatedAt: now,
+              wallId: wallId,
+              localPath: ownedPath,
+              kind: 'original',
+              width: width,
+              height: height,
+              sortOrder: Value(liveOriginalCount),
+              isPrimary: Value(liveOriginalCount == 0),
+              ownerId: Value(currentUid()),
+            ),
+          );
+    });
     return id;
   }
 
@@ -940,6 +1081,23 @@ class LibraryCrudRepository {
   static const _defaultAreaName = '__default__';
   static const _defaultSectorName = '__default__';
 
+  /// Rejects [name] (after trimming) if it collides with the hidden
+  /// `__default__` sentinel Area/Sector name (bug #11) — see
+  /// [_ensureDefaultAreaId]/[_ensureDefaultSectorId]. An Area/Sector
+  /// actually named `__default__` would be indistinguishable from the
+  /// sentinel and get silently filtered out of every UI list (see
+  /// [_areaQuery]/[_sectorQuery]), effectively vanishing. Input validation
+  /// only — no schema column. Called from the public
+  /// [createArea]/[renameArea]/[createSector]/[renameSector] paths, NOT
+  /// from [_insertArea]/[_insertSector], which the sentinel's own
+  /// find-or-create path uses to create `__default__` itself.
+  void _rejectReservedName(String name) {
+    final trimmed = name.trim();
+    if (trimmed == _defaultAreaName || trimmed == _defaultSectorName) {
+      throw ArgumentError.value(name, 'name', 'reserved area/sector name');
+    }
+  }
+
   /// Live, flat list of every non-deleted [db.Wall], each paired with its
   /// PRIMARY (or, if none is flagged — e.g. legacy data untouched by the
   /// v5->v6 migration's backfill — the most recent) non-deleted
@@ -971,6 +1129,43 @@ class LibraryCrudRepository {
   /// areaName] always come back `null` ("Unfiled") rather than ever
   /// surfacing the sentinel as a real area.
   ///
+  /// Ownership scoping (bug #1): scoped to own-or-unowned walls, same
+  /// pattern as [listOwnAreas]/[listOwnSectors] — `w.owner_id IS NULL OR
+  /// w.owner_id = ?`, bound to the passed-in [ownerUid]. Without this, a
+  /// foreign-owned wall synced down locally (e.g. while browsing someone
+  /// else's shared topo — see `community_repository.dart`) would appear
+  /// here as if it were the signed-in user's own, fully editable. A `null`
+  /// [ownerUid] (signed out) makes `w.owner_id = ?` evaluate to SQL `NULL`
+  /// (never true), so the `OR` collapses to exactly `w.owner_id IS NULL` —
+  /// no separate branch needed.
+  ///
+  /// [ownerUid] is an EXPLICIT parameter (mirroring [listOwnAreas]/
+  /// [listOwnSectors]) rather than always reading [currentUid] internally
+  /// (Hole A, adversarial-review 2026-07-21): the OLD code called
+  /// [currentUid] exactly once, at the moment this method built the query's
+  /// bound `Variable` — the resulting *stream* then kept that one uid
+  /// forever, even though `currentUid()` itself would return something
+  /// fresh on a later call. `toposProvider` (`library_providers.dart`) is a
+  /// plain provider that called this exactly once and never rebuilt on its
+  /// own, so a frozen-uid stream silently kept showing a first account's own
+  /// topos after an in-app sign-out/sign-in as a second account (this app
+  /// is local-first, one on-device SQLite store shared by whoever is
+  /// currently signed in — there's no separate per-account store to switch
+  /// to). Making the uid an explicit parameter pushes the "read the CURRENT
+  /// uid" responsibility out to the caller: `toposProvider` `ref.watch`es
+  /// the live uid off `authStateProvider` and passes it in on every build,
+  /// so an auth change rebuilds the provider and re-subscribes this stream
+  /// with a fresh uid instead of reusing a stale one.
+  ///
+  /// [ownerUid] defaults to (i.e. an OMITTED argument falls back to)
+  /// invoking [currentUid] — preserving every existing signed-out-by-
+  /// default call site (most of this repository's own test suite) — but an
+  /// explicitly-passed value, including an explicit `null`, is always used
+  /// as-is and never overridden by [currentUid]. In practice the two never
+  /// disagree: both ultimately trace back to the same signed-in/signed-out
+  /// session, just read through two different doors (a live stream vs. a
+  /// synchronous getter) — see [currentUidProvider]'s doc.
+  ///
   /// Tiebreak note: the outer ordering, the thumbnail subquery, and the
   /// top-grade subquery all order by their respective columns DESC at
   /// coarse resolution (ms for `created_at`, and `grade_sort_key` ties are
@@ -979,7 +1174,8 @@ class LibraryCrudRepository {
   /// tiebreak for deterministic, stable output across repeated reads; since
   /// ids are random UUIDs this tiebreak is arbitrary but consistent, not a
   /// proxy for "more recent" or "harder".
-  Stream<List<TopoRef>> watchTopos() {
+  Stream<List<TopoRef>> watchTopos([String? ownerUid = _unsetOwnerUid]) {
+    final uid = ownerUid == _unsetOwnerUid ? currentUid() : ownerUid;
     const sql =
         '''
       SELECT
@@ -1011,11 +1207,13 @@ class LibraryCrudRepository {
       LEFT JOIN sectors s ON s.id = w.sector_id
       LEFT JOIN areas a ON a.id = s.area_id
       WHERE w.deleted_at IS NULL
+        AND (w.owner_id IS NULL OR w.owner_id = ?)
       ORDER BY w.created_at DESC, w.id DESC
     ''';
     return _db
         .customSelect(
           sql,
+          variables: [Variable<String>(uid)],
           readsFrom: {
             _db.walls,
             _db.photos,
@@ -1133,6 +1331,29 @@ class LibraryCrudRepository {
         });
   }
 
+  /// Bug #17: a naive `AVG(w.longitude)` is wrong for a group of walls that
+  /// straddles the antimeridian (e.g. `+179.9` and `-179.9`, ~0.2° apart in
+  /// reality) — it averages to `~0`, the opposite side of the planet.
+  /// Detects the straddle via `MAX(longitude) - MIN(longitude) > 180`
+  /// (never true for a group that doesn't cross the line, since real
+  /// longitudes span at most 360° and any non-crossing cluster's raw spread
+  /// stays under 180°); when it fires, shifts every negative longitude by
+  /// +360 before averaging (mapping the group onto one continuous span),
+  /// then wraps the result back into `(-180, 180]` by subtracting 360 if it
+  /// landed past 180. Expressed with only `MAX`/`MIN`/`AVG`/`CASE` inside
+  /// the existing single-pass `GROUP BY` (no window functions or
+  /// subqueries needed) so it drops into [watchLocatedSectors]/
+  /// [watchLocatedAreas] without restructuring either query.
+  static const _kAntimeridianSafeAvgLongitude =
+      '''
+      CASE WHEN (MAX(w.longitude) - MIN(w.longitude)) > 180 THEN
+        CASE WHEN AVG(CASE WHEN w.longitude < 0 THEN w.longitude + 360 ELSE w.longitude END) > 180
+          THEN AVG(CASE WHEN w.longitude < 0 THEN w.longitude + 360 ELSE w.longitude END) - 360
+          ELSE AVG(CASE WHEN w.longitude < 0 THEN w.longitude + 360 ELSE w.longitude END)
+        END
+      ELSE AVG(w.longitude)
+      END''';
+
   /// Live list of every non-deleted, non-sentinel [db.Sector] that has at
   /// least one located descendant wall, each paired with the arithmetic-mean
   /// centroid over exactly those located walls — see [LocatedSectorRef]. A
@@ -1152,7 +1373,7 @@ class LibraryCrudRepository {
         s.id AS sector_id,
         s.name AS sector_name,
         AVG(w.latitude) AS avg_latitude,
-        AVG(w.longitude) AS avg_longitude
+        $_kAntimeridianSafeAvgLongitude AS avg_longitude
       FROM sectors s
       JOIN walls w ON w.sector_id = s.id
       WHERE s.deleted_at IS NULL
@@ -1195,7 +1416,7 @@ class LibraryCrudRepository {
         a.id AS area_id,
         a.name AS area_name,
         AVG(w.latitude) AS avg_latitude,
-        AVG(w.longitude) AS avg_longitude
+        $_kAntimeridianSafeAvgLongitude AS avg_longitude
       FROM areas a
       JOIN sectors s ON s.area_id = a.id
       JOIN walls w ON w.sector_id = s.id
@@ -1236,7 +1457,9 @@ class LibraryCrudRepository {
               ..limit(1))
             .getSingleOrNull();
     if (existing != null) return existing.id;
-    final area = await createArea(_defaultAreaName);
+    // _insertArea, NOT createArea: the sentinel's own name IS the reserved
+    // name [_rejectReservedName] blocks on the public path.
+    final area = await _insertArea(_defaultAreaName);
     return area.id;
   }
 
@@ -1256,7 +1479,9 @@ class LibraryCrudRepository {
               ..limit(1))
             .getSingleOrNull();
     if (existing != null) return existing.id;
-    final sector = await createSector(areaId, _defaultSectorName);
+    // _insertSector, NOT createSector: same reserved-name rationale as
+    // _ensureDefaultAreaId's _insertArea call above.
+    final sector = await _insertSector(areaId, _defaultSectorName);
     return sector.id;
   }
 
@@ -1369,29 +1594,52 @@ class LibraryCrudRepository {
   // ---------------------------------------------------------------------
 
   Future<void> _cascadeSoftDeleteAreaSubtree(String areaId, int now) async {
-    final sectors = await (_db.select(
-      _db.sectors,
-    )..where((t) => t.areaId.equals(areaId) & t.deletedAt.isNull())).get();
+    // Hole B guard: the child-sector select itself is also scoped
+    // own-or-unowned, so a FOREIGN sector nested under an otherwise-owned
+    // area (e.g. synced-down from someone else's shared topo) is skipped
+    // entirely at every level, not just cascaded into with no filter.
+    final sectors = await (_db.select(_db.sectors)..where(
+          (t) =>
+              t.areaId.equals(areaId) &
+              t.deletedAt.isNull() &
+              _ownOrUnowned(t.ownerId),
+        ))
+        .get();
     for (final sector in sectors) {
       await _cascadeSoftDeleteSectorSubtree(sector.id, now);
     }
-    await (_db.update(_db.areas)
-          ..where((t) => t.id.equals(areaId) & t.deletedAt.isNull()))
+    await (_db.update(_db.areas)..where(
+          (t) =>
+              t.id.equals(areaId) &
+              t.deletedAt.isNull() &
+              _ownOrUnowned(t.ownerId),
+        ))
         .write(db.AreasCompanion(deletedAt: Value(now), updatedAt: Value(now)));
   }
 
   Future<void> _cascadeSoftDeleteSectorSubtree(String sectorId, int now) async {
-    final walls = await (_db.select(
-      _db.walls,
-    )..where((t) => t.sectorId.equals(sectorId) & t.deletedAt.isNull())).get();
+    // Hole B guard, same rationale as [_cascadeSoftDeleteAreaSubtree]'s: the
+    // child-wall select is scoped own-or-unowned so a FOREIGN wall nested
+    // under an otherwise-owned sector is never soft-deleted transitively.
+    final walls = await (_db.select(_db.walls)..where(
+          (t) =>
+              t.sectorId.equals(sectorId) &
+              t.deletedAt.isNull() &
+              _ownOrUnowned(t.ownerId),
+        ))
+        .get();
     for (final wall in walls) {
       await _cascadeSoftDeleteWallSubtree(wall.id, now);
     }
-    await (_db.update(
-      _db.sectors,
-    )..where((t) => t.id.equals(sectorId) & t.deletedAt.isNull())).write(
-      db.SectorsCompanion(deletedAt: Value(now), updatedAt: Value(now)),
-    );
+    await (_db.update(_db.sectors)..where(
+          (t) =>
+              t.id.equals(sectorId) &
+              t.deletedAt.isNull() &
+              _ownOrUnowned(t.ownerId),
+        ))
+        .write(
+          db.SectorsCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+        );
   }
 
   Future<void> _cascadeSoftDeleteWallSubtree(String wallId, int now) async {
@@ -1404,6 +1652,40 @@ class LibraryCrudRepository {
       _db.routes,
     )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).write(
       db.RoutesCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+    );
+    // Bug #5: a soft-deleted wall's live Ascents (Logbook entries) were
+    // previously left untouched, so a deleted topo's ascents lingered in
+    // the Logbook forever. Comments/Likes are cascaded alongside for the
+    // same reason. Unlike Photos/Routes/Walls above, these three are also
+    // marked `dirty` for sync hygiene: these community rows may already
+    // have been pushed to the backend and need the tombstone to reach it
+    // on the next push.
+    await (_db.update(
+      _db.ascents,
+    )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).write(
+      db.AscentsCompanion(
+        deletedAt: Value(now),
+        updatedAt: Value(now),
+        dirty: const Value(true),
+      ),
+    );
+    await (_db.update(
+      _db.comments,
+    )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).write(
+      db.CommentsCompanion(
+        deletedAt: Value(now),
+        updatedAt: Value(now),
+        dirty: const Value(true),
+      ),
+    );
+    await (_db.update(
+      _db.likes,
+    )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).write(
+      db.LikesCompanion(
+        deletedAt: Value(now),
+        updatedAt: Value(now),
+        dirty: const Value(true),
+      ),
     );
     await (_db.update(_db.walls)
           ..where((t) => t.id.equals(wallId) & t.deletedAt.isNull()))

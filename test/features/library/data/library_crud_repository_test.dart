@@ -86,6 +86,37 @@ void main() {
       expect(sectors.single.name, 'Sector Renamed');
       expect(walls.single.name, 'Wall Renamed');
     });
+
+    test(
+      'bug #11: createArea/renameArea/createSector/renameSector reject the '
+      'reserved __default__ sentinel name (would otherwise collide with '
+      'the hidden sentinel and vanish from every list); createTopo\'s '
+      'internal find-or-create of the real sentinel is unaffected',
+      () async {
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+
+        expect(() => repo.createArea('__default__'), throwsArgumentError);
+        expect(
+          () => repo.createSector(area.id, '__default__'),
+          throwsArgumentError,
+        );
+        expect(
+          () => repo.renameArea(area.id, '__default__'),
+          throwsArgumentError,
+        );
+        expect(
+          () => repo.renameSector(sector.id, '__default__'),
+          throwsArgumentError,
+        );
+        // Padded/trimmed variants are caught too.
+        expect(() => repo.createArea('  __default__  '), throwsArgumentError);
+
+        // The internal sentinel find-or-create path must still work.
+        final wallId = await repo.createTopo('Photo First Topo');
+        expect(wallId, isNotEmpty);
+      },
+    );
   });
 
   group('A2: softDeleteArea cascades', () {
@@ -245,6 +276,113 @@ void main() {
       final sectors = await repo.listSectors(area.id);
       expect(sectors, hasLength(1));
     });
+
+    test(
+      'bug #5: also soft-deletes the wall\'s live Ascents/Comments/Likes '
+      '(so deleted topos stop lingering in the Logbook), marking them '
+      'dirty for sync, while a sibling wall\'s own rows are untouched',
+      () async {
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final targetWall = await repo.createWall(sector.id, 'Target Wall');
+        final siblingWall = await repo.createWall(sector.id, 'Sibling Wall');
+        final targetPhotoId = await repo.attachPhotoToWall(
+          targetWall.id,
+          XFile('/tmp/target.jpg'),
+          100,
+          200,
+        );
+        await db
+            .into(db.routes)
+            .insert(
+              RoutesCompanion.insert(
+                id: 'route-target',
+                createdAt: 1000,
+                updatedAt: 1000,
+                wallId: targetWall.id,
+                photoId: targetPhotoId,
+                number: 1,
+                colorIndex: 0,
+                pointsJson: '[]',
+                symbolsJson: '[]',
+                sortOrder: 0,
+              ),
+            );
+
+        await db
+            .into(db.ascents)
+            .insert(
+              AscentsCompanion.insert(
+                id: 'ascent-target',
+                createdAt: 1000,
+                updatedAt: 1000,
+                routeId: 'route-target',
+                wallId: targetWall.id,
+                climbedAt: 1000,
+                style: 'send',
+              ),
+            );
+        await db
+            .into(db.comments)
+            .insert(
+              CommentsCompanion.insert(
+                id: 'comment-target',
+                createdAt: 1000,
+                updatedAt: 1000,
+                wallId: targetWall.id,
+                body: 'nice',
+              ),
+            );
+        await db
+            .into(db.likes)
+            .insert(
+              LikesCompanion.insert(
+                id: 'like-target',
+                createdAt: 1000,
+                updatedAt: 1000,
+                wallId: targetWall.id,
+              ),
+            );
+
+        // A sibling wall's own Ascent must survive untouched.
+        await db
+            .into(db.ascents)
+            .insert(
+              AscentsCompanion.insert(
+                id: 'ascent-sibling',
+                createdAt: 1000,
+                updatedAt: 1000,
+                routeId: 'route-target',
+                wallId: siblingWall.id,
+                climbedAt: 1000,
+                style: 'send',
+              ),
+            );
+
+        await repo.softDeleteWall(targetWall.id);
+
+        final targetAscent = await (db.select(
+          db.ascents,
+        )..where((t) => t.id.equals('ascent-target'))).getSingle();
+        final targetComment = await (db.select(
+          db.comments,
+        )..where((t) => t.id.equals('comment-target'))).getSingle();
+        final targetLike = await (db.select(
+          db.likes,
+        )..where((t) => t.id.equals('like-target'))).getSingle();
+        expect(targetAscent.deletedAt, isNotNull);
+        expect(targetAscent.dirty, isTrue);
+        expect(targetComment.deletedAt, isNotNull);
+        expect(targetComment.dirty, isTrue);
+        expect(targetLike.deletedAt, isNotNull);
+        expect(targetLike.dirty, isTrue);
+
+        final siblingAscent = await (db.select(
+          db.ascents,
+        )..where((t) => t.id.equals('ascent-sibling'))).getSingle();
+        expect(siblingAscent.deletedAt, isNull);
+      },
+    );
   });
 
   group('A4: watch streams emit updates', () {
@@ -416,6 +554,33 @@ void main() {
         expect(loaded!.id, firstId);
       },
     );
+
+    test(
+      'bug #10: a concurrent double-attach (no await between the two '
+      'calls) never produces two primaries — the live-original count-read '
+      'and the insert are serialized inside one transaction',
+      () async {
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final wall = await repo.createWall(sector.id, 'Wall');
+
+        await Future.wait([
+          repo.attachPhotoToWall(wall.id, XFile('/tmp/a.jpg'), 100, 200),
+          repo.attachPhotoToWall(wall.id, XFile('/tmp/b.jpg'), 100, 200),
+        ]);
+
+        final photos = await (db.select(
+          db.photos,
+        )..where((t) => t.wallId.equals(wall.id))).get();
+        expect(photos, hasLength(2));
+        expect(
+          photos.where((p) => p.isPrimary),
+          hasLength(1),
+          reason: 'exactly one of the two concurrently-attached photos must '
+              'end up isPrimary — never zero, never both',
+        );
+      },
+    );
   });
 
   group('A6: listSectors scoping', () {
@@ -513,6 +678,143 @@ void main() {
               'this test) PhotoFiles falls back to returning it unchanged',
         );
         expect(withPhotoRef.routeCount, 0);
+      },
+    );
+
+    test(
+      'excludes a FOREIGN-owned wall (a synced-down shared topo) — bug #1: '
+      'watchTopos must not surface someone else\'s wall as if it were the '
+      'signed-in user\'s own, editable topo; own + unowned walls still '
+      'appear',
+      () async {
+        final myRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'my-uid',
+        );
+        final myArea = await myRepo.createArea('My Area');
+        final mySector = await myRepo.createSector(myArea.id, 'My Sector');
+        final myWall = await myRepo.createWall(mySector.id, 'My Wall');
+
+        final foreignRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'foreign-uid',
+        );
+        final foreignArea = await foreignRepo.createArea('Foreign Area');
+        final foreignSector = await foreignRepo.createSector(
+          foreignArea.id,
+          'Foreign Sector',
+        );
+        final foreignWall = await foreignRepo.createWall(
+          foreignSector.id,
+          'Foreign Wall',
+        );
+
+        // Unowned: created via the signed-out-default `repo` (currentUid
+        // always null) — must still appear, same own-or-unowned pattern as
+        // listOwnAreas/listOwnSectors.
+        final unownedArea = await repo.createArea('Unowned Area');
+        final unownedSector = await repo.createSector(
+          unownedArea.id,
+          'Unowned Sector',
+        );
+        final unownedWall = await repo.createWall(
+          unownedSector.id,
+          'Unowned Wall',
+        );
+
+        final topos = await myRepo.watchTopos().first;
+
+        expect(topos.map((t) => t.wallId), contains(myWall.id));
+        expect(topos.map((t) => t.wallId), contains(unownedWall.id));
+        expect(
+          topos.map((t) => t.wallId),
+          isNot(contains(foreignWall.id)),
+        );
+      },
+    );
+
+    test(
+      'watchTopos(signed-out, currentUid returns null) includes only '
+      'unowned walls, never a FOREIGN-owned one',
+      () async {
+        final unownedArea = await repo.createArea('Unowned Area');
+        final unownedSector = await repo.createSector(
+          unownedArea.id,
+          'Unowned Sector',
+        );
+        await repo.createWall(unownedSector.id, 'Unowned Wall');
+
+        final foreignRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'foreign-uid',
+        );
+        final foreignArea = await foreignRepo.createArea('Foreign Area');
+        final foreignSector = await foreignRepo.createSector(
+          foreignArea.id,
+          'Foreign Sector',
+        );
+        final foreignWall = await foreignRepo.createWall(
+          foreignSector.id,
+          'Foreign Wall',
+        );
+
+        final topos = await repo.watchTopos().first;
+
+        expect(topos.map((t) => t.name), ['Unowned Wall']);
+        expect(topos.map((t) => t.wallId), isNot(contains(foreignWall.id)));
+      },
+    );
+
+    test(
+      'Hole A (adversarial-review 2026-07-21): watchTopos takes an '
+      'EXPLICIT ownerUid parameter, and switching it (on the SAME repo '
+      'instance/call) changes which walls come back — the repository-side '
+      'guarantee that lets toposProvider re-subscribe with a fresh uid on '
+      'every auth change instead of freezing whatever uid the OLD code '
+      'read once via a `currentUid` closure',
+      () async {
+        final myRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'my-uid',
+        );
+        final myWall = await myRepo.createWall(
+          (await myRepo.createSector(
+            (await myRepo.createArea('My Area')).id,
+            'My Sector',
+          )).id,
+          'My Wall',
+        );
+
+        final otherRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'other-uid',
+        );
+        final otherWall = await otherRepo.createWall(
+          (await otherRepo.createSector(
+            (await otherRepo.createArea('Other Area')).id,
+            'Other Sector',
+          )).id,
+          'Other Wall',
+        );
+
+        // Same `repo` instance (whose OWN currentUid is the default
+        // signed-out closure) for both calls — only the explicit ownerUid
+        // ARGUMENT differs between them, mirroring how toposProvider
+        // re-derives a fresh uid from authStateProvider and passes it to
+        // the SAME libraryCrudRepositoryProvider instance on every auth
+        // change (an in-app account switch, no app restart).
+        final asMe = await repo.watchTopos('my-uid').first;
+        expect(asMe.map((t) => t.wallId), contains(myWall.id));
+        expect(asMe.map((t) => t.wallId), isNot(contains(otherWall.id)));
+
+        final asOther = await repo.watchTopos('other-uid').first;
+        expect(asOther.map((t) => t.wallId), contains(otherWall.id));
+        expect(asOther.map((t) => t.wallId), isNot(contains(myWall.id)));
       },
     );
 
@@ -2029,6 +2331,447 @@ void main() {
     );
   });
 
+  group(
+    'Hole B (adversarial-review 2026-07-21): write-time own-or-unowned '
+    'guard',
+    () {
+      test(
+        'a FOREIGN-owned wall can be neither renamed nor soft-deleted; an '
+        'OWN and an UNOWNED wall still can be — the write-time counterpart '
+        'to bug #1\'s read-side own-or-unowned scoping: even if a foreign '
+        'wall ever leaked into a local read, it must stay fully '
+        'uneditable',
+        () async {
+          final myRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'my-uid',
+          );
+          final myArea = await myRepo.createArea('My Area');
+          final mySector = await myRepo.createSector(myArea.id, 'My Sector');
+          final myWall = await myRepo.createWall(mySector.id, 'My Wall');
+
+          final foreignRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'foreign-uid',
+          );
+          final foreignArea = await foreignRepo.createArea('Foreign Area');
+          final foreignSector = await foreignRepo.createSector(
+            foreignArea.id,
+            'Foreign Sector',
+          );
+          final foreignWall = await foreignRepo.createWall(
+            foreignSector.id,
+            'Foreign Wall',
+          );
+
+          // Unowned: created via the signed-out-default `repo` (currentUid
+          // always null) — e.g. a topo created offline/signed-out on this
+          // device.
+          final unownedArea = await repo.createArea('Unowned Area');
+          final unownedSector = await repo.createSector(
+            unownedArea.id,
+            'Unowned Sector',
+          );
+          final unownedWall = await repo.createWall(
+            unownedSector.id,
+            'Unowned Wall',
+          );
+
+          // `myRepo` (currentUid: 'my-uid') attempts to mutate all three —
+          // only the foreign wall's mutations must be silently rejected.
+          await myRepo.renameWall(foreignWall.id, 'Hacked Name');
+          await myRepo.softDeleteWall(foreignWall.id);
+          await myRepo.renameWall(myWall.id, 'My Wall Renamed');
+          await myRepo.softDeleteWall(unownedWall.id);
+
+          final foreignRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(foreignWall.id))).getSingle();
+          expect(
+            foreignRow.name,
+            'Foreign Wall',
+            reason: 'a foreign-owned wall must never be renamed',
+          );
+          expect(
+            foreignRow.deletedAt,
+            isNull,
+            reason: 'a foreign-owned wall must never be soft-deleted',
+          );
+
+          final myRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(myWall.id))).getSingle();
+          expect(
+            myRow.name,
+            'My Wall Renamed',
+            reason: 'a genuinely own wall must remain renamable',
+          );
+
+          final unownedRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(unownedWall.id))).getSingle();
+          expect(
+            unownedRow.deletedAt,
+            isNotNull,
+            reason:
+                'an unowned wall must remain writable by any signed-in uid '
+                '(own-or-UNOWNED, not own-only)',
+          );
+        },
+      );
+
+      test(
+        'setWallCoordinates / publishTopo / moveWall against a '
+        'FOREIGN-owned wall are silent no-ops (same guard, single-row and '
+        'cascading mutation shapes both covered)',
+        () async {
+          final foreignRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'foreign-uid',
+          );
+          final foreignArea = await foreignRepo.createArea('Foreign Area');
+          final foreignSector = await foreignRepo.createSector(
+            foreignArea.id,
+            'Foreign Sector',
+          );
+          final destSector = await foreignRepo.createSector(
+            foreignArea.id,
+            'Foreign Dest Sector',
+          );
+          final foreignWall = await foreignRepo.createWall(
+            foreignSector.id,
+            'Foreign Wall',
+          );
+
+          final myRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 2000,
+            currentUid: () => 'my-uid',
+          );
+          await myRepo.setWallCoordinates(foreignWall.id, 47.4979, 19.0402);
+          await myRepo.publishTopo(foreignWall.id);
+          await myRepo.moveWall(foreignWall.id, destSector.id);
+
+          final row = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(foreignWall.id))).getSingle();
+          expect(row.latitude, isNull);
+          expect(row.longitude, isNull);
+          expect(row.visibility, 'private');
+          expect(row.sectorId, foreignSector.id);
+          expect(row.dirty, isFalse);
+          expect(row.updatedAt, 1000);
+        },
+      );
+    },
+  );
+
+  group(
+    'Hole B follow-up (Area/Sector mutation surface, adversarial-review '
+    '2026-07-21): write-time own-or-unowned guard extended to '
+    'renameArea/renameSector/moveSector and to the softDeleteArea/'
+    'softDeleteSector cascades',
+    () {
+      test(
+        'a FOREIGN-owned Area/Sector can be neither renamed nor moved; an '
+        'OWN and an UNOWNED Area/Sector still can be',
+        () async {
+          final myRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'my-uid',
+          );
+          final myArea = await myRepo.createArea('My Area');
+          final mySector = await myRepo.createSector(myArea.id, 'My Sector');
+
+          final foreignRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'foreign-uid',
+          );
+          final foreignArea = await foreignRepo.createArea('Foreign Area');
+          final foreignSector = await foreignRepo.createSector(
+            foreignArea.id,
+            'Foreign Sector',
+          );
+          final foreignDestArea = await foreignRepo.createArea(
+            'Foreign Dest Area',
+          );
+
+          final unownedArea = await repo.createArea('Unowned Area');
+          final unownedSector = await repo.createSector(
+            unownedArea.id,
+            'Unowned Sector',
+          );
+          final destArea = await repo.createArea('Dest Area');
+
+          // `myRepo` attempts to mutate the foreign Area/Sector — must be
+          // silent no-ops. It also renames its own Area/Sector, and moves
+          // the unowned Sector — both must still succeed (own-or-UNOWNED).
+          await myRepo.renameArea(foreignArea.id, 'Hacked Area Name');
+          await myRepo.renameSector(foreignSector.id, 'Hacked Sector Name');
+          await myRepo.moveSector(foreignSector.id, foreignDestArea.id);
+          await myRepo.renameArea(myArea.id, 'My Area Renamed');
+          await myRepo.renameSector(mySector.id, 'My Sector Renamed');
+          await myRepo.moveSector(unownedSector.id, destArea.id);
+
+          final foreignAreaRow = await (db.select(
+            db.areas,
+          )..where((t) => t.id.equals(foreignArea.id))).getSingle();
+          expect(
+            foreignAreaRow.name,
+            'Foreign Area',
+            reason: 'a foreign-owned area must never be renamed',
+          );
+
+          final foreignSectorRow = await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(foreignSector.id))).getSingle();
+          expect(
+            foreignSectorRow.name,
+            'Foreign Sector',
+            reason: 'a foreign-owned sector must never be renamed',
+          );
+          expect(
+            foreignSectorRow.areaId,
+            foreignArea.id,
+            reason: 'a foreign-owned sector must never be moved',
+          );
+          expect(foreignSectorRow.dirty, isFalse);
+
+          final myAreaRow = await (db.select(
+            db.areas,
+          )..where((t) => t.id.equals(myArea.id))).getSingle();
+          expect(myAreaRow.name, 'My Area Renamed');
+
+          final mySectorRow = await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(mySector.id))).getSingle();
+          expect(mySectorRow.name, 'My Sector Renamed');
+
+          final unownedSectorRow = await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(unownedSector.id))).getSingle();
+          expect(
+            unownedSectorRow.areaId,
+            destArea.id,
+            reason:
+                'an unowned sector must remain movable by any signed-in '
+                'uid (own-or-UNOWNED, not own-only)',
+          );
+        },
+      );
+
+      test(
+        'softDeleteArea does NOT cascade-delete a FOREIGN-owned descendant '
+        'sector/wall reached transitively (e.g. a foreign sector nested '
+        'under an otherwise-own area); an own/unowned subtree still '
+        'cascade-deletes normally',
+        () async {
+          final myRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'my-uid',
+          );
+          final myArea = await myRepo.createArea('My Area');
+          final mySector = await myRepo.createSector(myArea.id, 'My Sector');
+          final myWall = await myRepo.createWall(mySector.id, 'My Wall');
+
+          final foreignRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'foreign-uid',
+          );
+          // A foreign sector (and its wall) nested directly under MY area —
+          // simulating a foreign row that leaked in under an otherwise-own
+          // ancestor.
+          final foreignSector = await foreignRepo.createSector(
+            myArea.id,
+            'Foreign Sector',
+          );
+          final foreignWall = await foreignRepo.createWall(
+            foreignSector.id,
+            'Foreign Wall',
+          );
+
+          await myRepo.softDeleteArea(myArea.id);
+
+          final myAreaRow = await (db.select(
+            db.areas,
+          )..where((t) => t.id.equals(myArea.id))).getSingle();
+          expect(
+            myAreaRow.deletedAt,
+            isNotNull,
+            reason: 'the own area itself must still cascade-delete',
+          );
+
+          final mySectorRow = await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(mySector.id))).getSingle();
+          expect(
+            mySectorRow.deletedAt,
+            isNotNull,
+            reason: 'an own descendant sector must still cascade-delete',
+          );
+
+          final myWallRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(myWall.id))).getSingle();
+          expect(
+            myWallRow.deletedAt,
+            isNotNull,
+            reason: 'an own descendant wall must still cascade-delete',
+          );
+
+          final foreignSectorRow = await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(foreignSector.id))).getSingle();
+          expect(
+            foreignSectorRow.deletedAt,
+            isNull,
+            reason:
+                'a FOREIGN sector nested under an own area must NOT be '
+                'soft-deleted transitively',
+          );
+
+          final foreignWallRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(foreignWall.id))).getSingle();
+          expect(
+            foreignWallRow.deletedAt,
+            isNull,
+            reason:
+                'a FOREIGN wall nested (two levels down) under an own area '
+                'must NOT be soft-deleted transitively',
+          );
+        },
+      );
+
+      test(
+        'softDeleteArea against a FOREIGN-owned area is itself a silent '
+        'no-op — the whole subtree (including own-looking descendants) '
+        'stays untouched',
+        () async {
+          final foreignRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'foreign-uid',
+          );
+          final foreignArea = await foreignRepo.createArea('Foreign Area');
+          final foreignSector = await foreignRepo.createSector(
+            foreignArea.id,
+            'Foreign Sector',
+          );
+          final foreignWall = await foreignRepo.createWall(
+            foreignSector.id,
+            'Foreign Wall',
+          );
+
+          final myRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 2000,
+            currentUid: () => 'my-uid',
+          );
+          await myRepo.softDeleteArea(foreignArea.id);
+
+          final foreignAreaRow = await (db.select(
+            db.areas,
+          )..where((t) => t.id.equals(foreignArea.id))).getSingle();
+          final foreignSectorRow = await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(foreignSector.id))).getSingle();
+          final foreignWallRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(foreignWall.id))).getSingle();
+          expect(foreignAreaRow.deletedAt, isNull);
+          expect(foreignSectorRow.deletedAt, isNull);
+          expect(foreignWallRow.deletedAt, isNull);
+        },
+      );
+
+      test(
+        'softDeleteSector does NOT cascade-delete a FOREIGN-owned '
+        'descendant wall reached transitively; an own/unowned subtree '
+        'still cascade-deletes normally, and a FOREIGN sector itself is a '
+        'silent no-op',
+        () async {
+          final myRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'my-uid',
+          );
+          final myArea = await myRepo.createArea('My Area');
+          final mySector = await myRepo.createSector(myArea.id, 'My Sector');
+          final myWall = await myRepo.createWall(mySector.id, 'My Wall');
+
+          final foreignRepo = LibraryCrudRepository(
+            db,
+            nowMs: () => 1000,
+            currentUid: () => 'foreign-uid',
+          );
+          // A foreign wall nested directly under MY sector.
+          final foreignWall = await foreignRepo.createWall(
+            mySector.id,
+            'Foreign Wall',
+          );
+          // An unowned wall nested under MY sector — must still cascade.
+          final unownedWall = await repo.createWall(
+            mySector.id,
+            'Unowned Wall',
+          );
+
+          await myRepo.softDeleteSector(mySector.id);
+
+          final mySectorRow = await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(mySector.id))).getSingle();
+          expect(mySectorRow.deletedAt, isNotNull);
+
+          final myWallRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(myWall.id))).getSingle();
+          expect(myWallRow.deletedAt, isNotNull);
+
+          final unownedWallRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(unownedWall.id))).getSingle();
+          expect(
+            unownedWallRow.deletedAt,
+            isNotNull,
+            reason: 'an unowned wall nested under an own sector must still '
+                'cascade-delete',
+          );
+
+          final foreignWallRow = await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(foreignWall.id))).getSingle();
+          expect(
+            foreignWallRow.deletedAt,
+            isNull,
+            reason:
+                'a FOREIGN wall nested under an own sector must NOT be '
+                'soft-deleted transitively',
+          );
+
+          // A directly foreign-owned sector: softDeleteSector on it must
+          // itself be a silent no-op.
+          final otherForeignSector = await foreignRepo.createSector(
+            myArea.id,
+            'Other Foreign Sector',
+          );
+          await myRepo.softDeleteSector(otherForeignSector.id);
+          final otherForeignSectorRow = await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(otherForeignSector.id))).getSingle();
+          expect(otherForeignSectorRow.deletedAt, isNull);
+        },
+      );
+    },
+  );
+
   group('D8: wallSectorId / listOwnAreas / listOwnSectors — move-picker '
       'lookups', () {
     test(
@@ -2149,4 +2892,71 @@ void main() {
       },
     );
   });
+
+  group(
+    'D9: watchLocatedSectors/watchLocatedAreas antimeridian-safe centroid '
+    '(bug #17)',
+    () {
+      test(
+        'watchLocatedSectors centroid for walls straddling the antimeridian '
+        'stays near the actual cluster, not the naive AVG\'s opposite-side '
+        'wrap-around',
+        () async {
+          final area = await repo.createArea('Area');
+          final sector = await repo.createSector(area.id, 'Sector');
+          final wallEast = await repo.createWall(sector.id, 'Wall East');
+          final wallWest = await repo.createWall(sector.id, 'Wall West');
+          // Two walls ~0.2° apart in reality, straddling the antimeridian.
+          await repo.setWallCoordinates(wallEast.id, 0.0, 179.9);
+          await repo.setWallCoordinates(wallWest.id, 0.0, -179.9);
+
+          final located = await repo.watchLocatedSectors().first;
+
+          expect(located, hasLength(1));
+          final centroidLongitude = located.single.longitude;
+          // Naive AVG(179.9, -179.9) == 0.0 (the opposite side of the
+          // planet); the antimeridian-safe centroid must land near ±180,
+          // not near 0.
+          expect(centroidLongitude.abs(), greaterThan(179.0));
+        },
+      );
+
+      test(
+        'watchLocatedSectors centroid for a NON-straddling group (both '
+        'walls near +179, well clear of the antimeridian) is unaffected — '
+        'still the plain average',
+        () async {
+          final area = await repo.createArea('Area');
+          final sector = await repo.createSector(area.id, 'Sector');
+          final wallA = await repo.createWall(sector.id, 'Wall A');
+          final wallB = await repo.createWall(sector.id, 'Wall B');
+          await repo.setWallCoordinates(wallA.id, 0.0, 178.0);
+          await repo.setWallCoordinates(wallB.id, 0.0, 179.0);
+
+          final located = await repo.watchLocatedSectors().first;
+
+          expect(located.single.longitude, closeTo(178.5, 0.001));
+        },
+      );
+
+      test(
+        'watchLocatedAreas centroid for walls (across sectors) straddling '
+        'the antimeridian stays near the actual cluster',
+        () async {
+          final area = await repo.createArea('Area');
+          final sectorA = await repo.createSector(area.id, 'Sector A');
+          final sectorB = await repo.createSector(area.id, 'Sector B');
+          final wallEast = await repo.createWall(sectorA.id, 'Wall East');
+          final wallWest = await repo.createWall(sectorB.id, 'Wall West');
+          await repo.setWallCoordinates(wallEast.id, 0.0, 179.9);
+          await repo.setWallCoordinates(wallWest.id, 0.0, -179.9);
+
+          final located = await repo.watchLocatedAreas().first;
+
+          expect(located, hasLength(1));
+          expect(located.single.longitude.abs(), greaterThan(179.0));
+        },
+      );
+    },
+  );
 }
