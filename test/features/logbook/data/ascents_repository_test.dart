@@ -180,6 +180,57 @@ void main() {
       )..where((t) => t.id.equals(ascent.id))).getSingle();
       expect(row.ownerId, isNull);
     });
+
+    test(
+      'defaults to visibility "private" and null authorName when omitted',
+      () async {
+        final s = await seed('1');
+
+        final ascent = await repo.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 1, 1),
+          style: AscentStyle.onsight,
+        );
+
+        expect(ascent.visibility, 'private');
+        expect(ascent.isShared, isFalse);
+        expect(ascent.authorName, isNull);
+
+        final row = await (database.select(
+          database.ascents,
+        )..where((t) => t.id.equals(ascent.id))).getSingle();
+        expect(row.visibility, 'private');
+        expect(row.authorName, isNull);
+      },
+    );
+
+    test(
+      'Feature #12: shared:true + authorName persist visibility="shared" '
+      'and the given authorName',
+      () async {
+        final s = await seed('1');
+
+        final ascent = await repo.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 1, 1),
+          style: AscentStyle.redpoint,
+          shared: true,
+          authorName: 'Alex Honnold',
+        );
+
+        expect(ascent.visibility, 'shared');
+        expect(ascent.isShared, isTrue);
+        expect(ascent.authorName, 'Alex Honnold');
+
+        final row = await (database.select(
+          database.ascents,
+        )..where((t) => t.id.equals(ascent.id))).getSingle();
+        expect(row.visibility, 'shared');
+        expect(row.authorName, 'Alex Honnold');
+      },
+    );
   });
 
   group('B3b: logbook scoping + ordering', () {
@@ -384,6 +435,247 @@ void main() {
       expect(updated.climbedAt, ascent.climbedAt);
       expect(updated.notes, 'updated note');
     });
+
+    test(
+      'Feature #12: shared/authorName follow the same omit-to-leave-'
+      'unchanged convention as the other optional fields',
+      () async {
+        final s = await seed('1');
+        final owned = AscentsRepository(
+          database,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+        );
+        final ascent = await owned.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 1, 1),
+          style: AscentStyle.attempt,
+        );
+        expect(ascent.visibility, 'private');
+
+        final laterRepo = AscentsRepository(
+          database,
+          nowMs: () => 2000,
+          currentUid: () => 'u1',
+        );
+        final updated = await laterRepo.updateAscent(
+          id: ascent.id,
+          shared: true,
+          authorName: 'Lynn Hill',
+        );
+
+        expect(updated.visibility, 'shared');
+        expect(updated.isShared, isTrue);
+        expect(updated.authorName, 'Lynn Hill');
+
+        // Omitting both on a later update leaves them unchanged.
+        final unchanged = await laterRepo.updateAscent(
+          id: ascent.id,
+          notes: 'unrelated edit',
+        );
+        expect(unchanged.visibility, 'shared');
+        expect(unchanged.authorName, 'Lynn Hill');
+      },
+    );
+  });
+
+  group('setAscentVisibility', () {
+    test(
+      'flips private -> shared -> private, bumping updatedAt and marking '
+      'dirty each time, without touching ownerId/createdAt',
+      () async {
+        final s = await seed('1');
+        final owned = AscentsRepository(
+          database,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+        );
+        final ascent = await owned.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 1, 1),
+          style: AscentStyle.onsight,
+        );
+        expect(ascent.visibility, 'private');
+
+        final laterRepo = AscentsRepository(
+          database,
+          nowMs: () => 2000,
+          currentUid: () => 'u1',
+        );
+        await laterRepo.setAscentVisibility(id: ascent.id, shared: true);
+
+        var row = await (database.select(
+          database.ascents,
+        )..where((t) => t.id.equals(ascent.id))).getSingle();
+        expect(row.visibility, 'shared');
+        expect(row.updatedAt, 2000);
+        expect(row.dirty, isTrue);
+        expect(row.ownerId, 'u1');
+        expect(row.createdAt, 1000);
+
+        final evenLaterRepo = AscentsRepository(
+          database,
+          nowMs: () => 3000,
+          currentUid: () => 'u1',
+        );
+        await evenLaterRepo.setAscentVisibility(id: ascent.id, shared: false);
+
+        row = await (database.select(
+          database.ascents,
+        )..where((t) => t.id.equals(ascent.id))).getSingle();
+        expect(row.visibility, 'private');
+        expect(row.updatedAt, 3000);
+      },
+    );
+
+    test('is a no-op on a soft-deleted ascent (matches updateAscent)', () async {
+      final s = await seed('1');
+      final owned = AscentsRepository(
+        database,
+        nowMs: () => 1000,
+        currentUid: () => 'u1',
+      );
+      final ascent = await owned.logAscent(
+        routeId: s.routeId,
+        wallId: s.wallId,
+        climbedAt: DateTime.utc(2026, 1, 1),
+        style: AscentStyle.onsight,
+      );
+      await owned.softDeleteAscent(ascent.id);
+
+      await owned.setAscentVisibility(id: ascent.id, shared: true);
+
+      final row = await (database.select(
+        database.ascents,
+      )..where((t) => t.id.equals(ascent.id))).getSingle();
+      expect(row.visibility, 'private', reason: 'deleted rows are not mutated');
+    });
+  });
+
+  group('Feature #12: watchSharedAscents / sharedAscents (cross-owner feed)', () {
+    test(
+      'returns ONLY shared ascents, across every owner, excluding private '
+      'and soft-deleted rows',
+      () async {
+        final s = await seed('1');
+        final userA = AscentsRepository(
+          database,
+          nowMs: () => 1000,
+          currentUid: () => 'user-a',
+        );
+        final userB = AscentsRepository(
+          database,
+          nowMs: () => 1000,
+          currentUid: () => 'user-b',
+        );
+
+        // A: private — must NOT appear in the feed.
+        final aPrivate = await userA.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 1, 1),
+          style: AscentStyle.onsight,
+        );
+        // B: shared — MUST appear.
+        final bShared = await userB.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 2, 1),
+          style: AscentStyle.redpoint,
+          shared: true,
+          authorName: 'User B',
+        );
+        // A: shared but later soft-deleted — must NOT appear.
+        final aSharedDeleted = await userA.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 3, 1),
+          style: AscentStyle.flash,
+          shared: true,
+        );
+        await userA.softDeleteAscent(aSharedDeleted.id);
+
+        final feed = await userA.sharedAscents();
+
+        expect(feed.map((e) => e.ascentId).toList(), [bShared.id]);
+        expect(feed.single.ownerId, 'user-b');
+        expect(feed.single.authorName, 'User B');
+        expect(feed.single.wallId, s.wallId);
+        expect(feed.single.wallName, 'Wall 1');
+        expect(feed.single.style, AscentStyle.redpoint);
+        expect(feed.single.routeNumber, 1);
+
+        // Sanity: neither excluded ascent leaked through.
+        expect(
+          feed.map((e) => e.ascentId),
+          isNot(contains(aPrivate.id)),
+        );
+        expect(
+          feed.map((e) => e.ascentId),
+          isNot(contains(aSharedDeleted.id)),
+        );
+      },
+    );
+
+    test(
+      'newest climbedAt first across owners, and watchSharedAscents reacts '
+      'to a later setAscentVisibility flip',
+      () async {
+        final s = await seed('1');
+        final userA = AscentsRepository(
+          database,
+          nowMs: () => 1000,
+          currentUid: () => 'user-a',
+        );
+        final userB = AscentsRepository(
+          database,
+          nowMs: () => 1000,
+          currentUid: () => 'user-b',
+        );
+
+        final older = await userA.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 1, 1),
+          style: AscentStyle.onsight,
+          shared: true,
+        );
+        final newer = await userB.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 6, 1),
+          style: AscentStyle.flash,
+          shared: true,
+        );
+        // Starts private; not yet in the feed.
+        final flipped = await userA.logAscent(
+          routeId: s.routeId,
+          wallId: s.wallId,
+          climbedAt: DateTime.utc(2026, 3, 1),
+          style: AscentStyle.attempt,
+        );
+
+        final emissions = <List<SharedAscentEntry>>[];
+        final sub = userA.watchSharedAscents().listen(emissions.add);
+        await Future<void>.delayed(Duration.zero);
+        expect(emissions.last.map((e) => e.ascentId).toList(), [
+          newer.id,
+          older.id,
+        ]);
+
+        await userA.setAscentVisibility(id: flipped.id, shared: true);
+        await Future<void>.delayed(Duration.zero);
+        expect(emissions.last.map((e) => e.ascentId).toList(), [
+          newer.id,
+          flipped.id,
+          older.id,
+        ]);
+
+        await sub.cancel();
+      },
+    );
   });
 
   group('ascentsForRoute', () {

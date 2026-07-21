@@ -14,3 +14,11 @@ final ascentsRepositoryProvider = Provider<AscentsRepository>(
     currentUid: ref.watch(currentUidProvider),
   ),
 );
+
+/// Reactive, cross-owner feed of every opt-in-`shared` ascent (Feature #12,
+/// public opt-in ascent logs) — backs a public "ascent feed" (any signed-in
+/// user's shared climbs, not scoped to the current user). See
+/// [AscentsRepository.watchSharedAscents] for the exact query semantics.
+final sharedAscentsProvider = StreamProvider<List<SharedAscentEntry>>(
+  (ref) => ref.watch(ascentsRepositoryProvider).watchSharedAscents(),
+);
