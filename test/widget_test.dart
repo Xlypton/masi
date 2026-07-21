@@ -2152,6 +2152,27 @@ void main() {
             find.text('No photo yet — pick one to start'),
             findsOneWidget,
           );
+          // The empty state must offer a tappable primary "Add a photo"
+          // button (not just the icon/caption) that opens the SAME
+          // Camera/Library source sheet the photo FAB uses — see
+          // `_buildEmptyState`'s doc.
+          final addPhotoButton = find.byKey(
+            const Key('topo-empty-state-add-photo'),
+          );
+          expect(addPhotoButton, findsOneWidget);
+          expect(find.text('Add a photo'), findsOneWidget);
+
+          await tester.tap(addPhotoButton);
+          await _drain(tester);
+          expect(
+            find.byKey(const Key('photo-source-library')),
+            findsOneWidget,
+            reason:
+                'tapping the empty-state button must open the real photo '
+                'source action sheet, exactly like the photo FAB',
+          );
+          await tester.tap(find.byKey(const Key('photo-source-cancel')));
+          await _drain(tester);
 
           // Unmount so Riverpod cancels the live Drift watch subscriptions
           // this real (owning) ProviderScope holds before db.close runs in

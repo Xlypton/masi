@@ -1048,7 +1048,18 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           .setPrimaryPhoto(widget.wallId, photo.id);
     } catch (e, st) {
       debugPrint('Failed to set cover photo ${photo.id}: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't update cover photo — please try again"),
+        ),
+      );
+      return;
     }
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Cover photo updated')));
   }
 
   /// U4 (manage menu): deletes [photo] (and, via
@@ -1090,9 +1101,19 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       await ref.read(photoRepositoryProvider).deleteOriginalPhoto(photo.id);
     } catch (e, st) {
       debugPrint('Failed to delete photo ${photo.id}: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't delete photo — please try again"),
+        ),
+      );
       return;
     }
-    if (!mounted || !wasActiveOrInFlight) return;
+    if (!mounted) return;
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(const SnackBar(content: Text('Photo deleted')));
+    if (!wasActiveOrInFlight) return;
 
     final remaining = await ref
         .read(photoRepositoryProvider)
@@ -1815,6 +1836,36 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                 color: colors.ink2,
               ),
             ),
+            // readOnly: no add affordance — there is no photo a read-only
+            // viewer could pick to attach to someone else's wall (mirrors
+            // `_buildImageErrorState`'s own `!widget.readOnly` gate).
+            if (!widget.readOnly) ...[
+              const SizedBox(height: MasiSpacing.lg),
+              // "Filled" (primary) per DESIGN.md "Buttons": accent bg,
+              // onAccent text, radius `MasiRadii.control` — same
+              // ElevatedButton.styleFrom shape used by
+              // `crud_list_scaffold.dart`'s own add button, rather than the
+              // "Tinted" style `_buildImageErrorState`'s "Choose another
+              // photo" uses (that one is a secondary retry action; this is
+              // the screen's ONLY action while empty, so it reads as
+              // primary).
+              ElevatedButton(
+                key: const Key('topo-empty-state-add-photo'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colors.accent,
+                  foregroundColor: colors.onAccent,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: MasiSpacing.lg,
+                    vertical: MasiSpacing.md,
+                  ),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(MasiRadii.control),
+                  ),
+                ),
+                onPressed: _pickImage,
+                child: const Text('Add a photo'),
+              ),
+            ],
           ],
         ),
       ),

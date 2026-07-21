@@ -294,6 +294,13 @@ void main() {
         findsOneWidget,
         reason: 'deleting photo2 must not disturb photo1\'s item',
       );
+      expect(
+        find.text('Photo deleted'),
+        findsOneWidget,
+        reason:
+            '_handleDeletePhoto must surface a confirmation SnackBar on '
+            'success, mirroring _handleEditLocation\'s own pattern',
+      );
       // The canvas was never showing photo2 (photo1 is the active/primary
       // one) so deleting it must not have touched the active selection.
       expect(
@@ -338,6 +345,13 @@ void main() {
       reason:
           'photo2 is the only photo left, so it must be promoted to '
           'primary and become the active canvas photo',
+    );
+    expect(
+      find.text('Photo deleted'),
+      findsOneWidget,
+      reason:
+          '_handleDeletePhoto must confirm success even on the '
+          'active-photo/redirect path, not just the non-active one',
     );
 
     // As in U2: the selected image must be photo2's own OWNED localPath
@@ -387,6 +401,13 @@ void main() {
       expect(
         seeded.container.read(drawControllerProvider(seeded.wallId)).activePhotoId,
         seeded.photo1Id,
+      );
+      expect(
+        find.text('Cover photo updated'),
+        findsOneWidget,
+        reason:
+            '_handleSetCoverPhoto must surface a confirmation SnackBar on '
+            'success, mirroring _handleEditLocation\'s own pattern',
       );
     },
   );
