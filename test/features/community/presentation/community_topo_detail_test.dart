@@ -648,11 +648,15 @@ void main() {
       // collapsing header's embedded TopoCanvasScreen `embedded: true` (see
       // that flag's doc), which suppresses its own floating RouteLegend
       // (and hence this same label) entirely.
-      expect(
-        find.text('1. Sunny Arete • 6a', skipOffstage: false),
-        findsWidgets,
-      );
-      // Unnamed, ungraded route falls back to the generic label.
+      // Redesign: the grade now renders in its own leading pill/badge
+      // (`_GradeBadge`) rather than appended to the name text
+      // (`_routeNameLabel`), so the name and grade are separate Text
+      // widgets — asserted as two separate finds instead of one combined
+      // string.
+      expect(find.text('1. Sunny Arete', skipOffstage: false), findsWidgets);
+      expect(find.text('6a', skipOffstage: false), findsWidgets);
+      // Unnamed, ungraded route falls back to the generic label (no grade
+      // badge renders, since gradeRaw is null).
       expect(find.text('Route 2', skipOffstage: false), findsWidgets);
 
       // Pre-seeded comments render.
@@ -665,8 +669,9 @@ void main() {
   );
 
   testWidgets(
-    'D4: the comment submit button renders MasiIcon(\'send_check\') — '
-    'masi_send.svg does not exist in assets/icons/masi/ yet',
+    'D4 (redesign): the comment submit button renders '
+    "MasiIcon('send_fill') — masi_send_fill.svg now exists in "
+    'assets/icons/masi/, added alongside the comment-input redesign',
     (tester) async {
       final seeded = await seedWallWithTwoRoutesAndComments(tester);
       addTearDown(seeded.db.close);
@@ -698,7 +703,7 @@ void main() {
           matching: find.byType(MasiIcon, skipOffstage: false),
         ),
       );
-      expect(submitIcon.name, 'send_check');
+      expect(submitIcon.name, 'send_fill');
     },
   );
 
@@ -1027,6 +1032,57 @@ void main() {
         findsNothing,
       );
     });
+  });
+
+  group('Redesign golden (visual regression)', () {
+    testWidgets(
+      'the redesigned screen (photo header with gradient-scrim title, '
+      'card-based routes list, filled rounded comment input + send_fill '
+      'button) renders a stable golden image',
+      (tester) async {
+        final seeded = await seedWallWithTwoRoutesAndComments(tester);
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
+
+        // Pin physical size + device pixel ratio so the checked-in golden
+        // PNG's dimensions/content are deterministic across machines,
+        // mirroring topo_painter_golden_test.dart's own golden test. Tall
+        // enough that the redesigned screen's header + like row + comments
+        // + routes card all render without being clipped by the test
+        // viewport (no scrolling needed to capture them in one shot).
+        tester.view.physicalSize = const Size(400, 1200);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        // A dedicated RepaintBoundary + GlobalKey (rather than
+        // `find.byType(RepaintBoundary)`, as topo_painter_golden_test.dart
+        // uses) since this is a full screen with many Material widgets
+        // (IconButton, TextField, OutlinedButton, ...) that can themselves
+        // introduce their own internal RepaintBoundary descendants --
+        // `find.byType` would risk matching more than one and throwing on
+        // the matcher's internal `.single`.
+        final repaintKey = GlobalKey();
+        await tester.pumpWidget(
+          wrap(
+            seeded.container,
+            RepaintBoundary(
+              key: repaintKey,
+              child: CommunityTopoDetailScreen(
+                wallId: seeded.wallId,
+                debugInitialImageSize: const Size(1000, 2000),
+              ),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await expectLater(
+          find.byKey(repaintKey),
+          matchesGoldenFile('goldens/community_topo_detail.png'),
+        );
+      },
+    );
   });
 }
 

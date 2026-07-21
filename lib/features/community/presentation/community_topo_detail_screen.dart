@@ -6,7 +6,8 @@ import '../../../app/theme.dart';
 import '../../../core/routes/route_styles.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
-import '../../topo/presentation/route_legend.dart';
+import '../../topo/domain/topo_route.dart';
+import '../../topo/presentation/canvas_chrome.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
 import '../../library/application/library_providers.dart';
 import '../application/comments_providers.dart';
@@ -56,8 +57,49 @@ class _CommunityTopoDetailScreenState
   /// toggled by tapping its header (keyed `community-routes-section`).
   bool _routesExpanded = true;
 
+  /// Redesign: drives the collapsing header between its "hero" look (large
+  /// white title over the photo, behind a gradient scrim) and its
+  /// "collapsed" look (small title in `colors.ink` over a solid
+  /// `colors.surface` app-bar background) — see [_onScroll].
+  /// `FlexibleSpaceBar.title`'s own color is otherwise STATIC across the
+  /// whole collapse animation (only its position/scale are framework-
+  /// animated — see `FlexibleSpaceBar.build`'s `title` branch), so without
+  /// this the title would have to pick one fixed color that stays legible
+  /// on both a photo AND a solid theme surface — impossible with this app's
+  /// light/dark `MasiColors` tokens (no single color reads well on both an
+  /// arbitrary photo-with-scrim and a near-white/near-black surface).
+  final _scrollController = ScrollController();
+  bool _headerCollapsed = false;
+  double _expandedHeight = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _scrollController.addListener(_onScroll);
+  }
+
+  /// Flips [_headerCollapsed] once the header has scrolled (approximately)
+  /// all the way to its pinned, collapsed strip — matching the same
+  /// scroll-offset threshold (`expandedHeight - kToolbarHeight`) at which
+  /// `FlexibleSpaceBar`'s own built-in background fade (see its `build`
+  /// method: `background` fades to fully transparent over the last
+  /// `kToolbarHeight` px of the collapse) finishes, so the title's color
+  /// switch lines up with the background's own transition instead of
+  /// visibly fighting it.
+  void _onScroll() {
+    if (_expandedHeight <= 0) return;
+    final threshold = _expandedHeight - kToolbarHeight;
+    final collapsed =
+        _scrollController.hasClients && _scrollController.offset >= threshold;
+    if (collapsed != _headerCollapsed) {
+      setState(() => _headerCollapsed = collapsed);
+    }
+  }
+
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     _commentController.dispose();
     super.dispose();
   }
@@ -170,10 +212,18 @@ class _CommunityTopoDetailScreenState
     // even for a signed-in user.
     ref.watch(currentAuthorNameProvider);
 
+    final expandedHeight = MediaQuery.sizeOf(context).height * 0.48;
+    // Captured for `_onScroll` (see that method's doc) — an ordinary field
+    // write, not a `setState`, since it's just stashing a layout value for a
+    // later scroll-callback read, not itself something that needs to
+    // trigger a rebuild.
+    _expandedHeight = expandedHeight;
+
     return Scaffold(
       key: Key('community-detail-$wallId'),
       body: SafeArea(
         child: CustomScrollView(
+          controller: _scrollController,
           slivers: [
             // D1: the topo image as a fixed, COLLAPSING header (rolls up as
             // the body below scrolls) rather than the old fixed-height
@@ -183,8 +233,16 @@ class _CommunityTopoDetailScreenState
             SliverAppBar(
               key: const Key('community-detail-header'),
               pinned: true,
-              expandedHeight: MediaQuery.sizeOf(context).height * 0.48,
-              backgroundColor: colors.ground,
+              expandedHeight: expandedHeight,
+              // Transparent while the photo (+ scrim) is still showing
+              // through — so the header reads as one continuous surface
+              // with the photo. Once collapsed (see `_headerCollapsed`),
+              // solid `colors.surface` shows behind the now-small,
+              // ink-colored title: standard collapsing-header behavior,
+              // legible in both states.
+              backgroundColor: _headerCollapsed
+                  ? colors.surface
+                  : Colors.transparent,
               surfaceTintColor: Colors.transparent,
               elevation: 0,
               // This screen owns its own back affordance (rather than the
@@ -222,15 +280,24 @@ class _CommunityTopoDetailScreenState
                     collapseMode: CollapseMode.pin,
                     titlePadding: const EdgeInsetsDirectional.only(
                       start: 56,
-                      bottom: MasiSpacing.sm,
+                      bottom: MasiSpacing.md,
                       end: MasiSpacing.lg,
                     ),
+                    // Redesign: a proper large-title hierarchy (titleLarge,
+                    // bumped to w700) instead of the old cramped
+                    // titleMedium overlaid directly on the photo with no
+                    // scrim — legible over ANY photo thanks to the
+                    // gradient scrim in `background` below, white while
+                    // expanded and switching to `colors.ink` once
+                    // collapsed onto the now-solid `colors.surface`
+                    // app-bar background (see `_headerCollapsed`).
                     title: Text(
                       title,
                       key: const Key('community-detail-title'),
                       overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                        color: colors.ink,
+                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.w700,
+                        color: _headerCollapsed ? colors.ink : Colors.white,
                       ),
                     ),
                     background: IgnorePointer(
@@ -263,12 +330,36 @@ class _CommunityTopoDetailScreenState
                       // the only FUNCTIONAL back control, and this header
                       // never showed its own route legend anyway (the
                       // "Routes" section below does that job).
-                      child: TopoCanvasScreen(
-                        wallId: wallId,
-                        readOnly: true,
-                        embedded: true,
-                        // ignore: invalid_use_of_visible_for_testing_member
-                        debugInitialImageSize: widget.debugInitialImageSize,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          TopoCanvasScreen(
+                            wallId: wallId,
+                            readOnly: true,
+                            embedded: true,
+                            // ignore: invalid_use_of_visible_for_testing_member
+                            debugInitialImageSize: widget.debugInitialImageSize,
+                          ),
+                          // Bottom-aligned gradient scrim: keeps the title
+                          // (in its white, "over-the-photo" state) legible
+                          // regardless of the underlying photo's own
+                          // colors/contrast — transparent at the top so the
+                          // photo itself still reads, darkening toward the
+                          // bottom where the title sits.
+                          DecoratedBox(
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                                stops: const [0.5, 1.0],
+                                colors: [
+                                  Colors.black.withValues(alpha: 0),
+                                  Colors.black.withValues(alpha: 0.55),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ),
@@ -304,10 +395,14 @@ class _CommunityTopoDetailScreenState
                       ),
                     ],
                   ),
+                  const SizedBox(height: MasiSpacing.sm),
                   const Divider(),
+                  const SizedBox(height: MasiSpacing.xs),
                   Text(
                     'Comments',
-                    style: Theme.of(context).textTheme.titleMedium,
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                   const SizedBox(height: MasiSpacing.sm),
                   if (comments.isEmpty)
@@ -321,15 +416,48 @@ class _CommunityTopoDetailScreenState
                   else
                     for (final comment in comments)
                       _CommentRow(comment: comment),
-                  const SizedBox(height: MasiSpacing.sm),
+                  const SizedBox(height: MasiSpacing.md),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.center,
                     children: [
                       Expanded(
                         child: TextField(
                           key: const Key('community-comment-field'),
                           controller: _commentController,
-                          decoration: const InputDecoration(
+                          // Redesign: filled, rounded input matching the
+                          // Community Feed's own search field style
+                          // (`community_feed_screen.dart`) — a soft
+                          // `surface2` fill with no harsh underline, rather
+                          // than the bare default `InputDecoration`.
+                          decoration: InputDecoration(
                             hintText: 'Add a comment',
+                            filled: true,
+                            fillColor: colors.surface2,
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: MasiSpacing.lg,
+                              vertical: MasiSpacing.md,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(
+                                MasiRadii.control,
+                              ),
+                              borderSide: BorderSide.none,
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(
+                                MasiRadii.control,
+                              ),
+                              borderSide: BorderSide.none,
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(
+                                MasiRadii.control,
+                              ),
+                              borderSide: BorderSide(
+                                color: colors.accent,
+                                width: 1.5,
+                              ),
+                            ),
                           ),
                         ),
                       ),
@@ -345,12 +473,8 @@ class _CommunityTopoDetailScreenState
                           return IconButton(
                             key: const Key('community-comment-submit'),
                             tooltip: 'Post comment',
-                            // D4: masi_send.svg doesn't exist in
-                            // assets/icons/masi/ (only masi_send_check*) —
-                            // keep the existing glyph per that assertion's
-                            // fallback.
                             icon: MasiIcon(
-                              'send_check',
+                              'send_fill',
                               color: canSubmit ? colors.accent : colors.ink2,
                             ),
                             onPressed: canSubmit ? _submitComment : null,
@@ -359,7 +483,9 @@ class _CommunityTopoDetailScreenState
                       ),
                     ],
                   ),
+                  const SizedBox(height: MasiSpacing.lg),
                   const Divider(),
+                  const SizedBox(height: MasiSpacing.sm),
                   _buildRoutesSection(context, colors, routeEntries),
                 ]),
               ),
@@ -386,11 +512,17 @@ class _CommunityTopoDetailScreenState
         InkWell(
           key: const Key('community-routes-section'),
           onTap: () => setState(() => _routesExpanded = !_routesExpanded),
+          borderRadius: BorderRadius.circular(MasiRadii.control),
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: MasiSpacing.xs),
+            padding: const EdgeInsets.symmetric(vertical: MasiSpacing.sm),
             child: Row(
               children: [
-                Text('Routes', style: Theme.of(context).textTheme.titleMedium),
+                Text(
+                  'Routes',
+                  style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
                 const Spacer(),
                 MasiIcon(
                   _routesExpanded ? 'chevron_up' : 'chevron_down',
@@ -402,78 +534,183 @@ class _CommunityTopoDetailScreenState
           ),
         ),
         if (_routesExpanded) const SizedBox(height: MasiSpacing.sm),
+        // Redesign: the routes used to render as a bare Column of
+        // zero-padding ListTiles that visually ran into each other. Now a
+        // single card (`colors.surface` + `MasiRadii.card` +
+        // `kMasiAmbientShadow`, matching this app's other card surfaces —
+        // see account_screen.dart's sign-in card) holds every route row,
+        // with a hairline `separator` Divider BETWEEN rows (never after
+        // the last) so no two rows ever visually merge.
         if (_routesExpanded)
-          for (final entry in routeEntries)
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              title: Text(routeDisplayLabel(entry.route)),
-              subtitle:
-                  (entry.route.styleTags.isEmpty &&
-                          (entry.route.stars ?? 0) <= 0)
-                      ? null
-                      : Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (entry.route.styleTags.isNotEmpty)
-                              Wrap(
-                                spacing: 4,
-                                runSpacing: 4,
-                                children: [
-                                  for (final tag in entry.route.styleTags)
-                                    _RouteStyleTagChip(
-                                      routeId: entry.dbId,
-                                      tag: tag,
-                                    ),
-                                ],
-                              ),
-                            if ((entry.route.stars ?? 0) > 0)
-                              Row(
-                                key: Key('route-stars-${entry.dbId}'),
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  for (
-                                    var i = 0;
-                                    i < entry.route.stars!;
-                                    i++
-                                  )
-                                    const Padding(
-                                      padding: EdgeInsets.only(right: 1),
-                                      child: MasiIcon('star_fill', size: 12),
-                                    ),
-                                ],
-                              ),
-                          ],
-                        ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (entry.route.betaVideoUrl != null)
-                    IconButton(
-                      key: Key('route-beta-${entry.dbId}'),
-                      tooltip: 'Watch beta video',
-                      icon: MasiIcon('globe'),
-                      onPressed: () =>
-                          _launchBetaVideo(entry.route.betaVideoUrl!),
-                    ),
-                  OutlinedButton(
-                    key: Key('community-log-ascent-${entry.dbId}'),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: colors.accent,
-                      side: BorderSide(color: colors.accent),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(
-                          MasiRadii.control,
-                        ),
-                      ),
-                    ),
-                    onPressed: () => _openLogAscentSheet(entry.dbId),
-                    child: const Text('Log ascent'),
-                  ),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.lg),
+            decoration: BoxDecoration(
+              color: colors.surface,
+              borderRadius: BorderRadius.circular(MasiRadii.card),
+              boxShadow: kMasiAmbientShadow,
+            ),
+            child: Column(
+              children: [
+                for (var i = 0; i < routeEntries.length; i++) ...[
+                  _buildRouteRow(context, colors, routeEntries[i]),
+                  if (i != routeEntries.length - 1)
+                    Divider(height: 1, thickness: 1, color: colors.separator),
                 ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// One route row in the redesigned Routes card: a leading grade pill
+  /// ([_GradeBadge], shown when [TopoRoute.gradeRaw] is set), the route's
+  /// name/number ([_routeNameLabel] — [routeDisplayLabel]'s identical
+  /// name-vs-number fallback, minus the `' • <grade>'` suffix now shown in
+  /// the pill instead), its style-tag chips + star rating underneath, and
+  /// right-aligned actions (beta-video + "Log ascent") — every existing
+  /// key/behavior preserved exactly.
+  Widget _buildRouteRow(
+    BuildContext context,
+    MasiColors colors,
+    RouteEntry entry,
+  ) {
+    final route = entry.route;
+    final grade = route.gradeRaw;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: MasiSpacing.md),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          if (grade != null) ...[
+            _GradeBadge(grade: grade),
+            const SizedBox(width: MasiSpacing.sm),
+          ],
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _routeNameLabel(route),
+                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                    color: colors.ink,
+                    fontWeight: FontWeight.w600,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                if (route.styleTags.isNotEmpty || (route.stars ?? 0) > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(top: MasiSpacing.xs),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (route.styleTags.isNotEmpty)
+                          Wrap(
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: [
+                              for (final tag in route.styleTags)
+                                _RouteStyleTagChip(
+                                  routeId: entry.dbId,
+                                  tag: tag,
+                                ),
+                            ],
+                          ),
+                        if ((route.stars ?? 0) > 0)
+                          Row(
+                            key: Key('route-stars-${entry.dbId}'),
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (var i = 0; i < route.stars!; i++)
+                                const Padding(
+                                  padding: EdgeInsets.only(right: 1),
+                                  child: MasiIcon('star_fill', size: 12),
+                                ),
+                            ],
+                          ),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(width: MasiSpacing.sm),
+          if (route.betaVideoUrl != null)
+            IconButton(
+              key: Key('route-beta-${entry.dbId}'),
+              tooltip: 'Watch beta video',
+              visualDensity: VisualDensity.compact,
+              icon: MasiIcon('globe'),
+              onPressed: () => _launchBetaVideo(route.betaVideoUrl!),
+            ),
+          OutlinedButton(
+            key: Key('community-log-ascent-${entry.dbId}'),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: colors.accent,
+              side: BorderSide(color: colors.accent),
+              padding: const EdgeInsets.symmetric(
+                horizontal: MasiSpacing.md,
+                vertical: MasiSpacing.xs,
+              ),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(MasiRadii.control),
               ),
             ),
-      ],
+            onPressed: () => _openLogAscentSheet(entry.dbId),
+            child: const Text('Log ascent'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// [routeDisplayLabel]'s identical name-vs-number fallback, minus the
+/// trailing `' • <grade>'` suffix — the grade renders separately in this
+/// screen's own leading [_GradeBadge] rather than appended to the name.
+String _routeNameLabel(TopoRoute route) {
+  final trimmedName = route.name?.trim();
+  return (trimmedName != null && trimmedName.isNotEmpty)
+      ? '${route.number}. $trimmedName'
+      : 'Route ${route.number}';
+}
+
+/// Small leading grade pill for a route row in the redesigned Routes list —
+/// a soft, theme-adaptive chip (`MasiColors.surface2` background, matching
+/// `route_legend.dart`'s style-tag chips) with `accent`-tinted text, so the
+/// grade reads at a glance before the route's full name/number. Deliberately
+/// NOT `amethyst100` for the fill: that brand-ramp token is a fixed literal
+/// in both light AND dark `MasiColors` (see theme.dart), so pairing it with
+/// the theme-adaptive `accent` text color would give poor contrast in dark
+/// mode (light lavender fill + light purple text).
+class _GradeBadge extends StatelessWidget {
+  const _GradeBadge({required this.grade});
+
+  final String grade;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: MasiSpacing.sm,
+        vertical: MasiSpacing.xs,
+      ),
+      decoration: BoxDecoration(
+        color: colors.surface2,
+        borderRadius: BorderRadius.circular(MasiRadii.control),
+      ),
+      child: Text(
+        grade,
+        style: Theme.of(context).textTheme.labelMedium?.copyWith(
+          color: colors.accent,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
     );
   }
 }
