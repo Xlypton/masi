@@ -4,6 +4,8 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/account/application/auth_providers.dart';
+import 'package:climbtopo/features/account/application/pwa_install_providers.dart';
+import 'package:climbtopo/features/account/application/pwa_install_types.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/account/presentation/account_screen.dart';
 import 'package:climbtopo/features/backup/application/sync_orchestrator.dart';
@@ -603,6 +605,141 @@ void main() {
 
         expect(find.byKey(const Key('sync-status')), findsOneWidget);
         expect(find.text('Not synced yet'), findsOneWidget);
+      },
+    );
+  });
+
+  group('PWA install affordance', () {
+    ProviderContainer makeContainer(PwaInstallStatus status) {
+      final fakeRepo = FakeAuthRepository(
+        const AuthSessionState.signedIn('climber@example.com'),
+      );
+      addTearDown(fakeRepo.dispose);
+      final container = ProviderContainer(
+        overrides: [
+          authRepositoryProvider.overrideWithValue(fakeRepo),
+          pwaInstallStatusProvider.overrideWithValue(status),
+        ],
+      );
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    testWidgets(
+      'the default/native status (not standalone, cannot prompt, platform '
+      'other) shows neither the install button nor the iOS hint — native '
+      'regression guard: the stub status must never render either '
+      'affordance',
+      (tester) async {
+        final container = makeContainer(
+          const PwaInstallStatus(
+            isStandalone: false,
+            canPrompt: false,
+            platform: PwaPlatform.other,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('account-install-button')),
+          findsNothing,
+        );
+        expect(find.byKey(const Key('account-install-hint')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'canPrompt=true (Chromium/Android deferred install prompt ready) '
+      'shows the real "Install app" button, not the iOS hint',
+      (tester) async {
+        final container = makeContainer(
+          const PwaInstallStatus(
+            isStandalone: false,
+            canPrompt: true,
+            platform: PwaPlatform.android,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('account-install-button')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('account-install-hint')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'platform=ios with canPrompt=false (Safari has no programmatic '
+      'install API) shows the "Add to Home Screen" hint, not the prompt '
+      'button',
+      (tester) async {
+        final container = makeContainer(
+          const PwaInstallStatus(
+            isStandalone: false,
+            canPrompt: false,
+            platform: PwaPlatform.ios,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('account-install-hint')), findsOneWidget);
+        expect(
+          find.byKey(const Key('account-install-button')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'isStandalone=true (already installed) shows neither affordance, '
+      'even when canPrompt is also true — nothing left to offer',
+      (tester) async {
+        final container = makeContainer(
+          const PwaInstallStatus(
+            isStandalone: true,
+            canPrompt: true,
+            platform: PwaPlatform.android,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('account-install-button')),
+          findsNothing,
+        );
+        expect(find.byKey(const Key('account-install-hint')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'tapping the iOS hint opens a dialog explaining the manual Share -> '
+      "'Add to Home Screen' steps",
+      (tester) async {
+        final container = makeContainer(
+          const PwaInstallStatus(
+            isStandalone: false,
+            canPrompt: false,
+            platform: PwaPlatform.ios,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('account-install-hint')));
+        await tester.pumpAndSettle();
+
+        expect(find.byType(AlertDialog), findsOneWidget);
+        expect(find.textContaining('Add to Home Screen'), findsWidgets);
       },
     );
   });

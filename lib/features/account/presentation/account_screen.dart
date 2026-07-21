@@ -2,11 +2,15 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/masi_icon.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../topo/presentation/canvas_chrome.dart';
 import '../application/auth_providers.dart';
 import '../application/email_initials.dart';
 import '../application/profile_providers.dart';
+import '../application/pwa_install.dart';
+import '../application/pwa_install_providers.dart';
+import '../application/pwa_install_types.dart';
 import '../data/auth_repository.dart';
 
 /// The Account screen: magic-link email sign-in when signed out, else the
@@ -464,9 +468,126 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                 onPressed: widget.onSignOut,
                 child: const Text('Sign out'),
               ),
+              const _InstallSection(),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// PWA-install affordance appended to the signed-in card — a mobile-web-only
+/// concern (see `pwa_install_providers.dart`): native builds always get the
+/// inert stub status, so this renders nothing there, matching the "no
+/// visual change on iOS/Android app" requirement.
+///
+/// Shows one of two things, depending on [PwaInstallStatus]:
+///  - a real "Install app" button (`account-install-button`) when the
+///    browser has a deferred native install prompt ready
+///    ([PwaInstallStatus.canPrompt] — Chromium/Android's
+///    `beforeinstallprompt`), which calls [pwaPromptInstall] and confirms
+///    via a SnackBar once the user accepts;
+///  - an "Add to Home Screen" hint (`account-install-hint`) on
+///    [PwaPlatform.ios], which has no programmatic install API at all —
+///    tapping it explains the manual Share-sheet steps instead.
+/// Renders nothing (a zero-size box) once [PwaInstallStatus.isStandalone] is
+/// already true (already installed — nothing left to offer) or on any other
+/// platform/browser combination that can neither prompt nor be walked
+/// through manually.
+class _InstallSection extends ConsumerWidget {
+  const _InstallSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final status = ref.watch(pwaInstallStatusProvider);
+    final showInstall =
+        !status.isStandalone &&
+        (status.canPrompt || status.platform == PwaPlatform.ios);
+    if (!showInstall) return const SizedBox.shrink();
+
+    final colors = MasiColors.of(context);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: MasiSpacing.lg),
+        if (status.canPrompt)
+          ElevatedButton(
+            key: const Key('account-install-button'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: colors.accent,
+              foregroundColor: colors.onAccent,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(13),
+              ),
+            ),
+            onPressed: () => _handleInstallPrompt(context),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                MasiIcon('download', size: 18, color: colors.onAccent),
+                const SizedBox(width: MasiSpacing.sm),
+                const Text('Install app'),
+              ],
+            ),
+          )
+        else
+          ElevatedButton(
+            key: const Key('account-install-hint'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: colors.surface2,
+              foregroundColor: colors.ink,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(13),
+              ),
+            ),
+            onPressed: () => _showAddToHomeScreenDialog(context),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                MasiIcon('download', size: 18, color: colors.ink),
+                const SizedBox(width: MasiSpacing.sm),
+                const Text('Add to Home Screen'),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
+  /// Fires the browser's real (Chromium/Android) install prompt via
+  /// [pwaPromptInstall] and — only on an accepted outcome — confirms with a
+  /// SnackBar. A dismissed/unavailable outcome is a silent no-op: the
+  /// browser's own prompt UI already gave the user a clear choice, so a
+  /// second "you said no" message here would be redundant noise.
+  Future<void> _handleInstallPrompt(BuildContext context) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final accepted = await pwaPromptInstall();
+    if (accepted) {
+      messenger.showSnackBar(const SnackBar(content: Text('Installing…')));
+    }
+  }
+
+  /// The iOS fallback: Safari has no programmatic install API, so the best
+  /// this app can do is explain the manual Share-sheet steps.
+  void _showAddToHomeScreenDialog(BuildContext context) {
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Add to Home Screen'),
+        content: const Text(
+          'To install: tap the Share button in your browser, then choose '
+          "'Add to Home Screen'.",
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: const Text('OK'),
+          ),
+        ],
       ),
     );
   }
