@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'nav_shell.dart';
 import '../features/account/presentation/account_screen.dart';
 import '../features/ar/presentation/ar_screen.dart';
+import '../features/community/presentation/ascent_detail_screen.dart';
 import '../features/community/presentation/community_screen.dart';
 import '../features/community/presentation/community_topo_detail_screen.dart';
 import '../features/library/presentation/areas_screen.dart';
@@ -94,6 +95,13 @@ final appRouter = GoRouter(
       path: '/community/topo/:wallId',
       builder: (context, state) =>
           CommunityTopoDetailScreen(wallId: state.pathParameters['wallId']!),
+    ),
+    // A shared ascent log's read-only detail (Feature #12, public opt-in
+    // ascent logs) — see AscentDetailScreen's class doc.
+    GoRoute(
+      path: '/community/ascent/:id',
+      builder: (context, state) =>
+          AscentDetailScreen(ascentId: state.pathParameters['id']!),
     ),
     // The personal ascent Logbook (see LogbookScreen's class doc).
     GoRoute(
