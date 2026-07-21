@@ -11,7 +11,6 @@ import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/core/platform/ar_support.dart';
 import 'package:climbtopo/core/location/location_service.dart';
-import 'package:climbtopo/core/location/photo_gps.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/library/presentation/set_location_picker.dart';
@@ -28,289 +27,25 @@ import 'package:climbtopo/features/topo/presentation/route_legend.dart';
 import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
 import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
+import 'package:climbtopo/features/topo/presentation/topo_canvas_gps.dart';
+import 'package:climbtopo/features/topo/presentation/topo_canvas_photo_ops.dart';
 import 'package:climbtopo/shared/presentation/masi_icon.dart';
+
+// Split out of this god-file (pure refactor, zero behavior change): GPS
+// capture helpers moved to `topo_canvas_gps.dart`, and the selected-image
+// provider + photo-attach helpers moved to `topo_canvas_photo_ops.dart`.
+// Re-exported here so every existing importer of this file (e.g.
+// `topos_screen.dart`'s `show captureWallGpsFromPhoto,
+// gpsCaptureResultSnackBar`, and this feature's own tests) keeps resolving
+// with no edit required on their end.
+export 'topo_canvas_gps.dart';
+export 'topo_canvas_photo_ops.dart';
 
 // Theme-follow fix: the canvas backdrop used to be a hardcoded near-black
 // (`_kCanvasBackdrop = Color(0xFF121316)`) regardless of the app's
 // light/dark theme. The Scaffold below now uses `colors.ground` — the same
 // theme-derived token the empty-state placeholder ([_buildEmptyState]) has
 // always used — so the canvas follows the theme like every other screen.
-
-/// Holds the path of the currently selected image, or null if none.
-class SelectedImageNotifier extends Notifier<String?> {
-  @override
-  String? build() => null;
-
-  void select(String path) => state = path;
-  void clear() => state = null;
-}
-
-final selectedImageProvider = NotifierProvider<SelectedImageNotifier, String?>(
-  SelectedImageNotifier.new,
-);
-
-/// Loads [wallId]'s persisted "original" photo (if any) via
-/// [photoRepository], and, when found, loads its routes into
-/// [drawController]'s state via [DrawController.loadForWall].
-///
-/// Extracted as a standalone, non-UI function taking its dependencies
-/// directly (rather than a [WidgetRef], and rather than being inlined into
-/// [_TopoCanvasScreenState]) precisely so the "restore a wall's persisted
-/// photo/routes on open" contract is testable directly against a
-/// [ProviderContainer]'s `photoRepositoryProvider` /
-/// `drawControllerProvider.notifier` — no widget pump, no [WidgetRef] (which
-/// is `sealed` in riverpod 3 and so cannot be faked in tests), and no real
-/// image decode required (see
-/// `test/features/topo/application/topo_canvas_wall_binding_test.dart`).
-///
-/// UNCONDITIONAL reset (cross-wall leak fix): [drawController.beginPhotoSwitch]
-/// is called — and [onReset], if given, is invoked — synchronously, BEFORE
-/// the async [photoRepository.loadOriginal] call even starts, and regardless
-/// of whether a photo is ultimately found. Previously the only reset was
-/// [beforeLoadForWall] below, which only ever ran when a photo WAS found;
-/// entering a wall with no photo yet left [drawControllerProvider] (and, via
-/// [onReset], `selectedImageProvider`) holding whatever the
-/// PREVIOUSLY-viewed wall had left there — both are app-lifetime globals,
-/// not per-wall state. Concretely, without this: navigating from a
-/// wall A that has a photo+routes to a wall B that has none would show B's
-/// screen with A's photo and routes still on screen, AND leave
-/// `state.activeWallId == A`, so drawing+committing on B would silently
-/// persist to wall A. Resetting first — synchronously, before the `await`
-/// below — closes that: `activeWallId` becomes null immediately (so a stray
-/// commit mid-load can't reach ANY wall's persisted routes — see
-/// [DrawController.beginPhotoSwitch]'s doc), and the screen falls back to its
-/// own empty state rather than the previous wall's image, for exactly as
-/// long as wall B genuinely has nothing to show.
-///
-/// [beforeLoadForWall], if given, is invoked synchronously with the found
-/// photo right before [DrawController.loadForWall] is called. This exists so
-/// [_TopoCanvasScreenState] can select the photo's path (showing the image)
-/// at exactly the right moment: [SelectedImageNotifier.select] synchronously
-/// triggers this screen's `ref.listen` callback in `build`
-/// ([DrawController.beginPhotoSwitch] + clearing the transform), which must
-/// run BEFORE `loadForWall` populates fresh wall/route state, or
-/// that synchronous clear would immediately wipe out what was just loaded.
-/// (For the has-photo path, this means [DrawController.beginPhotoSwitch] is
-/// invoked twice — once unconditionally above, once via that listener when
-/// [beforeLoadForWall] selects the path — which is harmless: the second call
-/// finds state already clear, then `loadForWall` proceeds exactly as before.)
-///
-/// FIX #4 (continued): the no-photo branch calls
-/// [DrawController.cancelPhotoSwitch] before returning — [beginPhotoSwitch]
-/// above opens a switch that, with no photo to load, [DrawController
-/// .loadForWall] will never run to close out. Without this call
-/// [DrawState.isSwitchingPhoto] would stay stuck `true`, and the NEXT
-/// [DrawController.beginPhotoSwitch] (for whatever wall is entered after
-/// this photo-less one) would wrongly treat that stale flag as "a switch
-/// is still in flight" and carry forward any stray routes committed on
-/// this photo-less wall's empty canvas into the NEXT wall's freshly-loaded
-/// state instead of discarding them — see [DrawController.cancelPhotoSwitch]'s
-/// doc for the full regression this closes.
-Future<PhotoRef?> loadWallOriginalPhoto(
-  PhotoRepository photoRepository,
-  DrawController drawController,
-  String wallId, {
-  void Function(PhotoRef photo)? beforeLoadForWall,
-  void Function()? onReset,
-}) async {
-  final generation = drawController.beginPhotoSwitch();
-  onReset?.call();
-
-  final photo = await photoRepository.loadOriginal(wallId);
-  if (photo == null) {
-    drawController.cancelPhotoSwitch(generation);
-    return null;
-  }
-  beforeLoadForWall?.call(photo);
-  await drawController.loadForWall(wallId, photo.id);
-  return photo;
-}
-
-/// Resolves the app-owned path for the just-attached photo [photoId] via
-/// [libraryRepo] and, if it differs from [pickedPath] (the transient
-/// picker-cache path [_TopoCanvasScreenState._pickImage] originally
-/// selected), updates [selectedImage] to hold the owned path instead.
-/// Returns whichever path ends up current (the owned path, or [pickedPath]
-/// unchanged if [libraryRepo].attachPhotoToWall's copy never happened/failed
-/// and the row still points at [pickedPath]).
-///
-/// This is the fix for a confirmed photo-ownership bug: [attachPhotoToWall]
-/// copies a freshly-picked file into the app-owned `<appDocuments>/photos/`
-/// directory and stores THAT path on the new row, but only returns the new
-/// photo's id (see that method's doc) — `selectedImageProvider` itself was
-/// left holding whatever raw path `_pickImage` selected before the attach
-/// even started, for the rest of the session (a stale, OS-evictable
-/// picker-cache path rather than the owned copy) until the wall was
-/// reopened.
-///
-/// [libraryRepo].photoLocalPath is a direct primary-key lookup by [photoId]
-/// — unlike `PhotoRepository.loadOriginal`'s wallId+kind query, it can never
-/// throw on a wall that has accumulated more than one live `'original'` row
-/// (e.g. from replacing a wall's photo more than once), so re-reading the
-/// owned path this way is safe even in that case.
-///
-/// Extracted as a standalone function taking [libraryRepo] and
-/// [selectedImage] (a [SelectedImageNotifier], not a [WidgetRef]) directly
-/// — mirroring [loadWallOriginalPhoto]'s own extraction above — so this
-/// fix's contract is directly testable against a [ProviderContainer]'s
-/// `libraryCrudRepositoryProvider`/`selectedImageProvider`: no widget pump,
-/// no real image decode (see
-/// `test/features/library/data/photo_ownership_test.dart`'s "S1 regression"
-/// group, which exercises exactly this).
-Future<String> resolveAttachedPhotoPath(
-  LibraryCrudRepository libraryRepo,
-  SelectedImageNotifier selectedImage,
-  String photoId,
-  String pickedPath,
-) async {
-  final ownedPath = await libraryRepo.photoLocalPath(photoId) ?? pickedPath;
-  if (ownedPath != pickedPath) {
-    selectedImage.select(ownedPath);
-  }
-  return ownedPath;
-}
-
-/// The outcome of a single [captureWallGpsFromPhoto] call, surfaced to the
-/// caller so it can tell the user whether (and how) a location was found
-/// for the photo just attached — see the "indicator" feature this backs:
-/// a [SnackBar] via [gpsCaptureResultSnackBar] reporting exactly this.
-enum GpsCaptureResult {
-  /// The photo itself carried EXIF GPS tags, and the wall's coordinates
-  /// were set (or updated) from them.
-  exif,
-
-  /// The photo had no EXIF GPS, but the wall had no coordinates yet and a
-  /// device location was available, so that was recorded instead.
-  deviceFallback,
-
-  /// Neither EXIF GPS nor an applicable device-location fallback: no EXIF
-  /// tags, AND either no device location was available, the wall already
-  /// had coordinates (the fallback only ever fills a void — see below), or
-  /// an error occurred. The wall's coordinates are unchanged in every case.
-  none,
-}
-
-/// Reads the file at [path]'s bytes and, if they carry EXIF GPS tags (see
-/// `core/location/photo_gps.dart`'s [extractGpsFromImageBytes]), records
-/// them on [wallId] via [libraryRepo.setWallCoordinates].
-///
-/// Returns a [GpsCaptureResult] describing what happened, so callers (see
-/// [_attachPhotoAndLoad] and `topos_screen.dart`'s `_handleNewTopo`) can
-/// show the user a SnackBar reflecting it via [gpsCaptureResultSnackBar].
-///
-/// [locationService], if given, backs a fallback for the common no-EXIF
-/// case (screenshots, downloaded images, GPS-less cameras): when the photo
-/// itself carries no GPS, [LocationService.currentLocation] is asked for
-/// the DEVICE's current position instead, and — if one is available —
-/// THAT is recorded on [wallId]. EXIF always wins when both are present:
-/// the fallback is only ever attempted after an EXIF read comes back null.
-/// Passing no [locationService] (the default) simply skips the fallback,
-/// leaving the pre-existing EXIF-only behavior unchanged (and returns
-/// [GpsCaptureResult.none] whenever there's no EXIF GPS, exactly as if the
-/// fallback had been attempted and come back empty).
-///
-/// Data-corruption fix: the device-location fallback only ever fills a
-/// VOID — it is attempted ONLY when [wallId] has no coordinates yet (see
-/// [LibraryCrudRepository.wallHasCoordinates]). This function runs on
-/// EVERY photo attach, including REPLACING a wall's existing photo (the
-/// canvas's add/replace-photo action): without this guard, a wall correctly
-/// geotagged from its first photo's real EXIF GPS at the crag would have
-/// those coordinates silently overwritten by wherever the device happens to
-/// be — e.g. the user's home — the moment its photo is later replaced with
-/// a no-EXIF image (a screenshot, a downloaded photo). EXIF GPS itself is
-/// NOT subject to this guard: an EXIF read on a replacement photo always
-/// updates [wallId]'s coordinates, even overwriting existing ones — that is
-/// explicit, user-chosen photo data, not an incidental device position.
-///
-
-/// Extracted as a standalone function taking [libraryRepo] and a plain
-/// [xfile] directly — mirroring [loadWallOriginalPhoto]/
-/// [resolveAttachedPhotoPath]'s own extraction above — so this is directly
-/// testable against a real [LibraryCrudRepository] and a real (or
-/// hand-built fixture) file on disk: no widget pump and no `FileImage`/
-/// `ui.instantiateImageCodec` decode required
-/// (see `test/features/topo/presentation/topo_canvas_gps_test.dart`).
-///
-/// Never throws: a missing/unreadable file, bytes with no EXIF GPS AND no
-/// (or no available) device location, resolves to [GpsCaptureResult.none]
-/// rather than throwing — this is deliberately best-effort, exactly like
-/// [extractGpsFromImageBytes] and [LocationService.currentLocation]
-/// themselves, so missing location data of either kind never blocks or
-/// breaks the surrounding photo attach/load flow.
-Future<GpsCaptureResult> captureWallGpsFromPhoto(
-  LibraryCrudRepository libraryRepo,
-  String wallId,
-  XFile xfile, {
-  LocationService? locationService,
-}) async {
-  try {
-    final bytes = await xfile.readAsBytes();
-    final gps = extractGpsFromImageBytes(bytes);
-    if (gps != null) {
-      await libraryRepo.setWallCoordinates(
-        wallId,
-        gps.latitude,
-        gps.longitude,
-      );
-      return GpsCaptureResult.exif;
-    }
-
-    // No EXIF GPS -- fall back to the device's current location, but ONLY
-    // to fill a VOID: if the wall already has coordinates (e.g. from a
-    // previous photo's real EXIF GPS at the crag), a replacement photo with
-    // no EXIF GPS must never silently overwrite them with wherever the
-    // device happens to be right now -- see this function's doc for the
-    // data-corruption scenario this guards against.
-    if (await libraryRepo.wallHasCoordinates(wallId)) {
-      return GpsCaptureResult.none;
-    }
-
-    final device = await locationService?.currentLocation();
-    if (device == null) return GpsCaptureResult.none;
-    await libraryRepo.setWallCoordinates(
-      wallId,
-      device.latitude,
-      device.longitude,
-    );
-    return GpsCaptureResult.deviceFallback;
-  } catch (_) {
-    // Best-effort: a missing file, decode hiccup, or location failure must
-    // never break the photo attach/load flow this runs alongside.
-    return GpsCaptureResult.none;
-  }
-}
-
-/// The user-facing message for [result], shared by both flows that call
-/// [captureWallGpsFromPhoto] — this screen's own add/replace-photo action
-/// ([_attachPhotoAndLoad]) and the Topos home's "New topo" flow
-/// (`topos_screen.dart`'s `_handleNewTopo`) — so the wording is identical
-/// for the same underlying outcome no matter which flow produced it.
-String gpsCaptureResultMessage(GpsCaptureResult result) => switch (result) {
-  GpsCaptureResult.exif => 'Location found in photo',
-  GpsCaptureResult.deviceFallback => 'Location set from your current position',
-  GpsCaptureResult.none => 'No location found in photo',
-};
-
-/// A [SnackBar] presenting [gpsCaptureResultMessage] for [result] — with a
-/// leading place-pin icon whenever a location was actually captured
-/// ([GpsCaptureResult.exif] or [GpsCaptureResult.deviceFallback]), omitted
-/// for [GpsCaptureResult.none] so that neutral "nothing found" case reads
-/// plainly rather than implying a location was set.
-SnackBar gpsCaptureResultSnackBar(GpsCaptureResult result) {
-  final foundLocation = result != GpsCaptureResult.none;
-  return SnackBar(
-    content: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (foundLocation) ...[
-          MasiIcon('pin', size: 18),
-          const SizedBox(width: 8),
-        ],
-        Flexible(child: Text(gpsCaptureResultMessage(result))),
-      ],
-    ),
-  );
-}
 
 class TopoCanvasScreen extends ConsumerStatefulWidget {
   const TopoCanvasScreen({
