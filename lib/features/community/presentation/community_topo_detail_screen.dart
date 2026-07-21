@@ -8,6 +8,7 @@ import '../../../shared/presentation/masi_icon.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../topo/presentation/route_legend.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
+import '../../library/application/library_providers.dart';
 import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
@@ -149,6 +150,16 @@ class _CommunityTopoDetailScreenState
         ref.watch(commentsForWallProvider(wallId)).value ?? const [];
     final routeEntries =
         ref.watch(routeEntriesForWallProvider(wallId)).value ?? const [];
+    // Chrome-title fix: the collapsing header used to show no title at all
+    // (just a back button), leaving the viewer with no way to tell which
+    // topo they're looking at once they'd scrolled past its photo. Mirrors
+    // topo_canvas_screen.dart's own `wallNameProvider` fallback: 'Topo'
+    // both while still loading and if the wall genuinely has no name.
+    final wallName = ref.watch(wallNameProvider(wallId));
+    final title = wallName.maybeWhen(
+      data: (name) => (name == null || name.isEmpty) ? 'Topo' : name,
+      orElse: () => 'Topo',
+    );
     // Watched (not just read from _submitComment) so authStateProvider is
     // warmed from the very first build: authRepositoryProvider's
     // authStateChanges() stream emits its first value asynchronously (a
@@ -209,6 +220,19 @@ class _CommunityTopoDetailScreenState
                 children: [
                   FlexibleSpaceBar(
                     collapseMode: CollapseMode.pin,
+                    titlePadding: const EdgeInsetsDirectional.only(
+                      start: 56,
+                      bottom: MasiSpacing.sm,
+                      end: MasiSpacing.lg,
+                    ),
+                    title: Text(
+                      title,
+                      key: const Key('community-detail-title'),
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                        color: colors.ink,
+                      ),
+                    ),
                     background: IgnorePointer(
                       // NON-interactive: the embedded TopoCanvasScreen's own
                       // pan/zoom (InteractiveViewer) and tap-to-select would
@@ -287,7 +311,17 @@ class _CommunityTopoDetailScreenState
                     style: Theme.of(context).textTheme.titleMedium,
                   ),
                   const SizedBox(height: MasiSpacing.sm),
-                  for (final comment in comments) _CommentRow(comment: comment),
+                  if (comments.isEmpty)
+                    Text(
+                      'No comments yet — be the first',
+                      key: const Key('community-comments-empty'),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodyMedium?.copyWith(color: colors.ink2),
+                    )
+                  else
+                    for (final comment in comments)
+                      _CommentRow(comment: comment),
                   const SizedBox(height: MasiSpacing.sm),
                   Row(
                     children: [
@@ -301,14 +335,28 @@ class _CommunityTopoDetailScreenState
                         ),
                       ),
                       const SizedBox(width: MasiSpacing.sm),
-                      IconButton(
-                        key: const Key('community-comment-submit'),
-                        tooltip: 'Post comment',
-                        // D4: masi_send.svg doesn't exist in
-                        // assets/icons/masi/ (only masi_send_check*) — keep
-                        // the existing glyph per that assertion's fallback.
-                        icon: MasiIcon('send_check'),
-                        onPressed: _submitComment,
+                      // Disabled/inert state for an empty/whitespace-only
+                      // draft: rebuilt straight off the controller (rather
+                      // than gated on comments-list state) so it reacts to
+                      // every keystroke, not just a comment actually posting.
+                      ValueListenableBuilder<TextEditingValue>(
+                        valueListenable: _commentController,
+                        builder: (context, value, _) {
+                          final canSubmit = value.text.trim().isNotEmpty;
+                          return IconButton(
+                            key: const Key('community-comment-submit'),
+                            tooltip: 'Post comment',
+                            // D4: masi_send.svg doesn't exist in
+                            // assets/icons/masi/ (only masi_send_check*) —
+                            // keep the existing glyph per that assertion's
+                            // fallback.
+                            icon: MasiIcon(
+                              'send_check',
+                              color: canSubmit ? colors.accent : colors.ink2,
+                            ),
+                            onPressed: canSubmit ? _submitComment : null,
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -411,6 +459,15 @@ class _CommunityTopoDetailScreenState
                     ),
                   OutlinedButton(
                     key: Key('community-log-ascent-${entry.dbId}'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colors.accent,
+                      side: BorderSide(color: colors.accent),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(
+                          MasiRadii.control,
+                        ),
+                      ),
+                    ),
                     onPressed: () => _openLogAscentSheet(entry.dbId),
                     child: const Text('Log ascent'),
                   ),

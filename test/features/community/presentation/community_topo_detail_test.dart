@@ -282,6 +282,134 @@ void main() {
   );
 
   testWidgets(
+    'chrome title: the collapsing header shows the wall/topo name so the '
+    'viewer always knows which topo they\'re on',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final titleWidget = tester.widget<Text>(
+        find.byKey(const Key('community-detail-title'), skipOffstage: false),
+      );
+      // seedWallWithRoute names the wall literally 'Wall'.
+      expect(titleWidget.data, 'Wall');
+    },
+  );
+
+  testWidgets(
+    'comment empty state: renders a placeholder when the wall has no '
+    'comments yet, and it disappears once one is posted',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('community-comments-empty'), skipOffstage: false),
+        findsOneWidget,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('community-comment-field')),
+        'First!',
+      );
+      // The submit IconButton is disabled/enabled off a ValueListenableBuilder
+      // watching `_commentController` directly (see the "comment submit
+      // button" group above) — `enterText` fires that listener synchronously
+      // but the rebuilt (now-enabled) IconButton instance isn't in the
+      // element tree until a frame is pumped. Skipping this `pump()` taps
+      // the still-disabled button from the PREVIOUS build (a no-op), so the
+      // comment is silently never submitted.
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('community-comment-submit')));
+      await tester.pumpAndSettle();
+
+      expect(
+        find.byKey(const Key('community-comments-empty'), skipOffstage: false),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'comment submit button: disabled for an empty/whitespace-only draft, '
+    'enabled once real text is entered',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      IconButton submitButton() => tester.widget<IconButton>(
+        find.byKey(
+          const Key('community-comment-submit'),
+          skipOffstage: false,
+        ),
+      );
+
+      // Empty draft: disabled.
+      expect(submitButton().onPressed, isNull);
+
+      // Whitespace-only draft: still disabled.
+      await tester.enterText(
+        find.byKey(const Key('community-comment-field')),
+        '   ',
+      );
+      await tester.pump();
+      expect(submitButton().onPressed, isNull);
+
+      // Real text: enabled.
+      await tester.enterText(
+        find.byKey(const Key('community-comment-field')),
+        'Nice!',
+      );
+      await tester.pump();
+      expect(submitButton().onPressed, isNotNull);
+
+      // Clearing it back out disables it again.
+      await tester.enterText(
+        find.byKey(const Key('community-comment-field')),
+        '',
+      );
+      await tester.pump();
+      expect(submitButton().onPressed, isNull);
+    },
+  );
+
+  testWidgets(
     'D4b: tapping community-like-button toggles state and updates the count',
     (tester) async {
       final seeded = await seedWallWithRoute(tester);
@@ -344,6 +472,10 @@ void main() {
         find.byKey(const Key('community-comment-field')),
         'Great line!',
       );
+      // See the identical comment in the "comment empty state" test above:
+      // the submit button needs a pumped frame to pick up the now-enabled
+      // `onPressed` before it can be usefully tapped.
+      await tester.pump();
       await tester.tap(find.byKey(const Key('community-comment-submit')));
       await tester.pumpAndSettle();
 
