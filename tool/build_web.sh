@@ -33,7 +33,11 @@ done
 
 echo "==> dart:io grep gate (must be empty)"
 # Any dart:io import outside a *_native.dart file would leak into the web bundle.
-OFFENDERS="$(grep -rl "dart:io" lib --include="*.dart" | grep -v '_native.dart' || true)"
+# Match real import/export DIRECTIVES only (a line that starts with import/export
+# 'dart:io'), never prose: doc comments legitimately mention `dart:io` when they
+# explain the wasm conditional-import split, and a raw substring grep flags those
+# as false positives (which is what used to make this gate fail on clean code).
+OFFENDERS="$(grep -rlE "^[[:space:]]*(import|export)[[:space:]]+['\"]dart:io['\"]" lib --include="*.dart" | grep -v '_native.dart' || true)"
 if [[ -n "$OFFENDERS" ]]; then
   echo "FAIL: dart:io found outside *_native.dart in:" >&2
   echo "$OFFENDERS" >&2
