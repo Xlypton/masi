@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/config/supabase_providers.dart';
@@ -51,3 +52,19 @@ final currentUidProvider = Provider<String? Function()>((ref) {
     }
   };
 });
+
+/// Whether the web-only "must be signed in" auth wall (see `router.dart`'s
+/// top-level redirect, `_webAuthGateRedirect`) is active for this app run.
+///
+/// Defaults to [kIsWeb]: on native (iOS/Android) the wall must be a total
+/// no-op — this app is local-first and stays fully usable signed out there,
+/// unchanged from before the wall existed. Only on web is an unauthenticated
+/// visitor blocked from every route except the sign-in view
+/// (`webAuthGateSignInPath`) until they complete a magic-link sign-in.
+///
+/// Deliberately a plain, override-able `Provider<bool>` — the redirect logic
+/// itself must NEVER inline a bare `kIsWeb` check, so widget tests can force
+/// the gate on or off (see `router_test.dart`'s "web auth wall" group)
+/// without needing a real web build to flip the compile-time constant.
+/// `kIsWeb` is used ONLY here, as this provider's default value.
+final webAuthGateEnabledProvider = Provider<bool>((ref) => kIsWeb);

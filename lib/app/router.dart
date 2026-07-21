@@ -1,6 +1,11 @@
+import 'dart:async';
+
+import 'package:flutter/widgets.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'nav_shell.dart';
+import '../features/account/application/auth_providers.dart';
 import '../features/account/presentation/account_screen.dart';
 import '../features/ar/presentation/ar_screen.dart';
 import '../features/community/presentation/ascent_detail_screen.dart';
@@ -34,7 +39,121 @@ String communityRedirectTarget(Map<String, String> queryParameters) {
   return focus != null ? '/map?focus=$focus' : '/map';
 }
 
+/// The full-screen sign-in destination the web auth wall (see
+/// [_webAuthGateRedirect]) sends a signed-out web visitor to: the existing
+/// `/account` route below, which is declared as a top-level SIBLING of the
+/// bottom-nav shell rather than one of its branches — it already builds on
+/// the root navigator, full-screen, with no tabs exposed (see `NavShell`'s
+/// class doc), and `AccountScreen` itself already renders the actual sign-in
+/// UI (`_SignedOutBody`) purely from live [authStateProvider] state. No new
+/// screen needed — just this route is reused as the wall's landing spot.
+const String webAuthGateSignInPath = '/account';
+
+/// Containers [_webAuthGateRedirect] has already wired an [authStateProvider]
+/// refresh listener onto (see [_ensureAuthRefreshWired]) — keyed by object
+/// identity via [Expando] rather than a [Set] so a disposed
+/// [ProviderContainer] (e.g. a fresh one per widget test) is never kept
+/// alive just to remember it was wired.
+final Expando<Object> _authRefreshWired = Expando<Object>(
+  'webAuthGateRefreshWired',
+);
+
+/// Web auth wall (private-app requirement, see `CLIMBTOPO.md`): on WEB,
+/// while [webAuthGateEnabledProvider] is on, an unauthenticated visitor must
+/// not reach ANY route except [webAuthGateSignInPath] itself. On NATIVE
+/// (`webAuthGateEnabledProvider` false, its `kIsWeb`-derived default) this
+/// function is a total no-op on the very first line — the local-first app
+/// stays exactly as usable signed out as it was before this wall existed.
+///
+/// Reads live Riverpod state via [ProviderScope.containerOf] rather than
+/// `ref.watch` because `appRouter` below is a plain module-level [GoRouter]
+/// (like this file's pre-existing `communityRedirectTarget`-driven legacy
+/// redirect), constructed once at import time, long before any
+/// [ProviderContainer] exists — there's no provider to `watch` from here.
+/// `context` is always a live descendant of whatever
+/// [ProviderScope]/`UncontrolledProviderScope` wraps
+/// `MaterialApp.router(routerConfig: appRouter, ...)`: go_router's own
+/// `Router` widget passes ITS OWN mounted `BuildContext` into every
+/// top-level `redirect` call (see go_router's `parser.dart`/`_navigate`), so
+/// this lookup is safe everywhere this router is actually mounted —
+/// `main.dart`'s real app and every existing router test's
+/// `UncontrolledProviderScope`-wrapped harness alike.
+///
+/// Order of checks — deliberately FAIL CLOSED: the only two ways past this
+/// function while the gate is on and you're not already on the sign-in
+/// route are (a) genuine first-load loading (case 3) and (b) a confirmed
+/// signed-in session (case 5). Everything else — signed-out OR errored —
+/// redirects to [webAuthGateSignInPath].
+///  1. Gate disabled -> `null` (no redirect, ever) — the native no-op.
+///  2. [webAuthGateSignInPath] itself is ALWAYS exempt, gate or no gate — a
+///     signed-out visitor already on the sign-in view must stay there (no
+///     redirect loop).
+///  3. Genuinely still loading with NO value yet
+///     (`AsyncValue.isLoading && !AsyncValue.hasValue` — the brief window
+///     before the first `onAuthStateChange`/fake-stream emission, which on
+///     web also spans Supabase's `detectSessionInUri` parsing a magic-link
+///     `code` out of `Uri.base` at boot): don't bounce a would-be
+///     -authenticated user off the page they actually asked for. Once the
+///     stream resolves, [_ensureAuthRefreshWired]'s listener calls
+///     [GoRouter.refresh] to re-run this redirect against the CURRENT
+///     location with the now-known state.
+///
+///     NOTE this is intentionally NOT the same test as the old (buggy)
+///     `!authAsync.hasValue`: [AsyncValue.hasValue] is ALSO false for a
+///     value-less [AsyncError], and `main()` deliberately catches-and
+///     -continues when `Supabase.initialize()` fails, which leaves
+///     [authStateProvider] a *permanent* value-less `AsyncError` — under the
+///     old check that made this function return `null` on every route,
+///     forever, i.e. the wall failed OPEN. `isLoading` is `false` once the
+///     stream has settled to an error, so that case falls through to #4
+///     instead.
+///  4. [AsyncValue.hasError] (the auth backend is unavailable — init failed
+///     or unreachable, per #3's note): treated as UNAUTHENTICATED, not as
+///     "unknown, let them through" — redirects to [webAuthGateSignInPath].
+///     Fail closed.
+///  5. Otherwise a resolved value is present: signed-in passes through
+///     untouched (`null`); signed-out redirects to [webAuthGateSignInPath].
+FutureOr<String?> _webAuthGateRedirect(
+  BuildContext context,
+  GoRouterState state,
+) {
+  final container = ProviderScope.containerOf(context, listen: false);
+  if (!container.read(webAuthGateEnabledProvider)) return null;
+
+  _ensureAuthRefreshWired(container);
+
+  if (state.matchedLocation == webAuthGateSignInPath) return null;
+
+  final authAsync = container.read(authStateProvider);
+
+  if (authAsync.isLoading && !authAsync.hasValue) return null;
+
+  if (authAsync.hasError) return webAuthGateSignInPath;
+
+  return authAsync.value!.isSignedIn ? null : webAuthGateSignInPath;
+}
+
+/// Wires a ONE-TIME [authStateProvider] listener onto [container] that calls
+/// [GoRouter.refresh] on every emission, so [_webAuthGateRedirect] gets
+/// re-evaluated for the CURRENT location the moment the auth stream actually
+/// resolves (e.g. loading -> signed-out must then bounce to
+/// [webAuthGateSignInPath], but [_webAuthGateRedirect] itself only runs on
+/// navigation attempts, never on a bare state change by itself — `refresh()`
+/// is what turns "state changed" into "re-run the redirect check"). Guarded
+/// by [_authRefreshWired] since every navigation re-invokes
+/// [_webAuthGateRedirect] against the same container, which would otherwise
+/// pile up a duplicate listener per navigation.
+void _ensureAuthRefreshWired(ProviderContainer container) {
+  if (_authRefreshWired[container] != null) return;
+  _authRefreshWired[container] = true;
+  container.listen(
+    authStateProvider,
+    (previous, next) => appRouter.refresh(),
+  );
+}
+
 final appRouter = GoRouter(
+  redirect: _webAuthGateRedirect,
   routes: [
     // The persistent bottom-nav shell (see `nav_shell.dart`'s `NavShell`):
     // three `IndexedStack` branches — Topos (home, index 0) / Map (index 1)

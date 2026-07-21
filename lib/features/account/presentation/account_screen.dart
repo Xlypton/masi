@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -48,6 +49,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   final _emailController = TextEditingController();
   bool _sending = false;
   bool _linkSent = false;
+  bool _notApproved = false;
   String? _error;
 
   @override
@@ -67,6 +69,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     if (!_emailPattern.hasMatch(email)) {
       setState(() {
         _linkSent = false;
+        _notApproved = false;
         _error = 'Enter a valid email address.';
       });
       return;
@@ -77,13 +80,14 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     // the "sending"/confirmation UI renders underneath it.
     FocusManager.instance.primaryFocus?.unfocus();
 
-    // Reset both the confirmation and any prior error at the START of every
-    // attempt (not just the error), so a later failed send can never render
-    // the stale "link sent" confirmation and the new error message at the
-    // same time.
+    // Reset the confirmation, the not-approved notice, and any prior error
+    // at the START of every attempt (not just the error), so a later failed
+    // send can never render a stale message from an earlier attempt
+    // alongside whatever this new attempt resolves to.
     setState(() {
       _sending = true;
       _linkSent = false;
+      _notApproved = false;
       _error = null;
     });
     try {
@@ -92,7 +96,18 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       setState(() => _linkSent = true);
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = 'Could not send the link: $e');
+      // This app is private (server-side `disable_signup=true`, mirrored
+      // client-side by `sendMagicLink`'s `shouldCreateUser: false`): an
+      // email with no existing account throws here instead of silently
+      // sending nothing, so it gets a distinct, friendly message rather
+      // than the generic "Could not send the link" error below.
+      setState(() {
+        if (isNotApprovedAuthError(e)) {
+          _notApproved = true;
+        } else {
+          _error = 'Could not send the link: $e';
+        }
+      });
     } finally {
       if (mounted) {
         setState(() => _sending = false);
@@ -154,23 +169,27 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                   controller: _emailController,
                   sending: _sending,
                   linkSent: _linkSent,
+                  notApproved: _notApproved,
                   error: _error,
                   onSend: _handleSendLink,
                 ),
           loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, stackTrace) => Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Something went wrong: $error'),
-                const SizedBox(height: 8),
-                ElevatedButton(
-                  key: const Key('account-error-retry'),
-                  onPressed: () => ref.invalidate(authStateProvider),
-                  child: const Text('Retry'),
-                ),
-              ],
-            ),
+          // A permanent, value-less AsyncError here (e.g. main()'s
+          // documented Supabase.initialize()-failed catch-and-continue
+          // fallback — see `_webAuthGateRedirect`'s doc in
+          // `lib/app/router.dart`) is treated as UNAUTHENTICATED, exactly
+          // like the `data`-signed-out branch above, rather than a dead-end
+          // "Something went wrong" screen with no way to even attempt
+          // sign-in: this is the sign-in view the web auth wall's fail
+          // -CLOSED redirect lands an errored visitor on, so it must
+          // actually offer the sign-in form.
+          error: (error, stackTrace) => _SignedOutBody(
+            controller: _emailController,
+            sending: _sending,
+            linkSent: _linkSent,
+            notApproved: _notApproved,
+            error: _error,
+            onSend: _handleSendLink,
           ),
         ),
       ),
@@ -187,6 +206,7 @@ class _SignedOutBody extends StatelessWidget {
     required this.controller,
     required this.sending,
     required this.linkSent,
+    required this.notApproved,
     required this.error,
     required this.onSend,
   });
@@ -194,6 +214,12 @@ class _SignedOutBody extends StatelessWidget {
   final TextEditingController controller;
   final bool sending;
   final bool linkSent;
+
+  /// Whether the last [onSend] attempt failed because [controller]'s email
+  /// isn't an approved/existing account (see `isNotApprovedAuthError`'s
+  /// doc) — renders the distinct `account-not-approved` message instead of
+  /// [linkSent]'s generic confirmation or [error]'s generic failure text.
+  final bool notApproved;
   final String? error;
   final VoidCallback onSend;
 
@@ -259,6 +285,18 @@ class _SignedOutBody extends StatelessWidget {
                   'Check your email for a link to sign in.',
                   key: const Key('account-link-sent'),
                   style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              if (notApproved) ...[
+                const SizedBox(height: MasiSpacing.md),
+                Text(
+                  "This email isn't approved for access yet. Ask the owner "
+                  'to add you.',
+                  key: const Key('account-not-approved'),
+                  style: textTheme.bodyMedium?.copyWith(
+                    color: colors.gradeHard,
+                  ),
                   textAlign: TextAlign.center,
                 ),
               ],
@@ -591,6 +629,37 @@ class _InstallSection extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Whether [error] is Supabase rejecting a magic-link OTP send because
+/// [error]'s email isn't an existing, approved account — the shape expected
+/// once `SupabaseAuthRepository.sendMagicLink` passes `shouldCreateUser:
+/// false` (mirroring this private app's server-side `disable_signup=true`
+/// lock). `_handleSendLink` above uses this to show a distinct, friendly
+/// "not approved" message instead of the generic "Could not send the link"
+/// error.
+///
+/// Matches the known message/code shapes Supabase's GoTrue actually returns
+/// for this case — message containing "signups not allowed for otp" (the
+/// literal wording GoTrue sends when `create_user: false` hits a
+/// nonexistent user), or a `code`/message of "otp_disabled"/
+/// "signup_disabled", plus a generic "user not found" fallback — rather than
+/// one exact string, since GoTrue's wording isn't a stable contract. Any
+/// non-[AuthException] (network error, etc.) or an [AuthException] that
+/// doesn't match one of these shapes (e.g. rate-limited) returns `false`,
+/// falling through to the existing generic error handling.
+@visibleForTesting
+bool isNotApprovedAuthError(Object error) {
+  if (error is! AuthException) return false;
+  final code = error.code?.toLowerCase() ?? '';
+  final message = error.message.toLowerCase();
+  return code == 'otp_disabled' ||
+      code == 'signup_disabled' ||
+      code == 'user_not_found' ||
+      message.contains('signups not allowed for otp') ||
+      message.contains('otp_disabled') ||
+      message.contains('signup_disabled') ||
+      message.contains('user not found');
 }
 
 /// The local-part of [email] (everything before the first `@`), used as the

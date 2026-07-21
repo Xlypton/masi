@@ -1,7 +1,12 @@
+import 'dart:async';
+
 import 'package:climbtopo/app/router.dart';
 import 'package:climbtopo/app/theme.dart';
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/core/db/database_provider.dart';
+import 'package:climbtopo/features/account/application/auth_providers.dart';
+import 'package:climbtopo/features/account/data/auth_repository.dart';
+import 'package:climbtopo/features/account/presentation/account_screen.dart';
 import 'package:climbtopo/features/community/presentation/community_screen.dart';
 import 'package:climbtopo/features/community/presentation/community_topo_detail_screen.dart';
 import 'package:climbtopo/features/library/presentation/areas_screen.dart';
@@ -64,6 +69,95 @@ Future<void> _pumpBounded(WidgetTester tester) async {
   for (var i = 0; i < 6; i++) {
     await tester.pump(const Duration(milliseconds: 30));
   }
+}
+
+/// Minimal in-memory [AuthRepository] double for the web-auth-wall tests
+/// below — mirrors `account_screen_test.dart`'s own `FakeAuthRepository`
+/// (a single-subscription, seed-buffered [StreamController], so the
+/// constructor-seeded [initial] state reliably reaches
+/// `authStateProvider`'s listener on its first `listen()`) but trimmed to
+/// just what `_webAuthGateRedirect` actually reads (`authStateChanges`) —
+/// `sendMagicLink`/`signOut` are never exercised by these routing tests.
+class _FakeAuthRepository implements AuthRepository {
+  _FakeAuthRepository(AuthSessionState initial) : _current = initial {
+    _controller.add(initial);
+  }
+
+  /// Never emits on [authStateChanges] at all — models `authStateProvider`
+  /// stuck in its initial `AsyncLoading`, with no value yet, for the
+  /// fail-closed regression test: [_webAuthGateRedirect] must NOT bounce a
+  /// visitor while auth is genuinely still resolving (e.g. first boot / a
+  /// magic-link `?code=` exchange in flight).
+  _FakeAuthRepository.loadingForever()
+    : _current = const AuthSessionState.signedOut();
+
+  /// Immediately errors on [authStateChanges] instead of ever emitting a
+  /// value — models `authStateProvider` becoming a *permanent* value-less
+  /// `AsyncError`, which is exactly what happens in production when
+  /// `main()`'s documented `Supabase.initialize()` catch-and-continue
+  /// fallback fires (see `currentUidProvider`'s doc in `auth_providers.dart`)
+  /// and the app is left with no working auth backend. This is the case the
+  /// fail-OPEN bug let slip through as "unknown, allow" — this fake exists
+  /// so the regression test can force exactly that state.
+  _FakeAuthRepository.erroring(Object error)
+    : _current = const AuthSessionState.signedOut() {
+    _controller.addError(error);
+  }
+
+  final _controller = StreamController<AuthSessionState>();
+  final AuthSessionState _current;
+
+  @override
+  AuthSessionState get currentSession => _current;
+
+  @override
+  Stream<AuthSessionState> authStateChanges() => _controller.stream;
+
+  @override
+  Future<void> sendMagicLink(String email) async {}
+
+  @override
+  Future<void> signOut() async {}
+
+  Future<void> dispose() => _controller.close();
+}
+
+/// Like [_makeContainer], plus the auth seams the web-auth-wall tests need:
+/// a [_FakeAuthRepository] seeded with [authState] and
+/// [webAuthGateEnabledProvider] forced to [gateEnabled] — the CRITICAL
+/// testability seam `router.dart`'s `_webAuthGateRedirect` reads instead of
+/// a bare `kIsWeb`, so these tests can force the gate on/off without a real
+/// web build.
+ProviderContainer _makeGateContainer({
+  required AuthSessionState authState,
+  required bool gateEnabled,
+}) => _makeGateContainerFromRepo(
+  _FakeAuthRepository(authState),
+  gateEnabled: gateEnabled,
+);
+
+/// Shared by [_makeGateContainer] and the fail-closed regression tests that
+/// need a [_FakeAuthRepository] variant other than a resolved
+/// [AuthSessionState] — [_FakeAuthRepository.loadingForever] and
+/// [_FakeAuthRepository.erroring] — so every web-auth-wall test wires the
+/// same DB/gate overrides.
+ProviderContainer _makeGateContainerFromRepo(
+  _FakeAuthRepository repo, {
+  required bool gateEnabled,
+}) {
+  addTearDown(repo.dispose);
+  final db = AppDatabase(NativeDatabase.memory());
+  final container = ProviderContainer(
+    overrides: [
+      appDatabaseProvider.overrideWithValue(db),
+      nowMsProvider.overrideWithValue(() => 1000),
+      authRepositoryProvider.overrideWithValue(repo),
+      webAuthGateEnabledProvider.overrideWithValue(gateEnabled),
+    ],
+  );
+  addTearDown(db.close);
+  addTearDown(container.dispose);
+  return container;
 }
 
 void main() {
@@ -474,6 +568,146 @@ void main() {
         expect(iconInTab(const Key('nav-tab-topos')).name, 'route');
         expect(iconInTab(const Key('nav-tab-map')).name, 'topo_map');
         expect(iconInTab(const Key('nav-tab-feed')).name, 'comment');
+      },
+    );
+  });
+
+  group('web auth wall: _webAuthGateRedirect gates every route behind '
+      'sign-in on web, and is a total no-op on native', () {
+    setUp(() => appRouter.go('/'));
+
+    testWidgets(
+      'gate enabled + signed-out: lands on the sign-in view (/account) — '
+      'Topos and the bottom-nav tabs are not reachable',
+      (tester) async {
+        final container = _makeGateContainer(
+          authState: const AuthSessionState.signedOut(),
+          gateEnabled: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(AccountScreen), findsOneWidget);
+        expect(find.byKey(const Key('account-email-field')), findsOneWidget);
+        expect(find.byType(ToposScreen), findsNothing);
+        expect(find.byKey(const Key('nav-tab-topos')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-out: a direct deep link to a wall (not just '
+      'the Topos home) also redirects to the sign-in view',
+      (tester) async {
+        final container = _makeGateContainer(
+          authState: const AuthSessionState.signedOut(),
+          gateEnabled: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+        appRouter.go('/walls/nonexistent-wall-id');
+        await _drain(tester);
+
+        expect(find.byType(AccountScreen), findsOneWidget);
+        expect(find.byType(TopoCanvasScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-in: no redirect — the normal app renders, '
+      'Topos and its nav tab are reachable',
+      (tester) async {
+        final container = _makeGateContainer(
+          authState: const AuthSessionState.signedIn('climber@example.com'),
+          gateEnabled: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byKey(const Key('nav-tab-topos')), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + auth state genuinely still loading (no value yet, e.g. '
+      'first boot / a magic-link `?code=` exchange in flight): does NOT '
+      'redirect — the pending resolution must be allowed to complete',
+      (tester) async {
+        final container = _makeGateContainerFromRepo(
+          _FakeAuthRepository.loadingForever(),
+          gateEnabled: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + auth state errored (e.g. Supabase.initialize() failed '
+      "per main()'s documented catch-and-continue fallback, leaving "
+      'authStateProvider a permanent value-less AsyncError): redirects to '
+      'the sign-in view — the wall fails CLOSED, never open',
+      (tester) async {
+        final container = _makeGateContainerFromRepo(
+          _FakeAuthRepository.erroring(
+            StateError('auth backend unavailable'),
+          ),
+          gateEnabled: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(AccountScreen), findsOneWidget);
+        expect(find.byKey(const Key('account-email-field')), findsOneWidget);
+        expect(find.byType(ToposScreen), findsNothing);
+        expect(find.byKey(const Key('nav-tab-topos')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate DISABLED (the native default) + signed-out: NO redirect — the '
+      'local-first app stays fully usable signed out, unchanged (regression '
+      'guard for iOS/Android)',
+      (tester) async {
+        final container = _makeGateContainer(
+          authState: const AuthSessionState.signedOut(),
+          gateEnabled: false,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byKey(const Key('nav-tab-topos')), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-out, already on /account: stays there — no '
+      'redirect loop out of the sign-in view itself',
+      (tester) async {
+        final container = _makeGateContainer(
+          authState: const AuthSessionState.signedOut(),
+          gateEnabled: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+        appRouter.go('/account');
+        await _drain(tester);
+
+        expect(find.byType(AccountScreen), findsOneWidget);
+        expect(find.byKey(const Key('account-email-field')), findsOneWidget);
       },
     );
   });

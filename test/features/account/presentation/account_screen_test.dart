@@ -18,6 +18,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 /// A [SyncOrchestrator] whose `build()` short-circuits to a fixed
 /// [SyncOrchestratorState] — never watches `appDatabaseProvider`/subscribes
@@ -902,6 +903,131 @@ void main() {
         );
         expect(field.controller?.text, isEmpty);
         expect(field.decoration?.hintText, 'climber');
+      },
+    );
+  });
+
+  group('isNotApprovedAuthError: pure classification', () {
+    test(
+      'the literal GoTrue message for create_user:false against a '
+      'nonexistent user ("Signups not allowed for otp") -> true',
+      () {
+        expect(
+          isNotApprovedAuthError(
+            const AuthException('Signups not allowed for otp'),
+          ),
+          isTrue,
+        );
+      },
+    );
+
+    test('AuthException with code "otp_disabled" -> true', () {
+      expect(
+        isNotApprovedAuthError(
+          const AuthException('otp is disabled', code: 'otp_disabled'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('AuthException with code "signup_disabled" -> true', () {
+      expect(
+        isNotApprovedAuthError(
+          const AuthException('signups disabled', code: 'signup_disabled'),
+        ),
+        isTrue,
+      );
+    });
+
+    test('a "user not found"-worded AuthException -> true', () {
+      expect(
+        isNotApprovedAuthError(const AuthException('User not found')),
+        isTrue,
+      );
+    });
+
+    test(
+      'an unrelated AuthException (e.g. OTP rate-limited) -> false, falling '
+      'through to the generic error path',
+      () {
+        expect(
+          isNotApprovedAuthError(
+            const AuthException('email rate limit exceeded'),
+          ),
+          isFalse,
+        );
+      },
+    );
+
+    test('a non-AuthException error (e.g. a network failure) -> false', () {
+      expect(isNotApprovedAuthError(Exception('network error')), isFalse);
+    });
+  });
+
+  group('#54 (approved-login UX): the not-approved OTP error message', () {
+    testWidgets(
+      'sendMagicLink throwing the disabled-signup AuthException shows the '
+      "'account-not-approved' message, and NOT the generic sent "
+      'confirmation',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        fakeRepo.sendMagicLinkError = const AuthException(
+          'Signups not allowed for otp',
+        );
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('account-email-field')),
+          'notapproved@example.com',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('account-send-link')));
+        await tester.pumpAndSettle();
+
+        expect(fakeRepo.sendMagicLinkCalls, ['notapproved@example.com']);
+        expect(
+          find.byKey(const Key('account-not-approved')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('account-link-sent')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'a genuine successful send still shows the generic "check your '
+      'email" confirmation, not the not-approved message',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('account-email-field')),
+          'climber@example.com',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('account-send-link')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('account-link-sent')), findsOneWidget);
+        expect(find.byKey(const Key('account-not-approved')), findsNothing);
       },
     );
   });
