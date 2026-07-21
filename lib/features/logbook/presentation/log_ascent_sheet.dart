@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../account/application/profile_providers.dart';
 import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
 import 'logbook_screen.dart' show styleLabel;
@@ -57,6 +58,11 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
   AscentStyle _style = AscentStyle.redpoint;
   final _notesController = TextEditingController();
 
+  /// Feature #12 opt-in: whether this ascent should be visible on the
+  /// public community feed (`Ascent.visibility == 'shared'`). Defaults to
+  /// `false` ('private') — sharing is opt-in, never on by default.
+  bool _shared = false;
+
   /// Re-entrancy guard for [_save] — without it, a double-tap on the Save
   /// button (e.g. a slow repo write) fires `logAscent` twice and logs a
   /// duplicate ascent.
@@ -73,6 +79,7 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
     setState(() => _saving = true);
     try {
       final notes = _notesController.text.trim();
+      final authorName = ref.read(myDisplayNameProvider).asData?.value;
       await ref
           .read(ascentsRepositoryProvider)
           .logAscent(
@@ -81,6 +88,8 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
             climbedAt: DateTime.now(),
             style: _style,
             notes: notes.isEmpty ? null : notes,
+            shared: _shared,
+            authorName: authorName,
           );
       if (mounted) {
         FocusManager.instance.primaryFocus?.unfocus();
@@ -126,6 +135,17 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
             key: Key('${widget.keyPrefix}-ascent-notes'),
             controller: _notesController,
             decoration: const InputDecoration(hintText: 'Notes (optional)'),
+          ),
+          const SizedBox(height: MasiSpacing.md),
+          SwitchListTile(
+            key: const Key('log-ascent-share-toggle'),
+            contentPadding: EdgeInsets.zero,
+            value: _shared,
+            onChanged: (value) => setState(() => _shared = value),
+            title: const Text('Share to community feed'),
+            subtitle: const Text(
+              'Others can see, like & comment on this ascent',
+            ),
           ),
           const SizedBox(height: MasiSpacing.md),
           SizedBox(

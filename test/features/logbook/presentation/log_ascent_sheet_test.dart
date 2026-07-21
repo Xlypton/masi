@@ -285,4 +285,78 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    '#12 ST4: the share toggle defaults OFF and Save logs a private '
+    '(unshared) ascent when left untouched',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await pumpHarness(
+        tester,
+        seeded.container,
+        routeId: seeded.routeDbId,
+        wallId: seeded.wallId,
+      );
+
+      await tester.tap(find.byKey(const Key('open-log-ascent-sheet')));
+      await tester.pumpAndSettle();
+
+      final toggle = tester.widget<SwitchListTile>(
+        find.byKey(const Key('log-ascent-share-toggle')),
+      );
+      expect(
+        toggle.value,
+        isFalse,
+        reason: 'sharing must be opt-in, off by default',
+      );
+
+      await tester.tap(find.byKey(const Key('test-ascent-save')));
+      await tester.pumpAndSettle();
+
+      final ascentsRepo = seeded.container.read(ascentsRepositoryProvider);
+      final ascents = await ascentsRepo.ascentsForRoute(seeded.routeDbId);
+      expect(ascents, hasLength(1));
+      expect(ascents.single.visibility, 'private');
+      expect(ascents.single.isShared, isFalse);
+    },
+  );
+
+  testWidgets(
+    '#12 ST4: toggling the share switch ON and Save logs a shared ascent',
+    (tester) async {
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await pumpHarness(
+        tester,
+        seeded.container,
+        routeId: seeded.routeDbId,
+        wallId: seeded.wallId,
+      );
+
+      await tester.tap(find.byKey(const Key('open-log-ascent-sheet')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('log-ascent-share-toggle')));
+      await tester.pump();
+
+      final toggle = tester.widget<SwitchListTile>(
+        find.byKey(const Key('log-ascent-share-toggle')),
+      );
+      expect(toggle.value, isTrue);
+
+      await tester.tap(find.byKey(const Key('test-ascent-save')));
+      await tester.pumpAndSettle();
+
+      final ascentsRepo = seeded.container.read(ascentsRepositoryProvider);
+      final ascents = await ascentsRepo.ascentsForRoute(seeded.routeDbId);
+      expect(ascents, hasLength(1));
+      expect(ascents.single.visibility, 'shared');
+      expect(ascents.single.isShared, isTrue);
+    },
+  );
 }
