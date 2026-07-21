@@ -115,6 +115,10 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
     _betaUrlController = TextEditingController(
       text: initial?.betaVideoUrl ?? '',
     );
+    // Live-validate as the user types so the inline error (see
+    // `_betaUrlInvalid`) tracks the field rather than only appearing after
+    // a failed Save attempt.
+    _betaUrlController.addListener(_handleBetaUrlChanged);
     _customTagController = TextEditingController();
     _gradeSystem = initial?.gradeSystem ?? GradeSystem.french;
     _grade = initial?.gradeRaw;
@@ -125,6 +129,7 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
 
   @override
   void dispose() {
+    _betaUrlController.removeListener(_handleBetaUrlChanged);
     _nameController.dispose();
     _descriptionController.dispose();
     _betaUrlController.dispose();
@@ -132,18 +137,31 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
     super.dispose();
   }
 
+  void _handleBetaUrlChanged() {
+    setState(() {});
+  }
+
   /// #41 validation: an empty (after trim) URL clears the field (`null`);
-  /// a non-empty one must be a valid `http`/`https` URL, otherwise it's
-  /// dropped (treated as unset) rather than persisting garbage. Trims
-  /// surrounding whitespace either way.
+  /// a non-empty one must be a valid `http`/`https` URL. Trims surrounding
+  /// whitespace either way. Invalid-but-non-empty values are no longer
+  /// silently dropped here -- [_betaUrlInvalid] blocks Save until the field
+  /// is fixed or cleared, so by the time this runs the value is already
+  /// known-good (or empty).
   String? _validatedBetaUrl() {
     final raw = _betaUrlController.text.trim();
-    if (raw.isEmpty) return null;
+    return raw.isEmpty ? null : raw;
+  }
+
+  /// True when the beta-URL field currently holds a non-empty value that
+  /// isn't a valid `http`/`https` URL. Drives the inline error shown under
+  /// the field and blocks [_save] until the field is fixed or cleared.
+  bool get _betaUrlInvalid {
+    final raw = _betaUrlController.text.trim();
+    if (raw.isEmpty) return false;
     final uri = Uri.tryParse(raw);
-    if (uri == null || !uri.isAbsolute || !(uri.isScheme('http') || uri.isScheme('https'))) {
-      return null;
-    }
-    return raw;
+    return uri == null ||
+        !uri.isAbsolute ||
+        !(uri.isScheme('http') || uri.isScheme('https'));
   }
 
   void _toggleStyleTag(String key) {
@@ -182,6 +200,13 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
   }
 
   void _save() {
+    if (_betaUrlInvalid) {
+      // Surface the inline error (in case Save is tapped before the field
+      // has ever fired a change event, e.g. a pasted value via autofill)
+      // and refuse to save/pop until it's fixed or cleared.
+      setState(() {});
+      return;
+    }
     ref
         .read(drawControllerProvider(widget.wallId).notifier)
         .setRouteMetadata(
@@ -331,7 +356,14 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
                         key: Key('topo-meta-style-$value'),
                         label: label,
                         selected: _style == value,
-                        onPressed: () => setState(() => _style = value),
+                        // Re-tapping the already-selected style deselects it
+                        // (toggles back to unset), matching how the
+                        // multi-select style-tag chips below already behave
+                        // -- otherwise the identical _StyleChip look reads
+                        // as inconsistent between the two groups.
+                        onPressed: () => setState(
+                          () => _style = _style == value ? null : value,
+                        ),
                       ),
                     ),
                     if (value != _styleOptions.last.$1)
@@ -358,6 +390,9 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
                 controller: _betaUrlController,
                 hintText: 'https://…',
                 colors: colors,
+                errorText: _betaUrlInvalid
+                    ? 'Enter a valid https:// link'
+                    : null,
               ),
               const SizedBox(height: MasiSpacing.lg),
               _FieldLabel('Style tags', colors),
@@ -421,18 +456,33 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
               Row(
                 children: [
                   for (var value = 1; value <= 3; value++) ...[
-                    GestureDetector(
-                      key: Key('topo-meta-stars-$value'),
-                      onTap: () => _onStarTapped(value),
-                      child: MasiIcon(
-                        _stars != null && value <= _stars!
-                            ? 'star_fill'
-                            : 'star',
-                        size: 28,
-                        color: colors.accent,
+                    Semantics(
+                      label: 'Rate $value stars',
+                      button: true,
+                      child: SizedBox(
+                        width: 44,
+                        height: 44,
+                        child: Material(
+                          color: Colors.transparent,
+                          shape: const CircleBorder(),
+                          child: InkWell(
+                            key: Key('topo-meta-stars-$value'),
+                            customBorder: const CircleBorder(),
+                            onTap: () => _onStarTapped(value),
+                            child: Center(
+                              child: MasiIcon(
+                                _stars != null && value <= _stars!
+                                    ? 'star_fill'
+                                    : 'star',
+                                size: 28,
+                                color: colors.accent,
+                              ),
+                            ),
+                          ),
+                        ),
                       ),
                     ),
-                    if (value != 3) const SizedBox(width: MasiSpacing.sm),
+                    if (value != 3) const SizedBox(width: MasiSpacing.xs),
                   ],
                 ],
               ),
@@ -520,6 +570,7 @@ class _MasiTextField extends StatelessWidget {
     required this.colors,
     this.minLines,
     this.maxLines = 1,
+    this.errorText,
   });
 
   final Key fieldKey;
@@ -529,8 +580,14 @@ class _MasiTextField extends StatelessWidget {
   final int? minLines;
   final int maxLines;
 
+  /// When non-null, shows an inline validation error below the field and
+  /// switches its border to the `gradeHard` (red) token -- see
+  /// `RouteMetadataSheet._betaUrlInvalid`.
+  final String? errorText;
+
   @override
   Widget build(BuildContext context) {
+    final errorColor = colors.gradeHard;
     return TextField(
       key: fieldKey,
       controller: controller,
@@ -540,6 +597,8 @@ class _MasiTextField extends StatelessWidget {
       decoration: InputDecoration(
         hintText: hintText,
         hintStyle: TextStyle(fontSize: 17, color: colors.ink3),
+        errorText: errorText,
+        errorStyle: TextStyle(fontSize: 13, color: errorColor),
         filled: true,
         fillColor: colors.surface2,
         contentPadding: const EdgeInsets.symmetric(
@@ -557,6 +616,14 @@ class _MasiTextField extends StatelessWidget {
         focusedBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(MasiRadii.control),
           borderSide: BorderSide(color: colors.accent, width: 1.5),
+        ),
+        errorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(MasiRadii.control),
+          borderSide: BorderSide(color: errorColor, width: 1.5),
+        ),
+        focusedErrorBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(MasiRadii.control),
+          borderSide: BorderSide(color: errorColor, width: 1.5),
         ),
       ),
     );

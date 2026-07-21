@@ -168,6 +168,82 @@ void main() {
         expect(_routeById(container, routeId).betaVideoUrl, isNull);
       },
     );
+
+    testWidgets(
+      'an invalid, non-empty URL shows an inline error and blocks the '
+      'ENTIRE save -- other edited fields (e.g. name) are not persisted '
+      'either',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final routeId = _seedRoute(container);
+        final before = _routeById(container, routeId);
+
+        await tester.pumpWidget(
+          _buildSheet(container: container, routeId: routeId),
+        );
+
+        await tester.enterText(
+          find.byKey(const Key('topo-meta-name')),
+          'Should Not Persist Either',
+        );
+        await tester.enterText(
+          find.byKey(const Key('topo-meta-beta-url')),
+          'not a url',
+        );
+        await tester.pump();
+
+        // Inline error appears live (before Save is even tapped).
+        expect(find.text('Enter a valid https:// link'), findsOneWidget);
+
+        await _tapKey(tester, 'topo-meta-save');
+        await tester.pump();
+
+        // Error persists and the sheet did NOT pop/save -- neither the
+        // invalid URL nor the otherwise-valid name field went through.
+        expect(find.text('Enter a valid https:// link'), findsOneWidget);
+        final after = _routeById(container, routeId);
+        expect(after.betaVideoUrl, isNull);
+        expect(after.name, before.name);
+        expect(after.name, isNot('Should Not Persist Either'));
+      },
+    );
+
+    testWidgets(
+      'fixing an invalid URL (or clearing it) removes the inline error and '
+      'allows Save to proceed',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final routeId = _seedRoute(container);
+
+        await tester.pumpWidget(
+          _buildSheet(container: container, routeId: routeId),
+        );
+
+        await tester.enterText(
+          find.byKey(const Key('topo-meta-beta-url')),
+          'not a url',
+        );
+        await tester.pump();
+        expect(find.text('Enter a valid https:// link'), findsOneWidget);
+
+        await tester.enterText(
+          find.byKey(const Key('topo-meta-beta-url')),
+          'https://example.com/fixed',
+        );
+        await tester.pump();
+        expect(find.text('Enter a valid https:// link'), findsNothing);
+
+        await _tapKey(tester, 'topo-meta-save');
+        await tester.pumpAndSettle();
+
+        expect(
+          _routeById(container, routeId).betaVideoUrl,
+          'https://example.com/fixed',
+        );
+      },
+    );
   });
 
   group('RouteMetadataSheet style tags (#42)', () {

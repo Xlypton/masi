@@ -345,10 +345,20 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('6b').last);
         await tester.pumpAndSettle();
+        // 'boulder', not 'trad': RouteMetadataSheet has no Key, so Flutter
+        // reuses the SAME State across this `_buildSheet` and the cancel
+        // path's above -- and the style chip now TOGGLES (re-tapping an
+        // already-selected chip deselects it, matching the multi-select
+        // style-tag chips). The cancel-path block already left `_style`
+        // == 'trad' selected in that surviving state (Cancel only skips
+        // persisting; it doesn't reset the sheet's own fields), so
+        // re-tapping 'trad' here would toggle it OFF, not select it.
+        // Tapping a style that was never touched sidesteps the carried-over
+        // state entirely and stays a true "select" tap.
         await tester.ensureVisible(
-          find.byKey(const Key('topo-meta-style-trad')),
+          find.byKey(const Key('topo-meta-style-boulder')),
         );
-        await tester.tap(find.byKey(const Key('topo-meta-style-trad')));
+        await tester.tap(find.byKey(const Key('topo-meta-style-boulder')));
         await tester.pump();
         await tester.enterText(
           find.byKey(const Key('topo-meta-description')),
@@ -363,7 +373,7 @@ void main() {
         expect(afterSave.name, 'Le Toit');
         expect(afterSave.gradeSystem, GradeSystem.french);
         expect(afterSave.gradeRaw, '6b');
-        expect(afterSave.style, 'trad');
+        expect(afterSave.style, 'boulder');
         expect(afterSave.description, 'crux at the roof');
       },
     );
