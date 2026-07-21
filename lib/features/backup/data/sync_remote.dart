@@ -2,26 +2,46 @@ import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-/// The eight row-level tables this app syncs, in FK dependency order
-/// (Areas → Sectors → Walls → Photos → Routes → Comments → Likes → Ascents)
-/// — the same order [BackupRepository.importSnapshot] applies rows in, and
-/// the same set of keys used in [BackupRepository.exportSnapshot]'s `tables`
-/// map. Comments/Likes/Ascents were added for the community-features sync
-/// extension: Comments and Likes attach to a Wall (`wallId`) and are shared
-/// alongside their wall (see [fetchSharedTopos]); Ascents additionally
-/// references a Route (`routeId`) and is a private per-user logbook —
+/// The nine row-level tables this app syncs, in FK dependency order
+/// (Profiles → Areas → Sectors → Walls → Photos → Routes → Ascents →
+/// Comments → Likes) — the same order [BackupRepository.importSnapshot]
+/// applies rows in, and the same set of keys used in
+/// [BackupRepository.exportSnapshot]'s `tables` map.
+///
+/// Comments/Likes/Ascents were added for the community-features sync
+/// extension: Comments and Likes attach to EITHER a Wall (`wallId`, shared
+/// alongside their wall — see [fetchSharedTopos]) OR an Ascent (`ascentId`,
+/// Feature #12); Ascents additionally references a Route (`routeId`) and is
 /// pushed/pulled for its owner via [upsertOwnRows]/[fetchOwnRows] like every
-/// other table, but DELIBERATELY NEVER included in [fetchSharedTopos]'s
-/// return, even when its wall is shared.
+/// other table (own rows push regardless of `visibility` — see
+/// [fetchSharedAscents]'s doc for what actually controls OTHER users' read
+/// access to a shared ascent).
+///
+/// **Ascents comes BEFORE Comments/Likes** — Feature #12 added
+/// `Comments.ascentId`/`Likes.ascentId` FKs referencing `Ascents.id`, so a
+/// comment/like attached to an ascent must never be pushed/imported before
+/// the ascent it references exists remotely/locally, or the FK write fails
+/// (`PRAGMA foreign_keys = ON` locally; a real FK constraint on the
+/// Supabase side).
+///
+/// Profiles (#18, editable synced display name) is FIRST because it has no
+/// FK deps, and because its `id` IS the owning uid (see `tables.dart`'s
+/// `Profiles` doc) — [upsertOwnRows]/[fetchOwnRows]'s generic
+/// `ownerId = uid` scoping happens to fetch exactly the caller's own profile
+/// row via this same loop, with no special-casing. Resolving OTHER users'
+/// profiles (e.g. a shared topo's author) is NOT part of that generic own-
+/// row loop, nor of [fetchSharedTopos] (which has no FK to a profile to
+/// join on) — that's what the separate [fetchProfiles] is for.
 const List<String> syncTableNames = [
+  'profiles',
   'areas',
   'sectors',
   'walls',
   'photos',
   'routes',
+  'ascents',
   'comments',
   'likes',
-  'ascents',
 ];
 
 /// Seam over the cloud backend the row-level [SyncService] talks to.
@@ -49,6 +69,15 @@ const List<String> syncTableNames = [
 /// (`owner_id = auth.uid()` for own rows; `visibility = 'shared'` — with no
 /// owner check — for the shared-topo query); the fake in tests simulates
 /// the same split by filtering its in-memory rows the same way.
+///
+/// Feature #12 (public opt-in ascent logs) layers a SECOND, independent
+/// visibility axis on top of this: `Ascents.visibility` (`'private'` default
+/// | `'shared'`) decides whether OTHER users can see a given ascent log,
+/// completely unrelated to whether the ascent's wall is itself shared — an
+/// ascent on a private topo can be shared, and vice versa. [fetchSharedTopos]
+/// still never returns ascent rows at all (see its doc); the cross-owner
+/// ascent feed is [fetchSharedAscents] instead, again RLS-enforced on the
+/// real backend the same `visibility = 'shared'`, no-owner-check way.
 abstract class SyncRemote {
   /// Upserts every row in [tablesToRows] (keyed by table name, see
   /// [syncTableNames]) as belonging to [uid], INCLUDING soft-deleted
@@ -72,10 +101,39 @@ abstract class SyncRemote {
   /// ORIGINAL `ownerId` (an ownership fact, not a "who's asking" scoping) —
   /// callers must not rewrite it.
   ///
-  /// DELIBERATELY EXCLUDES Ascents (a private per-user logbook) — an ascent
-  /// is never returned here even when its wall is shared. Callers must not
-  /// add an `'ascents'` key to the returned map.
+  /// DELIBERATELY EXCLUDES Ascents — an ascent is never returned here even
+  /// when its wall is shared; a wall's shared-ness says nothing about
+  /// whether any ascent logged against it has opted in to being shared
+  /// itself (see [fetchSharedAscents], the separate call for that). Callers
+  /// must not add an `'ascents'` key to the returned map.
   Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos();
+
+  /// Every Ascent (any owner) with `visibility == 'shared'` (Feature #12,
+  /// public opt-in ascent logs) — the source for a cross-owner public feed
+  /// of shared climbs. Deliberately separate from [fetchSharedTopos] (which
+  /// covers a shared Wall's own rows and still never returns an `'ascents'`
+  /// key): an ascent's visibility is an independent, per-ascent opt-in,
+  /// unrelated to whether its wall is itself shared — so a shared ascent's
+  /// wall may well be `'private'` and absent from every other pulled table.
+  ///
+  /// Also returns each shared ascent's `'routes'`/`'walls'`/`'photos'`/
+  /// `'sectors'`/`'areas'` ancestor chain (`Ascent.routeId`/`Ascent.wallId`
+  /// → `Route.photoId` → `Wall.sectorId` → `Sector.areaId`), scoped to ONLY
+  /// the specific rows those specific ascents reference (never a wall's
+  /// OTHER routes/photos) — this is REQUIRED, not cosmetic: `Ascents.routeId`
+  /// / `Ascents.wallId` are enforced FKs (`PRAGMA foreign_keys = ON`
+  /// locally), so importing a shared ascent whose wall/route don't already
+  /// exist on this device throws unless this context comes along with it.
+  /// Scoping to the minimal chain (rather than the wall's full context, the
+  /// way [fetchSharedTopos] does) avoids leaking a private topo's OTHER
+  /// routes/photos just because one ascent on it opted in.
+  ///
+  /// Returns a map keyed like every other shared-fetch's table-name-keyed
+  /// shape (`'areas'`/`'sectors'`/`'walls'`/`'photos'`/`'routes'`/
+  /// `'ascents'`), so callers can hand it straight to
+  /// `BackupRepository.importSnapshot` (merged with [fetchSharedTopos]'s
+  /// return, as `SyncService.pullOwnAndShared` does).
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents();
 
   /// Uploads [bytes] to the caller's OWN private object path
   /// (`<uid>/<photoId><ext>`) — readable (per real backend RLS) only by
@@ -125,6 +183,14 @@ abstract class SyncRemote {
   /// Every object path that currently exists under the shared `shared/`
   /// folder — used to skip re-uploading a shared photo already there.
   Future<Set<String>> listSharedPhotoObjectPaths();
+
+  /// Every cloud `profiles` row whose `id` (== owning uid) is in [uids] —
+  /// used by [SyncService.pullOwnAndShared] to resolve display names for
+  /// every OTHER user referenced by a just-pulled shared row (plus the
+  /// signed-in user's own uid), something [fetchOwnRows]'s `ownerId = uid`
+  /// scoping and [fetchSharedTopos]'s wall-FK join can't reach on their own.
+  /// Returns an empty list for an empty [uids] set without a round trip.
+  Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids);
 }
 
 /// The shared-bucket object path for a photo with canonical id [photoId]
@@ -283,6 +349,64 @@ class SupabaseSyncRemote implements SyncRemote {
   }
 
   @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents() async {
+    final ascentRows = <Map<String, dynamic>>[
+      for (final row in await _client.from('ascents').select().eq('visibility', 'shared'))
+        Map<String, dynamic>.from(row),
+    ];
+    if (ascentRows.isEmpty) {
+      return {
+        'areas': <Map<String, dynamic>>[],
+        'sectors': <Map<String, dynamic>>[],
+        'walls': <Map<String, dynamic>>[],
+        'photos': <Map<String, dynamic>>[],
+        'routes': <Map<String, dynamic>>[],
+        'ascents': <Map<String, dynamic>>[],
+      };
+    }
+
+    // Minimal ancestor/reference chain so the FK-enforced routeId/wallId (and
+    // in turn a route's photoId, a wall's sectorId, a sector's areaId) all
+    // resolve locally — see this method's doc for why this must be scoped to
+    // exactly these ids, not a wall's full context.
+    final wallIds = {for (final a in ascentRows) a['wallId'] as String}.toList();
+    final routeIds = {for (final a in ascentRows) a['routeId'] as String}.toList();
+
+    final wallRows = <Map<String, dynamic>>[
+      for (final row in await _client.from('walls').select().inFilter('id', wallIds))
+        Map<String, dynamic>.from(row),
+    ];
+    final sectorIds = {for (final w in wallRows) w['sectorId'] as String}.toList();
+    final sectorRows = <Map<String, dynamic>>[
+      for (final row in await _client.from('sectors').select().inFilter('id', sectorIds))
+        Map<String, dynamic>.from(row),
+    ];
+    final areaIds = {for (final s in sectorRows) s['areaId'] as String}.toList();
+    final areaRows = <Map<String, dynamic>>[
+      for (final row in await _client.from('areas').select().inFilter('id', areaIds))
+        Map<String, dynamic>.from(row),
+    ];
+    final routeRows = <Map<String, dynamic>>[
+      for (final row in await _client.from('routes').select().inFilter('id', routeIds))
+        Map<String, dynamic>.from(row),
+    ];
+    final photoIds = {for (final r in routeRows) r['photoId'] as String}.toList();
+    final photoRows = <Map<String, dynamic>>[
+      for (final row in await _client.from('photos').select().inFilter('id', photoIds))
+        Map<String, dynamic>.from(row),
+    ];
+
+    return {
+      'areas': areaRows,
+      'sectors': sectorRows,
+      'walls': wallRows,
+      'photos': photoRows,
+      'routes': routeRows,
+      'ascents': ascentRows,
+    };
+  }
+
+  @override
   Future<void> uploadPhoto({
     required String uid,
     required String photoId,
@@ -345,5 +469,12 @@ class SupabaseSyncRemote implements SyncRemote {
   Future<Set<String>> listSharedPhotoObjectPaths() async {
     final files = await _client.storage.from(_bucket).list(path: 'shared');
     return {for (final file in files) 'shared/${file.name}'};
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async {
+    if (uids.isEmpty) return const [];
+    final rows = await _client.from('profiles').select().inFilter('id', uids.toList());
+    return [for (final row in rows) Map<String, dynamic>.from(row)];
   }
 }

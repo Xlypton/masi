@@ -37,9 +37,9 @@ class PushSyncResult {
 
   final SyncPushOutcome outcome;
 
-  /// Total row count pushed across all eight tables (areas/sectors/walls/
-  /// photos/routes/comments/likes/ascents), INCLUDING tombstones. Always 0
-  /// when [outcome] isn't [SyncPushOutcome.pushed].
+  /// Total row count pushed across all nine tables (profiles/areas/sectors/
+  /// walls/photos/routes/comments/likes/ascents), INCLUDING tombstones.
+  /// Always 0 when [outcome] isn't [SyncPushOutcome.pushed].
   final int rowsPushed;
 
   /// Number of distinct photo FILES actually uploaded (private copy and/or
@@ -82,7 +82,7 @@ class PullSyncResult {
   final SyncPullOutcome outcome;
 
   /// Total row count FETCHED from the signed-in user's own cloud rows
-  /// (across all eight tables). Note this counts rows received, not rows
+  /// (across all nine tables). Note this counts rows received, not rows
   /// actually WRITTEN locally — a row older than its local counterpart is
   /// fetched but then skipped by last-write-wins during import. Always 0
   /// when [outcome] isn't [SyncPullOutcome.pulled].
@@ -123,8 +123,8 @@ class PullSyncResult {
 ///    FK-ordered-import + last-write-wins machinery — [pullOwnAndShared]
 ///    hands it `{'tables': <fetched rows>}` maps, the exact shape
 ///    [BackupRepository.exportSnapshot] produces, so the existing
-///    Areas→Sectors→Walls→Photos(originals-before-slices)→Routes→Comments→
-///    Likes→Ascents ordering and per-row `updatedAt` comparison apply
+///    Areas→Sectors→Walls→Photos(originals-before-slices)→Routes→Ascents→
+///    Comments→Likes ordering and per-row `updatedAt` comparison apply
 ///    unchanged.
 ///  - [AuthRepository]: gates push/pull on being signed in and supplies the
 ///    uid every own-row/private-photo path is scoped to.
@@ -140,11 +140,16 @@ class PullSyncResult {
 /// user's own uid. That `ownerId` is what lets the UI later treat a pulled
 /// shared topo as read-only (not the signed-in user's own row).
 ///
-/// CRITICAL invariant for Ascents: a private per-user logbook, never part of
-/// [SyncRemote.fetchSharedTopos]'s return — [pullOwnAndShared] only ever
-/// imports another user's ascents if a future [SyncRemote] implementation
-/// mistakenly added them there, which this class has no way to prevent by
-/// itself; the guarantee lives in [SyncRemote.fetchSharedTopos]'s contract.
+/// Ascents visibility model (Feature #12, public opt-in ascent logs): the
+/// signed-in user's own ascents are always fully pulled via [fetchOwnRows]
+/// (private or shared, same as any other own row — see
+/// `AscentsRepository.watchLogbook`'s own-scoping doc). Separately, OTHER
+/// users' opt-in-`visibility == 'shared'` ascents are pulled via
+/// [SyncRemote.fetchSharedAscents] and merged into the same batch
+/// [SyncRemote.fetchSharedTopos] returns — which itself still NEVER returns
+/// ascent rows (a shared wall does not imply its ascents are public; see
+/// that method's doc). A shared-ascent row keeps its original (foreign)
+/// `ownerId` on import, exactly like a shared topo's rows above.
 class SyncService {
   // Named (not positional) so call sites can't silently swap two
   // same-typed collaborators; the private fields below intentionally stay
@@ -205,6 +210,7 @@ class SyncService {
     // after it, uploading a cross-table snapshot that never actually existed
     // locally. This wraps READS only; conflict/LWW resolution (#2) is a
     // separate, deferred concern.
+    late List<db.Profile> profiles;
     late List<db.Area> areas;
     late List<db.Sector> sectors;
     late List<db.Wall> walls;
@@ -214,6 +220,7 @@ class SyncService {
     late List<db.Like> likes;
     late List<db.Ascent> ascents;
     await _db.transaction(() async {
+      profiles = await (_db.select(_db.profiles)..where((t) => t.ownerId.equals(uid))).get();
       areas = await (_db.select(_db.areas)..where((t) => t.ownerId.equals(uid))).get();
       sectors = await (_db.select(_db.sectors)..where((t) => t.ownerId.equals(uid))).get();
       walls = await (_db.select(_db.walls)..where((t) => t.ownerId.equals(uid))).get();
@@ -225,6 +232,7 @@ class SyncService {
     });
 
     final tablesToRows = <String, List<Map<String, dynamic>>>{
+      'profiles': [for (final row in profiles) row.toJson()],
       'areas': [for (final row in areas) row.toJson()],
       'sectors': [for (final row in sectors) row.toJson()],
       'walls': [for (final row in walls) row.toJson()],
@@ -318,6 +326,55 @@ class SyncService {
 
     final ownTables = await _remote.fetchOwnRows(uid);
     final sharedTables = await _remote.fetchSharedTopos();
+
+    // Feature #12 (public opt-in ascent logs): pull every OTHER owner's
+    // opt-in-`shared` ascents via the separate fetchSharedAscents call and
+    // merge its rows into the same `sharedTables` map fetchSharedTopos
+    // built — NOT into `fetchSharedTopos` itself, which deliberately never
+    // returns an `'ascents'` key (a shared wall doesn't imply its ascents
+    // are public). Merging here means this whole batch flows through the
+    // identical importSnapshot(mode: lww) call below, so Ascents importing
+    // BEFORE Comments/Likes (see `BackupRepository.importSnapshot`'s
+    // FK-ordering comment) applies uniformly to own AND shared rows alike.
+    //
+    // fetchSharedAscents ALSO returns each shared ascent's minimal
+    // area/sector/wall/photo/route ancestor chain (see its doc) — required
+    // because `Ascents.routeId`/`Ascents.wallId` are enforced FKs locally,
+    // and a shared ascent's wall may well be `'private'` and otherwise
+    // absent from `sharedTables` entirely. areas/sectors/walls/photos/
+    // routes are CONCATENATED (not overwritten) with whatever
+    // fetchSharedTopos already put there — a wall that's both openly shared
+    // AND host to a shared ascent would otherwise get double-fetched rows,
+    // which is harmless (idempotent per-id upsert on import) but the
+    // concatenation avoids silently dropping either side's rows.
+    final sharedAscentTables = await _remote.fetchSharedAscents();
+    for (final key in const ['areas', 'sectors', 'walls', 'photos', 'routes']) {
+      sharedTables[key] = [
+        ...(sharedTables[key] ?? const []),
+        ...(sharedAscentTables[key] ?? const []),
+      ];
+    }
+    sharedTables['ascents'] = sharedAscentTables['ascents'] ?? const [];
+
+    // Resolve display-name profiles for every uid a pulled SHARED row is
+    // attributed to (e.g. a shared topo's owner), plus the signed-in user's
+    // own uid, via one batched fetchProfiles call — [fetchOwnRows]'s generic
+    // `ownerId = uid` loop already put the signed-in user's OWN profile row
+    // into `ownTables['profiles']`, but has no way to reach any OTHER
+    // user's profile, and [fetchSharedTopos] has no FK to a profile to join
+    // on. Merged into `sharedTables['profiles']` (a key it doesn't otherwise
+    // set) so it flows through the same importSnapshot(mode: lww) call as
+    // every other shared row below; re-including the own uid here is
+    // harmless (idempotent LWW re-write of the same row already imported
+    // from `ownTables`).
+    final profileUids = <String>{uid};
+    for (final rows in sharedTables.values) {
+      for (final row in rows) {
+        final ownerId = row['ownerId'] as String?;
+        if (ownerId != null) profileUids.add(ownerId);
+      }
+    }
+    sharedTables['profiles'] = await _remote.fetchProfiles(profileUids);
 
     final ownPhotosDownloaded = await _downloadAndRewritePhotos(
       ownTables,

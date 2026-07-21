@@ -50,6 +50,16 @@ class _CountingSyncRemote implements SyncRemote {
   }
 
   @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents() async {
+    return {'ascents': <Map<String, dynamic>>[]};
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async {
+    return const [];
+  }
+
+  @override
   Future<void> uploadPhoto({
     required String uid,
     required String photoId,

@@ -23,8 +23,8 @@ enum ConflictMode {
 /// so a restore doesn't resurrect a logically-deleted row as "not deleted".
 ///
 /// [importSnapshot] upserts every row by its `id` primary key inside a
-/// single [db.AppDatabase.transaction], in FK dependency order (Areas →
-/// Sectors → Walls → Photos → Routes). Photos has a self-FK
+/// single [db.AppDatabase.transaction], in FK dependency order (Profiles →
+/// Areas → Sectors → Walls → Photos → Routes). Photos has a self-FK
 /// (`parentPhotoId`), so within Photos, rows with no parent (originals) are
 /// always imported before rows that reference a parent (slices), regardless
 /// of the order they appear in the snapshot.
@@ -34,6 +34,7 @@ class BackupRepository {
   final db.AppDatabase _db;
 
   Future<Map<String, dynamic>> exportSnapshot() async {
+    final profiles = await _db.select(_db.profiles).get();
     final areas = await _db.select(_db.areas).get();
     final sectors = await _db.select(_db.sectors).get();
     final walls = await _db.select(_db.walls).get();
@@ -46,6 +47,7 @@ class BackupRepository {
     return {
       'schemaVersion': _db.schemaVersion,
       'tables': {
+        'profiles': [for (final row in profiles) row.toJson()],
         'areas': [for (final row in areas) row.toJson()],
         'sectors': [for (final row in sectors) row.toJson()],
         'walls': [for (final row in walls) row.toJson()],
@@ -65,17 +67,23 @@ class BackupRepository {
     final tables = (snapshot['tables'] as Map).cast<String, dynamic>();
 
     await _db.transaction(() async {
+      // Profiles have no FK deps (their `id` is the owning uid, not a
+      // caller-generated one referencing anything else), so they're
+      // imported first — matches [syncTableNames]'s ordering.
+      await _importProfiles(_rowsOf(tables, 'profiles'), mode);
       await _importAreas(_rowsOf(tables, 'areas'), mode);
       await _importSectors(_rowsOf(tables, 'sectors'), mode);
       await _importWalls(_rowsOf(tables, 'walls'), mode);
       await _importPhotos(_rowsOf(tables, 'photos'), mode);
       await _importRoutes(_rowsOf(tables, 'routes'), mode);
-      // Comments/Likes reference Walls only (already imported above); Ascents
-      // additionally references Routes (also already imported above), hence
-      // all three are safely imported last regardless of FK dependency.
+      // Ascents must be imported BEFORE Comments/Likes: Feature #12 (public
+      // opt-in ascent logs) added `Comments.ascentId`/`Likes.ascentId` FKs
+      // referencing `Ascents.id` (in addition to their pre-existing `wallId`
+      // FK), so a comment/like attached to an ascent would violate the FK
+      // (`PRAGMA foreign_keys = ON`) if imported before that ascent exists.
+      await _importAscents(_rowsOf(tables, 'ascents'), mode);
       await _importComments(_rowsOf(tables, 'comments'), mode);
       await _importLikes(_rowsOf(tables, 'likes'), mode);
-      await _importAscents(_rowsOf(tables, 'ascents'), mode);
     });
   }
 
@@ -91,6 +99,27 @@ class BackupRepository {
     required int? localUpdatedAt,
     required int incomingUpdatedAt,
   }) => localUpdatedAt == null || incomingUpdatedAt > localUpdatedAt;
+
+  Future<void> _importProfiles(
+    List<Map<String, dynamic>> rows,
+    ConflictMode mode,
+  ) async {
+    final existing = mode == ConflictMode.lww
+        ? {for (final r in await _db.select(_db.profiles).get()) r.id: r.updatedAt}
+        : const <String, int>{};
+
+    for (final json in rows) {
+      final profile = db.Profile.fromJson(json);
+      if (mode == ConflictMode.lww &&
+          !_shouldWriteLww(
+            localUpdatedAt: existing[profile.id],
+            incomingUpdatedAt: profile.updatedAt,
+          )) {
+        continue;
+      }
+      await _db.into(_db.profiles).insertOnConflictUpdate(profile);
+    }
+  }
 
   Future<void> _importAreas(
     List<Map<String, dynamic>> rows,
@@ -261,12 +290,18 @@ class BackupRepository {
     }
   }
 
-  /// Ascents are a private per-user logbook: pushed/pulled for their OWNER
-  /// only. This import method itself is agnostic to that policy (it just
-  /// imports whatever rows it's handed) — the privacy guarantee lives one
-  /// layer up, in `SyncRemote.fetchSharedTopos` never returning an
-  /// `'ascents'` key, so `SyncService.pullOwnAndShared` never hands this
-  /// method any OTHER user's ascent rows.
+  /// Ascents may arrive here for TWO distinct reasons (Feature #12, public
+  /// opt-in ascent logs): the signed-in user's own full row set (private or
+  /// shared, imported via `SyncService.pullOwnAndShared`'s "own" call), or
+  /// another owner's opt-in-`visibility == 'shared'` ascents (imported via
+  /// its separate "shared" call, sourced from `SyncRemote.fetchSharedAscents`
+  /// — NEVER from `fetchSharedTopos`, which still excludes ascents
+  /// entirely). This import method itself stays agnostic to which case it's
+  /// handling — it just imports whatever rows it's handed, importing BEFORE
+  /// Comments/Likes (see the FK-ordering comment in [importSnapshot]) so
+  /// their `ascentId` FK never points at a not-yet-inserted row. The privacy
+  /// boundary (who gets to see whose ascents) lives one layer up, in what
+  /// each `SyncRemote` fetch method chooses to return.
   Future<void> _importAscents(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,

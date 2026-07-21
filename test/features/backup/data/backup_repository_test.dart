@@ -1,6 +1,10 @@
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/features/backup/data/backup_repository.dart';
-import 'package:drift/drift.dart';
+// `hide isNotNull`: drift's query-builder helper of the same name collides
+// with `package:matcher`'s (via flutter_test) `isNotNull` MATCHER used
+// throughout this file's `expect(...)` calls — this file only needs the
+// latter.
+import 'package:drift/drift.dart' hide isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -280,6 +284,105 @@ void main() {
       expect(slice.parentPhotoId, 'photo-original');
     },
   );
+
+  group('S5: profiles (#18, editable synced display name)', () {
+    test(
+      'export -> wipe -> replace-import round-trips a profiles row '
+      'byte-for-byte, alongside the rest of the hierarchy',
+      () async {
+        await seed(db);
+        await db.into(db.profiles).insert(
+          ProfilesCompanion.insert(
+            id: 'user-1',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value('user-1'),
+            displayName: const Value('Alex'),
+          ),
+        );
+
+        final snapshot = await repo.exportSnapshot();
+        expect(
+          (snapshot['tables'] as Map)['profiles'],
+          isNotNull,
+          reason: 'exportSnapshot must include a profiles key',
+        );
+
+        await wipe(db);
+        await db.delete(db.profiles).go();
+        expect(await db.select(db.profiles).get(), isEmpty);
+
+        await repo.importSnapshot(snapshot, mode: ConflictMode.replace);
+
+        final profile = await (db.select(
+          db.profiles,
+        )..where((t) => t.id.equals('user-1'))).getSingle();
+        expect(profile.displayName, 'Alex');
+        expect(profile.ownerId, 'user-1');
+      },
+    );
+
+    test(
+      'lww: a local profile row with a NEWER updatedAt survives an older '
+      'incoming import; an incoming row with no local counterpart is '
+      'inserted',
+      () async {
+        await db.into(db.profiles).insert(
+          ProfilesCompanion.insert(
+            id: 'user-1',
+            createdAt: 100,
+            updatedAt: 500,
+            displayName: const Value('Local (newer)'),
+          ),
+        );
+
+        final incoming = {
+          'schemaVersion': 1,
+          'tables': {
+            'profiles': [
+              {
+                'id': 'user-1',
+                'createdAt': 100,
+                'updatedAt': 100, // older than local's 500
+                'deletedAt': null,
+                'remoteId': null,
+                'dirty': false,
+                'ownerId': 'user-1',
+                'displayName': 'Incoming (older)',
+              },
+              {
+                'id': 'user-2',
+                'createdAt': 100,
+                'updatedAt': 100,
+                'deletedAt': null,
+                'remoteId': null,
+                'dirty': false,
+                'ownerId': 'user-2',
+                'displayName': 'Brand new',
+              },
+            ],
+            'areas': <Map<String, dynamic>>[],
+            'sectors': <Map<String, dynamic>>[],
+            'walls': <Map<String, dynamic>>[],
+            'photos': <Map<String, dynamic>>[],
+            'routes': <Map<String, dynamic>>[],
+          },
+        };
+
+        await repo.importSnapshot(incoming, mode: ConflictMode.lww);
+
+        final user1 = await (db.select(
+          db.profiles,
+        )..where((t) => t.id.equals('user-1'))).getSingle();
+        expect(user1.displayName, 'Local (newer)');
+
+        final user2 = await (db.select(
+          db.profiles,
+        )..where((t) => t.id.equals('user-2'))).getSingle();
+        expect(user2.displayName, 'Brand new');
+      },
+    );
+  });
 
   group('S3-d: lww conflict mode', () {
     test('a local row with a NEWER updatedAt is preserved', () async {

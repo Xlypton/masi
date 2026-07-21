@@ -109,9 +109,68 @@ class FakeSyncRemote implements SyncRemote {
       'routes': routes,
       'comments': comments,
       'likes': likes,
-      // NOTE: deliberately no 'ascents' key — Ascents are a private
-      // per-user logbook and must never be visible via a shared-topo pull,
-      // even when the ascent's wall is itself shared (see C2c).
+      // NOTE: deliberately no 'ascents' key — a shared wall does not imply
+      // its ascents are public; see [fetchSharedAscents] for the separate,
+      // ascent-level opt-in feed (Feature #12).
+    };
+  }
+
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents() async {
+    final ascents = [
+      for (final row in _rows['ascents']!.values)
+        if (row['visibility'] == 'shared') Map<String, dynamic>.from(row),
+    ];
+    if (ascents.isEmpty) {
+      return {
+        'areas': <Map<String, dynamic>>[],
+        'sectors': <Map<String, dynamic>>[],
+        'walls': <Map<String, dynamic>>[],
+        'photos': <Map<String, dynamic>>[],
+        'routes': <Map<String, dynamic>>[],
+        'ascents': <Map<String, dynamic>>[],
+      };
+    }
+
+    // Mirrors SupabaseSyncRemote.fetchSharedAscents: the minimal ancestor/
+    // reference chain (NOT a wall's full context) so the FK-enforced
+    // routeId/wallId (and a route's photoId, a wall's sectorId, a sector's
+    // areaId) all resolve locally without leaking a private wall's other
+    // routes/photos.
+    final wallIds = {for (final a in ascents) a['wallId'] as String};
+    final routeIds = {for (final a in ascents) a['routeId'] as String};
+
+    final walls = [
+      for (final wall in _rows['walls']!.values)
+        if (wallIds.contains(wall['id'])) Map<String, dynamic>.from(wall),
+    ];
+    final sectorIds = {for (final w in walls) w['sectorId'] as String};
+    final sectors = [
+      for (final sector in _rows['sectors']!.values)
+        if (sectorIds.contains(sector['id'])) Map<String, dynamic>.from(sector),
+    ];
+    final areaIds = {for (final s in sectors) s['areaId'] as String};
+    final areas = [
+      for (final area in _rows['areas']!.values)
+        if (areaIds.contains(area['id'])) Map<String, dynamic>.from(area),
+    ];
+    final routes = [
+      for (final route in _rows['routes']!.values)
+        if (routeIds.contains(route['id'])) Map<String, dynamic>.from(route),
+    ];
+    final photoIds = {for (final r in routes) r['photoId'] as String};
+    final photos = [
+      for (final photo in _rows['photos']!.values)
+        if (photoIds.contains(photo['id'])) Map<String, dynamic>.from(photo),
+    ];
+
+    return {
+      'areas': areas,
+      'sectors': sectors,
+      'walls': walls,
+      'photos': photos,
+      'routes': routes,
+      'ascents': ascents,
     };
   }
 
@@ -155,6 +214,14 @@ class FakeSyncRemote implements SyncRemote {
 
   @override
   Future<Set<String>> listSharedPhotoObjectPaths() async => sharedStorage.keys.toSet();
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async {
+    return [
+      for (final row in _rows['profiles']!.values)
+        if (uids.contains(row['id'])) Map<String, dynamic>.from(row),
+    ];
+  }
 }
 
 /// In-memory [ConnectivityService] test double: reports whatever [status]
@@ -990,6 +1057,63 @@ void main() {
     );
 
     test(
+      'C1c: pushOwn\'s Ascent payload carries visibility and authorName '
+      '(Feature #12, public opt-in ascent logs)',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-vis',
+          sectorId: 'sector-vis',
+          wallId: 'wall-vis',
+          photoId: 'photo-vis',
+          routeId: 'route-vis',
+        );
+        await c.db.into(c.db.ascents).insert(
+          AscentsCompanion.insert(
+            id: 'ascent-vis',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            routeId: 'route-vis',
+            wallId: 'wall-vis',
+            climbedAt: 12345,
+            style: 'redpoint',
+            visibility: const Value('shared'),
+            authorName: const Value('Alex Honnold'),
+          ),
+        );
+
+        await c.service.pushOwn();
+
+        final ownRows = await remote.fetchOwnRows(_uidU1);
+        final ascent = ownRows['ascents']!.single;
+        expect(ascent['visibility'], 'shared');
+        expect(ascent['authorName'], 'Alex Honnold');
+      },
+    );
+
+    test(
+      'C1d: syncTableNames orders Ascents BEFORE Comments and Likes '
+      '(Feature #12 FK: Comments.ascentId/Likes.ascentId -> Ascents.id — a '
+      'row referencing an ascent must never push/import before that ascent '
+      'exists remotely/locally)',
+      () {
+        final ascentsIndex = syncTableNames.indexOf('ascents');
+        final commentsIndex = syncTableNames.indexOf('comments');
+        final likesIndex = syncTableNames.indexOf('likes');
+
+        expect(ascentsIndex, greaterThanOrEqualTo(0));
+        expect(ascentsIndex, lessThan(commentsIndex));
+        expect(ascentsIndex, lessThan(likesIndex));
+      },
+    );
+
+    test(
       'C2a: after ownerA (u2) publishes a wall (visibility=shared) and '
       'pushes its comments+likes, a pull as ownerB (u1) imports them for '
       'that shared wall',
@@ -1139,9 +1263,10 @@ void main() {
     );
 
     test(
-      'C2c: ownerB\'s pull does NOT import ownerA\'s ascents (privacy) — '
-      'the ascents table is untouched by a shared pull even though the '
-      'ascent\'s wall is shared',
+      'C2c: ownerB\'s pull does NOT import ownerA\'s PRIVATE ascent — a '
+      'default-visibility ascent stays untouched by a pull even though the '
+      'ascent\'s wall is shared (contrast C2d: a SHARED ascent DOES pull, '
+      'via the separate fetchSharedAscents path)',
       () async {
         final remote = FakeSyncRemote();
 
@@ -1197,6 +1322,298 @@ void main() {
               'pulled as part of a shared topo, even though the ascent\'s '
               'wall is shared',
         );
+      },
+    );
+
+    test(
+      'C2d: ownerB\'s pull DOES import ownerA\'s SHARED ascent (Feature '
+      '#12) via the separate fetchSharedAscents path, preserving its '
+      'original ownerId, EVEN THOUGH the ascent\'s wall is private '
+      '(contrast C2c, where a PRIVATE ascent does not pull) — the wall/'
+      'route/sector/area ancestor chain comes along too (required to '
+      'satisfy the local FK on Ascents.wallId/routeId), staying `private` '
+      'itself and WITHOUT leaking the wall\'s other, unrelated routes',
+      () async {
+        final remote = FakeSyncRemote();
+
+        final containerU2 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU2));
+        addTearDown(() => containerU2.db.close());
+        await seedWallHierarchy(
+          containerU2.db,
+          ownerId: _uidU2,
+          areaId: 'area-shared-ascent',
+          sectorId: 'sector-shared-ascent',
+          wallId: 'wall-shared-ascent',
+          photoId: 'photo-shared-ascent',
+          routeId: 'route-shared-ascent',
+        );
+        // A second, unrelated route on the SAME (private) wall — not
+        // referenced by any shared ascent, so it must NOT leak to U1.
+        await containerU2.db.into(containerU2.db.routes).insert(
+          RoutesCompanion.insert(
+            id: 'route-unrelated',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU2),
+            wallId: 'wall-shared-ascent',
+            photoId: 'photo-shared-ascent',
+            number: 2,
+            colorIndex: 1,
+            pointsJson: '[]',
+            symbolsJson: '[]',
+            sortOrder: 1,
+          ),
+        );
+        await containerU2.db.into(containerU2.db.ascents).insert(
+          AscentsCompanion.insert(
+            id: 'ascent-shared',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU2),
+            routeId: 'route-shared-ascent',
+            wallId: 'wall-shared-ascent',
+            climbedAt: 100,
+            style: 'redpoint',
+            visibility: const Value('shared'),
+            authorName: const Value('u2'),
+          ),
+        );
+        await containerU2.service.pushOwn();
+
+        final containerU1 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => containerU1.db.close());
+
+        final result = await containerU1.service.pullOwnAndShared();
+        expect(result.didPull, isTrue);
+
+        final ascent = await (containerU1.db.select(
+          containerU1.db.ascents,
+        )..where((t) => t.id.equals('ascent-shared'))).getSingleOrNull();
+        expect(ascent, isNotNull);
+        expect(
+          ascent!.ownerId,
+          _uidU2,
+          reason: 'a pulled shared ascent keeps its ORIGINAL owner, never '
+              'rewritten to the pulling user\'s own uid',
+        );
+        expect(ascent.visibility, 'shared');
+        expect(ascent.authorName, 'u2');
+
+        final wall = await (containerU1.db.select(
+          containerU1.db.walls,
+        )..where((t) => t.id.equals('wall-shared-ascent'))).getSingleOrNull();
+        expect(
+          wall,
+          isNotNull,
+          reason: 'the wall must come along too, to satisfy the local FK '
+              'on Ascents.wallId — this device has never seen this owner\'s '
+              'other data',
+        );
+        expect(
+          wall!.visibility,
+          'private',
+          reason: 'pulling the ascent must not flip the wall itself into '
+              'looking like a shared topo',
+        );
+
+        final referencedRoute = await (containerU1.db.select(
+          containerU1.db.routes,
+        )..where((t) => t.id.equals('route-shared-ascent'))).getSingleOrNull();
+        expect(referencedRoute, isNotNull);
+
+        final unrelatedRoute = await (containerU1.db.select(
+          containerU1.db.routes,
+        )..where((t) => t.id.equals('route-unrelated'))).getSingleOrNull();
+        expect(
+          unrelatedRoute,
+          isNull,
+          reason: 'fetchSharedAscents must only bring the SPECIFIC route(s) '
+              'a shared ascent references, never the wall\'s other routes — '
+              'that would leak a private topo just because one ascent on '
+              'it opted in',
+        );
+      },
+    );
+
+    test(
+      'C2e: a user\'s own pull (fresh device) restores their OWN ascent AND '
+      'a comment/like attached to it (via ascentId, not wallId) without an '
+      'FK violation, proving Ascents import BEFORE Comments/Likes within '
+      'the own-row import batch too (Feature #12 FK: Comments.ascentId/'
+      'Likes.ascentId -> Ascents.id)',
+      () async {
+        final remote = FakeSyncRemote();
+        final auth = FakeAuthRepository(_signedInU1);
+
+        final containerA = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerA.db.close());
+        await seedWallHierarchy(
+          containerA.db,
+          ownerId: _uidU1,
+          areaId: 'area-own-ascent',
+          sectorId: 'sector-own-ascent',
+          wallId: 'wall-own-ascent',
+          photoId: 'photo-own-ascent',
+          routeId: 'route-own-ascent',
+        );
+        await containerA.db.into(containerA.db.ascents).insert(
+          AscentsCompanion.insert(
+            id: 'ascent-own',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            routeId: 'route-own-ascent',
+            wallId: 'wall-own-ascent',
+            climbedAt: 100,
+            style: 'flash',
+          ),
+        );
+        await containerA.db.into(containerA.db.comments).insert(
+          CommentsCompanion.insert(
+            id: 'comment-on-own-ascent',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            ascentId: const Value('ascent-own'),
+            body: 'Self note',
+          ),
+        );
+        await containerA.db.into(containerA.db.likes).insert(
+          LikesCompanion.insert(
+            id: 'like-on-own-ascent',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            ascentId: const Value('ascent-own'),
+          ),
+        );
+        await containerA.service.pushOwn();
+
+        final containerB = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerB.db.close());
+
+        // Would throw a Sqlite FK-constraint exception (this local db runs
+        // under real `PRAGMA foreign_keys = ON`) if Comments/Likes were
+        // imported before Ascents.
+        final result = await containerB.service.pullOwnAndShared();
+        expect(result.didPull, isTrue);
+
+        final comment = await (containerB.db.select(
+          containerB.db.comments,
+        )..where((t) => t.id.equals('comment-on-own-ascent'))).getSingleOrNull();
+        expect(comment, isNotNull);
+        expect(comment!.ascentId, 'ascent-own');
+
+        final like = await (containerB.db.select(
+          containerB.db.likes,
+        )..where((t) => t.id.equals('like-on-own-ascent'))).getSingleOrNull();
+        expect(like, isNotNull);
+        expect(like!.ascentId, 'ascent-own');
+      },
+    );
+  });
+
+  group('profiles sync (#18: editable synced display name)', () {
+    test(
+      'D1: pushOwn pushes the signed-in user\'s own profile row',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => c.db.close());
+
+        await c.db.into(c.db.profiles).insert(
+          ProfilesCompanion.insert(
+            id: _uidU1,
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            displayName: const Value('u1 display name'),
+          ),
+        );
+
+        final result = await c.service.pushOwn();
+        expect(result.didPush, isTrue);
+
+        final ownRows = await remote.fetchOwnRows(_uidU1);
+        expect(ownRows['profiles']!.map((r) => r['id']), [_uidU1]);
+        expect(ownRows['profiles']!.single['displayName'], 'u1 display name');
+      },
+    );
+
+    test(
+      'D2: pullOwnAndShared restores the signed-in user\'s own profile '
+      'into a fresh DB',
+      () async {
+        final remote = FakeSyncRemote();
+        final auth = FakeAuthRepository(_signedInU1);
+
+        final containerA = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerA.db.close());
+        await containerA.db.into(containerA.db.profiles).insert(
+          ProfilesCompanion.insert(
+            id: _uidU1,
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            displayName: const Value('Alex'),
+          ),
+        );
+        await containerA.service.pushOwn();
+
+        final containerB = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerB.db.close());
+        expect(await containerB.db.select(containerB.db.profiles).get(), isEmpty);
+
+        await containerB.service.pullOwnAndShared();
+
+        final profile = await (containerB.db.select(
+          containerB.db.profiles,
+        )..where((t) => t.id.equals(_uidU1))).getSingle();
+        expect(profile.displayName, 'Alex');
+      },
+    );
+
+    test(
+      'D3: pulling a shared topo also resolves its OWNER\'s display name '
+      'via fetchProfiles, even though fetchSharedTopos itself has no FK to '
+      'a profile',
+      () async {
+        final remote = FakeSyncRemote();
+
+        final containerU2 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU2));
+        addTearDown(() => containerU2.db.close());
+        await seedWallHierarchy(
+          containerU2.db,
+          ownerId: _uidU2,
+          visibility: 'shared',
+          areaId: 'area-shared3',
+          sectorId: 'sector-shared3',
+          wallId: 'wall-shared3',
+          photoId: 'photo-shared3',
+          routeId: 'route-shared3',
+        );
+        await containerU2.db.into(containerU2.db.profiles).insert(
+          ProfilesCompanion.insert(
+            id: _uidU2,
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU2),
+            displayName: const Value('u2 display name'),
+          ),
+        );
+        await containerU2.service.pushOwn();
+
+        final containerU1 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => containerU1.db.close());
+
+        final result = await containerU1.service.pullOwnAndShared();
+        expect(result.didPull, isTrue);
+
+        final u2Profile = await (containerU1.db.select(
+          containerU1.db.profiles,
+        )..where((t) => t.id.equals(_uidU2))).getSingleOrNull();
+        expect(u2Profile, isNotNull);
+        expect(u2Profile!.displayName, 'u2 display name');
       },
     );
   });

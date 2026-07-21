@@ -80,6 +80,10 @@ class _UnavailableSyncRemote implements SyncRemote {
       _unavailable();
 
   @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents() =>
+      _unavailable();
+
+  @override
   Future<void> uploadPhoto({
     required String uid,
     required String photoId,
@@ -108,6 +112,10 @@ class _UnavailableSyncRemote implements SyncRemote {
 
   @override
   Future<Set<String>> listSharedPhotoObjectPaths() => _unavailable();
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) =>
+      _unavailable();
 }
 
 /// The [SyncService] the "sync now" entry point(s) call into, wired to the
