@@ -1568,6 +1568,228 @@ void main() {
     },
   );
 
+  group('P7: v7 -> v8 migration (Profiles table, #18)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp(
+        'climbtopo_migration_test_',
+      );
+      dbFile = File(p.join(tempDir.path, 'v7.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) {
+        await tempDir.delete(recursive: true);
+      }
+    });
+
+    test(
+      'creates the brand-new profiles table and preserves every '
+      'pre-existing row on the v7-era tables untouched',
+      () async {
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute('''
+          CREATE TABLE areas (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            name TEXT NOT NULL,
+            description TEXT NULL,
+            latitude REAL NULL,
+            longitude REAL NULL
+          );
+
+          CREATE TABLE sectors (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            area_id TEXT NOT NULL REFERENCES areas (id),
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL
+          );
+
+          CREATE TABLE walls (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            sector_id TEXT NOT NULL REFERENCES sectors (id),
+            name TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            visibility TEXT NOT NULL DEFAULT 'private',
+            latitude REAL NULL,
+            longitude REAL NULL
+          );
+
+          CREATE TABLE photos (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            local_path TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            width INTEGER NOT NULL,
+            height INTEGER NOT NULL,
+            parent_photo_id TEXT NULL REFERENCES photos (id),
+            crop_xpct REAL NULL,
+            crop_width_pct REAL NULL,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_primary INTEGER NOT NULL DEFAULT 0
+          );
+
+          CREATE TABLE routes (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            photo_id TEXT NOT NULL REFERENCES photos (id),
+            number INTEGER NOT NULL,
+            name TEXT NULL,
+            grade_system TEXT NULL,
+            grade_raw TEXT NULL,
+            grade_sort_key REAL NULL,
+            style TEXT NULL,
+            description TEXT NULL,
+            color_index INTEGER NOT NULL,
+            points_json TEXT NOT NULL,
+            symbols_json TEXT NOT NULL,
+            sort_order INTEGER NOT NULL,
+            visible INTEGER NOT NULL DEFAULT 1,
+            beta_video_url TEXT NULL,
+            style_tags_json TEXT NULL,
+            stars INTEGER NULL
+          );
+
+          CREATE UNIQUE INDEX idx_routes_photo_number_live
+            ON routes (photo_id, number) WHERE deleted_at IS NULL;
+
+          CREATE TABLE comments (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NULL REFERENCES walls (id),
+            ascent_id TEXT NULL REFERENCES ascents (id),
+            body TEXT NOT NULL,
+            author_name TEXT NULL
+          );
+
+          CREATE TABLE likes (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            wall_id TEXT NULL REFERENCES walls (id),
+            ascent_id TEXT NULL REFERENCES ascents (id)
+          );
+
+          CREATE TABLE ascents (
+            id TEXT NOT NULL PRIMARY KEY,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            deleted_at INTEGER NULL,
+            remote_id TEXT NULL,
+            dirty INTEGER NOT NULL DEFAULT 0,
+            owner_id TEXT NULL,
+            route_id TEXT NOT NULL REFERENCES routes (id),
+            wall_id TEXT NOT NULL REFERENCES walls (id),
+            climbed_at INTEGER NOT NULL,
+            style TEXT NOT NULL,
+            notes TEXT NULL,
+            grade_opinion TEXT NULL,
+            visibility TEXT NOT NULL DEFAULT 'private',
+            author_name TEXT NULL
+          );
+
+          INSERT INTO areas (id, created_at, updated_at, name)
+            VALUES ('area-1', 1000, 1000, 'Pre-migration Area');
+
+          INSERT INTO sectors
+            (id, created_at, updated_at, area_id, name, sort_order)
+            VALUES
+            ('sector-1', 1000, 1000, 'area-1', 'Pre-migration Sector', 0);
+
+          INSERT INTO walls
+            (id, created_at, updated_at, sector_id, name, sort_order)
+            VALUES
+            ('wall-1', 1000, 1000, 'sector-1', 'Pre-migration Wall', 0);
+
+          PRAGMA user_version = 7;
+        ''');
+        raw.close();
+
+        // Open the SAME file with the current AppDatabase (schemaVersion
+        // 8). Drift reads the on-disk user_version (7), sees it doesn't
+        // match the target (8), and runs onUpgrade(m, 7, 8) — exercising
+        // only the `if (from < 8)` branch (the earlier branches are
+        // no-ops here since 7 is not < 2/3/4/5/6/7).
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        // Pre-existing v7-era row survives untouched.
+        final wall = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals('wall-1'))).getSingle();
+        expect(
+          wall.name,
+          'Pre-migration Wall',
+          reason: 'pre-existing row must survive the migration',
+        );
+
+        // profiles must exist and be usable (proves the generated
+        // Companion/table is wired, not just physically present in SQLite),
+        // starting out with zero rows (a purely new, empty table).
+        final profilesBefore = await db.select(db.profiles).get();
+        expect(profilesBefore, isEmpty);
+
+        await db
+            .into(db.profiles)
+            .insert(
+              ProfilesCompanion.insert(
+                id: 'user-1',
+                createdAt: 2000,
+                updatedAt: 2000,
+                ownerId: const Value('user-1'),
+                displayName: const Value('Alex'),
+              ),
+            );
+        final profile = await (db.select(
+          db.profiles,
+        )..where((t) => t.id.equals('user-1'))).getSingle();
+        expect(profile.displayName, 'Alex');
+        expect(profile.ownerId, 'user-1');
+        expect(profile.dirty, isFalse);
+      },
+    );
+  });
+
   group('fresh onCreate (schemaVersion 4)', () {
     test('builds all 8 tables, each carrying the full SyncColumns set', () async {
       final db = AppDatabase(NativeDatabase.memory());
@@ -1592,6 +1814,7 @@ void main() {
           'comments',
           'likes',
           'ascents',
+          'profiles',
         },
         reason: 'onCreate must build every table declared on AppDatabase',
       );
@@ -1753,6 +1976,31 @@ void main() {
       expect(ascent.remoteId, 'remote-ascent-1');
       expect(ascent.dirty, isTrue);
       expect(ascent.ownerId, 'user-1');
+
+      await db
+          .into(db.profiles)
+          .insert(
+            ProfilesCompanion.insert(
+              id: 'user-1',
+              createdAt: now,
+              updatedAt: now,
+              displayName: const Value('Alex'),
+              deletedAt: const Value(6000),
+              remoteId: const Value('remote-profile-1'),
+              dirty: const Value(true),
+              ownerId: const Value('user-1'),
+            ),
+          );
+      final profile = await (db.select(
+        db.profiles,
+      )..where((t) => t.id.equals('user-1'))).getSingle();
+      expect(profile.displayName, 'Alex');
+      expect(profile.createdAt, now);
+      expect(profile.updatedAt, now);
+      expect(profile.deletedAt, 6000);
+      expect(profile.remoteId, 'remote-profile-1');
+      expect(profile.dirty, isTrue);
+      expect(profile.ownerId, 'user-1');
     });
   });
 }

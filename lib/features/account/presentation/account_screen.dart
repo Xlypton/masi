@@ -6,6 +6,7 @@ import '../../backup/application/sync_orchestrator.dart';
 import '../../topo/presentation/canvas_chrome.dart';
 import '../application/auth_providers.dart';
 import '../application/email_initials.dart';
+import '../application/profile_providers.dart';
 import '../data/auth_repository.dart';
 
 /// The Account screen: magic-link email sign-in when signed out, else the
@@ -276,17 +277,80 @@ class _SignedOutBody extends StatelessWidget {
 }
 
 /// Signed-in body: the current user's email + a "Sign out" action, same
-/// card styling as [_SignedOutBody].
-class _SignedInBody extends StatelessWidget {
+/// card styling as [_SignedOutBody] — plus (#18) an editable, synced
+/// display name.
+///
+/// A [ConsumerStatefulWidget] (rather than the plain [ConsumerWidget] this
+/// used to be) so it can own the display-name [TextEditingController] and
+/// the transient "saving" local UI state around
+/// [ProfileRepository.setMyDisplayName], mirroring [_AccountScreenState]'s
+/// own rationale for owning its email controller/send state locally rather
+/// than in Riverpod.
+class _SignedInBody extends ConsumerStatefulWidget {
   const _SignedInBody({required this.email, required this.onSignOut});
 
   final String email;
   final VoidCallback onSignOut;
 
   @override
+  ConsumerState<_SignedInBody> createState() => _SignedInBodyState();
+}
+
+class _SignedInBodyState extends ConsumerState<_SignedInBody> {
+  final _nameController = TextEditingController();
+  bool _saving = false;
+
+  /// Guards the one-time prefill of [_nameController] from
+  /// [myDisplayNameProvider] once it resolves — set on the FIRST non-null
+  /// value seen so a later emission (e.g. this same save round-tripping
+  /// through the stream) never clobbers whatever the user is actively
+  /// typing.
+  bool _prefilled = false;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _handleSaveDisplayName() async {
+    final name = _nameController.text.trim();
+    if (name.isEmpty || _saving) return;
+
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(() => _saving = true);
+    try {
+      await ref.read(profileRepositoryProvider).setMyDisplayName(name);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Display name saved.')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save display name: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
+    final email = widget.email;
+
+    // One-time prefill: once the synced display name resolves to a
+    // non-empty value, seed the controller with it (never overwriting text
+    // the user is actively editing on a later rebuild/emission).
+    final resolvedName = ref.watch(myDisplayNameProvider).asData?.value;
+    if (!_prefilled && resolvedName != null && resolvedName.isNotEmpty) {
+      _prefilled = true;
+      _nameController.text = resolvedName;
+    }
 
     return Center(
       child: SingleChildScrollView(
@@ -340,6 +404,53 @@ class _SignedInBody extends StatelessWidget {
                 },
               ),
               const SizedBox(height: MasiSpacing.lg),
+              Text(
+                'Display name',
+                style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
+              ),
+              const SizedBox(height: MasiSpacing.sm),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  Expanded(
+                    child: TextField(
+                      key: const Key('account-display-name-field'),
+                      controller: _nameController,
+                      textInputAction: TextInputAction.done,
+                      decoration: InputDecoration(
+                        // Falls back to the email local-part as a hint when
+                        // no display name has been set yet — never a raw
+                        // uid/email in the FIELD itself, just a placeholder
+                        // nudging what to type.
+                        hintText: emailLocalPart(email),
+                      ),
+                      onSubmitted: (_) => _handleSaveDisplayName(),
+                    ),
+                  ),
+                  const SizedBox(width: MasiSpacing.sm),
+                  ElevatedButton(
+                    key: const Key('account-display-name-save'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: colors.accent,
+                      foregroundColor: colors.onAccent,
+                      disabledBackgroundColor: colors.accent,
+                      disabledForegroundColor: colors.onAccent.withValues(
+                        alpha: 0.7,
+                      ),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: MasiSpacing.lg,
+                        vertical: 14,
+                      ),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                    ),
+                    onPressed: _saving ? null : _handleSaveDisplayName,
+                    child: const Text('Save'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: MasiSpacing.lg),
               ElevatedButton(
                 key: const Key('account-sign-out'),
                 style: ElevatedButton.styleFrom(
@@ -350,7 +461,7 @@ class _SignedInBody extends StatelessWidget {
                     borderRadius: BorderRadius.circular(13),
                   ),
                 ),
-                onPressed: onSignOut,
+                onPressed: widget.onSignOut,
                 child: const Text('Sign out'),
               ),
             ],
@@ -359,6 +470,16 @@ class _SignedInBody extends StatelessWidget {
       ),
     );
   }
+}
+
+/// The local-part of [email] (everything before the first `@`), used as the
+/// display-name field's placeholder hint when no display name has been set
+/// yet — mirrors `email_initials.dart`'s own "local part" notion but returns
+/// the full segment rather than just its first two characters.
+@visibleForTesting
+String emailLocalPart(String email) {
+  final at = email.indexOf('@');
+  return at > 0 ? email.substring(0, at) : email;
 }
 
 /// The `sync-status` line's text for a given [SyncOrchestratorState] — the

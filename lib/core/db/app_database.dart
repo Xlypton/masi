@@ -12,13 +12,23 @@ part 'app_database.g.dart';
 /// Route for a Photo that doesn't exist) at write time instead of silently
 /// leaving orphaned rows.
 @DriftDatabase(
-  tables: [Areas, Sectors, Walls, Photos, Routes, Comments, Likes, Ascents],
+  tables: [
+    Areas,
+    Sectors,
+    Walls,
+    Photos,
+    Routes,
+    Comments,
+    Likes,
+    Ascents,
+    Profiles,
+  ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 7;
+  int get schemaVersion => 8;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -170,6 +180,15 @@ class AppDatabase extends _$AppDatabase {
         await m.alterTable(
           TableMigration(comments, newColumns: [comments.ascentId]),
         );
+      }
+      // v7 -> v8: adds the brand-new `Profiles` table (#18, editable synced
+      // display name). A fresh table, unrelated to any existing row/column,
+      // so this is a pure `m.createTable` with nothing to backfill — no
+      // pre-existing data is touched. See `tables.dart`'s `Profiles` doc for
+      // why its `id` is the user's Supabase uid rather than a generated
+      // UUID.
+      if (from < 8) {
+        await m.createTable(profiles);
       }
     },
     beforeOpen: (details) async {

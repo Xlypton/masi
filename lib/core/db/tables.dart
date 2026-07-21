@@ -22,6 +22,27 @@ mixin SyncColumns on Table {
   TextColumn get ownerId => text().nullable()();
 }
 
+/// A signed-in user's editable, synced display name (#18).
+///
+/// Unlike every other [SyncColumns] table, [id] here is NOT a caller-
+/// generated UUIDv4 — it IS the Supabase Auth uid (`auth.uid()`), so a
+/// profile row's [SyncColumns.ownerId] is always equal to its own [id]
+/// (stamped that way by `ProfileRepository.setMyDisplayName`; there is no
+/// signed-out profile row, since there is no uid to key one by). This makes
+/// "my profile" and "resolve display name for uid X" the same lookup
+/// (`profiles.id == uid`), and lets `SyncRemote.fetchOwnRows`'s generic
+/// `ownerId = auth.uid()` scoping fetch exactly one row — the caller's own —
+/// with no special-casing.
+class Profiles extends Table with SyncColumns {
+  /// The user-chosen display name shown in place of their email/uid
+  /// wherever another user's identity is surfaced (Community feed,
+  /// comments, ascent logs, ...). `null` until the user sets one.
+  TextColumn get displayName => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 class Areas extends Table with SyncColumns {
   TextColumn get name => text()();
   TextColumn get description => text().nullable()();

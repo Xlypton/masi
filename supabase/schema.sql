@@ -318,3 +318,53 @@ CREATE POLICY "ascents_owner_all" ON public.ascents FOR ALL TO authenticated
   USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
 CREATE POLICY "ascents_shared_select" ON public.ascents FOR SELECT TO authenticated
   USING ("visibility" = 'shared');
+
+-- ============================================================================
+-- Profiles: editable, synced display name (Feature #18)
+-- ============================================================================
+--
+-- Unlike every other table above, "id" here is NOT a caller-generated UUID —
+-- it IS the owning user's auth uid (so "id" = "ownerId" always). This is a
+-- deliberately WIDE-OPEN read policy relative to every other table: a
+-- display name must be resolvable for ANY user shown anywhere in the app
+-- (a shared topo's owner, an ascent's author, a comment's author, ...), not
+-- just rows the requester owns or that hang off a shared wall/ascent — so
+-- SELECT has no scoping condition at all beyond "authenticated". Writes stay
+-- owner-only, same as every other table's owner policy.
+
+-- ---------- TABLES ----------
+CREATE TABLE IF NOT EXISTS public.profiles (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "createdAt" BIGINT NOT NULL,
+  "updatedAt" BIGINT NOT NULL,
+  "deletedAt" BIGINT,
+  "remoteId" TEXT,
+  "dirty" BOOLEAN NOT NULL DEFAULT false,
+  "ownerId" TEXT,
+  "displayName" TEXT
+);
+
+-- ---------- PRIVILEGES (RLS still restricts WHICH rows) ----------
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON public.profiles
+  TO authenticated;
+
+-- ---------- ENABLE ROW LEVEL SECURITY ----------
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+-- ---------- ROW POLICIES ----------
+DROP POLICY IF EXISTS "profiles_owner_write" ON public.profiles;
+DROP POLICY IF EXISTS "profiles_any_select"  ON public.profiles;
+
+-- Owner: full CRUD on their own row (matched by "id", which for this table
+-- IS the owning uid — "ownerId" is kept in lockstep by the client but "id"
+-- is the authoritative check here so a row can never be write-locked out by
+-- a null/mismatched "ownerId").
+CREATE POLICY "profiles_owner_write" ON public.profiles FOR ALL TO authenticated
+  USING ("id" = auth.uid()::text) WITH CHECK ("id" = auth.uid()::text);
+
+-- Any authenticated user can READ any profile row — permissive, no owner or
+-- shared-topo check — so a display name can be resolved for whoever authored
+-- whatever is currently on screen.
+CREATE POLICY "profiles_any_select" ON public.profiles FOR SELECT TO authenticated
+  USING (true);

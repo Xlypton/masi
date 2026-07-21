@@ -295,6 +295,28 @@ Future<void> _seedComment(
       );
 }
 
+/// Seeds a `profiles` row (#18) so `profileDisplayNameProvider(id)` resolves
+/// [displayName] for it — the test-side counterpart to
+/// `ProfileRepository.setMyDisplayName`, inserted directly rather than
+/// through the repository since these tests only care about the READ side
+/// (`_FeedRow`'s resolved-name rendering).
+Future<void> _seedProfile(
+  AppDatabase db, {
+  required String id,
+  required String displayName,
+}) {
+  return db
+      .into(db.profiles)
+      .insert(
+        ProfilesCompanion.insert(
+          id: id,
+          createdAt: 1000,
+          updatedAt: 1000,
+          displayName: Value(displayName),
+        ),
+      );
+}
+
 Future<String> _seedPhoto(
   AppDatabase db, {
   required String id,
@@ -1397,7 +1419,15 @@ void main() {
         container
             .read(communityFilterProvider.notifier)
             .setStyles({'boulder'});
-        await tester.pump();
+        // `_drain` (not a bare `tester.pump()`): filtering every row out
+        // disposes each now-gone `_FeedRow`'s `profileDisplayNameProvider`
+        // (#18, `autoDispose`) subscription, and drift's own
+        // `StreamQueryStore` schedules a real zero-duration cleanup `Timer`
+        // when that subscription is cancelled — real time must actually
+        // advance for it to fire, or flutter_test's end-of-test
+        // `!timersPending` invariant check fails even though nothing is
+        // actually leaking.
+        await _drain(tester);
 
         expect(find.byKey(const Key('community-empty')), findsOneWidget);
         expect(find.text('No topos match your filters'), findsOneWidget);
@@ -2092,10 +2122,17 @@ void main() {
         addTearDown(tester.view.resetDevicePixelRatio);
       }
 
-      // A realistic 36-char Supabase Auth uid -- `SharedTopo.ownerId` is the
-      // raw uid, never shortened, so this is exactly what ships in the "by
-      // <owner>" text.
+      // A realistic 36-char Supabase Auth uid -- `SharedTopo.ownerId` is
+      // always the raw uid, but #18 resolves it to the owner's synced
+      // display name (`profileDisplayNameProvider`) rather than ever
+      // rendering the uid itself. Both tests below seed a `profiles` row
+      // with a realistically long display name for this uid, so the
+      // reflow-at-large-scale regression this group guards against is still
+      // exercised against realistic long text (see the dedicated
+      // no-profile-row test further down for the "Unknown climber"
+      // fallback).
       const ownerUid = 'f1e2d3c4-b5a6-4c7d-8e9f-0a1b2c3d4e5f';
+      const ownerDisplayName = 'Alexandra Boulderfield-Watanabe';
 
       testWidgets(
         'A1: at 390x800 @ 1.0x text scale, the owner text sits on the SAME '
@@ -2120,6 +2157,11 @@ void main() {
               visibility: 'shared',
               ownerId: ownerUid,
             );
+            await _seedProfile(
+              db,
+              id: ownerUid,
+              displayName: ownerDisplayName,
+            );
             await _seedLike(db, id: 'like-a1', wallId: 'wall-a1');
             await _seedComment(
               db,
@@ -2138,7 +2180,7 @@ void main() {
           );
           await _drain(tester);
 
-          final ownerFinder = find.text('by $ownerUid');
+          final ownerFinder = find.text('by $ownerDisplayName');
           final likesFinder = find.byKey(
             const Key('community-topo-row-wall-a1-likes'),
           );
@@ -2182,6 +2224,11 @@ void main() {
               visibility: 'shared',
               ownerId: ownerUid,
             );
+            await _seedProfile(
+              db,
+              id: ownerUid,
+              displayName: ownerDisplayName,
+            );
             await _seedLike(db, id: 'like-a2', wallId: 'wall-a2');
             await _seedComment(
               db,
@@ -2201,6 +2248,48 @@ void main() {
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
+        },
+      );
+
+      testWidgets(
+        'A3 (#18): an owner with no profiles row yet falls back to '
+        '"Unknown climber" — never the raw uid',
+        (tester) async {
+          setViewportSize(tester, const Size(390, 800));
+          final container = _makeContainer();
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() async {
+            await _seedArea(db, id: 'area-a3', name: 'Area A3');
+            await _seedSector(
+              db,
+              id: 'sector-a3',
+              areaId: 'area-a3',
+              name: 'S',
+            );
+            await _seedWall(
+              db,
+              id: 'wall-a3',
+              sectorId: 'sector-a3',
+              name: 'Wall A3',
+              visibility: 'shared',
+              ownerId: ownerUid,
+            );
+            // Deliberately NOT seeding a `profiles` row for `ownerUid` here
+            // — this is exactly the "no display name set yet" case.
+          });
+
+          await tester.pumpWidget(
+            wrapWithScale(
+              container,
+              CommunityFeedScreen(),
+              1.0,
+            ),
+          );
+          await _drain(tester);
+
+          expect(find.text('Unknown climber'), findsOneWidget);
+          expect(find.text('by $ownerUid'), findsNothing);
+          expect(find.textContaining(ownerUid), findsNothing);
         },
       );
     },

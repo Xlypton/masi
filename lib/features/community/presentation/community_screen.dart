@@ -18,6 +18,7 @@ import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/filtering/style_tag_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
+import '../../account/application/profile_providers.dart';
 import '../../library/application/library_providers.dart';
 import '../../../core/net/retryable_error.dart';
 import '../../topo/presentation/photo_image.dart';
@@ -641,6 +642,15 @@ class _FeedRow extends ConsumerWidget {
     final myUid = ref.watch(authStateProvider).asData?.value.uid;
     final isMine = topo.ownerId != null && topo.ownerId == myUid;
 
+    // #18: resolve the owner's synced display name rather than showing the
+    // raw uid. `null` (no ownerId at all, no profile row yet, or an empty
+    // name) all collapse to the same "Unknown climber" fallback below — the
+    // raw uid must never render.
+    final ownerId = topo.ownerId;
+    final ownerDisplayName = ownerId != null
+        ? ref.watch(profileDisplayNameProvider(ownerId)).asData?.value
+        : null;
+
     return Material(
       key: Key('community-topo-row-$wallId'),
       color: colors.surface,
@@ -737,8 +747,9 @@ class _FeedRow extends ConsumerWidget {
                         const SizedBox(width: MasiSpacing.sm),
                         Expanded(
                           child: Text(
-                            topo.ownerId != null
-                                ? 'by ${topo.ownerId}'
+                            (ownerDisplayName != null &&
+                                    ownerDisplayName.isNotEmpty)
+                                ? 'by $ownerDisplayName'
                                 : 'Unknown climber',
                             style: textTheme.bodySmall?.copyWith(
                               color: colors.ink3,

@@ -1,6 +1,8 @@
 import 'dart:async';
 
 import 'package:climbtopo/app/theme.dart';
+import 'package:climbtopo/core/db/app_database.dart';
+import 'package:climbtopo/core/db/database_provider.dart';
 import 'package:climbtopo/features/account/application/auth_providers.dart';
 import 'package:climbtopo/features/account/data/auth_repository.dart';
 import 'package:climbtopo/features/account/presentation/account_screen.dart';
@@ -8,6 +10,8 @@ import 'package:climbtopo/features/backup/application/sync_orchestrator.dart';
 import 'package:climbtopo/features/library/application/library_providers.dart';
 import 'package:climbtopo/features/library/data/library_crud_repository.dart';
 import 'package:climbtopo/features/library/presentation/topos_screen.dart';
+import 'package:drift/drift.dart' show Value;
+import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -107,6 +111,25 @@ Widget _wrap(ProviderContainer container, Widget child) {
     container: container,
     child: MaterialApp(theme: MasiTheme.light, home: child),
   );
+}
+
+/// Pumps real time forward under `tester.runAsync` before pumping the
+/// widget tree, then settles — needed for the #18 display-name tests below,
+/// which (unlike every other test in this file) watch a real
+/// `myDisplayNameProvider` StreamProvider backed by a real in-memory Drift
+/// database. That's genuine `dart:ffi` I/O, which — per this project's own
+/// "never drive real I/O under fake-async" rule (see `CLAUDE.md`) — needs
+/// real time to actually resolve rather than hanging under `flutter_test`'s
+/// default fake clock. Mirrors `community_screen_test.dart`'s/
+/// `topos_screen_test.dart`'s identically-named helper.
+Future<void> _drain(WidgetTester tester) async {
+  for (var i = 0; i < 6; i++) {
+    await tester.runAsync(
+      () => Future<void>.delayed(const Duration(milliseconds: 20)),
+    );
+    await tester.pump(const Duration(milliseconds: 30));
+  }
+  await tester.pumpAndSettle();
 }
 
 void main() {
@@ -580,6 +603,168 @@ void main() {
 
         expect(find.byKey(const Key('sync-status')), findsOneWidget);
         expect(find.text('Not synced yet'), findsOneWidget);
+      },
+    );
+  });
+
+  group('#18: editable, synced display name', () {
+    testWidgets(
+      'entering a name and tapping Save persists it via ProfileRepository '
+      'and shows a confirmation SnackBar',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedIn(
+            'climber@example.com',
+            uid: 'uid-1',
+          ),
+        );
+        addTearDown(fakeRepo.dispose);
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            authRepositoryProvider.overrideWithValue(fakeRepo),
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            // A real `appDatabaseProvider` override means the REAL
+            // `SyncOrchestrator` would otherwise see this test's own
+            // `ProfileRepository` write via its `db.tableUpdates()`
+            // subscription and schedule a real 2s debounced push `Timer`
+            // that outlives the test (flutter_test's "Timer still pending"
+            // failure) — swap in the fixed, listener-free fake used by the
+            // `E1d` group above; this group only cares about the
+            // display-name read/write path, not sync.
+            syncOrchestratorProvider.overrideWith(
+              () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('account-display-name-field')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('account-display-name-save')),
+          findsOneWidget,
+        );
+
+        await tester.enterText(
+          find.byKey(const Key('account-display-name-field')),
+          'Alex Boulder',
+        );
+        await tester.pump();
+        await tester.tap(find.byKey(const Key('account-display-name-save')));
+        await _drain(tester);
+
+        expect(find.text('Display name saved.'), findsOneWidget);
+
+        await tester.runAsync(() async {
+          final row = await (db.select(
+            db.profiles,
+          )..where((t) => t.id.equals('uid-1'))).getSingleOrNull();
+          expect(row?.displayName, 'Alex Boulder');
+          expect(row?.dirty, isTrue);
+        });
+      },
+    );
+
+    testWidgets(
+      'a previously-saved display name prefills the field on load',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedIn(
+            'climber@example.com',
+            uid: 'uid-2',
+          ),
+        );
+        addTearDown(fakeRepo.dispose);
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        await tester.runAsync(() async {
+          await db
+              .into(db.profiles)
+              .insert(
+                ProfilesCompanion.insert(
+                  id: 'uid-2',
+                  createdAt: 1000,
+                  updatedAt: 1000,
+                  displayName: const Value('Existing Name'),
+                ),
+              );
+        });
+        final container = ProviderContainer(
+          overrides: [
+            authRepositoryProvider.overrideWithValue(fakeRepo),
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            // A real `appDatabaseProvider` override means the REAL
+            // `SyncOrchestrator` would otherwise see this test's own
+            // `ProfileRepository` write via its `db.tableUpdates()`
+            // subscription and schedule a real 2s debounced push `Timer`
+            // that outlives the test (flutter_test's "Timer still pending"
+            // failure) — swap in the fixed, listener-free fake used by the
+            // `E1d` group above; this group only cares about the
+            // display-name read/write path, not sync.
+            syncOrchestratorProvider.overrideWith(
+              () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await _drain(tester);
+
+        expect(find.text('Existing Name'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'with no display name set yet, the field is empty and hints the '
+      "email's local part",
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedIn(
+            'climber@example.com',
+            uid: 'uid-3',
+          ),
+        );
+        addTearDown(fakeRepo.dispose);
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            authRepositoryProvider.overrideWithValue(fakeRepo),
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            // A real `appDatabaseProvider` override means the REAL
+            // `SyncOrchestrator` would otherwise see this test's own
+            // `ProfileRepository` write via its `db.tableUpdates()`
+            // subscription and schedule a real 2s debounced push `Timer`
+            // that outlives the test (flutter_test's "Timer still pending"
+            // failure) — swap in the fixed, listener-free fake used by the
+            // `E1d` group above; this group only cares about the
+            // display-name read/write path, not sync.
+            syncOrchestratorProvider.overrideWith(
+              () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await _drain(tester);
+
+        final field = tester.widget<TextField>(
+          find.byKey(const Key('account-display-name-field')),
+        );
+        expect(field.controller?.text, isEmpty);
+        expect(field.decoration?.hintText, 'climber');
       },
     );
   });
