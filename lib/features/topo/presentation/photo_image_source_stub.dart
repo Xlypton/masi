@@ -23,6 +23,9 @@ class PlatformPhotoImage extends ConsumerWidget {
     this.width,
     this.height,
     this.placeholder,
+    this.loadingPlaceholder,
+    this.cacheWidth,
+    this.cacheHeight,
   });
 
   final String storedPath;
@@ -30,6 +33,9 @@ class PlatformPhotoImage extends ConsumerWidget {
   final double? width;
   final double? height;
   final Widget Function()? placeholder;
+  final Widget Function()? loadingPlaceholder;
+  final int? cacheWidth;
+  final int? cacheHeight;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) =>

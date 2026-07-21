@@ -134,6 +134,143 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+
+    testWidgets(
+      '#56: cacheWidth/cacheHeight pass straight through to the underlying '
+      'Image.file\'s own decode-size hints',
+      (tester) async {
+        final file = File(p.join(tempDir.path, 'cache-size.png'))
+          ..writeAsBytesSync(_tinyPngBytes);
+
+        await tester.pumpWidget(
+          _wrap(
+            PhotoImage(
+              file.path,
+              width: 40,
+              height: 40,
+              cacheWidth: 80,
+              cacheHeight: 90,
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final image = tester.widget<Image>(find.byType(Image));
+        // `Image.file(..., cacheWidth:, cacheHeight:)` has no `cacheWidth`/
+        // `cacheHeight` getters of its own -- the constructor folds them
+        // into `image = ResizeImage.resizeIfNeeded(cacheWidth, cacheHeight,
+        // <provider>)` (see `Image.file`'s source). So the only observable
+        // proof the params were threaded through is the resulting `image`
+        // provider: it must be a `ResizeImage` wrapping the underlying
+        // `FileImage`, carrying `width`/`height` exactly equal to what was
+        // passed in (neither `Image.file` nor `PhotoImage`/
+        // `PlatformPhotoImage` do any devicePixelRatio math of their own --
+        // that scaling, when wanted, is the CALLER's job, e.g.
+        // `topos_row.dart`'s `_Thumbnail` computing `52 * devicePixelRatio`
+        // before it ever reaches here -- this test passes already-physical
+        // 80/90 literals straight through, so the expected `ResizeImage`
+        // values are those same literals, unscaled).
+        expect(image.image, isA<ResizeImage>());
+        final resizeImage = image.image as ResizeImage;
+        expect(resizeImage.width, 80);
+        expect(resizeImage.height, 90);
+      },
+    );
+
+    testWidgets(
+      '#56: loadingPlaceholder shows while the real decode is still '
+      'pending -- DISTINCT from placeholder -- then disappears once the '
+      'photo actually loads, with no exception',
+      (tester) async {
+        final file = File(p.join(tempDir.path, 'loading-then-found.png'))
+          ..writeAsBytesSync(_tinyPngBytes);
+
+        await tester.pumpWidget(
+          _wrap(
+            PhotoImage(
+              file.path,
+              loadingPlaceholder: () =>
+                  const SizedBox(key: Key('loading'), width: 1, height: 1),
+              placeholder: () =>
+                  const SizedBox(key: Key('missing'), width: 1, height: 1),
+            ),
+          ),
+        );
+        // A single pump, no drain: the real file read/decode hasn't had a
+        // chance to complete yet, so this must still be the LOADING state.
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('loading')),
+          findsOneWidget,
+          reason: 'still loading -- must show loadingPlaceholder',
+        );
+        expect(
+          find.byKey(const Key('missing')),
+          findsNothing,
+          reason: 'a photo that decodes fine must never show placeholder',
+        );
+
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('loading')),
+          findsNothing,
+          reason:
+              'once the frame has arrived, loadingPlaceholder must be gone',
+        );
+        expect(find.byKey(const Key('missing')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      '#56: a MISSING photo eventually shows the static placeholder, NEVER '
+      'the loadingPlaceholder, once resolution completes -- proving a '
+      'missing photo does not shimmer forever',
+      (tester) async {
+        final missingPath = p.join(tempDir.path, 'loading-then-missing.png');
+
+        await tester.pumpWidget(
+          _wrap(
+            PhotoImage(
+              missingPath,
+              loadingPlaceholder: () =>
+                  const SizedBox(key: Key('loading'), width: 1, height: 1),
+              placeholder: () =>
+                  const SizedBox(key: Key('missing'), width: 1, height: 1),
+            ),
+          ),
+        );
+        // A single pump, no drain: the async open-and-fail hasn't resolved
+        // yet, so this must still read as LOADING, not missing.
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('loading')),
+          findsOneWidget,
+          reason: 'not yet resolved -- must show loadingPlaceholder, not '
+              'jump straight to the missing-photo placeholder',
+        );
+        expect(find.byKey(const Key('missing')), findsNothing);
+
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('missing')),
+          findsOneWidget,
+          reason: 'resolved-missing must show the static placeholder',
+        );
+        expect(
+          find.byKey(const Key('loading')),
+          findsNothing,
+          reason:
+              'a confirmed-missing photo must never keep showing '
+              'loadingPlaceholder -- that would shimmer forever',
+        );
+      },
+    );
   });
 
   group('PhotoImageProvider (native dimension probe)', () {

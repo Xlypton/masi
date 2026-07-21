@@ -915,12 +915,31 @@ class LibraryCrudRepository {
         });
   }
 
-  /// Resolves a stored thumbnail `localPath` to an absolute display path via
-  /// [PhotoFiles.resolvePhotoPathSync] (synchronous, for the [watchTopos]
-  /// stream), passing `null` through unchanged (walls with no photo).
+  /// Resolves a stored thumbnail `localPath` to an absolute display path for
+  /// the row's small tile, passing `null` through unchanged (walls with no
+  /// photo).
+  ///
+  /// #56 fix: [thumbKeyFor] is applied FIRST, deriving the downscaled
+  /// `thumbs/<id>.jpg` key from the stored ORIGINAL path, before resolving
+  /// via [PhotoFiles.resolvePhotoPathSync] (synchronous, for the
+  /// [watchTopos] stream) — so the Topos-home list decodes the small
+  /// 512px-max-edge thumbnail generated at import time instead of the
+  /// full-resolution original (`photo_strip.dart`'s existing precedent for
+  /// its own 52px strip tile). [thumbKeyFor] only manipulates the basename
+  /// (`path.join('thumbs', '$id.jpg')`), so it composes correctly with
+  /// every case [resolvePhotoPathSync] itself handles — a relative stored
+  /// path, a still-valid legacy absolute one, or a stale absolute one
+  /// pending container-rotation self-heal — since all three ultimately
+  /// resolve against the SAME current docs dir via the re-derived relative
+  /// form. A wall whose photo predates thumbnail generation (no
+  /// `thumbs/<id>.jpg` was ever written) resolves to a path that simply
+  /// doesn't exist on disk; that degrades to [PhotoImage]'s `placeholder`
+  /// gradient exactly like any other unreadable photo, never a blank tile.
   String? _resolveThumbnail(String? storedThumbnailPath) {
     if (storedThumbnailPath == null) return null;
-    return _photoFiles.resolvePhotoPathSync(storedThumbnailPath).path;
+    return _photoFiles
+        .resolvePhotoPathSync(thumbKeyFor(storedThumbnailPath))
+        .path;
   }
 
   // ---------------------------------------------------------------------

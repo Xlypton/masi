@@ -1390,7 +1390,18 @@ void main() {
         );
 
         await tester.tap(find.byKey(const Key('community-filter-clear')));
-        await tester.pumpAndSettle();
+        // NOT `pumpAndSettle()`: clearing the filter re-reveals
+        // wall-trad's feed row, which was fully unmounted while filtered
+        // out -- its `PhotoImage` remounts FRESH and starts in the
+        // "loading" state, rendering a brand-new `MasiShimmer` whose
+        // `AnimationController..repeat()` never completes (see that
+        // class's doc). `pumpAndSettle()` only advances flutter_test's
+        // fake-async clock, which can't progress the real dart:io file
+        // open behind it either, so the shimmer never resolves and
+        // `pumpAndSettle()` spins until it times out. A bounded pump is
+        // plenty to flush the filter-clear rebuild this assertion cares
+        // about -- the shimmer's continued animation is incidental.
+        await tester.pump(const Duration(milliseconds: 300));
 
         expect(_feedRowFinder(), findsNWidgets(2));
         expect(

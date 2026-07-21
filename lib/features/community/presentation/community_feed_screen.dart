@@ -13,6 +13,7 @@ import '../../account/application/profile_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
+import '../../../shared/presentation/masi_shimmer.dart';
 import '../../topo/presentation/photo_image.dart';
 import '../application/community_providers.dart';
 import '../application/community_topo_detail_providers.dart';
@@ -915,9 +916,10 @@ Color _colorForGradeBand(MasiColors colors, GradeBand band) {
 }
 
 /// 52x52 rounded thumbnail, mirroring `topos_screen.dart`'s `_Thumbnail`:
-/// the topo's original photo when readable, else an amethyst gradient
+/// the topo's downscaled `thumbs/<id>.jpg` thumbnail (#56 — NOT the
+/// full-resolution original) when readable, else an amethyst gradient
 /// placeholder (never a broken-image icon) — see that class's doc for what
-/// [PhotoImage]'s `placeholder` covers.
+/// [PhotoImage]'s `placeholder`/`loadingPlaceholder` cover.
 class _Thumbnail extends StatelessWidget {
   const _Thumbnail({required this.path});
 
@@ -928,6 +930,10 @@ class _Thumbnail extends StatelessWidget {
     final colors = MasiColors.of(context);
     final radius = BorderRadius.circular(10);
     final thumbnailPath = path;
+    // #56: decode at display size, not the original's full resolution —
+    // the tile is 52 LOGICAL px, so the decode target is that times the
+    // device's pixel ratio.
+    final cachePx = (52 * MediaQuery.of(context).devicePixelRatio).round();
 
     final child = thumbnailPath == null
         ? _GradientFallback(colors: colors)
@@ -936,7 +942,10 @@ class _Thumbnail extends StatelessWidget {
             width: 52,
             height: 52,
             fit: BoxFit.cover,
+            cacheWidth: cachePx,
+            cacheHeight: cachePx,
             placeholder: () => _GradientFallback(colors: colors),
+            loadingPlaceholder: () => const MasiShimmer(),
           );
 
     return ClipRRect(

@@ -24,6 +24,7 @@ import '../application/library_providers.dart';
 import '../application/proximity_topos_provider.dart';
 import '../data/library_crud_repository.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_shimmer.dart';
 import 'move_target_picker.dart';
 import 'set_location_picker.dart';
 

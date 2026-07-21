@@ -30,10 +30,25 @@ import 'photo_image_source.dart';
 /// covers every case that used to be handled ad hoc per call site —
 /// `errorBuilder` (a real decode failure on native) AND the old
 /// `File(...).existsSync()` pre-check (now: bytes not found, or not yet
-/// loaded from IndexedDB, on web). There is no way to distinguish "still
-/// loading" from "missing" from the outside, by design — both show
-/// [placeholder]; a load that succeeds a moment later simply replaces it,
-/// same as a network image appearing once it arrives.
+/// loaded from IndexedDB, on web).
+///
+/// [loadingPlaceholder] (#56) is a SEPARATE, optional slot for a "still
+/// loading" visual (e.g. an animated shimmer skeleton) — DISTINCT from
+/// [placeholder], which stays reserved for "this photo genuinely cannot be
+/// shown" (a decode error, or bytes confirmed not found). Both backends
+/// distinguish the two states from the outside now: native drives it off
+/// `Image.file`'s own `frameBuilder` (`frame == null` = still loading), web
+/// off whether the async IndexedDB byte-read/cache resolution has completed
+/// yet. When [loadingPlaceholder] is omitted, behavior is unchanged from
+/// before this param existed: [placeholder] alone covers both "loading" and
+/// "missing", exactly like a plain network image appearing once it arrives.
+///
+/// [cacheWidth]/[cacheHeight] (#56) are optional decode-size hints — passed
+/// straight through to the underlying `Image.file`/`Image.network`'s own
+/// `cacheWidth`/`cacheHeight` — so a small on-screen tile (e.g. a 52px list
+/// thumbnail) doesn't pay the memory/CPU cost of decoding a full-resolution
+/// original at its native size. Omitted by default (decode at native size,
+/// the pre-existing behavior) so every other call site is unaffected.
 class PhotoImage extends StatelessWidget {
   const PhotoImage(
     this.storedPath, {
@@ -42,6 +57,9 @@ class PhotoImage extends StatelessWidget {
     this.width,
     this.height,
     this.placeholder,
+    this.loadingPlaceholder,
+    this.cacheWidth,
+    this.cacheHeight,
   });
 
   /// The stored photo reference to render — see this file's doc for what
@@ -52,10 +70,21 @@ class PhotoImage extends StatelessWidget {
   final double? height;
 
   /// Shown whenever the photo can't be rendered (decode error, or bytes not
-  /// found/not yet loaded). Defaults to an empty box — every migrated call
-  /// site that didn't already have its own visual fallback used
-  /// `SizedBox.shrink()`, so that stays the default here too.
+  /// found/not yet loaded — unless [loadingPlaceholder] is given, in which
+  /// case "not yet loaded" shows that instead). Defaults to an empty box —
+  /// every migrated call site that didn't already have its own visual
+  /// fallback used `SizedBox.shrink()`, so that stays the default here too.
   final Widget Function()? placeholder;
+
+  /// Shown while the photo is still being resolved/decoded, distinct from
+  /// [placeholder]'s "this photo is missing/broken" — see this class's doc.
+  /// `null` (the default) preserves the pre-existing behavior exactly:
+  /// [placeholder] alone is shown for the entire loading window.
+  final Widget Function()? loadingPlaceholder;
+
+  /// Optional decode-size hints in PHYSICAL pixels — see this class's doc.
+  final int? cacheWidth;
+  final int? cacheHeight;
 
   @override
   Widget build(BuildContext context) {
@@ -65,6 +94,9 @@ class PhotoImage extends StatelessWidget {
       width: width,
       height: height,
       placeholder: placeholder,
+      loadingPlaceholder: loadingPlaceholder,
+      cacheWidth: cacheWidth,
+      cacheHeight: cacheHeight,
     );
   }
 }

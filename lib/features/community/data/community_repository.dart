@@ -393,12 +393,19 @@ class CommunityRepository {
         });
   }
 
-  /// Resolves a stored thumbnail `localPath` to an absolute display path via
-  /// [PhotoFiles.resolvePhotoPathSync], passing `null` through unchanged
-  /// (walls with no photo). Mirrors
-  /// `LibraryCrudRepository._resolveThumbnail`.
+  /// Resolves a stored thumbnail `localPath` to an absolute display path for
+  /// the feed's small tile, passing `null` through unchanged (walls with no
+  /// photo). Mirrors `LibraryCrudRepository._resolveThumbnail` (#56 fix):
+  /// [thumbKeyFor] derives the downscaled `thumbs/<id>.jpg` key BEFORE
+  /// resolving via [PhotoFiles.resolvePhotoPathSync], so the Community feed
+  /// decodes the small thumbnail rather than the full-resolution original.
+  /// A photo that predates thumbnail generation resolves to a path that
+  /// doesn't exist on disk, which degrades to [PhotoImage]'s `placeholder`
+  /// gradient like any other unreadable photo — never a blank tile.
   String? _resolveThumbnail(String? storedThumbnailPath) {
     if (storedThumbnailPath == null) return null;
-    return _photoFiles.resolvePhotoPathSync(storedThumbnailPath).path;
+    return _photoFiles
+        .resolvePhotoPathSync(thumbKeyFor(storedThumbnailPath))
+        .path;
   }
 }

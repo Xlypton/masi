@@ -1,5 +1,6 @@
 import 'package:climbtopo/core/db/app_database.dart';
 import 'package:climbtopo/features/community/data/community_repository.dart';
+import 'package:climbtopo/features/topo/data/photo_files.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -434,7 +435,9 @@ void main() {
           final topos = await repo.watchSharedTopos().first;
           final topo = topos.singleWhere((t) => t.wallId == 'wall-primary-1');
 
-          expect(topo.thumbnailPath, '/tmp/photo-primary-old.jpg');
+          // #56: watchSharedTopos derives the THUMBNAIL key (thumbKeyFor)
+          // from the stored original before resolving.
+          expect(topo.thumbnailPath, 'thumbs/photo-primary-old.jpg');
         },
       );
 
@@ -493,6 +496,37 @@ void main() {
           expect(topo.routeCount, 1);
           expect(topo.topGradeLabel, '6a');
           expect(topo.routeGradeKeys, [7.0]);
+        },
+      );
+    },
+  );
+
+  group(
+    '#56: watchSharedTopos resolves the THUMBNAIL key, not the original',
+    () {
+      test(
+        'thumbnailPath is derived via thumbKeyFor (thumbs/<id>.jpg), not '
+        'the stored original photos/<id><ext> path -- the Community feed '
+        'must decode the small pre-generated thumbnail, not the '
+        'full-resolution original',
+        () async {
+          await seedArea('area-thumb-56');
+          await seedSector('sector-thumb-56', areaId: 'area-thumb-56');
+          await seedWall('wall-thumb-56', sectorId: 'sector-thumb-56');
+          await seedPhoto('photo-thumb-56', wallId: 'wall-thumb-56');
+
+          final topos = await repo.watchSharedTopos().first;
+          final topo = topos.singleWhere(
+            (t) => t.wallId == 'wall-thumb-56',
+          );
+
+          expect(topo.thumbnailPath, thumbKeyFor('/tmp/photo-thumb-56.jpg'));
+          expect(topo.thumbnailPath, 'thumbs/photo-thumb-56.jpg');
+          expect(
+            topo.thumbnailPath,
+            isNot(contains('/tmp/')),
+            reason: 'must not resolve to the stored original\'s own path',
+          );
         },
       );
     },

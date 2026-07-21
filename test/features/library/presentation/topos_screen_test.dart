@@ -480,6 +480,55 @@ void main() {
     );
 
     testWidgets(
+      '#56: a thumbnailPath pointing at a photo that cannot be decoded '
+      '(e.g. a legacy photo whose thumbnail was never generated on disk) '
+      'never leaves the row blank or crashes -- it resolves to the '
+      'gradient placeholder',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final tempDir = Directory.systemTemp.createTempSync(
+          'topos_screen_missing_thumb_test_',
+        );
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+        // Deliberately never created -- simulates a thumb key that
+        // resolved (thumbKeyFor + resolvePhotoPathSync both succeed
+        // syntactically) but whose file genuinely isn't on disk.
+        final missingThumbPath = '${tempDir.path}/thumbs/ghost.jpg';
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            toposProvider.overrideWith(
+              (ref) => Stream.value([
+                TopoRef(
+                  wallId: 'wall-missing-thumb',
+                  name: 'Ghost Topo',
+                  thumbnailPath: missingThumbPath,
+                  routeCount: 0,
+                  createdAt: 1000,
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('topo-item-wall-missing-thumb')),
+          findsOneWidget,
+        );
+        expect(find.text('Ghost Topo'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       '#51: the topos list folds the floating bottom bar\'s clearance into '
       'its own bottom padding, so the last row is not left hidden behind it',
       (tester) async {

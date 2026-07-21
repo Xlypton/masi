@@ -670,12 +670,15 @@ void main() {
         expect(withPhotoRef.name, 'Photo Wall');
         expect(
           withPhotoRef.thumbnailPath,
-          'photos/$thumbPhotoId.jpg',
+          'thumbs/$thumbPhotoId.jpg',
           reason:
-              'attachPhotoToWall stores the relative photos/<id><ext> '
-              'form (the source path does not exist on disk here), and '
-              'watchTopos with the default (no path_provider available in '
-              'this test) PhotoFiles falls back to returning it unchanged',
+              '#56: watchTopos resolves the THUMBNAIL key '
+              '(thumbKeyFor), not the original photos/<id><ext> path — '
+              'attachPhotoToWall stores the relative original form (the '
+              'source path does not exist on disk here), and watchTopos '
+              'with the default (no path_provider available in this test) '
+              'PhotoFiles falls back to returning the derived thumb key '
+              'unchanged',
         );
         expect(withPhotoRef.routeCount, 0);
       },
@@ -1120,7 +1123,7 @@ void main() {
           final ref = (await repo.watchTopos().first).single;
 
           expect(ref.name, 'Wall');
-          expect(ref.thumbnailPath, 'photos/$photoId.jpg');
+          expect(ref.thumbnailPath, 'thumbs/$photoId.jpg');
           expect(ref.routeCount, 1);
           expect(ref.topGradeLabel, '7a');
           expect(ref.topGradeBand, GradeBand.hard);
@@ -1172,6 +1175,94 @@ void main() {
       );
     },
   );
+
+  group('#56: watchTopos resolves the THUMBNAIL key, not the original', () {
+    test(
+      'thumbnailPath is derived via thumbKeyFor (thumbs/<id>.jpg), not the '
+      'stored original photos/<id><ext> path -- the Topos-home list must '
+      'decode the small pre-generated thumbnail, not the full-resolution '
+      'original',
+      () async {
+        final wallId = await repo.createTopo('Speed Topo');
+        final photoId = await repo.attachPhotoToWall(
+          wallId,
+          XFile('/tmp/does-not-exist.jpg'),
+          100,
+          200,
+        );
+
+        final topos = await repo.watchTopos().first;
+
+        expect(
+          topos.single.thumbnailPath,
+          thumbKeyFor('photos/$photoId.jpg'),
+        );
+        expect(topos.single.thumbnailPath, 'thumbs/$photoId.jpg');
+        expect(
+          topos.single.thumbnailPath,
+          isNot(contains('/photos/')),
+          reason: 'must not resolve to the original photos/ directory',
+        );
+      },
+    );
+
+    test(
+      'a photo that predates thumbnail generation (no thumbs/<id>.jpg was '
+      'ever written) still resolves to a non-null path rather than leaving '
+      'the row without a usable thumbnailPath at all -- PhotoImage\'s own '
+      'placeholder degrades gracefully for a path that does not exist on '
+      'disk, never a permanently blank tile',
+      () async {
+        final docsDir = Directory.systemTemp.createTempSync(
+          'library_crud_thumb_fallback_',
+        );
+        addTearDown(() {
+          if (docsDir.existsSync()) docsDir.deleteSync(recursive: true);
+        });
+        final photoFiles = PhotoFiles(docsDir: () async => docsDir);
+        final healingRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          photoFiles: photoFiles,
+        );
+        await photoFiles.warmDocsPath();
+
+        final wallId = await healingRepo.createTopo('Legacy Topo');
+        final photoId = await healingRepo.attachPhotoToWall(
+          wallId,
+          XFile('/tmp/does-not-exist.jpg'),
+          100,
+          200,
+        );
+        // Simulate a legacy photo: the ORIGINAL exists on disk, but its
+        // thumbnail was never generated (predates #56's thumbnail write).
+        final photosDir = Directory(p.join(docsDir.path, 'photos'))
+          ..createSync(recursive: true);
+        File(
+          p.join(photosDir.path, '$photoId.jpg'),
+        ).writeAsBytesSync(List<int>.filled(4, 1));
+        // Deliberately do NOT create docsDir/thumbs/$photoId.jpg.
+
+        final topos = await healingRepo.watchTopos().first;
+
+        expect(
+          topos.single.thumbnailPath,
+          isNotNull,
+          reason:
+              'even with no thumb file on disk, watchTopos must still hand '
+              'back a resolvable (if currently-missing) path for the '
+              'widget layer to gate/fall back on, never null/blank',
+        );
+        expect(
+          File(topos.single.thumbnailPath!).existsSync(),
+          isFalse,
+          reason:
+              'confirms this is genuinely the missing-thumb case, not an '
+              'accidental pass',
+        );
+      },
+    );
+  });
 
   group('A8: createTopo', () {
     test('returns a wallId resolving to a real non-deleted Wall row with the '
@@ -1397,10 +1488,11 @@ void main() {
         expect(rawPhoto2.isPrimary, isFalse);
 
         // Both source paths are missing on disk, so attachPhotoToWall
-        // stores the relative photos/<id><ext> form for each, and the
-        // default (no path_provider in this test) PhotoFiles used by
-        // watchTopos falls back to returning it unchanged.
-        final expectedPath = 'photos/$photoId1.jpg';
+        // stores the relative photos/<id><ext> form for each; watchTopos
+        // (#56) derives the THUMBNAIL key from that (thumbKeyFor), and the
+        // default (no path_provider in this test) PhotoFiles falls back to
+        // returning the derived key unchanged.
+        final expectedPath = 'thumbs/$photoId1.jpg';
 
         for (var i = 0; i < 3; i++) {
           final topos = await tiedRepo.watchTopos().first;
@@ -1442,7 +1534,9 @@ void main() {
 
         final expectedPhotoId = [photoId1, photoId2]
           ..sort((a, b) => b.compareTo(a));
-        final expectedPath = 'photos/${expectedPhotoId.first}.jpg';
+        // #56: watchTopos derives the THUMBNAIL key (thumbKeyFor), not the
+        // original photos/<id><ext> path.
+        final expectedPath = 'thumbs/${expectedPhotoId.first}.jpg';
 
         for (var i = 0; i < 3; i++) {
           final topos = await tiedRepo.watchTopos().first;
@@ -1459,6 +1553,7 @@ void main() {
     late LibraryCrudRepository healingRepo;
 
     String photosDirPath() => p.join(docsDir.path, 'photos');
+    String thumbsDirPath() => p.join(docsDir.path, 'thumbs');
 
     setUp(() {
       docsDir = Directory.systemTemp.createTempSync('library_crud_docs_');
@@ -1550,10 +1645,12 @@ void main() {
 
       expect(
         topos.single.thumbnailPath,
-        p.join(photosDirPath(), '$photoId.jpg'),
+        p.join(thumbsDirPath(), '$photoId.jpg'),
         reason:
-            'the relative stored thumbnail must resolve to an '
-            'absolute path under the current docs dir',
+            '#56: watchTopos derives the THUMBNAIL key (thumbKeyFor) from '
+            'the relative stored original before resolving, so it must '
+            'resolve to an absolute path under the current docs dir\'s '
+            'thumbs/ subdirectory, not photos/',
       );
 
       // watchTopos must NOT heal/rewrite the row (sync stream has no
@@ -1582,10 +1679,11 @@ void main() {
         );
 
         // No warmDocsPath()/async resolve called on THIS PhotoFiles, so
-        // the sync resolver's cache is cold -> returns the stored value.
+        // the sync resolver's cache is cold -> returns the derived thumb
+        // key (#56: thumbKeyFor applied before resolution) unchanged.
         final topos = await healingRepo.watchTopos().first;
 
-        expect(topos.single.thumbnailPath, 'photos/$photoId.jpg');
+        expect(topos.single.thumbnailPath, 'thumbs/$photoId.jpg');
       },
     );
   });

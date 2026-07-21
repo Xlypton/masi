@@ -16,6 +16,16 @@ import '../data/photo_files.dart';
 /// an absolute, already-resolved path — see `photo_image.dart`'s doc) and
 /// renders it with plain `Image.file`, byte-for-byte the same widget every
 /// migrated call site used before this migration.
+///
+/// #56: [loadingPlaceholder], when given, is wired to `Image.file`'s own
+/// `frameBuilder` — `frame == null` (and not synchronously loaded, e.g. an
+/// already-decoded/cached image reappearing) means the decode genuinely
+/// hasn't produced a frame yet, distinct from `errorBuilder`'s "this photo
+/// can't be shown at all" (still [placeholder]). Omitting
+/// [loadingPlaceholder] leaves `frameBuilder` `null`, i.e. `Image`'s own
+/// default (instant) behavior — unchanged from before this param existed.
+/// [cacheWidth]/[cacheHeight] pass straight through to `Image.file`'s decode
+/// size hints.
 class PlatformPhotoImage extends ConsumerWidget {
   const PlatformPhotoImage({
     super.key,
@@ -24,6 +34,9 @@ class PlatformPhotoImage extends ConsumerWidget {
     this.width,
     this.height,
     this.placeholder,
+    this.loadingPlaceholder,
+    this.cacheWidth,
+    this.cacheHeight,
   });
 
   final String storedPath;
@@ -31,6 +44,9 @@ class PlatformPhotoImage extends ConsumerWidget {
   final double? width;
   final double? height;
   final Widget Function()? placeholder;
+  final Widget Function()? loadingPlaceholder;
+  final int? cacheWidth;
+  final int? cacheHeight;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -41,6 +57,14 @@ class PlatformPhotoImage extends ConsumerWidget {
       fit: fit,
       width: width,
       height: height,
+      cacheWidth: cacheWidth,
+      cacheHeight: cacheHeight,
+      frameBuilder: loadingPlaceholder == null
+          ? null
+          : (context, child, frame, wasSynchronouslyLoaded) {
+              if (wasSynchronouslyLoaded || frame != null) return child;
+              return loadingPlaceholder!.call();
+            },
       errorBuilder: (context, error, stackTrace) =>
           placeholder?.call() ?? const SizedBox.shrink(),
     );

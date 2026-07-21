@@ -574,11 +574,16 @@ class _CommunityProximityRow extends StatelessWidget {
   }
 }
 
-/// 52x52 rounded thumbnail: the topo's most recent `kind:'original'` photo
-/// when it has one and its bytes are readable, else an amethyst gradient
-/// placeholder. [PhotoImage]'s `placeholder` covers every way that can fail
-/// (no path at all, a decode error, or — on web — bytes not found/not yet
-/// loaded from IndexedDB) so no path ever surfaces a broken-image icon.
+/// 52x52 rounded thumbnail: the topo's downscaled `thumbs/<id>.jpg`
+/// thumbnail (#56 — resolved by `LibraryCrudRepository`/`CommunityRepository`
+/// `_resolveThumbnail`, NOT the full-resolution original) when it has one
+/// and its bytes are readable, else an amethyst gradient placeholder.
+/// [PhotoImage]'s `placeholder` covers every way that can fail (no path at
+/// all, a decode error, or — on web — bytes not found/not yet loaded from
+/// IndexedDB) so no path ever surfaces a broken-image icon; its
+/// `loadingPlaceholder` (an animated [MasiShimmer]) covers the DISTINCT
+/// "still loading" window so a genuinely-missing photo never shimmers
+/// forever.
 class _Thumbnail extends StatelessWidget {
   const _Thumbnail({required this.path});
 
@@ -589,6 +594,10 @@ class _Thumbnail extends StatelessWidget {
     final colors = MasiColors.of(context);
     final radius = BorderRadius.circular(10);
     final thumbnailPath = path;
+    // #56: decode at display size, not the original's full resolution —
+    // the tile is 52 LOGICAL px, so the decode target is that times the
+    // device's pixel ratio.
+    final cachePx = (52 * MediaQuery.of(context).devicePixelRatio).round();
 
     final child = thumbnailPath == null
         ? _GradientFallback(colors: colors)
@@ -597,7 +606,10 @@ class _Thumbnail extends StatelessWidget {
             width: 52,
             height: 52,
             fit: BoxFit.cover,
+            cacheWidth: cachePx,
+            cacheHeight: cachePx,
             placeholder: () => _GradientFallback(colors: colors),
+            loadingPlaceholder: () => const MasiShimmer(),
           );
 
     return ClipRRect(

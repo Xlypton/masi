@@ -24,7 +24,19 @@ import 'photo_image_self_heal_guard.dart';
 /// Web rendering: shows [PhotoImageCache]'s cached object URL for
 /// [storedPath] via `Image.network` the moment it's available — synchronously
 /// (no placeholder flash) if already cached, otherwise the [placeholder]
-/// while a background IndexedDB read populates the cache.
+/// (or, if given, [loadingPlaceholder] — see #56 below) while a background
+/// IndexedDB read populates the cache.
+///
+/// #56: [loadingPlaceholder], when given, shows while resolution is still
+/// PENDING (the cache-through IndexedDB read hasn't completed yet — tracked
+/// by [_PlatformPhotoImageState._resolved]); once resolution completes,
+/// whether to a real URL (renders the photo) or to `null` (bytes genuinely
+/// not found), the pending window is over and a `null` result falls through
+/// to [placeholder] instead — so a missing photo never shows
+/// [loadingPlaceholder] forever. Omitting [loadingPlaceholder] preserves the
+/// exact pre-existing behavior: [placeholder] alone covers the whole
+/// pending-or-missing `_url == null` window. [cacheWidth]/[cacheHeight] pass
+/// straight through to `Image.network`'s decode size hints.
 class PlatformPhotoImage extends ConsumerStatefulWidget {
   const PlatformPhotoImage({
     super.key,
@@ -33,6 +45,9 @@ class PlatformPhotoImage extends ConsumerStatefulWidget {
     this.width,
     this.height,
     this.placeholder,
+    this.loadingPlaceholder,
+    this.cacheWidth,
+    this.cacheHeight,
   });
 
   final String storedPath;
@@ -40,6 +55,9 @@ class PlatformPhotoImage extends ConsumerStatefulWidget {
   final double? width;
   final double? height;
   final Widget Function()? placeholder;
+  final Widget Function()? loadingPlaceholder;
+  final int? cacheWidth;
+  final int? cacheHeight;
 
   @override
   ConsumerState<PlatformPhotoImage> createState() =>
@@ -49,6 +67,14 @@ class PlatformPhotoImage extends ConsumerStatefulWidget {
 class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
   String? _key;
   String? _url;
+
+  /// #56: `true` once resolution has completed for the CURRENT [_key] —
+  /// whether it landed on a real URL or confirmed-missing (`null`). `false`
+  /// means still pending: [_url] is `null` but that's not yet a verdict, so
+  /// [loadingPlaceholder] (not [placeholder]) is what should show. Reset to
+  /// `false` whenever [_key] changes in [_ensureUrl], alongside [_url]
+  /// itself and [_failedUrl].
+  bool _resolved = false;
 
   /// Non-null once we've attempted a self-heal re-resolve for the CURRENT
   /// [_key] (see [_handleLoadError]) — the URL that triggered that attempt.
@@ -86,10 +112,12 @@ class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
     if (key == _key) return;
     _key = key;
     _failedUrl = null; // New key: any earlier self-heal attempt is moot.
+    _resolved = false;
 
     final cached = PhotoImageCache.instance.photoUrlSync(key);
     if (cached != null) {
       _url = cached;
+      _resolved = true;
       return;
     }
     _url = null;
@@ -98,7 +126,10 @@ class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
           .resolveUrl(key, () => photoFiles.readPhotoBytes(key))
           .then((url) {
             if (!mounted || _key != key) return;
-            setState(() => _url = url);
+            setState(() {
+              _url = url;
+              _resolved = true;
+            });
           }),
     );
   }
@@ -156,6 +187,16 @@ class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
   Widget build(BuildContext context) {
     final url = _url;
     if (url == null) {
+      // #56: still pending (not yet resolved either way) shows
+      // loadingPlaceholder when given; a CONFIRMED-missing result
+      // (_resolved true, url still null) always falls through to the
+      // static placeholder, so a genuinely missing photo never shimmers
+      // forever.
+      if (!_resolved) {
+        return widget.loadingPlaceholder?.call() ??
+            widget.placeholder?.call() ??
+            const SizedBox.shrink();
+      }
       return widget.placeholder?.call() ?? const SizedBox.shrink();
     }
     return Image.network(
@@ -163,6 +204,8 @@ class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
       fit: widget.fit,
       width: widget.width,
       height: widget.height,
+      cacheWidth: widget.cacheWidth,
+      cacheHeight: widget.cacheHeight,
       errorBuilder: (context, error, stackTrace) {
         _handleLoadError(url);
         return widget.placeholder?.call() ?? const SizedBox.shrink();
