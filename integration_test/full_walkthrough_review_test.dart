@@ -357,12 +357,13 @@ void main() {
     // 06/07. Community feed + map.
     // ------------------------------------------------------------------
     await step('06-community-feed + 07-community-map', () async {
-      // `home-community-button` now goes straight to the Map branch
-      // (`/community` redirects to `/map`) -- Feed is a separate, permanent
-      // bottom-nav tab (`nav-tab-feed`) rather than an in-screen toggle.
-      final communityButton = find.byKey(const Key('home-community-button'));
-      expect(tester.any(communityButton), isTrue, reason: 'home-community-button not found');
-      await tester.tap(communityButton);
+      // Map is now a separate, permanent bottom-nav tab (`nav-tab-map`)
+      // rather than a compass button on the Topos home AppBar -- Feed is
+      // likewise its own permanent tab (`nav-tab-feed`) rather than an
+      // in-screen toggle.
+      final mapTab = find.byKey(const Key('nav-tab-map'));
+      expect(tester.any(mapTab), isTrue, reason: 'nav-tab-map not found');
+      await tester.tap(mapTab);
       await tester.pumpAndSettle(const Duration(seconds: 1));
       // flutter_map's tile fade-in never settles -- pump fixed durations.
       await tester.pump(const Duration(milliseconds: 500));
@@ -411,7 +412,10 @@ void main() {
         return;
       }
       var attempts = 0;
-      while (!tester.any(find.byKey(const Key('home-community-button'))) && attempts < 5) {
+      // `topos-filter-button` only exists on the Topos home screen, so use
+      // it (rather than the removed compass button) to detect we're back
+      // home.
+      while (!tester.any(find.byKey(const Key('topos-filter-button'))) && attempts < 5) {
         final popped = await _goBack(tester);
         if (!popped) break;
         attempts++;
@@ -422,8 +426,15 @@ void main() {
     // 09. Logbook.
     // ------------------------------------------------------------------
     await step('09-logbook', () async {
-      final logbookButton = find.byKey(const Key('home-logbook-button'));
-      expect(tester.any(logbookButton), isTrue, reason: 'home-logbook-button not found');
+      // Logbook's entry point moved off the Topos home AppBar onto the
+      // Feed screen's own AppBar (`feed-logbook-button`) -- go there first.
+      final feedTab = find.byKey(const Key('nav-tab-feed'));
+      expect(tester.any(feedTab), isTrue, reason: 'nav-tab-feed not found');
+      await tester.tap(feedTab);
+      await tester.pumpAndSettle(const Duration(seconds: 1));
+
+      final logbookButton = find.byKey(const Key('feed-logbook-button'));
+      expect(tester.any(logbookButton), isTrue, reason: 'feed-logbook-button not found');
       await tester.tap(logbookButton);
       await tester.pumpAndSettle(const Duration(seconds: 2));
       await tester.pumpAndSettle(const Duration(milliseconds: 600));

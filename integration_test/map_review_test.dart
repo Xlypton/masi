@@ -142,20 +142,19 @@ void main() {
     await tester.pumpAndSettle(const Duration(seconds: 2));
 
     // ------------------------------------------------------------------
-    // Navigate: Topos home -> Community (map tab by default).
+    // Navigate: Topos home -> Map (persistent bottom-nav tab).
     // ------------------------------------------------------------------
-    final communityButton = find.byKey(const Key('home-community-button'));
+    final mapTab = find.byKey(const Key('nav-tab-map'));
     expect(
-      tester.any(communityButton),
+      tester.any(mapTab),
       isTrue,
-      reason: 'home-community-button not found',
+      reason: 'nav-tab-map not found',
     );
-    await tester.tap(communityButton);
+    await tester.tap(mapTab);
     await tester.pumpAndSettle(const Duration(seconds: 1));
 
     // ------------------------------------------------------------------
-    // `home-community-button` now goes straight to the Map branch
-    // (`/community` redirects to `/map`) -- there is no more in-screen
+    // Map is a persistent bottom-nav tab now -- there is no more in-screen
     // Feed/Map toggle to tap; just let the map settle.
     // ------------------------------------------------------------------
     // Do NOT pumpAndSettle: flutter_map's tile fade-in animation never

@@ -86,10 +86,10 @@ void main() {
     app.main();
     await tester.pumpAndSettle(const Duration(seconds: 2));
 
-    // `home-community-button` now goes straight to the Map branch
-    // (`/community` redirects to `/map`) -- there is no more in-screen
+    // Map is now a persistent bottom-nav tab (`nav-tab-map`) rather than a
+    // compass button on the Topos home AppBar -- there is no more in-screen
     // Feed/Map toggle to tap afterward.
-    await tester.tap(find.byKey(const Key('home-community-button')));
+    await tester.tap(find.byKey(const Key('nav-tab-map')));
     await tester.pumpAndSettle(const Duration(seconds: 1));
     await tester.pump(const Duration(milliseconds: 500));
     await tester.pump(const Duration(seconds: 1));

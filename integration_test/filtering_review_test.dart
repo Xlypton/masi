@@ -234,14 +234,16 @@ void main() {
 
     // ------------------------------------------------------------------
     // 03. Community screen (feed tab), showing the published "Filter Wall".
+    // Feed is now a persistent bottom-nav tab (`nav-tab-feed`) rather than
+    // an in-screen Feed/Map toggle reached via a home AppBar button.
     // ------------------------------------------------------------------
-    final communityButton = find.byKey(const Key('home-community-button'));
+    final feedTab = find.byKey(const Key('nav-tab-feed'));
     expect(
-      tester.any(communityButton),
+      tester.any(feedTab),
       isTrue,
-      reason: 'home-community-button not found',
+      reason: 'nav-tab-feed not found',
     );
-    await tester.tap(communityButton);
+    await tester.tap(feedTab);
     await tester.pumpAndSettle(const Duration(seconds: 1));
     await binding.takeScreenshot('filter-03-community-screen');
 
@@ -262,24 +264,18 @@ void main() {
     await tester.tapAt(const Offset(20, 40));
     await tester.pumpAndSettle();
 
-    // Back to the Topos home.
-    final communityBackButton = find.byType(BackButton);
-    expect(
-      tester.any(communityBackButton),
-      isTrue,
-      reason: 'BackButton not found on Community screen',
-    );
-    await tester.tap(communityBackButton.first);
-    await tester.pumpAndSettle(const Duration(seconds: 1));
-
     // ------------------------------------------------------------------
     // 05. Logbook screen, showing the 3 seeded ascents.
+    // Feed/Map are persistent bottom-nav branches now (no back-arrow to pop
+    // back to Topos home) and the Logbook's entry point moved onto the
+    // Feed screen's own AppBar (`feed-logbook-button`) -- already on Feed
+    // from step 03, so tap it directly.
     // ------------------------------------------------------------------
-    final logbookButton = find.byKey(const Key('home-logbook-button'));
+    final logbookButton = find.byKey(const Key('feed-logbook-button'));
     expect(
       tester.any(logbookButton),
       isTrue,
-      reason: 'home-logbook-button not found',
+      reason: 'feed-logbook-button not found',
     );
     await tester.tap(logbookButton);
     await tester.pumpAndSettle(const Duration(seconds: 1));
