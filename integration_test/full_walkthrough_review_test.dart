@@ -133,7 +133,7 @@ Future<_SeedResult> _seed(String Function(String name) imagePathFor) async {
     );
     await routeRepo.upsertRoute(sunnyFace.id, sunnyPhotoId, route1);
 
-    // Route 2: top + rest, named + graded (UIAA).
+    // Route 2: top + disabledHold, named + graded (UIAA).
     final route2 = TopoRoute(
       id: 2,
       number: 2,
@@ -144,7 +144,7 @@ Future<_SeedResult> _seed(String Function(String name) imagePathFor) async {
         Offset(0.75, 0.15),
       ],
       symbols: const [
-        TopoSymbol(type: SymbolType.rest, position: Offset(0.66, 0.65)),
+        TopoSymbol(type: SymbolType.disabledHold, position: Offset(0.66, 0.65)),
         TopoSymbol(type: SymbolType.top, position: Offset(0.75, 0.15)),
       ],
       colorIndex: routeColorIndexFor(2),

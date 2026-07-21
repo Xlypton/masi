@@ -18,10 +18,10 @@ import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
 /// Maps each [SymbolType] that has a dedicated masi brand glyph to its SVG
 /// asset name suffix (`assets/icons/masi/masi_<name>.svg`) — the SAME
 /// assets `MasiIcon`/the draw-mode `SymbolPaletteBar` render, so the
-/// on-photo marker matches the palette glyph exactly. [SymbolType.rest] has
-/// no entry: it keeps [TopoPainter]'s hand-drawn ringed-dot geometry (no
-/// brand glyph exists for it) — see [TopoPainter]'s "Symbol glyph mapping"
-/// doc.
+/// on-photo marker matches the palette glyph exactly. [SymbolType
+/// .disabledHold] has no entry: it keeps [TopoPainter]'s hand-drawn
+/// prohibition-sign geometry (no brand glyph exists for it) — see
+/// [TopoPainter]'s "Symbol glyph mapping" doc.
 const Map<SymbolType, String> _symbolGlyphAssetNames = {
   SymbolType.anchor: 'anchor',
   SymbolType.bolt: 'bolt',

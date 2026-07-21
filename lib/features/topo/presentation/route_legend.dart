@@ -303,7 +303,7 @@ class RouteLegend extends ConsumerWidget {
                     constraints: const BoxConstraints(),
                     icon: route.visible
                         ? MasiIcon('eye')
-                        : Icon(Icons.visibility_off_outlined),
+                        : MasiIcon('eye_off'),
                     onPressed: () => notifier.toggleRouteVisibility(route.id),
                   ),
                   IconButton(

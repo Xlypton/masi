@@ -292,10 +292,9 @@ class _CommunityTopoDetailScreenState
                       IconButton(
                         key: const Key('community-like-button'),
                         tooltip: hasLiked ? 'Unlike' : 'Like',
-                        icon: Icon(
-                          hasLiked ? Icons.favorite : Icons.favorite_border,
-                          color: hasLiked ? colors.accent : colors.ink2,
-                        ),
+                        icon: hasLiked
+                            ? MasiIcon('heart_fill', color: colors.accent)
+                            : MasiIcon('heart', color: colors.ink2),
                         onPressed: _toggleLike,
                       ),
                       Text(

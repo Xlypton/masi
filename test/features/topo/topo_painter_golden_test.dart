@@ -427,8 +427,8 @@ void main() {
     test(
       'A3i (#43): SymbolType.disabledHold paints a distinct prohibition '
       'glyph -- a stroked circle PLUS exactly one diagonal line -- unlike '
-      'every other hand-drawn glyph (bolt: 2 lines/no circle; rest: 2 '
-      'circles/no line; anchor: 1 filled circle/no line; top: a path)',
+      'every other hand-drawn glyph (bolt: 2 lines/no circle; '
+      'anchor: 1 filled circle/no line; top: a path)',
       () {
         final route = TopoRoute(
           id: 1,
@@ -772,54 +772,6 @@ void main() {
     );
 
     test(
-      'D3: SymbolType.rest ALWAYS keeps its ringed-dot geometry, even when '
-      'a caller (mis-)supplies a loaded picture for it -- just the stroked '
-      'ring plus filled center dot, with no white contrast-backing circle',
-      () {
-        final pic = dummyPicture();
-        final route = TopoRoute(
-          id: 1,
-          number: 1,
-          colorIndex: 0,
-          points: const [Offset(0.1, 0.1), Offset(0.9, 0.8)],
-          symbols: const [
-            TopoSymbol(type: SymbolType.rest, position: Offset(0.5, 0.5)),
-          ],
-        );
-        final painter = TopoPainter(
-          imageSize: imageSize,
-          routes: [route],
-          currentPoints: const [],
-          showHandles: false,
-          selectedRouteId: 1,
-          palette: palette,
-          symbolPictures: {SymbolType.rest: pic},
-        );
-        final canvas = _RecordingCanvas();
-
-        painter.paint(canvas, imageSize);
-
-        expect(canvas.drawnPictures, isEmpty);
-        expect(canvas.saveLayerPaints, isEmpty);
-        // Ringed-dot: the stroked outline ring, then the smaller filled
-        // center dot -- exactly two circles, no backing circle.
-        expect(canvas.circleCenters, hasLength(2));
-
-        final radii = canvas.circleRadii;
-        // Ring (radius) is larger than the center dot (radius / 3).
-        expect(radii[0], greaterThan(radii[1]));
-
-        // Outline ring: stroked, in the route's resolved color.
-        expect(canvas.circlePaints[0].style, PaintingStyle.stroke);
-        expect(canvas.circlePaints[0].color.toARGB32(), palette[0].toARGB32());
-
-        // Center dot: filled, in the route's resolved color.
-        expect(canvas.circlePaints[1].style, PaintingStyle.fill);
-        expect(canvas.circlePaints[1].color.toARGB32(), palette[0].toARGB32());
-      },
-    );
-
-    test(
       'D4: a type with NO entry in symbolPictures (e.g. before the async '
       'glyph load completes) falls back to the pre-existing hand-drawn '
       'geometry -- never a blank marker',
@@ -941,7 +893,7 @@ void main() {
           ],
           symbols: const [
             TopoSymbol(type: SymbolType.anchor, position: Offset(0.1, 0.1)),
-            TopoSymbol(type: SymbolType.rest, position: Offset(0.9, 0.8)),
+            TopoSymbol(type: SymbolType.disabledHold, position: Offset(0.9, 0.8)),
           ],
         );
         final painter = TopoPainter(
@@ -1740,7 +1692,6 @@ void main() {
             TopoSymbol(type: SymbolType.bolt, position: Offset(0.3, 0.4)),
             TopoSymbol(type: SymbolType.top, position: Offset(0.9, 0.8)),
             TopoSymbol(type: SymbolType.crux, position: Offset(0.5, 0.5)),
-            TopoSymbol(type: SymbolType.rest, position: Offset(0.2, 0.6)),
             TopoSymbol(type: SymbolType.disabledHold, position: Offset(0.6, 0.2)),
           ],
         ),

@@ -51,18 +51,37 @@ String encodeSymbols(List<TopoSymbol> symbols) {
   ]);
 }
 
+/// Looks up [name] in [SymbolType.values] by [SymbolType.name], returning
+/// null instead of throwing when there is no match — unlike
+/// [Iterable.byName]. Used by [decodeSymbols] so a legacy persisted symbol
+/// type that no longer exists in the enum (e.g. the removed `'rest'`) is
+/// silently dropped rather than crashing the load of an old topo.
+SymbolType? _symbolTypeByNameOrNull(String name) {
+  for (final type in SymbolType.values) {
+    if (type.name == name) return type;
+  }
+  return null;
+}
+
 /// Decodes a JSON array produced by [encodeSymbols] back into a symbol list.
+///
+/// Defensive against legacy persisted data: any entry whose `'type'` is not
+/// a current [SymbolType] name (e.g. a pre-existing route whose
+/// `symbolsJson` still contains a now-removed type like the old `'rest'`
+/// marker) is silently dropped rather than thrown on, so an old topo still
+/// loads with its remaining, still-valid symbols intact.
 List<TopoSymbol> decodeSymbols(String json) {
   final decoded = jsonDecode(json) as List<dynamic>;
   return [
     for (final entry in decoded)
-      TopoSymbol(
-        type: SymbolType.values.byName(entry['type'] as String),
-        position: Offset(
-          (entry['x'] as num).toDouble(),
-          (entry['y'] as num).toDouble(),
+      if (_symbolTypeByNameOrNull(entry['type'] as String) != null)
+        TopoSymbol(
+          type: _symbolTypeByNameOrNull(entry['type'] as String)!,
+          position: Offset(
+            (entry['x'] as num).toDouble(),
+            (entry['y'] as num).toDouble(),
+          ),
         ),
-      ),
   ];
 }
 

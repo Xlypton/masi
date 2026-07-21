@@ -23,11 +23,8 @@ const double kSymbolPaletteBarHeight = 68.0;
 /// `Icons.close` ("X"), which reads as "close/delete" rather than a
 /// climbing bolt; it now uses `MasiIcon('bolt')` (a plain filled
 /// dot — the standard topo-diagram glyph for a bolt) so it's not confused
-/// with a dismiss/cancel action. [SymbolType.rest] uses
-/// `Icons.self_improvement` (a seated/resting figure glyph), which reads
-/// unambiguously as "rest" once paired with its text label.
-/// [SymbolType.anchor]/[SymbolType.top]/[SymbolType.crux] use Masi
-/// equivalents, while [SymbolType.rest] keeps Material (no equivalent).
+/// with a dismiss/cancel action. [SymbolType.anchor]/[SymbolType.top]/
+/// [SymbolType.crux] use their own Masi equivalents.
 ///
 /// [SymbolType.disabledHold] (feature #43, per-route excluded hold) uses
 /// `MasiIcon('close')` -- the brand set has no dedicated "off/no/ban" glyph,
@@ -47,8 +44,6 @@ Widget _symbolIconWidget(SymbolType type, {Color? color, double? size}) {
       return MasiIcon('finish_flag', color: color, size: size);
     case SymbolType.crux:
       return MasiIcon('crux', color: color, size: size);
-    case SymbolType.rest:
-      return Icon(Icons.self_improvement, color: color, size: size);
     case SymbolType.disabledHold:
       return MasiIcon('close', color: color, size: size);
   }
@@ -60,7 +55,6 @@ const Map<SymbolType, String> _symbolLabels = {
   SymbolType.bolt: 'Bolt',
   SymbolType.top: 'Top',
   SymbolType.crux: 'Crux',
-  SymbolType.rest: 'Rest',
   SymbolType.disabledHold: 'Off',
 };
 

@@ -80,6 +80,26 @@ void main() {
       expect(decoded, symbols);
       expect(decoded.map((s) => s.type).toSet(), SymbolType.values.toSet());
     });
+
+    test(
+      'drops a legacy entry whose type is no longer a valid SymbolType '
+      '(e.g. the removed "rest" marker) without throwing, keeping the '
+      'other, still-valid entries',
+      () {
+        const json =
+            '[{"type":"anchor","x":1.0,"y":2.0},'
+            '{"type":"rest","x":3.0,"y":4.0},'
+            '{"type":"crux","x":5.0,"y":6.0}]';
+
+        expect(() => decodeSymbols(json), returnsNormally);
+        final decoded = decodeSymbols(json);
+
+        expect(decoded, [
+          const TopoSymbol(type: SymbolType.anchor, position: Offset(1.0, 2.0)),
+          const TopoSymbol(type: SymbolType.crux, position: Offset(5.0, 6.0)),
+        ]);
+      },
+    );
   });
 
   group('rowToDomain metadata (M4 A4)', () {

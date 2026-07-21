@@ -431,22 +431,27 @@ void main() {
           .widget<Text>(find.byKey(const Key('community-like-count')))
           .data!;
 
+      Finder heartIcon(String name) => find.byWidgetPredicate(
+        (widget) => widget is MasiIcon && widget.name == name,
+      );
+
       expect(likeCountText(), '0');
-      expect(find.byIcon(Icons.favorite_border), findsOneWidget);
-      expect(find.byIcon(Icons.favorite), findsNothing);
+      expect(heartIcon('heart'), findsOneWidget);
+      expect(heartIcon('heart_fill'), findsNothing);
 
       await tester.tap(find.byKey(const Key('community-like-button')));
       await tester.pumpAndSettle();
 
       expect(likeCountText(), '1');
-      expect(find.byIcon(Icons.favorite), findsOneWidget);
-      expect(find.byIcon(Icons.favorite_border), findsNothing);
+      expect(heartIcon('heart_fill'), findsOneWidget);
+      expect(heartIcon('heart'), findsNothing);
 
       await tester.tap(find.byKey(const Key('community-like-button')));
       await tester.pumpAndSettle();
 
       expect(likeCountText(), '0');
-      expect(find.byIcon(Icons.favorite_border), findsOneWidget);
+      expect(heartIcon('heart'), findsOneWidget);
+      expect(heartIcon('heart_fill'), findsNothing);
     },
   );
 

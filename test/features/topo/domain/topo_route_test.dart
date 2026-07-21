@@ -594,7 +594,7 @@ void main() {
 
     test('different type is not equal', () {
       const a = TopoSymbol(type: SymbolType.top, position: Offset(0.3, 0.4));
-      const b = TopoSymbol(type: SymbolType.rest, position: Offset(0.3, 0.4));
+      const b = TopoSymbol(type: SymbolType.crux, position: Offset(0.3, 0.4));
 
       expect(a, isNot(b));
     });

@@ -53,7 +53,7 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(tester.takeException(), isNull);
-        for (final label in ['Anchor', 'Bolt', 'Top', 'Crux', 'Rest']) {
+        for (final label in ['Anchor', 'Bolt', 'Top', 'Crux']) {
           expect(
             find.text(label),
             findsOneWidget,

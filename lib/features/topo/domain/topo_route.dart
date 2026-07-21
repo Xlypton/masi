@@ -13,7 +13,7 @@ import '../../../core/grades/grade_system.dart';
 /// already per-route (not shared across routes), the same hold position can
 /// independently be a [disabledHold] on route A while route B has no such
 /// symbol at all -- no additional plumbing needed beyond this enum member.
-enum SymbolType { anchor, bolt, top, crux, rest, disabledHold }
+enum SymbolType { anchor, bolt, top, crux, disabledHold }
 
 /// A single marker (e.g. bolt, anchor) placed on a route, in percent space.
 @immutable
