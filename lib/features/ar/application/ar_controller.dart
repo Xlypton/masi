@@ -1,6 +1,9 @@
+import 'dart:ui' show Offset;
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:climbtopo/features/ar/application/ar_channel.dart';
+import 'package:climbtopo/features/ar/domain/corner_smoother.dart';
 
 /// Supplies the [ArChannel] used by [ArController] to talk to the native AR
 /// platform channel. Overridable in tests (e.g. to inject an [ArChannel]
@@ -52,29 +55,72 @@ class ArState {
 /// the stream into [onAlignment]. This keeps the controller synchronously
 /// testable without a running platform channel/stream.
 class ArController extends Notifier<ArState> {
+  /// EMA low-pass filter applied to each incoming alignment's raw
+  /// `screenCorners` before they're stored in [state] (see [onAlignment]) —
+  /// this is what feeds `Homography.fromQuad` in `ArAlignmentStage`, so
+  /// smoothing happens once here rather than being duplicated at every
+  /// consumer. A single instance lives for as long as this controller does
+  /// (an app-lifetime singleton, like [ArController] itself), reset at each
+  /// discontinuity — see [resetCornerSmoothing] and its call sites.
+  final CornerSmoother _cornerSmoother = CornerSmoother();
+
   @override
   ArState build() => const ArState(mode: ArMode.auto, active: false);
 
   /// Switches the alignment mode: updates [ArState.mode] and forwards the
   /// change to native via [ArChannel.setMode]. Always resets
   /// [arLockedProvider] back to unlocked, so switching modes never leaves a
-  /// stale lock from a previous mode's session behind.
+  /// stale lock from a previous mode's session behind. Also resets the
+  /// corner-smoothing filter (an AR mode change is one of the three
+  /// documented discontinuities — see [CornerSmoother]'s class doc) so the
+  /// new mode's first corner sample is never blended against corners from
+  /// the mode just left.
   void setMode(ArMode mode) {
     state = state.copyWith(mode: mode);
     ref.read(arChannelProvider).setMode(mode);
     ref.read(arLockedProvider.notifier).reset();
+    _cornerSmoother.reset();
   }
 
   /// Records the latest alignment update pushed from native (see the AR
-  /// screen's subscription to [ArChannel.alignments]).
+  /// screen's subscription to [ArChannel.alignments]), after passing its raw
+  /// `screenCorners` (when present) through the EMA [_cornerSmoother] —
+  /// [ArState.latest] always holds the SMOOTHED corners, never the raw ones,
+  /// so every consumer (`ArAlignmentStage`) gets low-pass-filtered data for
+  /// free.
+  ///
+  /// Resets [_cornerSmoother] whenever this update is NOT a healthy
+  /// tracked-with-corners frame (tracking false, or corners absent/
+  /// malformed) — this is the "tracking loss" discontinuity from
+  /// [CornerSmoother]'s class doc: it guarantees that whenever tracking
+  /// later resumes, the filter has no stale pre-loss state left to blend
+  /// the newly-reacquired corners against.
   void onAlignment(ArAlignment alignment) {
-    state = state.copyWith(latest: alignment);
+    final List<Offset>? rawCorners = alignment.screenCorners;
+    if (!alignment.tracking || rawCorners == null) {
+      _cornerSmoother.reset();
+      state = state.copyWith(latest: alignment);
+      return;
+    }
+    final List<Offset> smoothed = _cornerSmoother.smooth(rawCorners);
+    state = state.copyWith(
+      latest: alignment.copyWith(screenCorners: smoothed),
+    );
   }
 
   /// Marks whether the native AR session is currently active (started).
   void markActive(bool active) {
     state = state.copyWith(active: active);
   }
+
+  /// Resets the corner-smoothing filter so the next [onAlignment] call is
+  /// treated as a fresh first sample rather than blended against whatever
+  /// came before. Called on a fresh manual lock (see `ar_screen.dart`'s
+  /// `ArAlignmentStage.onToggleLock`) and on every AR-screen entry (see
+  /// `ar_screen.dart`'s `_resetArViewState`) — the third of the three
+  /// documented discontinuities ([setMode] and [onAlignment]'s own
+  /// tracking-loss handling cover the other two).
+  void resetCornerSmoothing() => _cornerSmoother.reset();
 }
 
 final arControllerProvider = NotifierProvider<ArController, ArState>(

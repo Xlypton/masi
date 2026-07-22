@@ -10,10 +10,85 @@ import 'package:flutter/services.dart';
 /// match these exact strings.
 enum ArMode { auto, manual }
 
+/// ARKit's coarse tracking-quality signal for the current frame, as reported
+/// by native over the `trackingState` wire field (added alongside the A1
+/// AR-stability overhaul — see [ArAlignment.fromMap]).
+///
+/// This is the REAL signal [ArAlignment.derivedConfidence] is computed from,
+/// replacing the previous hardcoded `confidence = 1.0` that
+/// `ArAlignmentStage` used whenever `tracking == true`, regardless of how
+/// healthy tracking actually was.
+enum ArTrackingState {
+  /// ARKit's normal, fully-confident tracking state.
+  normal,
+
+  /// ARKit is tracking, but has flagged degraded quality (see
+  /// [ArAlignment.limitedReason] for why).
+  limited,
+
+  /// ARKit currently has no usable pose at all.
+  notAvailable,
+
+  /// ARKit is still establishing its first pose for this session.
+  initializing,
+
+  /// ARKit lost tracking and is attempting to relocalize.
+  relocalizing;
+
+  /// Parses the wire `trackingState` string into an [ArTrackingState].
+  ///
+  /// Absent, non-string, or unrecognized input falls back to [normal] —
+  /// this is the field's documented backward-compatibility default (see
+  /// [ArAlignment.fromMap]'s class doc): older/malformed native payloads
+  /// that don't send this newer field at all behave exactly as they did
+  /// before it existed (confidence pinned to 1.0 whenever tracking).
+  static ArTrackingState fromWire(Object? raw) {
+    switch (raw) {
+      case 'normal':
+        return ArTrackingState.normal;
+      case 'limited':
+        return ArTrackingState.limited;
+      case 'notAvailable':
+        return ArTrackingState.notAvailable;
+      case 'initializing':
+        return ArTrackingState.initializing;
+      case 'relocalizing':
+        return ArTrackingState.relocalizing;
+      default:
+        return ArTrackingState.normal;
+    }
+  }
+}
+
+/// Maps [state] to a 0.0-1.0 confidence estimate, per the A1 AR-stability
+/// contract:
+///  - [ArTrackingState.normal] -> `1.0` (fully trust the overlay)
+///  - [ArTrackingState.limited] -> `0.35` (ARKit is still actively tracking,
+///    but flagged degraded quality)
+///  - [ArTrackingState.notAvailable], [ArTrackingState.initializing],
+///    [ArTrackingState.relocalizing] -> `0.1` (no meaningful pose right now)
+///
+/// The three low-confidence states share one value: from the overlay's
+/// perspective (see `kLowConfidenceThreshold` in `ar_overlay_painter.dart`)
+/// they're equally "don't trust this yet" — no finer distinction between
+/// them is needed for the confidence-driven fade.
+double confidenceForTrackingState(ArTrackingState state) {
+  switch (state) {
+    case ArTrackingState.normal:
+      return 1.0;
+    case ArTrackingState.limited:
+      return 0.35;
+    case ArTrackingState.notAvailable:
+    case ArTrackingState.initializing:
+    case ArTrackingState.relocalizing:
+      return 0.1;
+  }
+}
+
 /// A single AR alignment update pushed from the native side: a confidence
-/// score, whether tracking is currently healthy, and (the primary ARKit
-/// image-tracking signal) the 4 on-screen corners the tracked anchor
-/// currently projects to.
+/// score, whether tracking is currently healthy, the tracking-quality state
+/// behind that, and (the primary ARKit image-tracking signal) the 4
+/// on-screen corners the tracked anchor currently projects to.
 ///
 /// Constructed from the wire map delivered over
 /// [ArChannel.alignments]/`climbtopo/ar/alignment`. The native (ARKit)
@@ -24,22 +99,33 @@ enum ArMode { auto, manual }
 ///   'corners': [x0,y0,x1,y1,x2,y2,x3,y3],  // TL,TR,BR,BL screen points in
 ///                                          // logical px; present only when
 ///                                          // tracked
+///   'trackingState': <String>,             // one of "normal"/"limited"/
+///                                          // "notAvailable"/"initializing"/
+///                                          // "relocalizing"; OPTIONAL —
+///                                          // absent defaults to "normal"
+///                                          // (today's pre-A1 behavior)
+///   'limitedReason': <String>,             // OPTIONAL, only meaningful
+///                                          // when trackingState=="limited"
 /// }
 /// ```
 /// `confidence` is never sent by native at all (it's a Dart-only field that
-/// always defaults to `0.0` via [fromMap]); `homography`/`frameWidth`/
+/// always defaults to `0.0` via [fromMap] — see [derivedConfidence] for the
+/// value actually driven by tracking quality); `homography`/`frameWidth`/
 /// `frameHeight` used to be sent but are no longer read anywhere and have
 /// been removed from this model entirely. [fromMap] parses each remaining
 /// field independently and defaults just that field on malformed/missing
 /// input rather than bailing out entirely: a missing/non-numeric
 /// `confidence` falls back to `0.0`, a missing/non-bool `tracking` falls
-/// back to `false`, and malformed `corners` falls back to `null` — none of
-/// this throws.
+/// back to `false`, malformed `corners` falls back to `null`, a missing/
+/// unrecognized `trackingState` falls back to [ArTrackingState.normal], and
+/// a non-string `limitedReason` falls back to `null` — none of this throws.
 class ArAlignment {
   const ArAlignment({
     required this.confidence,
     required this.tracking,
     this.screenCorners,
+    this.trackingState = ArTrackingState.normal,
+    this.limitedReason,
   });
 
   final double confidence;
@@ -53,6 +139,26 @@ class ArAlignment {
   /// homography each frame, rather than relying on a native-solved
   /// homography.
   final List<Offset>? screenCorners;
+
+  /// ARKit's coarse tracking-quality state for this frame. Defaults to
+  /// [ArTrackingState.normal] when the native payload omits the
+  /// `trackingState` field entirely (backward-compatible with pre-A1
+  /// native builds that don't send it yet).
+  final ArTrackingState trackingState;
+
+  /// A short native (ARKit) reason string for degraded tracking, only
+  /// meaningful when [trackingState] is [ArTrackingState.limited] (e.g.
+  /// `"excessiveMotion"`, `"insufficientFeatures"`). `null` when absent —
+  /// see `ar_screen.dart`'s status-pill hint mapping for how this is
+  /// surfaced to the user.
+  final String? limitedReason;
+
+  /// The confidence estimate actually driven by tracking quality: derives
+  /// from [trackingState] via [confidenceForTrackingState]. This — NOT the
+  /// [confidence] field above (which native never populates) — is what
+  /// `ArAlignmentStage` uses to drive the low-confidence fade and status
+  /// pill.
+  double get derivedConfidence => confidenceForTrackingState(trackingState);
 
   /// Parses [map] into an [ArAlignment].
   ///
@@ -69,11 +175,40 @@ class ArAlignment {
     final bool tracking = trackingRaw is bool ? trackingRaw : false;
 
     final List<Offset>? screenCorners = _parseCorners(map['corners']);
+    final ArTrackingState trackingState = ArTrackingState.fromWire(
+      map['trackingState'],
+    );
+    final Object? limitedReasonRaw = map['limitedReason'];
+    final String? limitedReason = limitedReasonRaw is String
+        ? limitedReasonRaw
+        : null;
 
     return ArAlignment(
       confidence: confidence,
       tracking: tracking,
       screenCorners: screenCorners,
+      trackingState: trackingState,
+      limitedReason: limitedReason,
+    );
+  }
+
+  /// Returns a copy of this [ArAlignment] with the given fields replaced.
+  /// Used by `ArController.onAlignment` (see `ar_controller.dart`) to
+  /// substitute EMA-smoothed corners in place of the raw ones, without
+  /// disturbing any other field.
+  ArAlignment copyWith({
+    double? confidence,
+    bool? tracking,
+    List<Offset>? screenCorners,
+    ArTrackingState? trackingState,
+    String? limitedReason,
+  }) {
+    return ArAlignment(
+      confidence: confidence ?? this.confidence,
+      tracking: tracking ?? this.tracking,
+      screenCorners: screenCorners ?? this.screenCorners,
+      trackingState: trackingState ?? this.trackingState,
+      limitedReason: limitedReason ?? this.limitedReason,
     );
   }
 
@@ -105,6 +240,8 @@ class ArAlignment {
     return other is ArAlignment &&
         other.confidence == confidence &&
         other.tracking == tracking &&
+        other.trackingState == trackingState &&
+        other.limitedReason == limitedReason &&
         _cornersEqual(other.screenCorners, screenCorners);
   }
 
@@ -121,13 +258,16 @@ class ArAlignment {
   int get hashCode => Object.hash(
     confidence,
     tracking,
+    trackingState,
+    limitedReason,
     screenCorners == null ? null : Object.hashAll(screenCorners!),
   );
 
   @override
   String toString() =>
       'ArAlignment(confidence: $confidence, '
-      'tracking: $tracking, screenCorners: $screenCorners)';
+      'tracking: $tracking, trackingState: $trackingState, '
+      'limitedReason: $limitedReason, screenCorners: $screenCorners)';
 }
 
 /// Dart-side handle to the native AR platform channel pair:

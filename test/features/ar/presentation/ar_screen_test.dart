@@ -1149,5 +1149,410 @@ void main() {
         },
       );
     });
+
+    group('A1: hold-last-good on a degenerate fromQuad solve', () {
+      // All 4 points collinear (on the line y=50) -- Homography.fromQuad
+      // returns Homography.identity() for a degenerate dst quad like this
+      // one (verified directly against homography.dart; mirrors
+      // homography_test.dart's B4 collinear-src case, just on the dst side).
+      const degenerateCorners = <Offset>[
+        Offset(50, 50),
+        Offset(150, 50),
+        Offset(250, 50),
+        Offset(350, 50),
+      ];
+      const goodCorners = <Offset>[
+        Offset(50, 50),
+        Offset(350, 50),
+        Offset(350, 750),
+        Offset(50, 750),
+      ];
+
+      testWidgets(
+        'A1-A2: a degenerate quad right after a good tracked frame keeps '
+        'rendering the previous good homography, not Homography.identity()',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: goodCorners,
+                ),
+              );
+          await tester.pump();
+
+          final goodHomography = currentPainter(tester).homography;
+          expect(goodHomography, isNot(Homography.identity()));
+
+          // Reset the corner-smoothing filter so the next (degenerate)
+          // sample passes straight through unblended -- isolating the
+          // hold-last-good behavior under test from EMA smoothing (covered
+          // separately in ar_controller_test.dart / corner_smoother_test
+          // .dart). Without this, blending the degenerate quad 65/35 with
+          // the previous good one could denature its collinearity and mask
+          // the very bug this test targets.
+          container.read(arControllerProvider.notifier).resetCornerSmoothing();
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: degenerateCorners,
+                ),
+              );
+          await tester.pump();
+
+          expect(
+            currentPainter(tester).homography,
+            goodHomography,
+            reason:
+                'a degenerate fromQuad result must never be rendered '
+                'directly -- the overlay should hold the last known-good '
+                "homography instead of snapping to Homography.identity()'s "
+                'huge top-left placement for this frame',
+          );
+          expect(
+            currentPainter(tester).homography,
+            isNot(Homography.identity()),
+          );
+        },
+      );
+
+      testWidgets(
+        'with no prior good homography yet, a degenerate first tracked '
+        'frame falls back to the fitted ghost placement, not identity',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: degenerateCorners,
+                ),
+              );
+          await tester.pump();
+
+          final fit = Homography.fitInto(refSize, viewSize);
+          expect(currentPainter(tester).homography, fit);
+          expect(
+            currentPainter(tester).homography,
+            isNot(Homography.identity()),
+          );
+        },
+      );
+
+      testWidgets(
+        'a tracking-loss gap clears the held last-good homography -- a '
+        'degenerate frame right after re-acquiring track falls back to the '
+        'fitted ghost, not the stale pre-loss placement',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: goodCorners,
+                ),
+              );
+          await tester.pump();
+          expect(
+            currentPainter(tester).homography,
+            isNot(Homography.identity()),
+          );
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(confidence: 0.0, tracking: false),
+              );
+          await tester.pump();
+
+          container.read(arControllerProvider.notifier).resetCornerSmoothing();
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: degenerateCorners,
+                ),
+              );
+          await tester.pump();
+
+          final fit = Homography.fitInto(refSize, viewSize);
+          expect(
+            currentPainter(tester).homography,
+            fit,
+            reason:
+                'the tracking-loss gap must have cleared the held last-good '
+                'homography, so this degenerate re-acquisition frame falls '
+                'back to the fitted ghost rather than a stale pre-loss '
+                'placement',
+          );
+        },
+      );
+
+      testWidgets(
+        'Defect 2: switching back to auto after a manual lock clears the '
+        'held last-good homography -- a degenerate frame arriving in the '
+        'SAME update as the mode switch falls back to the fitted ghost, '
+        'not the stale manual-locked-session placement',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          // Lock manual alignment (native `lockManual` is mocked to
+          // succeed -- see this file's top-level setUp) -- once locked,
+          // rendering goes through the same fromQuad/hold-last-good path as
+          // auto mode (see ArAlignmentStage's class doc).
+          await tester.tap(find.byKey(const Key('ar-lock')));
+          await tester.pumpAndSettle();
+          expect(container.read(arLockedProvider), isTrue);
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: goodCorners,
+                ),
+              );
+          await tester.pump();
+
+          final goodHomography = currentPainter(tester).homography;
+          expect(goodHomography, isNot(Homography.identity()));
+
+          // Switch back to auto AND feed a degenerate frame BEFORE the
+          // next pump, so both the mode change and the degenerate solve
+          // land in the same build -- otherwise a redundant recompute of
+          // the still-cached good corners in an intervening pump would
+          // silently repopulate _lastGoodHomography with the same value
+          // and mask the very bug this test targets (mode change also
+          // resets arLockedProvider back to unlocked, per
+          // ArController.setMode).
+          container.read(arControllerProvider.notifier).setMode(ArMode.auto);
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: degenerateCorners,
+                ),
+              );
+          await tester.pump();
+
+          final fit = Homography.fitInto(refSize, viewSize);
+          expect(
+            currentPainter(tester).homography,
+            fit,
+            reason:
+                'switching back to auto must clear the held last-good '
+                'homography from the manual-locked session, so this '
+                'degenerate first frame in the new mode falls back to the '
+                'fitted ghost rather than re-pinning off a stale homography '
+                'left over from the mode just left',
+          );
+        },
+      );
+    });
+
+    group(
+      'A1: real confidence from trackingState drives the low-confidence '
+      'fade + status pill',
+      () {
+        const corners = <Offset>[
+          Offset(50, 50),
+          Offset(350, 50),
+          Offset(350, 750),
+          Offset(50, 750),
+        ];
+
+        testWidgets(
+          'A1-A4: trackingState absent (ArAlignment\'s default) -> '
+          'confidence 1.0, "Tracking" label -- backward-compatible with '
+          'pre-A1 behavior',
+          (tester) async {
+            pinViewSize(tester);
+            final container = ProviderContainer();
+            addTearDown(container.dispose);
+
+            await tester.pumpWidget(buildStage(container));
+            await tester.pump();
+
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: corners,
+                  ),
+                );
+            await tester.pump();
+
+            expect(currentPainter(tester).confidence, 1.0);
+            expect(find.text('Tracking'), findsOneWidget);
+          },
+        );
+
+        testWidgets(
+          'A1-A3: trackingState=limited -> confidence 0.35 (below '
+          'kLowConfidenceThreshold, so the painter\'s low-confidence path '
+          'fires), status pill reads "Limited" with a reason-derived hint',
+          (tester) async {
+            pinViewSize(tester);
+            final container = ProviderContainer();
+            addTearDown(container.dispose);
+
+            await tester.pumpWidget(buildStage(container));
+            await tester.pump();
+
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: corners,
+                    trackingState: ArTrackingState.limited,
+                    limitedReason: 'excessiveMotion',
+                  ),
+                );
+            await tester.pump();
+
+            expect(currentPainter(tester).confidence, 0.35);
+            expect(
+              currentPainter(tester).confidence,
+              lessThan(kLowConfidenceThreshold),
+            );
+            expect(find.text('Limited'), findsOneWidget);
+            expect(
+              tester.widget<Text>(find.byKey(const Key('ar-hint'))).data,
+              'Move slower',
+            );
+          },
+        );
+
+        testWidgets(
+          'A1-A3: trackingState=limited with tracking:true keeps the '
+          'overlay in the tracked/placed state (fromQuad-solved from the '
+          'reported screenCorners), NOT the centered ghost -- only '
+          'confidence drops, the overlay never un-glues from the wall '
+          '(native decouples the render/tracking:true gate from tracking '
+          'quality -- only notAvailable ghosts it, see ArPlatformView.swift)',
+          (tester) async {
+            pinViewSize(tester);
+            final container = ProviderContainer();
+            addTearDown(container.dispose);
+
+            await tester.pumpWidget(buildStage(container));
+            await tester.pump();
+
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: corners,
+                    trackingState: ArTrackingState.limited,
+                    limitedReason: 'excessiveMotion',
+                  ),
+                );
+            await tester.pump();
+
+            final expected = Homography.fromQuad([
+              Offset.zero,
+              Offset(refSize.width, 0),
+              Offset(refSize.width, refSize.height),
+              Offset(0, refSize.height),
+            ], corners);
+
+            expect(
+              currentPainter(tester).homography,
+              expected,
+              reason:
+                  'a .limited frame must still be treated as tracked/'
+                  'placed -- the overlay stays glued to the wall '
+                  '(fromQuad of the reported corners), it must not fall '
+                  'back to the fitted ghost the way tracking:false does',
+            );
+            expect(
+              currentPainter(tester).homography,
+              isNot(Homography.fitInto(refSize, viewSize)),
+            );
+            expect(currentPainter(tester).confidence, 0.35);
+            expect(
+              currentPainter(tester).confidence,
+              lessThan(kLowConfidenceThreshold),
+            );
+          },
+        );
+
+        testWidgets(
+          'A1-A3: trackingState=notAvailable -> confidence 0.1',
+          (tester) async {
+            pinViewSize(tester);
+            final container = ProviderContainer();
+            addTearDown(container.dispose);
+
+            await tester.pumpWidget(buildStage(container));
+            await tester.pump();
+
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: corners,
+                    trackingState: ArTrackingState.notAvailable,
+                  ),
+                );
+            await tester.pump();
+
+            expect(currentPainter(tester).confidence, 0.1);
+            expect(
+              currentPainter(tester).confidence,
+              lessThan(kLowConfidenceThreshold),
+            );
+          },
+        );
+      },
+    );
   });
 }

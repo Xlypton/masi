@@ -48,12 +48,19 @@ protocol ArSessionControlling: AnyObject {
 ///       treat `false` as a no-op and prompt the user to try again.
 ///     - "unlockManual" (no args) -- clears the manual world pin.
 ///   EventChannel('climbtopo/ar/alignment')
-///     - emits {tracking: Bool, corners: [Double]x8?, frameWidth: Int?, frameHeight: Int?}
+///     - emits {tracking: Bool, corners: [Double]x8?, frameWidth: Int?, frameHeight: Int?,
+///       trackingState: String, limitedReason: String?}
 ///       -- `corners` is the tracked ARKit reference image's four corners (screen-space
 ///       x,y pairs in TL,TR,BR,BL order) projected via `ARSCNView.projectPoint`, present
 ///       only when `tracking` is true; `frameWidth`/`frameHeight` are the live ARKit
 ///       captured-frame pixel dimensions for that same frame, present only when both are
 ///       `> 0`. Dart treats their absence as "unknown" and falls back to a fitted overlay.
+///       `trackingState` is one of "normal" | "limited" | "notAvailable", derived from
+///       `ARCamera.trackingState` (decoupled from -- and now a required precondition of --
+///       whether the pinned corners are in-frustum: `tracking` is only `true` when BOTH
+///       hold). `limitedReason` is present only when `trackingState == "limited"` and is a
+///       user-facing hint string ("Move slower", "Need more texture/light", "Starting up",
+///       "Reconnecting").
 final class ArChannelHandler: NSObject, FlutterStreamHandler {
 
     static let methodChannelName = "climbtopo/ar"
@@ -184,8 +191,26 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
     /// dimensions for that same frame; pass `0, 0` (the sentinel for "no
     /// frame size") when unknown -- they are only included in the emitted
     /// payload when both are `> 0`.
-    func sendAlignment(corners: [Double], tracking: Bool, frameWidth: Int, frameHeight: Int) {
-        var payload: [String: Any] = ["tracking": tracking]
+    /// `trackingState` is the honest ARKit tracking state for this frame
+    /// ("normal" | "limited" | "notAvailable"). The overlay render-lock is
+    /// DECOUPLED from tracking quality: callers keep `tracking: true` through
+    /// `.limited` (in-frustum + pinned) so the overlay stays placed but FADED
+    /// (Dart derives a low confidence from the state), and only drop to
+    /// `tracking: false` on `.notAvailable` / out-of-frustum / not-pinned.
+    /// PIN-ONCE, by contrast, still requires `.normal`. `limitedReason` is the
+    /// raw ARKit reason token ("excessiveMotion" | "insufficientFeatures" |
+    /// "initializing" | "relocalizing"); the Dart layer owns the user-facing
+    /// copy. Only meaningful (and only sent) when `trackingState == "limited"`.
+    func sendAlignment(
+        corners: [Double],
+        tracking: Bool,
+        frameWidth: Int,
+        frameHeight: Int,
+        trackingState: String,
+        limitedReason: String? = nil
+    ) {
+        var payload: [String: Any] = ["tracking": tracking, "trackingState": trackingState]
+        if let limitedReason { payload["limitedReason"] = limitedReason }
         if corners.count == 8 { payload["corners"] = corners }
         if frameWidth > 0 && frameHeight > 0 {
             payload["frameWidth"] = frameWidth

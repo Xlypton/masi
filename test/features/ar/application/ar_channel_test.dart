@@ -131,6 +131,198 @@ void main() {
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(c));
     });
+
+    test('copyWith overrides only the given fields', () {
+      const original = ArAlignment(
+        confidence: 0.5,
+        tracking: true,
+        screenCorners: <Offset>[
+          Offset(1, 1),
+          Offset(2, 2),
+          Offset(3, 3),
+          Offset(4, 4),
+        ],
+        trackingState: ArTrackingState.limited,
+        limitedReason: 'excessiveMotion',
+      );
+
+      final withNewCorners = original.copyWith(
+        screenCorners: const <Offset>[
+          Offset(9, 9),
+          Offset(9, 9),
+          Offset(9, 9),
+          Offset(9, 9),
+        ],
+      );
+
+      expect(withNewCorners.confidence, 0.5);
+      expect(withNewCorners.tracking, isTrue);
+      expect(withNewCorners.trackingState, ArTrackingState.limited);
+      expect(withNewCorners.limitedReason, 'excessiveMotion');
+      expect(withNewCorners.screenCorners, const <Offset>[
+        Offset(9, 9),
+        Offset(9, 9),
+        Offset(9, 9),
+        Offset(9, 9),
+      ]);
+    });
+  });
+
+  group('ArTrackingState / derivedConfidence (A1 real-confidence contract)', () {
+    test(
+      'A1-A4: fromMap with no trackingState field defaults to normal -- '
+      'backward-compatible with pre-A1 native payloads that never sent it',
+      () {
+        final alignment = ArAlignment.fromMap(<String, Object?>{
+          'tracking': true,
+          'corners': <double>[50, 50, 350, 50, 350, 750, 50, 750],
+        });
+
+        expect(alignment.trackingState, ArTrackingState.normal);
+        expect(alignment.limitedReason, isNull);
+        expect(
+          alignment.derivedConfidence,
+          1.0,
+          reason:
+              'absent trackingState must behave exactly like today: full '
+              'confidence whenever the payload has no opinion on tracking '
+              'quality',
+        );
+      },
+    );
+
+    test('fromMap parses a well-formed trackingState + limitedReason', () {
+      final alignment = ArAlignment.fromMap(<String, Object?>{
+        'tracking': true,
+        'trackingState': 'limited',
+        'limitedReason': 'insufficientFeatures',
+      });
+
+      expect(alignment.trackingState, ArTrackingState.limited);
+      expect(alignment.limitedReason, 'insufficientFeatures');
+    });
+
+    test(
+      'fromMap with an unrecognized trackingState string falls back to '
+      'normal, no throw',
+      () {
+        final alignment = ArAlignment.fromMap(<String, Object?>{
+          'tracking': true,
+          'trackingState': 'some-future-arkit-state-we-dont-know-about',
+        });
+
+        expect(alignment.trackingState, ArTrackingState.normal);
+      },
+    );
+
+    test(
+      'fromMap with a non-string trackingState falls back to normal, no '
+      'throw',
+      () {
+        final alignment = ArAlignment.fromMap(<String, Object?>{
+          'tracking': true,
+          'trackingState': 42,
+        });
+
+        expect(alignment.trackingState, ArTrackingState.normal);
+      },
+    );
+
+    test(
+      'fromMap with a non-string limitedReason leaves it null, no throw',
+      () {
+        final alignment = ArAlignment.fromMap(<String, Object?>{
+          'tracking': true,
+          'trackingState': 'limited',
+          'limitedReason': 7,
+        });
+
+        expect(alignment.limitedReason, isNull);
+      },
+    );
+
+    test(
+      'A1-A3: confidenceForTrackingState maps every state per the documented '
+      'contract',
+      () {
+        expect(confidenceForTrackingState(ArTrackingState.normal), 1.0);
+        expect(confidenceForTrackingState(ArTrackingState.limited), 0.35);
+        expect(confidenceForTrackingState(ArTrackingState.notAvailable), 0.1);
+        expect(confidenceForTrackingState(ArTrackingState.initializing), 0.1);
+        expect(confidenceForTrackingState(ArTrackingState.relocalizing), 0.1);
+      },
+    );
+
+    test(
+      'ArAlignment.derivedConfidence delegates to confidenceForTrackingState '
+      'for every state',
+      () {
+        for (final state in ArTrackingState.values) {
+          final alignment = ArAlignment(
+            confidence: 0.0, // deliberately irrelevant -- derivedConfidence
+            // must never read this dead field.
+            tracking: true,
+            trackingState: state,
+          );
+          expect(
+            alignment.derivedConfidence,
+            confidenceForTrackingState(state),
+            reason: 'state=$state',
+          );
+        }
+      },
+    );
+
+    test(
+      'A1-A3: below-threshold states (limited/notAvailable/initializing/'
+      'relocalizing) all produce a confidence under the painter\'s '
+      'kLowConfidenceThreshold (0.4), so the low-confidence fade fires',
+      () {
+        for (final state in <ArTrackingState>[
+          ArTrackingState.limited,
+          ArTrackingState.notAvailable,
+          ArTrackingState.initializing,
+          ArTrackingState.relocalizing,
+        ]) {
+          expect(
+            confidenceForTrackingState(state),
+            lessThan(0.4),
+            reason: 'state=$state',
+          );
+        }
+        expect(confidenceForTrackingState(ArTrackingState.normal), greaterThanOrEqualTo(0.4));
+      },
+    );
+
+    test(
+      'ArTrackingState.fromWire parses every documented wire string',
+      () {
+        expect(ArTrackingState.fromWire('normal'), ArTrackingState.normal);
+        expect(ArTrackingState.fromWire('limited'), ArTrackingState.limited);
+        expect(
+          ArTrackingState.fromWire('notAvailable'),
+          ArTrackingState.notAvailable,
+        );
+        expect(
+          ArTrackingState.fromWire('initializing'),
+          ArTrackingState.initializing,
+        );
+        expect(
+          ArTrackingState.fromWire('relocalizing'),
+          ArTrackingState.relocalizing,
+        );
+      },
+    );
+
+    test(
+      'ArTrackingState.fromWire falls back to normal for null/malformed '
+      'input',
+      () {
+        expect(ArTrackingState.fromWire(null), ArTrackingState.normal);
+        expect(ArTrackingState.fromWire(42), ArTrackingState.normal);
+        expect(ArTrackingState.fromWire('nonsense'), ArTrackingState.normal);
+      },
+    );
   });
 
   group('ArChannel', () {

@@ -29,6 +29,10 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
 
     private let sceneView = ARSCNView()
     private let channelHandler: ArChannelHandler
+    /// Standard ARKit "move your device" guidance UI for a good initial lock
+    /// (`goal: .tracking`). Added as a subview of `sceneView` so it renders
+    /// over the live camera feed; wired to `sceneView.session` in `init`.
+    private let coachingOverlay = ARCoachingOverlayView()
 
     private var mode: ArMode = .auto
     private var referenceImage: ARReferenceImage?
@@ -36,6 +40,10 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
     private var frameCounter = 0
     private var pinnedTransform: simd_float4x4?
     private var pinnedPhysicalSize: CGSize?
+    /// Last `trackingState` string sent to Dart -- used only to log ARKit
+    /// tracking-state TRANSITIONS (AR_DBG) rather than spamming a log line
+    /// every frame.
+    private var lastTrackingStateStr: String?
     /// Manual-mode fixed world-space corners (TL,TR,BR,BL), set by
     /// `lockManualAlignment(screenCorners:)`. Takes precedence over
     /// `pinnedTransform`/`pinnedPhysicalSize` when present -- see
@@ -57,6 +65,14 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
 
         sceneView.session.delegate = self
         channelHandler.sessionController = self
+
+        coachingOverlay.session = sceneView.session
+        coachingOverlay.goal = .tracking
+        coachingOverlay.activatesAutomatically = true
+        coachingOverlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        coachingOverlay.frame = sceneView.bounds
+        coachingOverlay.delegate = self
+        sceneView.addSubview(coachingOverlay)
 
         NSLog("AR_DBG ARKit ArPlatformView.init")
     }
@@ -98,6 +114,12 @@ extension ArPlatformView: ArSessionControlling {
         // the real-world print size.
         let ref = ARReferenceImage(cg, orientation: .up, physicalWidth: 0.3)
         referenceImage = ref
+
+        guard ARWorldTrackingConfiguration.isSupported else {
+            NSLog("AR_DBG ARWorldTrackingConfiguration.isSupported=false, refusing to start session")
+            completion(false)
+            return
+        }
 
         let config = ARWorldTrackingConfiguration()
         config.detectionImages = [ref]
@@ -146,6 +168,10 @@ extension ArPlatformView: ArSessionControlling {
         wasTracked = false
         frameCounter = 0
         guard let ref = referenceImage else { return }
+        guard ARWorldTrackingConfiguration.isSupported else {
+            NSLog("AR_DBG ARWorldTrackingConfiguration.isSupported=false, refusing to rescan")
+            return
+        }
         let config = ARWorldTrackingConfiguration()
         config.detectionImages = [ref]
         config.maximumNumberOfTrackedImages = 1
@@ -253,6 +279,28 @@ extension ArPlatformView: ArSessionControlling {
     }
 }
 
+// MARK: - ARCoachingOverlayViewDelegate (standard ARKit "move your device" guidance)
+
+extension ArPlatformView: ARCoachingOverlayViewDelegate {
+
+    func coachingOverlayViewDidActivate(_ coachingOverlayView: ARCoachingOverlayView) {
+        NSLog("AR_DBG coaching overlay activated")
+    }
+
+    func coachingOverlayViewDidDeactivate(_ coachingOverlayView: ARCoachingOverlayView) {
+        NSLog("AR_DBG coaching overlay deactivated")
+    }
+
+    /// ARKit shows a "Start Over" affordance inside the overlay when it
+    /// cannot recover tracking on its own; wire it to the same
+    /// `rescanSession()` path exposed to Dart's manual "rescan" action so it
+    /// gets the user back to a clean first lock the same way.
+    func coachingOverlayViewDidRequestSessionReset(_ coachingOverlayView: ARCoachingOverlayView) {
+        NSLog("AR_DBG coaching overlay requested session reset")
+        rescanSession()
+    }
+}
+
 // MARK: - ARSessionDelegate (per-frame tracking -> screen-space corners)
 
 extension ArPlatformView: ARSessionDelegate {
@@ -274,14 +322,86 @@ extension ArPlatformView: ARSessionDelegate {
         return screen.z > 0 && screen.z < 1
     }
 
+    /// Derives the honest `(trackingState, limitedReason)` payload strings
+    /// from ARKit's own `ARCamera.TrackingState`, per the Dart contract:
+    /// `.normal` -> ("normal", nil); `.limited(reason)` -> ("limited",
+    /// <user-facing hint>); `.notAvailable` -> ("notAvailable", nil).
+    private static func trackingStateStrings(_ state: ARCamera.TrackingState) -> (state: String, limitedReason: String?) {
+        switch state {
+        case .normal:
+            return ("normal", nil)
+        case .limited(let reason):
+            // Send the RAW ARKit reason token, not a pre-translated hint --
+            // the Dart presentation layer (_ArStatus._limitedReasonHint in
+            // ar_screen.dart) owns the user-facing copy and maps these exact
+            // token spellings itself.
+            let token: String?
+            switch reason {
+            case .excessiveMotion:
+                token = "excessiveMotion"
+            case .insufficientFeatures:
+                token = "insufficientFeatures"
+            case .initializing:
+                token = "initializing"
+            case .relocalizing:
+                token = "relocalizing"
+            @unknown default:
+                token = nil
+            }
+            return ("limited", token)
+        case .notAvailable:
+            return ("notAvailable", nil)
+        }
+    }
+
+    /// ARImageAnchor arrival (ARKit's own detection event, independent of
+    /// whether we go on to pin it -- see the pin-once gate in
+    /// `session(_:didUpdate:)`). Purely diagnostic; does not touch pinning.
+    func session(_ session: ARSession, didAdd anchors: [ARAnchor]) {
+        for anchor in anchors {
+            guard let imageAnchor = anchor as? ARImageAnchor else { continue }
+            NSLog(
+                "AR_DBG ARImageAnchor arrived name=%@ isTracked=%@",
+                imageAnchor.referenceImage.name ?? "unknown",
+                imageAnchor.isTracked ? "true" : "false"
+            )
+        }
+    }
+
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let fw = CVPixelBufferGetWidth(frame.capturedImage)
         let fh = CVPixelBufferGetHeight(frame.capturedImage)
 
+        let trackingState = frame.camera.trackingState
+        let (trackingStateStr, limitedReasonStr) = Self.trackingStateStrings(trackingState)
+        let isTrackingNormal: Bool
+        if case .normal = trackingState { isTrackingNormal = true } else { isTrackingNormal = false }
+        // Render/tracking:true gate: keep the overlay LOCKED (faded, not
+        // ghosted) through `.limited` frames -- only `.notAvailable` (truly
+        // lost) drops to `tracking: false`. This is intentionally looser
+        // than the PIN-ONCE gate below (`isTrackingNormal`, still required
+        // to CREATE a pin in the first place) -- once pinned on a solid
+        // `.normal` frame, a subsequent dip to `.limited` (e.g.
+        // excessiveMotion during normal panning) must not un-glue the
+        // overlay from the wall, it should just fade per Dart's
+        // derivedConfidence -- see ar_screen.dart's honest-confidence
+        // handling of `trackingState: "limited"`.
+        let isTrackingAvailable: Bool
+        if case .notAvailable = trackingState { isTrackingAvailable = false } else { isTrackingAvailable = true }
+        if lastTrackingStateStr != trackingStateStr {
+            NSLog(
+                "AR_DBG trackingState %@ -> %@ (limitedReason=%@)",
+                lastTrackingStateStr ?? "nil",
+                trackingStateStr,
+                limitedReasonStr ?? "none"
+            )
+            lastTrackingStateStr = trackingStateStr
+        }
+
         // Pin on the FIRST detection, only once tracking is solid. After that we
         // ride world tracking off the fixed transform and IGNORE further image
         // (re-)detections, which on 3D scenes false-match onto other surfaces.
-        if mode == .auto, pinnedTransform == nil, case .normal = frame.camera.trackingState,
+        if mode == .auto, pinnedTransform == nil, isTrackingNormal,
            let img = frame.anchors.compactMap({ $0 as? ARImageAnchor }).first {
             pinnedTransform = img.transform
             pinnedPhysicalSize = img.referenceImage.physicalSize
@@ -310,17 +430,25 @@ extension ArPlatformView: ARSessionDelegate {
                     }
                     out.append(Double(s.x)); out.append(Double(s.y))
                 }
-                guard allValid else {
+                guard allValid, isTrackingAvailable else {
                     // A corner projected behind the camera (or produced a
-                    // non-finite screen point) -- publishing it would send a
-                    // garbage/flipped overlay for this frame, so fall back to
-                    // the not-tracked payload exactly like the `else` branch.
-                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG manual pin invalid projection, tracking=false") }
-                    self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0)
+                    // non-finite screen point), OR ARKit's own tracking state
+                    // is `.notAvailable` (truly lost, not merely `.limited`)
+                    // -- publishing it would send a garbage/flipped/dishonest
+                    // overlay for this frame, so fall back to the
+                    // not-tracked payload exactly like the `else` branch.
+                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG manual pin invalid projection or non-normal tracking, tracking=false") }
+                    self.channelHandler.sendAlignment(
+                        corners: [], tracking: false, frameWidth: 0, frameHeight: 0,
+                        trackingState: trackingStateStr, limitedReason: limitedReasonStr
+                    )
                     return
                 }
                 if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG manual pin tracking=true") }
-                self.channelHandler.sendAlignment(corners: out, tracking: true, frameWidth: fw, frameHeight: fh)
+                self.channelHandler.sendAlignment(
+                    corners: out, tracking: true, frameWidth: fw, frameHeight: fh,
+                    trackingState: trackingStateStr, limitedReason: limitedReasonStr
+                )
             } else if let t = pinned, let size = phys {
                 // EXISTING auto path -- unchanged.
                 let hw = Float(size.width) / 2
@@ -344,14 +472,19 @@ extension ArPlatformView: ARSessionDelegate {
                     }
                     out.append(Double(screen.x)); out.append(Double(screen.y))
                 }
-                guard allValid else {
+                guard allValid, isTrackingAvailable else {
                     // A pinned corner projected behind the camera (or
-                    // produced a non-finite screen point) -- abandon this
-                    // frame rather than publish a garbage overlay, falling
-                    // back to the same not-tracked payload as the `else`
-                    // branch below.
-                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG ARKit invalid projection, tracking=false") }
-                    self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0)
+                    // produced a non-finite screen point), OR ARKit's own
+                    // tracking state is `.notAvailable` (truly lost, not
+                    // merely `.limited`) -- abandon this frame rather than
+                    // publish a garbage/dishonest overlay, falling back to
+                    // the same not-tracked payload as the `else` branch
+                    // below.
+                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG ARKit invalid projection or non-normal tracking, tracking=false") }
+                    self.channelHandler.sendAlignment(
+                        corners: [], tracking: false, frameWidth: 0, frameHeight: 0,
+                        trackingState: trackingStateStr, limitedReason: limitedReasonStr
+                    )
                     return
                 }
                 if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG ARKit tracking=true (pinned)") }
@@ -359,11 +492,17 @@ extension ArPlatformView: ARSessionDelegate {
                 if self.frameCounter == 1 || self.frameCounter % 60 == 0 {
                     NSLog("AR_DBG ARKit pinned corners=%@", out.description)
                 }
-                self.channelHandler.sendAlignment(corners: out, tracking: true, frameWidth: fw, frameHeight: fh)
+                self.channelHandler.sendAlignment(
+                    corners: out, tracking: true, frameWidth: fw, frameHeight: fh,
+                    trackingState: trackingStateStr, limitedReason: limitedReasonStr
+                )
             } else {
                 // EXISTING not-tracked path -- unchanged.
                 if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG ARKit tracking=false") }
-                self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0)
+                self.channelHandler.sendAlignment(
+                    corners: [], tracking: false, frameWidth: 0, frameHeight: 0,
+                    trackingState: trackingStateStr, limitedReason: limitedReasonStr
+                )
             }
         }
     }
@@ -372,7 +511,11 @@ extension ArPlatformView: ARSessionDelegate {
         NSLog("AR_DBG ARKit session didFailWithError=%@", error.localizedDescription)
         DispatchQueue.main.async { [weak self] in
             self?.wasTracked = false
-            self?.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0)
+            self?.lastTrackingStateStr = "notAvailable"
+            self?.channelHandler.sendAlignment(
+                corners: [], tracking: false, frameWidth: 0, frameHeight: 0,
+                trackingState: "notAvailable", limitedReason: nil
+            )
         }
     }
 }

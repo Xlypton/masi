@@ -1,5 +1,6 @@
 import 'package:climbtopo/features/ar/application/ar_channel.dart';
 import 'package:climbtopo/features/ar/application/ar_controller.dart';
+import 'package:climbtopo/features/ar/domain/corner_smoother.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -128,6 +129,226 @@ void main() {
       container.read(arControllerProvider.notifier).markActive(false);
 
       expect(container.read(arControllerProvider).active, isFalse);
+    });
+
+    group('A1: EMA corner smoothing (onAlignment)', () {
+      const first = <Offset>[
+        Offset(0, 0),
+        Offset(100, 0),
+        Offset(100, 100),
+        Offset(0, 100),
+      ];
+      const second = <Offset>[
+        Offset(20, 20),
+        Offset(120, 20),
+        Offset(120, 120),
+        Offset(20, 120),
+      ];
+
+      test(
+        'the first-ever tracked alignment stores its corners unchanged (no '
+        'filter state to blend against yet)',
+        () {
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: first,
+                ),
+              );
+
+          expect(
+            container.read(arControllerProvider).latest?.screenCorners,
+            first,
+          );
+        },
+      );
+
+      test(
+        'a second tracked alignment stores EMA-blended corners, not the raw '
+        'new ones -- alpha * raw + (1 - alpha) * previous, per coordinate',
+        () {
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: first,
+                ),
+              );
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: second,
+                ),
+              );
+
+          final smoothed = container
+              .read(arControllerProvider)
+              .latest!
+              .screenCorners!;
+
+          expect(smoothed, isNot(second));
+          for (var i = 0; i < 4; i++) {
+            final expectedX =
+                kCornerSmoothingAlpha * second[i].dx +
+                (1 - kCornerSmoothingAlpha) * first[i].dx;
+            final expectedY =
+                kCornerSmoothingAlpha * second[i].dy +
+                (1 - kCornerSmoothingAlpha) * first[i].dy;
+            expect(smoothed[i].dx, closeTo(expectedX, 1e-9), reason: 'corner $i dx');
+            expect(smoothed[i].dy, closeTo(expectedY, 1e-9), reason: 'corner $i dy');
+          }
+        },
+      );
+
+      test(
+        'other ArAlignment fields (confidence/tracking/trackingState/'
+        'limitedReason) pass through unchanged alongside the smoothed '
+        'corners',
+        () {
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: first,
+                ),
+              );
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: second,
+                  trackingState: ArTrackingState.limited,
+                  limitedReason: 'excessiveMotion',
+                ),
+              );
+
+          final latest = container.read(arControllerProvider).latest!;
+          expect(latest.tracking, isTrue);
+          expect(latest.trackingState, ArTrackingState.limited);
+          expect(latest.limitedReason, 'excessiveMotion');
+        },
+      );
+
+      test(
+        'A1: setMode resets the corner-smoothing filter -- an AR mode '
+        'change is a documented discontinuity, so the next alignment after '
+        'a mode switch is a fresh passthrough, not blended with pre-switch '
+        'corners',
+        () {
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: first,
+                ),
+              );
+
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: second,
+                ),
+              );
+
+          expect(
+            container.read(arControllerProvider).latest?.screenCorners,
+            second,
+            reason:
+                'after a mode change, the filter must have been reset, so '
+                'this alignment passes through raw',
+          );
+        },
+      );
+
+      test(
+        'A1: a tracking:false update resets the corner-smoothing filter, so '
+        'a later re-acquisition starts fresh rather than blending against '
+        'pre-loss corners',
+        () {
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: first,
+                ),
+              );
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(const ArAlignment(confidence: 0.0, tracking: false));
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: second,
+                ),
+              );
+
+          expect(
+            container.read(arControllerProvider).latest?.screenCorners,
+            second,
+            reason:
+                'tracking loss must have reset the filter, so the '
+                're-acquired alignment passes through raw',
+          );
+        },
+      );
+
+      test(
+        'resetCornerSmoothing() clears filter state directly (called by '
+        'ArAlignmentStage on a fresh manual lock and by ArScreen on every '
+        'wall entry)',
+        () {
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: first,
+                ),
+              );
+
+          container.read(arControllerProvider.notifier).resetCornerSmoothing();
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: second,
+                ),
+              );
+
+          expect(
+            container.read(arControllerProvider).latest?.screenCorners,
+            second,
+          );
+        },
+      );
     });
   });
 

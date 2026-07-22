@@ -70,8 +70,10 @@ bool _isArPlatformSupported() => isArSupported();
 /// The *only* iOS-gated piece of this screen is the native `UiKitView`
 /// camera surface itself. Everything else — the overlay painter, the
 /// auto/manual mode toggle, and the manual pan/scale/rotate gesture layer —
-/// lives in [ArAlignmentStage], a plain [ConsumerWidget] with NO platform
-/// checks of its own. [ArScreen] only ever *constructs* [ArAlignmentStage]
+/// lives in [ArAlignmentStage], a plain [ConsumerStatefulWidget] with NO
+/// platform checks of its own (its private State merely caches the last
+/// known-good homography across frames — see that class's doc). [ArScreen]
+/// only ever *constructs* [ArAlignmentStage]
 /// from its iOS branch (handing it a real `UiKitView` as [ArAlignmentStage
 /// .cameraView]), but nothing stops a test from pumping [ArAlignmentStage]
 /// directly — on ANY platform — with a harmless placeholder [Widget] (e.g.
@@ -222,6 +224,11 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   void _resetArViewState() {
     ref.read(manualAlignProvider.notifier).reset();
     ref.read(arLockedProvider.notifier).reset();
+    // Corner-smoothing is an app-lifetime singleton's internal filter (see
+    // ArController._cornerSmoother) — reset unconditionally (unlike the mode
+    // check just below) so a fresh wall entry never blends its first tracked
+    // corners against a previous wall's leftover filter state.
+    ref.read(arControllerProvider.notifier).resetCornerSmoothing();
     if (ref.read(arControllerProvider).mode != ArMode.auto) {
       ref.read(arControllerProvider.notifier).setMode(ArMode.auto);
     }
@@ -410,24 +417,32 @@ class _ArScreenState extends ConsumerState<ArScreen> {
 ///
 /// - **Auto mode** ([ArMode.auto], the primary mode): while ARKit is
 ///   tracking (`arState.latest?.tracking == true` with a non-null
-///   `screenCorners`), the homography is solved fresh via
+///   `screenCorners`, already EMA-smoothed by `ArController.onAlignment` —
+///   see [CornerSmoother]), the homography is solved fresh via
 ///   [Homography.fromQuad] — mapping the reference photo's 4 corners onto
 ///   the 4 on-screen corners ARKit reports the tracked anchor at — with
-///   confidence pinned to `1.0` (routes are glued to the wall; no outline
-///   guide is shown, there's nothing to line up). While not yet tracking (no
-///   update yet, or the latest update reports `tracking: false`), the
-///   homography falls back to a centered "ghost" placement
-///   ([Homography.fitInto]) with confidence `0.0`, again with no outline
-///   guide.
+///   confidence derived from `latest.derivedConfidence` (see
+///   [ArAlignment.derivedConfidence]), which reflects ARKit's actual
+///   tracking-quality state rather than a hardcoded `1.0`. If that solve is
+///   degenerate (`Homography.fromQuad` returns [Homography.identity], e.g. a
+///   momentarily collinear corner quad), the last known-good homography is
+///   held instead — see [_ArAlignmentStageState._lastGoodHomography]. While
+///   not yet tracking (no update yet, or the latest update reports
+///   `tracking: false`), the homography falls back to a centered "ghost"
+///   placement ([Homography.fitInto]) with confidence `0.0`, again with no
+///   outline guide.
 /// - **Manual mode** ([ArMode.manual], the fallback): the homography comes
 ///   from [manualAlignProvider], hand-adjustable via the pan/scale/rotate
 ///   gesture layer shown over the overlay; confidence is pinned to `1.0`
 ///   (there's nothing to be "unsure" about — the user placed it there).
+///   Once locked, rendering switches to the same native-corners path as auto
+///   mode (see above), since the native side now owns the pinned world
+///   anchor.
 ///
 /// See [ArScreen]'s class doc for why this widget carries no platform
 /// checks of its own: [cameraView] is supplied by the caller, so this
-/// widget is exactly as testable as any other [ConsumerWidget].
-class ArAlignmentStage extends ConsumerWidget {
+/// widget is exactly as testable as any other [ConsumerStatefulWidget].
+class ArAlignmentStage extends ConsumerStatefulWidget {
   const ArAlignmentStage({
     super.key,
     required this.cameraView,
@@ -466,13 +481,71 @@ class ArAlignmentStage extends ConsumerWidget {
   final VoidCallback? onRetryStart;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ArAlignmentStage> createState() => _ArAlignmentStageState();
+}
+
+class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
+  /// The most recent NON-degenerate homography `Homography.fromQuad` solved
+  /// from ARKit-tracked corners (auto mode, or manual-and-locked). Held so a
+  /// transient degenerate solve (`Homography.fromQuad` returns
+  /// [Homography.identity] for a collinear/degenerate corner quad — see
+  /// `homography.dart`'s `fromQuad` doc) never snaps the overlay to
+  /// identity's huge top-left placement for a single frame; instead the
+  /// overlay keeps rendering at the last known-good placement until a fresh
+  /// non-degenerate solve arrives. Falls back to the centered "ghost" fit
+  /// (not identity) if there's no known-good homography yet.
+  ///
+  /// Deliberately a plain State field, NOT a Riverpod provider: writing it
+  /// is a side effect of [build] itself (see below), and mutating a Riverpod
+  /// provider synchronously during ANY widget's build trips Riverpod's
+  /// "modify a provider while the widget tree was building" guard (see
+  /// `_ArScreenState._load`'s doc, elsewhere in this file, for the same
+  /// guard referenced from the opposite direction). A plain field has no
+  /// such restriction — it's simply memory that survives across this
+  /// State's rebuilds, and resets to a clean `null` whenever a brand-new
+  /// `ArAlignmentStage` (and thus a brand-new State) is constructed — e.g. a
+  /// fresh wall's AR entry, since `ArScreen.build` always constructs a new
+  /// one (see `homography.dart`'s math is untouched — this is a
+  /// consumer-side guard only, per the A1 AR-stability contract).
+  Homography? _lastGoodHomography;
+
+  /// The previous build's `tracking` value, used to detect a true->false
+  /// transition (tracking freshly lost) so [_lastGoodHomography] can be
+  /// cleared — otherwise a later re-acquisition's first (possibly still-
+  /// settling, and thus occasionally degenerate) solve would fall back to a
+  /// homography computed from a camera pose from BEFORE the tracking gap,
+  /// rather than the safer centered "ghost" fit.
+  bool _wasTracking = false;
+
+  /// The previous build's [ArState.mode], used to detect an auto<->manual
+  /// mode switch so [_lastGoodHomography] can be cleared. Mirrors
+  /// [ArController.setMode]'s own corner-smoother reset (mode change is one
+  /// of the three documented `CornerSmoother` discontinuities) — without
+  /// this, switching from manual-LOCKED back to auto can re-pin off the same
+  /// still-tracked anchor with no intervening `tracking: false`, so a stale
+  /// homography from the mode just left would otherwise leak into the new
+  /// mode's degenerate-solve fallback. `null` until the first build (a
+  /// brand-new [_ArAlignmentStageState] already starts with a clean
+  /// [_lastGoodHomography], so there's nothing to clear then).
+  ArMode? _lastMode;
+
+  @override
+  Widget build(BuildContext context) {
     final arState = ref.watch(arControllerProvider);
     final manualHomography = ref.watch(manualAlignProvider);
     final locked = ref.watch(arLockedProvider);
     final isManual = arState.mode == ArMode.manual;
     final latest = arState.latest;
     final tracking = latest?.tracking ?? false;
+    if (_lastMode != null && _lastMode != arState.mode) {
+      _lastGoodHomography = null;
+      _wasTracking = false;
+    }
+    _lastMode = arState.mode;
+    if (_wasTracking && !tracking) {
+      _lastGoodHomography = null;
+    }
+    _wasTracking = tracking;
     // The outline-guide ghost is only useful while the user is actively
     // lining things up by hand in manual mode: auto mode never shows it —
     // when tracked, routes are glued to the wall (nothing to guide); when
@@ -482,7 +555,7 @@ class ArAlignmentStage extends ConsumerWidget {
     return LayoutBuilder(
       builder: (context, constraints) {
         final viewSize = constraints.biggest;
-        final fit = Homography.fitInto(refSize, viewSize);
+        final fit = Homography.fitInto(widget.refSize, viewSize);
         final manualComposite = manualHomography.multiply(fit);
 
         Future<void> onToggleLock() async {
@@ -501,12 +574,29 @@ class ArAlignmentStage extends ConsumerWidget {
           }
           final ok = await channel.lockManual(<Offset>[
             manualComposite.warp(Offset.zero),
-            manualComposite.warp(Offset(refSize.width, 0)),
-            manualComposite.warp(Offset(refSize.width, refSize.height)),
-            manualComposite.warp(Offset(0, refSize.height)),
+            manualComposite.warp(Offset(widget.refSize.width, 0)),
+            manualComposite.warp(
+              Offset(widget.refSize.width, widget.refSize.height),
+            ),
+            manualComposite.warp(Offset(0, widget.refSize.height)),
           ]);
           if (!context.mounted) return;
           if (ok) {
+            // A fresh manual lock is one of the three documented
+            // discontinuities for the corner-smoothing filter (see
+            // CornerSmoother's class doc) — reset it so the newly-locked
+            // world anchor's first corner sample is never blended against
+            // whatever came before (e.g. stale auto-mode jitter, or a
+            // previous lock).
+            ref.read(arControllerProvider.notifier).resetCornerSmoothing();
+            // Mirror that same reset onto _lastGoodHomography/_wasTracking:
+            // a fresh lock pins a brand-new native world anchor, so a stale
+            // homography from whatever this stage last held (e.g. a
+            // previous lock, or auto-mode tracking before switching to
+            // manual) must never be the fallback for this new lock's first
+            // (possibly still-settling) fromQuad solve.
+            _lastGoodHomography = null;
+            _wasTracking = false;
             ref.read(arLockedProvider.notifier).toggle();
           } else {
             ScaffoldMessenger.maybeOf(context)?.showSnackBar(
@@ -535,17 +625,28 @@ class ArAlignmentStage extends ConsumerWidget {
             // ARKit is tracking: solve the homography that maps the
             // reference photo's 4 corners directly onto the 4 on-screen
             // points ARKit reports the tracked anchor's corners project to
-            // this frame — no intermediate camera-frame space involved.
-            homography = Homography.fromQuad(
+            // this frame (already EMA-smoothed upstream in
+            // `ArController.onAlignment`) — no intermediate camera-frame
+            // space involved.
+            final solved = Homography.fromQuad(
               [
                 Offset.zero,
-                Offset(refSize.width, 0),
-                Offset(refSize.width, refSize.height),
-                Offset(0, refSize.height),
+                Offset(widget.refSize.width, 0),
+                Offset(widget.refSize.width, widget.refSize.height),
+                Offset(0, widget.refSize.height),
               ],
               corners,
             );
-            confidence = 1.0;
+            if (solved == Homography.identity()) {
+              // Degenerate solve (see homography.dart's fromQuad doc) —
+              // hold the last known-good homography rather than snapping to
+              // identity's huge top-left placement for this frame.
+              homography = _lastGoodHomography ?? fit;
+            } else {
+              _lastGoodHomography = solved;
+              homography = solved;
+            }
+            confidence = latest!.derivedConfidence;
           } else {
             // Not tracking yet (or no update yet) — show a fitted "ghost"
             // overlay instead of an unwarped, likely off-screen one.
@@ -557,13 +658,13 @@ class ArAlignmentStage extends ConsumerWidget {
         final overlay = IgnorePointer(
           child: CustomPaint(
             painter: ArOverlayPainter(
-              routes: routes,
-              refSize: refSize,
+              routes: widget.routes,
+              refSize: widget.refSize,
               homography: homography,
               palette: kRoutePalette,
               confidence: confidence,
               routeColorResolver: topoRouteColor,
-              outline: showOutline ? outline : null,
+              outline: showOutline ? widget.outline : null,
             ),
             child: const SizedBox.expand(),
           ),
@@ -578,7 +679,7 @@ class ArAlignmentStage extends ConsumerWidget {
         return Stack(
           fit: StackFit.expand,
           children: [
-            cameraView,
+            widget.cameraView,
             if (gestureEnabled) _ManualGestureLayer(child: overlay) else overlay,
             Positioned(
               top: 12,
@@ -587,8 +688,10 @@ class ArAlignmentStage extends ConsumerWidget {
                 mode: arState.mode,
                 locked: locked,
                 tracking: tracking,
-                error: startError,
-                onRetry: onRetryStart,
+                trackingState: latest?.trackingState ?? ArTrackingState.normal,
+                limitedReason: latest?.limitedReason,
+                error: widget.startError,
+                onRetry: widget.onRetryStart,
               ),
             ),
             Positioned(
@@ -618,6 +721,8 @@ class _ArStatus extends StatelessWidget {
     required this.mode,
     required this.locked,
     required this.tracking,
+    this.trackingState = ArTrackingState.normal,
+    this.limitedReason,
     this.error,
     this.onRetry,
   });
@@ -628,6 +733,17 @@ class _ArStatus extends StatelessWidget {
   /// Whether ARKit is currently tracking the reference photo (only
   /// meaningful in [ArMode.auto] — ignored in manual mode).
   final bool tracking;
+
+  /// ARKit's coarse tracking-quality state for the latest alignment (see
+  /// [ArAlignment.trackingState]). Defaults to [ArTrackingState.normal] when
+  /// there's no alignment yet — matching [ArAlignment]'s own
+  /// backward-compatible default.
+  final ArTrackingState trackingState;
+
+  /// ARKit's reason for degraded tracking (see [ArAlignment.limitedReason]),
+  /// only meaningful when [trackingState] is [ArTrackingState.limited].
+  /// Mapped to a short user-facing hint via [_limitedReasonHint] below.
+  final String? limitedReason;
 
   /// Set (via [ArAlignmentStage.startError]) when the native `channel.
   /// start` call has thrown — see #7b. Non-null replaces the usual mode/
@@ -641,6 +757,7 @@ class _ArStatus extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final isManual = mode == ArMode.manual;
+    final bool isLimited = tracking && trackingState == ArTrackingState.limited;
     final String label;
     final String hint;
     if (error != null) {
@@ -651,6 +768,13 @@ class _ArStatus extends StatelessWidget {
       hint = tracking
           ? 'Routes anchored to the wall'
           : 'Move slowly to find the wall';
+    } else if (!isManual && isLimited) {
+      // Real confidence (from ARKit's own trackingState, see
+      // ArAlignment.derivedConfidence) has dropped below full — surface
+      // WHY, rather than the usual "Tracking" readout implying everything
+      // is fine.
+      label = 'Limited';
+      hint = _limitedReasonHint(limitedReason);
     } else if (!isManual && tracking) {
       label = 'Tracking';
       hint = 'Routes locked to the wall';
@@ -693,6 +817,28 @@ class _ArStatus extends StatelessWidget {
       onTap: onRetry,
       child: pill,
     );
+  }
+}
+
+/// Maps a native ARKit `limitedReason` string (see [ArAlignment
+/// .limitedReason]) to a short, human status-pill hint. Covers ARKit's
+/// actual `ARCamera.TrackingState.Reason` cases (`excessiveMotion`,
+/// `insufficientFeatures`, `initializing`, `relocalizing`); anything
+/// unrecognized (including `null`, e.g. native sent `trackingState:
+/// "limited"` without a reason) falls back to a generic hint rather than
+/// showing nothing or a raw ARKit identifier to the user.
+String _limitedReasonHint(String? reason) {
+  switch (reason) {
+    case 'excessiveMotion':
+      return 'Move slower';
+    case 'insufficientFeatures':
+      return 'Need more light';
+    case 'initializing':
+      return 'Finding the wall';
+    case 'relocalizing':
+      return 'Relocating — hold steady';
+    default:
+      return 'Tracking quality is low';
   }
 }
 
