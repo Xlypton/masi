@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../features/topo/presentation/canvas_chrome.dart';
 import '../shared/presentation/masi_icon.dart';
+import 'install_banner.dart';
 import 'theme.dart';
 
 /// The app's persistent bottom-navigation shell, wrapping the three primary
@@ -50,7 +51,17 @@ class NavShell extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: navigationShell,
+      // The dismissible "Add to Home Screen" banner (#59) sits ABOVE the
+      // branch content, never covering the floating bottom bar. It collapses
+      // to zero height off-web / once installed / after dismissal (see
+      // [InstallBanner]), so on those (the overwhelmingly common) paths this
+      // is just `navigationShell` in an `Expanded` — no visual change.
+      body: Column(
+        children: [
+          const InstallBanner(),
+          Expanded(child: navigationShell),
+        ],
+      ),
       // Every branch extends under the floating bar now (#51) — see this
       // class's doc.
       extendBody: true,
