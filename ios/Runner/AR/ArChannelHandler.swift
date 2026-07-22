@@ -16,7 +16,7 @@ protocol ArSessionControlling: AnyObject {
         refWidth: Int,
         refHeight: Int,
         routesJson: String,
-        completion: @escaping (Bool, [Double]?) -> Void
+        completion: @escaping (Bool, [Double]?, RockMask?) -> Void
     )
     func stopSession()
     func setMode(_ mode: ArMode)
@@ -34,12 +34,19 @@ protocol ArSessionControlling: AnyObject {
 /// `lib/features/ar/.../ar_channel*.dart`):
 ///   MethodChannel('masi/ar')
 ///     - "start" args: {referenceImagePath: String, refWidth: Int, refHeight: Int, routesJson: String}
-///       result: {success: Bool, rockQuadPercent: [Double]x8?} -- `rockQuadPercent` is
+///       result: {success: Bool, rockQuadPercent: [Double]x8?, rockMaskAlpha: Uint8List?,
+///       rockMaskWidth: Int?, rockMaskHeight: Int?}. `rockQuadPercent` is
 ///       [tlX,tlY, trX,trY, brX,brY, blX,blY], each 0..1, the fraction of the FULL
 ///       upright reference photo that native's best-effort rock/wall segmentation
 ///       (`ArRockSegmentation`, iOS 17+) cropped ARKit's detectionImages target down
-///       to; the key is OMITTED (nil) whenever segmentation didn't run/found nothing
-///       and the full upright photo was used as the detection target instead.
+///       to. `rockMaskAlpha` is a raw 8-bit alpha silhouette buffer (row-major, one
+///       byte per texel, each 0 or 255 -- NOT PNG), length == rockMaskWidth*rockMaskHeight,
+///       in the same FULL upright photo 0..1 frame (long edge downsampled to <= 256px).
+///       All THREE mask keys plus rockQuadPercent are OMITTED TOGETHER whenever
+///       segmentation didn't run/found nothing and the full upright photo was used as
+///       the detection target instead (never a null sentinel). The identical mask wire
+///       shape is also produced statelessly by `ArSegmentationChannelHandler`
+///       ("masi/arSegmentation" -> "segmentPreview").
 ///     - "stop" (no args)
 ///     - "setMode" args: {mode: 'auto'|'manual'}
 ///     - "rescan" (no args) -- clears the pinned world transform and re-runs
@@ -111,9 +118,14 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
                 refWidth: refWidth,
                 refHeight: refHeight,
                 routesJson: routesJson
-            ) { success, rockQuadPercent in
+            ) { success, rockQuadPercent, rockMask in
                 var payload: [String: Any] = ["success": success]
                 if let rockQuadPercent { payload["rockQuadPercent"] = rockQuadPercent }
+                if let rockMask {
+                    payload["rockMaskAlpha"] = FlutterStandardTypedData(bytes: rockMask.alpha)
+                    payload["rockMaskWidth"] = rockMask.width
+                    payload["rockMaskHeight"] = rockMask.height
+                }
                 result(payload)
             }
 

@@ -86,25 +86,12 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
 
 extension ArPlatformView: ArSessionControlling {
 
-    /// Redraws `image` UPRIGHT, baking in its `imageOrientation` into the
-    /// pixel buffer itself. `UIImage.cgImage` is the RAW decoded pixel
-    /// buffer with EXIF orientation discarded; feeding THAT straight into
-    /// `ARReferenceImage` (as this used to do) while Dart's own reference
-    /// dimensions are EXIF-oriented made portrait reference photos detect
-    /// rotated/skewed. Returns `image.cgImage` unchanged when already `.up`
-    /// (no redraw needed).
-    private static func uprightCGImage(from image: UIImage) -> CGImage? {
-        if image.imageOrientation == .up { return image.cgImage }
-        let renderer = UIGraphicsImageRenderer(size: image.size)
-        return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }.cgImage
-    }
-
     func startSession(
         referenceImagePath: String,
         refWidth: Int,
         refHeight: Int,
         routesJson: String,
-        completion: @escaping (Bool, [Double]?) -> Void
+        completion: @escaping (Bool, [Double]?, RockMask?) -> Void
     ) {
         NSLog("AR_DBG startSession invoked")
         // `routesJson` is accepted for contract completeness -- the native
@@ -115,14 +102,14 @@ extension ArPlatformView: ArSessionControlling {
 
         guard let uiImage = UIImage(contentsOfFile: referenceImagePath), let rawCG = uiImage.cgImage else {
             NSLog("AR_DBG ref decode FAILED")
-            completion(false, nil)
+            completion(false, nil, nil)
             return
         }
 
-        // EXIF orientation fix -- see `uprightCGImage` doc above.
-        guard let uprightCG = Self.uprightCGImage(from: uiImage) else {
+        // EXIF orientation fix -- see `ArRockSegmentation.uprightCGImage` doc.
+        guard let uprightCG = ArRockSegmentation.uprightCGImage(from: uiImage) else {
             NSLog("AR_DBG ref upright redraw FAILED")
-            completion(false, nil)
+            completion(false, nil, nil)
             return
         }
         NSLog(
@@ -138,9 +125,11 @@ extension ArPlatformView: ArSessionControlling {
         // see `ArRockSegmentation.segmentAndCrop`.
         var referenceCG = uprightCG
         var rockQuadPercent: [Double]? = nil
+        var rockMask: RockMask? = nil
         if let crop = ArRockSegmentation.segmentAndCrop(uprightCG) {
             referenceCG = crop.cgImage
             rockQuadPercent = crop.quadPercent
+            rockMask = crop.mask
             NSLog("AR_DBG seg: using rock crop quad=\(crop.quadPercent)")
         } else {
             NSLog("AR_DBG seg: no crop, using full upright photo")
@@ -157,7 +146,7 @@ extension ArPlatformView: ArSessionControlling {
 
         guard ARWorldTrackingConfiguration.isSupported else {
             NSLog("AR_DBG ARWorldTrackingConfiguration.isSupported=false, refusing to start session")
-            completion(false, nil)
+            completion(false, nil, nil)
             return
         }
 
@@ -174,7 +163,7 @@ extension ArPlatformView: ArSessionControlling {
             self.pinnedManualCorners = nil
             self.sceneView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
             NSLog("AR_DBG ARKit world session.run detectionImages=1")
-            completion(true, rockQuadPercent)
+            completion(true, rockQuadPercent, rockMask)
         }
     }
 
