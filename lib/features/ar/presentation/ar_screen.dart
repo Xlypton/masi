@@ -130,9 +130,32 @@ class _ArScreenState extends ConsumerState<ArScreen> {
 
   StreamSubscription<ArAlignment>? _alignmentSubscription;
 
+  /// Cached copies of [arChannelProvider]/[arControllerProvider.notifier],
+  /// resolved once here in [initState] (where `ref.read` is safe — the
+  /// element is freshly mounted) rather than read fresh in [dispose].
+  ///
+  /// Flutter's `StatefulElement.unmount()` calls `super.unmount()` (which
+  /// marks the element `defunct`) BEFORE calling `state.dispose()`, and
+  /// Riverpod 3.3.2's `WidgetRef.read`/`watch` each start with an
+  /// unconditional `_assertNotDisposed()` check against exactly that flag
+  /// (see `flutter_riverpod`'s `consumer.dart`) — so a `ref.read` called
+  /// directly in `dispose()`'s body throws a `StateError` there on every
+  /// real teardown, silently skipping whatever cleanup came after the first
+  /// such call ever since (`FlutterError` catches and reports it, which is
+  /// why this never surfaced as an on-device crash). Both providers are
+  /// plain (non-autoDispose) app-lifetime singletons — see
+  /// `arChannelProvider`/`arControllerProvider`'s docs in
+  /// `ar_controller.dart` — so caching the resolved instances here is safe:
+  /// they aren't torn down when this screen is, only when the whole
+  /// `ProviderContainer` is.
+  late final ArChannel _arChannel;
+  late final ArController _arController;
+
   @override
   void initState() {
     super.initState();
+    _arChannel = ref.read(arChannelProvider);
+    _arController = ref.read(arControllerProvider.notifier);
     _load();
   }
 
@@ -392,8 +415,23 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   void dispose() {
     _alignmentSubscription?.cancel();
     if (_sessionStarted) {
-      ref.read(arChannelProvider).stop();
-      ref.read(arControllerProvider.notifier).markActive(false);
+      // Cached fields (see their doc above) — NOT ref.read: by the time
+      // dispose() runs, this element is already defunct and any ref.read
+      // here would throw a StateError, silently skipping everything after
+      // the first such call (this is exactly the bug those fields fix).
+      //
+      // channel.stop() is the load-bearing call: it releases the native
+      // camera/ARKit session, which otherwise leaks across AR-screen entries.
+      // _arController.markActive(false) is comparatively low-stakes —
+      // arControllerProvider is an app-lifetime singleton (see its doc in
+      // ar_controller.dart) that outlives this screen, so skipping it merely
+      // leaves ArState.active stale as true until the next _startSession
+      // (or _resetArViewState's own reset, if the next AR entry doesn't
+      // start a session at all) — never a leaked resource. Still called
+      // here (best-effort) so ArState.active reflects reality immediately
+      // rather than waiting on the next entry.
+      _arChannel.stop();
+      _arController.markActive(false);
     }
     super.dispose();
   }

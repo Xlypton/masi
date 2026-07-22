@@ -47,6 +47,12 @@ class _FakeArChannel extends ArChannel {
 
   final List<Offset> result;
 
+  /// Set by [stop] when called. Lets this test assert that
+  /// `_ArScreenState.dispose()` actually invokes `channel.stop()` (releasing
+  /// the native camera/tracking session) rather than silently skipping it —
+  /// see the dispose-time bug this test's final block documents/asserts.
+  bool stopCalled = false;
+
   @override
   Future<List<Offset>?> start({
     required String referenceImagePath,
@@ -54,6 +60,12 @@ class _FakeArChannel extends ArChannel {
     required int refHeight,
     required String routesJson,
   }) async => result;
+
+  @override
+  Future<void> stop() {
+    stopCalled = true;
+    return super.stop();
+  }
 }
 
 /// Covers the one end-to-end forwarding gap no other AR test closes:
@@ -207,46 +219,46 @@ void main() {
       // test controls exactly when `_ArScreenState.dispose()` runs, rather
       // than leaving it to the framework's own implicit end-of-test teardown.
       //
-      // PRE-EXISTING BUG uncovered here (out of scope for this test — no
-      // production code is touched): `_ArScreenState.dispose()` reads
-      // `ref.read(arChannelProvider)`/`ref.read(arControllerProvider
-      // .notifier)` directly in its body. This test is the FIRST in the
-      // whole AR suite to actually drive `_startSession` to completion
-      // (every other ArScreen-mounting test takes either the
-      // unsupported-placeholder branch or the web/KeyedSubtree branch, where
-      // `_sessionStarted` never flips true — see this file's class doc and
-      // `ar_web_manual_test.dart`'s C4 group), so it's also the first to
-      // exercise `dispose()`'s `if (_sessionStarted) { ... }` branch at all.
-      // Flutter's `StatefulElement.unmount()` calls `super.unmount()` (which
-      // marks the element `defunct`) BEFORE calling `state.dispose()` — so by
-      // the time ANY `State.dispose()` override runs, `context.mounted` is
-      // already `false`. Riverpod 3.3.2's `ref.read`/`ref.watch` each start
-      // with an unconditional `_assertNotDisposed()` check against exactly
-      // that flag (see `flutter_riverpod`'s `consumer.dart`), so this
-      // `ref.read` call throws a `StateError` on every real dispose of an
-      // AR screen that ever started a session — not merely a test artifact
-      // of container-disposal ordering. `FlutterError` catches and reports
-      // it (hence `tester.takeException()` below rather than a rethrow),
-      // which is why this hasn't shown up as an app crash on-device: the
-      // native `stop()`/`markActive(false)` calls after the first `ref.read`
-      // silently never run. Consuming it here (rather than fixing
-      // `ar_screen.dart`) keeps this test additive-only, per this task's
-      // scope — flag for a follow-up fix (e.g. cache the channel/notifier in
-      // a field before disposal, as Riverpod's own error message advises).
+      // This is the FIRST test in the whole AR suite to actually drive
+      // `_startSession` to completion (every other ArScreen-mounting test
+      // takes either the unsupported-placeholder branch or the
+      // web/KeyedSubtree branch, where `_sessionStarted` never flips true —
+      // see this file's class doc and `ar_web_manual_test.dart`'s C4 group),
+      // so it's also the first to exercise `dispose()`'s
+      // `if (_sessionStarted) { ... }` branch at all.
+      //
+      // FORMERLY a pre-existing bug lived here: Flutter's
+      // `StatefulElement.unmount()` calls `super.unmount()` (which marks the
+      // element `defunct`) BEFORE calling `state.dispose()`, and Riverpod
+      // 3.3.2's `WidgetRef.read` starts with an unconditional
+      // `_assertNotDisposed()` check against exactly that flag (see
+      // `flutter_riverpod`'s `consumer.dart`) — so a `ref.read` called
+      // directly in `dispose()`'s body threw a `StateError` on every real
+      // dispose of an AR screen that ever started a session, silently
+      // aborting `channel.stop()`/`markActive(false)` (caught and reported by
+      // `FlutterError`, hence never surfacing as an app crash on-device).
+      // Fixed in `ar_screen.dart` by caching the channel/controller-notifier
+      // in State fields (assigned in `initState`, where `ref.read` is safe)
+      // and reading those cached fields in `dispose()` instead — exactly the
+      // fix Riverpod's own assertion message advises. This test now asserts
+      // both halves of that fix: dispose no longer throws, and the teardown
+      // it used to skip (`channel.stop()`) actually runs.
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
       expect(
         tester.takeException(),
-        isA<StateError>().having(
-          (e) => e.message,
-          'message',
-          contains('Using "ref" when a widget is about to or has been '
-              'unmounted is unsafe'),
-        ),
+        isNull,
         reason:
-            'the known pre-existing dispose()-time ref.read bug documented '
-            'above — consumed here so it does not fail THIS test, which is '
-            'about _startSession forwarding, not about disposal',
+            'dispose() must not throw — the cached-field fix means no '
+            '`ref.read` ever runs in the dispose body',
+      );
+      expect(
+        fakeChannel.stopCalled,
+        isTrue,
+        reason:
+            "dispose() must actually call the cached channel's stop() to "
+            'release the native camera/tracking session — this is the '
+            'load-bearing teardown the pre-existing bug used to skip',
       );
     },
   );
