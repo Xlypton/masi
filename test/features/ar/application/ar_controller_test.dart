@@ -40,6 +40,53 @@ void main() {
       expect(a.hashCode, b.hashCode);
       expect(a, isNot(c));
     });
+
+    group('rockQuadPercent', () {
+      const quad = <Offset>[
+        Offset(0.1, 0.1),
+        Offset(0.9, 0.1),
+        Offset(0.9, 0.9),
+        Offset(0.1, 0.9),
+      ];
+
+      test('defaults to null', () {
+        const state = ArState(mode: ArMode.auto, active: false);
+        expect(state.rockQuadPercent, isNull);
+      });
+
+      test('copyWith sets it when given a value', () {
+        const state = ArState(mode: ArMode.auto, active: false);
+        final withQuad = state.copyWith(rockQuadPercent: quad);
+        expect(withQuad.rockQuadPercent, quad);
+      });
+
+      test(
+        'equality/hashCode treat two states with equal (but distinct) '
+        'quad lists as equal, and a differing quad as unequal',
+        () {
+          const a = ArState(
+            mode: ArMode.auto,
+            active: false,
+            rockQuadPercent: quad,
+          );
+          const b = ArState(
+            mode: ArMode.auto,
+            active: false,
+            rockQuadPercent: <Offset>[
+              Offset(0.1, 0.1),
+              Offset(0.9, 0.1),
+              Offset(0.9, 0.9),
+              Offset(0.1, 0.9),
+            ],
+          );
+          const c = ArState(mode: ArMode.auto, active: false);
+
+          expect(a, b);
+          expect(a.hashCode, b.hashCode);
+          expect(a, isNot(c));
+        },
+      );
+    });
   });
 
   group('ArController', () {
@@ -79,6 +126,7 @@ void main() {
       expect(state.mode, ArMode.auto);
       expect(state.active, isFalse);
       expect(state.latest, isNull);
+      expect(state.rockQuadPercent, isNull);
     });
 
     test(
@@ -129,6 +177,65 @@ void main() {
       container.read(arControllerProvider.notifier).markActive(false);
 
       expect(container.read(arControllerProvider).active, isFalse);
+    });
+
+    group('B1/B3: setRockQuadPercent', () {
+      const quad = <Offset>[
+        Offset(0.1, 0.1),
+        Offset(0.9, 0.1),
+        Offset(0.9, 0.9),
+        Offset(0.1, 0.9),
+      ];
+
+      test('setRockQuadPercent(quad) sets state.rockQuadPercent', () {
+        container.read(arControllerProvider.notifier).setRockQuadPercent(quad);
+
+        expect(container.read(arControllerProvider).rockQuadPercent, quad);
+      });
+
+      test(
+        'setRockQuadPercent(null) after a previously-set quad ACTUALLY '
+        'resets it back to null -- the copyWith-style `?? this.field` '
+        'idiom every other nullable ArState field uses can never null out '
+        'an already-set field, so this must not go through a naive '
+        'state.copyWith(rockQuadPercent: null) call',
+        () {
+          container
+              .read(arControllerProvider.notifier)
+              .setRockQuadPercent(quad);
+          expect(container.read(arControllerProvider).rockQuadPercent, quad);
+
+          container.read(arControllerProvider.notifier).setRockQuadPercent(null);
+
+          expect(
+            container.read(arControllerProvider).rockQuadPercent,
+            isNull,
+          );
+        },
+      );
+
+      test(
+        'setRockQuadPercent leaves every other ArState field untouched',
+        () {
+          container.read(arControllerProvider.notifier).setMode(ArMode.manual);
+          container.read(arControllerProvider.notifier).markActive(true);
+          final alignment = ArAlignment.fromMap(<String, Object?>{
+            'confidence': 0.7,
+            'tracking': true,
+          });
+          container.read(arControllerProvider.notifier).onAlignment(alignment);
+
+          container
+              .read(arControllerProvider.notifier)
+              .setRockQuadPercent(quad);
+
+          final state = container.read(arControllerProvider);
+          expect(state.mode, ArMode.manual);
+          expect(state.active, isTrue);
+          expect(state.latest, alignment);
+          expect(state.rockQuadPercent, quad);
+        },
+      );
     });
 
     group('A1: EMA corner smoothing (onAlignment)', () {

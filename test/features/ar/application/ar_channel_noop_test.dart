@@ -61,6 +61,23 @@ void main() {
         await channel.unlockManual();
       },
     );
+
+    test(
+      'B1: start() resolves to null (never a rockQuadPercent) without '
+      'invoking a real MethodChannel',
+      () async {
+        final channel = ArChannel.noop();
+
+        final quad = await channel.start(
+          referenceImagePath: 'x',
+          refWidth: 1,
+          refHeight: 1,
+          routesJson: '[]',
+        );
+
+        expect(quad, isNull);
+      },
+    );
   });
 
   group('createArChannel (native/VM factory)', () {

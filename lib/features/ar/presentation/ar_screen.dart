@@ -243,6 +243,15 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     // check just below) so a fresh wall entry never blends its first tracked
     // corners against a previous wall's leftover filter state.
     ref.read(arControllerProvider.notifier).resetCornerSmoothing();
+    // Same app-lifetime-singleton concern as corner-smoothing just above:
+    // rockQuadPercent (the native-reported rock/crop quad from the PREVIOUS
+    // session's `channel.start` result — see ArState.rockQuadPercent's doc)
+    // must never leak into a new wall's session, since _startSession only
+    // overwrites it once a fresh channel.start call actually resolves — a
+    // wall whose own session never returns a quad at all (e.g. no confident
+    // native segmentation) would otherwise keep rendering the PRIOR wall's
+    // crop instead of falling back to its own full-photo rect.
+    ref.read(arControllerProvider.notifier).setRockQuadPercent(null);
     // arAutoTrackingProvider (not a direct arSupportsAutoTracking() call) so
     // this is overridable in tests, same as arSupportedProvider elsewhere in
     // this file.
@@ -306,8 +315,9 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     _sessionStarted = true;
     final channel = ref.read(arChannelProvider);
     debugPrint('AR_DBG _startSession calling channel.start');
+    final List<Offset>? rockQuad;
     try {
-      await channel.start(
+      rockQuad = await channel.start(
         referenceImagePath: photo.localPath,
         refWidth: photo.width,
         refHeight: photo.height,
@@ -330,6 +340,7 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       setState(() => _startError = null);
     }
     ref.read(arControllerProvider.notifier).markActive(true);
+    ref.read(arControllerProvider.notifier).setRockQuadPercent(rockQuad);
     _alignmentSubscription = channel.alignments().listen(
       ref.read(arControllerProvider.notifier).onAlignment,
     );
@@ -805,12 +816,32 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
             // this frame (already EMA-smoothed upstream in
             // `ArController.onAlignment`) — no intermediate camera-frame
             // space involved.
-            final refCorners = [
-              Offset.zero,
-              Offset(widget.refSize.width, 0),
-              Offset(widget.refSize.width, widget.refSize.height),
-              Offset(0, widget.refSize.height),
-            ];
+            //
+            // When native found a confident rock/crop segmentation
+            // (arState.rockQuadPercent non-null — see ar_channel.dart's
+            // ArChannel.start doc for the wire contract), the SOURCE quad is
+            // that segmentation's 4 fractional corners scaled up into pixel
+            // space instead of the full reference-photo rect: the tracked
+            // anchor corresponds to just the rock face ARKit locked onto,
+            // not the whole photo (which may include background/other
+            // holds/other rock). `null` (no confident segmentation, or no
+            // session started yet) falls back to the unchanged full-photo
+            // rect — Homography.fromQuad is agnostic to what the source
+            // quad represents either way.
+            final refCorners = arState.rockQuadPercent != null
+                ? [
+                    for (final p in arState.rockQuadPercent!)
+                      Offset(
+                        p.dx * widget.refSize.width,
+                        p.dy * widget.refSize.height,
+                      ),
+                  ]
+                : [
+                    Offset.zero,
+                    Offset(widget.refSize.width, 0),
+                    Offset(widget.refSize.width, widget.refSize.height),
+                    Offset(0, widget.refSize.height),
+                  ];
             final solved = Homography.fromQuad(refCorners, corners);
             if (Homography.isDegenerateQuadSolve(solved, refCorners, corners)) {
               // Degenerate/implausible solve (see

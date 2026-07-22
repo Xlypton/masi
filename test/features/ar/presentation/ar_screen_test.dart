@@ -288,6 +288,185 @@ void main() {
     );
 
     testWidgets(
+      'B3: entering AR for a different wall resets arControllerProvider.'
+      "rockQuadPercent back to null, so a prior session's native rock/crop "
+      'quad can never leak into a new session that returns none',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final crud = container.read(libraryCrudRepositoryProvider);
+        final area = await crud.createArea('Area');
+        final sector = await crud.createSector(area.id, 'Sector');
+        final wallA = await crud.createWall(sector.id, 'Wall A');
+        final wallB = await crud.createWall(sector.id, 'Wall B');
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(theme: MasiTheme.light, home: ArScreen(wallId: wallA.id)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        // Simulate a leftover rockQuadPercent from wall A's session, as if a
+        // real channel.start had returned a confident native segmentation.
+        container
+            .read(arControllerProvider.notifier)
+            .setRockQuadPercent(const <Offset>[
+              Offset(0.1, 0.1),
+              Offset(0.9, 0.1),
+              Offset(0.9, 0.9),
+              Offset(0.1, 0.9),
+            ]);
+        expect(container.read(arControllerProvider).rockQuadPercent, isNotNull);
+
+        // Back out and enter AR for a DIFFERENT wall — same real-navigation
+        // mirroring as Fix 1 above (a brand-new ArScreen widget subtree, not
+        // an in-place rebuild).
+        await tester.pumpWidget(const SizedBox());
+        await tester.pumpAndSettle();
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(theme: MasiTheme.light, home: ArScreen(wallId: wallB.id)),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          container.read(arControllerProvider).rockQuadPercent,
+          isNull,
+          reason:
+              "wall B's AR entry must not inherit wall A's leftover "
+              'rockQuadPercent',
+        );
+      },
+    );
+
+    group(
+      'B4: EXIF parity -- refSize is exactly PhotoRef.width/height, never '
+      'a second re-decode',
+      () {
+        // No EXIF-rotated JPEG fixture exists in this repo's test assets, so
+        // this proves the narrower but load-bearing invariant instead (per
+        // the B4 spec's documented fallback): AR's refSize NEVER comes from
+        // a second, independent dimension decode -- it is always exactly
+        // the PhotoRef.width/PhotoRef.height already persisted for this
+        // photo. Those persisted dims themselves come from
+        // `image_dimensions_native.dart`'s `decodeImageSize` (`dart:ui`'s
+        // `instantiateImageCodec` on the picked file's raw bytes -- see
+        // `topos_screen.dart`'s `_handleNewTopo`), which honors EXIF
+        // orientation -- so PhotoRef.width/height are already the
+        // EXIF-ORIENTED dims by the time AR ever sees them. A
+        // rockQuadPercent fraction (documented in `ar_channel.dart` as "0..1
+        // of the ORIENTED full reference photo") is only meaningful if
+        // native's segmentation and Dart's refSize agree on what "oriented"
+        // means -- this test guards that agreement holds all the way
+        // through ArScreen -> ArAlignmentStage, using deliberately
+        // non-square width/height (1000x2000) so a width/height swap bug
+        // would be caught.
+        testWidgets(
+          'ArScreen constructs ArAlignmentStage.refSize as exactly '
+          "Size(photo.width, photo.height) -- the same oriented dims "
+          "PhotoRepository.loadOriginal reports, not an independently "
+          're-decoded size',
+          (tester) async {
+            final db = AppDatabase(NativeDatabase.memory());
+            addTearDown(db.close);
+            final container = ProviderContainer(
+              overrides: [
+                appDatabaseProvider.overrideWithValue(db),
+                nowMsProvider.overrideWithValue(() => 1000),
+                arSupportedProvider.overrideWithValue(true),
+                arAutoTrackingProvider.overrideWithValue(false),
+                // Same self-consistency hardening as ar_web_manual_test
+                // .dart's C4/remount groups: arSupported:true can drive a
+                // real _resetArViewState -> ArController.setMode ->
+                // arChannelProvider.setMode call; noop keeps that harmless
+                // on this test host with no masi/ar mock registered.
+                arChannelProvider.overrideWithValue(ArChannel.noop()),
+              ],
+            );
+            addTearDown(container.dispose);
+
+            final crud = container.read(libraryCrudRepositoryProvider);
+            final area = await crud.createArea('Area');
+            final sector = await crud.createSector(area.id, 'Sector');
+            final wall = await crud.createWall(sector.id, 'Wall');
+            late String photoId;
+            await tester.runAsync(() async {
+              photoId = await crud.attachPhotoToWall(
+                wall.id,
+                XFile('/tmp/exif-parity-test-photo.jpg'),
+                1000,
+                2000,
+              );
+              final routeRepo = RouteRepository(db, nowMs: () => 1000);
+              await routeRepo.upsertRoute(
+                wall.id,
+                photoId,
+                const TopoRoute(
+                  id: 1,
+                  number: 1,
+                  points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
+                ),
+              );
+            });
+
+            final photo = await container
+                .read(photoRepositoryProvider)
+                .loadOriginal(wall.id);
+            expect(photo, isNotNull);
+            expect(
+              photo!.width,
+              1000,
+              reason:
+                  'PhotoRef.width must be exactly what was decoded/'
+                  'persisted at attach time',
+            );
+            expect(photo.height, 2000);
+
+            await tester.pumpWidget(
+              UncontrolledProviderScope(
+                container: container,
+                child: MaterialApp(
+                  theme: MasiTheme.light,
+                  home: ArScreen(wallId: wall.id),
+                ),
+              ),
+            );
+            await tester.pumpAndSettle();
+
+            final stage = tester.widget<ArAlignmentStage>(
+              find.byType(ArAlignmentStage),
+            );
+            expect(
+              stage.refSize,
+              Size(photo.width.toDouble(), photo.height.toDouble()),
+              reason:
+                  "ArAlignmentStage's refSize -- the scale base every "
+                  "rockQuadPercent fraction is multiplied against (see "
+                  "ar_screen.dart's ArAlignmentStage.build) -- must be "
+                  "exactly PhotoRef's own oriented width/height, never a "
+                  'second re-decoded size that could disagree with what '
+                  'native used to compute rockQuadPercent in the first '
+                  'place',
+            );
+          },
+        );
+      },
+    );
+
+    testWidgets(
       'A1b: with no photo/routes at all, the screen still renders the '
       'iOS-only placeholder (platform gate wins regardless of data) — no '
       'crash',
@@ -531,6 +710,108 @@ void main() {
       final bottomRight = expected.warp(Offset(refSize.width, refSize.height));
       expect(bottomRight.dx, closeTo(350, 1e-6));
       expect(bottomRight.dy, closeTo(750, 1e-6));
+    });
+
+    group('B2: rockQuadPercent as the fromQuad SOURCE quad', () {
+      const corners = <Offset>[
+        Offset(50, 50),
+        Offset(350, 50),
+        Offset(350, 750),
+        Offset(50, 750),
+      ];
+      const rockQuadPercent = <Offset>[
+        Offset(0.1, 0.1),
+        Offset(0.9, 0.1),
+        Offset(0.9, 0.9),
+        Offset(0.1, 0.9),
+      ];
+
+      testWidgets(
+        'AUTO + tracking with arState.rockQuadPercent set: the SOURCE quad '
+        'is rockQuadPercent scaled by refSize, not the full-photo rect -- '
+        'the rendered homography differs from the full-photo-src case',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container
+              .read(arControllerProvider.notifier)
+              .setRockQuadPercent(rockQuadPercent);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 0.0,
+                  tracking: true,
+                  screenCorners: corners,
+                ),
+              );
+          await tester.pump();
+
+          final expectedRefCorners = [
+            for (final p in rockQuadPercent)
+              Offset(p.dx * refSize.width, p.dy * refSize.height),
+          ];
+          final expected = Homography.fromQuad(expectedRefCorners, corners);
+          final fullPhotoHomography = Homography.fromQuad([
+            Offset.zero,
+            Offset(refSize.width, 0),
+            Offset(refSize.width, refSize.height),
+            Offset(0, refSize.height),
+          ], corners);
+
+          expect(currentPainter(tester).homography, expected);
+          expect(
+            currentPainter(tester).homography,
+            isNot(fullPhotoHomography),
+            reason:
+                'a rockQuadPercent-scoped source quad must produce a '
+                'different homography from the full-photo-rect source quad',
+          );
+        },
+      );
+
+      testWidgets(
+        'AUTO + tracking with arState.rockQuadPercent null (the default): '
+        'the SOURCE quad is the unchanged full-photo rect -- identical to '
+        'current (pre-rockQuad) behavior',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          expect(
+            container.read(arControllerProvider).rockQuadPercent,
+            isNull,
+          );
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 0.0,
+                  tracking: true,
+                  screenCorners: corners,
+                ),
+              );
+          await tester.pump();
+
+          final expected = Homography.fromQuad([
+            Offset.zero,
+            Offset(refSize.width, 0),
+            Offset(refSize.width, refSize.height),
+            Offset(0, refSize.height),
+          ], corners);
+
+          expect(currentPainter(tester).homography, expected);
+        },
+      );
     });
 
     testWidgets(

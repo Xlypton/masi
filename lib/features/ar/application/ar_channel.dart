@@ -310,29 +310,64 @@ class ArChannel {
   /// Invokes the native `start` method with exactly:
   /// `{'referenceImagePath': ..., 'refWidth': ..., 'refHeight': ...,
   /// 'routesJson': ...}`.
-  Future<void> start({
+  ///
+  /// Native's result is `{"success": bool, "rockQuadPercent": [Double]?}`.
+  /// Returns the parsed `rockQuadPercent` as 4 [Offset]s (TL, TR, BR, BL;
+  /// each component a 0..1 fraction of the ORIENTED full reference photo) —
+  /// see [_parseRockQuadPercent] for the exact malformed-input fallback
+  /// rules. `null` covers both "native found no confident segmentation" (the
+  /// key is simply omitted — callers must treat this as "use the full-photo
+  /// rect", never as an error) AND any malformed result, including the noop
+  /// channel (which never calls native at all).
+  Future<List<Offset>?> start({
     required String referenceImagePath,
     required int refWidth,
     required int refHeight,
     required String routesJson,
   }) async {
-    if (_noop) return;
+    if (_noop) return null;
     debugPrint(
       'AR_DBG ar_channel.start invoking (refPath=$referenceImagePath '
       '${refWidth}x$refHeight)',
     );
     try {
-      await _method.invokeMethod<void>('start', <String, Object?>{
-        'referenceImagePath': referenceImagePath,
-        'refWidth': refWidth,
-        'refHeight': refHeight,
-        'routesJson': routesJson,
-      });
+      final result = await _method.invokeMethod<Object?>(
+        'start',
+        <String, Object?>{
+          'referenceImagePath': referenceImagePath,
+          'refWidth': refWidth,
+          'refHeight': refHeight,
+          'routesJson': routesJson,
+        },
+      );
       debugPrint('AR_DBG ar_channel.start returned OK');
+      return _parseRockQuadPercent(result);
     } catch (e) {
       debugPrint('AR_DBG ar_channel.start ERROR $e');
       rethrow;
     }
+  }
+
+  /// Parses the native `start` result's optional `rockQuadPercent` field
+  /// into 4 [Offset]s, or `null` — mirroring [ArAlignment._parseCorners]'s
+  /// "malformed input -> null, never throw" style. `null` for: [result]
+  /// isn't a `Map`; the `rockQuadPercent` key is absent; its value isn't a
+  /// `List`; that list's length isn't exactly 8; or any entry isn't `num`.
+  static List<Offset>? _parseRockQuadPercent(Object? result) {
+    if (result is! Map) return null;
+    final Object? raw = result['rockQuadPercent'];
+    if (raw is! List || raw.length != 8) return null;
+    final List<double> values = <double>[];
+    for (final Object? entry in raw) {
+      if (entry is! num) return null;
+      values.add(entry.toDouble());
+    }
+    return <Offset>[
+      Offset(values[0], values[1]),
+      Offset(values[2], values[3]),
+      Offset(values[4], values[5]),
+      Offset(values[6], values[7]),
+    ];
   }
 
   /// Stops native AR tracking. Invokes the native `stop` method (no args).

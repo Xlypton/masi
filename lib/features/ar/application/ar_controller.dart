@@ -31,17 +31,40 @@ final arAutoTrackingProvider = Provider<bool>(
 /// [ArAlignment] pushed from native (or null before the first update), and
 /// whether the AR session is currently active (started on native).
 class ArState {
-  const ArState({required this.mode, this.latest, required this.active});
+  const ArState({
+    required this.mode,
+    this.latest,
+    required this.active,
+    this.rockQuadPercent,
+  });
 
   final ArMode mode;
   final ArAlignment? latest;
   final bool active;
 
-  ArState copyWith({ArMode? mode, ArAlignment? latest, bool? active}) {
+  /// The native-reported rock/crop quad from the most recent `channel.start`
+  /// result (see `ar_channel.dart`'s `ArChannel.start` doc for the wire
+  /// contract): 4 fractional (0..1) corners of the ORIENTED full reference
+  /// photo, TL/TR/BR/BL. `null` means either no session has started yet, or
+  /// native found no confident segmentation — `ArAlignmentStage` treats both
+  /// the same way (fall back to the full-photo rect as the `fromQuad` source
+  /// quad). Set via [ArController.setRockQuadPercent]; reset to `null` on
+  /// every AR-screen re-entry/wall switch (see `ar_screen.dart`'s
+  /// `_resetArViewState`) so a prior session's crop can never leak into a
+  /// new session that returns none.
+  final List<Offset>? rockQuadPercent;
+
+  ArState copyWith({
+    ArMode? mode,
+    ArAlignment? latest,
+    bool? active,
+    List<Offset>? rockQuadPercent,
+  }) {
     return ArState(
       mode: mode ?? this.mode,
       latest: latest ?? this.latest,
       active: active ?? this.active,
+      rockQuadPercent: rockQuadPercent ?? this.rockQuadPercent,
     );
   }
 
@@ -51,15 +74,31 @@ class ArState {
     return other is ArState &&
         other.mode == mode &&
         other.latest == latest &&
-        other.active == active;
+        other.active == active &&
+        _quadEqual(other.rockQuadPercent, rockQuadPercent);
+  }
+
+  static bool _quadEqual(List<Offset>? a, List<Offset>? b) {
+    if (a == null || b == null) return a == b;
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   @override
-  int get hashCode => Object.hash(mode, latest, active);
+  int get hashCode => Object.hash(
+    mode,
+    latest,
+    active,
+    rockQuadPercent == null ? null : Object.hashAll(rockQuadPercent!),
+  );
 
   @override
   String toString() =>
-      'ArState(mode: $mode, latest: $latest, active: $active)';
+      'ArState(mode: $mode, latest: $latest, active: $active, '
+      'rockQuadPercent: $rockQuadPercent)';
 }
 
 /// Holds [ArState] and mediates mode changes/alignment updates for the AR
@@ -128,6 +167,27 @@ class ArController extends Notifier<ArState> {
   /// Marks whether the native AR session is currently active (started).
   void markActive(bool active) {
     state = state.copyWith(active: active);
+  }
+
+  /// Records the native-reported rock/crop quad from the most recent
+  /// `channel.start` result (see [ArState.rockQuadPercent]'s doc), or clears
+  /// it back to `null` (called by `ar_screen.dart`'s `_resetArViewState` on
+  /// every AR-screen re-entry/wall switch).
+  ///
+  /// Deliberately builds a fresh [ArState] directly rather than through
+  /// [ArState.copyWith]: copyWith's `newValue ?? this.field` pattern (the
+  /// same idiom every other nullable field on this class uses) can never
+  /// null out an already-set field, since passing `null` for [quad] just
+  /// falls through to the CURRENT value. This field specifically must be
+  /// resettable to `null` on demand, so it needs a real reset path rather
+  /// than that shared (and, for every other field, harmless) limitation.
+  void setRockQuadPercent(List<Offset>? quad) {
+    state = ArState(
+      mode: state.mode,
+      latest: state.latest,
+      active: state.active,
+      rockQuadPercent: quad,
+    );
   }
 
   /// Resets the corner-smoothing filter so the next [onAlignment] call is
