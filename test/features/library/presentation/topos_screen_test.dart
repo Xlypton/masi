@@ -4138,7 +4138,9 @@ void main() {
       testWidgets(
         'a nearby community topo (not already one of this device\'s own) '
         'appears in the merged list, is visually marked as shared, and '
-        'tapping it navigates to /community/topo/<wallId>',
+        'tapping it navigates to the read-only /walls/<wallId>?readonly=1 '
+        'topo canvas -- NOT /community/topo/<wallId> (that shared/social '
+        'view stays reserved for the Feed)',
         (tester) async {
           final db = AppDatabase(NativeDatabase.memory());
           addTearDown(db.close);
@@ -4167,6 +4169,12 @@ void main() {
           );
           addTearDown(container.dispose);
 
+          // Both destinations are wired (rather than just `/walls/:wallId`)
+          // so this test PROVES the push landed on the read-only canvas
+          // route specifically, not merely that SOME push happened -- if a
+          // future regression routed back to `/community/topo/:wallId`,
+          // `pushedPath` would capture THAT instead and the exact-string
+          // assertion below would fail.
           String? pushedPath;
           final router = GoRouter(
             initialLocation: '/',
@@ -4178,8 +4186,14 @@ void main() {
               GoRoute(
                 path: '/community/topo/:wallId',
                 builder: (context, state) {
-                  pushedPath =
-                      '/community/topo/${state.pathParameters['wallId']}';
+                  pushedPath = state.uri.toString();
+                  return const SizedBox();
+                },
+              ),
+              GoRoute(
+                path: '/walls/:wallId',
+                builder: (context, state) {
+                  pushedPath = state.uri.toString();
                   return const SizedBox();
                 },
               ),
@@ -4208,7 +4222,185 @@ void main() {
           await tester.tap(find.byKey(rowKey));
           await _drain(tester);
 
-          expect(pushedPath, '/community/topo/wall-community');
+          expect(pushedPath, '/walls/wall-community?readonly=1');
+        },
+      );
+
+      testWidgets(
+        'A4 regression: an OWN topo row still pushes the plain editable '
+        '/walls/<wallId> route (no readonly param, and never '
+        '/community/topo/<wallId>)',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              locationServiceProvider.overrideWithValue(
+                const _FakeLocationService((latitude: 0.0, longitude: 0.0)),
+              ),
+              toposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  TopoRef(
+                    wallId: 'wall-own',
+                    name: 'My Own Topo',
+                    thumbnailPath: null,
+                    routeCount: 1,
+                    createdAt: 1000,
+                    latitude: 0.01,
+                    longitude: 0.01,
+                  ),
+                ]),
+              ),
+              sharedToposProvider.overrideWith((ref) => Stream.value(const [])),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          String? pushedPath;
+          final router = GoRouter(
+            initialLocation: '/',
+            routes: [
+              GoRoute(
+                path: '/',
+                builder: (context, state) => const ToposScreen(),
+              ),
+              GoRoute(
+                path: '/community/topo/:wallId',
+                builder: (context, state) {
+                  pushedPath = state.uri.toString();
+                  return const SizedBox();
+                },
+              ),
+              GoRoute(
+                path: '/walls/:wallId',
+                builder: (context, state) {
+                  pushedPath = state.uri.toString();
+                  return const SizedBox();
+                },
+              ),
+            ],
+          );
+
+          await tester.pumpWidget(
+            UncontrolledProviderScope(
+              container: container,
+              child: MaterialApp.router(
+                theme: MasiTheme.light,
+                routerConfig: router,
+              ),
+            ),
+          );
+          await _drain(tester);
+
+          const rowKey = Key('topo-item-wall-own');
+          await tester.tap(find.byKey(rowKey));
+          await _drain(tester);
+
+          expect(pushedPath, '/walls/wall-own');
+        },
+      );
+
+      testWidgets(
+        'A6: each _ToposList item has a stable, unique Key per '
+        '(source, wallId) -- distinct between an own and a community entry '
+        'sharing the SAME wallId, and identical across a rebuild',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              locationServiceProvider.overrideWithValue(
+                const _FakeLocationService((latitude: 0.0, longitude: 0.0)),
+              ),
+              toposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  TopoRef(
+                    wallId: 'wall-own',
+                    name: 'My Own Topo',
+                    thumbnailPath: null,
+                    routeCount: 1,
+                    createdAt: 1000,
+                    latitude: 0.01,
+                    longitude: 0.01,
+                  ),
+                ]),
+              ),
+              sharedToposProvider.overrideWith(
+                (ref) => Stream.value(const [
+                  SharedTopo(
+                    wallId: 'wall-community',
+                    name: 'Community Boulder',
+                    routeCount: 2,
+                    likeCount: 0,
+                    commentCount: 0,
+                    latitude: 0.02,
+                    longitude: 0.02,
+                  ),
+                ]),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(_wrap(container, const ToposScreen()));
+          await _drain(tester);
+
+          final ownElement = tester.element(
+            find.byKey(const Key('topo-item-wall-own')),
+          );
+          final communityElement = tester.element(
+            find.byKey(const Key('topo-item-community-wall-community')),
+          );
+
+          // Walk up from each row's inner keyed widget to the
+          // `_ToposList`-assigned outer `ValueKey` (the nearest ancestor
+          // `Key` distinct from the row's own inner key) -- both rows'
+          // ancestor chain includes exactly one such widget: `_TopoRow`/
+          // `_CommunityProximityRow` itself, per `_ToposList.itemBuilder`.
+          Key? outerKeyOf(Element element) {
+            Key? found;
+            element.visitAncestorElements((ancestor) {
+              final key = ancestor.widget.key;
+              if (key is ValueKey<(String, String)>) {
+                found = key;
+                return false;
+              }
+              return true;
+            });
+            return found;
+          }
+
+          final ownKey = outerKeyOf(ownElement);
+          final communityKey = outerKeyOf(communityElement);
+
+          expect(ownKey, isNotNull);
+          expect(communityKey, isNotNull);
+          expect(
+            ownKey,
+            const ValueKey(('own', 'wall-own')),
+          );
+          expect(
+            communityKey,
+            const ValueKey(('community', 'wall-community')),
+          );
+          expect(
+            ownKey,
+            isNot(equals(communityKey)),
+            reason: 'own vs community entries must never collide',
+          );
+
+          // Rebuild (a fresh, equivalent frame) must reproduce the SAME
+          // key values -- proving stability across rebuilds, not just
+          // uniqueness within one.
+          await tester.pump();
+          final ownKeyAfterRebuild = outerKeyOf(
+            tester.element(find.byKey(const Key('topo-item-wall-own'))),
+          );
+          expect(ownKeyAfterRebuild, ownKey);
         },
       );
 

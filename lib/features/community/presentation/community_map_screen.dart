@@ -846,7 +846,11 @@ class _MapViewState extends ConsumerState<_MapView> {
                   key: Key('community-map-marker-${topo.wallId}'),
                   onTap: () {
                     FocusManager.instance.primaryFocus?.unfocus();
-                    context.push('/community/topo/${topo.wallId}');
+                    // Read-only topo canvas (wall photo + drawn routes), NOT
+                    // the social/likes-first CommunityTopoDetailScreen -- that
+                    // view stays reserved for the Feed (see the OWN marker
+                    // just below, which pushes the same route unadorned).
+                    context.push('/walls/${topo.wallId}?readonly=1');
                   },
                   // Community-feed topos are, by construction, always
                   // shared/public (see `CommunityRepository.watchSharedTopos`

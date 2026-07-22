@@ -165,10 +165,16 @@ class _CommunityTopoDetailScreenState
   }
 
   /// D2: tapping the collapsing header pushes the SAME [TopoCanvasScreen]
-  /// widget the app's own `/walls/:wallId` route hosts full-screen — but
-  /// pushed directly (rather than through that go_router path, which has
-  /// no `readOnly` variant) so this stays `readOnly: true`: a community
-  /// topo may belong to someone else, so it must never become editable.
+  /// widget the app's own `/walls/:wallId` route hosts full-screen (that
+  /// route now also accepts a `?readonly=1` query to render read-only) —
+  /// but pushed directly via [Navigator], rather than through that
+  /// go_router path, as a deliberate choice: routing through go_router
+  /// here would change this header tap's back-nav/URL semantics (this
+  /// screen's own address bar entry would be replaced by the canvas
+  /// route's), which isn't wanted for a push that's really just "expand
+  /// this same topo full-screen". `readOnly: true` is still hard-passed
+  /// regardless, since a community topo may belong to someone else and
+  /// must never become editable.
   void _openFullCanvas() {
     Navigator.of(context).push(
       MaterialPageRoute<void>(

@@ -243,11 +243,19 @@ final appRouter = GoRouter(
       ),
     ),
     // The wall-detail route hosts the real topo canvas, bound to the
-    // navigated wall (see TopoCanvasScreen.wallId).
+    // navigated wall (see TopoCanvasScreen.wallId). An optional `?readonly=1`
+    // query param (used by community/nearby entry points — see
+    // `topos_row.dart`'s `_CommunityProximityRow` and
+    // `community_map_screen.dart`'s community marker) renders the SAME
+    // canvas in `readOnly` mode instead of routing to the social/likes-first
+    // `CommunityTopoDetailScreen`; absent (or any non-`1` value) keeps the
+    // existing editable default so own-topo navigation is unaffected.
     GoRoute(
       path: '/walls/:wallId',
-      builder: (context, state) =>
-          TopoCanvasScreen(wallId: state.pathParameters['wallId']!),
+      builder: (context, state) => TopoCanvasScreen(
+        wallId: state.pathParameters['wallId']!,
+        readOnly: state.uri.queryParameters['readonly'] == '1',
+      ),
     ),
     // The AR alignment view for a wall — see ArScreen's class doc for the
     // native-camera-vs-overlay platform split.

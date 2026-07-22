@@ -154,21 +154,31 @@ Widget _wrap(
   );
 }
 
-/// Like [_wrap], but the `/community/topo/:wallId` destination renders a
-/// keyed placeholder carrying the tapped wallId in its text, so a test can
-/// confirm that tapping a map marker actually navigated (rather than just
-/// that the `GestureDetector`'s key/onTap exist).
+/// Like [_wrap], but the `/walls/:wallId` destination renders a keyed
+/// placeholder carrying the exact pushed location (path + query) in its
+/// text, so a test can confirm that tapping a community/shared map marker
+/// actually navigated to the read-only topo route (rather than just that
+/// the `GestureDetector`'s key/onTap exist). `/community/topo/:wallId`
+/// stays wired too, to a plain unkeyed placeholder -- a regression trap:
+/// if a marker's destination ever reverted to the old social/shared
+/// route, the keyed `community-topo-detail-placeholder` would never
+/// render and the test would fail instead of silently passing against the
+/// wrong screen.
 Widget _wrapWithDetailRoute(ProviderContainer container, Widget screen) {
   final router = GoRouter(
     initialLocation: '/',
     routes: [
       GoRoute(path: '/', builder: (context, state) => screen),
       GoRoute(
-        path: '/community/topo/:wallId',
+        path: '/walls/:wallId',
         builder: (context, state) => Text(
-          'detail-${state.pathParameters['wallId']}',
+          state.uri.toString(),
           key: const Key('community-topo-detail-placeholder'),
         ),
+      ),
+      GoRoute(
+        path: '/community/topo/:wallId',
+        builder: (context, state) => const SizedBox(),
       ),
     ],
   );
@@ -1933,7 +1943,8 @@ void main() {
     );
 
     testWidgets(
-      'tapping a logo marker still navigates to the topo detail route',
+      'tapping a community logo marker navigates to the read-only topo '
+      'view',
       (tester) async {
         final container = _makeContainer();
         final db = container.read(appDatabaseProvider);
@@ -1960,11 +1971,21 @@ void main() {
           await tester.pump(const Duration(milliseconds: 100));
         }
 
+        // wall-shared-1 is owned by `_otherOwnerId` (not this device), so
+        // it renders as a COMMUNITY marker -- which must push the
+        // read-only topo canvas (`/walls/:wallId?readonly=1`), never the
+        // social/shared `/community/topo/:wallId` detail screen (that
+        // route stays reserved for the Feed's own row taps). Asserting the
+        // exact pushed location string -- rather than merely that SOME
+        // detail screen rendered -- proves both halves at once.
         expect(
           find.byKey(const Key('community-topo-detail-placeholder')),
           findsOneWidget,
         );
-        expect(find.text('detail-wall-shared-1'), findsOneWidget);
+        expect(
+          find.text('/walls/wall-shared-1?readonly=1'),
+          findsOneWidget,
+        );
       },
     );
 

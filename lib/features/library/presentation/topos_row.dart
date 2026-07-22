@@ -42,6 +42,7 @@ class _ToposList extends StatelessWidget {
         final entry = entries[index];
         if (entry.source == ProximityTopoSource.own) {
           return _TopoRow(
+            key: ValueKey(('own', entry.wallId)),
             topo: entry.ownTopo!,
             distanceKm: entry.distanceKm,
             setLocationTileProvider: setLocationTileProvider,
@@ -49,7 +50,10 @@ class _ToposList extends StatelessWidget {
             setLocationLocationService: setLocationLocationService,
           );
         }
-        return _CommunityProximityRow(entry: entry);
+        return _CommunityProximityRow(
+          key: ValueKey(('community', entry.wallId)),
+          entry: entry,
+        );
       },
     );
   }
@@ -57,6 +61,7 @@ class _ToposList extends StatelessWidget {
 
 class _TopoRow extends ConsumerWidget {
   const _TopoRow({
+    super.key,
     required this.topo,
     this.distanceKm,
     this.setLocationTileProvider,
@@ -502,10 +507,12 @@ class _TopoRow extends ConsumerWidget {
 /// [_TopoRow] (same 52x52 thumbnail) but marked with a `_CommunitySharedBadge`
 /// instead of [_VisibilityBadge] (a community entry is never "mine" to
 /// publish/unpublish/rename/delete -- there is no menu at all), and taps
-/// straight into the read-only `/community/topo/<wallId>` detail rather than
-/// this device's own topo canvas.
+/// straight into the read-only topo canvas (`/walls/<wallId>?readonly=1` --
+/// NOT the social/likes-first `/community/topo/<wallId>` detail, which stays
+/// reserved for the Feed) so the wall photo + drawn routes render the same
+/// way an owner sees them, just non-editable.
 class _CommunityProximityRow extends StatelessWidget {
-  const _CommunityProximityRow({required this.entry});
+  const _CommunityProximityRow({super.key, required this.entry});
 
   final ProximityTopoEntry entry;
 
@@ -522,7 +529,7 @@ class _CommunityProximityRow extends StatelessWidget {
       borderRadius: BorderRadius.circular(MasiRadii.card),
       child: InkWell(
         borderRadius: BorderRadius.circular(MasiRadii.card),
-        onTap: () => context.push('/community/topo/$wallId'),
+        onTap: () => context.push('/walls/$wallId?readonly=1'),
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: MasiSpacing.md,

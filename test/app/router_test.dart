@@ -229,6 +229,39 @@ void main() {
 
       expect(find.byType(TopoCanvasScreen), findsOneWidget);
     });
+
+    testWidgets(
+      'A1: /walls/:wallId?readonly=1 builds TopoCanvasScreen with '
+      'readOnly true; /walls/:wallId (no param) keeps readOnly false',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        appRouter.go('/walls/nonexistent-wall-id');
+        await _drain(tester);
+
+        expect(find.byType(TopoCanvasScreen), findsOneWidget);
+        expect(
+          tester
+              .widget<TopoCanvasScreen>(find.byType(TopoCanvasScreen))
+              .readOnly,
+          isFalse,
+          reason: 'the plain route must keep its existing editable default',
+        );
+
+        appRouter.go('/walls/nonexistent-wall-id?readonly=1');
+        await _drain(tester);
+
+        expect(find.byType(TopoCanvasScreen), findsOneWidget);
+        final readOnlyScreen = tester.widget<TopoCanvasScreen>(
+          find.byType(TopoCanvasScreen),
+        );
+        expect(readOnlyScreen.readOnly, isTrue);
+        expect(readOnlyScreen.wallId, 'nonexistent-wall-id');
+      },
+    );
   });
 
   group(
