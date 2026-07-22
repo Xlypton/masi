@@ -94,7 +94,9 @@ CREATE TABLE IF NOT EXISTS public.photos (
   "height" INTEGER NOT NULL,
   "parentPhotoId" TEXT,
   "cropXpct" DOUBLE PRECISION,
-  "cropWidthPct" DOUBLE PRECISION
+  "cropWidthPct" DOUBLE PRECISION,
+  "sortOrder" INTEGER NOT NULL DEFAULT 0,
+  "isPrimary" BOOLEAN NOT NULL DEFAULT false
 );
 
 CREATE TABLE IF NOT EXISTS public.routes (
@@ -118,7 +120,10 @@ CREATE TABLE IF NOT EXISTS public.routes (
   "pointsJson" TEXT NOT NULL DEFAULT '[]',
   "symbolsJson" TEXT NOT NULL DEFAULT '[]',
   "sortOrder" INTEGER NOT NULL DEFAULT 0,
-  "visible" BOOLEAN NOT NULL DEFAULT true
+  "visible" BOOLEAN NOT NULL DEFAULT true,
+  "betaVideoUrl" TEXT,
+  "styleTagsJson" TEXT,
+  "stars" INTEGER
 );
 
 -- ---------- PRIVILEGES (RLS still restricts WHICH rows) ----------
