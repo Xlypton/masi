@@ -5,6 +5,14 @@ import 'dart:io';
 /// implementation exists) — see `ar_support.dart`'s facade doc.
 bool isArSupported() => Platform.isIOS;
 
+/// Whether this platform's AR implementation supports continuous
+/// (`ArMode.auto`) tracking — i.e. a real ARKit/ARCore session that
+/// re-solves the homography from tracked features every frame, as opposed
+/// to only a manual/static alignment. Native (iOS) has the real ARKit
+/// image-tracking session, so this is `true` wherever AR itself is
+/// supported.
+bool arSupportsAutoTracking() => Platform.isIOS;
+
 /// A cheap, synchronous existence check for a local file path — used to
 /// gate spawning the (real, background-isolate) ghost-outline extraction in
 /// `ArScreen._load` without ever awaiting a doomed `compute()` call for a

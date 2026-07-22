@@ -280,10 +280,28 @@ class ArAlignment {
 class ArChannel {
   ArChannel({MethodChannel? method, EventChannel? event})
     : _method = method ?? const MethodChannel('climbtopo/ar'),
-      _event = event ?? const EventChannel('climbtopo/ar/alignment');
+      _event = event ?? const EventChannel('climbtopo/ar/alignment'),
+      _noop = false;
+
+  /// A web-safe no-op [ArChannel]: every method resolves/completes
+  /// immediately (or returns its documented "nothing happened" default)
+  /// WITHOUT ever touching a [MethodChannel]/[EventChannel] — there is no
+  /// native `climbtopo/ar` handler on web, so invoking one there would throw
+  /// `MissingPluginException`. See `ar_channel_factory_web.dart`, which
+  /// wires this in for the web build via [ArChannel.isNoop].
+  ArChannel.noop()
+    : _method = const MethodChannel('climbtopo/ar'),
+      _event = const EventChannel('climbtopo/ar/alignment'),
+      _noop = true;
 
   final MethodChannel _method;
   final EventChannel _event;
+  final bool _noop;
+
+  /// Whether this is a no-op channel (see [ArChannel.noop]) that never
+  /// touches a real platform channel. Lets callers/tests distinguish a
+  /// web-safe stand-in from a real native-backed channel.
+  bool get isNoop => _noop;
 
   /// Starts native AR tracking/alignment against the reference photo at
   /// [referenceImagePath] (with pixel dimensions [refWidth]x[refHeight]),
@@ -298,6 +316,7 @@ class ArChannel {
     required int refHeight,
     required String routesJson,
   }) async {
+    if (_noop) return;
     debugPrint(
       'AR_DBG ar_channel.start invoking (refPath=$referenceImagePath '
       '${refWidth}x$refHeight)',
@@ -318,12 +337,14 @@ class ArChannel {
 
   /// Stops native AR tracking. Invokes the native `stop` method (no args).
   Future<void> stop() {
+    if (_noop) return Future<void>.value();
     return _method.invokeMethod<void>('stop');
   }
 
   /// Switches the native alignment mode. Invokes the native `setMode`
   /// method with `{'mode': mode.name}` (`'auto'` or `'manual'`).
   Future<void> setMode(ArMode mode) {
+    if (_noop) return Future<void>.value();
     return _method.invokeMethod<void>('setMode', <String, Object?>{
       'mode': mode.name,
     });
@@ -331,7 +352,10 @@ class ArChannel {
 
   /// Re-triggers native ARKit detection (clears the pinned world anchor so
   /// the user can redo a bad first lock). No args.
-  Future<void> rescan() => _method.invokeMethod<void>('rescan');
+  Future<void> rescan() {
+    if (_noop) return Future<void>.value();
+    return _method.invokeMethod<void>('rescan');
+  }
 
   /// Locks the manual alignment on the native side, handing it the 4 screen
   /// corners (TL, TR, BR, BL, in Flutter view/logical points) the manually
@@ -349,6 +373,7 @@ class ArChannel {
   /// rather than throwing.
   Future<bool> lockManual(List<Offset> corners) async {
     assert(corners.length == 4);
+    if (_noop) return false;
     if (corners.length != 4) return false;
     final flat = <double>[];
     for (final c in corners) {
@@ -364,13 +389,17 @@ class ArChannel {
 
   /// Unlocks a previously-locked manual alignment on the native side. No
   /// args.
-  Future<void> unlockManual() => _method.invokeMethod<void>('unlockManual');
+  Future<void> unlockManual() {
+    if (_noop) return Future<void>.value();
+    return _method.invokeMethod<void>('unlockManual');
+  }
 
   /// A broadcast stream of [ArAlignment] updates from the native side.
   ///
   /// Non-map events are guarded (mapped to the [ArAlignment.fromMap]
   /// default) rather than propagated as-is or thrown.
   Stream<ArAlignment> alignments() {
+    if (_noop) return const Stream<ArAlignment>.empty();
     return _event.receiveBroadcastStream().map((Object? event) {
       if (event is! Map) {
         return ArAlignment.fromMap(const <Object?, Object?>{});
