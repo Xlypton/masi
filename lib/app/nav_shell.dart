@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../features/account/application/pwa_install_providers.dart';
 import '../features/topo/presentation/canvas_chrome.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'install_banner.dart';
@@ -40,7 +42,7 @@ import 'theme.dart';
 /// uses `bottom: false` so that measured value reaches its scroll view
 /// unconsumed, exactly like `CommunityMapScreen` already did for the Map
 /// branch pre-#51.
-class NavShell extends StatelessWidget {
+class NavShell extends ConsumerWidget {
   const NavShell({super.key, required this.navigationShell});
 
   /// Drives which branch's content is shown (`navigationShell.currentIndex`)
@@ -49,7 +51,13 @@ class NavShell extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Installed-standalone-PWA-only (#58 cluster): iOS reports
+    // safe-area-inset-bottom = 0 in that mode (apple-mobile-web-app-status-bar-style
+    // is 'default'), so the bottom bar's SafeArea below adds nothing and the
+    // pill sits over the home indicator. Everywhere else (in-browser Safari,
+    // native iOS/Android, tests) this stays false and behavior is unchanged.
+    final isStandalone = ref.watch(pwaInstallStatusProvider).isStandalone;
     return Scaffold(
       // The dismissible "Add to Home Screen" banner (#59) sits ABOVE the
       // branch content, never covering the floating bottom bar. It collapses
@@ -66,6 +74,10 @@ class NavShell extends StatelessWidget {
       // class's doc.
       extendBody: true,
       bottomNavigationBar: SafeArea(
+        // Standalone-PWA-only floor: `minimum` takes max(deviceInset, this)
+        // per edge, so a real (non-zero) device inset still wins and nothing
+        // double-counts — this only fills the gap when iOS reports zero.
+        minimum: EdgeInsets.only(bottom: isStandalone ? MasiSpacing.xxl : 0),
         child: Padding(
           padding: const EdgeInsets.fromLTRB(
             MasiSpacing.lg,
