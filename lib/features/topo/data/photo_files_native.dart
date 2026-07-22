@@ -301,6 +301,49 @@ class PhotoFiles {
     }
   }
 
+  /// Best-effort delete of the original photo file stored at [stored] (a
+  /// `Photos.localPath` value, resolved via [resolvePhotoPathSync] — the
+  /// SAME cache-backed algorithm [resolvePhotoPath] uses, just without
+  /// awaiting it) AND its thumbnail (`thumbs/<id>.jpg`, via [thumbKeyFor]) —
+  /// the on-disk counterpart to a DB-side tombstone
+  /// (`PhotoRepository.deleteOriginalPhoto`): once a photo row is
+  /// soft-deleted there is no reason to keep its bytes around, locally OR
+  /// in cloud Storage (see `SyncService._uploadOwnPhotos`'s
+  /// tombstone-skip-and-remove). NEVER throws, mirroring this class's
+  /// established defensive style — deleting an already-missing file (or a
+  /// thumbnail that was never generated) is a silent no-op, not an error.
+  /// The original and thumbnail deletes are independent try/catch blocks so
+  /// a failure on one never skips the other.
+  ///
+  /// Deliberately never awaits [_resolveDocsPath]/`_docsDir()` (a
+  /// `path_provider` platform channel call): this is invoked as best-effort
+  /// background cleanup from the delete tap-handler
+  /// (`TopoCanvasScreen._handleDeletePhoto`) and must never hang a caller —
+  /// under `flutter_test`, awaiting that channel with no mock handler wedges
+  /// forever under a plain `pump()`. Instead this resolves off the already-
+  /// memoized [_cachedDocsPath] (warmed via [warmDocsPath] at app startup,
+  /// see `main.dart`). If it hasn't been warmed yet (e.g. a plain unit test
+  /// with no explicit [warmDocsPath] call), there is nothing safely
+  /// resolvable to delete yet, so this no-ops gracefully rather than
+  /// attempting a delete against an unresolved path.
+  Future<void> deletePhotoBytes(String stored) async {
+    final docsPath = _cachedDocsPath;
+    if (docsPath == null) return;
+    try {
+      final resolution = resolvePhotoPathSync(stored);
+      final file = File(resolution.path);
+      if (await file.exists()) await file.delete();
+    } catch (_) {
+      // Best-effort — never throws.
+    }
+    try {
+      final thumbFile = File(p.join(docsPath, thumbKeyFor(stored)));
+      if (await thumbFile.exists()) await thumbFile.delete();
+    } catch (_) {
+      // Best-effort — never throws.
+    }
+  }
+
   /// Resolves and memoizes the app-documents directory path, so a later
   /// synchronous [resolvePhotoPathSync] can join relative photo paths
   /// without awaiting. One-shot: concurrent/repeat calls share a single

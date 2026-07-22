@@ -44,6 +44,10 @@ class PhotoFiles {
         'No PhotoFiles backend available on this platform.',
       );
 
+  Future<void> deletePhotoBytes(String stored) => throw UnsupportedError(
+    'No PhotoFiles backend available on this platform.',
+  );
+
   PhotoPathResolution resolvePhotoPathSync(String stored) =>
       throw UnsupportedError(
         'No PhotoFiles backend available on this platform.',

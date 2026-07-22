@@ -225,8 +225,20 @@ class PhotoRepository {
   /// [photoId] was the wall's primary and other live originals remain on
   /// the same wall, promotes the newest remaining one (`createdAt` DESC) to
   /// primary, preserving the single-primary invariant. Runs in one
-  /// transaction. No-op if [photoId] doesn't resolve to a live photo.
-  Future<void> deleteOriginalPhoto(String photoId) async {
+  /// transaction. No-op (returns an empty list) if [photoId] doesn't
+  /// resolve to a live photo.
+  ///
+  /// Returns the `localPath` of every photo row just tombstoned — the
+  /// canonical [photoId] photo itself, plus every cascaded child
+  /// (`parentPhotoId == photoId`) row — so the CALLER can purge the
+  /// matching on-disk/IndexedDB bytes (via `PhotoFiles.deletePhotoBytes`)
+  /// once this DB write has committed. Deliberately NOT done inside this
+  /// method: this repository's write path stays free of any
+  /// filesystem/IndexedDB I/O (only [_rowToRef]'s READ-side path
+  /// resolution touches [PhotoFiles]), and returning the paths keeps the DB
+  /// transaction itself free of best-effort byte-store calls.
+  Future<List<String>> deleteOriginalPhoto(String photoId) async {
+    var storedPaths = const <String>[];
     await _db.transaction(() async {
       final photo = await (_db.select(_db.photos)
             ..where((t) => t.id.equals(photoId) & t.deletedAt.isNull()))
@@ -234,6 +246,19 @@ class PhotoRepository {
       if (photo == null) return;
 
       final now = nowMs();
+
+      // Captured BEFORE the cascade UPDATE below flips their deletedAt —
+      // this WHERE clause matches the exact same still-live set that
+      // update is about to tombstone.
+      final childPhotos = await (_db.select(_db.photos)
+            ..where(
+              (t) => t.parentPhotoId.equals(photoId) & t.deletedAt.isNull(),
+            ))
+          .get();
+      storedPaths = [
+        photo.localPath,
+        for (final child in childPhotos) child.localPath,
+      ];
 
       await (_db.update(
         _db.photos,
@@ -295,6 +320,7 @@ class PhotoRepository {
         ),
       );
     });
+    return storedPaths;
   }
 
   /// Writes `sortOrder` for every id in [orderedPhotoIds] to its (0-based)

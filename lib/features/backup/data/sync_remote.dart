@@ -184,6 +184,27 @@ abstract class SyncRemote {
   /// folder — used to skip re-uploading a shared photo already there.
   Future<Set<String>> listSharedPhotoObjectPaths();
 
+  /// Removes the object at the caller's OWN private object path
+  /// (`<uid>/<photoId><ext>`) for a just-tombstoned photo — the cloud-side
+  /// counterpart to `PhotoRepository.deleteOriginalPhoto`'s local
+  /// soft-delete. Best-effort/idempotent: removing an object that was never
+  /// uploaded (or was already removed by an earlier push) must NOT throw —
+  /// [SyncService._uploadOwnPhotos] calls this unconditionally for every
+  /// tombstoned photo, regardless of whether a copy actually exists remotely.
+  Future<void> removePhoto({
+    required String uid,
+    required String photoId,
+    required String ext,
+  });
+
+  /// Removes the object at the SHARED object path (`shared/<photoId><ext>`,
+  /// see [sharedPhotoPath]) for a just-tombstoned photo. Best-effort/
+  /// idempotent, mirroring [removePhoto].
+  Future<void> removeSharedPhoto({
+    required String photoId,
+    required String ext,
+  });
+
   /// Every cloud `profiles` row whose `id` (== owning uid) is in [uids] —
   /// used by [SyncService.pullOwnAndShared] to resolve display names for
   /// every OTHER user referenced by a just-pulled shared row (plus the
@@ -469,6 +490,31 @@ class SupabaseSyncRemote implements SyncRemote {
   Future<Set<String>> listSharedPhotoObjectPaths() async {
     final files = await _client.storage.from(_bucket).list(path: 'shared');
     return {for (final file in files) 'shared/${file.name}'};
+  }
+
+  @override
+  Future<void> removePhoto({
+    required String uid,
+    required String photoId,
+    required String ext,
+  }) async {
+    try {
+      await _client.storage.from(_bucket).remove(['$uid/$photoId$ext']);
+    } on StorageException {
+      // Best-effort/idempotent — an absent object must not fail the push.
+    }
+  }
+
+  @override
+  Future<void> removeSharedPhoto({
+    required String photoId,
+    required String ext,
+  }) async {
+    try {
+      await _client.storage.from(_bucket).remove([sharedPhotoPath(photoId, ext)]);
+    } on StorageException {
+      // Best-effort/idempotent.
+    }
   }
 
   @override

@@ -29,6 +29,8 @@ class FakeSyncRemote implements SyncRemote {
   final Map<String, List<int>> sharedStorage = {};
   final List<String> uploadedPrivatePaths = [];
   final List<String> uploadedSharedPaths = [];
+  final List<String> removedPrivatePaths = [];
+  final List<String> removedSharedPaths = [];
 
   @override
   Future<void> upsertOwnRows(
@@ -214,6 +216,27 @@ class FakeSyncRemote implements SyncRemote {
 
   @override
   Future<Set<String>> listSharedPhotoObjectPaths() async => sharedStorage.keys.toSet();
+
+  @override
+  Future<void> removePhoto({
+    required String uid,
+    required String photoId,
+    required String ext,
+  }) async {
+    final path = '$uid/$photoId$ext';
+    privateStorage.remove(path);
+    removedPrivatePaths.add(path);
+  }
+
+  @override
+  Future<void> removeSharedPhoto({
+    required String photoId,
+    required String ext,
+  }) async {
+    final path = sharedPhotoPath(photoId, ext);
+    sharedStorage.remove(path);
+    removedSharedPaths.add(path);
+  }
 
   @override
   Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async {
@@ -591,6 +614,129 @@ void main() {
       expect(own['areas'], isEmpty);
       expect(remote.privateStorage, isEmpty);
     });
+
+    test(
+      'a tombstoned (deletedAt set) photo is skipped by the uploader and '
+      'its already-uploaded private+shared cloud bytes are removed '
+      '(E-A2/E-A3)',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          visibility: 'shared',
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        // First push uploads both the private AND shared copies (wall-1 is
+        // shared).
+        final first = await c.service.pushOwn();
+        expect(first.photosUploaded, 1);
+        expect(remote.privateStorage.containsKey('$_uidU1/photo-1.jpg'), isTrue);
+        expect(remote.sharedStorage.containsKey('shared/photo-1.jpg'), isTrue);
+
+        // Tombstone the photo row locally, mirroring what
+        // PhotoRepository.deleteOriginalPhoto does (deletedAt/updatedAt/
+        // dirty bumped, row otherwise unchanged).
+        await (c.db.update(c.db.photos)..where((t) => t.id.equals('photo-1'))).write(
+          const PhotosCompanion(
+            deletedAt: Value(9999),
+            updatedAt: Value(9999),
+            dirty: Value(true),
+          ),
+        );
+
+        final second = await c.service.pushOwn();
+
+        expect(
+          second.photosUploaded,
+          0,
+          reason: 'a tombstoned photo must never be (re-)uploaded (E-A2)',
+        );
+        expect(
+          remote.privateStorage.containsKey('$_uidU1/photo-1.jpg'),
+          isFalse,
+          reason: 'the private cloud copy must be removed once tombstoned',
+        );
+        expect(
+          remote.sharedStorage.containsKey('shared/photo-1.jpg'),
+          isFalse,
+          reason: 'the shared cloud copy must be removed once tombstoned',
+        );
+        expect(remote.removedPrivatePaths, ['$_uidU1/photo-1.jpg']);
+        expect(remote.removedSharedPaths, ['shared/photo-1.jpg']);
+        expect(
+          remote.uploadedPrivatePaths,
+          ['$_uidU1/photo-1.jpg'],
+          reason: 'no additional upload call should have happened on the '
+              'second (tombstoned) push',
+        );
+        expect(remote.uploadedSharedPaths, ['shared/photo-1.jpg']);
+
+        // Idempotent: pushing again (already removed remotely) must not
+        // throw, must not re-upload, and removePhoto/removeSharedPhoto are
+        // simply called again against an already-absent object (E-A3).
+        final third = await c.service.pushOwn();
+        expect(third.photosUploaded, 0);
+        expect(
+          remote.removedPrivatePaths,
+          ['$_uidU1/photo-1.jpg', '$_uidU1/photo-1.jpg'],
+        );
+        expect(
+          remote.removedSharedPaths,
+          ['shared/photo-1.jpg', 'shared/photo-1.jpg'],
+        );
+      },
+    );
+
+    test(
+      'a photo tombstoned before ever being uploaded is skipped by the '
+      'uploader without throwing — idempotent removal of an object that '
+      'was never present remotely (E-A3)',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+        // Tombstone it BEFORE any push has ever uploaded it.
+        await (c.db.update(c.db.photos)..where((t) => t.id.equals('photo-1'))).write(
+          const PhotosCompanion(
+            deletedAt: Value(9999),
+            updatedAt: Value(9999),
+            dirty: Value(true),
+          ),
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.didPush, isTrue);
+        expect(result.photosUploaded, 0);
+        expect(remote.uploadedPrivatePaths, isEmpty);
+        expect(remote.uploadedSharedPaths, isEmpty);
+        expect(remote.removedPrivatePaths, ['$_uidU1/photo-1.jpg']);
+        expect(remote.privateStorage, isEmpty);
+      },
+    );
   });
 
   group('pullOwnAndShared: own-row round trip', () {

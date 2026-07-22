@@ -190,6 +190,73 @@ void main() {
     });
   });
 
+  group('deletePhotoBytes', () {
+    // deletePhotoBytes resolves off the MEMOIZED docs path
+    // (resolvePhotoPathSync) and never awaits path_provider directly, so it
+    // can't hang the delete tap-handler's critical path (see its doc). Warm
+    // the cache up front so these two tests see full resolution/deletion
+    // rather than the cold-cache no-op — the cold-cache behavior itself is
+    // covered by the 'idempotent'/'no path_provider' tests below, which
+    // deliberately leave the cache cold.
+    test(
+      'deletes both the original file (resolved via resolvePhotoPathSync) '
+      'AND its thumbnail (thumbs/<id>.jpg, via thumbKeyFor) for a relative '
+      'stored path (E-A4), once the docs path is warmed',
+      () async {
+        await photoFiles.warmDocsPath();
+        final photoFile = File(p.join(photosDirPath(), 'abc123.jpg'))
+          ..createSync(recursive: true);
+        photoFile.writeAsBytesSync(List<int>.filled(8, 1));
+        final thumbFile = File(p.join(docsDir.path, 'thumbs', 'abc123.jpg'))
+          ..createSync(recursive: true);
+        thumbFile.writeAsBytesSync(List<int>.filled(8, 2));
+
+        await photoFiles.deletePhotoBytes('photos/abc123.jpg');
+
+        expect(photoFile.existsSync(), isFalse);
+        expect(thumbFile.existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'deletes only the original when no thumbnail was ever generated for '
+      'that id, without throwing, once the docs path is warmed',
+      () async {
+        await photoFiles.warmDocsPath();
+        final photoFile = File(p.join(photosDirPath(), 'noThumb.jpg'))
+          ..createSync(recursive: true);
+        photoFile.writeAsBytesSync(List<int>.filled(4, 3));
+
+        await photoFiles.deletePhotoBytes('photos/noThumb.jpg');
+
+        expect(photoFile.existsSync(), isFalse);
+      },
+    );
+
+    test(
+      'is idempotent: deleting bytes for a stored path with no file on '
+      'disk and no thumbnail does not throw',
+      () async {
+        await photoFiles.deletePhotoBytes('photos/never-existed.jpg');
+        // No throw is the assertion.
+      },
+    );
+
+    test(
+      'when the docs path is not warmed (no path_provider / never called), '
+      'the call no-ops gracefully without throwing, mirroring the class\'s '
+      'defensive style',
+      () async {
+        final throwingDocsDir = PhotoFiles(
+          docsDir: () async => throw StateError('no path_provider here'),
+        );
+
+        await throwingDocsDir.deletePhotoBytes('/tmp/whatever.jpg');
+        // No throw is the assertion.
+      },
+    );
+  });
+
   group('resolvePhotoPath', () {
     // resolvePhotoPath resolves off PhotoFiles' MEMOIZED docs path and never
     // awaits path_provider on its hot path (so it can't hang a widget pump —

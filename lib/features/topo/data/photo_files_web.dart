@@ -74,6 +74,24 @@ class PhotoFiles {
   Future<PhotoPathResolution> resolvePhotoPath(String stored) async =>
       PhotoPathResolution(path: stored);
 
+  /// Best-effort delete of the bytes stored under the logical key [stored]
+  /// AND its thumbnail (`thumbs/<id>.jpg`, via [thumbKeyFor]) — the
+  /// IndexedDB counterpart to a DB-side tombstone
+  /// (`PhotoRepository.deleteOriginalPhoto`). [PhotoByteStore.delete] is
+  /// idempotent for an absent key, but the surrounding IndexedDB open/txn
+  /// can still reject (blocked upgrade, private-browsing storage limits, a
+  /// closed connection). Since the caller fires this unawaited, swallow any
+  /// failure here so a byte-cleanup hiccup never becomes an unhandled async
+  /// error — worst case is orphaned bytes, never a crash.
+  Future<void> deletePhotoBytes(String stored) async {
+    try {
+      await _store.delete(stored);
+    } catch (_) {}
+    try {
+      await _store.delete(thumbKeyFor(stored));
+    } catch (_) {}
+  }
+
   /// Synchronous counterpart to [resolvePhotoPath] — identical passthrough,
   /// since resolution here never needs to await anything.
   PhotoPathResolution resolvePhotoPathSync(String stored) =>

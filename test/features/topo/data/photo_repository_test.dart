@@ -344,7 +344,8 @@ void main() {
 
     test(
       'deleteOriginalPhoto soft-deletes the photo AND cascades to its '
-      'routes and child photo rows',
+      'routes and child photo rows, returning the canonical + child stored '
+      'paths for the caller to purge (E-A1)',
       () async {
         final route = RouteRepository(db, nowMs: () => 1000);
         await route.upsertRoute(
@@ -353,7 +354,10 @@ void main() {
           TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
         );
         // A child `Photos` row (parentPhotoId set) — deleteOriginalPhoto's
-        // cascade covers any child photo, regardless of what created it.
+        // cascade covers any child photo, regardless of what created it. A
+        // DISTINCT localPath from the parent's so the returned stored-paths
+        // list can be asserted precisely below.
+        const childLocalPath = '/tmp/child.jpg';
         await db
             .into(db.photos)
             .insert(
@@ -362,7 +366,7 @@ void main() {
                 createdAt: 1000,
                 updatedAt: 1000,
                 wallId: wallId,
-                localPath: originalLocalPath,
+                localPath: childLocalPath,
                 kind: 'original',
                 width: originalWidth,
                 height: originalHeight,
@@ -370,7 +374,14 @@ void main() {
               ),
             );
 
-        await repo.deleteOriginalPhoto(originalPhotoId);
+        final storedPaths = await repo.deleteOriginalPhoto(originalPhotoId);
+
+        expect(
+          storedPaths,
+          unorderedEquals(<String>[originalLocalPath, childLocalPath]),
+          reason: 'the caller purges bytes for the canonical photo AND '
+              'every cascaded child photo (E-A1)',
+        );
 
         final photoRow = await (db.select(
           db.photos,
@@ -392,6 +403,16 @@ void main() {
     );
 
     test(
+      'deleteOriginalPhoto returns an empty list (and is a no-op) when '
+      'photoId does not resolve to a live photo',
+      () async {
+        final storedPaths = await repo.deleteOriginalPhoto('no-such-photo');
+
+        expect(storedPaths, isEmpty);
+      },
+    );
+
+    test(
       'deleteOriginalPhoto promotes the newest remaining original to '
       'primary when the deleted photo was primary',
       () async {
@@ -403,7 +424,8 @@ void main() {
         await insertOriginal('photo-2', createdAt: 2000);
         await insertOriginal('photo-3', createdAt: 3000);
 
-        await repo.deleteOriginalPhoto(originalPhotoId);
+        final storedPaths = await repo.deleteOriginalPhoto(originalPhotoId);
+        expect(storedPaths, [originalLocalPath]);
 
         final remaining = await (db.select(db.photos)
               ..where(
@@ -430,7 +452,8 @@ void main() {
       () async {
         await insertOriginal('photo-2', createdAt: 2000, isPrimary: true);
 
-        await repo.deleteOriginalPhoto(originalPhotoId);
+        final storedPaths = await repo.deleteOriginalPhoto(originalPhotoId);
+        expect(storedPaths, [originalLocalPath]);
 
         final remaining = await (db.select(db.photos)
               ..where(

@@ -120,6 +120,19 @@ class _UnavailableSyncRemote implements SyncRemote {
   Future<Set<String>> listSharedPhotoObjectPaths() => _unavailable();
 
   @override
+  Future<void> removePhoto({
+    required String uid,
+    required String photoId,
+    required String ext,
+  }) => _unavailable();
+
+  @override
+  Future<void> removeSharedPhoto({
+    required String photoId,
+    required String ext,
+  }) => _unavailable();
+
+  @override
   Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) =>
       _unavailable();
 }

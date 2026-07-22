@@ -261,6 +261,16 @@ class SyncService {
   /// photo whose wall (per [wallVisibility], keyed by wall id) is
   /// `'shared'` is ALSO uploaded to the shared object path, in addition to
   /// its always-uploaded private copy.
+  ///
+  /// A TOMBSTONED photo (`deletedAt` set — see
+  /// `PhotoRepository.deleteOriginalPhoto`) is never (re-)uploaded here:
+  /// instead both its private and shared cloud copies are REMOVED (via
+  /// [SyncRemote.removePhoto]/[SyncRemote.removeSharedPhoto]), unconditionally
+  /// and regardless of whether either copy was ever actually uploaded —
+  /// both calls are best-effort/idempotent on an absent object. Without
+  /// this, a deleted photo's bytes would linger in Storage forever, and
+  /// worse, a naive re-upload of the row's still-referenced `localPath`
+  /// would resurrect bytes that local storage may have already purged.
   Future<int> _uploadOwnPhotos(
     String uid,
     List<db.Photo> photos,
@@ -280,6 +290,13 @@ class SyncService {
       }
 
       final ext = p.extension(photo.localPath);
+
+      if (photo.deletedAt != null) {
+        await _remote.removePhoto(uid: uid, photoId: canonicalId, ext: ext);
+        await _remote.removeSharedPhoto(photoId: canonicalId, ext: ext);
+        continue;
+      }
+
       final needsPrivate = !alreadyPrivate.contains('$uid/$canonicalId$ext');
       final needsShared =
           wallVisibility[photo.wallId] == 'shared' &&

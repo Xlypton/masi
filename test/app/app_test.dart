@@ -85,6 +85,19 @@ class _CountingSyncRemote implements SyncRemote {
 
   @override
   Future<Set<String>> listSharedPhotoObjectPaths() async => {};
+
+  @override
+  Future<void> removePhoto({
+    required String uid,
+    required String photoId,
+    required String ext,
+  }) async {}
+
+  @override
+  Future<void> removeSharedPhoto({
+    required String photoId,
+    required String ext,
+  }) async {}
 }
 
 /// Minimal [AuthRepository] test double standing in for the auth session

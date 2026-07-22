@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
@@ -20,7 +21,6 @@ import 'package:climbtopo/features/topo/data/image_dimensions.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
 import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
-import 'package:climbtopo/features/topo/presentation/photo_image.dart';
 import 'package:climbtopo/features/topo/presentation/photo_strip.dart';
 import 'package:climbtopo/features/topo/presentation/photo_source_sheet.dart';
 import 'package:climbtopo/features/topo/presentation/route_legend.dart';
@@ -118,15 +118,15 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
 
   /// TEST-ONLY seam: when non-null, [_TopoCanvasScreenState.build] uses this
   /// as the resolved natural image size for whatever photo path ends up
-  /// selected, instead of decoding it via [_resolveImageSize]'s real
-  /// `FileImage(...).resolve(...)` — see the "Reaching the topo canvas in
-  /// tests" note in the project CLAUDE.md for why that real decode can't be
-  /// driven from a widget test (it hangs under fake-async).
+  /// selected, instead of deriving it from the selected photo's persisted
+  /// [PhotoRef.width]/[PhotoRef.height] (see [build]'s own doc for why a
+  /// real codec decode is never driven here — it hangs under fake-async in a
+  /// widget test) — see the "Reaching the topo canvas in tests" note in the
+  /// project CLAUDE.md.
   ///
   /// Always null in production (the default), so this changes no production
   /// behavior: [build] only reads it, never sets it, and every other
-  /// production path (the FileImage decode, error handling, reframing) is
-  /// untouched.
+  /// production path (the stored-size lookup, reframing) is untouched.
   @visibleForTesting
   final Size? debugInitialImageSize;
 
@@ -180,22 +180,22 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// the whole point).
   final GlobalKey _canvasKey = GlobalKey();
 
-  /// The decoded natural size of the currently selected image, resolved
-  /// asynchronously by [_resolveImageSize]. Null while unknown/loading.
+  /// The natural size of the currently selected image, derived directly
+  /// from its persisted [PhotoRef.width]/[PhotoRef.height] (see [build] —
+  /// no codec decode is ever run to learn this). Null while the matching
+  /// [PhotoRef] hasn't shown up in [wallOriginalsProvider] yet (e.g. a
+  /// freshly-picked photo whose `attachPhotoToWall` write is still in
+  /// flight), during which [_buildCanvasArea] shows a brief loading spinner.
   Size? _imageSize;
 
-  /// The image path [_imageSize] was (or is being) resolved for, so that a
-  /// newly-selected image triggers exactly one re-resolve.
+  /// The image path [_imageSize] was last successfully derived for, so a
+  /// rebuild that doesn't change the selected photo (and already found its
+  /// stored size) doesn't needlessly re-scan [wallOriginalsProvider]'s list.
+  /// Deliberately left NOT-equal-to the current path (see [build]) whenever
+  /// the matching [PhotoRef] isn't resolvable yet, so the next rebuild
+  /// (which the live [wallOriginalsProvider] watch triggers once the row
+  /// lands) retries instead of getting stuck with a stale null forever.
   String? _resolvedForPath;
-
-  /// Set when the current image failed to decode (e.g. a corrupt or
-  /// unreadable file), so [_buildCanvasArea] can show a recoverable error
-  /// state instead of leaving [CircularProgressIndicator] spinning forever
-  /// (see [_resolveImageSize]'s `onError`).
-  bool _imageLoadError = false;
-
-  ImageStream? _imageStream;
-  ImageStreamListener? _imageStreamListener;
 
   /// The wallId [_loadInitialPhotoForWall] has already run (or is running)
   /// for, so a rebuild never re-triggers the initial load for the same wall.
@@ -203,23 +203,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// given route/widget instance (a new wallId means a new route, hence a
   /// new widget), so this is set once in [initState] and never changes.
   String? _loadedWallId;
-
-  /// The image path most recently handed to [ImagePicker] via [_pickImage],
-  /// awaiting its natural size before it can be attached to
-  /// [TopoCanvasScreen.wallId] via [_attachPhotoAndLoad]. Null the rest of
-  /// the time — including while restoring an already-attached photo via
-  /// [_loadInitialPhotoForWall], which never needs to attach anything — so
-  /// [_resolveImageSize]'s decode-success callback only calls
-  /// [_attachPhotoAndLoad] for a freshly-PICKED photo, never for one being
-  /// restored from persistence.
-  String? _pendingAttachPath;
-
-  /// The [XFile] most recently handed to [ImagePicker] via [_pickImage],
-  /// mirroring [_pendingAttachPath] (same lifetime/purpose) but retaining
-  /// the actual picked file object so [_resolveImageSize]'s decode-success
-  /// callback can hand it to [decodeImageSize] rather than only ever having
-  /// the bare path string.
-  XFile? _pendingAttachXFile;
 
   @override
   void initState() {
@@ -316,11 +299,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
   @override
   void dispose() {
-    final stream = _imageStream;
-    final listener = _imageStreamListener;
-    if (stream != null && listener != null) {
-      stream.removeListener(listener);
-    }
     _transformationController.dispose();
     super.dispose();
   }
@@ -520,22 +498,25 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
   /// Lets the user choose Camera or Library (via [showPhotoSourceSheet]'s
   /// iOS action sheet — see DESIGN.md "Photo source") before picking an
-  /// image with [pickPhotoFrom], preserving the exact same
-  /// attach-and-load flow ([_pendingAttachPath] + [_attachPhotoAndLoad] via
-  /// [_resolveImageSize]'s decode callback) that a gallery-only pick used
-  /// to feed directly. Replaces the previous `ImagePicker().pickImage(source:
-  /// ImageSource.gallery)`-only call so the canvas's "replace/add photo"
-  /// FAB offers the same Camera/Library choice as the Topos-home "New
-  /// topo" flow.
+  /// image with [pickPhotoFrom], then kicks off the attach-and-load flow
+  /// ([_attachPickedPhoto] -> [_attachPhotoAndLoad]) directly — there is no
+  /// decode callback to re-home this onto any more (see [build]'s doc for
+  /// why [_imageSize] is now derived from the persisted [PhotoRef] instead
+  /// of a `FileImage` decode): selecting the picked path first (so the
+  /// screen immediately shows a loading spinner for it via [build]'s
+  /// `ref.listen`/`beginPhotoSwitch`), then firing the attach
+  /// fire-and-forget, mirrors the previous sequencing exactly. Replaces the
+  /// previous `ImagePicker().pickImage(source: ImageSource.gallery)`-only
+  /// call so the canvas's "replace/add photo" FAB offers the same
+  /// Camera/Library choice as the Topos-home "New topo" flow.
   Future<void> _pickImage() async {
     if (widget.readOnly) return;
     final source = await showPhotoSourceSheet(context);
     if (source == null || !mounted) return;
     final xfile = await pickPhotoFrom(source);
     if (xfile == null || !mounted) return;
-    _pendingAttachPath = xfile.path;
-    _pendingAttachXFile = xfile;
     ref.read(selectedImageProvider.notifier).select(xfile.path);
+    unawaited(_attachPickedPhoto(xfile));
   }
 
   /// Restores [wallId]'s already-attached original photo (if any) so the
@@ -593,10 +574,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// (empty, since attaching just created the photo), and marks the
   /// controller as persistence-backed so subsequent edits write through.
   ///
-  /// Called only once [width]/[height] are known (i.e. from the
-  /// [ImageStreamListener] success callback in [_resolveImageSize]), since
-  /// [LibraryCrudRepository.attachPhotoToWall] needs the image's natural
-  /// size to create its Photo row. Since that decode is async, there is
+  /// Called only once [width]/[height] are known (i.e. from
+  /// [_attachPickedPhoto], fired from [_pickImage] right after the photo is
+  /// selected), since [LibraryCrudRepository.attachPhotoToWall] needs the
+  /// image's natural size to create its Photo row. Since that decode is
+  /// async, there is
   /// necessarily a window between the photo becoming selected and this
   /// method's [DrawController.loadForWall] call resolving; the `ref.listen`
   /// in [build] calls [DrawController.beginPhotoSwitch] synchronously the
@@ -716,11 +698,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
   /// Decodes [xfile]'s natural pixel dimensions via the cross-platform
   /// [decodeImageSize] utility and hands them to [_attachPhotoAndLoad].
-  /// Called (fire-and-forget) from [_resolveImageSize]'s decode-success
-  /// callback for a freshly-picked photo — see that callback's doc for why
-  /// the width/height fed to the attach call come from here rather than
-  /// from the FileImage stream's own `info.image.width/height` (which still
-  /// separately drives `_imageSize`/display, untouched by this helper).
+  /// Called (fire-and-forget) directly from [_pickImage] for a
+  /// freshly-picked photo, right after it's selected. This decode is only
+  /// ever used to populate the new Photo row's `width`/`height` columns —
+  /// once [_attachPhotoAndLoad] persists them, [build] picks the SAME
+  /// stored values back up via [wallOriginalsProvider] to drive
+  /// `_imageSize`/display; this helper never touches `_imageSize` itself.
   Future<void> _attachPickedPhoto(XFile xfile) async {
     final size = await decodeImageSize(xfile);
     if (!mounted) return;
@@ -833,7 +816,18 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     final wasActiveOrInFlight = drawState.activePhotoId == photo.id ||
         drawState.switchTargetPhotoId == photo.id;
     try {
-      await ref.read(photoRepositoryProvider).deleteOriginalPhoto(photo.id);
+      final storedPaths = await ref
+          .read(photoRepositoryProvider)
+          .deleteOriginalPhoto(photo.id);
+      // Purge the tombstoned photo's on-disk/IndexedDB bytes (canonical +
+      // every cascaded child) now that the DB write committed — best-effort
+      // and never throws (see PhotoFiles.deletePhotoBytes). Fired
+      // non-blocking (not awaited) so filesystem/IndexedDB I/O can never
+      // delay or hang the user-facing delete (the SnackBar + photo-switch
+      // below) — the DB row is already tombstoned, which is what makes the
+      // delete correct; byte cleanup is background housekeeping only.
+      final photoFiles = ref.read(photoFilesProvider);
+      unawaited(Future.wait(storedPaths.map(photoFiles.deletePhotoBytes)));
     } catch (e, st) {
       debugPrint('Failed to delete photo ${photo.id}: $e\n$st');
       if (!mounted) return;
@@ -872,72 +866,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     await _switchToPhoto(remaining);
   }
 
-  /// Decodes the image at [path] purely to learn its natural size, which
-  /// [TopoCanvas] needs for percent<->scene coordinate conversion and for
-  /// sizing its [CustomPaint]. Guarded by [_resolvedForPath] so repeated
-  /// widget rebuilds while the same image is selected don't re-trigger a
-  /// decode.
-  void _resolveImageSize(String path) {
-    if (_resolvedForPath == path) return;
-    _resolvedForPath = path;
-    if (mounted) {
-      setState(() {
-        _imageSize = null;
-        _imageLoadError = false;
-      });
-    }
-
-    final previousStream = _imageStream;
-    final previousListener = _imageStreamListener;
-    if (previousStream != null && previousListener != null) {
-      previousStream.removeListener(previousListener);
-    }
-
-    final stream = PhotoImageProvider(
-      path,
-      photoFiles: ref.read(photoFilesProvider),
-    ).resolve(const ImageConfiguration());
-    final listener = ImageStreamListener(
-      (info, _) {
-        if (!mounted) return;
-        final width = info.image.width;
-        final height = info.image.height;
-        setState(() {
-          _imageSize = Size(width.toDouble(), height.toDouble());
-        });
-        // Only a freshly-PICKED photo (see _pickImage) needs attaching —
-        // restoring an already-attached photo via _loadInitialPhotoForWall
-        // never sets _pendingAttachPath, so this is a no-op for that path.
-        // The width/height fed to the attach call now come from
-        // decodeImageSize (via _attachPickedPhoto), NOT from this stream's
-        // own info.image.width/height, which continue to drive _imageSize/
-        // display above exactly as before.
-        if (_pendingAttachPath == path) {
-          _pendingAttachPath = null;
-          final xfile = _pendingAttachXFile;
-          _pendingAttachXFile = null;
-          if (xfile != null) {
-            _attachPickedPhoto(xfile);
-          }
-        }
-      },
-      onError: (error, stackTrace) {
-        // Rather than leaving _imageSize null forever (which previously
-        // left the screen showing a permanent loading spinner for an
-        // unreadable/corrupt image), surface a recoverable error state so
-        // the user can pick a different photo.
-        if (!mounted) return;
-        setState(() {
-          _imageSize = null;
-          _imageLoadError = true;
-        });
-      },
-    );
-    _imageStream = stream;
-    _imageStreamListener = listener;
-    stream.addListener(listener);
-  }
-
   @override
   Widget build(BuildContext context) {
     // Fires synchronously, as part of the same state-change notification
@@ -946,11 +874,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // first pick). This is what closes the M3 race: DrawController state
     // is cleared (activeWallId -> null, routes -> empty, ...) the MOMENT
     // the new photo is selected, well before the async
-    // ensureDefaultForImage -> loadForWall chain kicked off from
-    // _resolveImageSize's decode callback below even starts, let alone
-    // resolves. See DrawController.beginPhotoSwitch for why nulling
-    // activeWallId is what actually prevents a mid-switch commit from
-    // persisting against the previous photo's wall.
+    // ensureDefaultForImage -> loadForWall chain (kicked off from
+    // _pickImage/_loadInitialPhotoForWall) resolves. See
+    // DrawController.beginPhotoSwitch for why nulling activeWallId is what
+    // actually prevents a mid-switch commit from persisting against the
+    // previous photo's wall.
     ref.listen<String?>(selectedImageProvider, (previous, next) {
       if (next != null && next != previous) {
         ref.read(drawControllerProvider(widget.wallId).notifier).beginPhotoSwitch();
@@ -1026,25 +954,72 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       }
     }
 
+    // U1/U2/U3/U4 (photo strip): switching between DIFFERENT photos on this
+    // wall (see PhotoStrip's class doc). NOT gated on `widget.readOnly` — a
+    // read-only community viewer can still switch between someone else's
+    // photos (see PhotoStrip.readOnly's doc for what IS suppressed in that
+    // case: the add/manage affordances). PhotoStrip itself renders nothing
+    // once the wall's live-original list (`wallOriginalsProvider`) comes
+    // back empty, but the Divider ABOVE it (this call site's own wrapping)
+    // is not PhotoStrip's to skip — so this also watches the same live list
+    // to keep that divider from floating over an empty strip before the
+    // wall's first photo is attached.
+    //
+    // Moved above the `_imageSize` derivation below (F-A1/F-A2 fix): this
+    // is now the SAME live list `_imageSize` is read from — no separate
+    // FileImage/codec decode probe — so it needs to be watched first.
+    final wallPhotos = ref
+        .watch(wallOriginalsProvider(widget.wallId))
+        .maybeWhen(data: (list) => list, orElse: () => const <PhotoRef>[]);
+    final showPhotoStrip = wallPhotos.isNotEmpty;
+
+    // Derives _imageSize straight from the displayed photo's own persisted
+    // PhotoRef.width/height — the SAME source `imagePath` (PhotoRef.localPath)
+    // itself comes from — instead of running a real FileImage/codec decode
+    // probe. The old probe LATCHED a permanent `_imageLoadError` on any
+    // decode failure (e.g. a friend opening this wall mid-download, or a
+    // cold web-cache miss for the underlying bytes), which blanked the
+    // canvas until the user left and re-entered; the stored width/height
+    // are populated at import time (see PhotoRepository/decodeImageSize)
+    // and don't depend on the bytes being resolvable right now, so this can
+    // never latch that way. Genuinely-missing bytes are instead handled by
+    // TopoCanvasBody's own PhotoImage, which self-heals/placeholders per
+    // key (see photo_image_source_web.dart) rather than needing this
+    // screen to track an error state at all.
     if (imagePath != null && imagePath != _resolvedForPath) {
       final debugSize = widget.debugInitialImageSize;
       if (debugSize != null) {
         // TEST-ONLY seam (see TopoCanvasScreen.debugInitialImageSize's doc):
-        // bypass the real FileImage decode entirely and use the injected
+        // bypass the persisted-size lookup entirely and use the injected
         // size directly. Mutating these fields directly (no setState) is
         // safe here — it's still within this same build call, before
-        // _buildCanvasArea below reads them — and mirrors what the real
-        // decode's success callback ultimately sets, minus the async
-        // round-trip.
+        // _buildCanvasArea below reads them.
         _resolvedForPath = imagePath;
         _imageSize = debugSize;
-        _imageLoadError = false;
       } else {
-        // Deferred to after this frame: triggering the decode (and its
-        // setState) synchronously during build is not allowed.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (mounted) _resolveImageSize(imagePath);
-        });
+        PhotoRef? match;
+        for (final p in wallPhotos) {
+          if (p.localPath == imagePath) {
+            match = p;
+            break;
+          }
+        }
+        if (match != null && match.width > 0 && match.height > 0) {
+          _resolvedForPath = imagePath;
+          _imageSize = Size(match.width.toDouble(), match.height.toDouble());
+        } else {
+          // Either the matching PhotoRef hasn't shown up in
+          // wallOriginalsProvider yet (a freshly-picked photo whose
+          // attachPhotoToWall write is still in flight) or it has a
+          // defensive/degenerate non-positive width or height — either
+          // way, DON'T set _resolvedForPath: leaving it mismatched means
+          // the next rebuild (which the live wallOriginalsProvider watch
+          // above triggers once a valid row lands) retries this lookup
+          // instead of getting stuck with a stale null forever.
+          // _buildCanvasArea shows a loading spinner for as long as
+          // _imageSize stays null — never a permanent error state.
+          _imageSize = null;
+        }
       }
     }
 
@@ -1056,21 +1031,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         !widget.readOnly &&
         imagePath != null &&
         drawState.mode == DrawMode.draw;
-
-    // U1/U2/U3/U4 (photo strip): switching between DIFFERENT photos on this
-    // wall (see PhotoStrip's class doc). NOT gated on `widget.readOnly` — a
-    // read-only community viewer can still switch between someone else's
-    // photos (see PhotoStrip.readOnly's doc for what IS suppressed in that
-    // case: the add/manage affordances). PhotoStrip itself renders nothing
-    // once the wall's live-original list (`wallOriginalsProvider`) comes
-    // back empty, but the Divider ABOVE it (this call site's own wrapping)
-    // is not PhotoStrip's to skip — so this also watches the same live list
-    // to keep that divider from floating over an empty strip before the
-    // wall's first photo is attached.
-    final wallPhotos = ref
-        .watch(wallOriginalsProvider(widget.wallId))
-        .maybeWhen(data: (list) => list, orElse: () => const <PhotoRef>[]);
-    final showPhotoStrip = wallPhotos.isNotEmpty;
 
     // Floating translucent-glass chrome over an edge-to-edge photo, per
     // DESIGN.md "Topo canvas": no opaque AppBar/BottomAppBar — the canvas
@@ -1572,18 +1532,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               ),
             ),
             // readOnly: no add affordance — there is no photo a read-only
-            // viewer could pick to attach to someone else's wall (mirrors
-            // `_buildImageErrorState`'s own `!widget.readOnly` gate).
+            // viewer could pick to attach to someone else's wall.
             if (!widget.readOnly) ...[
               const SizedBox(height: MasiSpacing.lg),
               // "Filled" (primary) per DESIGN.md "Buttons": accent bg,
               // onAccent text, radius `MasiRadii.control` — same
               // ElevatedButton.styleFrom shape used by
-              // `crud_list_scaffold.dart`'s own add button, rather than the
-              // "Tinted" style `_buildImageErrorState`'s "Choose another
-              // photo" uses (that one is a secondary retry action; this is
-              // the screen's ONLY action while empty, so it reads as
-              // primary).
+              // `crud_list_scaffold.dart`'s own add button. This is the
+              // screen's ONLY action while empty, so it reads as primary.
               ElevatedButton(
                 key: const Key('topo-empty-state-add-photo'),
                 style: ElevatedButton.styleFrom(
@@ -1607,13 +1563,19 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     );
   }
 
+  /// Builds the canvas body once a photo is selected: a `topo-image-loading`
+  /// spinner while [_imageSize] is still unresolved (see [build]'s doc for
+  /// how it's derived from the displayed photo's persisted [PhotoRef]),
+  /// otherwise the real [TopoCanvasBody]. There is no separate
+  /// permanent-error branch here (see the removed `_imageLoadError`/
+  /// `_buildImageErrorState` — F-A1/F-A2 fix): genuinely-missing photo
+  /// bytes are handled by [TopoCanvasBody]'s own `PhotoImage`, which
+  /// self-heals/placeholders per key rather than latching a screen-level
+  /// error that used to require leaving and re-entering to clear.
   Widget _buildCanvasArea(
     String imagePath,
     DrawState drawState,
   ) {
-    if (_imageLoadError) {
-      return _buildImageErrorState(context);
-    }
     final imageSize = _imageSize;
     if (imageSize == null) {
       return const Center(
@@ -1640,63 +1602,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // CommunityTopoDetailScreen — see RouteLegend.onLogAscent's doc for
       // why this widget's own copy must stay hidden there.
       onLogAscent: widget.readOnly ? null : _openLogAscentSheet,
-    );
-  }
-
-  Widget _buildImageErrorState(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return ColoredBox(
-      color: colors.ground,
-      child: Center(
-        child: Column(
-          key: const Key('topo-image-error-state'),
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            MasiIcon(
-              'image_broken',
-              size: 72,
-              color: colors.gradeHard,
-            ),
-            const SizedBox(height: MasiSpacing.lg),
-            Text(
-              "Couldn't load this photo",
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: colors.gradeHard,
-              ),
-            ),
-            const SizedBox(height: MasiSpacing.lg),
-            // readOnly: no retry affordance — there is nothing a read-only
-            // viewer could pick to replace someone else's photo with (see
-            // TopoCanvasScreen.readOnly's doc).
-            if (!widget.readOnly)
-              // "Tinted" secondary button per DESIGN.md "Buttons": accent
-              // text on a faint accent wash, rather than the previous
-              // Material OutlinedButton.
-              Material(
-                color: colors.accent.withValues(alpha: 0.16),
-                borderRadius: BorderRadius.circular(MasiRadii.control),
-                child: InkWell(
-                  key: const Key('topo-image-error-pick-another'),
-                  onTap: _pickImage,
-                  borderRadius: BorderRadius.circular(MasiRadii.control),
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: MasiSpacing.lg,
-                      vertical: MasiSpacing.md,
-                    ),
-                    child: Text(
-                      'Choose another photo',
-                      style: TextStyle(
-                        color: colors.accent,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
     );
   }
 }
