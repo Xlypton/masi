@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../features/account/data/auth_repository.dart';
 
-/// Pure edge-detector + guarded invoker backing `ClimbTopoApp`'s
+/// Pure edge-detector + guarded invoker backing `MasiApp`'s
 /// `ref.listen(authStateProvider, ...)` claim-on-sign-in bootstrap.
 ///
 /// Fires [claim] with the newly-signed-in uid exactly when [previous] was
@@ -22,7 +22,7 @@ import '../features/account/data/auth_repository.dart';
 /// Reading `next`/`previous` only through [AsyncValue.asData] means an
 /// unavailable/erroring auth source (Supabase never initialized, a stream
 /// error) degrades to `null` here rather than throwing — this must never
-/// crash the app, since ClimbTopo is local-first and fully usable with sync
+/// crash the app, since Masi is local-first and fully usable with sync
 /// unavailable (see `main()`'s identical "log and continue" stance around
 /// `Supabase.initialize`).
 ///

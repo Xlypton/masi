@@ -2,14 +2,14 @@ import Flutter
 import UIKit
 
 /// Factory for the native AR camera + Vision-homography platform view,
-/// registered under view type "climbtopo/ar" (see `AppDelegate.swift`),
-/// matching the Dart-side `UiKitView(viewType: 'climbtopo/ar')`.
+/// registered under view type "masi/ar" (see `AppDelegate.swift`),
+/// matching the Dart-side `UiKitView(viewType: 'masi/ar')`.
 ///
 /// One instance is created in `AppDelegate` and handed to
 /// `FlutterPluginRegistrar.register(_:withId:)`. It threads the same
 /// `FlutterBinaryMessenger` used for plugin registration through to each
-/// `ArPlatformView` it creates, so the `climbtopo/ar` MethodChannel and
-/// `climbtopo/ar/alignment` EventChannel (created inside `ArPlatformView`
+/// `ArPlatformView` it creates, so the `masi/ar` MethodChannel and
+/// `masi/ar/alignment` EventChannel (created inside `ArPlatformView`
 /// via `ArChannelHandler`) talk to the same Flutter engine instance.
 final class ArViewFactory: NSObject, FlutterPlatformViewFactory {
 

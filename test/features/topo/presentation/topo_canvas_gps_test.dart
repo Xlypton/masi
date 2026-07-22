@@ -13,10 +13,10 @@
 import 'dart:io';
 import 'dart:typed_data';
 
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/location/location_service.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/location/location_service.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;

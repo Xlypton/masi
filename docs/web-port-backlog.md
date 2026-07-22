@@ -1,6 +1,6 @@
 # Web Port Backlog (post-M2)
 
-The ClimbTopo web/PWA port has shipped its core milestones — Drift persistence on
+The Masi web/PWA port has shipped its core milestones — Drift persistence on
 `WasmDatabase`, the photo byte-store pipeline (IndexedDB via `idb_shim`), thumbnail
 generation, AR gray-out, and PWA scaffolding/hosting are all in on `main` (see
 `WEB_PORT_BRIEF.md` and the `feat(web): ... (Phase N)` commits). This document tracks

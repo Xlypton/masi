@@ -1,9 +1,9 @@
 import 'dart:ui' as ui;
 
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
-import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/grade_colors.dart';
+import 'package:masi/features/topo/presentation/topo_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

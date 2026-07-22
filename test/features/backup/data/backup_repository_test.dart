@@ -1,5 +1,5 @@
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/features/backup/data/backup_repository.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/features/backup/data/backup_repository.dart';
 // `hide isNotNull`: drift's query-builder helper of the same name collides
 // with `package:matcher`'s (via flutter_test) `isNotNull` MATCHER used
 // throughout this file's `expect(...)` calls — this file only needs the

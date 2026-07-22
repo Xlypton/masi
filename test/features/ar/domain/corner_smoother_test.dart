@@ -2,7 +2,7 @@ import 'dart:math';
 
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:climbtopo/features/ar/domain/corner_smoother.dart';
+import 'package:masi/features/ar/domain/corner_smoother.dart';
 
 void main() {
   group('CornerSmoother', () {

@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:climbtopo/core/routes/route_styles.dart';
+import 'package:masi/core/routes/route_styles.dart';
 
 // Contract under test (see lib/core/routes/route_styles.dart doc comments
 // for the full derivation):

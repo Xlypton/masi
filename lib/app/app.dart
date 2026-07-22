@@ -11,14 +11,14 @@ import 'claim_ownership_bootstrap.dart';
 import 'router.dart';
 import 'theme.dart';
 
-class ClimbTopoApp extends ConsumerStatefulWidget {
-  const ClimbTopoApp({super.key});
+class MasiApp extends ConsumerStatefulWidget {
+  const MasiApp({super.key});
 
   @override
-  ConsumerState<ClimbTopoApp> createState() => _ClimbTopoAppState();
+  ConsumerState<MasiApp> createState() => _MasiAppState();
 }
 
-class _ClimbTopoAppState extends ConsumerState<ClimbTopoApp>
+class _MasiAppState extends ConsumerState<MasiApp>
     with WidgetsBindingObserver {
   @override
   void initState() {

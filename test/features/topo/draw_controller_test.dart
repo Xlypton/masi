@@ -1,9 +1,9 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 
 /// FIX #6 (family-keyed `drawControllerProvider(_testWallId)`): stand-in wallId — every
 /// test here gets its own fresh [container] in `setUp`, so one shared key is

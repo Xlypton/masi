@@ -2,10 +2,10 @@ import 'dart:ui' show Offset;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:climbtopo/core/platform/ar_support.dart';
-import 'package:climbtopo/features/ar/application/ar_channel.dart';
-import 'package:climbtopo/features/ar/application/ar_channel_factory.dart';
-import 'package:climbtopo/features/ar/domain/corner_smoother.dart';
+import 'package:masi/core/platform/ar_support.dart';
+import 'package:masi/features/ar/application/ar_channel.dart';
+import 'package:masi/features/ar/application/ar_channel_factory.dart';
+import 'package:masi/features/ar/domain/corner_smoother.dart';
 
 /// Supplies the [ArChannel] used by [ArController] to talk to the native AR
 /// platform channel. Overridable in tests (e.g. to inject an [ArChannel]
@@ -13,7 +13,7 @@ import 'package:climbtopo/features/ar/domain/corner_smoother.dart';
 /// [createArChannel] so this resolves to a real native-backed [ArChannel]
 /// on iOS/Android/desktop and a web-safe [ArChannel.noop] on web (see
 /// `ar_channel_factory.dart`) — no code path invokes a real platform channel
-/// on a platform that doesn't have a native `climbtopo/ar` handler.
+/// on a platform that doesn't have a native `masi/ar` handler.
 final arChannelProvider = Provider<ArChannel>((ref) => createArChannel());
 
 /// Whether AR is supported on this platform at all (see

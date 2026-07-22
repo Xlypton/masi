@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:climbtopo/core/location/photo_gps.dart';
+import 'package:masi/core/location/photo_gps.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 // Not exported from `package:image/image.dart`'s barrel (its own

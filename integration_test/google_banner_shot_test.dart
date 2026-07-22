@@ -34,11 +34,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:climbtopo/features/account/application/auth_providers.dart';
-import 'package:climbtopo/features/account/application/pwa_install_providers.dart';
-import 'package:climbtopo/features/account/application/pwa_install_types.dart';
-import 'package:climbtopo/features/account/data/auth_repository.dart';
-import 'package:climbtopo/main.dart' show bootApp;
+import 'package:masi/features/account/application/auth_providers.dart';
+import 'package:masi/features/account/application/pwa_install_providers.dart';
+import 'package:masi/features/account/application/pwa_install_types.dart';
+import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/main.dart' show bootApp;
 
 /// Minimal in-memory [AuthRepository] double — copied verbatim from
 /// `web_boot_stability_test.dart`'s `_FakeAuthRepository` (see that file's

@@ -28,13 +28,13 @@ import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
-import 'package:climbtopo/features/topo/data/route_repository.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/main.dart' as app;
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/logbook/data/ascents_repository.dart';
+import 'package:masi/features/topo/data/route_repository.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/main.dart' as app;
 
 /// Generates a real, decodable PNG (gradient + grid) for a seeded wall's
 /// photo — same recipe `boulder_marker_review_test.dart`/`map_review_test

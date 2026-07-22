@@ -1,6 +1,6 @@
 // Intended-behavior tests for RouteMetadataSheet's grade-system handling,
 // grade validation, and colorBand computation (Subtask A5, assertions
-// A5a-A5e). These encode the SPEC (CLIMBTOPO.md / DESIGN.md's "Grade bands"
+// A5a-A5e). These encode the SPEC (MASI.md / DESIGN.md's "Grade bands"
 // table, reproduced as H1-H6 in the plan) — NOT current behavior. A failing
 // assertion here means the CODE is wrong, never that this test should be
 // loosened.
@@ -8,11 +8,11 @@
 // Boilerplate (ProviderContainer seeding + buildSheet wrapper) copied from
 // the `RouteMetadataSheet` group in test/widget_test.dart.
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/route_metadata_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

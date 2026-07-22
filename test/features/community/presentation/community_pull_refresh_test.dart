@@ -1,12 +1,12 @@
 import 'dart:convert';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/backup/application/sync_orchestrator.dart';
-import 'package:climbtopo/features/community/application/community_providers.dart';
-import 'package:climbtopo/features/community/data/community_repository.dart';
-import 'package:climbtopo/features/community/presentation/community_screen.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/backup/application/sync_orchestrator.dart';
+import 'package:masi/features/community/application/community_providers.dart';
+import 'package:masi/features/community/data/community_repository.dart';
+import 'package:masi/features/community/presentation/community_screen.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';

@@ -1,6 +1,6 @@
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/features/community/data/comments_repository.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/features/community/data/comments_repository.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 

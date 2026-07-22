@@ -3,9 +3,9 @@
 // interaction. Mirrors style_filter_chips_test.dart's shape for the newer
 // multi-tag facet.
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/routes/route_styles.dart';
-import 'package:climbtopo/shared/filtering/style_tag_filter_chips.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/routes/route_styles.dart';
+import 'package:masi/shared/filtering/style_tag_filter_chips.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

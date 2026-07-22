@@ -2,8 +2,8 @@
 // merge/filter function over the four located-entity read models. No
 // database involved: every input is a hand-built fixture, mirroring how the
 // map UI subtask will feed it live provider data.
-import 'package:climbtopo/features/community/data/map_search.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/community/data/map_search.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:latlong2/latlong.dart';
 

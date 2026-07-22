@@ -1,6 +1,6 @@
-import 'package:climbtopo/features/community/application/community_providers.dart';
-import 'package:climbtopo/features/community/data/community_repository.dart';
-import 'package:climbtopo/shared/filtering/grade_range.dart';
+import 'package:masi/features/community/application/community_providers.dart';
+import 'package:masi/features/community/data/community_repository.dart';
+import 'package:masi/shared/filtering/grade_range.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 

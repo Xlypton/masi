@@ -66,7 +66,7 @@ class NominatimGeocodingService implements GeocodingService {
   /// Nominatim's usage policy (https://operations.osmfoundation.org/policies/nominatim/)
   /// rejects requests carrying an empty/default `http` package User-Agent --
   /// this must always be sent.
-  static const _userAgent = 'ClimbTopo/1.0 (com.climbtopo.climbtopo)';
+  static const _userAgent = 'Masi/1.0 (com.xlypton.masi)';
 
   static const _timeout = Duration(seconds: 8);
 

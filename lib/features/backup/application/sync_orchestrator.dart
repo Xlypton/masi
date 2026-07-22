@@ -68,7 +68,7 @@ final syncDebounceDurationProvider = Provider<Duration>((ref) => const Duration(
 /// Opportunistic background-sync controller: debounced push-on-local-write,
 /// pull-once-on-sign-in, and immediate push-on-app-background.
 ///
-/// Constructed at the app root (`ClimbTopoApp` `ref.watch`es
+/// Constructed at the app root (`MasiApp` `ref.watch`es
 /// [syncOrchestratorProvider] — NOT merely `ref.read`s it — for the widget's
 /// entire lifetime, i.e. the whole app run). That active watch matters for a
 /// non-obvious reason: [build]'s raw `db.tableUpdates().listen(...)`
@@ -81,7 +81,7 @@ final syncDebounceDurationProvider = Provider<Duration>((ref) => const Duration(
 /// this class (and its state persists — a non-`.autoDispose` `NotifierProvider`
 /// is never torn down once created) but its `ref.listen(authStateProvider)`
 /// subscription silently stops receiving events the moment nothing is left
-/// actively watching it, which is why `ClimbTopoApp` must keep a live
+/// actively watching it, which is why `MasiApp` must keep a live
 /// `ref.watch` (or `ref.listen`) on this provider for as long as the app
 /// runs, not just poke it once at startup. Tests must do the same — a bare
 /// `container.read(syncOrchestratorProvider)` is NOT enough to observe

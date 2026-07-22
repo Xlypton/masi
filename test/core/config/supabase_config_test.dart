@@ -1,4 +1,4 @@
-import 'package:climbtopo/core/config/supabase_config.dart';
+import 'package:masi/core/config/supabase_config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

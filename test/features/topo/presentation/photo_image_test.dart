@@ -18,9 +18,9 @@
 import 'dart:convert';
 import 'dart:io';
 
-import 'package:climbtopo/features/topo/data/photo_files.dart';
-import 'package:climbtopo/features/topo/presentation/photo_image.dart';
-import 'package:climbtopo/features/topo/presentation/photo_image_self_heal_guard.dart';
+import 'package:masi/features/topo/data/photo_files.dart';
+import 'package:masi/features/topo/presentation/photo_image.dart';
+import 'package:masi/features/topo/presentation/photo_image_self_heal_guard.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

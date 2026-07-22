@@ -1,10 +1,10 @@
 import 'dart:async';
 
-import 'package:climbtopo/core/db/app_database.dart' as db;
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
-import 'package:climbtopo/features/logbook/presentation/logbook_providers.dart';
+import 'package:masi/core/db/app_database.dart' as db;
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/logbook/data/ascents_repository.dart';
+import 'package:masi/features/logbook/presentation/logbook_providers.dart';
 import 'package:drift/drift.dart' hide isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

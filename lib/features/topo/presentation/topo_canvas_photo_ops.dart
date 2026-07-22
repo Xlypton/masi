@@ -1,8 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/data/photo_repository.dart';
 
 /// Holds the path of the currently selected image, or null if none.
 class SelectedImageNotifier extends Notifier<String?> {

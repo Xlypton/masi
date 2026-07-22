@@ -1,6 +1,6 @@
 # MASI — Design Language
 
-The visual system for ClimbTopo. **This file is the source of truth for all UI work.** When a screen is in doubt, it defers to the five principles at the bottom. Live reference (rendered): the "MASI Design Language" artifact.
+The visual system for Masi. **This file is the source of truth for all UI work.** When a screen is in doubt, it defers to the five principles at the bottom. Live reference (rendered): the "MASI Design Language" artifact.
 
 Derived from the app mark: a faceted amethyst boulder split by a jagged white crack. The crack is a route line — that is the core idea.
 
@@ -96,7 +96,7 @@ Give large titles `w700` and tight negative tracking. Body stays 17. Expose as a
 ## Components
 
 ### Navigation — large title
-Screen title as a **large title** below a slim bar. Back = chevron + previous title in `accent`. Trailing actions are `accent` text or `accent` glyphs, never a filled button in the bar. Title text must `overflow: ellipsis` and be `Flexible` so it never overflows when trailing icons appear (fixes the "Climb…" truncation — but more importantly the canvas title should be the **topo/wall name**, not "ClimbTopo").
+Screen title as a **large title** below a slim bar. Back = chevron + previous title in `accent`. Trailing actions are `accent` text or `accent` glyphs, never a filled button in the bar. Title text must `overflow: ellipsis` and be `Flexible` so it never overflows when trailing icons appear (fixes the "Climb…" truncation — but more importantly the canvas title should be the **topo/wall name**, not "Masi").
 
 ### Topos home — grouped inset list (the new flat home)
 - `/` is the **flat list of topos** (each topo = a wall + its original photo + route count). Drop the Area→Sector→Wall drill-down from the primary flow; keep it reachable via a trailing "Organize" action, and keep the data model intact.

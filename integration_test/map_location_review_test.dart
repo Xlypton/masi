@@ -33,12 +33,12 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
-import 'package:climbtopo/app/app.dart';
-import 'package:climbtopo/core/config/supabase_config.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/core/location/location_service.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
+import 'package:masi/app/app.dart';
+import 'package:masi/core/config/supabase_config.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/location/location_service.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
 
 /// A fixed, always-succeeding [LocationService] fake — no platform channel,
 /// no permission prompts, no simulated-CoreLocation flakiness. Returns a
@@ -196,7 +196,7 @@ void main() {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: const ClimbTopoApp(),
+        child: const MasiApp(),
       ),
     );
     await tester.pumpAndSettle(const Duration(seconds: 2));

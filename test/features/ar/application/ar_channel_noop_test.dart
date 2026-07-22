@@ -1,6 +1,6 @@
-import 'package:climbtopo/features/ar/application/ar_channel.dart';
-import 'package:climbtopo/features/ar/application/ar_channel_factory.dart';
-import 'package:climbtopo/features/ar/application/ar_controller.dart';
+import 'package:masi/features/ar/application/ar_channel.dart';
+import 'package:masi/features/ar/application/ar_channel_factory.dart';
+import 'package:masi/features/ar/application/ar_controller.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 

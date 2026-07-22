@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build_web.sh — build the ClimbTopo web bundle and enforce the web guardrails.
+# build_web.sh — build the Masi web bundle and enforce the web guardrails.
 #
 # This is the locally-runnable "definition of done" gate for the web port. It:
 #   1. runs the dart:io grep gate (no dart:io outside *_native.dart)

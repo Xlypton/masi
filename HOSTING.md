@@ -1,4 +1,4 @@
-# Hosting the ClimbTopo PWA
+# Hosting the Masi PWA
 
 The web build (`flutter build web`, wasm by default) requires the page to be
 **cross-origin isolated**. Both drift's OPFS worker (`web/drift_worker.js`,
@@ -30,6 +30,6 @@ Two ready-made configs are provided so either host works out of the box:
   COOP/COEP + `application/wasm` headers. JSON has no comment syntax, hence
   this note living here instead of inline.
 
-If you ever put ClimbTopo behind a different static host, port these same
+If you ever put Masi behind a different static host, port these same
 three headers (COOP, COEP, and the wasm content-type) to that host's config
 format — that's the whole requirement.

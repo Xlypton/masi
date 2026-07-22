@@ -6,7 +6,7 @@
 /// state/provider and unit-tested without a widget harness.
 library;
 
-import 'package:climbtopo/core/grades/grade_system.dart';
+import 'package:masi/core/grades/grade_system.dart';
 
 /// Sentinel used by [GradeRange.copyWith] to distinguish "leave this bound
 /// unchanged" (the default, when the argument is omitted) from "explicitly

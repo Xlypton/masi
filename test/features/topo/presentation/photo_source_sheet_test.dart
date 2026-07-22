@@ -1,5 +1,5 @@
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/topo/presentation/photo_source_sheet.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/topo/presentation/photo_source_sheet.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';

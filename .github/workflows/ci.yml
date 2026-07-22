@@ -1,6 +1,6 @@
 name: CI
 
-# CI floor for the ClimbTopo web port (v2 plan, Phase 0).
+# CI floor for the Masi web port (v2 plan, Phase 0).
 # The repo is local-first and not currently pushed to a remote; this workflow is
 # the enforceable spec for when one exists. The same gates run locally via
 # `tool/build_web.sh` and the standard `flutter analyze` / `flutter test`.

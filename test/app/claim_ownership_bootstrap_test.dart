@@ -1,5 +1,5 @@
-import 'package:climbtopo/app/claim_ownership_bootstrap.dart';
-import 'package:climbtopo/features/account/data/auth_repository.dart';
+import 'package:masi/app/claim_ownership_bootstrap.dart';
+import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 

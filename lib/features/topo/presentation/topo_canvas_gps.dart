@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
-import 'package:climbtopo/core/location/location_service.dart';
-import 'package:climbtopo/core/location/photo_gps.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:masi/core/location/location_service.dart';
+import 'package:masi/core/location/photo_gps.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// The outcome of a single [captureWallGpsFromPhoto] call, surfaced to the
 /// caller so it can tell the user whether (and how) a location was found

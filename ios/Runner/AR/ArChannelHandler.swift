@@ -25,14 +25,14 @@ protocol ArSessionControlling: AnyObject {
     func unlockManualAlignment()
 }
 
-/// Owns the exact-contract `climbtopo/ar` MethodChannel (`start`/`stop`/
-/// `setMode`/`rescan`) and the `climbtopo/ar/alignment` EventChannel, and
+/// Owns the exact-contract `masi/ar` MethodChannel (`start`/`stop`/
+/// `setMode`/`rescan`) and the `masi/ar/alignment` EventChannel, and
 /// forwards method calls to a `ArSessionControlling` delegate (the platform
 /// view).
 ///
 /// Dart contract (must stay byte-for-byte in sync with
 /// `lib/features/ar/.../ar_channel*.dart`):
-///   MethodChannel('climbtopo/ar')
+///   MethodChannel('masi/ar')
 ///     - "start" args: {referenceImagePath: String, refWidth: Int, refHeight: Int, routesJson: String}
 ///     - "stop" (no args)
 ///     - "setMode" args: {mode: 'auto'|'manual'}
@@ -47,7 +47,7 @@ protocol ArSessionControlling: AnyObject {
 ///       `.normal`, or a degenerate/non-finite projection) -- Dart should
 ///       treat `false` as a no-op and prompt the user to try again.
 ///     - "unlockManual" (no args) -- clears the manual world pin.
-///   EventChannel('climbtopo/ar/alignment')
+///   EventChannel('masi/ar/alignment')
 ///     - emits {tracking: Bool, corners: [Double]x8?, frameWidth: Int?, frameHeight: Int?,
 ///       trackingState: String, limitedReason: String?}
 ///       -- `corners` is the tracked ARKit reference image's four corners (screen-space
@@ -63,8 +63,8 @@ protocol ArSessionControlling: AnyObject {
 ///       "Reconnecting").
 final class ArChannelHandler: NSObject, FlutterStreamHandler {
 
-    static let methodChannelName = "climbtopo/ar"
-    static let eventChannelName = "climbtopo/ar/alignment"
+    static let methodChannelName = "masi/ar"
+    static let eventChannelName = "masi/ar/alignment"
 
     weak var sessionController: ArSessionControlling?
 

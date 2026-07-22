@@ -11,9 +11,9 @@
 import 'dart:async' show Completer, unawaited;
 import 'dart:convert';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/location/geocoding_service.dart';
-import 'package:climbtopo/features/library/presentation/set_location_picker.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/location/geocoding_service.dart';
+import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_test/flutter_test.dart';

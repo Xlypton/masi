@@ -2,12 +2,12 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/core/routes/route_styles.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/core/routes/route_styles.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// Free-form climbing style options offered by [RouteMetadataSheet], by
 /// convention one of `'sport'`, `'trad'`, `'boulder'` (see

@@ -3,9 +3,9 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 
 /// Whether the topo canvas is in passive viewing mode or active route
 /// drawing mode.

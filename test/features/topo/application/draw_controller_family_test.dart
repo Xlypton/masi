@@ -1,8 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/presentation/route_legend.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/presentation/route_legend.dart';
 
 /// FIX #6 (HIGH, CONFIRMED — backlog #32, "family-key the canvas providers
 /// by wallId"): [drawControllerProvider]/[legendExpandedProvider] used to be

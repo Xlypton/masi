@@ -2,8 +2,8 @@
 //
 // Purpose: prove the headless-Chrome `flutter drive` + chromedriver pipeline
 // (see `tool/drive_web.sh`) actually works, independent of whether the real
-// ClimbTopo app compiles for web yet. This file deliberately does NOT import
-// `package:climbtopo/main.dart` (or anything else that pulls in `dart:io`),
+// Masi app compiles for web yet. This file deliberately does NOT import
+// `package:masi/main.dart` (or anything else that pulls in `dart:io`),
 // so it compiles for `-d web-server` today even while the real app doesn't.
 //
 // Run it with:

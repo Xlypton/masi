@@ -1,5 +1,5 @@
 -- ============================================================================
--- ClimbTopo P0 backend: row-level cloud sync + topo sharing
+-- Masi P0 backend: row-level cloud sync + topo sharing
 -- Run ONCE: Supabase Dashboard -> SQL Editor -> paste this whole file -> Run.
 -- Safe to re-run (idempotent: IF NOT EXISTS + DROP POLICY IF EXISTS).
 --

@@ -1,5 +1,5 @@
-import 'package:climbtopo/core/config/supabase_config.dart';
-import 'package:climbtopo/core/config/supabase_providers.dart';
+import 'package:masi/core/config/supabase_config.dart';
+import 'package:masi/core/config/supabase_providers.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';

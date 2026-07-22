@@ -6,28 +6,28 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show StandardMessageCodec;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/core/platform/ar_support.dart';
-import 'package:climbtopo/features/ar/application/ar_channel.dart';
-import 'package:climbtopo/features/ar/application/ar_controller.dart';
-import 'package:climbtopo/features/ar/application/manual_align_controller.dart';
-import 'package:climbtopo/features/ar/application/outline_extractor.dart';
-import 'package:climbtopo/features/ar/domain/homography.dart';
-import 'package:climbtopo/features/ar/presentation/ar_camera_view.dart';
-import 'package:climbtopo/features/ar/presentation/ar_overlay_painter.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
-import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
-import 'package:climbtopo/features/topo/presentation/route_palette.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/platform/ar_support.dart';
+import 'package:masi/features/ar/application/ar_channel.dart';
+import 'package:masi/features/ar/application/ar_controller.dart';
+import 'package:masi/features/ar/application/manual_align_controller.dart';
+import 'package:masi/features/ar/application/outline_extractor.dart';
+import 'package:masi/features/ar/domain/homography.dart';
+import 'package:masi/features/ar/presentation/ar_camera_view.dart';
+import 'package:masi/features/ar/presentation/ar_overlay_painter.dart';
+import 'package:masi/features/topo/data/photo_repository.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/canvas_chrome.dart';
+import 'package:masi/features/topo/presentation/grade_colors.dart';
+import 'package:masi/features/topo/presentation/route_palette.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// The `PlatformView` type used for the native camera/AR surface on iOS.
 /// Kept as a top-level constant string (rather than sprinkled as a literal)
 /// so [ArScreen] and any future native-side wiring agree on the exact
 /// channel/view-type name.
-const String _kArPlatformViewType = 'climbtopo/ar';
+const String _kArPlatformViewType = 'masi/ar';
 
 /// Encodes [routes] as the `routesJson` payload handed to
 /// [ArChannel.start]. Kept intentionally simple (number/colorIndex/
@@ -208,7 +208,7 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   /// is only touched via [ArController.setMode] when it isn't already
   /// [ArMode.auto]: `setMode` also fires a (fire-and-forget) native
   /// `setMode` platform-channel call via [arChannelProvider] — harmless on
-  /// iOS (or wherever `climbtopo/ar` is mocked, as in this feature's own
+  /// iOS (or wherever `masi/ar` is mocked, as in this feature's own
   /// tests), but unnecessary work for a mode that's already correct, and a
   /// call this screen has no reason to make on every single entry when
   /// there's nothing to actually reset.
@@ -266,7 +266,7 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   bool _isArPlatformSupported() => ref.read(arSupportedProvider);
 
   /// Kicks off [_startSession] once the native `UiKitView` (and therefore
-  /// its `climbtopo/ar` MethodChannel handler) has actually mounted — see
+  /// its `masi/ar` MethodChannel handler) has actually mounted — see
   /// [build]'s `onPlatformViewCreated` wiring. Calling [ArChannel.start]
   /// any earlier (e.g. straight out of [_load]) sends it before the native
   /// handler is registered, so the native side never receives it and the
@@ -338,7 +338,7 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   /// — a real retry, ending in either its `onReady` (real success) or
   /// `onError` (a fresh, real failure pill) callback.
   ///
-  /// On native, the `climbtopo/ar` channel handler stays registered on the
+  /// On native, the `masi/ar` channel handler stays registered on the
   /// already-mounted `UiKitView` across retries, so — unlike the very
   /// first call, gated on `onPlatformViewCreated` in [build] — this can
   /// call [_startSession] directly without waiting for another mount.
@@ -429,7 +429,7 @@ class _ArScreenState extends ConsumerState<ArScreen> {
                 key: ValueKey('ar-web-camera-$_webCameraAttempt'),
                 child: buildArCameraView(
                   onReady: () {
-                    // There's no native `climbtopo/ar` session to sequence a
+                    // There's no native `masi/ar` session to sequence a
                     // start call for on web (arChannelProvider resolves to
                     // ArChannel.noop() there) — the live getUserMedia feed
                     // becoming ready IS the AR session starting, so mark
@@ -683,7 +683,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
 
         Future<void> onToggleLock() async {
           // Defense-in-depth alongside the `ar-lock` FAB's own `active`
-          // gate below (#7): the native `climbtopo/ar` handler only exists
+          // gate below (#7): the native `masi/ar` handler only exists
           // once the platform view has mounted, so a stray call here
           // before that (or after `active` flips back false, e.g. a
           // rebuild racing a failed retry) must never reach the channel.
@@ -691,7 +691,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
           final currentlyLocked = ref.read(arLockedProvider);
           if (!widget.autoTracking) {
             // Web: there is no native world anchor to pin/release — the
-            // `climbtopo/ar` channel is ArChannel.noop() there (see
+            // `masi/ar` channel is ArChannel.noop() there (see
             // ar_channel_factory.dart) — so locking/unlocking is a pure-Dart
             // state flip, never a channel call.
             if (currentlyLocked) {
@@ -1032,7 +1032,7 @@ class _ArControls extends ConsumerWidget {
 
   /// Mirrors [ArState.active]: whether the native AR session has actually
   /// started (i.e. `ArChannel.start` has succeeded — see `ar_screen.dart`'s
-  /// `_startSession`/`markActive`). Every FAB below fires a `climbtopo/ar`
+  /// `_startSession`/`markActive`). Every FAB below fires a `masi/ar`
   /// platform-channel call, either directly ([onToggleLock], re-scan) or
   /// indirectly (the mode toggle, via `ArController.setMode`). Firing any
   /// of them before the native `UiKitView` has mounted and registered its

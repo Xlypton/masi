@@ -479,7 +479,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
               TileLayer(
                 urlTemplate:
                     'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-                userAgentPackageName: 'com.climbtopo.climbtopo',
+                userAgentPackageName: 'com.xlypton.masi',
                 tileProvider: _tileProvider(),
                 retinaMode: RetinaMode.isHighDensity(context),
                 evictErrorTileStrategy:

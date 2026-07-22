@@ -3,8 +3,8 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart' show listEquals, visibleForTesting;
 import 'package:flutter/rendering.dart' show CustomPainter, TextPainter, TextSpan, TextStyle;
 
-import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/core/coordinates/coordinate_transformer.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 
 /// Default stroke color for the in-progress route.
 const Color _defaultCurrentColor = Color(0xFFE65100);

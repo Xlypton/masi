@@ -1,6 +1,6 @@
-# ClimbTopo — Project Instructions
+# Masi — Project Instructions
 
-Flutter climbing-route documentation app (visual-first topo editor). Full spec: **`CLIMBTOPO.md`**.
+Flutter climbing-route documentation app (visual-first topo editor). Full spec: **`MASI.md`**.
 iOS-primary. Local-first (Drift/SQLite). Riverpod **v3** (use `Notifier`, never `StateProvider`).
 v1 (M0–M6) + v2 AR are code-complete on `main`. Supabase sync is implemented and live —
 outbox push/pull + tombstoned soft-delete sync in `lib/features/backup/` (`sync_service.dart`,
@@ -13,10 +13,10 @@ outbox push/pull + tombstoned soft-delete sync in `lib/features/backup/` (`sync_
 - Flutter 3.44.2 · Dart 3.12.2 · Xcode 26.6.
 - **iOS uses Swift Package Manager, not CocoaPods** — there is intentionally no `ios/Podfile`.
   Don't try to `pod install`; it will fail with "No Podfile found" and that is expected.
-- Package name is `climbtopo`; app entrypoint is `main()` in `lib/main.dart`. It builds a
+- Package name is `masi`; app entrypoint is `main()` in `lib/main.dart`. It builds a
   `ProviderContainer`, awaits `container.read(photoFilesProvider).warmDocsPath()` to pre-warm the
   photo-path cache before the first frame, then calls
-  `runApp(UncontrolledProviderScope(container: container, child: const ClimbTopoApp()))` —
+  `runApp(UncontrolledProviderScope(container: container, child: const MasiApp()))` —
   not the plain `ProviderScope(child: ...)` pattern.
 
 ## Web port (in progress — v2 plan)
@@ -95,7 +95,7 @@ Screenshots are persisted by `test_driver/integration_test.dart` (an `integratio
 `onScreenshot` callback) into **`build/screenshots/<name>.png>`**. Flows live in `integration_test/`.
 
 1. Write/extend a flow in `integration_test/<name>_test.dart`. It launches the real app
-   (`import 'package:climbtopo/main.dart' as app; ... app.main();`), drives taps via
+   (`import 'package:masi/main.dart' as app; ... app.main();`), drives taps via
    `find.byKey(...)`, and calls `await binding.takeScreenshot('NN-label')` at each state worth seeing.
    Target widgets by **Key** (e.g. `area-add-fab`, `area-item-<id>`) — never pixel coordinates.
    (On iOS no `convertFlutterSurfaceToImage()` is needed; on Android it is, before each screenshot.)
@@ -125,7 +125,7 @@ asset) before `app.main()`. Wire this seam when we start testing canvas fixes �
   human-in-the-loop. Everything else is simulator-verifiable.
 - **CoreSimulator flakiness**: if `flutter drive` hangs on install with `IXErrorDomain code=2 / "Failed to
   create promise"`, kill the process, quit Simulator.app, `killall -9 com.apple.CoreSimulator.CoreSimulatorService`,
-  reboot the sim, `xcrun simctl uninstall booted com.climbtopo.climbtopo`, and retry.
+  reboot the sim, `xcrun simctl uninstall booted com.xlypton.masi`, and retry.
 
 ### On-device debugging (physical iPhone, iOS 27) — hard-won facts
 The AR/camera path can ONLY be verified on the physical device, and the usual `flutter run` loop is broken there. What actually works:
@@ -142,12 +142,12 @@ The AR/camera path can ONLY be verified on the physical device, and the usual `f
 - **Capture device console via `devicectl`** (launches the app fresh AND streams its console; run in background, then grep):
   ```bash
   xcrun devicectl device process launch --console --terminate-existing \
-    --device <deviceid> com.climbtopo.climbtopo > /tmp/console.log 2>&1
+    --device <deviceid> com.xlypton.masi > /tmp/console.log 2>&1
   ```
   `--terminate-existing` relaunches without reinstalling, so app data (your seeded topo) survives.
 - **CRITICAL — what devicectl `--console` captures:** native **`NSLog` (os_log) YES, Dart `print`/`debugPrint` NO** (in a release build). So for on-device diagnosis, put diagnostic logging in **native Swift `NSLog`** (with a greppable prefix, e.g. `AR_DBG`). Dart-side logs will NOT surface in release + devicectl. (Debug/attach would show Dart logs, but attach is broken here — see above.)
-- **Flutter PlatformView channel gotcha (root-caused a black-AR bug):** the `climbtopo/ar` `MethodChannel` handler is registered **lazily inside `ArPlatformView.init`, which runs only when the `UiKitView` MOUNTS**. Any channel call fired before mount (e.g. from `initState`/`_load`, right after `setState`) is sent before the native handler exists and is silently dropped (`MissingPluginException`). **Gate platform-view channel calls on `UiKitView.onPlatformViewCreated`, never on `initState`/data-load timing.**
-- **Device facts:** `PetiTeló ☄️`, device id via `flutter devices` (was `00008140-0011585936EB001C`), bundle id `com.climbtopo.climbtopo`, dev team `8773L4RF2P` (free personal → 7-day profiles). **Uninstall — or a 7-day profile expiry — wipes app data + the login session; a plain in-place `devicectl device install app` does NOT (see the in-place-update rule above).**
+- **Flutter PlatformView channel gotcha (root-caused a black-AR bug):** the `masi/ar` `MethodChannel` handler is registered **lazily inside `ArPlatformView.init`, which runs only when the `UiKitView` MOUNTS**. Any channel call fired before mount (e.g. from `initState`/`_load`, right after `setState`) is sent before the native handler exists and is silently dropped (`MissingPluginException`). **Gate platform-view channel calls on `UiKitView.onPlatformViewCreated`, never on `initState`/data-load timing.**
+- **Device facts:** `PetiTeló ☄️`, device id via `flutter devices` (was `00008140-0011585936EB001C`), bundle id `com.xlypton.masi`, dev team `8773L4RF2P` (free personal → 7-day profiles). **Uninstall — or a 7-day profile expiry — wipes app data + the login session; a plain in-place `devicectl device install app` does NOT (see the in-place-update rule above).**
 
 ### Fallbacks (not set up, document-only)
 - `idb` (`brew install idb-companion && pip install fb-idb`) → `idb ui describe-all` (accessibility tree),

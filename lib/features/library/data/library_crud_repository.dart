@@ -1376,7 +1376,7 @@ class LibraryCrudRepository {
   /// soft-deleted tombstones are never claimed. Runs in one transaction so a
   /// crash mid-backfill can't leave some tables claimed and others not.
   ///
-  /// Wired to fire once per sign-in from `ClimbTopoApp`'s
+  /// Wired to fire once per sign-in from `MasiApp`'s
   /// `handleAuthStateForClaimOwnership` listener (see `lib/app/`) on the
   /// signed-out -> signed-in edge of `authStateProvider`.
   Future<void> claimOwnership(String uid) {

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// Regression test for the search-field magnifier bug: `MasiIcon('search',
 /// size: 13, ...)` passed as `InputDecoration.prefixIcon` rendered ~48x48

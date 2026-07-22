@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
-import 'package:climbtopo/shared/filtering/style_filter_chips.dart' show FilterChoiceChip;
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/logbook/data/ascents_repository.dart';
+import 'package:masi/shared/filtering/style_filter_chips.dart' show FilterChoiceChip;
 
 /// Capitalizes an [AscentStyle]'s `name` for display (e.g. `onsight` ->
 /// `Onsight`, `redpoint` -> `Redpoint`).

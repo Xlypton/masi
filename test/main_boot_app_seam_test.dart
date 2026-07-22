@@ -24,7 +24,7 @@
 // `tool/drive_web.sh` in headless Chrome, NOT by `flutter test`), plus the
 // existing non-web-specific auth-wall redirect coverage in
 // `test/app/router_test.dart`.
-import 'package:climbtopo/main.dart' show bootApp;
+import 'package:masi/main.dart' show bootApp;
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_test/flutter_test.dart';
 

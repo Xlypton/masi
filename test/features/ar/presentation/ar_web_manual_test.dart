@@ -1,15 +1,15 @@
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/ar/application/ar_channel.dart';
-import 'package:climbtopo/features/ar/application/ar_controller.dart';
-import 'package:climbtopo/features/ar/application/manual_align_controller.dart';
-import 'package:climbtopo/features/ar/domain/homography.dart';
-import 'package:climbtopo/features/ar/presentation/ar_overlay_painter.dart';
-import 'package:climbtopo/features/ar/presentation/ar_screen.dart';
-import 'package:climbtopo/features/library/application/library_providers.dart';
-import 'package:climbtopo/features/topo/data/route_repository.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/ar/application/ar_channel.dart';
+import 'package:masi/features/ar/application/ar_controller.dart';
+import 'package:masi/features/ar/application/manual_align_controller.dart';
+import 'package:masi/features/ar/domain/homography.dart';
+import 'package:masi/features/ar/presentation/ar_overlay_painter.dart';
+import 'package:masi/features/ar/presentation/ar_screen.dart';
+import 'package:masi/features/library/application/library_providers.dart';
+import 'package:masi/features/topo/data/route_repository.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -41,7 +41,7 @@ class _FakePathProviderPlatform extends PathProviderPlatform {
 /// pumping [ArAlignmentStage] directly (with a harmless placeholder
 /// `cameraView`) against a real [ProviderContainer] — the same documented
 /// seam that group's own class doc explains — just with `autoTracking:
-/// false` this time, and no mocked `climbtopo/ar` `MethodChannel` at all:
+/// false` this time, and no mocked `masi/ar` `MethodChannel` at all:
 /// the whole point of this flag is that web never touches that channel, so
 /// if any of the paths under test somehow DID reach a real platform-channel
 /// call, it would throw `MissingPluginException` (no mock registered here)
@@ -215,7 +215,7 @@ void main() {
         // reduces to (a pure-Dart arLockedProvider.toggle(), no channel
         // call at all — see that method), so this exercises precisely the
         // same rendering path a real tap would, without needing a mocked
-        // `climbtopo/ar` MethodChannel in this file at all.
+        // `masi/ar` MethodChannel in this file at all.
         container.read(arLockedProvider.notifier).toggle();
         await tester.pump();
 
@@ -283,7 +283,7 @@ void main() {
             // arChannelProvider.setMode call. Left un-overridden, that
             // resolves to createArChannel()'s REAL (non-noop) backing on
             // this native-VM test host (see ar_channel_factory_native.dart)
-            // — a genuine `climbtopo/ar` MethodChannel call with no mock
+            // — a genuine `masi/ar` MethodChannel call with no mock
             // handler registered in this file, which becomes an orphaned,
             // never-completing Future rather than a clean, immediate no-op.
             // Overriding to ArChannel.noop() here keeps this group

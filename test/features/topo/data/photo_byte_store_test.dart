@@ -5,7 +5,7 @@
 // so these tests genuinely cover the store's put/get/delete logic.
 import 'dart:typed_data';
 
-import 'package:climbtopo/features/topo/data/photo_byte_store.dart';
+import 'package:masi/features/topo/data/photo_byte_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:idb_shim/idb_client_memory.dart';
 

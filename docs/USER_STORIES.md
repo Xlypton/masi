@@ -1,7 +1,7 @@
-# masi (ClimbTopo) — User Stories & Use Cases
+# masi (Masi) — User Stories & Use Cases
 
-**Package:** `climbtopo` · **Status:** v1 (M0–M6) + v2 AR code-complete on `main`; Supabase sync deferred.
-**Source of truth for behavior:** `/Users/kerip/Projects/masi/CLIMBTOPO.md` and `/Users/kerip/Projects/masi/DESIGN.md`.
+**Package:** `masi` · **Status:** v1 (M0–M6) + v2 AR code-complete on `main`; Supabase sync deferred.
+**Source of truth for behavior:** `/Users/kerip/Projects/masi/MASI.md` and `/Users/kerip/Projects/masi/DESIGN.md`.
 This document is the source of truth for UI test derivation — every story below is written so an
 implementer can turn its acceptance criteria directly into `testWidgets` assertions.
 
@@ -16,21 +16,21 @@ implementer can turn its acceptance criteria directly into `testWidgets` asserti
 ## 1. Introduction
 
 **One-liner:** masi is a visual-first topo editor for rock climbers — photograph a wall, draw route
-lines directly on the photo, name and grade them, done. (CLIMBTOPO.md:L1, L5)
+lines directly on the photo, name and grade them, done. (MASI.md:L1, L5)
 
 **North-star contribution flow:** *open app → pick photo → draw line → name + grade → done*, targeting
-under two minutes, offline, one-handed. (CLIMBTOPO.md:L7, L9; DESIGN.md:L139)
+under two minutes, offline, one-handed. (MASI.md:L7, L9; DESIGN.md:L139)
 
 **Personas:**
 - **The climber at the crag** — no signal, one free hand, needs to document a new line before the
-  next party arrives. This is the primary and only persona named in the spec. (CLIMBTOPO.md:L6-7)
+  next party arrives. This is the primary and only persona named in the spec. (MASI.md:L6-7)
 - **The organizer** (same person, later, at home) — drills into Area→Sector→Wall to tidy up, rename,
   or delete stale entries. Secondary to the contribution flow by design: reachable via "Organize," not
   the home screen. (DESIGN.md:L102)
 
 **Platform scope for v1 stories:**
-- iOS-primary, Flutter, phone form factor first. (CLIMBTOPO.md:L11-13; DESIGN.md:L7)
-- Fully local-first (Drift/SQLite); zero-connectivity functional. (CLIMBTOPO.md:L193-196)
+- iOS-primary, Flutter, phone form factor first. (MASI.md:L11-13; DESIGN.md:L7)
+- Fully local-first (Drift/SQLite); zero-connectivity functional. (MASI.md:L193-196)
 - **Out of scope for this document** (spec marks v2 or not-planned; see "Out of scope" section at the
   end): AR live route viewer, cloud sync, auth, community discovery/map, image upload to Supabase,
   multi-pitch routes, in-app camera/panorama stitching, ascent logbook, grade voting. Everywhere below,
@@ -132,7 +132,7 @@ granted or about to be requested by the OS.
   photo, no extra screens.
 **Covers spec:** DESIGN.md:L104 ("Primary action = a filled amethyst button 'New topo'... → opens the
 photo-source action sheet → on capture, create the topo and push straight to the canvas."); DESIGN.md:
-L114-120 (action sheet spec); CLIMBTOPO.md:L168-172 (`image_picker`, no in-app camera); CLIMBTOPO.md:
+L114-120 (action sheet spec); MASI.md:L168-172 (`image_picker`, no in-app camera); MASI.md:
 L73.
 **Test:** library_ui_intent_test.dart → A6e. (Existing coverage today: photo_source_sheet_test.dart —
 not part of the intent-test id map but exercises the same sheet.)
@@ -184,9 +184,9 @@ the intent test below, which frames it as fixing a regression (BUG-1a/BUG-1c).
 
 ### Epic B — Library CRUD (Area / Sector / Wall)
 
-Background: `Area → Sector → Wall → {Photo(s), Route(s)}` (CLIMBTOPO.md:L119-125), reached from Home
+Background: `Area → Sector → Wall → {Photo(s), Route(s)}` (MASI.md:L119-125), reached from Home
 via "Organize" (DESIGN.md:L102). Every table follows sync-ready conventions: UUIDv4 id, createdAt/
-updatedAt, soft-delete via `deletedAt` (CLIMBTOPO.md:L127-131).
+updatedAt, soft-delete via `deletedAt` (MASI.md:L127-131).
 
 #### US-LIB1: Create an Area
 **As a** user organizing my library **I want** to create a new Area (e.g. a crag) **so that** I have a
@@ -202,7 +202,7 @@ place to file its sectors and walls.
 - Given the name field is empty, then the confirm action is disabled or submission is rejected (no
   empty-named Area is ever created).
 - Given the Areas list was empty, then after creation it shows exactly one row with the new name.
-**Covers spec:** CLIMBTOPO.md:L119-125 (hierarchy), L135-136 (Area entity), L262 (Milestone 6: "Area /
+**Covers spec:** MASI.md:L119-125 (hierarchy), L135-136 (Area entity), L262 (Milestone 6: "Area /
 Sector / Wall lists + create/edit/delete").
 **Test:** library_ui_intent_test.dart → A6a.
 
@@ -215,7 +215,7 @@ crag's real name.
 - When the user confirms a new non-empty name, then the Area's name is updated in place and
   `updatedAt` advances.
 - Given the user cancels the rename dialog, then the Area's name is unchanged.
-**Covers spec:** CLIMBTOPO.md:L262; CLIMBTOPO.md:L127-131 (updatedAt convention).
+**Covers spec:** MASI.md:L262; MASI.md:L127-131 (updatedAt convention).
 **Test:** library_ui_intent_test.dart → A6a.
 
 #### US-LIB3: Delete an Area with confirmation (soft delete)
@@ -232,7 +232,7 @@ crag's worth of sectors/walls/routes by a stray tap.
 - When confirmed, then the Area is soft-deleted (`deletedAt` set, row not physically removed) and no
   longer appears in the Areas list.
 - When cancelled, then the Area remains fully intact and visible.
-**Covers spec:** CLIMBTOPO.md:L127-131 (soft-delete convention); L262.
+**Covers spec:** MASI.md:L127-131 (soft-delete convention); L262.
 **Test:** library_ui_intent_test.dart → A6a.
 
 #### US-LIB4: Drill down Area → Sector → Wall
@@ -248,7 +248,7 @@ its Walls **so that** I can navigate the hierarchy the data model implies.
 - When the user taps a Sector, then only Walls belonging to that Sector are listed.
 - Back navigation from Walls returns to the same Sector's position in the Sectors list (state
   preserved, not reset to Areas root).
-**Covers spec:** CLIMBTOPO.md:L119-125 (hierarchy); DESIGN.md:L102 ("keep it reachable via... Organize").
+**Covers spec:** MASI.md:L119-125 (hierarchy); DESIGN.md:L102 ("keep it reachable via... Organize").
 **Test:** library_ui_intent_test.dart → A6b.
 
 #### US-LIB5: Create / rename / delete a Sector
@@ -261,7 +261,7 @@ have **so that** the whole hierarchy is manageable consistently.
 - Rename: confirmed edits update the Sector's name in place.
 - Delete: requires confirmation; on confirm, sets `deletedAt` and removes it from the visible Sectors
   list under that Area.
-**Covers spec:** CLIMBTOPO.md:L138 (Sector entity); L262.
+**Covers spec:** MASI.md:L138 (Sector entity); L262.
 **Test:** library_ui_intent_test.dart → A6b.
 
 #### US-LIB6: Create / rename a Wall
@@ -273,7 +273,7 @@ has its own record to attach photos and routes to.
 - Create: a non-empty name persists a new Wall under the current Sector.
 - Rename: confirmed edits update the Wall's name in place, and (per US-NAV1) that name is what the
   canvas nav title subsequently shows.
-**Covers spec:** CLIMBTOPO.md:L140 (Wall entity); DESIGN.md:L98-99 (canvas title = wall name).
+**Covers spec:** MASI.md:L140 (Wall entity); DESIGN.md:L98-99 (canvas title = wall name).
 **Test:** library_ui_intent_test.dart → A6c.
 
 #### US-LIB7: Delete a Wall cascades to its Photos and Routes
@@ -292,7 +292,7 @@ has its own record to attach photos and routes to.
   to non-deleted records (e.g. Home's topo list, the canvas).
 - The cascade is a DAO-level guarantee, independently verified against an in-memory SQLite DB (not
   just a UI-level hide).
-**Covers spec:** CLIMBTOPO.md:L241 ("Drift DAO tests against an in-memory SQLite DB: CRUD, soft-delete,
+**Covers spec:** MASI.md:L241 ("Drift DAO tests against an in-memory SQLite DB: CRUD, soft-delete,
 cascade on Wall delete, migration round-trips.").
 **Test:** library_ui_intent_test.dart → A6c.
 
@@ -311,7 +311,7 @@ tapping Retry re-issues the query.
 - Given a query throws, then an error state with a visible "Retry" affordance renders instead of a
   crash or infinite spinner.
 - When "Retry" is tapped, then the query re-runs and, on success, the normal list/empty state renders.
-**Covers spec:** CLIMBTOPO.md:L262 ("...empty/error states."). Exact retry copy/mechanics are not
+**Covers spec:** MASI.md:L262 ("...empty/error states."). Exact retry copy/mechanics are not
 spelled out further in either spec file.
 **Test:** library_ui_intent_test.dart → A6b, A6c (empty/error coverage split across Sectors/Walls).
 
@@ -320,7 +320,7 @@ spelled out further in either spec file.
 ### Epic C — Canvas Modes (View ↔ Draw)
 
 The single highest-risk UX decision in the spec: gesture ownership is resolved by an **explicit,
-binary mode toggle**, never per-gesture arbitration. (CLIMBTOPO.md:L226, L272)
+binary mode toggle**, never per-gesture arbitration. (MASI.md:L226, L272)
 
 #### US-MODE1: Toggle explicitly between View and Draw
 **As a** user on the topo canvas **I want** an explicit toggle between View and Draw modes **so that**
@@ -338,7 +338,7 @@ I always know unambiguously whether my next touch will pan/zoom the photo or pla
 - Given Draw mode, then `InteractiveViewer.panEnabled == false` (pan is locked so single-finger
   gestures are unambiguously point-placement).
 - Given View mode, then `InteractiveViewer.panEnabled == true` and `scaleEnabled == true`.
-**Covers spec:** CLIMBTOPO.md:L181 ("Explicit mode toggle — View ↔ Draw... in View mode
+**Covers spec:** MASI.md:L181 ("Explicit mode toggle — View ↔ Draw... in View mode
 InteractiveViewer owns gestures; in Draw mode a GestureDetector captures tap/drag... InteractiveViewer
 pan is locked."); L226; L272.
 **Test:** canvas_mode_intent_test.dart → A1b, A1f.
@@ -354,7 +354,7 @@ added to any route.
   created or modified.
 - Given View mode, when the user pinches, then the viewport zooms and no route/point is created or
   modified.
-**Covers spec:** CLIMBTOPO.md:L181.
+**Covers spec:** MASI.md:L181.
 **Test:** canvas_mode_intent_test.dart → A1f.
 
 #### US-MODE3: Draw mode locks panning so taps place points unambiguously
@@ -367,7 +367,7 @@ placement/edit, never to InteractiveViewer's pan handler.
 - Given Draw mode, then `InteractiveViewer.panEnabled == false`.
 - Given Draw mode, when the user taps the photo, then a point is appended to the in-progress route
   (see Epic D), not interpreted as a pan gesture.
-**Covers spec:** CLIMBTOPO.md:L181, L272 ("lock InteractiveViewer pan in Draw mode. Decided up front,
+**Covers spec:** MASI.md:L181, L272 ("lock InteractiveViewer pan in Draw mode. Decided up front,
 not arbitrated per-gesture.").
 **Test:** canvas_mode_intent_test.dart → A1f.
 
@@ -406,7 +406,7 @@ guard).
 
 ### Epic D — Draw Flow
 
-"Draw first, fill metadata second — never block the creative flow with a form." (CLIMBTOPO.md:L222)
+"Draw first, fill metadata second — never block the creative flow with a form." (MASI.md:L222)
 
 #### US-DRAW1: Place route points by tapping/dragging on the photo
 **As a** user in Draw mode **I want** to tap or drag on the photo to lay down a sequence of points
@@ -420,7 +420,7 @@ guard).
 - Given Draw mode, when the user taps the photo, then `drawControllerProvider.currentPoints` grows by
   one entry at the tapped location.
 - Given Draw mode, when the user adds two or more points, then a preview line renders through them.
-**Covers spec:** CLIMBTOPO.md:L182 ("Draw a route: tap/drag places points...").
+**Covers spec:** MASI.md:L182 ("Draw a route: tap/drag places points...").
 **Test:** canvas_mode_intent_test.dart → A1b (setup precondition for A1c/A1e); no dedicated point-
 placement geometry test in the current map — (gap — no coverage yet) for placement geometry itself.
 
@@ -436,7 +436,7 @@ points and converts it to a cubic bézier (`Path.cubicTo`) for display.
 - Given Draw mode specifically, then the raw (un-smoothed) point positions are also visibly rendered
   (e.g. as handles/dots) alongside the smoothed curve, so the user can see where their actual taps
   landed.
-**Covers spec:** CLIMBTOPO.md:L182 ("rendered as a smoothed Catmull-Rom spline (converted to cubic
+**Covers spec:** MASI.md:L182 ("rendered as a smoothed Catmull-Rom spline (converted to cubic
 bézier via Path.cubicTo)"); L276 ("show raw points in Draw mode").
 **Test:** (gap — no coverage yet; no spline-fidelity assertions exist in the current intent-test map).
 
@@ -449,7 +449,7 @@ re-renders through the new position.
 **Acceptance criteria (Given/When/Then):**
 - Given an existing point, when the user drags its handle, then that point's coordinates update (not
   a new point appended) and the rendered curve reflects the new position.
-**Covers spec:** CLIMBTOPO.md:L184 ("Point editing: drag an existing point to nudge it (smoothing
+**Covers spec:** MASI.md:L184 ("Point editing: drag an existing point to nudge it (smoothing
 means raw taps rarely land perfectly).").
 **Test:** (gap — no coverage yet).
 
@@ -468,7 +468,7 @@ route **so that** I can correct mistakes without affecting already-committed rou
   to before the Undo.
 - Given a previously committed route (already in `routes`), then Undo/Redo never mutates that
   committed route's points — only the in-progress (uncommitted) route is affected.
-**Covers spec:** CLIMBTOPO.md:L183 ("Undo/redo stack scoped to the in-progress route."); DESIGN.md:
+**Covers spec:** MASI.md:L183 ("Undo/redo stack scoped to the in-progress route."); DESIGN.md:
 L127 (bottom pill: "undo / redo / commit").
 **Test:** canvas_mode_intent_test.dart → A1b (buttons present in Draw mode); undo/redo *stack
 semantics* specifically: (gap — no coverage yet).
@@ -509,7 +509,7 @@ at least two points to be a line).
   is absent.
 - Immediately after commit, exactly one `RouteMetadataSheet` widget is present, scoped to the new
   route.
-**Covers spec:** CLIMBTOPO.md:L189-191 ("Draw first, fill second... After the line is drawn, a sheet
+**Covers spec:** MASI.md:L189-191 ("Draw first, fill second... After the line is drawn, a sheet
 collects: name, grade..."); L222.
 **Test:** canvas_mode_intent_test.dart → A1c.
 
@@ -526,7 +526,7 @@ Sheet dismisses. Canvas remains in View mode with the toolbar cluster absent.
 - Given the sheet has been dismissed and the screen is unmounted then re-mounted for the same wall
   (simulating close+reopen), then the fresh mount also starts in View mode with the cluster absent
   (ties to US-MODE4).
-**Covers spec:** CLIMBTOPO.md:L189-191; canonicalized further by intent test (BUG-1c).
+**Covers spec:** MASI.md:L189-191; canonicalized further by intent test (BUG-1c).
 **Test:** canvas_mode_intent_test.dart → A1d.
 
 ---
@@ -548,7 +548,7 @@ apply to passive browsing.
   `topo-undo-button`/`topo-redo-button`/`topo-clear-button`/`topo-commit-button` all resolve to
   `findsNothing`.
 - Given Draw mode, then all four resolve to `findsOneWidget`.
-**Covers spec:** DESIGN.md:L127 (toolbar composition); CLIMBTOPO.md:L181 (mode is the single source of
+**Covers spec:** DESIGN.md:L127 (toolbar composition); MASI.md:L181 (mode is the single source of
 truth for which gesture/UI layer is active).
 **Test:** canvas_mode_intent_test.dart → A1a, A1b.
 
@@ -563,7 +563,7 @@ hides in the same frame/rebuild, not on a subsequent user action.
 - Given a commit action, then in the very next pump after commit, `mode == DrawMode.view` AND the
   cluster is fully absent — there is no intermediate frame where mode is View but the cluster is
   still showing.
-**Covers spec:** CLIMBTOPO.md:L189-191; DESIGN.md:L127. Regression tag: BUG-1b.
+**Covers spec:** MASI.md:L189-191; DESIGN.md:L127. Regression tag: BUG-1b.
 **Test:** canvas_mode_intent_test.dart → A1c.
 
 #### US-TOOLBAR3: The toolbar cluster never occludes the route list/legend
@@ -587,7 +587,7 @@ regression guard (BUG-1d).
 
 ### Epic F — Route Legend
 
-The spec never names a discrete "legend" widget — CLIMBTOPO.md:L186-187 only specifies the
+The spec never names a discrete "legend" widget — MASI.md:L186-187 only specifies the
 *capabilities* (toggle on/off, tap-to-select). The stories below define the legend as the concrete UI
 surface that satisfies those capabilities, per the `topo-route-legend` key already referenced by the
 canvas-mode tests (Epic E) and the dedicated `route_legend_intent_test.dart` suite.
@@ -601,7 +601,7 @@ independent of mode — only the *toolbar cluster* is mode-scoped, per Epic E).
 **Acceptance criteria (Given/When/Then):**
 - Given ≥1 route, then `topo-route-legend` is mounted and its full rendered rect lies within the
   screen's safe-area bounds — no part is clipped by the screen edge or hidden behind other chrome.
-**Covers spec:** CLIMBTOPO.md:L186-187 (routes must be inspectable/toggleable at all times); layout
+**Covers spec:** MASI.md:L186-187 (routes must be inspectable/toggleable at all times); layout
 guarantee is otherwise implementation-level, canonicalized by the dedicated legend intent-test suite.
 **Test:** route_legend_intent_test.dart → A2a.
 
@@ -646,7 +646,7 @@ stop rendering on the canvas → toggling again restores it.
 - When a route's toggle is tapped from visible→hidden, then that route's polyline and symbols are no
   longer painted on the canvas, while other routes are unaffected.
 - When toggled hidden→visible again, then it re-renders exactly as before.
-**Covers spec:** CLIMBTOPO.md:L186-187 ("Toggle individual routes on/off...").
+**Covers spec:** MASI.md:L186-187 ("Toggle individual routes on/off...").
 **Test:** route_legend_intent_test.dart → A2d.
 
 #### US-LEGEND5: Tap a legend row to select its route
@@ -658,7 +658,7 @@ tapping the rendered line, see US-APPEAR3) → its row is visually marked as sel
 **Acceptance criteria (Given/When/Then):**
 - When a legend row is tapped, then that route's id becomes the canvas's selected-route id.
 - The selected row is visually distinguished (e.g. highlight) from unselected rows.
-**Covers spec:** CLIMBTOPO.md:L187 ("tap a rendered route to select it") — extended by the legend as an
+**Covers spec:** MASI.md:L187 ("tap a rendered route to select it") — extended by the legend as an
 alternate, always-reliable selection entry point.
 **Test:** route_legend_intent_test.dart → A2e.
 
@@ -672,7 +672,7 @@ soft-delete pattern used elsewhere) → route removed from the legend and canvas
 - When the user confirms deletion of a route from its legend row, then that route no longer renders on
   the canvas and no longer appears in the legend.
 - Other routes on the same wall are unaffected.
-**Covers spec:** Not stated verbatim in spec; consistent with the soft-delete convention (CLIMBTOPO.md:
+**Covers spec:** Not stated verbatim in spec; consistent with the soft-delete convention (MASI.md:
 L127-131) applied at the route level. Defined concretely by the legend intent-test suite.
 **Test:** route_legend_intent_test.dart → A2f.
 
@@ -687,7 +687,7 @@ matching its difficulty band **so that** I can gauge a wall's difficulty spread 
   mapped color (see US-GRADE5's band→color table) and its label text includes the route's `gradeRaw`.
 - The swatch color is never the app's amethyst accent color — accent is reserved for interactive
   affordances, not grade information (see US-GRADE7).
-**Covers spec:** CLIMBTOPO.md:L186 ("Each route has a grade-band color + a number label."); DESIGN.md:
+**Covers spec:** MASI.md:L186 ("Each route has a grade-band color + a number label."); DESIGN.md:
 L137 ("grade colors inform; the accent is spent on intent alone.").
 **Test:** route_legend_intent_test.dart → A2g.
 
@@ -721,7 +721,7 @@ numbered label near it (e.g. at its midpoint or start).
 - Given a route with `colorBand == advanced`, then its rendered stroke color equals the advanced band
   color (`#E08A2B`, per US-GRADE5).
 - Given N committed routes on a wall, then each has a distinct, visible number label.
-**Covers spec:** CLIMBTOPO.md:L186 ("Each route has a grade-band color + a number label."); DESIGN.md:
+**Covers spec:** MASI.md:L186 ("Each route has a grade-band color + a number label."); DESIGN.md:
 L26-35 (band→hex table).
 **Test:** (gap — no coverage yet).
 
@@ -740,7 +740,7 @@ selected.
 - Given a tap farther than the threshold from every route, then selection is cleared (no route
   selected) — the threshold itself scales with current zoom, so it represents a roughly constant
   on-screen hit radius regardless of zoom level.
-**Covers spec:** CLIMBTOPO.md:L187 ("tap a rendered route to select it (hit-test = min distance from
+**Covers spec:** MASI.md:L187 ("tap a rendered route to select it (hit-test = min distance from
 tap to polyline segments, threshold scaled to current zoom)").
 **Test:** (gap — no coverage yet).
 
@@ -776,7 +776,7 @@ that** other climbers can see where the anchor, bolts, crux, or rest points are.
   the tapped location, stored as `{type, x, y}` in percent coordinates (0–1 or 0–100 of image
   dimensions, not raw pixels).
 - Given the five symbol types, then each renders with its own distinct glyph (●, ✕, △, ★, ⊙).
-**Covers spec:** CLIMBTOPO.md:L148 ("symbols: List<TopoSymbol> → {type, x, y}... Types: anchor ●, bolt
+**Covers spec:** MASI.md:L148 ("symbols: List<TopoSymbol> → {type, x, y}... Types: anchor ●, bolt
 ✕, top △, crux ★, rest ⊙."); L185 ("Symbol placement: anchor/bolt/top/crux/rest, positioned in percent
 space."); L254.
 **Test:** (gap — no coverage yet).
@@ -806,7 +806,7 @@ space.
 - Given a symbol at original-percent coordinates `(x, y)` and a slice with `cropXpct`/`cropWidthPct`,
   then the symbol's position on that slice is computed by the same percent re-projection formula used
   for route points (US-SLICE2), and renders at the visually corresponding rock feature.
-**Covers spec:** CLIMBTOPO.md:L162 (percent-of-original invariant, "the backbone of the app") applied
+**Covers spec:** MASI.md:L162 (percent-of-original invariant, "the backbone of the app") applied
 to symbols by the same percent-space design (L148, L185).
 **Test:** (gap — no coverage yet).
 
@@ -831,7 +831,7 @@ drawing it, without interrupting the drawing flow itself.
 - When the user saves with a valid name and grade, then the route's `name`, `gradeRaw`,
   `gradeSystem`, `style`, and `description` (if provided) persist, and `gradeSortKey` + `colorBand`
   are computed and persisted alongside them.
-**Covers spec:** CLIMBTOPO.md:L189-191 ("a sheet collects: name, grade (with grade-system picker:
+**Covers spec:** MASI.md:L189-191 ("a sheet collects: name, grade (with grade-system picker:
 French | UIAA), style, description. Grade entry validates against the chosen system's ladder and
 computes gradeSortKey + colorBand.").
 **Test:** route_metadata_intent_test.dart → A5a.
@@ -848,7 +848,7 @@ changes which ladder subsequent grade-value entry validates against.
   fewer (v1 explicitly excludes YDS/V-scale/Font; those are v2-only per the scope table).
 - When the user switches systems, then the grade-value input/picker is re-validated against the newly
   selected system's ladder.
-**Covers spec:** CLIMBTOPO.md:L27 (scope table: v1 = French + UIAA only); L189-191; L200-206 (ladder
+**Covers spec:** MASI.md:L27 (scope table: v1 = French + UIAA only); L189-191; L200-206 (ladder
 tables); DESIGN.md:L123 ("segmented control... for grade system (French / UIAA).").
 **Test:** route_metadata_intent_test.dart → A5b.
 
@@ -866,7 +866,7 @@ rejected (save disabled, or inline error shown).
   it's accepted and mapped to its canonical `gradeSortKey`.
 - Given a value not present in the currently selected system's ladder, then save is blocked / an
   error is shown — no route is persisted with an unrecognized grade token.
-**Covers spec:** CLIMBTOPO.md:L200-206 ("table-driven service in core/grades; ladders for French...
+**Covers spec:** MASI.md:L200-206 ("table-driven service in core/grades; ladders for French...
 and UIAA... each mapping token→canonical numeric sortKey."); L189-191.
 **Test:** route_metadata_intent_test.dart → A5c.
 
@@ -882,7 +882,7 @@ different system than I chose.
   French — never silently re-rendered as a UIAA-equivalent token.
 - `gradeSortKey` is a derived/normalized field used only for ordering and color-banding; it never
   overwrites or is displayed in place of `gradeRaw`.
-**Covers spec:** CLIMBTOPO.md:L149 ("gradeRaw + gradeSystem preserve exactly what the user entered.").
+**Covers spec:** MASI.md:L149 ("gradeRaw + gradeSystem preserve exactly what the user entered.").
 **Test:** route_metadata_intent_test.dart → A5d.
 
 #### US-GRADE5: Difficulty is mapped to one of five color bands
@@ -909,7 +909,7 @@ difficulty ranges:
 - Given a grade ≥8a, then `colorBand == elite` / `#8A5CD1`.
 - A UIAA-graded route maps to the same five bands via its ladder's normalized `gradeSortKey` — band
   boundaries are defined once, on the normalized scale, not duplicated per system.
-**Covers spec:** CLIMBTOPO.md:L208-216 (band→color table); DESIGN.md:L26-35 (band hex values +
+**Covers spec:** MASI.md:L208-216 (band→color table); DESIGN.md:L26-35 (band hex values +
 French ranges, "map to the existing grade-band logic in core/grades").
 **Test:** route_metadata_intent_test.dart → A5e.
 
@@ -926,7 +926,7 @@ style.
   `gradeRaw == null` (or equivalent ungraded sentinel).
 - Given style = sport or trad, then a valid grade is required to save (per US-GRADE3's ladder
   validation) — boulder is the only style where grading is optional.
-**Covers spec:** CLIMBTOPO.md:L206 ("boulder-style routes tagged style=boulder, graded in French/UIAA
+**Covers spec:** MASI.md:L206 ("boulder-style routes tagged style=boulder, graded in French/UIAA
 or left ungraded.").
 **Test:** route_metadata_intent_test.dart → A5a (folded into the general metadata-save assertion; no
 boulder-specific sub-case currently isolated) — (gap — boulder-specific optionality not isolated yet).
@@ -966,7 +966,7 @@ photo").
   no custom in-app gallery UI is built.
 - On a successful pick, the returned image becomes the new/replacement Photo (kind=original) for the
   target wall.
-**Covers spec:** CLIMBTOPO.md:L168-172 ("Pick photo or panorama from native library via image_picker
+**Covers spec:** MASI.md:L168-172 ("Pick photo or panorama from native library via image_picker
 (no in-app camera)."); L73; DESIGN.md:L114-120.
 **Test:** (gap — no coverage yet against the six mapped intent-test files; existing
 photo_source_sheet_test.dart exercises the sheet itself but is outside the given id map).
@@ -981,7 +981,7 @@ in-app camera) → user captures → app receives the file.
 - When "Take photo" is tapped, then `ImageSource.camera` is requested — the app never renders its own
   camera preview/capture UI.
 - On successful capture, the returned image becomes the new/replacement Photo for the target wall.
-**Covers spec:** CLIMBTOPO.md:L168-172; L233 ("in-app camera or panorama stitching" is explicitly
+**Covers spec:** MASI.md:L168-172; L233 ("in-app camera or panorama stitching" is explicitly
 "deferred indefinitely / not planned" — reinforcing that the native camera, not a custom one, is the
 only capture path, now and in the future).
 **Test:** (gap — no coverage yet).
@@ -999,7 +999,7 @@ and strips/normalizes the orientation tag before storing.
   visual result.
 - All subsequent percent-space coordinate math (route points, symbols, slice crops) operates against
   this normalized image, never needing to consult an orientation flag.
-**Covers spec:** CLIMBTOPO.md:L170 ("Normalize EXIF orientation on import (bake rotation into pixels)
+**Covers spec:** MASI.md:L170 ("Normalize EXIF orientation on import (bake rotation into pixels)
 so coordinate math never has to reason about orientation flags.").
 **Test:** (gap — no coverage yet).
 
@@ -1017,7 +1017,7 @@ the new image using the same percent coordinates.
 - On successful replacement, the wall's original Photo is updated (not duplicated), and existing
   routes still render at their stored percent coordinates against the new image.
 **Covers spec:** DESIGN.md:L120 ("Reuse from both the Topos-home 'New topo' flow and the canvas
-'replace photo'.") — this flow is **not mentioned in CLIMBTOPO.md at all**, only in DESIGN.md.
+'replace photo'.") — this flow is **not mentioned in MASI.md at all**, only in DESIGN.md.
 **Test:** (gap — no coverage yet).
 
 ---
@@ -1040,7 +1040,7 @@ routes on more precisely.
   and `parentPhotoId` equal to the original's id.
 - Given the slices' `cropXpct`/`cropWidthPct` values, then they are contiguous and together span
   `[0, 1]` (or `[0, 100]`) of the original's width with no gaps or overlaps.
-**Covers spec:** CLIMBTOPO.md:L174-177 ("User drags vertical cut lines on the panorama... each slice
+**Covers spec:** MASI.md:L174-177 ("User drags vertical cut lines on the panorama... each slice
 stored as a Photo with parentPhotoId + cropXpct/cropWidthPct."); L142-145 (Photo entity fields);
 L260.
 **Test:** slice_tool_intent_test.dart → A4a.
@@ -1060,7 +1060,7 @@ inverse when drawing on a slice and storing back against the original).
   the visually correct location on the slice's cropped image.
 - Given a point placed while viewing a slice, then it is stored back as a percent-of-original value
   (`c + local_x * w`) so it also renders correctly on the original and on any *other* slice.
-**Covers spec:** CLIMBTOPO.md:L162 ("Storing percentages of the original means a route drawn on a full
+**Covers spec:** MASI.md:L162 ("Storing percentages of the original means a route drawn on a full
 panorama renders correctly on any slice... This invariant is the backbone of the app and is covered by
 unit tests."); L177 ("Routes can be drawn on either; coordinates stay valid across both.").
 **Test:** slice_tool_intent_test.dart → A4b.
@@ -1082,7 +1082,7 @@ storing as a cut position.
 - Given a tap that lands within the letterbox margin itself (outside the image rect), then it is
   clamped to the nearest image edge (0% or 100%), never producing an out-of-range or negative
   `cropXpct`.
-**Covers spec:** CLIMBTOPO.md:L154-162 (general percent/scene/screen coordinate system) is the closest
+**Covers spec:** MASI.md:L154-162 (general percent/scene/screen coordinate system) is the closest
 spec grounding; the specific letterbox-correctness guarantee is **not spelled out verbatim** in either
 file and is defined concretely by the dedicated slice-tool intent test.
 **Test:** slice_tool_intent_test.dart → A4c.
@@ -1103,7 +1103,7 @@ are used to compute the fitted image area before mapping any tap.
 - The resulting slice Photo rows' `cropXpct`/`cropWidthPct` are identical to what they would be if the
   same photo were displayed without any letterboxing (e.g. in a perfectly matching widget) — letterbox
   margins never skew the crop math.
-**Covers spec:** Same grounding as US-SLICE3 (CLIMBTOPO.md:L154-162, backbone invariant L162); tall-
+**Covers spec:** Same grounding as US-SLICE3 (MASI.md:L154-162, backbone invariant L162); tall-
 photo correctness specifically is **not stated verbatim in spec**, defined by the intent test.
 **Test:** slice_tool_intent_test.dart → A4d.
 
@@ -1118,7 +1118,7 @@ selector on the canvas lets the user switch which Photo is currently displayed f
 - Given a wall with an original and N slices, then all N+1 Photo rows share the same `wallId`.
 - Switching the displayed photo between the original and any slice does not change which wall's data
   (routes, symbols) is in scope — only which image variant they're drawn against.
-**Covers spec:** CLIMBTOPO.md:L177 ("Original + slices linked under the same Wall.").
+**Covers spec:** MASI.md:L177 ("Original + slices linked under the same Wall.").
 **Test:** slice_tool_intent_test.dart → A4a (folded into slice-creation assertion; no isolated
 wall-linkage assertion exists) — (gap — cross-photo wall-linkage not isolated).
 
@@ -1216,7 +1216,7 @@ and all library CRUD flows with networking off throughout.
 - Given networking is off, then creating a topo, drawing a route, saving its metadata, and all
   Area/Sector/Wall CRUD operations succeed exactly as they would online.
 - No flow in this document blocks on or silently fails due to a network check.
-**Covers spec:** CLIMBTOPO.md:L193-196 ("Full offline support via Drift... App is fully functional
+**Covers spec:** MASI.md:L193-196 ("Full offline support via Drift... App is fully functional
 with zero connectivity."); L223 ("Offline-first — assume no signal at the crag.").
 **Test:** (gap — no coverage yet against the six mapped intent-test files; this is best exercised as
 an integration_test flow per the project's verification loop, not a widget-test file).
@@ -1235,7 +1235,7 @@ which photo variant was being viewed when the point was placed.
   cropped dimensions.
 - Given the same persisted point, then it renders at the correct location on the original, on every
   slice (via US-SLICE2's re-projection), and at any zoom/screen size.
-**Covers spec:** CLIMBTOPO.md:L225 ("Percentage-based coordinates always — never persist pixels.");
+**Covers spec:** MASI.md:L225 ("Percentage-based coordinates always — never persist pixels.");
 L162 ("This invariant is the backbone of the app and is covered by unit tests.").
 **Test:** slice_tool_intent_test.dart → A4b (shared with US-SLICE2, since it's the same underlying
 invariant).
@@ -1257,10 +1257,10 @@ both an original photo and at least one slice.
   Drift and renders at the same visual position on the original photo as before the relaunch.
 - Given the same relaunch, then the route also renders at the correct re-projected position when the
   user views a slice of that same wall.
-**Covers spec:** CLIMBTOPO.md:L292 ("...fill metadata (French + UIAA) → kill & relaunch app with
+**Covers spec:** MASI.md:L292 ("...fill metadata (French + UIAA) → kill & relaunch app with
 networking off → routes reload from Drift at correct positions on both the original and a slice.").
 **Test:** (gap — no coverage yet against the six mapped widget-test files; this is explicitly an
-integration_test-shaped verification per CLIMBTOPO.md:L292 and the project's kill/relaunch
+integration_test-shaped verification per MASI.md:L292 and the project's kill/relaunch
 verification loop, not a pure widget test).
 
 ---
@@ -1273,16 +1273,16 @@ specific wall/topo's name **so that** I always know which wall I'm looking at, e
 switching between several.
 **Preconditions:** Canvas is open for a named wall.
 **Main flow:** Nav bar renders a large title below a slim bar; the title text is the wall's (topo's)
-name, sourced from the Wall record — never the literal string "ClimbTopo" or "masi".
+name, sourced from the Wall record — never the literal string "Masi" or "masi".
 **Acceptance criteria (Given/When/Then):**
 - Given a wall named "The Diamond", when its canvas opens, then the nav title text is "The Diamond" —
-  not "ClimbTopo", "masi", or any other app-level constant.
+  not "Masi", "masi", or any other app-level constant.
 - Given a wall name long enough to risk overflow, then the title text uses `overflow: ellipsis` and is
   wrapped in a `Flexible`, so it truncates gracefully instead of overflowing the row when trailing
   icons (draw/slice/AR glyphs) are present.
 **Covers spec:** DESIGN.md:L98-99 ("Title text must overflow: ellipsis and be Flexible so it never
 overflows when trailing icons appear (fixes the 'Climb…' truncation — but more importantly the canvas
-title should be the topo/wall name, not 'ClimbTopo').").
+title should be the topo/wall name, not 'Masi').").
 **Test:** library_ui_intent_test.dart → A6f.
 
 #### US-NAV2: The amethyst accent is reserved for actionable elements
@@ -1388,27 +1388,27 @@ the six intent-test files exist and have been executed against `lib/`.
 ## 4. Out of Scope (v2)
 
 The following are explicitly deferred to v2 (or, in a few cases, not planned at all) per
-CLIMBTOPO.md:L17-35 and L230-233, and are **not covered by any story above**:
+MASI.md:L17-35 and L230-233, and are **not covered by any story above**:
 
 - **Auth & cloud sync** — Supabase auth, outbox-pattern sync (dirty flags, `updatedAt` cursors,
-  last-write-wins + tombstones). CLIMBTOPO.md:L28-29, L264. *v2, not covered.*
-- **Community discovery** — map + search over public topos. CLIMBTOPO.md:L30. v1 stores the
+  last-write-wins + tombstones). MASI.md:L28-29, L264. *v2, not covered.*
+- **Community discovery** — map + search over public topos. MASI.md:L30. v1 stores the
   supporting EXIF-GPS data (US-PHOTO area touches this only incidentally) but the discovery UI itself
   is *v2, not covered.*
-- **Image upload to Supabase Storage + thumbnails.** CLIMBTOPO.md:L31, L264. *v2, not covered.*
+- **Image upload to Supabase Storage + thumbnails.** MASI.md:L31, L264. *v2, not covered.*
 - **Multi-pitch routes** — a v1 Route is exactly one line on one photo; multi-pitch becomes a `Pitch`
-  child table in v2. CLIMBTOPO.md:L32, L152, L232. *v2, not covered.*
+  child table in v2. MASI.md:L32, L152, L232. *v2, not covered.*
 - **AR live route viewer** — homography-based overlay + manual fallback via
-  `VNHomographicImageRegistrationRequest`; explicitly not full 3D world-anchored AR. CLIMBTOPO.md:L33,
+  `VNHomographicImageRegistrationRequest`; explicitly not full 3D world-anchored AR. MASI.md:L33,
   L39-58, L232. *v2 per spec — note: the repo's git history shows this has since been merged
   ("v2: AR live route viewer") independent of this document, but it is out of scope for the stories
   above, which are grounded in the v1 spec text.*
 - **In-app camera / panorama stitching** — deferred indefinitely, not just to v2; native camera/
-  library only, permanently. CLIMBTOPO.md:L233.
-- **Ascent logbook / ticklist.** CLIMBTOPO.md:L233. *Not planned.*
-- **Grade voting / moderation.** CLIMBTOPO.md:L233. *Not planned.*
+  library only, permanently. MASI.md:L233.
+- **Ascent logbook / ticklist.** MASI.md:L233. *Not planned.*
+- **Grade voting / moderation.** MASI.md:L233. *Not planned.*
 - **3D world-anchored AR / photogrammetry** — explicitly rejected due to lack of outdoor VPS coverage,
-  LiDAR range/availability limits, and fragile outdoor image tracking. CLIMBTOPO.md:L53, L233.
+  LiDAR range/availability limits, and fragile outdoor image tracking. MASI.md:L53, L233.
   *Permanently out of scope, not merely deferred.*
 - **Additional grade systems** (YDS, V-scale/Font) — v1 supports exactly French + UIAA; adding more
-  ladders is additive in v2, no schema change required. CLIMBTOPO.md:L27, L205.
+  ladders is additive in v2, no schema change required. MASI.md:L27, L205.

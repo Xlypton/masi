@@ -59,11 +59,11 @@
 		</dict>
 	</dict>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ClimbTopo needs access to your photos to load wall images for route topos.</string>
+	<string>Masi needs access to your photos to load wall images for route topos.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>ClimbTopo needs camera access to photograph rock walls for route topos.</string>
+	<string>Masi needs camera access to photograph rock walls for route topos.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>ClimbTopo uses your location to place crags on the map and show where you are.</string>
+	<string>Masi uses your location to place crags on the map and show where you are.</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

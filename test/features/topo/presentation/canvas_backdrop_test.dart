@@ -11,11 +11,11 @@
 // colors.ground)`) — so the canvas backdrop follows the theme like every
 // other screen: light-theme ground (0xFFF3F1F9) in light mode, dark-theme
 // ground (0xFF100D17) in dark mode.
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/library/application/library_providers.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/library/application/library_providers.dart';
+import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
-import 'package:climbtopo/features/ar/domain/homography.dart';
-import 'package:climbtopo/features/ar/presentation/ar_overlay_painter.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/features/ar/domain/homography.dart';
+import 'package:masi/features/ar/presentation/ar_overlay_painter.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

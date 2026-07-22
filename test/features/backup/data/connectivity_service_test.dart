@@ -1,4 +1,4 @@
-import 'package:climbtopo/features/backup/data/connectivity_service.dart';
+import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Web port Phase 4 (auth + sync on web), task 4:

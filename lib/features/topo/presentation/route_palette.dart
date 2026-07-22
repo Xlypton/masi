@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 
 /// The visually-distinct stroke colors used for committed routes, indexed
 /// by [TopoRoute.colorIndex] (see [routeColorIndexFor]).

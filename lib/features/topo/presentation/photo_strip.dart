@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/topo/data/photo_files.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
-import 'package:climbtopo/features/topo/presentation/photo_image.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/topo/data/photo_files.dart';
+import 'package:masi/features/topo/data/photo_repository.dart';
+import 'package:masi/features/topo/presentation/photo_image.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// Horizontal strip of a wall's `original` photos — the "multiple photos
 /// per topo" axis, watching [wallOriginalsProvider] directly (so it stays

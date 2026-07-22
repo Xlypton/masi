@@ -1,5 +1,5 @@
-import 'package:climbtopo/features/account/application/pwa_install.dart';
-import 'package:climbtopo/features/account/application/pwa_install_types.dart';
+import 'package:masi/features/account/application/pwa_install.dart';
+import 'package:masi/features/account/application/pwa_install_types.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Verifies the native/test PWA-install backend

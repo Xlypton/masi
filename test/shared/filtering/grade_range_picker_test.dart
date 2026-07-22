@@ -3,10 +3,10 @@
 // right GradeRange on interaction. No image decode / real canvas involved
 // -- this is a plain controlled widget pumped directly under MaterialApp.
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/shared/filtering/grade_range.dart';
-import 'package:climbtopo/shared/filtering/grade_range_picker.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/shared/filtering/grade_range.dart';
+import 'package:masi/shared/filtering/grade_range_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

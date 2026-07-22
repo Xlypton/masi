@@ -8,28 +8,28 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/core/platform/ar_support.dart';
-import 'package:climbtopo/core/location/location_service.dart';
-import 'package:climbtopo/features/library/application/library_providers.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/library/presentation/set_location_picker.dart';
-import 'package:climbtopo/features/logbook/presentation/log_ascent_sheet.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/data/image_dimensions.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
-import 'package:climbtopo/features/topo/presentation/photo_strip.dart';
-import 'package:climbtopo/features/topo/presentation/photo_source_sheet.dart';
-import 'package:climbtopo/features/topo/presentation/route_legend.dart';
-import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
-import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas_gps.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas_photo_ops.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/platform/ar_support.dart';
+import 'package:masi/core/location/location_service.dart';
+import 'package:masi/features/library/application/library_providers.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/library/presentation/set_location_picker.dart';
+import 'package:masi/features/logbook/presentation/log_ascent_sheet.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/data/image_dimensions.dart';
+import 'package:masi/features/topo/data/photo_repository.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/canvas_chrome.dart';
+import 'package:masi/features/topo/presentation/photo_strip.dart';
+import 'package:masi/features/topo/presentation/photo_source_sheet.dart';
+import 'package:masi/features/topo/presentation/route_legend.dart';
+import 'package:masi/features/topo/presentation/route_metadata_sheet.dart';
+import 'package:masi/features/topo/presentation/symbol_palette_bar.dart';
+import 'package:masi/features/topo/presentation/topo_canvas.dart';
+import 'package:masi/features/topo/presentation/topo_canvas_gps.dart';
+import 'package:masi/features/topo/presentation/topo_canvas_photo_ops.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 // Split out of this god-file (pure refactor, zero behavior change): GPS
 // capture helpers moved to `topo_canvas_gps.dart`, and the selected-image
@@ -927,7 +927,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // AsyncValue.maybeWhen falls back to "Topo" both while this is still
     // loading and if the wall genuinely has no name (or doesn't exist —
     // see router_test.dart's nonexistent-wall-id smoke test), so the title
-    // is never blank and never shows the literal app name "ClimbTopo".
+    // is never blank and never shows the literal app name "Masi".
     final wallName = ref.watch(wallNameProvider(widget.wallId));
     final title = wallName.maybeWhen(
       data: (name) => (name == null || name.isEmpty) ? 'Topo' : name,
@@ -1255,8 +1255,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
   /// Mode-aware trailing glyphs for [_buildTopChromeRow] — this is what keeps
   /// the top chrome from ever becoming the old crowded AR/X/check/pencil
-  /// jumble (which was also what forced the "ClimbTopo" title to truncate
-  /// to "ClimbT…"): an optional edit-metadata glyph (route selected) + an
+  /// jumble (which was also what forced the old long app-name title to
+  /// truncate to an ellipsis): an optional edit-metadata glyph (route selected) + an
   /// optional AR glyph (view mode, eligible wall) + the draw/view mode
   /// toggle + (view mode only) the locate-on-map entry point + (draw mode
   /// only) the edit-location entry point.

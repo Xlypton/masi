@@ -91,7 +91,7 @@ double confidenceForTrackingState(ArTrackingState state) {
 /// on-screen corners the tracked anchor currently projects to.
 ///
 /// Constructed from the wire map delivered over
-/// [ArChannel.alignments]/`climbtopo/ar/alignment`. The native (ARKit)
+/// [ArChannel.alignments]/`masi/ar/alignment`. The native (ARKit)
 /// side's current payload shape is:
 /// ```
 /// {
@@ -271,27 +271,27 @@ class ArAlignment {
 }
 
 /// Dart-side handle to the native AR platform channel pair:
-///  - `climbtopo/ar` ([MethodChannel]): start/stop/setMode calls.
-///  - `climbtopo/ar/alignment` ([EventChannel]): a broadcast stream of
+///  - `masi/ar` ([MethodChannel]): start/stop/setMode calls.
+///  - `masi/ar/alignment` ([EventChannel]): a broadcast stream of
 ///    alignment updates (see [ArAlignment]).
 ///
 /// Both channels default to those names but accept injected instances so
 /// tests can supply mocks.
 class ArChannel {
   ArChannel({MethodChannel? method, EventChannel? event})
-    : _method = method ?? const MethodChannel('climbtopo/ar'),
-      _event = event ?? const EventChannel('climbtopo/ar/alignment'),
+    : _method = method ?? const MethodChannel('masi/ar'),
+      _event = event ?? const EventChannel('masi/ar/alignment'),
       _noop = false;
 
   /// A web-safe no-op [ArChannel]: every method resolves/completes
   /// immediately (or returns its documented "nothing happened" default)
   /// WITHOUT ever touching a [MethodChannel]/[EventChannel] — there is no
-  /// native `climbtopo/ar` handler on web, so invoking one there would throw
+  /// native `masi/ar` handler on web, so invoking one there would throw
   /// `MissingPluginException`. See `ar_channel_factory_web.dart`, which
   /// wires this in for the web build via [ArChannel.isNoop].
   ArChannel.noop()
-    : _method = const MethodChannel('climbtopo/ar'),
-      _event = const EventChannel('climbtopo/ar/alignment'),
+    : _method = const MethodChannel('masi/ar'),
+      _event = const EventChannel('masi/ar/alignment'),
       _noop = true;
 
   final MethodChannel _method;

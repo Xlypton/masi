@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 
-import 'package:climbtopo/app/theme.dart';
+import 'package:masi/app/theme.dart';
 
 /// The style filter options offered by [StyleFilterChips], in display
 /// order: `(value, label)` where `value` is the raw string stored on a

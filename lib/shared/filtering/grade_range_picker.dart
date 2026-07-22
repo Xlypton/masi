@@ -1,10 +1,10 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/shared/filtering/grade_range.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/shared/filtering/grade_range.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// A grade-system toggle plus min/max grade dropdowns for filter sheets,
 /// screen-agnostic so it's reusable across Community/Logbook/Topos filter

@@ -53,9 +53,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
-import 'package:climbtopo/features/account/application/auth_providers.dart';
-import 'package:climbtopo/features/account/data/auth_repository.dart';
-import 'package:climbtopo/main.dart' show bootApp;
+import 'package:masi/features/account/application/auth_providers.dart';
+import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/main.dart' show bootApp;
 
 /// Minimal in-memory [AuthRepository] double — see this file's header doc.
 /// Only ever constructed with a resolved (signed-in or signed-out) state, so

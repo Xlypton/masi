@@ -1,7 +1,7 @@
 import 'dart:io';
 
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/features/backup/data/sync_remote.dart'
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/features/backup/data/sync_remote.dart'
     show syncTableNames;
 import 'package:flutter_test/flutter_test.dart';
 

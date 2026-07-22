@@ -82,7 +82,7 @@ class _InstallBannerState extends ConsumerState<InstallBanner> {
               const SizedBox(width: MasiSpacing.md),
               Expanded(
                 child: Text(
-                  'Add ClimbTopo to your home screen',
+                  'Add Masi to your home screen',
                   style: textTheme.bodyMedium?.copyWith(
                     color: colors.ink,
                     fontWeight: FontWeight.w600,

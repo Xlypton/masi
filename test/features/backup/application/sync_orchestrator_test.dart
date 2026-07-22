@@ -1,15 +1,15 @@
 import 'dart:async';
 
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/account/application/auth_providers.dart';
-import 'package:climbtopo/features/account/data/auth_repository.dart';
-import 'package:climbtopo/features/backup/application/sync_orchestrator.dart';
-import 'package:climbtopo/features/backup/application/sync_providers.dart';
-import 'package:climbtopo/features/backup/data/backup_repository.dart';
-import 'package:climbtopo/features/backup/data/connectivity_service.dart';
-import 'package:climbtopo/features/backup/data/sync_remote.dart';
-import 'package:climbtopo/features/backup/data/sync_service.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/account/application/auth_providers.dart';
+import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/features/backup/application/sync_orchestrator.dart';
+import 'package:masi/features/backup/application/sync_providers.dart';
+import 'package:masi/features/backup/data/backup_repository.dart';
+import 'package:masi/features/backup/data/connectivity_service.dart';
+import 'package:masi/features/backup/data/sync_remote.dart';
+import 'package:masi/features/backup/data/sync_service.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -137,7 +137,7 @@ class _FakeConnectivityService implements ConnectivityService {
 }
 
 /// Builds [syncOrchestratorProvider] AND keeps it actively watched, exactly
-/// like `ClimbTopoApp`'s permanent `ref.watch(syncOrchestratorProvider)` does
+/// like `MasiApp`'s permanent `ref.watch(syncOrchestratorProvider)` does
 /// in production (see that widget's doc comment, and `sync_orchestrator.dart`'s
 /// class doc comment, for why this matters): `SyncOrchestrator`'s internal
 /// `ref.listen(authStateProvider, ...)` only keeps receiving auth-state

@@ -74,7 +74,7 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
   runApp(
     UncontrolledProviderScope(
       container: container,
-      child: const ClimbTopoApp(),
+      child: const MasiApp(),
     ),
   );
 }

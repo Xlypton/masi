@@ -1,14 +1,14 @@
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/library/application/library_providers.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/data/route_repository.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
-import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/library/application/library_providers.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/data/route_repository.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/canvas_chrome.dart';
+import 'package:masi/features/topo/presentation/route_metadata_sheet.dart';
+import 'package:masi/features/topo/presentation/topo_canvas.dart';
+import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,7 +19,7 @@ import 'package:image_picker/image_picker.dart';
 /// draw-toolbar's scoping to Draw mode, and the commit->metadata-sheet
 /// draw-flow lifecycle.
 ///
-/// These assertions are derived ONLY from the spec (CLIMBTOPO.md modes
+/// These assertions are derived ONLY from the spec (MASI.md modes
 /// A1-A3, plus BUG-1's toolbar-scoping report) — never from the current,
 /// known-buggy implementation. A failing test here is a bug signal to be
 /// fixed in lib/, never a reason to weaken the assertion.

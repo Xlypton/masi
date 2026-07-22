@@ -12,7 +12,7 @@ import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
 import 'logbook_providers.dart';
 
-/// The personal Logbook screen (see `CLIMBTOPO.md`): every own, non-deleted
+/// The personal Logbook screen (see `MASI.md`): every own, non-deleted
 /// `Ascent` the signed-in (or local, signed-out) user has logged, newest
 /// [LogbookEntry.climbedAt] first — see [logbookEntriesProvider].
 ///

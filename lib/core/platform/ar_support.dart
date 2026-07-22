@@ -17,7 +17,7 @@
 //    Wasm-clean: zero `dart:io` dependency in this branch.
 //  - anything else: stub, inert `false` for every capability.
 //
-// Android native still has no AR implementation wired up (no `climbtopo/ar`
+// Android native still has no AR implementation wired up (no `masi/ar`
 // platform-view handler on that side), so native support remains iff iOS.
 export 'ar_support_stub.dart'
     if (dart.library.io) 'ar_support_native.dart'

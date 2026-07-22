@@ -19,9 +19,9 @@ import 'package:integration_test/integration_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/main.dart' as app;
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/main.dart' as app;
 
 /// Same gradient/grid/shapes recipe as `filtering_review_test.dart`'s
 /// `_generateWallImage`, reused so each seeded wall has a real decodable

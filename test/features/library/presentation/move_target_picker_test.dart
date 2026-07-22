@@ -1,5 +1,5 @@
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/library/presentation/move_target_picker.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/library/presentation/move_target_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

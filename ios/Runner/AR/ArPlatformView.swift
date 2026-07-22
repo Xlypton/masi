@@ -6,7 +6,7 @@ import SceneKit
 import UIKit
 import simd
 
-/// Native AR platform view behind `UiKitView(viewType: 'climbtopo/ar')`.
+/// Native AR platform view behind `UiKitView(viewType: 'masi/ar')`.
 ///
 /// Uses ARKit world tracking (`ARWorldTrackingConfiguration` with
 /// `detectionImages`) to detect the reference topo photo in the live camera
@@ -15,7 +15,7 @@ import simd
 /// subsequent frame re-projects that same pinned transform's four corners
 /// (in reference-image pixel order: TL, TR, BR, BL) into current screen
 /// space via `ARSCNView.projectPoint`, and publishes them over the
-/// `climbtopo/ar/alignment` EventChannel (via `ArChannelHandler`) as
+/// `masi/ar/alignment` EventChannel (via `ArChannelHandler`) as
 /// `corners` -- Dart derives its own overlay transform from those four
 /// screen points rather than from a homography matrix. Further image
 /// (re-)detections are intentionally ignored once pinned, since on 3D
@@ -54,8 +54,8 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
     init(frame: CGRect, viewId: Int64, messenger: FlutterBinaryMessenger, args: Any?) {
         sceneView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
 
-        // The MethodChannel ("climbtopo/ar") and EventChannel
-        // ("climbtopo/ar/alignment") are created here, against the exact
+        // The MethodChannel ("masi/ar") and EventChannel
+        // ("masi/ar/alignment") are created here, against the exact
         // same FlutterBinaryMessenger the registrar handed to
         // ArViewFactory (see AppDelegate.swift), so channel names match
         // the Dart contract exactly.
@@ -146,7 +146,7 @@ extension ArPlatformView: ArSessionControlling {
     func setMode(_ newMode: ArMode) {
         // Mode no longer gates whether tracking runs (ARKit always tracks
         // once the session is running) -- Dart still reads/writes it via
-        // the `climbtopo/ar` MethodChannel, so it is kept here for contract
+        // the `masi/ar` MethodChannel, so it is kept here for contract
         // completeness. Switching modes resets ALL pins so tracking starts
         // fresh in the newly-selected mode.
         mode = newMode
@@ -160,7 +160,7 @@ extension ArPlatformView: ArSessionControlling {
     /// Clears the pinned world transform and re-runs image detection from
     /// scratch, so the user can redo a bad first lock (e.g. one that pinned
     /// onto the wrong surface). Exposed to Dart via the `rescan` method on
-    /// the `climbtopo/ar` MethodChannel (see `ArChannelHandler`).
+    /// the `masi/ar` MethodChannel (see `ArChannelHandler`).
     func rescanSession() {
         pinnedTransform = nil
         pinnedPhysicalSize = nil

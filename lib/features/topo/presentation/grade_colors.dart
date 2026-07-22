@@ -1,8 +1,8 @@
 import 'package:flutter/painting.dart' show Color;
 
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/route_palette.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/route_palette.dart';
 
 /// Stroke/swatch color for [GradeBand.beginner].
 const Color _beginnerColor = Color(0xFF2F9E6B); // green

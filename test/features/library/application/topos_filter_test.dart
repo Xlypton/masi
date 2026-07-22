@@ -3,10 +3,10 @@
 // Pure logic + Notifier state, no widget harness needed -- the widget-level
 // (Filters sheet + live list) coverage lives in topos_screen_test.dart.
 
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/library/application/library_providers.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/shared/filtering/grade_range.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/library/application/library_providers.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/shared/filtering/grade_range.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -1,6 +1,6 @@
 # masi icon set — v5 "hierarchical duotone++", iOS-first
 
-80 glyphs for ClimbTopo with real brand character (facets, depth, the crack) that still behave technically like Material icons: 24×24 grid, no background shape, **tintable with exactly one runtime color**.
+80 glyphs for Masi with real brand character (facets, depth, the crack) that still behave technically like Material icons: 24×24 grid, no background shape, **tintable with exactly one runtime color**.
 
 ## How faceted icons stay single-color tintable
 

@@ -1,6 +1,6 @@
 import 'dart:io';
 
-import 'package:climbtopo/core/db/app_database.dart';
+import 'package:masi/core/db/app_database.dart';
 import 'package:drift/drift.dart'
     show BooleanExpressionOperators, OrderingTerm, Value;
 import 'package:drift/native.dart';
@@ -42,7 +42,7 @@ void main() {
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp(
-        'climbtopo_migration_test_',
+        'masi_migration_test_',
       );
       dbFile = File(p.join(tempDir.path, 'v1.sqlite'));
     });
@@ -251,7 +251,7 @@ void main() {
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp(
-        'climbtopo_migration_test_',
+        'masi_migration_test_',
       );
       dbFile = File(p.join(tempDir.path, 'v2.sqlite'));
     });
@@ -471,7 +471,7 @@ void main() {
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp(
-        'climbtopo_migration_test_',
+        'masi_migration_test_',
       );
       dbFile = File(p.join(tempDir.path, 'v3.sqlite'));
     });
@@ -689,7 +689,7 @@ void main() {
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp(
-        'climbtopo_migration_test_',
+        'masi_migration_test_',
       );
       dbFile = File(p.join(tempDir.path, 'v4.sqlite'));
     });
@@ -930,7 +930,7 @@ void main() {
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp(
-        'climbtopo_migration_test_',
+        'masi_migration_test_',
       );
       dbFile = File(p.join(tempDir.path, 'v5.sqlite'));
     });
@@ -1267,7 +1267,7 @@ void main() {
 
       setUp(() async {
         tempDir = await Directory.systemTemp.createTemp(
-          'climbtopo_migration_test_',
+          'masi_migration_test_',
         );
         dbFile = File(p.join(tempDir.path, 'v6.sqlite'));
       });
@@ -1574,7 +1574,7 @@ void main() {
 
     setUp(() async {
       tempDir = await Directory.systemTemp.createTemp(
-        'climbtopo_migration_test_',
+        'masi_migration_test_',
       );
       dbFile = File(p.join(tempDir.path, 'v7.sqlite'));
     });

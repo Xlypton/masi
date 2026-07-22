@@ -1,10 +1,10 @@
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/account/application/auth_providers.dart';
-import 'package:climbtopo/features/community/presentation/community_screen.dart';
-import 'package:climbtopo/features/logbook/application/ascents_providers.dart';
-import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/account/application/auth_providers.dart';
+import 'package:masi/features/community/presentation/community_screen.dart';
+import 'package:masi/features/logbook/application/ascents_providers.dart';
+import 'package:masi/features/logbook/data/ascents_repository.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';

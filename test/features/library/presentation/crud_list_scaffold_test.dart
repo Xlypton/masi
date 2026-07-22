@@ -1,5 +1,5 @@
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/library/presentation/crud_list_scaffold.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/library/presentation/crud_list_scaffold.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';

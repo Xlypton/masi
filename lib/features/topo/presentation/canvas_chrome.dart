@@ -2,7 +2,7 @@ import 'dart:ui';
 
 import 'package:flutter/material.dart';
 
-import 'package:climbtopo/app/theme.dart';
+import 'package:masi/app/theme.dart';
 
 /// Deliberately conservative *upper bound* on the on-screen height of
 /// [TopoCanvasScreen]'s floating bottom glass cluster (undo / redo /

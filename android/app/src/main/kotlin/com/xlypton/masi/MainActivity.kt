@@ -1,4 +1,4 @@
-package com.climbtopo.climbtopo
+package com.xlypton.masi
 
 import io.flutter.embedding.android.FlutterActivity
 

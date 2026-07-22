@@ -6,8 +6,8 @@
 // the "null key excluded only when active" case, min>max normalization, and
 // value equality/copyWith.
 
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/shared/filtering/grade_range.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/shared/filtering/grade_range.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -6,14 +6,14 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
-import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/domain/route_hit_test.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
-import 'package:climbtopo/features/topo/presentation/photo_image.dart';
-import 'package:climbtopo/features/topo/presentation/route_palette.dart';
-import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
+import 'package:masi/core/coordinates/coordinate_transformer.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/domain/route_hit_test.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/grade_colors.dart';
+import 'package:masi/features/topo/presentation/photo_image.dart';
+import 'package:masi/features/topo/presentation/route_palette.dart';
+import 'package:masi/features/topo/presentation/topo_painter.dart';
 
 /// Maps each [SymbolType] that has a dedicated masi brand glyph to its SVG
 /// asset name suffix (`assets/icons/masi/masi_<name>.svg`) — the SAME

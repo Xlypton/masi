@@ -817,7 +817,7 @@ class _MapViewState extends ConsumerState<_MapView> {
         TileLayer(
           urlTemplate:
               'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-          userAgentPackageName: 'com.climbtopo.climbtopo',
+          userAgentPackageName: 'com.xlypton.masi',
           tileProvider: _tileProvider(),
           retinaMode: RetinaMode.isHighDensity(context),
           // Without this, a tile that fails once (transient CartoDB

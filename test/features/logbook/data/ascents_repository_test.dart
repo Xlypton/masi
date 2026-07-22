@@ -1,5 +1,5 @@
-import 'package:climbtopo/core/db/app_database.dart' as db;
-import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
+import 'package:masi/core/db/app_database.dart' as db;
+import 'package:masi/features/logbook/data/ascents_repository.dart';
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 

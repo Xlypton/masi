@@ -4,9 +4,9 @@
 // `SharedTopo` values — no `ProviderContainer`/database needed, per the
 // provider's doc recommending this pure-function factoring over wiring a
 // container (avoids flakiness around the underlying Drift/location streams).
-import 'package:climbtopo/features/community/data/community_repository.dart';
-import 'package:climbtopo/features/library/application/proximity_topos_provider.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/community/data/community_repository.dart';
+import 'package:masi/features/library/application/proximity_topos_provider.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 TopoRef _own(

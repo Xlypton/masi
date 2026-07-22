@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/routes/route_styles.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/routes/route_styles.dart';
 
 import 'style_filter_chips.dart';
 

@@ -2,9 +2,9 @@
 // ~/.claude/plans/masi-filtering.md): render + emit onChanged with the
 // right Set<AscentStyle> on interaction.
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
-import 'package:climbtopo/shared/filtering/ascent_type_filter_chips.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/logbook/data/ascents_repository.dart';
+import 'package:masi/shared/filtering/ascent_type_filter_chips.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

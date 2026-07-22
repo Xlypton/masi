@@ -1,7 +1,7 @@
-import 'package:climbtopo/app/install_banner.dart';
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/account/application/pwa_install_providers.dart';
-import 'package:climbtopo/features/account/application/pwa_install_types.dart';
+import 'package:masi/app/install_banner.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/account/application/pwa_install_providers.dart';
+import 'package:masi/features/account/application/pwa_install_types.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

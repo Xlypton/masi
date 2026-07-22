@@ -1,11 +1,15 @@
-# ClimbTopo
+<p align="center">
+  <img src="assets/icons/masi/masi_boulder_logo.svg" alt="Masi logo" width="200">
+</p>
+
+# Masi
 
 A local-first Flutter app for climbers to **document, browse, and share** rock-climbing
 routes. The core is a **visual-first topo editor**: photograph a rock face, optionally
 slice a panorama into wall segments, and draw route lines directly onto the photo on a
 zoomable canvas. Route lines are stored as vector (percentage-based) coordinates, not
 burned into the image, so they stay zoomable, tappable, and re-projectable across
-slices and screen sizes. Full product spec: [`CLIMBTOPO.md`](CLIMBTOPO.md).
+slices and screen sizes. Full product spec: [`MASI.md`](MASI.md).
 
 **iOS is the primary target.** Data is local-first (Drift/SQLite), with an optional
 Supabase backend for auth, cross-device sync, and the community features below.
@@ -82,7 +86,7 @@ in [`docs/web-port-backlog.md`](docs/web-port-backlog.md).
 
 ## Project docs
 
-- [`CLIMBTOPO.md`](CLIMBTOPO.md) — full product/architecture spec.
+- [`MASI.md`](MASI.md) — full product/architecture spec.
 - [`CLAUDE.md`](CLAUDE.md) — project instructions, toolchain quirks, verification loop.
 - [`DESIGN.md`](DESIGN.md) — visual/design language.
 - [`ICONS-README.md`](ICONS-README.md) — masi icon set (MasiIcon usage, generation, migration map).

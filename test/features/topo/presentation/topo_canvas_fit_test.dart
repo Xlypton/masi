@@ -1,4 +1,4 @@
-// Subtask 1 (ClimbTopo UX fixes plan): the wall photo was rendering as a
+// Subtask 1 (Masi UX fixes plan): the wall photo was rendering as a
 // tiny ~110x70 thumbnail pinned to the top-left of the canvas instead of
 // filling/centering the viewport, with drawn route points landing off the
 // image. Root cause: TopoCanvas's fit-to-viewport matrix was computed once
@@ -80,11 +80,11 @@
 // and its rounding are gone entirely — see the "TopoCanvas is full-bleed
 // (no viewport frame/rounding)" group below, which replaces it.
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
-import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/coordinates/coordinate_transformer.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/presentation/topo_canvas.dart';
+import 'package:masi/features/topo/presentation/topo_painter.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

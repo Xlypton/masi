@@ -4,7 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 import 'package:path/path.dart' as p;
 
-import 'package:climbtopo/features/ar/application/outline_extractor.dart';
+import 'package:masi/features/ar/application/outline_extractor.dart';
 
 /// Builds a 40x40 synthetic image that is solid black on the left half
 /// (x < 20) and solid white on the right half (x >= 20) — a single, clean

@@ -1,6 +1,6 @@
 import 'dart:typed_data';
 
-import 'package:climbtopo/features/topo/data/image_ops/image_ops.dart';
+import 'package:masi/features/topo/data/image_ops/image_ops.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image/image.dart' as img;
 

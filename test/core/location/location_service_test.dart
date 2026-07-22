@@ -1,4 +1,4 @@
-import 'package:climbtopo/core/location/location_service.dart';
+import 'package:masi/core/location/location_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:geolocator/geolocator.dart';
 

@@ -1,4 +1,4 @@
-# ClimbTopo → Web Port — Planning Brief
+# Masi → Web Port — Planning Brief
 
 > **Purpose.** Self-contained extraction of the current codebase for planning a Flutter **web** release
 > (PWA, "closest-to-native feel") alongside the existing iOS/Android app. AR is explicitly **out of scope**
@@ -27,11 +27,11 @@ piece, and a pile of small gates:
 
 ## 1. Project facts (current state)
 
-- Package `climbtopo`; entrypoint `main()` in `lib/main.dart` (`runApp` wraps `ClimbTopoApp` in `UncontrolledProviderScope`).
+- Package `masi`; entrypoint `main()` in `lib/main.dart` (`runApp` wraps `MasiApp` in `UncontrolledProviderScope`).
 - Flutter 3.44.2 · Dart 3.12.2. Riverpod **v3** (`Notifier`/`NotifierProvider`, never `StateProvider`). Routing: **go_router 17.3.0**.
 - Root widget: `MaterialApp.router` (Material 3), `themeMode: ThemeMode.system`, custom design tokens.
 - Platforms enabled: **iOS + Android only** (`.metadata` lists `root/android/ios`; no `web`, `macos`, `linux`, `windows`).
-- Local-first: Drift/SQLite on device; Supabase sync **is live and wired end-to-end** (despite stale "deferred" comments in `CLIMBTOPO.md` and `sync_remote.dart` — a real backend exists at `supabase/schema.sql`, 8 tables + Storage RLS, two-account live smoke verified 2026-07-17).
+- Local-first: Drift/SQLite on device; Supabase sync **is live and wired end-to-end** (despite stale "deferred" comments in `MASI.md` and `sync_remote.dart` — a real backend exists at `supabase/schema.sql`, 8 tables + Storage RLS, two-account live smoke verified 2026-07-17).
 - ~377 unit/widget tests; 51 test files override `appDatabaseProvider` with `AppDatabase(NativeDatabase.memory())`.
 
 ---
@@ -134,7 +134,7 @@ LazyDatabase _openConnection() => LazyDatabase(() async {
 **`kIsWeb` today:** only `ar_screen.dart` (lines 6, 56, 58). **`dart:io` importers:** 11 files (all listed in §3/§4). No conditional imports exist anywhere yet.
 
 **Platform channels / views — AR only:**
-- `climbtopo/ar` `MethodChannel` + `climbtopo/ar/alignment` `EventChannel` (`ar_channel.dart:141-143`); same string as the `UiKitView` viewType (`ar_screen.dart:288`).
+- `masi/ar` `MethodChannel` + `masi/ar/alignment` `EventChannel` (`ar_channel.dart:141-143`); same string as the `UiKitView` viewType (`ar_screen.dart:288`).
 - Native (iOS only): `ios/Runner/AR/` — `ArChannelHandler.swift`, `ArPlatformView.swift`, `ArViewFactory.swift`, `ArVisionPipeline.swift`; registered in `AppDelegate.swift:23`. **No Android AR** (`MainActivity.kt` is stock) — Android already falls through to the same unsupported placeholder web will.
 - `Info.plist` declares Photo/Camera/Location usage strings (iOS-only concepts).
 

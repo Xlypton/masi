@@ -1,4 +1,4 @@
-import 'package:climbtopo/features/account/application/email_initials.dart';
+import 'package:masi/features/account/application/email_initials.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -1,11 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/canvas_chrome.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// Overall height of [SymbolPaletteBar]. Bumped from the historical `56`
 /// (an icon-only row) to fit an icon PLUS a short text label per control —

@@ -1,6 +1,6 @@
 # Cloudflare Pages headers file.
 #
-# ClimbTopo's web build uses dart2wasm + drift's OPFS (Origin Private File
+# Masi's web build uses dart2wasm + drift's OPFS (Origin Private File
 # System) worker. Both require the page to be "cross-origin isolated", which
 # only happens when the top-level document is served with COOP + COEP. See:
 # https://web.dev/articles/coop-coep

@@ -3,7 +3,7 @@ import 'dart:math';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:climbtopo/features/ar/application/manual_align_controller.dart';
+import 'package:masi/features/ar/application/manual_align_controller.dart';
 
 void main() {
   group('ManualAlignController', () {

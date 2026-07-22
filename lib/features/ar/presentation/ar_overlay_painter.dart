@@ -4,9 +4,9 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/rendering.dart' show CustomPainter;
 
-import 'package:climbtopo/features/ar/domain/homography.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
+import 'package:masi/features/ar/domain/homography.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/topo_painter.dart';
 
 /// Radius (in canvas pixel units) of the dot drawn for a single-point route.
 const double _dotRadius = 4.0;

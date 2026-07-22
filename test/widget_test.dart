@@ -1,23 +1,23 @@
-import 'package:climbtopo/app/app.dart';
-import 'package:climbtopo/app/router.dart';
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/ar/presentation/ar_screen.dart';
-import 'package:climbtopo/features/library/application/library_providers.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/data/route_repository.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/grade_colors.dart';
-import 'package:climbtopo/features/topo/presentation/route_legend.dart';
-import 'package:climbtopo/features/topo/presentation/route_metadata_sheet.dart';
-import 'package:climbtopo/features/topo/presentation/route_palette.dart';
-import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
-import 'package:climbtopo/features/topo/presentation/topo_painter.dart';
+import 'package:masi/app/app.dart';
+import 'package:masi/app/router.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/ar/presentation/ar_screen.dart';
+import 'package:masi/features/library/application/library_providers.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/data/route_repository.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/grade_colors.dart';
+import 'package:masi/features/topo/presentation/route_legend.dart';
+import 'package:masi/features/topo/presentation/route_metadata_sheet.dart';
+import 'package:masi/features/topo/presentation/route_palette.dart';
+import 'package:masi/features/topo/presentation/symbol_palette_bar.dart';
+import 'package:masi/features/topo/presentation/topo_canvas.dart';
+import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/features/topo/presentation/topo_painter.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -76,7 +76,7 @@ void main() {
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
           ],
-          child: const ClimbTopoApp(),
+          child: const MasiApp(),
         ),
       );
       // Let GoRouter/MaterialApp.router settle AND the Drift-backed
@@ -2116,7 +2116,7 @@ void main() {
           await tester.pumpWidget(
             UncontrolledProviderScope(
               container: container,
-              child: const ClimbTopoApp(),
+              child: const MasiApp(),
             ),
           );
           await _drain(tester);

@@ -1,5 +1,5 @@
-import 'package:climbtopo/features/topo/domain/route_hit_test.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/domain/route_hit_test.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

@@ -5,8 +5,8 @@
 // exclusion). See `lib/features/community/data/map_search.dart`'s
 // `mapContentSearch`, which consumes these three streams alongside the
 // pre-existing `toposProvider`.
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';

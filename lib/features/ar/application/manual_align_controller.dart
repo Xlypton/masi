@@ -3,7 +3,7 @@ import 'dart:ui';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:climbtopo/features/ar/domain/homography.dart';
+import 'package:masi/features/ar/domain/homography.dart';
 
 /// Drives user-hand alignment of the ghost overlay: pan/scale/rotate
 /// gestures compose into a single [Homography] that the overlay painter

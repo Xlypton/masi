@@ -1,6 +1,6 @@
 import 'dart:convert';
 
-import 'package:climbtopo/core/location/geocoding_service.dart';
+import 'package:masi/core/location/geocoding_service.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' show BaseClient, BaseRequest, StreamedResponse;
 import 'package:http/retry.dart' show RetryClient;
@@ -68,7 +68,7 @@ void main() {
         expect(sentRequest.url.queryParameters['addressdetails'], '0');
         expect(
           sentRequest.headers['User-Agent'],
-          'ClimbTopo/1.0 (com.climbtopo.climbtopo)',
+          'Masi/1.0 (com.xlypton.masi)',
           reason: 'Nominatim rejects requests with an empty/default '
               'User-Agent',
         );

@@ -1,10 +1,10 @@
-# ClimbTopo — Route Documentation App for Rock Climbers
+# Masi — Route Documentation App for Rock Climbers
 
 ## Overview
 
-ClimbTopo is a mobile app for climbers to **document, browse, and (later) share** climbing routes. The core differentiator is a **visual-first topo editor**: photograph a rock face, optionally slice a panorama into wall segments, and draw route lines directly onto the photo on a zoomable canvas. Route lines are stored as **vector data** (percentage-based coordinates, not burned into the image), so they stay zoomable, tappable, editable, and re-projectable across slices and screen sizes.
+Masi is a mobile app for climbers to **document, browse, and (later) share** climbing routes. The core differentiator is a **visual-first topo editor**: photograph a rock face, optionally slice a panorama into wall segments, and draw route lines directly onto the photo on a zoomable canvas. Route lines are stored as **vector data** (percentage-based coordinates, not burned into the image), so they stay zoomable, tappable, editable, and re-projectable across slices and screen sizes.
 
-The reference point is **The Crag** (thecrag.com), but ClimbTopo optimizes one thing above all: **speed of contribution at the crag**. Target: a climber documents a new route in **under two minutes**, offline, one-handed.
+The reference point is **The Crag** (thecrag.com), but Masi optimizes one thing above all: **speed of contribution at the crag**. Target: a climber documents a new route in **under two minutes**, offline, one-handed.
 
 **Design north star — the contribution flow:** open app → pick photo → draw line → name + grade → done.
 

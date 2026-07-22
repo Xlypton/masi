@@ -2,8 +2,8 @@
 // ~/.claude/plans/masi-filtering.md): render + emit onChanged with the
 // right Set<String> on interaction.
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/shared/filtering/style_filter_chips.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/shared/filtering/style_filter_chips.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

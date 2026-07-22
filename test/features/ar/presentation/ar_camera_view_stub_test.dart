@@ -3,7 +3,7 @@
 // so this exercises the stub backend — the web backend
 // (`ar_camera_view_web.dart`) can only compile/run under `flutter build
 // web`/web-server test runners, not here.
-import 'package:climbtopo/features/ar/presentation/ar_camera_view.dart';
+import 'package:masi/features/ar/presentation/ar_camera_view.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

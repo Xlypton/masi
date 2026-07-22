@@ -1,6 +1,6 @@
-import 'package:climbtopo/features/ar/application/ar_channel.dart';
-import 'package:climbtopo/features/ar/application/ar_controller.dart';
-import 'package:climbtopo/features/ar/domain/corner_smoother.dart';
+import 'package:masi/features/ar/application/ar_channel.dart';
+import 'package:masi/features/ar/application/ar_controller.dart';
+import 'package:masi/features/ar/domain/corner_smoother.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -43,8 +43,8 @@ void main() {
   });
 
   group('ArController', () {
-    const method = MethodChannel('climbtopo/ar');
-    const event = EventChannel('climbtopo/ar/alignment');
+    const method = MethodChannel('masi/ar');
+    const event = EventChannel('masi/ar/alignment');
 
     final List<MethodCall> calls = <MethodCall>[];
 

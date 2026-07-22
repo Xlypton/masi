@@ -1,7 +1,7 @@
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/logbook/data/ascents_repository.dart';
-import 'package:climbtopo/features/logbook/presentation/logbook_providers.dart';
-import 'package:climbtopo/shared/filtering/grade_range.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/logbook/data/ascents_repository.dart';
+import 'package:masi/features/logbook/presentation/logbook_providers.dart';
+import 'package:masi/shared/filtering/grade_range.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 

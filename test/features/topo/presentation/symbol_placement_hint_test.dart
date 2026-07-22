@@ -1,8 +1,8 @@
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
-import 'package:climbtopo/features/topo/presentation/symbol_palette_bar.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/features/topo/presentation/symbol_palette_bar.dart';
+import 'package:masi/features/topo/presentation/topo_canvas.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';

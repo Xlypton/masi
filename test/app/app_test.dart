@@ -1,18 +1,18 @@
 import 'dart:async';
 
-import 'package:climbtopo/app/app.dart';
-import 'package:climbtopo/app/router.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/account/application/auth_providers.dart';
-import 'package:climbtopo/features/account/data/auth_repository.dart';
-import 'package:climbtopo/features/backup/application/sync_orchestrator.dart';
-import 'package:climbtopo/features/backup/application/sync_providers.dart';
-import 'package:climbtopo/features/backup/data/backup_repository.dart';
-import 'package:climbtopo/features/backup/data/connectivity_service.dart';
-import 'package:climbtopo/features/backup/data/sync_remote.dart';
-import 'package:climbtopo/features/backup/data/sync_service.dart';
-import 'package:climbtopo/features/library/presentation/topos_screen.dart';
+import 'package:masi/app/app.dart';
+import 'package:masi/app/router.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/account/application/auth_providers.dart';
+import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/features/backup/application/sync_orchestrator.dart';
+import 'package:masi/features/backup/application/sync_providers.dart';
+import 'package:masi/features/backup/data/backup_repository.dart';
+import 'package:masi/features/backup/data/connectivity_service.dart';
+import 'package:masi/features/backup/data/sync_remote.dart';
+import 'package:masi/features/backup/data/sync_service.dart';
+import 'package:masi/features/library/presentation/topos_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show StringCodec;
@@ -152,7 +152,7 @@ ProviderContainer _makeContainer() {
       authStateProvider.overrideWith(
         (ref) => Stream.value(const AuthSessionState.signedOut()),
       ),
-      // `ClimbTopoApp` permanently `ref.watch`es `syncOrchestratorProvider`
+      // `MasiApp` permanently `ref.watch`es `syncOrchestratorProvider`
       // (see its doc comment), so ANY real table write in a test that
       // mounts it — e.g. this file's claim-on-sign-in row update below —
       // now schedules a real debounced-push `Timer`. Left at the real 2s
@@ -199,7 +199,7 @@ Future<void> _drain(WidgetTester tester) async {
 /// same code path a real transition would, INCLUDING the framework's own
 /// synthesized intermediate states (e.g. paused -> resumed synthesizes
 /// through `hidden`/`inactive` first — see `ServicesBinding
-/// ._generateStateTransitions`) — harmless here since `ClimbTopoApp.
+/// ._generateStateTransitions`) — harmless here since `MasiApp.
 /// didChangeAppLifecycleState` only ever reacts to the terminal `paused`/
 /// `resumed` states this helper's caller actually asks for.
 Future<void> _setAppLifecycleState(WidgetTester tester, AppLifecycleState state) async {
@@ -215,7 +215,7 @@ void main() {
   // identical caveat) whose location persists across tests in this file.
   setUp(() => appRouter.go('/'));
 
-  group('ClimbTopoApp global tap-to-dismiss keyboard (#20)', () {
+  group('MasiApp global tap-to-dismiss keyboard (#20)', () {
     testWidgets(
       'MaterialApp.router wraps its routed content in a translucent '
       'GestureDetector whose onTap unfocuses the current focus',
@@ -225,7 +225,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const ClimbTopoApp(),
+            child: const MasiApp(),
           ),
         );
         await _drain(tester);
@@ -289,7 +289,7 @@ void main() {
     );
   });
 
-  group('ClimbTopoApp claim-on-sign-in bootstrap (C3)', () {
+  group('MasiApp claim-on-sign-in bootstrap (C3)', () {
     testWidgets(
       'a real signed-out -> signed-in auth-state transition claims a '
       'previously-unowned local row for the new uid, exactly once',
@@ -322,7 +322,7 @@ void main() {
             authStateProvider.overrideWith((ref) => authController.stream),
             // See `_makeContainer`'s identical override above: the
             // claimOwnership row UPDATE below is a real table write, which
-            // (now that `ClimbTopoApp` permanently watches
+            // (now that `MasiApp` permanently watches
             // `syncOrchestratorProvider`) schedules a real debounced-push
             // `Timer` — keep it short so `_drain` lets it fire before this
             // test ends, instead of tripping the "Timer still pending"
@@ -337,7 +337,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const ClimbTopoApp(),
+            child: const MasiApp(),
           ),
         );
         await _drain(tester);
@@ -436,7 +436,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const ClimbTopoApp(),
+            child: const MasiApp(),
           ),
         );
         await _drain(tester);
@@ -520,7 +520,7 @@ void main() {
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
-            child: const ClimbTopoApp(),
+            child: const MasiApp(),
           ),
         );
         await _drain(tester);

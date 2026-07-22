@@ -3,7 +3,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
-/// A5 (climbtopo-photo-first-home.md, Subtask 1): the camera/library photo
+/// A5 (masi-photo-first-home.md, Subtask 1): the camera/library photo
 /// source sheet relies on iOS's runtime permission prompts, which only fire
 /// if `Info.plist` carries non-empty usage-description strings. This test
 /// guards against that copy ever being deleted/emptied, without re-deriving

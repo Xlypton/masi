@@ -1,16 +1,16 @@
 import 'dart:convert';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/core/location/location_service.dart';
-import 'package:climbtopo/features/account/application/auth_providers.dart';
-import 'package:climbtopo/features/account/data/auth_repository.dart';
-import 'package:climbtopo/features/community/application/community_providers.dart';
-import 'package:climbtopo/features/community/data/community_repository.dart';
-import 'package:climbtopo/features/community/presentation/community_screen.dart';
-import 'package:climbtopo/shared/presentation/masi_icon.dart';
-import 'package:climbtopo/shared/filtering/grade_range.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/location/location_service.dart';
+import 'package:masi/features/account/application/auth_providers.dart';
+import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/features/community/application/community_providers.dart';
+import 'package:masi/features/community/data/community_repository.dart';
+import 'package:masi/features/community/presentation/community_screen.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/filtering/grade_range.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';

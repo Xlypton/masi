@@ -18,8 +18,8 @@
 //    content panel that must stay legible).
 //  - in both cases the child content still renders (legibility intact).
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/features/topo/presentation/canvas_chrome.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/features/topo/presentation/canvas_chrome.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 

@@ -1,6 +1,6 @@
 // Intended-behavior UI tests for Subtask A6 (library CRUD + topos home +
 // empty/error states + canvas title). These assertions are derived from the
-// SPEC (CLIMBTOPO.md / DESIGN.md contract items J2/J3/K1/K3/K6 — see
+// SPEC (MASI.md / DESIGN.md contract items J2/J3/K1/K3/K6 — see
 // `## Harness facts` and `### Subtask A6` in
 // `/Users/kerip/.claude/plans/masi-intended-behavior-ui-tests.md`), NOT from
 // whatever the current code happens to do. A failing assertion here is
@@ -11,16 +11,16 @@
 // `test/features/library/presentation/areas_screen_test.dart`,
 // `sectors_walls_screen_test.dart`, and `topos_screen_test.dart`.
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/library/application/library_providers.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/library/presentation/areas_screen.dart';
-import 'package:climbtopo/features/library/presentation/sectors_screen.dart';
-import 'package:climbtopo/features/library/presentation/topos_screen.dart';
-import 'package:climbtopo/features/library/presentation/walls_screen.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/library/application/library_providers.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/library/presentation/areas_screen.dart';
+import 'package:masi/features/library/presentation/sectors_screen.dart';
+import 'package:masi/features/library/presentation/topos_screen.dart';
+import 'package:masi/features/library/presentation/walls_screen.dart';
+import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -489,7 +489,7 @@ void main() {
       testWidgets(
         'a wall named "North Face" renders that exact string as the nav '
         'title, with maxLines 1 and TextOverflow.ellipsis — never '
-        '"ClimbTopo" or "masi"',
+        '"Masi" or "masi"',
         (tester) async {
           final container = _makeContainer();
           final repo = container.read(libraryCrudRepositoryProvider);
@@ -512,7 +512,7 @@ void main() {
           await tester.pumpAndSettle();
 
           expect(
-            find.text('ClimbTopo'),
+            find.text('Masi'),
             findsNothing,
             reason: 'nav title must never be the literal app name',
           );

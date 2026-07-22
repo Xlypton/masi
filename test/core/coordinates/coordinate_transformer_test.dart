@@ -3,7 +3,7 @@ import 'dart:ui';
 import 'package:flutter/widgets.dart' show Matrix4;
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:climbtopo/core/coordinates/coordinate_transformer.dart';
+import 'package:masi/core/coordinates/coordinate_transformer.dart';
 
 void main() {
   group('percentToScene', () {

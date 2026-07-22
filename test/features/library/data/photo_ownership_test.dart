@@ -1,13 +1,13 @@
 import 'dart:io';
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/features/library/data/library_crud_repository.dart';
-import 'package:climbtopo/features/topo/application/draw_controller.dart';
-import 'package:climbtopo/features/topo/data/photo_files.dart';
-import 'package:climbtopo/features/topo/data/photo_repository.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas.dart';
-import 'package:climbtopo/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/data/photo_files.dart';
+import 'package:masi/features/topo/data/photo_repository.dart';
+import 'package:masi/features/topo/presentation/topo_canvas.dart';
+import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -47,8 +47,8 @@ void main() {
 
   setUp(() {
     db = AppDatabase(NativeDatabase.memory());
-    docsDir = Directory.systemTemp.createTempSync('climbtopo_docs_');
-    srcDir = Directory.systemTemp.createTempSync('climbtopo_src_');
+    docsDir = Directory.systemTemp.createTempSync('masi_docs_');
+    srcDir = Directory.systemTemp.createTempSync('masi_src_');
     photoFiles = PhotoFiles(docsDir: () async => docsDir);
     repo = LibraryCrudRepository(db, nowMs: () => 1000, photoFiles: photoFiles);
   });

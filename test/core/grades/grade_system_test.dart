@@ -1,6 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 
-import 'package:climbtopo/core/grades/grade_system.dart';
+import 'package:masi/core/grades/grade_system.dart';
 
 // Contract under test (see lib/core/grades/grade_system.dart doc comment
 // for the full derivation of the shared scale, anchors, and thresholds):

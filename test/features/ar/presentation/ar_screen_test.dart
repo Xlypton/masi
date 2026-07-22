@@ -1,18 +1,18 @@
 import 'dart:async';
 import 'dart:ui' as ui;
 
-import 'package:climbtopo/app/theme.dart';
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/core/db/database_provider.dart';
-import 'package:climbtopo/features/ar/application/ar_channel.dart';
-import 'package:climbtopo/features/ar/application/ar_controller.dart';
-import 'package:climbtopo/features/ar/application/manual_align_controller.dart';
-import 'package:climbtopo/features/ar/domain/homography.dart';
-import 'package:climbtopo/features/ar/presentation/ar_overlay_painter.dart';
-import 'package:climbtopo/features/ar/presentation/ar_screen.dart';
-import 'package:climbtopo/features/library/application/library_providers.dart';
-import 'package:climbtopo/features/topo/data/route_repository.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/app/theme.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/ar/application/ar_channel.dart';
+import 'package:masi/features/ar/application/ar_controller.dart';
+import 'package:masi/features/ar/application/manual_align_controller.dart';
+import 'package:masi/features/ar/domain/homography.dart';
+import 'package:masi/features/ar/presentation/ar_overlay_painter.dart';
+import 'package:masi/features/ar/presentation/ar_screen.dart';
+import 'package:masi/features/library/application/library_providers.dart';
+import 'package:masi/features/topo/data/route_repository.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -93,13 +93,13 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   // ArController.setMode fires a real (fire-and-forget) MethodChannel call
-  // on 'climbtopo/ar' — mocked here (mirroring
+  // on 'masi/ar' — mocked here (mirroring
   // test/features/ar/application/ar_controller_test.dart) so the
   // ArAlignmentStage group's mode-toggle interactions never hit an
   // unhandled MissingPluginException from the unregistered real channel.
-  const arMethodChannel = MethodChannel('climbtopo/ar');
+  const arMethodChannel = MethodChannel('masi/ar');
 
-  /// Records every `climbtopo/ar` method call made during a test — used by
+  /// Records every `masi/ar` method call made during a test — used by
   /// the Re-scan control tests below to assert `rescan` was invoked (with no
   /// args) without needing a dedicated mock per test.
   ///
@@ -1026,7 +1026,7 @@ void main() {
       testWidgets(
         'inactive (native channel.start has not yet succeeded): the '
         'rescan/lock/mode-toggle FABs render disabled (onPressed null) and '
-        'tapping them fires no climbtopo/ar channel call — every AR control '
+        'tapping them fires no masi/ar channel call — every AR control '
         'must be gated on ArState.active so a call never fires before the '
         'platform view has mounted its native handler',
         (tester) async {

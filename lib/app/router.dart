@@ -58,7 +58,7 @@ final Expando<Object> _authRefreshWired = Expando<Object>(
   'webAuthGateRefreshWired',
 );
 
-/// Web auth wall (private-app requirement, see `CLIMBTOPO.md`): on WEB,
+/// Web auth wall (private-app requirement, see `MASI.md`): on WEB,
 /// while [webAuthGateEnabledProvider] is on, an unauthenticated visitor must
 /// not reach ANY route except [webAuthGateSignInPath] itself. On NATIVE
 /// (`webAuthGateEnabledProvider` false, its `kIsWeb`-derived default) this

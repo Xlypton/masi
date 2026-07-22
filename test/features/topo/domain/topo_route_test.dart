@@ -1,7 +1,7 @@
 import 'dart:io';
 
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {

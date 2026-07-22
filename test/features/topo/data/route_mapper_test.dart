@@ -1,7 +1,7 @@
-import 'package:climbtopo/core/db/app_database.dart' as db;
-import 'package:climbtopo/core/grades/grade_system.dart';
-import 'package:climbtopo/features/topo/data/route_mapper.dart';
-import 'package:climbtopo/features/topo/domain/topo_route.dart';
+import 'package:masi/core/db/app_database.dart' as db;
+import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/data/route_mapper.dart';
+import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 db.Route _row({

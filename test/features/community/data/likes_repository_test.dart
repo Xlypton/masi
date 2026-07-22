@@ -1,5 +1,5 @@
-import 'package:climbtopo/core/db/app_database.dart';
-import 'package:climbtopo/features/community/data/likes_repository.dart';
+import 'package:masi/core/db/app_database.dart';
+import 'package:masi/features/community/data/likes_repository.dart';
 import 'package:drift/drift.dart' hide isNull, isNotNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
