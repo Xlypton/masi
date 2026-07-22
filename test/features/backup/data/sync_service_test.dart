@@ -253,6 +253,9 @@ class FakeAuthRepository implements AuthRepository {
   Future<void> signInWithGoogle() async {}
 
   @override
+  Future<void> verifyEmailOtp(String email, String code) async {}
+
+  @override
   Future<void> signOut() async {}
 }
 

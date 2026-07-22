@@ -47,14 +47,27 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
   static final RegExp _emailPattern = RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$');
 
   final _emailController = TextEditingController();
+
+  /// Backs the iOS-web OTP-code entry field (see [_handleVerifyOtp]). Only
+  /// ever shown/used on iOS web, where the magic-LINK flow is replaced by an
+  /// emailed sign-in code — every other platform keeps the link flow and
+  /// never touches this controller.
+  final _otpController = TextEditingController();
   bool _sending = false;
   bool _linkSent = false;
   bool _notApproved = false;
   String? _error;
 
+  /// Set when the last [_handleVerifyOtp] attempt failed (wrong/expired
+  /// code) — renders the `account-otp-error` message. Distinct from [_error]
+  /// (which is the magic-link SEND path's generic failure) so the two can't
+  /// clobber each other.
+  String? _otpError;
+
   @override
   void dispose() {
     _emailController.dispose();
+    _otpController.dispose();
     super.dispose();
   }
 
@@ -108,6 +121,40 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
           _error = 'Could not send the link: $e';
         }
       });
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
+  /// iOS-web only: exchanges the emailed sign-in [_otpController] code for a
+  /// session via [AuthRepository.verifyEmailOtp]. Mirrors [_handleSendLink]'s
+  /// discipline (in-flight guard, keyboard dismissal, `mounted` guards around
+  /// every `setState`). On success there's nothing to do locally — the
+  /// `authStateProvider` listener flips the screen to [_SignedInBody]; on
+  /// failure it surfaces a friendly, retryable message via [_otpError].
+  Future<void> _handleVerifyOtp() async {
+    final email = _emailController.text.trim();
+    final code = _otpController.text.trim();
+    if (email.isEmpty || code.isEmpty || _sending) return;
+
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    setState(() {
+      _sending = true;
+      _otpError = null;
+    });
+    try {
+      await ref.read(authRepositoryProvider).verifyEmailOtp(email, code);
+      // Success: the `authStateProvider` listener flips to `_SignedInBody` —
+      // no manual navigation.
+    } catch (e) {
+      if (!mounted) return;
+      setState(
+        () => _otpError =
+            "That code didn't work — check it or request a new one.",
+      );
     } finally {
       if (mounted) {
         setState(() => _sending = false);
@@ -182,6 +229,14 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
 
     final asyncAuth = ref.watch(authStateProvider);
 
+    // True only on iOS WEB (native/test report `.other` — see
+    // `pwa_install_stub.dart`). On iOS web the magic-LINK sign-in doesn't
+    // survive the Safari -> installed-PWA handoff, so that flow is replaced
+    // by an emailed sign-in CODE (`verifyEmailOtp`); every other platform
+    // keeps the link flow untouched.
+    final iosWeb =
+        ref.watch(pwaInstallStatusProvider).platform == PwaPlatform.ios;
+
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -201,11 +256,15 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                 )
               : _SignedOutBody(
                   controller: _emailController,
+                  otpController: _otpController,
                   sending: _sending,
                   linkSent: _linkSent,
                   notApproved: _notApproved,
                   error: _error,
+                  otpError: _otpError,
+                  iosWeb: iosWeb,
                   onSend: _handleSendLink,
+                  onVerifyOtp: _handleVerifyOtp,
                   onGoogle: _handleGoogle,
                 ),
           loading: () => const Center(child: CircularProgressIndicator()),
@@ -220,11 +279,15 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
           // actually offer the sign-in form.
           error: (error, stackTrace) => _SignedOutBody(
             controller: _emailController,
+            otpController: _otpController,
             sending: _sending,
             linkSent: _linkSent,
             notApproved: _notApproved,
             error: _error,
+            otpError: _otpError,
+            iosWeb: iosWeb,
             onSend: _handleSendLink,
+            onVerifyOtp: _handleVerifyOtp,
             onGoogle: _handleGoogle,
           ),
         ),
@@ -240,15 +303,23 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
 class _SignedOutBody extends StatelessWidget {
   const _SignedOutBody({
     required this.controller,
+    required this.otpController,
     required this.sending,
     required this.linkSent,
     required this.notApproved,
     required this.error,
+    required this.otpError,
+    required this.iosWeb,
     required this.onSend,
+    required this.onVerifyOtp,
     required this.onGoogle,
   });
 
   final TextEditingController controller;
+
+  /// Backs the iOS-web OTP-code field (`account-otp-field`) — only shown once
+  /// [linkSent] is true AND [iosWeb] is true.
+  final TextEditingController otpController;
   final bool sending;
   final bool linkSent;
 
@@ -258,7 +329,23 @@ class _SignedOutBody extends StatelessWidget {
   /// [linkSent]'s generic confirmation or [error]'s generic failure text.
   final bool notApproved;
   final String? error;
+
+  /// Set when the last [onVerifyOtp] attempt failed — renders the
+  /// `account-otp-error` message under the iOS-web code field.
+  final String? otpError;
+
+  /// True only on iOS WEB (see `pwa_install_stub.dart` — native/test report
+  /// `.other`). On iOS web the send button is relabeled to send a sign-in
+  /// CODE and the post-send UI is the code-entry block, effectively hiding
+  /// the magic-LINK follow-up (the same underlying [onSend] call). Every
+  /// other platform keeps the magic-link button + "check your email for a
+  /// link" confirmation untouched.
+  final bool iosWeb;
   final VoidCallback onSend;
+
+  /// Submits the emailed sign-in code (`account-otp-submit`) via
+  /// [_AccountScreenState._handleVerifyOtp]. iOS-web only.
+  final VoidCallback onVerifyOtp;
 
   /// Starts a Google OAuth sign-in (`account-google-signin`), an alternative
   /// to the magic-link flow. Disabled while [sending] is true so it can't
@@ -319,7 +406,9 @@ class _SignedOutBody extends StatelessWidget {
                   ),
                 ),
                 onPressed: sending ? null : onSend,
-                child: const Text('Send magic link'),
+                child: Text(
+                  iosWeb ? 'Email me a sign-in code' : 'Send magic link',
+                ),
               ),
               const SizedBox(height: MasiSpacing.md),
               ElevatedButton(
@@ -343,13 +432,64 @@ class _SignedOutBody extends StatelessWidget {
                 ),
               ),
               if (linkSent) ...[
-                const SizedBox(height: MasiSpacing.md),
-                Text(
-                  'Check your email for a link to sign in.',
-                  key: const Key('account-link-sent'),
-                  style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
-                  textAlign: TextAlign.center,
-                ),
+                if (iosWeb) ...[
+                  // iOS web: the emailed magic LINK can't hand a session back
+                  // to the installed PWA, so steer the user to the CODE we
+                  // just emailed instead of showing a "check your email for a
+                  // link" message.
+                  const SizedBox(height: MasiSpacing.md),
+                  Text(
+                    'Enter the code from your email',
+                    style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: MasiSpacing.sm),
+                  TextField(
+                    key: const Key('account-otp-field'),
+                    controller: otpController,
+                    keyboardType: TextInputType.number,
+                    autocorrect: false,
+                    decoration: const InputDecoration(hintText: '123456'),
+                    onSubmitted: (_) => onVerifyOtp(),
+                  ),
+                  const SizedBox(height: MasiSpacing.md),
+                  ElevatedButton(
+                    key: const Key('account-otp-submit'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: colors.accent,
+                      foregroundColor: colors.onAccent,
+                      disabledBackgroundColor: colors.accent,
+                      disabledForegroundColor: colors.onAccent.withValues(
+                        alpha: 0.7,
+                      ),
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(13),
+                      ),
+                    ),
+                    onPressed: sending ? null : onVerifyOtp,
+                    child: const Text('Sign in'),
+                  ),
+                  if (otpError != null) ...[
+                    const SizedBox(height: MasiSpacing.md),
+                    Text(
+                      otpError!,
+                      key: const Key('account-otp-error'),
+                      style: textTheme.bodyMedium?.copyWith(
+                        color: colors.gradeHard,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ] else ...[
+                  const SizedBox(height: MasiSpacing.md),
+                  Text(
+                    'Check your email for a link to sign in.',
+                    key: const Key('account-link-sent'),
+                    style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ],
               if (notApproved) ...[
                 const SizedBox(height: MasiSpacing.md),

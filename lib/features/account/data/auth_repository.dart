@@ -80,6 +80,13 @@ abstract class AuthRepository {
   /// completes back into the app.
   Future<void> signInWithGoogle();
 
+  /// Verifies an emailed numeric sign-in [code] for [email] — the PWA-safe
+  /// alternative to the magic link, which breaks in the iOS standalone PWA
+  /// (the link opens Safari, so the session never lands back in the installed
+  /// app). Resolves once the code is accepted and the session is established;
+  /// [authStateChanges] then reports the sign-in.
+  Future<void> verifyEmailOtp(String email, String code);
+
   /// Signs out the current session, if any.
   Future<void> signOut();
 }
@@ -167,6 +174,16 @@ class SupabaseAuthRepository implements AuthRepository {
     await _client.auth.signInWithOAuth(
       OAuthProvider.google,
       redirectTo: resolveMagicLinkRedirect(),
+    );
+  }
+
+  @override
+  Future<void> verifyEmailOtp(String email, String code) {
+    final normalized = code.replaceAll(RegExp(r'\s+'), '');
+    return _client.auth.verifyOTP(
+      email: email,
+      token: normalized,
+      type: OtpType.email,
     );
   }
 
