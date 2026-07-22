@@ -86,12 +86,25 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
 
 extension ArPlatformView: ArSessionControlling {
 
+    /// Redraws `image` UPRIGHT, baking in its `imageOrientation` into the
+    /// pixel buffer itself. `UIImage.cgImage` is the RAW decoded pixel
+    /// buffer with EXIF orientation discarded; feeding THAT straight into
+    /// `ARReferenceImage` (as this used to do) while Dart's own reference
+    /// dimensions are EXIF-oriented made portrait reference photos detect
+    /// rotated/skewed. Returns `image.cgImage` unchanged when already `.up`
+    /// (no redraw needed).
+    private static func uprightCGImage(from image: UIImage) -> CGImage? {
+        if image.imageOrientation == .up { return image.cgImage }
+        let renderer = UIGraphicsImageRenderer(size: image.size)
+        return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }.cgImage
+    }
+
     func startSession(
         referenceImagePath: String,
         refWidth: Int,
         refHeight: Int,
         routesJson: String,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping (Bool, [Double]?) -> Void
     ) {
         NSLog("AR_DBG startSession invoked")
         // `routesJson` is accepted for contract completeness -- the native
@@ -100,10 +113,37 @@ extension ArPlatformView: ArSessionControlling {
         // this view sends, so `routesJson` is intentionally unused here.
         _ = routesJson
 
-        guard let uiImage = UIImage(contentsOfFile: referenceImagePath), let cg = uiImage.cgImage else {
+        guard let uiImage = UIImage(contentsOfFile: referenceImagePath), let rawCG = uiImage.cgImage else {
             NSLog("AR_DBG ref decode FAILED")
-            completion(false)
+            completion(false, nil)
             return
+        }
+
+        // EXIF orientation fix -- see `uprightCGImage` doc above.
+        guard let uprightCG = Self.uprightCGImage(from: uiImage) else {
+            NSLog("AR_DBG ref upright redraw FAILED")
+            completion(false, nil)
+            return
+        }
+        NSLog(
+            "AR_DBG ref exif imageOrientation=%d rawSize=%dx%d uprightSize=%dx%d",
+            uiImage.imageOrientation.rawValue, rawCG.width, rawCG.height, uprightCG.width, uprightCG.height
+        )
+
+        // Rock segmentation (iOS 17+, best-effort): crop the reference photo
+        // down to the detected foreground (the rock/wall) so ARKit's
+        // detectionImages target is tighter and less cluttered with
+        // background. Any failure (unsupported OS, no confident instance,
+        // Vision error) falls back to the full upright photo untouched --
+        // see `ArRockSegmentation.segmentAndCrop`.
+        var referenceCG = uprightCG
+        var rockQuadPercent: [Double]? = nil
+        if let crop = ArRockSegmentation.segmentAndCrop(uprightCG) {
+            referenceCG = crop.cgImage
+            rockQuadPercent = crop.quadPercent
+            NSLog("AR_DBG seg: using rock crop quad=\(crop.quadPercent)")
+        } else {
+            NSLog("AR_DBG seg: no crop, using full upright photo")
         }
 
         // 0.3m is a nominal physical width -- ARKit only uses it to scale
@@ -112,12 +152,12 @@ extension ArPlatformView: ArSessionControlling {
         // ARKit derives from this same value plus the image's pixel aspect
         // ratio), the corner projection stays self-consistent regardless of
         // the real-world print size.
-        let ref = ARReferenceImage(cg, orientation: .up, physicalWidth: 0.3)
+        let ref = ARReferenceImage(referenceCG, orientation: .up, physicalWidth: 0.3)
         referenceImage = ref
 
         guard ARWorldTrackingConfiguration.isSupported else {
             NSLog("AR_DBG ARWorldTrackingConfiguration.isSupported=false, refusing to start session")
-            completion(false)
+            completion(false, nil)
             return
         }
 
@@ -134,7 +174,7 @@ extension ArPlatformView: ArSessionControlling {
             self.pinnedManualCorners = nil
             self.sceneView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
             NSLog("AR_DBG ARKit world session.run detectionImages=1")
-            completion(true)
+            completion(true, rockQuadPercent)
         }
     }
 
@@ -406,6 +446,7 @@ extension ArPlatformView: ARSessionDelegate {
             pinnedTransform = img.transform
             pinnedPhysicalSize = img.referenceImage.physicalSize
             NSLog("AR_DBG pinned world transform")
+            NSLog("AR_DBG corner order = straight TL,TR,BR,BL (DEVICE-VERIFY -- see startSession upright fix)")
         }
         let pinned = pinnedTransform
         let phys = pinnedPhysicalSize
@@ -450,15 +491,24 @@ extension ArPlatformView: ARSessionDelegate {
                     trackingState: trackingStateStr, limitedReason: limitedReasonStr
                 )
             } else if let t = pinned, let size = phys {
-                // EXISTING auto path -- unchanged.
+                // EXISTING auto path -- unchanged aside from the corner
+                // mapping below.
                 let hw = Float(size.width) / 2
                 let hh = Float(size.height) / 2
-                // KEEP this corrected corner order (fixes the ARImageAnchor axis quarter-turn):
+                // DEVICE-VERIFY: straight (un-hacked) corner mapping. The
+                // reference image handed to ARKit is now genuinely EXIF-
+                // upright (see `uprightCGImage` in `startSession`), so the
+                // empirical quarter-turn order that used to compensate for
+                // feeding ARKit RAW (non-upright) pixels is no longer
+                // appropriate -- this is the naive TL/TR/BR/BL reading. It
+                // MUST be confirmed on a physical device with a portrait
+                // reference photo: if the overlay comes out rotated/skewed,
+                // this mapping is the first place to look.
                 let locals: [simd_float4] = [
-                    simd_float4(-hw, 0, hh, 1),   // TL
-                    simd_float4(-hw, 0, -hh, 1),  // TR
-                    simd_float4(hw, 0, -hh, 1),   // BR
-                    simd_float4(hw, 0, hh, 1),    // BL
+                    simd_float4(-hw, 0, -hh, 1),  // TL -> (0,0)
+                    simd_float4( hw, 0, -hh, 1),  // TR -> (w,0)
+                    simd_float4( hw, 0,  hh, 1),  // BR -> (w,h)
+                    simd_float4(-hw, 0,  hh, 1),  // BL -> (0,h)
                 ]
                 var out: [Double] = []
                 out.reserveCapacity(8)

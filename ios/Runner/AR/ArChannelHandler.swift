@@ -16,7 +16,7 @@ protocol ArSessionControlling: AnyObject {
         refWidth: Int,
         refHeight: Int,
         routesJson: String,
-        completion: @escaping (Bool) -> Void
+        completion: @escaping (Bool, [Double]?) -> Void
     )
     func stopSession()
     func setMode(_ mode: ArMode)
@@ -34,6 +34,12 @@ protocol ArSessionControlling: AnyObject {
 /// `lib/features/ar/.../ar_channel*.dart`):
 ///   MethodChannel('masi/ar')
 ///     - "start" args: {referenceImagePath: String, refWidth: Int, refHeight: Int, routesJson: String}
+///       result: {success: Bool, rockQuadPercent: [Double]x8?} -- `rockQuadPercent` is
+///       [tlX,tlY, trX,trY, brX,brY, blX,blY], each 0..1, the fraction of the FULL
+///       upright reference photo that native's best-effort rock/wall segmentation
+///       (`ArRockSegmentation`, iOS 17+) cropped ARKit's detectionImages target down
+///       to; the key is OMITTED (nil) whenever segmentation didn't run/found nothing
+///       and the full upright photo was used as the detection target instead.
 ///     - "stop" (no args)
 ///     - "setMode" args: {mode: 'auto'|'manual'}
 ///     - "rescan" (no args) -- clears the pinned world transform and re-runs
@@ -105,8 +111,10 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
                 refWidth: refWidth,
                 refHeight: refHeight,
                 routesJson: routesJson
-            ) { success in
-                result(success)
+            ) { success, rockQuadPercent in
+                var payload: [String: Any] = ["success": success]
+                if let rockQuadPercent { payload["rockQuadPercent"] = rockQuadPercent }
+                result(payload)
             }
 
         case "stop":
