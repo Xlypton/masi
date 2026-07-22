@@ -6,6 +6,34 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:masi/features/ar/domain/homography.dart';
 
+/// Test-only mirror of the area/span^2 ratio `isDegenerateQuadSolve` computes
+/// internally (bounding-box span via [max], shoelace area) -- duplicated
+/// here purely so the boundary-pinning fixtures below can assert their own
+/// numbers rather than relying on hand arithmetic in a comment alone. Not a
+/// call into production code: `_quadArea`/the span calc are library-private
+/// to `homography.dart`.
+double _quadAreaOverSpanSquared(List<Offset> q) {
+  double minX = q[0].dx, maxX = q[0].dx;
+  double minY = q[0].dy, maxY = q[0].dy;
+  for (final p in q) {
+    if (p.dx < minX) minX = p.dx;
+    if (p.dx > maxX) maxX = p.dx;
+    if (p.dy < minY) minY = p.dy;
+    if (p.dy > maxY) maxY = p.dy;
+  }
+  final double span = max(maxX - minX, maxY - minY);
+
+  double sum = 0;
+  for (int i = 0; i < 4; i++) {
+    final Offset a = q[i];
+    final Offset b = q[(i + 1) % 4];
+    sum += a.dx * b.dy - b.dx * a.dy;
+  }
+  final double area = sum.abs() / 2.0;
+
+  return area / (span * span);
+}
+
 void main() {
   group('Homography.identity', () {
     test('A1: warp is a no-op', () {
@@ -369,6 +397,486 @@ void main() {
       expect(result.dy.isFinite, isTrue);
       expect(result.dx, closeTo(5, 1e-9));
       expect(result.dy, closeTo(5, 1e-9));
+    });
+
+    test(
+      'A1(i): Hartley-normalized DLT round-trips a KNOWN strong-perspective '
+      'homography on a realistic large-photo-pixel src / screen-pixel dst '
+      'scale mismatch, within a tight tolerance -- both at the 4 defining '
+      'corners AND at an interior point never given to fromQuad, proving '
+      'the WHOLE matrix (not just the 4 trivially-satisfied constraints) '
+      'was recovered correctly',
+      () {
+        // src mimics a real reference-photo pixel rect (iPhone-photo-sized:
+        // thousands of px) -- the exact "photo-pixel coordinates (hundreds
+        // -thousands)" scale this whole defect is about.
+        const src = [
+          Offset(0, 0),
+          Offset(3024, 0),
+          Offset(3024, 4032),
+          Offset(0, 4032),
+        ];
+
+        // A genuine (non-affine) projective transform: modest rotation/
+        // scale/translation PLUS non-zero perspective terms (h20/h21),
+        // chosen so applying it to photo-pixel-scale src coordinates lands
+        // in a plausible on-screen pixel range -- reproducing the exact
+        // scale-mismatch this defect describes.
+        final trueHomography = Homography.fromRowMajor(const [
+          0.18, 0.04, 60, //
+          -0.03, 0.16, 90, //
+          0.00004, 0.00015, 1, //
+        ]);
+
+        final dst = [for (final p in src) trueHomography.warp(p)];
+
+        final solved = Homography.fromQuad(src, dst);
+
+        for (var i = 0; i < 4; i++) {
+          final result = solved.warp(src[i]);
+          expect(
+            result.dx,
+            closeTo(dst[i].dx, 1e-3),
+            reason: 'corner $i dx',
+          );
+          expect(
+            result.dy,
+            closeTo(dst[i].dy, 1e-3),
+            reason: 'corner $i dy',
+          );
+        }
+
+        // An interior point NOT among the 4 correspondences given to
+        // fromQuad -- only correct if the full matrix (incl. the
+        // perspective terms) was recovered, not merely a fit that happens
+        // to satisfy the 4 corners.
+        const interior = Offset(1500, 2200);
+        final expected = trueHomography.warp(interior);
+        final actual = solved.warp(interior);
+        expect(actual.dx, closeTo(expected.dx, 1e-3));
+        expect(actual.dy, closeTo(expected.dy, 1e-3));
+      },
+    );
+
+    test(
+      'A1(ii): a near-collinear dst quad combined with a large-photo-pixel '
+      'src (the exact scale-mismatch that made the un-normalized DLT '
+      'ill-conditioned) still returns a finite, bounded homography -- no '
+      'NaN/Infinity anywhere, including when warping points well outside '
+      'the 4 given correspondences',
+      () {
+        const src = [
+          Offset(0, 0),
+          Offset(3024, 0),
+          Offset(3024, 4032),
+          Offset(0, 4032),
+        ];
+        // Near-collinear (not exactly): all 4 points sit almost exactly on
+        // the line y=400, with only a sub-pixel perpendicular perturbation
+        // -- a sliver quad that is NOT exactly singular (so the internal
+        // `_solve8x8` epsilon-pivot check alone would not catch it), which
+        // is precisely the "wild-but-non-singular solve" failure mode.
+        const dst = [
+          Offset(50, 400.0),
+          Offset(250, 400.02),
+          Offset(450, 399.97),
+          Offset(650, 400.01),
+        ];
+
+        final solved = Homography.fromQuad(src, dst);
+
+        for (final v in solved.m) {
+          expect(v.isFinite, isTrue, reason: 'matrix entry $v must be finite');
+          expect(
+            v.abs(),
+            lessThan(1e12),
+            reason: 'matrix entry $v must be boundedly finite',
+          );
+        }
+
+        // Warp a handful of points spanning (and slightly outside) the src
+        // rect, incl. ones never given to fromQuad -- every result must
+        // still be finite/bounded, never NaN/Infinity.
+        for (final p in const [
+          Offset(0, 0),
+          Offset(3024, 4032),
+          Offset(1512, 2016),
+          Offset(-500, -500),
+          Offset(4000, 5000),
+        ]) {
+          final result = solved.warp(p);
+          expect(result.dx.isFinite, isTrue);
+          expect(result.dy.isFinite, isTrue);
+          expect(result.dx.abs(), lessThan(1e12));
+          expect(result.dy.abs(), lessThan(1e12));
+        }
+      },
+    );
+  });
+
+  group('Homography.isDegenerateQuadSolve', () {
+    const src = [
+      Offset(0, 0),
+      Offset(1000, 0),
+      Offset(1000, 2000),
+      Offset(0, 2000),
+    ];
+    const goodDst = [
+      Offset(50, 50),
+      Offset(350, 50),
+      Offset(350, 750),
+      Offset(50, 750),
+    ];
+    // Exactly collinear -- fromQuad's internal singular-system check
+    // catches this and returns identity() directly.
+    const collinearDst = [
+      Offset(50, 50),
+      Offset(150, 50),
+      Offset(250, 50),
+      Offset(350, 50),
+    ];
+    // A sliver quad: real (tiny) perpendicular deviation from the line
+    // y=50, so it is NOT exactly singular -- fromQuad returns some
+    // finite, non-identity matrix for this (thanks to A1's normalization),
+    // yet the quad itself is still not a trustworthy tracked corner set.
+    // This is exactly the "wild-but-non-singular solve" defect #2 (A2)
+    // describes: passes the old `solved == identity()` check, but must be
+    // caught by the new geometric validity test.
+    const sliverDst = [
+      Offset(50, 50.0),
+      Offset(150, 50.2),
+      Offset(250, 49.85),
+      Offset(350, 50.1),
+    ];
+
+    test('A2: a well-conditioned solve is NOT flagged degenerate', () {
+      final solved = Homography.fromQuad(src, goodDst);
+      expect(
+        Homography.isDegenerateQuadSolve(solved, src, goodDst),
+        isFalse,
+      );
+    });
+
+    test(
+      'A2: fromQuad\'s own identity sentinel (exactly-singular collinear '
+      'dst) IS flagged degenerate',
+      () {
+        final solved = Homography.fromQuad(src, collinearDst);
+        expect(solved, equals(Homography.identity()));
+        expect(
+          Homography.isDegenerateQuadSolve(solved, src, collinearDst),
+          isTrue,
+        );
+      },
+    );
+
+    test(
+      'A2: a wild-but-technically-non-singular sliver solve is NOT '
+      'identity, yet IS flagged degenerate -- proving the new check '
+      'catches what exact identity-equality alone would miss',
+      () {
+        final solved = Homography.fromQuad(src, sliverDst);
+        expect(
+          solved,
+          isNot(equals(Homography.identity())),
+          reason:
+              'the old exact-equality check would have let this solve '
+              'through uncaught',
+        );
+        expect(
+          Homography.isDegenerateQuadSolve(solved, src, sliverDst),
+          isTrue,
+        );
+      },
+    );
+
+    test('A2: any non-finite matrix entry is flagged degenerate', () {
+      final bogus = Homography.fromRowMajor(const [
+        double.nan, 0, 0, //
+        0, 1, 0, //
+        0, 0, 1, //
+      ]);
+      expect(
+        Homography.isDegenerateQuadSolve(bogus, src, goodDst),
+        isTrue,
+      );
+    });
+
+    // --- HIGH-severity fix: convexity/consistent-winding check -------------
+    //
+    // The old check set's 4th check ("residual": warp(src[i]) ≈ dst[i]
+    // within a span-proportional tolerance) was a TAUTOLOGY --
+    // Homography.fromQuad solves the 8-DOF system EXACTLY through the 4
+    // given correspondences, so warp(src[i]) == dst[i] always holds for any
+    // successful solve, regardless of whether the correspondences describe a
+    // geometrically sane transform. It caught nothing the non-finite check
+    // didn't already catch. Meanwhile a CONCAVE (reflex-vertex) or bowtie
+    // (self-intersecting) dst quad passed every one of the old checks --
+    // real central projections of a planar rectangle are ALWAYS convex, so
+    // either shape is an unambiguous tracking-glitch signature. F1-F3 below
+    // discriminate the fix: they fail against the pre-fix check set (F1/F2
+    // wrongly return false; F3 must keep returning false post-fix, i.e. the
+    // fix must not over-reject genuinely convex, steeply-foreshortened
+    // quads).
+    group('convexity / consistent-winding (HIGH fix)', () {
+      const foreshortenSrc = [
+        Offset(0, 0),
+        Offset(1000, 0),
+        Offset(1000, 1500),
+        Offset(0, 1500),
+      ];
+
+      test(
+        'F1: a concave dst quad (one corner glitched inward into a reflex '
+        'vertex) IS flagged degenerate -- pre-fix this returned FALSE '
+        '(accepted): fromQuad solves through the 4 points exactly (the old '
+        'residual check is a tautology), the span/area checks don\'t catch '
+        'it either, so a real tracking glitch like this rendered at full '
+        'confidence and poisoned _lastGoodHomography',
+        () {
+          const src = foreshortenSrc;
+          // TL, TR, BR (glitched inward), BL -- see this file's module doc
+          // for the exact worked example (warp(Offset(0,750)) lands 200px
+          // above the whole quad under the pre-fix check set).
+          const concaveDst = [
+            Offset(100, 100),
+            Offset(300, 100),
+            Offset(150, 150),
+            Offset(100, 300),
+          ];
+
+          final solved = Homography.fromQuad(src, concaveDst);
+          // Confirm this is a genuine non-identity, finite solve (not caught
+          // by fromQuad's own singular-system sentinel) -- otherwise F1
+          // would trivially pass via the non-finite/identity path rather
+          // than exercising the convexity check this test targets.
+          expect(solved, isNot(equals(Homography.identity())));
+          for (final v in solved.m) {
+            expect(v.isFinite, isTrue);
+          }
+
+          expect(
+            Homography.isDegenerateQuadSolve(solved, src, concaveDst),
+            isTrue,
+            reason:
+                'a concave (reflex-vertex) dst quad must be rejected -- a '
+                'real planar-rectangle projection is always convex',
+          );
+        },
+      );
+
+      test(
+        'F2: a bowtie (self-intersecting) dst quad -- adjacent corners '
+        'swapped -- IS flagged degenerate',
+        () {
+          const src = foreshortenSrc;
+          // An asymmetric convex quad with TR and BR swapped: connecting
+          // TL->BR'->TR'->BL now crosses itself in the middle (the
+          // TL-BR' and TR'-BL edges intersect), the textbook "bowtie" quad
+          // shape. Deliberately asymmetric (unlike a simple rectangle swap)
+          // so the shoelace-sum area is non-negligible relative to span^2 --
+          // a symmetric swap can shoelace-cancel to exactly 0 and get caught
+          // by the pre-existing area/span check alone, which would NOT
+          // discriminate this fix.
+          const bowtieDst = [
+            Offset(50, 50), // TL
+            Offset(280, 700), // was BR
+            Offset(300, 60), // was TR
+            Offset(60, 680), // BL
+          ];
+
+          final solved = Homography.fromQuad(src, bowtieDst);
+          for (final v in solved.m) {
+            expect(v.isFinite, isTrue);
+          }
+
+          expect(
+            Homography.isDegenerateQuadSolve(solved, src, bowtieDst),
+            isTrue,
+            reason: 'a self-intersecting (bowtie) dst quad must be rejected',
+          );
+        },
+      );
+
+      test(
+        'F3: genuinely CONVEX quads are NOT over-rejected -- a near-square '
+        'and a strongly-foreshortened-but-convex trapezoid (short top edge, '
+        'long bottom edge, simulating an oblique ~80° view) both return '
+        'FALSE',
+        () {
+          const src = foreshortenSrc;
+
+          const nearSquareDst = [
+            Offset(100, 100),
+            Offset(400, 100),
+            Offset(400, 400),
+            Offset(100, 400),
+          ];
+          final solvedSquare = Homography.fromQuad(src, nearSquareDst);
+          expect(
+            Homography.isDegenerateQuadSolve(solvedSquare, src, nearSquareDst),
+            isFalse,
+            reason: 'a plain convex square must never be flagged degenerate',
+          );
+
+          // Steeply-foreshortened but still convex: the far (top) edge is
+          // much shorter than the near (bottom) edge, exactly what a real
+          // rectangle viewed at a steep oblique angle projects to -- still
+          // convex (all 4 winding cross-products share the same sign).
+          const trapezoidDst = [
+            Offset(300, 100), // TL -- short top edge
+            Offset(500, 100), // TR
+            Offset(700, 600), // BR -- long bottom edge
+            Offset(100, 600), // BL
+          ];
+          final solvedTrapezoid = Homography.fromQuad(src, trapezoidDst);
+          expect(
+            Homography.isDegenerateQuadSolve(
+              solvedTrapezoid,
+              src,
+              trapezoidDst,
+            ),
+            isFalse,
+            reason:
+                'a steeply-foreshortened but still-convex trapezoid must '
+                'not be over-rejected -- this is exactly what a real '
+                'oblique-angle wall view looks like',
+          );
+        },
+      );
+
+      test(
+        'F4: the pre-existing collinear / sliver / non-finite degenerate '
+        'cases still return TRUE post-fix (regression guard: the '
+        'convexity check must not have loosened these)',
+        () {
+          expect(
+            Homography.isDegenerateQuadSolve(
+              Homography.fromQuad(src, collinearDst),
+              src,
+              collinearDst,
+            ),
+            isTrue,
+          );
+          expect(
+            Homography.isDegenerateQuadSolve(
+              Homography.fromQuad(src, sliverDst),
+              src,
+              sliverDst,
+            ),
+            isTrue,
+          );
+          final bogus = Homography.fromRowMajor(const [
+            double.nan, 0, 0, //
+            0, 1, 0, //
+            0, 0, 1, //
+          ]);
+          expect(
+            Homography.isDegenerateQuadSolve(bogus, src, goodDst),
+            isTrue,
+          );
+        },
+      );
+
+      test(
+        'F5 (boundary-pinning): a genuinely convex, strongly-foreshortened '
+        'quad whose area/span^2 ratio sits just above (not deep past) the '
+        '1e-4 area gate is NOT over-rejected -- pins that the convexity/'
+        'winding epsilon (1e-6, scaled by span^2) never becomes the binding '
+        'constraint ahead of the area gate for a realistic steep view',
+        () {
+          const src = foreshortenSrc;
+          // A thin, near-edge-on trapezoid: top edge flat (TL->TR at
+          // y=500), bottom edge only slightly tilted (BL at y=500.7, BR at
+          // y=500.9) -- exactly what a real planar rectangle viewed at a
+          // razor-steep oblique angle projects to. All 4 winding
+          // cross-products are comfortably large here (700-900, versus a
+          // span^2*1e-6 threshold of ~1) -- there is no near-straight
+          // vertex in this fixture; that invariant is isolated separately
+          // in F6, so this test exercises only the area-gate boundary.
+          const steepDst = [
+            Offset(0, 500), // TL
+            Offset(1000, 500), // TR
+            Offset(1000, 500.9), // BR
+            Offset(0, 500.7), // BL
+          ];
+
+          // area/span^2 = 800 / 1000^2 = 8e-4 -- comfortably (8x) above the
+          // 1e-4 area gate, landing inside the requested ~5e-4..1e-3
+          // boundary-pinning band. Asserted rather than trusted from hand
+          // arithmetic alone.
+          expect(
+            _quadAreaOverSpanSquared(steepDst),
+            closeTo(8e-4, 1e-6),
+            reason: 'fixture must actually sit in the intended boundary band',
+          );
+
+          final solved = Homography.fromQuad(src, steepDst);
+          for (final v in solved.m) {
+            expect(v.isFinite, isTrue);
+          }
+
+          expect(
+            Homography.isDegenerateQuadSolve(solved, src, steepDst),
+            isFalse,
+            reason:
+                'a realistic steep view sitting just above the area gate '
+                'must not be over-rejected -- pins that a valid steeply '
+                'foreshortened quad stays accepted',
+          );
+        },
+      );
+
+      test(
+        'F6 (winding-vs-area isolation): a convex quad with ONE '
+        'near-straight (~178.6 degree) vertex is accepted even though its '
+        'winding cross-product there is far smaller than its neighbors -- '
+        'proving the 1e-6 winding epsilon is looser than the 1e-4 area gate '
+        'and does not reject a genuinely convex near-straight corner',
+        () {
+          const src = foreshortenSrc;
+          // TL, BR, and BL form a large, unambiguously convex triangle; TR
+          // sits barely off the TL-BR line (offset by 6 in y against a
+          // 1000-wide span), giving it an interior angle of ~178.6 degrees
+          // -- convex (all 4 winding cross-products positive: 503000 at
+          // TL, 6000 at TR, 503000 at BR, 1000000 at BL) but only just so
+          // at TR. The overall shape is nowhere near degenerate: its own
+          // area/span^2 (asserted below) clears the 1e-4 area gate by
+          // ~5000x, so the area check is trivially satisfied and cannot be
+          // what's discriminating here -- only the winding epsilon at TR
+          // is actually exercised, isolating that invariant from F5's
+          // area-boundary case.
+          const nearStraightDst = [
+            Offset(0, 0), // TL
+            Offset(500, -6), // TR -- near-straight vs TL/BR
+            Offset(1000, 0), // BR
+            Offset(500, 1000), // BL
+          ];
+
+          expect(
+            _quadAreaOverSpanSquared(nearStraightDst),
+            greaterThan(1e-2),
+            reason:
+                'overall area/span^2 must clear the area gate by orders of '
+                'magnitude, isolating the winding check as the only thing '
+                'that could reject this quad',
+          );
+
+          final solved = Homography.fromQuad(src, nearStraightDst);
+          for (final v in solved.m) {
+            expect(v.isFinite, isTrue);
+          }
+
+          expect(
+            Homography.isDegenerateQuadSolve(solved, src, nearStraightDst),
+            isFalse,
+            reason:
+                'a near-straight-but-still-convex vertex must not be '
+                'rejected -- the winding epsilon is deliberately looser '
+                'than the area gate for exactly this reason',
+          );
+        },
+      );
     });
   });
 

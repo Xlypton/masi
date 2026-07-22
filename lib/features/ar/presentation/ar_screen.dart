@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show min;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -28,6 +29,21 @@ import 'package:masi/shared/presentation/masi_icon.dart';
 /// so [ArScreen] and any future native-side wiring agree on the exact
 /// channel/view-type name.
 const String _kArPlatformViewType = 'masi/ar';
+
+/// Confidence cap applied whenever [ArAlignmentStage] renders a HELD
+/// homography instead of a freshly-solved one -- either the stale last
+/// known-good pose (the current frame's `Homography.fromQuad` solve was
+/// rejected by [Homography.isDegenerateQuadSolve]) or the generic centered
+/// [Homography.fitInto] ghost (no known-good pose exists yet). Both are
+/// genuinely uncertain about the CURRENT frame's real alignment, so
+/// rendering either at full derived confidence would present a stale-or-
+/// placeholder placement as fully trustworthy -- a solid "confidently
+/// wrong" overlay. `min`-ed against the real
+/// [ArAlignment.derivedConfidence] (never raised upward) so an
+/// already-lower ARKit-reported confidence is never overridden; kept
+/// comfortably below [kLowConfidenceThreshold] so `ArOverlayPainter`
+/// always renders it in its faint "searching" treatment.
+const double _kHeldFrameConfidenceCap = 0.2;
 
 /// Encodes [routes] as the `routesJson` payload handed to
 /// [ArChannel.start]. Kept intentionally simple (number/colorIndex/
@@ -526,13 +542,19 @@ class _ArScreenState extends ConsumerState<ArScreen> {
 ///   confidence derived from `latest.derivedConfidence` (see
 ///   [ArAlignment.derivedConfidence]), which reflects ARKit's actual
 ///   tracking-quality state rather than a hardcoded `1.0`. If that solve is
-///   degenerate (`Homography.fromQuad` returns [Homography.identity], e.g. a
-///   momentarily collinear corner quad), the last known-good homography is
-///   held instead — see [_ArAlignmentStageState._lastGoodHomography]. While
-///   not yet tracking (no update yet, or the latest update reports
-///   `tracking: false`), the homography falls back to a centered "ghost"
-///   placement ([Homography.fitInto]) with confidence `0.0`, again with no
-///   outline guide.
+///   degenerate/implausible per [Homography.isDegenerateQuadSolve] (a
+///   genuine geometric validity test — e.g. a collinear OR near-collinear
+///   corner quad, or any non-finite matrix entry — NOT an exact `==
+///   Homography.identity()` comparison, since a wild-but-non-singular solve
+///   is never `==` to identity), the last known-good homography is held
+///   instead — see [_ArAlignmentStageState._lastGoodHomography] — and the
+///   rendered confidence is capped into the low/"searching" band (see
+///   `_kHeldFrameConfidenceCap`) regardless of `derivedConfidence`, since
+///   the CURRENT frame's alignment was never actually solved. While not yet
+///   tracking (no update yet, or the latest update reports `tracking:
+///   false`), the homography falls back to a centered "ghost" placement
+///   ([Homography.fitInto]) with confidence `0.0`, again with no outline
+///   guide.
 /// - **Manual mode** ([ArMode.manual], the fallback): the homography comes
 ///   from [manualAlignProvider], hand-adjustable via the pan/scale/rotate
 ///   gesture layer shown over the overlay; confidence is pinned to `1.0`
@@ -604,11 +626,15 @@ class ArAlignmentStage extends ConsumerStatefulWidget {
 class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
   /// The most recent NON-degenerate homography `Homography.fromQuad` solved
   /// from ARKit-tracked corners (auto mode, or manual-and-locked). Held so a
-  /// transient degenerate solve (`Homography.fromQuad` returns
-  /// [Homography.identity] for a collinear/degenerate corner quad — see
-  /// `homography.dart`'s `fromQuad` doc) never snaps the overlay to
-  /// identity's huge top-left placement for a single frame; instead the
-  /// overlay keeps rendering at the last known-good placement until a fresh
+  /// transient degenerate/implausible solve (rejected by
+  /// [Homography.isDegenerateQuadSolve] — see that method's doc; NOT merely
+  /// an exact `== Homography.identity()` collinear-quad sentinel, since a
+  /// wild-but-non-singular solve on a near-collinear/oblique quad is never
+  /// `==` to identity either) never snaps the overlay to a wild or
+  /// implausible placement for a single frame; instead the overlay keeps
+  /// rendering at the last known-good placement (at a capped low/
+  /// "searching" confidence — see `_kHeldFrameConfidenceCap` — since the
+  /// current frame's alignment was never actually solved) until a fresh
   /// non-degenerate solve arrives. Falls back to the centered "ghost" fit
   /// (not identity) if there's no known-good homography yet.
   ///
@@ -779,25 +805,38 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
             // this frame (already EMA-smoothed upstream in
             // `ArController.onAlignment`) — no intermediate camera-frame
             // space involved.
-            final solved = Homography.fromQuad(
-              [
-                Offset.zero,
-                Offset(widget.refSize.width, 0),
-                Offset(widget.refSize.width, widget.refSize.height),
-                Offset(0, widget.refSize.height),
-              ],
-              corners,
-            );
-            if (solved == Homography.identity()) {
-              // Degenerate solve (see homography.dart's fromQuad doc) —
-              // hold the last known-good homography rather than snapping to
-              // identity's huge top-left placement for this frame.
+            final refCorners = [
+              Offset.zero,
+              Offset(widget.refSize.width, 0),
+              Offset(widget.refSize.width, widget.refSize.height),
+              Offset(0, widget.refSize.height),
+            ];
+            final solved = Homography.fromQuad(refCorners, corners);
+            if (Homography.isDegenerateQuadSolve(solved, refCorners, corners)) {
+              // Degenerate/implausible solve (see
+              // Homography.isDegenerateQuadSolve's doc — this is a genuine
+              // geometric validity test, not an exact `== identity()`
+              // comparison, so it also catches a wild-but-non-singular
+              // solve on a near-collinear/oblique quad) — hold the last
+              // known-good homography rather than snapping to a wild or
+              // implausible placement for this frame. Never overwrite
+              // _lastGoodHomography with a rejected solve — that would
+              // poison every subsequent hold-last-good fallback with the
+              // same bad placement.
               homography = _lastGoodHomography ?? fit;
+              // Honest held-frame confidence (A3): whether we're holding a
+              // stale known-good pose or falling back to the generic
+              // centered fit (no known-good pose yet), the CURRENT frame's
+              // alignment was NOT actually solved this frame — render at a
+              // capped low ("searching") confidence rather than the real
+              // derived confidence, so a stale/placeholder placement never
+              // reads as a solid, fully-trustworthy overlay.
+              confidence = min(latest!.derivedConfidence, _kHeldFrameConfidenceCap);
             } else {
               _lastGoodHomography = solved;
               homography = solved;
+              confidence = latest!.derivedConfidence;
             }
-            confidence = latest!.derivedConfidence;
           } else {
             // Not tracking yet (or no update yet) — show a fitted "ghost"
             // overlay instead of an unwarped, likely off-screen one.

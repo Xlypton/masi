@@ -1388,7 +1388,263 @@ void main() {
           );
         },
       );
+
+      testWidgets(
+        'F5: a concave (reflex-vertex) tracked-corner quad right after a '
+        'good tracked frame keeps rendering the PREVIOUS good homography '
+        '(no wild snap), never poisons _lastGoodHomography with the '
+        'concave solve, and caps confidence below the fade threshold -- '
+        'pre-fix, Homography.isDegenerateQuadSolve accepted a concave quad '
+        'as non-degenerate: full confidence + a poisoned last-good pose',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: goodCorners,
+                ),
+              );
+          await tester.pump();
+
+          final goodHomography = currentPainter(tester).homography;
+          expect(goodHomography, isNot(Homography.identity()));
+          expect(currentPainter(tester).confidence, 1.0);
+
+          // Reset the corner-smoothing filter (see this group's A1-A2 test
+          // above) so the concave sample below passes through unblended.
+          container.read(arControllerProvider.notifier).resetCornerSmoothing();
+
+          // One corner glitched inward into a reflex vertex -- concave, not
+          // collinear -- exactly the shape homography_test.dart's F1 proves
+          // fromQuad solves to a finite, non-identity homography for.
+          const concaveCorners = <Offset>[
+            Offset(100, 100),
+            Offset(300, 100),
+            Offset(150, 150),
+            Offset(100, 300),
+          ];
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: concaveCorners,
+                ),
+              );
+          await tester.pump();
+
+          expect(
+            currentPainter(tester).homography,
+            goodHomography,
+            reason:
+                'a concave tracked-corner solve must never be rendered '
+                'directly -- the overlay must hold the previous good '
+                'homography instead of snapping to the concave placement',
+          );
+          expect(
+            currentPainter(tester).confidence,
+            lessThan(kLowConfidenceThreshold),
+            reason:
+                'pre-fix this stayed at the full derived confidence (1.0) '
+                '-- a solid overlay confidently presenting a placement '
+                'from an unambiguous tracking-glitch quad',
+          );
+
+          // _lastGoodHomography itself must not have been overwritten by
+          // the concave solve: feed a SECOND degenerate (collinear) frame
+          // with no good frame in between. If the concave solve above had
+          // poisoned _lastGoodHomography, this would now hold onto THAT
+          // (wrong) placement instead of the original good one.
+          container.read(arControllerProvider.notifier).resetCornerSmoothing();
+          container
+              .read(arControllerProvider.notifier)
+              .onAlignment(
+                const ArAlignment(
+                  confidence: 1.0,
+                  tracking: true,
+                  screenCorners: degenerateCorners,
+                ),
+              );
+          await tester.pump();
+
+          expect(
+            currentPainter(tester).homography,
+            goodHomography,
+            reason:
+                '_lastGoodHomography must still be the original tracked '
+                'pose -- the earlier concave solve must never have '
+                'overwritten it',
+          );
+        },
+      );
     });
+
+    group(
+      'A3: honest held-frame confidence -- a held/degenerate-solve frame '
+      'renders at a capped low ("searching") confidence, never the real '
+      'derived confidence',
+      () {
+        // Mirrors the "A1: hold-last-good" group's fixtures above: a
+        // well-conditioned quad, and one flagged degenerate by
+        // Homography.isDegenerateQuadSolve (exactly collinear here, but the
+        // confidence-capping code path is identical for any rejected solve
+        // -- see ArAlignmentStage's build method).
+        const goodCorners = <Offset>[
+          Offset(50, 50),
+          Offset(350, 50),
+          Offset(350, 750),
+          Offset(50, 750),
+        ];
+        const degenerateCorners = <Offset>[
+          Offset(50, 50),
+          Offset(150, 50),
+          Offset(250, 50),
+          Offset(350, 50),
+        ];
+
+        testWidgets(
+          'first-tracked-no-lastgood: a degenerate first tracked frame '
+          'renders the fitted ghost at a capped LOW confidence, not the '
+          'full derived confidence ARKit reported',
+          (tester) async {
+            pinViewSize(tester);
+            final container = ProviderContainer();
+            addTearDown(container.dispose);
+
+            await tester.pumpWidget(buildStage(container));
+            await tester.pump();
+
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: degenerateCorners,
+                    // trackingState defaults to normal -> derivedConfidence
+                    // 1.0 -- proving the cap, not just a naturally-low
+                    // ARKit-reported confidence, is what's in effect here.
+                  ),
+                );
+            await tester.pump();
+
+            final fit = Homography.fitInto(refSize, viewSize);
+            expect(currentPainter(tester).homography, fit);
+            expect(
+              currentPainter(tester).confidence,
+              lessThan(kLowConfidenceThreshold),
+              reason:
+                  'a degenerate first-ever solve must never render at full '
+                  'derived confidence just because ARKit itself reports '
+                  'good tracking quality -- the CURRENT frame\'s alignment '
+                  'was never actually solved',
+            );
+          },
+        );
+
+        testWidgets(
+          'stale-hold: a degenerate frame arriving right after a good '
+          'tracked frame keeps rendering the PREVIOUS good homography, but '
+          'the confidence drops to the capped low band instead of staying '
+          'at the full derived confidence -- this is the core "confidently '
+          'wrong" regression this fix targets: pre-fix, this rendered a '
+          'SOLID overlay at a stale/possibly-wrong placement',
+          (tester) async {
+            pinViewSize(tester);
+            final container = ProviderContainer();
+            addTearDown(container.dispose);
+
+            await tester.pumpWidget(buildStage(container));
+            await tester.pump();
+
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: goodCorners,
+                  ),
+                );
+            await tester.pump();
+
+            final goodHomography = currentPainter(tester).homography;
+            expect(currentPainter(tester).confidence, 1.0);
+
+            container.read(arControllerProvider.notifier).resetCornerSmoothing();
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: degenerateCorners,
+                  ),
+                );
+            await tester.pump();
+
+            expect(
+              currentPainter(tester).homography,
+              goodHomography,
+              reason: 'the held pose itself must be unaffected by this fix',
+            );
+            expect(
+              currentPainter(tester).confidence,
+              lessThan(kLowConfidenceThreshold),
+              reason:
+                  'pre-fix this stayed at 1.0 -- a solid overlay confidently '
+                  'presenting a possibly-stale placement as fully '
+                  'trustworthy',
+            );
+          },
+        );
+
+        testWidgets(
+          'good frame (unchanged): a well-conditioned solve still renders '
+          'at the full real derived confidence -- the cap only applies to '
+          'held/degenerate frames',
+          (tester) async {
+            pinViewSize(tester);
+            final container = ProviderContainer();
+            addTearDown(container.dispose);
+
+            await tester.pumpWidget(buildStage(container));
+            await tester.pump();
+
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: goodCorners,
+                  ),
+                );
+            await tester.pump();
+
+            final expected = Homography.fromQuad([
+              Offset.zero,
+              Offset(refSize.width, 0),
+              Offset(refSize.width, refSize.height),
+              Offset(0, refSize.height),
+            ], goodCorners);
+
+            expect(currentPainter(tester).homography, expected);
+            expect(currentPainter(tester).confidence, 1.0);
+          },
+        );
+      },
+    );
 
     group(
       'A1: real confidence from trackingState drives the low-confidence '

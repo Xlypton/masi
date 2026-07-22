@@ -124,18 +124,53 @@ class Homography {
   ///
   /// Both [src] and [dst] must have exactly 4 points (asserted).
   ///
-  /// Internally this assembles the 8x8 linear system for the 8 unknowns
-  /// `[h00, h01, h02, h10, h11, h12, h20, h21]` (with `h22` fixed to `1`)
-  /// implied by the 2 equations each correspondence contributes, then solves
-  /// it via Gaussian elimination with partial pivoting -- pure Dart, no
-  /// external packages.
+  /// [src] and [dst] typically live in very different absolute coordinate
+  /// scales (reference-photo pixel coordinates can run into the thousands,
+  /// while on-screen coordinates are usually in the hundreds), which makes
+  /// the raw 8x8 DLT system ill-conditioned if solved directly in those
+  /// coordinates -- large and small matrix entries side by side amplify
+  /// floating-point rounding error during Gaussian elimination, and can
+  /// produce wildly-scaled (though technically non-singular) solutions on
+  /// oblique or near-collinear quads. To mitigate this numerical
+  /// ill-conditioning -- NOT to guarantee a geometrically sane result on
+  /// every input; see [isDegenerateQuadSolve] for that -- both point sets
+  /// are first Hartley-normalized -- translated to their own centroid, then
+  /// isotropically scaled so their mean distance from the origin is `sqrt`
+  /// `(2)` -- so the DLT is solved on comparably-scaled, well-conditioned
+  /// coordinates; the result is then de-normalized back into the original
+  /// [src]/[dst] coordinate spaces. See Hartley & Zisserman, *Multiple View
+  /// Geometry*, alg. 4.1/4.2, for the standard technique this follows.
   ///
-  /// If the system is singular (e.g. [src] or [dst] points are collinear or
-  /// otherwise degenerate), this returns [Homography.identity] rather than
-  /// throwing or producing NaN/Infinity.
+  /// Internally (post-normalization) this assembles the 8x8 linear system
+  /// for the 8 unknowns `[h00, h01, h02, h10, h11, h12, h20, h21]` (with
+  /// `h22` fixed to `1` in the normalized system -- the overall matrix scale
+  /// is arbitrary since [warp] divides through by `w'` regardless) implied
+  /// by the 2 equations each correspondence contributes, then solves it via
+  /// Gaussian elimination with partial pivoting -- pure Dart, no external
+  /// packages.
+  ///
+  /// If the (normalized) system is singular (e.g. [src] or [dst] points are
+  /// collinear or otherwise degenerate) or de-normalizing would produce a
+  /// non-finite matrix entry, this returns [Homography.identity] rather than
+  /// throwing or producing NaN/Infinity. Note this only catches genuinely
+  /// singular/non-finite failures -- a technically-solvable but geometrically
+  /// implausible (e.g. near-collinear [dst]) solve is NOT guaranteed to come
+  /// back as identity; callers that need to distrust such solves should use
+  /// [Homography.isDegenerateQuadSolve] rather than comparing against
+  /// [Homography.identity] directly.
   factory Homography.fromQuad(List<Offset> src, List<Offset> dst) {
     assert(src.length == 4, 'Homography.fromQuad requires exactly 4 src points');
     assert(dst.length == 4, 'Homography.fromQuad requires exactly 4 dst points');
+
+    final _QuadNormalization srcNorm = _QuadNormalization.compute(src);
+    final _QuadNormalization dstNorm = _QuadNormalization.compute(dst);
+
+    final List<Offset> normalizedSrc = [
+      for (final Offset p in src) srcNorm.transform.warp(p),
+    ];
+    final List<Offset> normalizedDst = [
+      for (final Offset p in dst) dstNorm.transform.warp(p),
+    ];
 
     // Each correspondence (x,y) -> (u,v) contributes two rows to an 8x8
     // augmented matrix (8 unknown coefficients + 1 RHS column):
@@ -144,10 +179,10 @@ class Homography {
     final List<Float64List> a = List<Float64List>.generate(8, (_) => Float64List(9));
 
     for (int i = 0; i < 4; i++) {
-      final double x = src[i].dx;
-      final double y = src[i].dy;
-      final double u = dst[i].dx;
-      final double v = dst[i].dy;
+      final double x = normalizedSrc[i].dx;
+      final double y = normalizedSrc[i].dy;
+      final double u = normalizedDst[i].dx;
+      final double v = normalizedDst[i].dy;
 
       final Float64List rowU = a[2 * i];
       rowU[0] = x;
@@ -177,11 +212,146 @@ class Homography {
       return Homography.identity();
     }
 
-    return Homography.fromRowMajor(<double>[
+    final Homography normalizedHomography = Homography.fromRowMajor(<double>[
       h[0], h[1], h[2], //
       h[3], h[4], h[5], //
       h[6], h[7], 1.0, //
     ]);
+
+    // De-normalize: H = Tdst^-1 * Hnorm * Tsrc. `multiply` composes
+    // right-to-left (`a.multiply(b)` applies `b` first, then `a` -- see its
+    // own doc), which matches the application order here: a point is first
+    // mapped into normalized src space by Tsrc, then through the
+    // normalized-space homography, then back out of normalized dst space by
+    // Tdst^-1.
+    final Homography denormalized = dstNorm.inverse
+        .multiply(normalizedHomography)
+        .multiply(srcNorm.transform);
+
+    for (final double v in denormalized.m) {
+      if (!v.isFinite) {
+        return Homography.identity();
+      }
+    }
+
+    return denormalized;
+  }
+
+  /// Returns whether [solved] -- the result of `Homography.fromQuad(src,
+  /// dst)`, or any homography purporting to map [src] onto [dst] -- should
+  /// be DISTRUSTED as a per-frame alignment update, e.g. by
+  /// `ArAlignmentStage` before caching it as the new "last known-good"
+  /// homography.
+  ///
+  /// This is a genuine geometric validity test, unlike comparing `solved ==`
+  /// [Homography.identity] (which only catches the specific singular-system
+  /// sentinel [Homography.fromQuad] itself returns -- a numerically wild but
+  /// technically non-singular solve is never `==` to identity, so that
+  /// comparison alone lets such solves through uncaught). [solved] is
+  /// considered degenerate/untrustworthy when:
+  ///
+  ///  - any of its 9 matrix entries is non-finite (NaN/Infinity), or
+  ///  - [dst] itself is too close to degenerate to trust as a tracked quad
+  ///    -- its area is vanishingly small relative to its own bounding-box
+  ///    span (the "near-collinear quad" failure mode: a real, even steeply
+  ///    foreshortened, planar rectangle never projects to a near-zero-area
+  ///    quad), or
+  ///  - [dst] is not convex. [dst] is expected in TL, TR, BR, BL order
+  ///    (screen y is DOWN); a real central projection of a planar rectangle
+  ///    is ALWAYS convex, so this rejects two distinct tracking-glitch
+  ///    signatures a bounding-box/area check alone cannot see: a CONCAVE
+  ///    quad (one corner glitched inward past a reflex vertex) and a BOWTIE
+  ///    quad (two corners transposed, self-intersecting). Convexity is
+  ///    tested via the cross product (z-component) of each vertex's two
+  ///    incident edge vectors: convex iff all four cross products share the
+  ///    same sign; a (near-)zero cross product (a collinear vertex) is also
+  ///    rejected.
+  ///
+  /// Note this deliberately does NOT check that `warp(src[i]) ≈ dst[i]` --
+  /// [Homography.fromQuad] solves its 8-DOF system EXACTLY through the 4
+  /// given correspondences, so that would always hold for any successful
+  /// solve and catch nothing the non-finite check above doesn't already.
+  static bool isDegenerateQuadSolve(
+    Homography solved,
+    List<Offset> src,
+    List<Offset> dst,
+  ) {
+    assert(src.length == 4, 'isDegenerateQuadSolve requires exactly 4 src points');
+    assert(dst.length == 4, 'isDegenerateQuadSolve requires exactly 4 dst points');
+
+    for (final double v in solved.m) {
+      if (!v.isFinite) return true;
+    }
+
+    double minX = dst[0].dx, maxX = dst[0].dx;
+    double minY = dst[0].dy, maxY = dst[0].dy;
+    for (final Offset p in dst) {
+      if (p.dx < minX) minX = p.dx;
+      if (p.dx > maxX) maxX = p.dx;
+      if (p.dy < minY) minY = p.dy;
+      if (p.dy > maxY) maxY = p.dy;
+    }
+    final double span = max(maxX - minX, maxY - minY);
+    if (!(span > 1e-6)) {
+      // dst has collapsed to (near) a single point -- also catches NaN
+      // span via the negated comparison.
+      return true;
+    }
+
+    final double dstArea = _quadArea(dst);
+    if (dstArea < span * span * 1e-4) {
+      return true;
+    }
+
+    // Convexity / consistent-winding check: at each vertex, cross the
+    // incoming edge vector with the outgoing one. All four cross products
+    // must share the same sign for a convex (or at least simple,
+    // consistently-wound) quad; a sign flip means a reflex vertex
+    // (concave) or a crossed pair of edges (bowtie). A (near-)zero cross
+    // product means the vertex is (near-)collinear with its neighbors,
+    // which is also rejected rather than arbitrarily assigned a sign.
+    // The zero-threshold is scaled by span^2 (a cross product of two edge
+    // vectors is twice the signed area of the triangle they span, so this
+    // mirrors the dstArea-vs-span^2 scaling above) but looser than that
+    // check's 1e-4 ratio, since a single vertex's triangle is legitimately
+    // much smaller than the whole quad's area on a steeply foreshortened
+    // (but still convex) quad.
+    double? windingSign;
+    for (int i = 0; i < 4; i++) {
+      final Offset prev = dst[(i + 3) % 4];
+      final Offset curr = dst[i];
+      final Offset next = dst[(i + 1) % 4];
+      final Offset edgeIn = curr - prev;
+      final Offset edgeOut = next - curr;
+      final double cross = edgeIn.dx * edgeOut.dy - edgeIn.dy * edgeOut.dx;
+
+      if (cross.abs() < span * span * 1e-6) {
+        return true;
+      }
+      final double crossSign = cross.isNegative ? -1.0 : 1.0;
+      if (windingSign == null) {
+        windingSign = crossSign;
+      } else if (crossSign != windingSign) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  /// The (unsigned) area of the quadrilateral [q] (must have exactly 4
+  /// points, given in order around the polygon boundary) via the shoelace
+  /// formula. Used by [isDegenerateQuadSolve] to detect near-collinear/
+  /// sliver quads (area vanishes relative to the quad's own bounding-box
+  /// span) regardless of point winding order.
+  static double _quadArea(List<Offset> q) {
+    double sum = 0;
+    for (int i = 0; i < 4; i++) {
+      final Offset a = q[i];
+      final Offset b = q[(i + 1) % 4];
+      sum += a.dx * b.dy - b.dx * a.dy;
+    }
+    return sum.abs() / 2.0;
   }
 
   /// Solves the 8x8 linear system encoded as an augmented matrix (8 rows,
@@ -340,4 +510,62 @@ class Homography {
 
   @override
   String toString() => 'Homography(${m.join(', ')})';
+}
+
+/// The Hartley normalization similarity transform for a 4-point set: a
+/// [transform] mapping original-space points to a well-scaled normalized
+/// space (translated to the origin, mean distance from the origin `sqrt(2)`)
+/// for numerically stable DLT solving, and its algebraic [inverse] for
+/// mapping normalized-space results back out. See [Homography.fromQuad]'s
+/// doc for why this exists and the Hartley & Zisserman reference.
+///
+/// Deliberately a private, [Homography]-internal helper (not a public type):
+/// this is purely an implementation detail of [Homography.fromQuad]'s
+/// numerical stability, not a concept any caller needs to know about.
+class _QuadNormalization {
+  _QuadNormalization(this.transform, this.inverse);
+
+  /// Maps an original-space point into normalized space.
+  final Homography transform;
+
+  /// Maps a normalized-space point back into the original space.
+  final Homography inverse;
+
+  /// Computes the normalization transform for a 4-point set [points]:
+  /// translate to the centroid, then scale isotropically so the mean
+  /// distance from the (new) origin is `sqrt(2)`.
+  factory _QuadNormalization.compute(List<Offset> points) {
+    double sumX = 0, sumY = 0;
+    for (final Offset p in points) {
+      sumX += p.dx;
+      sumY += p.dy;
+    }
+    final double cx = sumX / points.length;
+    final double cy = sumY / points.length;
+
+    double sumDist = 0;
+    for (final Offset p in points) {
+      sumDist += (p - Offset(cx, cy)).distance;
+    }
+    final double meanDist = sumDist / points.length;
+    // Guard: a (near) zero mean distance means every point coincides at the
+    // centroid -- a fully degenerate point set with nothing meaningful to
+    // scale by. Fall back to an identity scale (no normalization) rather
+    // than dividing by (near) zero; the subsequent DLT solve will
+    // (correctly, and separately) fail on such a degenerate input regardless
+    // -- see fromQuad's singular-system fallback.
+    final double scale = meanDist > 1e-9 ? sqrt2 / meanDist : 1.0;
+
+    final Homography transform = Homography.fromRowMajor(<double>[
+      scale, 0, -scale * cx, //
+      0, scale, -scale * cy, //
+      0, 0, 1, //
+    ]);
+    final Homography inverse = Homography.fromRowMajor(<double>[
+      1 / scale, 0, cx, //
+      0, 1 / scale, cy, //
+      0, 0, 1, //
+    ]);
+    return _QuadNormalization(transform, inverse);
+  }
 }
