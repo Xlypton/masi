@@ -357,6 +357,12 @@ class _SignedOutBody extends StatelessWidget {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
 
+    // iOS-web email/OTP sign-in is disabled while the project is on Supabase's
+    // free tier: the default email provider blocks editing the OTP-code template,
+    // so the code never arrives. Google is the only iOS-web path for now.
+    // Re-enable by making this `true` (or `!iosWeb || smtpConfigured`) once SMTP is set up.
+    final showEmailSignIn = !iosWeb;
+
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(MasiSpacing.xl),
@@ -374,42 +380,46 @@ class _SignedOutBody extends StatelessWidget {
               Text('Sign in', style: textTheme.titleLarge),
               const SizedBox(height: MasiSpacing.sm),
               Text(
-                "Enter your email and we'll send you a link to sign in — "
-                'no password needed.',
+                showEmailSignIn
+                    ? "Enter your email and we'll send you a link to sign in — "
+                          'no password needed.'
+                    : 'Sign in with Google to continue.',
                 style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
               ),
-              const SizedBox(height: MasiSpacing.lg),
-              TextField(
-                key: const Key('account-email-field'),
-                controller: controller,
-                keyboardType: TextInputType.emailAddress,
-                autocorrect: false,
-                autofocus: true,
-                decoration: const InputDecoration(
-                  hintText: 'you@example.com',
-                ),
-                onSubmitted: (_) => onSend(),
-              ),
-              const SizedBox(height: MasiSpacing.lg),
-              ElevatedButton(
-                key: const Key('account-send-link'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: colors.accent,
-                  foregroundColor: colors.onAccent,
-                  disabledBackgroundColor: colors.accent,
-                  disabledForegroundColor: colors.onAccent.withValues(
-                    alpha: 0.7,
+              if (showEmailSignIn) ...[
+                const SizedBox(height: MasiSpacing.lg),
+                TextField(
+                  key: const Key('account-email-field'),
+                  controller: controller,
+                  keyboardType: TextInputType.emailAddress,
+                  autocorrect: false,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    hintText: 'you@example.com',
                   ),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(13),
+                  onSubmitted: (_) => onSend(),
+                ),
+                const SizedBox(height: MasiSpacing.lg),
+                ElevatedButton(
+                  key: const Key('account-send-link'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.accent,
+                    foregroundColor: colors.onAccent,
+                    disabledBackgroundColor: colors.accent,
+                    disabledForegroundColor: colors.onAccent.withValues(
+                      alpha: 0.7,
+                    ),
+                    padding: const EdgeInsets.symmetric(vertical: 14),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(13),
+                    ),
+                  ),
+                  onPressed: sending ? null : onSend,
+                  child: Text(
+                    iosWeb ? 'Email me a sign-in code' : 'Send magic link',
                   ),
                 ),
-                onPressed: sending ? null : onSend,
-                child: Text(
-                  iosWeb ? 'Email me a sign-in code' : 'Send magic link',
-                ),
-              ),
+              ],
               const SizedBox(height: MasiSpacing.md),
               ElevatedButton(
                 key: const Key('account-google-signin'),
@@ -431,7 +441,7 @@ class _SignedOutBody extends StatelessWidget {
                   ],
                 ),
               ),
-              if (linkSent) ...[
+              if (showEmailSignIn && linkSent) ...[
                 if (iosWeb) ...[
                   // iOS web: the emailed magic LINK can't hand a session back
                   // to the installed PWA, so steer the user to the CODE we

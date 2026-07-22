@@ -1247,8 +1247,7 @@ void main() {
     }
 
     testWidgets(
-      'iOS web: the send button is labeled "Email me a sign-in code", Google '
-      'is present, and "Send magic link" is nowhere on screen',
+      'iOS web: sign-in is Google-only — email/send/OTP hidden',
       (tester) async {
         final fakeRepo = FakeAuthRepository(
           const AuthSessionState.signedOut(),
@@ -1259,18 +1258,25 @@ void main() {
         await tester.pumpWidget(_wrap(container, const AccountScreen()));
         await tester.pump();
 
-        expect(find.text('Email me a sign-in code'), findsOneWidget);
-        expect(find.text('Send magic link'), findsNothing);
         expect(
           find.byKey(const Key('account-google-signin')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('account-email-field')), findsNothing);
+        expect(find.byKey(const Key('account-send-link')), findsNothing);
+        expect(find.byKey(const Key('account-otp-field')), findsNothing);
+        expect(find.text('Email me a sign-in code'), findsNothing);
+        expect(
+          find.text('Sign in with Google to continue.'),
           findsOneWidget,
         );
       },
     );
 
     testWidgets(
-      'non-iOS (platform other): the "Send magic link" button and Google are '
-      'both present — the magic-link flow is NOT removed off iOS',
+      'non-iOS (platform other): email field, "Send magic link" button, and '
+      'Google are all present — the magic-link flow is NOT removed off iOS, '
+      'and sending still reveals the link-sent confirmation',
       (tester) async {
         final fakeRepo = FakeAuthRepository(
           const AuthSessionState.signedOut(),
@@ -1281,27 +1287,13 @@ void main() {
         await tester.pumpWidget(_wrap(container, const AccountScreen()));
         await tester.pump();
 
+        expect(find.byKey(const Key('account-email-field')), findsOneWidget);
         expect(find.text('Send magic link'), findsOneWidget);
-        expect(find.text('Email me a sign-in code'), findsNothing);
         expect(
           find.byKey(const Key('account-google-signin')),
           findsOneWidget,
         );
-      },
-    );
-
-    testWidgets(
-      'iOS web OTP flow: sending reveals the code field; submitting a code '
-      'calls verifyEmailOtp once with the entered email + code',
-      (tester) async {
-        final fakeRepo = FakeAuthRepository(
-          const AuthSessionState.signedOut(),
-        );
-        addTearDown(fakeRepo.dispose);
-        final container = makeContainer(fakeRepo, PwaPlatform.ios);
-
-        await tester.pumpWidget(_wrap(container, const AccountScreen()));
-        await tester.pump();
+        expect(find.text('Email me a sign-in code'), findsNothing);
 
         await tester.enterText(
           find.byKey(const Key('account-email-field')),
@@ -1311,62 +1303,32 @@ void main() {
         await tester.tap(find.byKey(const Key('account-send-link')));
         await tester.pump();
 
-        // The OTP-code entry block replaces the "check your email for a link"
-        // message on iOS web.
-        expect(find.byKey(const Key('account-otp-field')), findsOneWidget);
+        expect(find.byKey(const Key('account-link-sent')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'iOS web: the OTP field is unreachable — there is no send button to '
+      'reveal it and no stray "check your email" confirmation either',
+      (tester) async {
+        // The OTP-code flow's code is still in place for a future one-line
+        // re-enable (see `showEmailSignIn` in `_SignedOutBody.build`), but on
+        // iOS web there's no `account-send-link` button to tap to reach it
+        // any more — Google is the only path. `FakeAuthRepository`'s
+        // `verifyEmailOtpCalls`/`verifyEmailOtpArgs`/`verifyEmailOtpError`
+        // and `googleSignInCalls` spies are kept defined (unused here) for
+        // when that re-enable happens.
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = makeContainer(fakeRepo, PwaPlatform.ios);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pump();
+
+        expect(find.byKey(const Key('account-otp-field')), findsNothing);
         expect(find.byKey(const Key('account-link-sent')), findsNothing);
-
-        await tester.enterText(
-          find.byKey(const Key('account-otp-field')),
-          '123456',
-        );
-        await tester.pump();
-        await tester.tap(find.byKey(const Key('account-otp-submit')));
-        await tester.pump();
-
-        expect(fakeRepo.verifyEmailOtpCalls, 1);
-        expect(
-          fakeRepo.verifyEmailOtpArgs,
-          [('climber@example.com', '123456')],
-        );
-      },
-    );
-
-    testWidgets(
-      'iOS web OTP error: a failing verifyEmailOtp shows the '
-      'account-otp-error message and stays on the signed-out screen',
-      (tester) async {
-        final fakeRepo = FakeAuthRepository(
-          const AuthSessionState.signedOut(),
-        );
-        addTearDown(fakeRepo.dispose);
-        fakeRepo.verifyEmailOtpError = Exception('bad');
-        final container = makeContainer(fakeRepo, PwaPlatform.ios);
-
-        await tester.pumpWidget(_wrap(container, const AccountScreen()));
-        await tester.pump();
-
-        await tester.enterText(
-          find.byKey(const Key('account-email-field')),
-          'climber@example.com',
-        );
-        await tester.pump();
-        await tester.tap(find.byKey(const Key('account-send-link')));
-        await tester.pump();
-
-        await tester.enterText(
-          find.byKey(const Key('account-otp-field')),
-          '000000',
-        );
-        await tester.pump();
-        await tester.tap(find.byKey(const Key('account-otp-submit')));
-        await tester.pump();
-
-        expect(fakeRepo.verifyEmailOtpCalls, 1);
-        expect(find.byKey(const Key('account-otp-error')), findsOneWidget);
-        // The screen stays signed-out (no session flip), so the sign-in form
-        // is still there to retry.
-        expect(find.byKey(const Key('account-email-field')), findsOneWidget);
       },
     );
   });
