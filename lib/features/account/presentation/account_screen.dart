@@ -115,6 +115,40 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     }
   }
 
+  Future<void> _handleGoogle() async {
+    // Reuse the same in-flight guard as the magic-link send so the two
+    // sign-in paths can't race each other.
+    if (_sending) return;
+
+    // Dismiss the keyboard as soon as a sign-in attempt is under way, matching
+    // `_handleSendLink`.
+    FocusManager.instance.primaryFocus?.unfocus();
+
+    // Reset the confirmation, not-approved notice, and any prior error at the
+    // START of the attempt, so a later failure can't render a stale message
+    // from an earlier magic-link attempt alongside it.
+    setState(() {
+      _sending = true;
+      _linkSent = false;
+      _notApproved = false;
+      _error = null;
+    });
+    try {
+      // On web, `signInWithOAuth` navigates the whole page away, so the code
+      // after this await may never run (the component unmounts) — the mounted
+      // guards below handle that. On success there's nothing to do locally:
+      // the `authStateProvider` listener flips the screen to `_SignedInBody`.
+      await ref.read(authRepositoryProvider).signInWithGoogle();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _error = 'Google sign-in failed. Please try again.');
+    } finally {
+      if (mounted) {
+        setState(() => _sending = false);
+      }
+    }
+  }
+
   Future<void> _handleSignOut() async {
     try {
       await ref.read(authRepositoryProvider).signOut();
@@ -172,6 +206,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
                   notApproved: _notApproved,
                   error: _error,
                   onSend: _handleSendLink,
+                  onGoogle: _handleGoogle,
                 ),
           loading: () => const Center(child: CircularProgressIndicator()),
           // A permanent, value-less AsyncError here (e.g. main()'s
@@ -190,6 +225,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
             notApproved: _notApproved,
             error: _error,
             onSend: _handleSendLink,
+            onGoogle: _handleGoogle,
           ),
         ),
       ),
@@ -209,6 +245,7 @@ class _SignedOutBody extends StatelessWidget {
     required this.notApproved,
     required this.error,
     required this.onSend,
+    required this.onGoogle,
   });
 
   final TextEditingController controller;
@@ -222,6 +259,11 @@ class _SignedOutBody extends StatelessWidget {
   final bool notApproved;
   final String? error;
   final VoidCallback onSend;
+
+  /// Starts a Google OAuth sign-in (`account-google-signin`), an alternative
+  /// to the magic-link flow. Disabled while [sending] is true so it can't
+  /// race a magic-link send already in flight.
+  final VoidCallback onGoogle;
 
   @override
   Widget build(BuildContext context) {
@@ -278,6 +320,27 @@ class _SignedOutBody extends StatelessWidget {
                 ),
                 onPressed: sending ? null : onSend,
                 child: const Text('Send magic link'),
+              ),
+              const SizedBox(height: MasiSpacing.md),
+              ElevatedButton(
+                key: const Key('account-google-signin'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: colors.surface2,
+                  foregroundColor: colors.ink,
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(13),
+                  ),
+                ),
+                onPressed: sending ? null : onGoogle,
+                child: const Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    MasiIcon('google', size: 18, tinted: false),
+                    SizedBox(width: MasiSpacing.sm),
+                    Text('Continue with Google'),
+                  ],
+                ),
               ),
               if (linkSent) ...[
                 const SizedBox(height: MasiSpacing.md),

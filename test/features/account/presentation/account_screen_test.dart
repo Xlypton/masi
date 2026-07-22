@@ -68,10 +68,17 @@ class FakeAuthRepository implements AuthRepository {
   /// Number of times [signOut] has been called.
   int signOutCalls = 0;
 
+  /// Number of times [signInWithGoogle] has been called.
+  int googleSignInCalls = 0;
+
   /// When non-null, the next call(s) to [sendMagicLink] throw this instead
   /// of succeeding — lets a test simulate a failed/rate-limited send (e.g.
   /// the MAJOR-1 stale-"link sent"-plus-error regression test below).
   Object? sendMagicLinkError;
+
+  /// When non-null, the next call(s) to [signInWithGoogle] throw this
+  /// instead of succeeding — lets a test simulate a failed OAuth start.
+  Object? googleSignInError;
 
   @override
   Stream<AuthSessionState> authStateChanges() => _controller.stream;
@@ -88,6 +95,12 @@ class FakeAuthRepository implements AuthRepository {
   @override
   Future<void> signOut() async {
     signOutCalls++;
+  }
+
+  @override
+  Future<void> signInWithGoogle() async {
+    googleSignInCalls++;
+    if (googleSignInError != null) throw googleSignInError!;
   }
 
   /// Emits a new [AuthSessionState] on the live [authStateChanges] stream,
@@ -273,6 +286,84 @@ void main() {
               'must be cleared once a new send attempt fails',
         );
         expect(find.textContaining('Could not send the link'), findsOneWidget);
+      },
+    );
+  });
+
+  group('#google sign-in', () {
+    testWidgets(
+      'the Continue with Google button is shown when signed out',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('account-google-signin')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'tapping Continue with Google calls signInWithGoogle once',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('account-google-signin')));
+        // pump (not pumpAndSettle) to avoid any animation hang.
+        await tester.pump();
+
+        expect(fakeRepo.googleSignInCalls, 1);
+      },
+    );
+
+    testWidgets(
+      'a failing Google sign-in shows an error and does not throw',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+        );
+        addTearDown(fakeRepo.dispose);
+        fakeRepo.googleSignInError = Exception('boom');
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('account-google-signin')));
+        // pump (not pumpAndSettle) to avoid any animation hang.
+        await tester.pump();
+
+        // The failure is caught, not rethrown, and the screen stays on the
+        // signed-out body offering the sign-in form again.
+        expect(fakeRepo.googleSignInCalls, 1);
+        expect(
+          find.text('Google sign-in failed. Please try again.'),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('account-email-field')), findsOneWidget);
       },
     );
   });

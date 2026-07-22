@@ -66,24 +66,19 @@ abstract class AuthRepository {
   /// it does NOT wait for the user to tap the link. The [authStateChanges]
   /// stream is what reports the eventual sign-in once that happens.
   ///
-  /// This app is private (server-side `disable_signup=true`): an
-  /// unapproved/nonexistent [email] must THROW here rather than silently
-  /// queuing nothing, so the caller (`account_screen.dart`'s
-  /// `_handleSendLink`) can show a distinct "not approved" message instead
-  /// of the generic success confirmation — see
-  /// [SupabaseAuthRepository.sendMagicLink]'s `shouldCreateUser: false`.
-  ///
-  /// NB — the "must THROW" precondition holds only while the Supabase
-  /// project has **email-enumeration protection OFF** (verified off: the
-  /// live `/auth/v1/otp` endpoint returns HTTP 422 `otp_disabled` for an
-  /// unapproved address). If a maintainer ever turns that dashboard toggle
-  /// ON, GoTrue returns HTTP 200 for a nonexistent user (to avoid leaking
-  /// which emails exist) and this stops throwing — the caller would then
-  /// show the generic "check your email" success instead of "not approved".
-  /// That degrades the *message* only, never the security guarantee: the
-  /// server still refuses to create the account, so no working link is ever
-  /// sent to an unapproved address regardless of the toggle.
+  /// Signups are OPEN client-side (`shouldCreateUser: true`): a brand-new
+  /// [email] can create an account and sign in. If the Supabase project
+  /// still has server-side `disable_signup=true`, GoTrue may reject a
+  /// never-seen address with a `signup_disabled` error — the caller
+  /// (`account_screen.dart`'s `_handleSendLink`) surfaces that gracefully as
+  /// a fallback message rather than treating it as a hard failure.
   Future<void> sendMagicLink(String email);
+
+  /// Starts the Google OAuth sign-in flow (launches the provider consent
+  /// URL). Like [sendMagicLink], this only kicks off the flow — the eventual
+  /// session arrives via [authStateChanges] once the OAuth redirect
+  /// completes back into the app.
+  Future<void> signInWithGoogle();
 
   /// Signs out the current session, if any.
   Future<void> signOut();
@@ -155,16 +150,23 @@ class SupabaseAuthRepository implements AuthRepository {
 
   @override
   Future<void> sendMagicLink(String email) {
-    // `shouldCreateUser: false` aligns the client with the server-side
-    // signup lock (`disable_signup=true`, set outside this codebase — see
-    // this method's doc): an email with no existing account errors here
-    // (typically an `AuthException` whose message/code matches
-    // `account_screen.dart`'s `isNotApprovedAuthError`) instead of Supabase
-    // silently creating a brand-new account for it.
+    // `shouldCreateUser: true` opens signups client-side: a brand-new email
+    // can create an account and sign in. The server-side `disable_signup`
+    // flag is managed separately; if it's still on, GoTrue may return a
+    // `signup_disabled` error for a never-seen address, which
+    // `account_screen.dart` surfaces gracefully as a fallback.
     return _client.auth.signInWithOtp(
       email: email,
       emailRedirectTo: resolveMagicLinkRedirect(),
-      shouldCreateUser: false,
+      shouldCreateUser: true,
+    );
+  }
+
+  @override
+  Future<void> signInWithGoogle() async {
+    await _client.auth.signInWithOAuth(
+      OAuthProvider.google,
+      redirectTo: resolveMagicLinkRedirect(),
     );
   }
 
