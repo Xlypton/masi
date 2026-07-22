@@ -1,9 +1,26 @@
+import 'dart:async';
+import 'dart:ui' as ui;
+
 import 'package:masi/features/ar/application/ar_channel.dart';
 import 'package:masi/features/ar/application/ar_controller.dart';
 import 'package:masi/features/ar/domain/corner_smoother.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+/// Decodes a tiny 1x1 RGBA image, for tests that need a real (non-null)
+/// `ui.Image` to stand in for a decoded rock mask.
+Future<ui.Image> _createTinyImage() {
+  final completer = Completer<ui.Image>();
+  ui.decodeImageFromPixels(
+    Uint8List.fromList(<int>[0, 229, 255, 255]),
+    1,
+    1,
+    ui.PixelFormat.rgba8888,
+    completer.complete,
+  );
+  return completer.future;
+}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -179,7 +196,7 @@ void main() {
       expect(container.read(arControllerProvider).active, isFalse);
     });
 
-    group('B1/B3: setRockQuadPercent', () {
+    group('B1/B3: setRockSegmentation', () {
       const quad = <Offset>[
         Offset(0.1, 0.1),
         Offset(0.9, 0.1),
@@ -187,25 +204,25 @@ void main() {
         Offset(0.1, 0.9),
       ];
 
-      test('setRockQuadPercent(quad) sets state.rockQuadPercent', () {
-        container.read(arControllerProvider.notifier).setRockQuadPercent(quad);
+      test('setRockSegmentation(quadPercent: quad) sets state.rockQuadPercent', () {
+        container.read(arControllerProvider.notifier).setRockSegmentation(quadPercent: quad);
 
         expect(container.read(arControllerProvider).rockQuadPercent, quad);
       });
 
       test(
-        'setRockQuadPercent(null) after a previously-set quad ACTUALLY '
-        'resets it back to null -- the copyWith-style `?? this.field` '
+        'setRockSegmentation(quadPercent: null) after a previously-set quad '
+        'ACTUALLY resets it back to null -- the copyWith-style `?? this.field` '
         'idiom every other nullable ArState field uses can never null out '
         'an already-set field, so this must not go through a naive '
         'state.copyWith(rockQuadPercent: null) call',
         () {
           container
               .read(arControllerProvider.notifier)
-              .setRockQuadPercent(quad);
+              .setRockSegmentation(quadPercent: quad);
           expect(container.read(arControllerProvider).rockQuadPercent, quad);
 
-          container.read(arControllerProvider.notifier).setRockQuadPercent(null);
+          container.read(arControllerProvider.notifier).setRockSegmentation(quadPercent: null);
 
           expect(
             container.read(arControllerProvider).rockQuadPercent,
@@ -214,8 +231,38 @@ void main() {
         },
       );
 
+      test('setRockSegmentation(mask: img) sets state.rockMask', () async {
+        final mask = await _createTinyImage();
+        addTearDown(mask.dispose);
+
+        container
+            .read(arControllerProvider.notifier)
+            .setRockSegmentation(mask: mask);
+
+        expect(container.read(arControllerProvider).rockMask, same(mask));
+      });
+
       test(
-        'setRockQuadPercent leaves every other ArState field untouched',
+        'setRockSegmentation() with NO args resets BOTH quadPercent and mask '
+        'back to null (the wall-switch reset path)',
+        () async {
+          final mask = await _createTinyImage();
+          addTearDown(mask.dispose);
+          container
+              .read(arControllerProvider.notifier)
+              .setRockSegmentation(quadPercent: quad, mask: mask);
+          expect(container.read(arControllerProvider).rockQuadPercent, quad);
+          expect(container.read(arControllerProvider).rockMask, same(mask));
+
+          container.read(arControllerProvider.notifier).setRockSegmentation();
+
+          expect(container.read(arControllerProvider).rockQuadPercent, isNull);
+          expect(container.read(arControllerProvider).rockMask, isNull);
+        },
+      );
+
+      test(
+        'setRockSegmentation leaves every other ArState field untouched',
         () {
           container.read(arControllerProvider.notifier).setMode(ArMode.manual);
           container.read(arControllerProvider.notifier).markActive(true);
@@ -227,7 +274,7 @@ void main() {
 
           container
               .read(arControllerProvider.notifier)
-              .setRockQuadPercent(quad);
+              .setRockSegmentation(quadPercent: quad);
 
           final state = container.read(arControllerProvider);
           expect(state.mode, ArMode.manual);
@@ -492,6 +539,29 @@ void main() {
 
       notifier.reset();
       expect(container.read(arLockedProvider), isFalse);
+    });
+  });
+
+  group('ArRockHighlightController', () {
+    late ProviderContainer container;
+
+    setUp(() {
+      container = ProviderContainer();
+      addTearDown(container.dispose);
+    });
+
+    test('build() starts off (false)', () {
+      expect(container.read(arRockHighlightProvider), isFalse);
+    });
+
+    test('toggle() flips on <-> off', () {
+      final notifier = container.read(arRockHighlightProvider.notifier);
+
+      notifier.toggle();
+      expect(container.read(arRockHighlightProvider), isTrue);
+
+      notifier.toggle();
+      expect(container.read(arRockHighlightProvider), isFalse);
     });
   });
 }

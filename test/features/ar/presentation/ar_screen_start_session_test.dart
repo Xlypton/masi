@@ -3,6 +3,7 @@ import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/ar/application/ar_channel.dart';
 import 'package:masi/features/ar/application/ar_controller.dart';
+import 'package:masi/features/ar/domain/rock_mask_codec.dart';
 import 'package:masi/features/ar/presentation/ar_screen.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
@@ -54,12 +55,12 @@ class _FakeArChannel extends ArChannel {
   bool stopCalled = false;
 
   @override
-  Future<List<Offset>?> start({
+  Future<ArSegmentationResult> start({
     required String referenceImagePath,
     required int refWidth,
     required int refHeight,
     required String routesJson,
-  }) async => result;
+  }) async => ArSegmentationResult(quadPercent: result);
 
   @override
   Future<void> stop() {

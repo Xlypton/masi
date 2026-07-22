@@ -32,6 +32,16 @@ const int kLowConfidenceAlpha = 89; // ~0.35 * 255, rounded.
 /// palette) even if the caller passes an empty palette list.
 const Color _fallbackRouteColor = Color(0xFF2E7D32);
 
+/// The flat tint the rock-highlight silhouette ([ArOverlayPainter.rockMask])
+/// is recolored to. Cyan reads as a glowing highlight over most rock/foliage
+/// photos; the `~160`/255 alpha keeps it translucent enough that the live
+/// camera feed still shows through the highlighted surface.
+const Color _rockHighlightTint = Color(0xFF00E5FF);
+
+/// Alpha (0-255) applied to [_rockHighlightTint] when painting the
+/// rock-highlight silhouette.
+const int _rockHighlightAlpha = 160;
+
 /// Paints topo routes warped through a [Homography] on top of a live camera
 /// feed, for the AR alignment view.
 ///
@@ -61,6 +71,7 @@ class ArOverlayPainter extends CustomPainter {
     this.confidence = 1.0,
     this.routeColorResolver,
     this.outline,
+    this.rockMask,
   });
 
   /// Routes to render, in percent-of-[refSize] space. Routes with
@@ -96,6 +107,16 @@ class ArOverlayPainter extends CustomPainter {
   /// default) draws no outline at all.
   final ui.Image? outline;
 
+  /// Optional rock-segmentation mask image (see `rock_mask_codec.dart`'s
+  /// [ui.Image] built by `decodeRockMaskAlpha`), painted — warped through
+  /// [homography] the same way [outline]/routes are — as a flat glowing
+  /// silhouette (recolored via a [BlendMode.srcIn] [ColorFilter] so only the
+  /// mask's alpha shape shows, in a constant [_rockHighlightTint]) over the
+  /// tracked wall. `null` (the default) draws no highlight at all — the
+  /// screen passes the mask only while the "highlight rock" toggle is on (see
+  /// `ar_screen.dart`).
+  final ui.Image? rockMask;
+
   bool get _isLowConfidence => confidence < kLowConfidenceThreshold;
 
   @override
@@ -115,6 +136,33 @@ class ArOverlayPainter extends CustomPainter {
       canvas.drawImageRect(outlineImage, src, dst, outlinePaint);
       canvas.restore(); // ends saveLayer
       canvas.restore(); // ends transform save
+    }
+
+    final maskImage = rockMask;
+    if (maskImage != null) {
+      canvas.save();
+      canvas.transform(homography.toMatrix4ColumnMajor());
+      final dst = Rect.fromLTWH(0, 0, refSize.width, refSize.height);
+      final src = Rect.fromLTWH(
+        0,
+        0,
+        maskImage.width.toDouble(),
+        maskImage.height.toDouble(),
+      );
+      // srcIn recolors the mask's alpha shape into a flat glowing silhouette
+      // in the constant highlight tint (the mask's own RGB is discarded);
+      // bilinear filtering smooths the downsampled mask stretched over the
+      // full-photo rect the same way the outline block above smooths its
+      // upscaled edge image.
+      final maskPaint = Paint()
+        ..colorFilter = ColorFilter.mode(
+          _rockHighlightTint.withAlpha(_rockHighlightAlpha),
+          BlendMode.srcIn,
+        )
+        ..filterQuality = FilterQuality.high
+        ..isAntiAlias = true;
+      canvas.drawImageRect(maskImage, src, dst, maskPaint);
+      canvas.restore();
     }
 
     for (final route in routes) {
@@ -199,6 +247,7 @@ class ArOverlayPainter extends CustomPainter {
         confidence != oldDelegate.confidence ||
         routeColorResolver != oldDelegate.routeColorResolver ||
         outline != oldDelegate.outline ||
+        rockMask != oldDelegate.rockMask ||
         !listEquals(palette, oldDelegate.palette) ||
         !listEquals(routes, oldDelegate.routes);
   }

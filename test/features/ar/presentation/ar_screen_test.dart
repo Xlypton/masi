@@ -89,6 +89,20 @@ Future<ui.Image> _decode2x2() {
 ///    exercise its overlay/toggle/gesture logic without ever touching
 ///    `UiKitView`). This drives the REAL `ArOverlayPainter` /
 ///    `ArController` / `ManualAlignController` wiring.
+/// Decodes a tiny 1x1 RGBA image, standing in for a decoded rock mask in the
+/// "highlight rock" toggle tests below.
+Future<ui.Image> _createTinyImage() {
+  final completer = Completer<ui.Image>();
+  ui.decodeImageFromPixels(
+    Uint8List.fromList(<int>[0, 229, 255, 255]),
+    1,
+    1,
+    ui.PixelFormat.rgba8888,
+    completer.complete,
+  );
+  return completer.future;
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -320,7 +334,7 @@ void main() {
         // real channel.start had returned a confident native segmentation.
         container
             .read(arControllerProvider.notifier)
-            .setRockQuadPercent(const <Offset>[
+            .setRockSegmentation(quadPercent: const <Offset>[
               Offset(0.1, 0.1),
               Offset(0.9, 0.1),
               Offset(0.9, 0.9),
@@ -736,7 +750,7 @@ void main() {
           addTearDown(container.dispose);
           container
               .read(arControllerProvider.notifier)
-              .setRockQuadPercent(rockQuadPercent);
+              .setRockSegmentation(quadPercent: rockQuadPercent);
 
           await tester.pumpWidget(buildStage(container));
           await tester.pump();
@@ -810,6 +824,105 @@ void main() {
           ], corners);
 
           expect(currentPainter(tester).homography, expected);
+        },
+      );
+    });
+
+    group('rock-highlight toggle gates the painter\'s rockMask', () {
+      testWidgets(
+        'with a mask set on the controller but the highlight OFF (default), '
+        'the painter receives rockMask: null; toggling the highlight ON '
+        'passes the mask through, and toggling OFF again clears it',
+        (tester) async {
+          pinViewSize(tester);
+          // Decode via runAsync: `decodeImageFromPixels` is real
+          // (non-fake-async) engine work that never completes under
+          // testWidgets' fake clock — the same reason every other
+          // ui.Image-decoding test in this suite lives in a plain `test()`.
+          final mask = (await tester.runAsync(_createTinyImage))!;
+          addTearDown(mask.dispose);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container
+              .read(arControllerProvider.notifier)
+              .setRockSegmentation(mask: mask);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          expect(
+            container.read(arRockHighlightProvider),
+            isFalse,
+            reason: 'sanity: highlight defaults off',
+          );
+          expect(
+            currentPainter(tester).rockMask,
+            isNull,
+            reason:
+                'a mask is present on the controller, but with the highlight '
+                'toggle off the painter must receive null (no silhouette)',
+          );
+
+          container.read(arRockHighlightProvider.notifier).toggle();
+          await tester.pump();
+
+          expect(
+            currentPainter(tester).rockMask,
+            same(mask),
+            reason:
+                'with the highlight on, the painter must receive the '
+                "controller's rockMask",
+          );
+
+          container.read(arRockHighlightProvider.notifier).toggle();
+          await tester.pump();
+
+          expect(
+            currentPainter(tester).rockMask,
+            isNull,
+            reason: 'toggling the highlight back off must clear the mask again',
+          );
+        },
+      );
+
+      testWidgets(
+        'with the highlight ON but NO mask on the controller, the painter '
+        'still receives null (nothing to highlight)',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+          container.read(arRockHighlightProvider.notifier).toggle();
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          expect(container.read(arRockHighlightProvider), isTrue);
+          expect(currentPainter(tester).rockMask, isNull);
+        },
+      );
+
+      testWidgets(
+        'tapping the ar-highlight-rock-toggle FAB flips '
+        'arRockHighlightProvider',
+        (tester) async {
+          pinViewSize(tester);
+          final container = ProviderContainer();
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(buildStage(container));
+          await tester.pump();
+
+          expect(
+            find.byKey(const Key('ar-highlight-rock-toggle')),
+            findsOneWidget,
+          );
+          expect(container.read(arRockHighlightProvider), isFalse);
+
+          await tester.tap(find.byKey(const Key('ar-highlight-rock-toggle')));
+          await tester.pump();
+
+          expect(container.read(arRockHighlightProvider), isTrue);
         },
       );
     });

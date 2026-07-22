@@ -15,6 +15,7 @@ import 'package:masi/features/ar/application/ar_controller.dart';
 import 'package:masi/features/ar/application/manual_align_controller.dart';
 import 'package:masi/features/ar/application/outline_extractor.dart';
 import 'package:masi/features/ar/domain/homography.dart';
+import 'package:masi/features/ar/domain/rock_mask_codec.dart';
 import 'package:masi/features/ar/presentation/ar_camera_view.dart';
 import 'package:masi/features/ar/presentation/ar_overlay_painter.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
@@ -271,10 +272,11 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     // session's `channel.start` result — see ArState.rockQuadPercent's doc)
     // must never leak into a new wall's session, since _startSession only
     // overwrites it once a fresh channel.start call actually resolves — a
-    // wall whose own session never returns a quad at all (e.g. no confident
-    // native segmentation) would otherwise keep rendering the PRIOR wall's
-    // crop instead of falling back to its own full-photo rect.
-    ref.read(arControllerProvider.notifier).setRockQuadPercent(null);
+    // wall whose own session never returns a quad/mask at all (e.g. no
+    // confident native segmentation) would otherwise keep rendering the PRIOR
+    // wall's crop/highlight instead of falling back to its own full-photo
+    // rect. Called with no args so BOTH rockQuadPercent and rockMask reset.
+    ref.read(arControllerProvider.notifier).setRockSegmentation();
     // arAutoTrackingProvider (not a direct arSupportsAutoTracking() call) so
     // this is overridable in tests, same as arSupportedProvider elsewhere in
     // this file.
@@ -338,9 +340,9 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     _sessionStarted = true;
     final channel = ref.read(arChannelProvider);
     debugPrint('AR_DBG _startSession calling channel.start');
-    final List<Offset>? rockQuad;
+    final ArSegmentationResult segmentation;
     try {
-      rockQuad = await channel.start(
+      segmentation = await channel.start(
         referenceImagePath: photo.localPath,
         refWidth: photo.width,
         refHeight: photo.height,
@@ -363,7 +365,12 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       setState(() => _startError = null);
     }
     ref.read(arControllerProvider.notifier).markActive(true);
-    ref.read(arControllerProvider.notifier).setRockQuadPercent(rockQuad);
+    ref
+        .read(arControllerProvider.notifier)
+        .setRockSegmentation(
+          quadPercent: segmentation.quadPercent,
+          mask: segmentation.mask,
+        );
     _alignmentSubscription = channel.alignments().listen(
       ref.read(arControllerProvider.notifier).onAlignment,
     );
@@ -726,6 +733,10 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
     final arState = ref.watch(arControllerProvider);
     final manualHomography = ref.watch(manualAlignProvider);
     final locked = ref.watch(arLockedProvider);
+    // When the "highlight rock" toggle is on AND native returned a mask for
+    // this session, paint that mask as a glowing silhouette over the wall;
+    // otherwise pass null (no highlight). See arRockHighlightProvider.
+    final highlightRock = ref.watch(arRockHighlightProvider);
     // Web (widget.autoTracking == false) has no continuous tracking session
     // to ever fall back on, so alignment is ALWAYS effectively manual there,
     // regardless of arState.mode (ArState.mode still literally flips
@@ -924,6 +935,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
               confidence: confidence,
               routeColorResolver: topoRouteColor,
               outline: showOutline ? widget.outline : null,
+              rockMask: highlightRock ? arState.rockMask : null,
             ),
             child: const SizedBox.expand(),
           ),
@@ -1121,11 +1133,11 @@ String _limitedReasonHint(String? reason) {
   }
 }
 
-/// The mode toggle (auto-tracking platforms only — see [autoTracking]),
-/// "reset alignment" button (unlocked manual mode only), the Lock/Unlock
-/// button (manual mode only), and the Re-scan button (auto mode AND
-/// auto-tracking platforms only), floating over the top-right of
-/// [ArAlignmentStage].
+/// The "highlight rock" toggle (always shown), the mode toggle (auto-tracking
+/// platforms only — see [autoTracking]), "reset alignment" button (unlocked
+/// manual mode only), the Lock/Unlock button (manual mode only), and the
+/// Re-scan button (auto mode AND auto-tracking platforms only), floating over
+/// the top-right of [ArAlignmentStage].
 class _ArControls extends ConsumerWidget {
   const _ArControls({
     required this.mode,
@@ -1176,9 +1188,23 @@ class _ArControls extends ConsumerWidget {
     // even before _resetArViewState has had a chance to flip mode away from
     // ArController's ArMode.auto default.
     final isManual = !autoTracking || mode == ArMode.manual;
+    final highlightRock = ref.watch(arRockHighlightProvider);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
+        Padding(
+          padding: const EdgeInsets.only(right: 8),
+          child: FloatingActionButton.small(
+            key: const Key('ar-highlight-rock-toggle'),
+            tooltip: highlightRock
+                ? 'Hide the rock highlight'
+                : 'Highlight the tracked rock',
+            onPressed: active
+                ? () => ref.read(arRockHighlightProvider.notifier).toggle()
+                : null,
+            child: const MasiIcon('boulder'),
+          ),
+        ),
         if (autoTracking && mode == ArMode.auto)
           Padding(
             padding: const EdgeInsets.only(right: 8),

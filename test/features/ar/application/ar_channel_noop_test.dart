@@ -63,19 +63,20 @@ void main() {
     );
 
     test(
-      'B1: start() resolves to null (never a rockQuadPercent) without '
-      'invoking a real MethodChannel',
+      'B1: start() resolves to a const empty ArSegmentationResult (neither a '
+      'rockQuadPercent nor a mask) without invoking a real MethodChannel',
       () async {
         final channel = ArChannel.noop();
 
-        final quad = await channel.start(
+        final result = await channel.start(
           referenceImagePath: 'x',
           refWidth: 1,
           refHeight: 1,
           routesJson: '[]',
         );
 
-        expect(quad, isNull);
+        expect(result.quadPercent, isNull);
+        expect(result.mask, isNull);
       },
     );
   });

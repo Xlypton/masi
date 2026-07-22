@@ -1,3 +1,4 @@
+
 import 'package:masi/features/ar/application/ar_channel.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -392,14 +393,14 @@ void main() {
                 });
             final channel = ArChannel(method: method, event: event);
 
-            final quad = await channel.start(
+            final result = await channel.start(
               referenceImagePath: '/p.jpg',
               refWidth: 1000,
               refHeight: 800,
               routesJson: '[]',
             );
 
-            expect(quad, const <Offset>[
+            expect(result.quadPercent, const <Offset>[
               Offset(0.1, 0.2),
               Offset(0.8, 0.2),
               Offset(0.8, 0.9),
@@ -419,14 +420,14 @@ void main() {
                 });
             final channel = ArChannel(method: method, event: event);
 
-            final quad = await channel.start(
+            final result = await channel.start(
               referenceImagePath: '/p.jpg',
               refWidth: 1000,
               refHeight: 800,
               routesJson: '[]',
             );
 
-            expect(quad, isNull);
+            expect(result.quadPercent, isNull);
           },
         );
 
@@ -441,14 +442,14 @@ void main() {
               });
           final channel = ArChannel(method: method, event: event);
 
-          final quad = await channel.start(
+          final result = await channel.start(
             referenceImagePath: '/p.jpg',
             refWidth: 1000,
             refHeight: 800,
             routesJson: '[]',
           );
 
-          expect(quad, isNull);
+          expect(result.quadPercent, isNull);
         });
 
         test(
@@ -464,14 +465,14 @@ void main() {
                 });
             final channel = ArChannel(method: method, event: event);
 
-            final quad = await channel.start(
+            final result = await channel.start(
               referenceImagePath: '/p.jpg',
               refWidth: 1000,
               refHeight: 800,
               routesJson: '[]',
             );
 
-            expect(quad, isNull);
+            expect(result.quadPercent, isNull);
           },
         );
 
@@ -497,14 +498,14 @@ void main() {
                 });
             final channel = ArChannel(method: method, event: event);
 
-            final quad = await channel.start(
+            final result = await channel.start(
               referenceImagePath: '/p.jpg',
               refWidth: 1000,
               refHeight: 800,
               routesJson: '[]',
             );
 
-            expect(quad, isNull);
+            expect(result.quadPercent, isNull);
           },
         );
 
@@ -518,14 +519,14 @@ void main() {
                 });
             final channel = ArChannel(method: method, event: event);
 
-            final quad = await channel.start(
+            final result = await channel.start(
               referenceImagePath: '/p.jpg',
               refWidth: 1000,
               refHeight: 800,
               routesJson: '[]',
             );
 
-            expect(quad, isNull);
+            expect(result.quadPercent, isNull);
           },
         );
 
@@ -535,18 +536,124 @@ void main() {
           () async {
             final channel = ArChannel(method: method, event: event);
 
-            final quad = await channel.start(
+            final result = await channel.start(
               referenceImagePath: '/p.jpg',
               refWidth: 1000,
               refHeight: 800,
               routesJson: '[]',
             );
 
-            expect(quad, isNull);
+            expect(result.quadPercent, isNull);
+          },
+        );
+
+        test(
+          'a well-formed rockQuadPercent WITHOUT mask keys leaves mask null',
+          () async {
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+                .setMockMethodCallHandler(method, (MethodCall call) async {
+                  calls.add(call);
+                  return <String, Object?>{
+                    'success': true,
+                    'rockQuadPercent': <double>[
+                      0.1, 0.2, 0.8, 0.2, 0.8, 0.9, 0.1, 0.9, //
+                    ],
+                  };
+                });
+            final channel = ArChannel(method: method, event: event);
+
+            final result = await channel.start(
+              referenceImagePath: '/p.jpg',
+              refWidth: 1000,
+              refHeight: 800,
+              routesJson: '[]',
+            );
+
+            expect(result.quadPercent, isNotNull);
+            expect(result.mask, isNull);
           },
         );
       },
     );
+
+    group('B4: start() parses the rock mask (rockMaskAlpha/Width/Height)', () {
+      test(
+        'a well-formed raw-alpha mask expands into a paint-ready ui.Image at '
+        'the reported dims',
+        () async {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(method, (MethodCall call) async {
+                calls.add(call);
+                return <String, Object?>{
+                  'success': true,
+                  'rockMaskAlpha': Uint8List.fromList(<int>[
+                    255, 0, //
+                    0, 255, //
+                  ]),
+                  'rockMaskWidth': 2,
+                  'rockMaskHeight': 2,
+                };
+              });
+          final channel = ArChannel(method: method, event: event);
+
+          final result = await channel.start(
+            referenceImagePath: '/p.jpg',
+            refWidth: 1000,
+            refHeight: 800,
+            routesJson: '[]',
+          );
+
+          expect(result.mask, isNotNull);
+          expect(result.mask!.width, 2);
+          expect(result.mask!.height, 2);
+        },
+      );
+
+      test('mask keys absent -> mask null, no throw', () async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(method, (MethodCall call) async {
+              calls.add(call);
+              return <String, Object?>{'success': true};
+            });
+        final channel = ArChannel(method: method, event: event);
+
+        final result = await channel.start(
+          referenceImagePath: '/p.jpg',
+          refWidth: 1000,
+          refHeight: 800,
+          routesJson: '[]',
+        );
+
+        expect(result.mask, isNull);
+      });
+
+      test(
+        'an alpha byte length that mismatches width*height -> mask null, no '
+        'throw',
+        () async {
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+              .setMockMethodCallHandler(method, (MethodCall call) async {
+                calls.add(call);
+                return <String, Object?>{
+                  'success': true,
+                  'rockMaskAlpha': Uint8List.fromList(<int>[255, 0, 0]),
+                  'rockMaskWidth': 2,
+                  'rockMaskHeight': 2,
+                };
+              });
+          final channel = ArChannel(method: method, event: event);
+
+          final result = await channel.start(
+            referenceImagePath: '/p.jpg',
+            refWidth: 1000,
+            refHeight: 800,
+            routesJson: '[]',
+          );
+
+          expect(result.mask, isNull);
+        },
+      );
+    });
 
     test('A1: stop() invokes "stop"', () async {
       final channel = ArChannel(method: method, event: event);

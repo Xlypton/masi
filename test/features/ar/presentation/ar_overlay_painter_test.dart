@@ -380,6 +380,83 @@ void main() {
     );
   });
 
+  group('rockMask (rock-highlight silhouette)', () {
+    test('rockMask: null (default) draws no highlight image', () {
+      final route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+      );
+      final painter = buildPainter(routes: [route]); // rockMask defaults null.
+      final canvas = _RecordingCanvas();
+
+      painter.paint(canvas, refSize);
+
+      expect(canvas.imageRects, isEmpty);
+      expect(canvas.transforms, isEmpty);
+      expect(canvas.lines, hasLength(1));
+    });
+
+    test(
+      'rockMask: non-null draws the mask image transformed by homography with '
+      'a (srcIn recolor) colorFilter, before route polylines',
+      () async {
+        final mask = await _createTinyImage();
+        final homography = Homography.translation(20, 10);
+        final route = TopoRoute(
+          id: 1,
+          number: 1,
+          points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
+        );
+
+        final painter = ArOverlayPainter(
+          routes: [route],
+          refSize: refSize,
+          homography: homography,
+          palette: palette,
+          rockMask: mask,
+        );
+        final canvas = _RecordingCanvas();
+
+        painter.paint(canvas, refSize);
+
+        expect(canvas.imageRects, hasLength(1));
+        final rec = canvas.imageRects.single;
+        expect(rec.image, same(mask));
+        expect(
+          rec.src,
+          Rect.fromLTWH(0, 0, mask.width.toDouble(), mask.height.toDouble()),
+        );
+        expect(rec.dst, Rect.fromLTWH(0, 0, refSize.width, refSize.height));
+        // The mask is recolored into a flat glowing silhouette via a srcIn
+        // ColorFilter (unlike the plain outline paint, which has none).
+        expect(rec.paint.colorFilter, isNotNull);
+
+        // The mask's transform matches the homography (same warp as routes).
+        expect(canvas.transforms, hasLength(1));
+        final expected = homography.toMatrix4ColumnMajor();
+        final actual = canvas.transforms.single;
+        for (var i = 0; i < 16; i++) {
+          expect(actual[i], closeTo(expected[i], 1e-9));
+        }
+
+        // Ordering: transform -> drawImageRect -> route polyline, so the
+        // highlight renders behind the routes.
+        final transformIndex = canvas.callOrder.indexOf('transform');
+        final imageIndex = canvas.callOrder.indexOf('drawImageRect');
+        final lineIndex = canvas.callOrder.indexOf('drawLine');
+        expect(transformIndex, lessThan(imageIndex));
+        expect(imageIndex, lessThan(lineIndex));
+
+        // A single balanced save/restore, NO saveLayer (unlike the outline's
+        // opacity-layer recipe).
+        expect(canvas.saveCount, 1);
+        expect(canvas.restoreCount, 1);
+        expect(canvas.saveLayers, isEmpty);
+      },
+    );
+  });
+
   group('A5: shouldRepaint', () {
     test('returns false when everything is identical', () {
       final routes = [
@@ -472,6 +549,35 @@ void main() {
           outline: image,
         );
         expect(withOutline.shouldRepaint(sameOutlineReference), isFalse);
+      },
+    );
+
+    test(
+      'returns true when rockMask differs (one null, one non-null); '
+      'returns false when both share the identical rockMask reference',
+      () async {
+        final mask = await _createTinyImage();
+
+        final withoutMask = buildPainter();
+        final withMask = ArOverlayPainter(
+          routes: const [],
+          refSize: refSize,
+          homography: Homography.identity(),
+          palette: palette,
+          rockMask: mask,
+        );
+
+        expect(withoutMask.shouldRepaint(withMask), isTrue);
+        expect(withMask.shouldRepaint(withoutMask), isTrue);
+
+        final sameMaskReference = ArOverlayPainter(
+          routes: const [],
+          refSize: refSize,
+          homography: Homography.identity(),
+          palette: palette,
+          rockMask: mask,
+        );
+        expect(withMask.shouldRepaint(sameMaskReference), isFalse);
       },
     );
   });

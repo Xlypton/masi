@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 
+import 'package:masi/features/ar/domain/rock_mask_codec.dart';
+
 /// The AR alignment mode: whether the native side continuously re-solves the
 /// homography from tracked features ([auto]), or holds the last-solved (or
 /// manually nudged) homography fixed ([manual]).
@@ -311,21 +313,26 @@ class ArChannel {
   /// `{'referenceImagePath': ..., 'refWidth': ..., 'refHeight': ...,
   /// 'routesJson': ...}`.
   ///
-  /// Native's result is `{"success": bool, "rockQuadPercent": [Double]?}`.
-  /// Returns the parsed `rockQuadPercent` as 4 [Offset]s (TL, TR, BR, BL;
-  /// each component a 0..1 fraction of the ORIENTED full reference photo) —
-  /// see [_parseRockQuadPercent] for the exact malformed-input fallback
-  /// rules. `null` covers both "native found no confident segmentation" (the
-  /// key is simply omitted — callers must treat this as "use the full-photo
-  /// rect", never as an error) AND any malformed result, including the noop
-  /// channel (which never calls native at all).
-  Future<List<Offset>?> start({
+  /// Native's result is
+  /// `{"success": bool, "rockQuadPercent": [Double]?, "rockMaskAlpha":
+  /// Uint8List?, "rockMaskWidth": Int?, "rockMaskHeight": Int?}`.
+  /// Returns an [ArSegmentationResult] holding both the parsed
+  /// `rockQuadPercent` (4 [Offset]s, TL/TR/BR/BL, each component a 0..1
+  /// fraction of the ORIENTED full reference photo — see
+  /// [parseRockQuadPercent]) and the per-pixel rock mask expanded to a
+  /// paint-ready [ui.Image] (see [decodeRockMaskAlpha]). Both fields are
+  /// independently `null` when native found no confident segmentation (the
+  /// keys are simply omitted — callers must treat that as "use the full-photo
+  /// rect / no highlight", never as an error), on any malformed result, and
+  /// on the noop channel (which never calls native at all, returning a const
+  /// empty result).
+  Future<ArSegmentationResult> start({
     required String referenceImagePath,
     required int refWidth,
     required int refHeight,
     required String routesJson,
   }) async {
-    if (_noop) return null;
+    if (_noop) return const ArSegmentationResult();
     debugPrint(
       'AR_DBG ar_channel.start invoking (refPath=$referenceImagePath '
       '${refWidth}x$refHeight)',
@@ -341,33 +348,14 @@ class ArChannel {
         },
       );
       debugPrint('AR_DBG ar_channel.start returned OK');
-      return _parseRockQuadPercent(result);
+      return ArSegmentationResult(
+        quadPercent: parseRockQuadPercent(result),
+        mask: await decodeRockMaskAlpha(result),
+      );
     } catch (e) {
       debugPrint('AR_DBG ar_channel.start ERROR $e');
       rethrow;
     }
-  }
-
-  /// Parses the native `start` result's optional `rockQuadPercent` field
-  /// into 4 [Offset]s, or `null` — mirroring [ArAlignment._parseCorners]'s
-  /// "malformed input -> null, never throw" style. `null` for: [result]
-  /// isn't a `Map`; the `rockQuadPercent` key is absent; its value isn't a
-  /// `List`; that list's length isn't exactly 8; or any entry isn't `num`.
-  static List<Offset>? _parseRockQuadPercent(Object? result) {
-    if (result is! Map) return null;
-    final Object? raw = result['rockQuadPercent'];
-    if (raw is! List || raw.length != 8) return null;
-    final List<double> values = <double>[];
-    for (final Object? entry in raw) {
-      if (entry is! num) return null;
-      values.add(entry.toDouble());
-    }
-    return <Offset>[
-      Offset(values[0], values[1]),
-      Offset(values[2], values[3]),
-      Offset(values[4], values[5]),
-      Offset(values[6], values[7]),
-    ];
   }
 
   /// Stops native AR tracking. Invokes the native `stop` method (no args).
