@@ -130,12 +130,14 @@ asset) before `app.main()`. Wire this seam when we start testing canvas fixes �
 ### On-device debugging (physical iPhone, iOS 27) — hard-won facts
 The AR/camera path can ONLY be verified on the physical device, and the usual `flutter run` loop is broken there. What actually works:
 
-- **`flutter run --debug` does NOT attach on this device** (free profile, iOS 27). The Xcode build + install succeed, then the launched process gets `SIGKILL` and you get *"The Dart VM Service was not discovered after 60 seconds."* A manually-tapped debug build just shows a **white screen** (it can't run its Dart standalone). Don't fight it — use a **release** build instead:
+- **`flutter run --debug` does NOT attach on this device** (free profile, iOS 27). The Xcode build + install succeed, then the launched process gets `SIGKILL` and you get *"The Dart VM Service was not discovered after 60 seconds."* A manually-tapped debug build just shows a **white screen** (it can't run its Dart standalone). Don't fight it — use a **release** build instead.
+- **ALWAYS UPDATE IN PLACE — never uninstall (the user is tired of logging in again).** `flutter install --release` prints *"Uninstalling old version…"* first, which **wipes the app container → destroys the Supabase login session** and forces a fresh login. To update the app while PRESERVING app data + the login session, build then install with `devicectl` (which updates over the existing install, no uninstall) — do NOT use `flutter install`, and NEVER `xcrun simctl/devicectl ... uninstall` this app on the phone:
   ```bash
   export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && \
   flutter build ios --release -t lib/main.dart && \
-  flutter install --release -d <deviceid>
+  xcrun devicectl device install app --device <deviceid> build/ios/iphoneos/Runner.app
   ```
+  In-place update preserves the login session **within the 7-day provisioning window**; only a profile expiry/re-sign (free-team limitation) forces a wipe — paid team ($99/yr) removes even that. If `devicectl install` ever fails on a signing mismatch, rebuild first; do not fall back to `flutter install` (it uninstalls).
 - **`flutter logs -d <id>` is dead on iOS 27** — it prints the "Showing … logs:" header and then nothing (the old syslog relay is gone).
 - **Capture device console via `devicectl`** (launches the app fresh AND streams its console; run in background, then grep):
   ```bash
@@ -145,7 +147,7 @@ The AR/camera path can ONLY be verified on the physical device, and the usual `f
   `--terminate-existing` relaunches without reinstalling, so app data (your seeded topo) survives.
 - **CRITICAL — what devicectl `--console` captures:** native **`NSLog` (os_log) YES, Dart `print`/`debugPrint` NO** (in a release build). So for on-device diagnosis, put diagnostic logging in **native Swift `NSLog`** (with a greppable prefix, e.g. `AR_DBG`). Dart-side logs will NOT surface in release + devicectl. (Debug/attach would show Dart logs, but attach is broken here — see above.)
 - **Flutter PlatformView channel gotcha (root-caused a black-AR bug):** the `climbtopo/ar` `MethodChannel` handler is registered **lazily inside `ArPlatformView.init`, which runs only when the `UiKitView` MOUNTS**. Any channel call fired before mount (e.g. from `initState`/`_load`, right after `setState`) is sent before the native handler exists and is silently dropped (`MissingPluginException`). **Gate platform-view channel calls on `UiKitView.onPlatformViewCreated`, never on `initState`/data-load timing.**
-- **Device facts:** `PetiTeló ☄️`, device id via `flutter devices` (was `00008140-0011585936EB001C`), bundle id `com.climbtopo.climbtopo`, dev team `8773L4RF2P` (free personal → 7-day profiles, reinstall wipes app data).
+- **Device facts:** `PetiTeló ☄️`, device id via `flutter devices` (was `00008140-0011585936EB001C`), bundle id `com.climbtopo.climbtopo`, dev team `8773L4RF2P` (free personal → 7-day profiles). **Uninstall — or a 7-day profile expiry — wipes app data + the login session; a plain in-place `devicectl device install app` does NOT (see the in-place-update rule above).**
 
 ### Fallbacks (not set up, document-only)
 - `idb` (`brew install idb-companion && pip install fb-idb`) → `idb ui describe-all` (accessibility tree),
