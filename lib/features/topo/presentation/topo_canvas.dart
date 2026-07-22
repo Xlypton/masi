@@ -8,10 +8,12 @@ import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:masi/core/coordinates/coordinate_transformer.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/application/rock_highlight_controller.dart';
 import 'package:masi/features/topo/domain/route_hit_test.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/grade_colors.dart';
 import 'package:masi/features/topo/presentation/photo_image.dart';
+import 'package:masi/features/topo/presentation/rock_mask_painter.dart';
 import 'package:masi/features/topo/presentation/route_palette.dart';
 import 'package:masi/features/topo/presentation/topo_painter.dart';
 
@@ -913,6 +915,15 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     final drawState = ref.watch(drawControllerProvider(widget.wallId));
     final isDrawMode = drawState.mode == DrawMode.draw;
 
+    // Rock-highlight overlay (see rock_highlight_controller.dart): the decoded
+    // segmentation mask for the ACTIVE photo, or null when there's no active
+    // photo, the highlight is toggled off, or segmentation found nothing. The
+    // provider is keyed by photoId, so switching photos gets its own state.
+    final photoId = drawState.activePhotoId;
+    final rockMask = photoId == null
+        ? null
+        : ref.watch(rockHighlightControllerProvider(photoId)).mask;
+
     return LayoutBuilder(
       builder: (context, constraints) {
         final viewportSize = Size(constraints.maxWidth, constraints.maxHeight);
@@ -975,6 +986,22 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   // image file.
                   placeholder: () => const SizedBox.shrink(),
                 ),
+                // Rock-highlight overlay: painted BETWEEN the photo and the
+                // route overlay so the segmented rock is washed with a
+                // translucent tint under the routes. No homography/transform
+                // of its own — it fills the same SizedBox(imageSize) as the
+                // photo and TopoPainter, so it shares the InteractiveViewer
+                // transform automatically. Only present when the active
+                // photo's highlight is on AND a mask was found (see
+                // RockHighlightState).
+                if (rockMask != null)
+                  CustomPaint(
+                    size: widget.imageSize,
+                    painter: RockMaskPainter(
+                      mask: rockMask,
+                      imageSize: widget.imageSize,
+                    ),
+                  ),
                 // Wrapped in a ListenableBuilder on the transformation
                 // controller (bug fix: "lines are super thin until you tap
                 // one") — `_currentScale` reads the controller's LIVE value,

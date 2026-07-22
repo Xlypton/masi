@@ -17,6 +17,7 @@ import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/logbook/presentation/log_ascent_sheet.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/application/rock_highlight_controller.dart';
 import 'package:masi/features/topo/data/image_dimensions.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
@@ -1306,6 +1307,39 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               : null,
           color: colors.accent,
           style: _topRowIconStyle(),
+        ),
+      );
+    }
+
+    // Rock-segmentation highlight toggle (#68): a sibling of the AR button,
+    // gated the same way (view mode, a photo loaded). Runs a one-shot native
+    // segmentation of the active photo and washes the detected rock with a
+    // translucent tint under the routes (see rock_highlight_controller.dart /
+    // rock_mask_painter.dart). Enabled only where native segmentation exists
+    // (isArSupported — iOS); disabled with an explanatory tooltip elsewhere.
+    if (drawState.mode == DrawMode.view && drawState.activePhotoId != null) {
+      final photoId = drawState.activePhotoId!;
+      final imagePath = ref.watch(selectedImageProvider);
+      final arSupported = isArSupported();
+      final rockState = ref.watch(rockHighlightControllerProvider(photoId));
+      actions.add(
+        IconButton(
+          key: const Key('topo-highlight-rock-toggle'),
+          icon: MasiIcon(rockState.enabled ? 'boulder_fill' : 'boulder'),
+          tooltip: arSupported
+              ? (rockState.enabled ? 'Hide rock highlight' : 'Highlight rock')
+              : 'Rock segmentation is available on iOS only',
+          onPressed: (arSupported && imagePath != null)
+              ? () => ref
+                    .read(rockHighlightControllerProvider(photoId).notifier)
+                    .toggle(imagePath)
+              : null,
+          color: colors.accent,
+          style: _topRowIconStyle(
+            backgroundColor: rockState.enabled
+                ? colors.accent.withValues(alpha: 0.16)
+                : null,
+          ),
         ),
       );
     }
