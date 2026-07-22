@@ -14,6 +14,7 @@ import 'package:climbtopo/features/ar/application/ar_controller.dart';
 import 'package:climbtopo/features/ar/application/manual_align_controller.dart';
 import 'package:climbtopo/features/ar/application/outline_extractor.dart';
 import 'package:climbtopo/features/ar/domain/homography.dart';
+import 'package:climbtopo/features/ar/presentation/ar_camera_view.dart';
 import 'package:climbtopo/features/ar/presentation/ar_overlay_painter.dart';
 import 'package:climbtopo/features/topo/data/photo_repository.dart';
 import 'package:climbtopo/features/topo/domain/topo_route.dart';
@@ -47,19 +48,6 @@ String _encodeRoutesForAr(List<TopoRoute> routes) {
       },
   ]);
 }
-
-/// Whether the native AR camera view (a `UiKitView`) is available on this
-/// platform. Only iOS ships the native implementation; every other platform
-/// (Android, web, desktop, and — critically — the platform `flutter test`
-/// runs widget tests under) must never attempt to instantiate a
-/// `UiKitView`, which would throw.
-///
-/// Delegates to [isArSupported] (see `lib/core/platform/ar_support.dart`),
-/// which conditional-imports the right backend per platform — this keeps
-/// `dart:io`'s `Platform` lookup (and its `File` sibling, see [_load]) out of
-/// this screen's own imports entirely, so this file compiles cleanly for web
-/// even though AR itself never runs there.
-bool _isArPlatformSupported() => isArSupported();
 
 /// The AR live-alignment screen for a wall: overlays that wall's routes
 /// (warped through the current camera-alignment [Homography]) on top of a
@@ -117,6 +105,12 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   /// Surfaced by [_ArStatus] in place of its usual mode/tracking readout;
   /// tapping it calls [_retryStartSession]. See #7b.
   String? _startError;
+
+  /// Bumped by [_retryStartSession]'s web branch to force the web camera
+  /// view ([buildArCameraView]) to remount on retry — see that method's
+  /// doc. Only ever read by [build]'s `KeyedSubtree` key in the
+  /// `!autoTracking` branch; native retries never touch it.
+  int _webCameraAttempt = 0;
 
   StreamSubscription<ArAlignment>? _alignmentSubscription;
 
@@ -196,9 +190,11 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   }
 
   /// Resets the AR view state to a clean per-wall-entry default: every AR
-  /// session starts in [ArMode.auto] (ARKit image-tracking is the primary
-  /// alignment mode) with [manualAlignProvider] back at [Homography.identity]
-  /// and [arLockedProvider] back to unlocked.
+  /// session starts in [ArMode.auto] on native (ARKit image-tracking is the
+  /// primary alignment mode there) or [ArMode.manual] on web (no continuous
+  /// tracking session exists in a browser — see [arAutoTrackingProvider]),
+  /// with [manualAlignProvider] back at [Homography.identity] and
+  /// [arLockedProvider] back to unlocked.
   ///
   /// [arControllerProvider], [manualAlignProvider], and [arLockedProvider]
   /// are app-lifetime singletons — never reset per wall on their own.
@@ -217,10 +213,12 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   /// call this screen has no reason to make on every single entry when
   /// there's nothing to actually reset.
   ///
-  /// Note: this matches [ArController.build]'s own default (also
+  /// Note: on native, this matches [ArController.build]'s own default (also
   /// [ArMode.auto]) — manual remains reachable at any time via the
   /// mode-toggle FAB as a fallback when ARKit tracking isn't available/good
-  /// enough.
+  /// enough. On web, this deliberately steps AWAY from that default (auto)
+  /// straight to manual, since there's no mode-toggle FAB there at all (see
+  /// `_ArControls`) — auto would otherwise be an unreachable dead mode.
   void _resetArViewState() {
     ref.read(manualAlignProvider.notifier).reset();
     ref.read(arLockedProvider.notifier).reset();
@@ -229,10 +227,43 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     // check just below) so a fresh wall entry never blends its first tracked
     // corners against a previous wall's leftover filter state.
     ref.read(arControllerProvider.notifier).resetCornerSmoothing();
-    if (ref.read(arControllerProvider).mode != ArMode.auto) {
-      ref.read(arControllerProvider.notifier).setMode(ArMode.auto);
+    // arAutoTrackingProvider (not a direct arSupportsAutoTracking() call) so
+    // this is overridable in tests, same as arSupportedProvider elsewhere in
+    // this file.
+    //
+    // Manual is the target ONLY for a platform that genuinely supports AR
+    // but has no continuous tracking session — i.e. real web. Everywhere
+    // AR isn't supported at all (arSupportedProvider false — Android,
+    // desktop, and this suite's own non-iOS `flutter test` host, see A1's
+    // doc above) keeps the pre-existing unconditional auto default: on
+    // those platforms ArScreen never even reaches ArAlignmentStage (build's
+    // arSupportedProvider gate shows the unsupported placeholder instead),
+    // so the mode is moot there, but leaving it at auto preserves this
+    // method's prior (platform-unaware) behavior for every test that
+    // asserts about it without touching either provider.
+    final targetMode =
+        ref.read(arAutoTrackingProvider) || !ref.read(arSupportedProvider)
+        ? ArMode.auto
+        : ArMode.manual;
+    if (ref.read(arControllerProvider).mode != targetMode) {
+      // setMode also fires a (fire-and-forget) native `setMode` platform-
+      // channel call via arChannelProvider — harmless on web too, since
+      // arChannelProvider resolves to ArChannel.noop() there (see
+      // ar_channel_factory.dart).
+      ref.read(arControllerProvider.notifier).setMode(targetMode);
     }
   }
+
+  /// Whether the native AR camera view (a `UiKitView`) is available on this
+  /// platform. Reads [arSupportedProvider] (see `ar_controller.dart`) —
+  /// which itself just delegates to [isArSupported] (see
+  /// `lib/core/platform/ar_support.dart`) by default — rather than calling
+  /// [isArSupported] directly, so this gate is overridable in tests. This
+  /// method's only caller is [_maybeStartSession], which is itself only
+  /// ever reached from a native `UiKitView`'s `onPlatformViewCreated` (see
+  /// [build]); web's manual-alignment path never mounts a `UiKitView` at
+  /// all, so it never calls this.
+  bool _isArPlatformSupported() => ref.read(arSupportedProvider);
 
   /// Kicks off [_startSession] once the native `UiKitView` (and therefore
   /// its `climbtopo/ar` MethodChannel handler) has actually mounted — see
@@ -288,12 +319,42 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     );
   }
 
-  /// Retries [_startSession] after a failed native start (see [_startError]
-  /// and #7b). The native `climbtopo/ar` channel handler stays registered
-  /// on the already-mounted `UiKitView` across retries, so — unlike the
-  /// very first call, gated on `onPlatformViewCreated` in [build] — this
-  /// can call [_startSession] directly without waiting for another mount.
+  /// Retries after a failed start (see [_startError] and #7b).
+  ///
+  /// On web (`!arAutoTrackingProvider`), there is no native session to
+  /// retry — [_startError] there came from [_ArWebCameraViewState]'s
+  /// `getUserMedia()` call throwing (e.g. the user denying the camera
+  /// permission), and that call only ever runs once, in that State's
+  /// `initState`. [ArChannel.noop().start] (what `channel.start` resolves
+  /// to on web — see `ar_channel_factory.dart`) returns successfully
+  /// without throwing and without ever touching the camera, so routing a
+  /// web retry through [_startSession] would clear [_startError] and
+  /// `markActive(true)` while the camera surface is still the same failed,
+  /// frozen widget underneath — a fake success. Instead, bump
+  /// [_webCameraAttempt]: [build]'s `KeyedSubtree` key embeds it, so a
+  /// changing value forces Flutter to dispose the old
+  /// `_ArWebCameraViewState` (releasing whatever half-open stream it held)
+  /// and mount a fresh one, whose `initState` re-attempts `getUserMedia()`
+  /// — a real retry, ending in either its `onReady` (real success) or
+  /// `onError` (a fresh, real failure pill) callback.
+  ///
+  /// On native, the `climbtopo/ar` channel handler stays registered on the
+  /// already-mounted `UiKitView` across retries, so — unlike the very
+  /// first call, gated on `onPlatformViewCreated` in [build] — this can
+  /// call [_startSession] directly without waiting for another mount.
   void _retryStartSession() {
+    if (!ref.read(arAutoTrackingProvider)) {
+      // Web: "start" is a one-shot getUserMedia in the camera widget's
+      // initState, not a native session. Remount it (bump the KeyedSubtree
+      // key) so the permission prompt / camera acquisition is re-attempted.
+      if (mounted) {
+        setState(() {
+          _startError = null;
+          _webCameraAttempt++;
+        });
+      }
+      return;
+    }
     final photo = _photo;
     final routes = _routes;
     if (photo == null || routes == null || routes.isEmpty) return;
@@ -322,7 +383,10 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       );
     }
 
-    if (!_isArPlatformSupported()) {
+    // ref.watch (unlike the ref.read _isArPlatformSupported() helper above,
+    // used only from _maybeStartSession) so an override of
+    // arSupportedProvider (e.g. in a test) rebuilds this gate.
+    if (!ref.watch(arSupportedProvider)) {
       return Scaffold(
         appBar: AppBar(title: const Text('AR view')),
         body: _buildUnsupportedPlaceholder(context),
@@ -338,19 +402,57 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       );
     }
 
+    // Whether this platform has a continuous (ARKit-style) tracking session
+    // — native (iOS) does, web doesn't (see arAutoTrackingProvider's doc in
+    // ar_controller.dart). Drives which camera surface to build below, and
+    // is forwarded to ArAlignmentStage so it can force web into
+    // always-manual alignment.
+    final autoTracking = ref.watch(arAutoTrackingProvider);
+
     return Scaffold(
       appBar: AppBar(title: const Text('AR view')),
       body: ArAlignmentStage(
-        cameraView: UiKitView(
-          viewType: _kArPlatformViewType,
-          creationParamsCodec: const StandardMessageCodec(),
-          onPlatformViewCreated: (_) => _maybeStartSession(),
-        ),
+        cameraView: autoTracking
+            ? UiKitView(
+                viewType: _kArPlatformViewType,
+                creationParamsCodec: const StandardMessageCodec(),
+                onPlatformViewCreated: (_) => _maybeStartSession(),
+              )
+            : KeyedSubtree(
+                // Keyed on _webCameraAttempt (see _retryStartSession's doc)
+                // so a retry after a failed getUserMedia() forces Flutter
+                // to dispose the old _ArWebCameraViewState and mount a
+                // fresh one — otherwise (same runtimeType, both keys null)
+                // Flutter reuses the existing State and initState (where
+                // getUserMedia() is actually called) never re-runs, so a
+                // retry would silently never re-attempt camera acquisition.
+                key: ValueKey('ar-web-camera-$_webCameraAttempt'),
+                child: buildArCameraView(
+                  onReady: () {
+                    // There's no native `climbtopo/ar` session to sequence a
+                    // start call for on web (arChannelProvider resolves to
+                    // ArChannel.noop() there) — the live getUserMedia feed
+                    // becoming ready IS the AR session starting, so mark
+                    // active directly instead of going through
+                    // _maybeStartSession/_startSession (which exist purely to
+                    // sequence the native channel.start call after the
+                    // UiKitView mounts). _sessionStarted is set too so
+                    // dispose's markActive(false) still fires symmetrically
+                    // when this screen is left.
+                    _sessionStarted = true;
+                    ref.read(arControllerProvider.notifier).markActive(true);
+                  },
+                  onError: (message) {
+                    if (mounted) setState(() => _startError = message);
+                  },
+                ),
+              ),
         routes: routes,
         refSize: Size(photo.width.toDouble(), photo.height.toDouble()),
         outline: _outline,
         startError: _startError,
         onRetryStart: _startError == null ? null : _retryStartSession,
+        autoTracking: autoTracking,
       ),
     );
   }
@@ -451,6 +553,7 @@ class ArAlignmentStage extends ConsumerStatefulWidget {
     this.outline,
     this.startError,
     this.onRetryStart,
+    this.autoTracking = true,
   });
 
   /// The live camera surface to render underneath the overlay. In the real
@@ -479,6 +582,20 @@ class ArAlignmentStage extends ConsumerStatefulWidget {
   /// non-null. `null` (and thus the pill non-interactive) whenever
   /// [startError] is `null`.
   final VoidCallback? onRetryStart;
+
+  /// Whether this platform has a continuous (ARKit-style) tracking session
+  /// to fall back to auto-placement with. Defaults to `true` — the native
+  /// (iOS) behavior every existing caller/test relies on — so this widget
+  /// stays byte-for-byte behaviorally unchanged wherever it's omitted.
+  ///
+  /// When `false` (web, via [ArScreen]'s `arAutoTrackingProvider` watch):
+  /// there is no native tracking signal to ever fall back on, so alignment
+  /// is ALWAYS effectively manual regardless of [ArState.mode] (see
+  /// [_ArAlignmentStageState.build]'s `isManual`), locking is a pure-Dart
+  /// state flip rather than a native `lockManual` call (see `onToggleLock`),
+  /// and [_ArControls] hides the mode-toggle/re-scan FABs (there is no other
+  /// mode to toggle to, and nothing to re-scan).
+  final bool autoTracking;
 
   @override
   ConsumerState<ArAlignmentStage> createState() => _ArAlignmentStageState();
@@ -534,7 +651,13 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
     final arState = ref.watch(arControllerProvider);
     final manualHomography = ref.watch(manualAlignProvider);
     final locked = ref.watch(arLockedProvider);
-    final isManual = arState.mode == ArMode.manual;
+    // Web (widget.autoTracking == false) has no continuous tracking session
+    // to ever fall back on, so alignment is ALWAYS effectively manual there,
+    // regardless of arState.mode (ArState.mode still literally flips
+    // between auto/manual on web via ArController.setMode, but nothing in
+    // this widget or _ArControls exposes a way back to auto once
+    // _resetArViewState has put it in manual — see that method's doc).
+    final isManual = !widget.autoTracking || arState.mode == ArMode.manual;
     final latest = arState.latest;
     final tracking = latest?.tracking ?? false;
     if (_lastMode != null && _lastMode != arState.mode) {
@@ -565,8 +688,28 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
           // before that (or after `active` flips back false, e.g. a
           // rebuild racing a failed retry) must never reach the channel.
           if (!ref.read(arControllerProvider).active) return;
-          final channel = ref.read(arChannelProvider);
           final currentlyLocked = ref.read(arLockedProvider);
+          if (!widget.autoTracking) {
+            // Web: there is no native world anchor to pin/release — the
+            // `climbtopo/ar` channel is ArChannel.noop() there (see
+            // ar_channel_factory.dart) — so locking/unlocking is a pure-Dart
+            // state flip, never a channel call.
+            if (currentlyLocked) {
+              ref.read(arLockedProvider.notifier).toggle();
+              return;
+            }
+            // Mirrors the native fresh-lock reset just below (same
+            // discontinuity rationale — see that branch's comment) even
+            // though web never actually reports tracked corners: keeps this
+            // stage's own _lastGoodHomography/_wasTracking bookkeeping
+            // consistent regardless of platform.
+            ref.read(arControllerProvider.notifier).resetCornerSmoothing();
+            _lastGoodHomography = null;
+            _wasTracking = false;
+            ref.read(arLockedProvider.notifier).toggle();
+            return;
+          }
+          final channel = ref.read(arChannelProvider);
           if (currentlyLocked) {
             channel.unlockManual();
             ref.read(arLockedProvider.notifier).toggle();
@@ -610,16 +753,24 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
 
         final Homography homography;
         final double confidence;
-        if (isManual && !locked) {
+        if (isManual && (!locked || !widget.autoTracking)) {
           // manualHomography starts at identity -> composite starts fitted;
           // every pan/scale/rotate gesture accumulates on top of that fit.
+          // The `|| !widget.autoTracking` half keeps web on the manual
+          // composite even once locked: unlike native, there's no native
+          // world anchor for the native side to take over rendering from
+          // (arState.latest never gets a tracked update on web — the
+          // channel's alignments() stream is empty, see ArChannel.noop()),
+          // so "locked" on web must freeze the manual composite in place
+          // rather than falling through to the native-corners branch below,
+          // which would otherwise reset the overlay to the fitted ghost.
           homography = manualComposite;
           confidence = 1.0;
         } else {
-          // Auto mode OR manual-and-locked: both render from the native
-          // world/ARKit-tracked corners — once locked, manual mode's
-          // overlay is driven the same way auto's is, since the native side
-          // now owns the pinned world anchor.
+          // Auto mode OR manual-and-locked (native only): both render from
+          // the native world/ARKit-tracked corners — once locked, manual
+          // mode's overlay is driven the same way auto's is, since the
+          // native side now owns the pinned world anchor.
           final corners = latest?.screenCorners;
           if (tracking && corners != null) {
             // ARKit is tracking: solve the homography that maps the
@@ -692,6 +843,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
                 limitedReason: latest?.limitedReason,
                 error: widget.startError,
                 onRetry: widget.onRetryStart,
+                autoTracking: widget.autoTracking,
               ),
             ),
             Positioned(
@@ -702,6 +854,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
                 locked: locked,
                 active: arState.active,
                 onToggleLock: onToggleLock,
+                autoTracking: widget.autoTracking,
               ),
             ),
           ],
@@ -725,10 +878,18 @@ class _ArStatus extends StatelessWidget {
     this.limitedReason,
     this.error,
     this.onRetry,
+    required this.autoTracking,
   });
 
   final ArMode mode;
   final bool locked;
+
+  /// Whether this platform has a continuous (ARKit-style) tracking session
+  /// — see [ArAlignmentStage.autoTracking]'s doc. When `false` (web), the
+  /// readout below shows a manual-appropriate "Align by hand"/"Locked"
+  /// label instead of the auto-mode tracking/confidence copy, since there
+  /// is no native tracking/confidence signal to report there at all.
+  final bool autoTracking;
 
   /// Whether ARKit is currently tracking the reference photo (only
   /// meaningful in [ArMode.auto] — ignored in manual mode).
@@ -763,6 +924,16 @@ class _ArStatus extends StatelessWidget {
     if (error != null) {
       label = "Couldn't start AR";
       hint = 'Tap to retry';
+    } else if (!autoTracking) {
+      // Web: there is no native tracking/confidence signal to report at
+      // all (the channel is ArChannel.noop() — see ar_channel_factory
+      // .dart) — this branch takes precedence over every mode-based one
+      // below regardless of the literal ArMode, since alignment is always
+      // effectively manual there (see ArAlignmentStage's isManual doc).
+      label = locked ? 'Locked' : 'Align by hand';
+      hint = locked
+          ? 'Routes frozen in place'
+          : 'Line up the outline with the wall, then Lock';
     } else if (isManual && locked) {
       label = 'Locked';
       hint = tracking
@@ -842,9 +1013,10 @@ String _limitedReasonHint(String? reason) {
   }
 }
 
-/// The mode toggle (always shown), "reset alignment" button (unlocked
-/// manual mode only), the Lock/Unlock button (manual mode only), and the
-/// Re-scan button (auto mode only), floating over the top-right of
+/// The mode toggle (auto-tracking platforms only — see [autoTracking]),
+/// "reset alignment" button (unlocked manual mode only), the Lock/Unlock
+/// button (manual mode only), and the Re-scan button (auto mode AND
+/// auto-tracking platforms only), floating over the top-right of
 /// [ArAlignmentStage].
 class _ArControls extends ConsumerWidget {
   const _ArControls({
@@ -852,6 +1024,7 @@ class _ArControls extends ConsumerWidget {
     required this.locked,
     required this.active,
     required this.onToggleLock,
+    required this.autoTracking,
   });
 
   final ArMode mode;
@@ -880,13 +1053,25 @@ class _ArControls extends ConsumerWidget {
   /// synchronous [VoidCallback]).
   final Future<void> Function() onToggleLock;
 
+  /// Whether this platform has a continuous (ARKit-style) tracking session
+  /// — see [ArAlignmentStage.autoTracking]'s doc. When `false` (web), the
+  /// mode-toggle and re-scan FABs below are hidden entirely: there is no
+  /// other mode to toggle to (alignment is always manual there) and nothing
+  /// for a "re-scan" to mean without a native tracking session.
+  final bool autoTracking;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final isManual = mode == ArMode.manual;
+    // Mirrors ArAlignmentStage.build's own isManual (see that method's
+    // doc): web (!autoTracking) is always effectively manual regardless of
+    // the literal mode, so the reset/lock FABs below show correctly there
+    // even before _resetArViewState has had a chance to flip mode away from
+    // ArController's ArMode.auto default.
+    final isManual = !autoTracking || mode == ArMode.manual;
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        if (mode == ArMode.auto)
+        if (autoTracking && mode == ArMode.auto)
           Padding(
             padding: const EdgeInsets.only(right: 8),
             child: FloatingActionButton.small(
@@ -924,23 +1109,26 @@ class _ArControls extends ConsumerWidget {
               child: MasiIcon(locked ? 'lock' : 'lock_open'),
             ),
           ),
-        FloatingActionButton.small(
-          key: const Key('ar-mode-toggle'),
-          tooltip: isManual ? 'Switch to auto alignment' : 'Switch to manual alignment',
-          onPressed: active
-              ? () => ref
-                  .read(arControllerProvider.notifier)
-                  .setMode(isManual ? ArMode.auto : ArMode.manual)
-              : null,
-          child: Text(
-            isManual ? 'M' : 'A',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.w700,
-              color: Theme.of(context).colorScheme.onPrimaryContainer,
+        if (autoTracking)
+          FloatingActionButton.small(
+            key: const Key('ar-mode-toggle'),
+            tooltip: isManual
+                ? 'Switch to auto alignment'
+                : 'Switch to manual alignment',
+            onPressed: active
+                ? () => ref
+                    .read(arControllerProvider.notifier)
+                    .setMode(isManual ? ArMode.auto : ArMode.manual)
+                : null,
+            child: Text(
+              isManual ? 'M' : 'A',
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w700,
+                color: Theme.of(context).colorScheme.onPrimaryContainer,
+              ),
             ),
           ),
-        ),
       ],
     );
   }
