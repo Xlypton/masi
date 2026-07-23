@@ -74,27 +74,37 @@ class _MasiShimmerState extends State<MasiShimmer>
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final highlight = _highlightFor(context, colors);
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        // Sweeps the highlight band from just off the top-left to just off
-        // the bottom-right and back to the start on each repeat (a
-        // continuous left-to-right pass, not a ping-pong), by translating a
-        // fixed-stop gradient horizontally via `GradientTransform`.
-        final slide = (_controller.value * 2) - 1; // -1.0 .. 1.0
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [colors.surface2, highlight, colors.surface2],
-              stops: const [0.35, 0.5, 0.65],
-              transform: _SlidingGradientTransform(slide),
+    // RepaintBoundary around the AnimatedBuilder's output: this widget is
+    // used per-thumbnail, so many instances can be ticking at once (e.g. a
+    // grid/list of still-loading photos). Without a boundary here, each
+    // controller tick's repaint bubbles up to the nearest ancestor
+    // RepaintBoundary/layer -- often shared with sibling list tiles -- so one
+    // shimmer's every-frame gradient sweep can force repaints of unrelated
+    // content around it. Isolating the sweep to its own layer confines that
+    // per-frame repaint cost to exactly this tile.
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _controller,
+        builder: (context, child) {
+          // Sweeps the highlight band from just off the top-left to just off
+          // the bottom-right and back to the start on each repeat (a
+          // continuous left-to-right pass, not a ping-pong), by translating a
+          // fixed-stop gradient horizontally via `GradientTransform`.
+          final slide = (_controller.value * 2) - 1; // -1.0 .. 1.0
+          return DecoratedBox(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [colors.surface2, highlight, colors.surface2],
+                stops: const [0.35, 0.5, 0.65],
+                transform: _SlidingGradientTransform(slide),
+              ),
             ),
-          ),
-          child: const SizedBox.expand(),
-        );
-      },
+            child: const SizedBox.expand(),
+          );
+        },
+      ),
     );
   }
 

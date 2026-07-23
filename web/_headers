@@ -26,8 +26,9 @@
 # ETag first": a cheap 304 when nothing changed, always-fresh the moment a
 # new build lands. Applied via the blanket `/*` block below (same block that
 # sets COOP/COEP) rather than enumerating every shell/asset path individually
-# — it's simpler and every file under this build is unversioned, so there is
-# no asset here that legitimately wants long-lived immutable caching anyway.
+# — it's simpler, and everything under this build EXCEPT the two
+# hand-versioned drift/sqlite assets called out further down is unversioned,
+# so this blanket rule is still the right default for everything else.
 
 /*
   Cross-Origin-Opener-Policy: same-origin
@@ -40,3 +41,22 @@
 
 /canvaskit/*.wasm
   Content-Type: application/wasm
+
+# Long-cache the drift/sqlite web-worker assets. Unlike the shell files
+# above, these two are NOT emitted per Flutter build -- they're hand-copied
+# into web/ and version-pinned against the locked `drift` package version in
+# `web/.drift_asset_versions` (checked by `tool/build_web.sh`'s asset-drift
+# gate), so a content change always comes with a version bump + redeploy
+# rather than a same-URL silent swap. That makes them safe to mark
+# `immutable`, unlike `main.dart.wasm`/`main.dart.js` (deliberately NOT
+# covered here -- those filenames are unversioned per build, so caching them
+# immutably would reintroduce the #55 stale-shell bug the `/*` block above
+# fixes). Cloudflare Pages resolves same-named headers by path specificity,
+# not file order, so these override the `/*` block's `no-cache` for exactly
+# these two paths while every other header from `/*` (COOP/COEP/CORP) still
+# applies.
+/sqlite3.wasm
+  Cache-Control: public, max-age=31536000, immutable
+
+/drift_worker.js
+  Cache-Control: public, max-age=31536000, immutable

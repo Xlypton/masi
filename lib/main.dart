@@ -40,22 +40,6 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
     usePathUrlStrategy();
     _urlStrategyConfigured = true;
   }
-  // Defensive hardening: a failed/unreachable Supabase init (bad config, no
-  // network on first launch, etc.) must never crash app boot — this app is
-  // local-first (Drift/SQLite) and fully usable with sync/backup/auth
-  // unavailable, so log and continue rather than letting the exception
-  // propagate out of main().
-  try {
-    await Supabase.initialize(
-      url: supabaseUrl,
-      publishableKey: supabaseAnonKey,
-      authOptions: const FlutterAuthClientOptions(
-        authFlowType: AuthFlowType.pkce,
-      ),
-    );
-  } catch (e, st) {
-    debugPrint('Supabase.initialize failed; continuing without it: $e\n$st');
-  }
   // Pre-warm the shared PhotoFiles' docs-path cache BEFORE the first frame,
   // so the synchronous, cache-backed `resolvePhotoPathSync` (used by
   // `watchTopos`'s thumbnail column and the canvas's first
@@ -70,11 +54,52 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
   // UncontrolledProviderScope so every provider still resolves against this
   // same container/cache.
   final container = ProviderContainer(overrides: overrides);
-  await container.read(photoFilesProvider).warmDocsPath();
+  // `_initSupabase()` (a network round trip: session restore/token refresh)
+  // and `warmDocsPath()` (a native path_provider lookup; a no-op on web) are
+  // independent of each other, so run them concurrently rather than
+  // sequentially — this cuts the boot-to-first-frame latency from the SUM of
+  // both down to the MAX of the two.
+  //
+  // Both must still be fully AWAITED before `runApp`, though — that part is
+  // not just a style choice. `MasiApp.build()` (`app/app.dart`) synchronously
+  // constructs `authStateProvider` on its very first build via
+  // `ref.listen(authStateProvider, ...)`, which eagerly reads
+  // `Supabase.instance.client` (see `supabaseClientProvider` in
+  // `core/config/supabase_providers.dart`). `Supabase.instance.client` is a
+  // `late` field on the package's singleton that throws
+  // `LateInitializationError` if read before `Supabase.initialize()` has
+  // completed — so a fire-and-forget (un-awaited) `Supabase.initialize()`
+  // here would crash the very first frame, on both web and native, the
+  // moment auth state is touched. If that ever changes (e.g. the auth layer
+  // moves behind a provider that tolerates a not-yet-initialized Supabase),
+  // this can become non-blocking too.
+  await Future.wait([
+    _initSupabase(),
+    container.read(photoFilesProvider).warmDocsPath(),
+  ]);
   runApp(
     UncontrolledProviderScope(
       container: container,
       child: const MasiApp(),
     ),
   );
+}
+
+/// Defensive hardening: a failed/unreachable Supabase init (bad config, no
+/// network on first launch, etc.) must never crash app boot — this app is
+/// local-first (Drift/SQLite) and fully usable with sync/backup/auth
+/// unavailable, so log and continue rather than letting the exception
+/// propagate out of [bootApp].
+Future<void> _initSupabase() async {
+  try {
+    await Supabase.initialize(
+      url: supabaseUrl,
+      publishableKey: supabaseAnonKey,
+      authOptions: const FlutterAuthClientOptions(
+        authFlowType: AuthFlowType.pkce,
+      ),
+    );
+  } catch (e, st) {
+    debugPrint('Supabase.initialize failed; continuing without it: $e\n$st');
+  }
 }
