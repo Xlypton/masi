@@ -208,6 +208,13 @@ class CloudBackupService {
   ///
   /// No-ops when signed out, or when the signed-in user has never pushed a
   /// backup (nothing to restore) — neither case throws.
+  ///
+  /// Restore is NOT all-or-nothing: [BackupRepository.importSnapshot] imports
+  /// each table in its own transaction, so a partial-failure restore (e.g. one
+  /// corrupt/incompatible table in an old backup) keeps the tables that
+  /// imported and rethrows an aggregate naming the ones that failed, rather
+  /// than rolling the whole restore back. Intended — matches the resilient
+  /// per-section sync-pull behavior.
   Future<PullBackupResult> pullBackup({
     ConflictMode mode = ConflictMode.lww,
   }) async {
