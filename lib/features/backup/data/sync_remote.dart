@@ -233,12 +233,16 @@ String sharedPhotoPath(String photoId, String ext) => 'shared/$photoId$ext';
 bool shouldPushLww({required int localUpdatedAt, required int? remoteUpdatedAt}) =>
     remoteUpdatedAt == null || localUpdatedAt >= remoteUpdatedAt;
 
-/// True when every field named in [requiredFields] is present in [row] as a
-/// non-null [String] — the guard [SupabaseSyncRemote.fetchOwnRows],
-/// [SupabaseSyncRemote.fetchSharedTopos], and
-/// [SupabaseSyncRemote.fetchSharedAscents] apply to each row (via
+/// True when every field named in [requiredFields] is present in [row] AND
+/// non-null — type-agnostic (works for any Drift column type: `String`,
+/// `int`, `bool`, ...), not just `String` FK ids. The guard
+/// [SupabaseSyncRemote.fetchOwnRows], [SupabaseSyncRemote.fetchSharedTopos],
+/// [SupabaseSyncRemote.fetchSharedAscents], and — on the push side —
+/// `SyncService.pushOwn` all apply this to each row (via
 /// [filterValidSyncRows]) before using any of [requiredFields] as an FK id
-/// to derive a follow-up query, or before returning the row at all.
+/// to derive a follow-up query, before returning/sending the row at all, or
+/// before trusting it to survive `<Table>.fromJson()` (which throws on a
+/// null NOT-NULL column of ANY type, not just String).
 ///
 /// P0 fix (#72, "fresh install syncs nothing after login"): a cloud row
 /// with an unexpectedly-null required column used to hit a non-null
@@ -246,12 +250,64 @@ bool shouldPushLww({required int localUpdatedAt, required int? remoteUpdatedAt})
 /// whole pull — see `SyncService.pullOwnAndShared`'s per-section isolation
 /// for the other half of this fix). This predicate lets the fetch SKIP just
 /// that one malformed row instead.
+///
+/// Sync-resilience hardening: originally String-only (`row[field] is!
+/// String`), which meant a required NOT-NULL non-String column (e.g.
+/// `Photos.width`, `Ascents.climbedAt`, `Sectors.sortOrder`) could never be
+/// validated by this predicate at all. Now checks presence + non-null
+/// generically via [syncRequiredFields], so every NOT-NULL column can be
+/// covered, not just the narrow FK-id sets this used to be called with.
 bool hasRequiredSyncFields(Map<String, dynamic> row, List<String> requiredFields) {
   for (final field in requiredFields) {
-    if (row[field] is! String) return false;
+    if (!row.containsKey(field) || row[field] == null) return false;
   }
   return true;
 }
+
+/// Authoritative per-table set of required (NOT NULL) column names, used as
+/// the [hasRequiredSyncFields]/[filterValidSyncRows] `requiredFields` for a
+/// full own-row validation — both on fetch ([SupabaseSyncRemote.fetchOwnRows])
+/// and on push (`SyncService.pushOwn`'s local-row guard).
+///
+/// SOURCE OF TRUTH: derived directly from the NOT-NULL columns declared in
+/// `lib/core/db/tables.dart`. Every table includes `id`/`createdAt`/
+/// `updatedAt` because the shared `SyncColumns` mixin declares all three
+/// NOT NULL (with no Drift-level default) on every table — including
+/// `Profiles` and `Likes`, whose own business columns are all nullable —
+/// so a row missing any of the three would equally crash `<Table>.fromJson()`
+/// or the `row['updatedAt'] as int` cast `upsertOwnRows` relies on for its
+/// last-writer-wins guard, regardless of table.
+///
+/// Beyond that floor, each table lists its own additional NOT-NULL columns
+/// that carry no Drift `withDefault(...)` (a column WITH a Drift default —
+/// `dirty`, `Photos.sortOrder`/`isPrimary`, `Routes.visible` — is excluded,
+/// since those are non-corruption-signaling bookkeeping/cosmetic fields),
+/// with one deliberate exception: `Walls.visibility`/`Ascents.visibility`
+/// ARE required despite having a Drift default, because sharing/community
+/// queries key directly off them (`.eq('visibility', 'shared')`) and a null
+/// value there would silently corrupt that filtering.
+const Map<String, List<String>> syncRequiredFields = {
+  'profiles': ['id', 'createdAt', 'updatedAt'],
+  'areas': ['id', 'createdAt', 'updatedAt', 'name'],
+  'sectors': ['id', 'createdAt', 'updatedAt', 'areaId', 'name', 'sortOrder'],
+  'walls': ['id', 'createdAt', 'updatedAt', 'sectorId', 'name', 'sortOrder', 'visibility'],
+  'photos': ['id', 'createdAt', 'updatedAt', 'wallId', 'localPath', 'kind', 'width', 'height'],
+  'routes': [
+    'id',
+    'createdAt',
+    'updatedAt',
+    'wallId',
+    'photoId',
+    'number',
+    'colorIndex',
+    'pointsJson',
+    'symbolsJson',
+    'sortOrder',
+  ],
+  'ascents': ['id', 'createdAt', 'updatedAt', 'routeId', 'wallId', 'climbedAt', 'style', 'visibility'],
+  'comments': ['id', 'createdAt', 'updatedAt', 'body'],
+  'likes': ['id', 'createdAt', 'updatedAt'],
+};
 
 /// Filters [rows] down to those satisfying [hasRequiredSyncFields] for
 /// [requiredFields] — every OTHER (valid) row in the same batch still
@@ -270,7 +326,7 @@ List<Map<String, dynamic>> filterValidSyncRows(
     } else {
       debugPrint(
         'SyncRemote: skipping malformed $debugLabel row (missing one of '
-        '$requiredFields as a non-null String): $row',
+        '$requiredFields as a non-null value): $row',
       );
     }
   }
@@ -304,30 +360,44 @@ class SupabaseSyncRemote implements SyncRemote {
       final rows = tablesToRows[tableName];
       if (rows == null || rows.isEmpty) continue;
 
-      // Client-side last-writer-wins guard on push (#2): fetch the remote's
-      // current id+updatedAt for exactly the ids about to be pushed (one
-      // batched round trip per table, not one per row), and drop any row a
-      // strictly-newer remote row would otherwise get clobbered by. See
-      // [shouldPushLww].
-      final ids = [for (final row in rows) row['id'] as String];
-      final remoteRows = await _client.from(tableName).select('id, updatedAt').inFilter('id', ids);
-      final remoteUpdatedAt = <String, int>{
-        for (final r in remoteRows) r['id'] as String: r['updatedAt'] as int,
-      };
-      final survivors = [
-        for (final row in rows)
-          if (shouldPushLww(
-            localUpdatedAt: row['updatedAt'] as int,
-            remoteUpdatedAt: remoteUpdatedAt[row['id']],
-          ))
-            row,
-      ];
-      if (survivors.isEmpty) continue;
+      // Per-table push isolation (sync-resilience hardening): a rejected/
+      // erroring table (bad data, a transient network blip on that one round
+      // trip, a real backend constraint violation, ...) must not abort the
+      // whole loop — every LATER table (and, upstream, `SyncService.pushOwn`'s
+      // subsequent photo-upload phase) still needs to run regardless of one
+      // earlier table's failure.
+      try {
+        // Client-side last-writer-wins guard on push (#2): fetch the remote's
+        // current id+updatedAt for exactly the ids about to be pushed (one
+        // batched round trip per table, not one per row), and drop any row a
+        // strictly-newer remote row would otherwise get clobbered by. See
+        // [shouldPushLww].
+        final ids = [for (final row in rows) row['id'] as String];
+        final remoteRows = await _client.from(tableName).select('id, updatedAt').inFilter('id', ids);
+        final remoteUpdatedAt = <String, int>{
+          for (final r in remoteRows) r['id'] as String: r['updatedAt'] as int,
+        };
+        final survivors = [
+          for (final row in rows)
+            if (shouldPushLww(
+              localUpdatedAt: row['updatedAt'] as int,
+              remoteUpdatedAt: remoteUpdatedAt[row['id']],
+            ))
+              row,
+        ];
+        if (survivors.isEmpty) continue;
 
-      // Confirmed live: the real Postgres tables (see `supabase/schema.sql`)
-      // use matching camelCase quoted columns (`"ownerId"`, `"wallId"`, ...)
-      // for drift's `toJson()` keys — no snake_case mapping layer needed.
-      await _client.from(tableName).upsert(survivors);
+        // Confirmed live: the real Postgres tables (see `supabase/schema.sql`)
+        // use matching camelCase quoted columns (`"ownerId"`, `"wallId"`, ...)
+        // for drift's `toJson()` keys — no snake_case mapping layer needed.
+        await _client.from(tableName).upsert(survivors);
+      } catch (e) {
+        debugPrint(
+          'SyncRemote: upsertOwnRows failed for table "$tableName" '
+          '(${rows.length} row(s)), skipping — other tables still push: $e',
+        );
+        continue;
+      }
     }
   }
 
@@ -339,10 +409,19 @@ class SupabaseSyncRemote implements SyncRemote {
     for (final tableName in syncTableNames) {
       final rows = await _client.from(tableName).select().eq('ownerId', uid);
       final mapped = [for (final row in rows) Map<String, dynamic>.from(row)];
-      // `id` is every table's primary key — a row missing it can never be
-      // imported locally anyway, so it's skipped here rather than left to
-      // throw deeper in BackupRepository.importSnapshot (P0 fix, #72).
-      result[tableName] = filterValidSyncRows(mapped, const ['id'], debugLabel: 'own $tableName');
+      // Full required-NOT-NULL-field validation per table (sync-resilience
+      // hardening) — was `const ['id']` only (P0 fix, #72), which caught a
+      // missing primary key but let a row with any OTHER null NOT-NULL
+      // column (e.g. a null `sortOrder`/`width`/`climbedAt`) through to
+      // throw deeper in `<Table>.fromJson()`/`BackupRepository.
+      // importSnapshot`. [syncRequiredFields] is the authoritative map (see
+      // its doc); the `?? const ['id']` fallback is defensive only — every
+      // name in [syncTableNames] has a matching entry there.
+      result[tableName] = filterValidSyncRows(
+        mapped,
+        syncRequiredFields[tableName] ?? const ['id'],
+        debugLabel: 'own $tableName',
+      );
     }
     return result;
   }

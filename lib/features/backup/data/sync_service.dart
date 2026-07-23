@@ -274,18 +274,65 @@ class SyncService {
       ascents = await (_db.select(_db.ascents)..where((t) => t.ownerId.equals(uid))).get();
     });
 
+    // Push-side NOT-NULL guard (sync-resilience hardening): drops (+
+    // debugPrints, via filterValidSyncRows) any local row missing a required
+    // NOT-NULL field before it's ever sent to Supabase, reusing the exact
+    // same [syncRequiredFields] map + [hasRequiredSyncFields]/
+    // [filterValidSyncRows] helpers the fetch side validates with (imported
+    // from `sync_remote.dart`) — the symmetric guard to `fetchOwnRows`'s.
+    // A normal local row set is unaffected: local Drift NOT-NULL column
+    // constraints mean a genuinely null required field can only happen here
+    // via local data corruption, not everyday use. The `?? const ['id']`
+    // fallback is defensive only — every table name below has a matching
+    // entry in [syncRequiredFields].
     final tablesToRows = <String, List<Map<String, dynamic>>>{
-      'profiles': [for (final row in profiles) row.toJson()],
-      'areas': [for (final row in areas) row.toJson()],
-      'sectors': [for (final row in sectors) row.toJson()],
-      'walls': [for (final row in walls) row.toJson()],
-      'photos': [for (final row in photos) row.toJson()],
-      'routes': [for (final row in routes) row.toJson()],
-      'comments': [for (final row in comments) row.toJson()],
-      'likes': [for (final row in likes) row.toJson()],
+      'profiles': filterValidSyncRows(
+        [for (final row in profiles) row.toJson()],
+        syncRequiredFields['profiles'] ?? const ['id'],
+        debugLabel: 'local profiles (push)',
+      ),
+      'areas': filterValidSyncRows(
+        [for (final row in areas) row.toJson()],
+        syncRequiredFields['areas'] ?? const ['id'],
+        debugLabel: 'local areas (push)',
+      ),
+      'sectors': filterValidSyncRows(
+        [for (final row in sectors) row.toJson()],
+        syncRequiredFields['sectors'] ?? const ['id'],
+        debugLabel: 'local sectors (push)',
+      ),
+      'walls': filterValidSyncRows(
+        [for (final row in walls) row.toJson()],
+        syncRequiredFields['walls'] ?? const ['id'],
+        debugLabel: 'local walls (push)',
+      ),
+      'photos': filterValidSyncRows(
+        [for (final row in photos) row.toJson()],
+        syncRequiredFields['photos'] ?? const ['id'],
+        debugLabel: 'local photos (push)',
+      ),
+      'routes': filterValidSyncRows(
+        [for (final row in routes) row.toJson()],
+        syncRequiredFields['routes'] ?? const ['id'],
+        debugLabel: 'local routes (push)',
+      ),
+      'comments': filterValidSyncRows(
+        [for (final row in comments) row.toJson()],
+        syncRequiredFields['comments'] ?? const ['id'],
+        debugLabel: 'local comments (push)',
+      ),
+      'likes': filterValidSyncRows(
+        [for (final row in likes) row.toJson()],
+        syncRequiredFields['likes'] ?? const ['id'],
+        debugLabel: 'local likes (push)',
+      ),
       // Ascents ARE pushed here (own-row push, no visibility distinction) —
       // it's fetchSharedTopos (pull side) that keeps them private, not push.
-      'ascents': [for (final row in ascents) row.toJson()],
+      'ascents': filterValidSyncRows(
+        [for (final row in ascents) row.toJson()],
+        syncRequiredFields['ascents'] ?? const ['id'],
+        debugLabel: 'local ascents (push)',
+      ),
     };
 
     await _remote.upsertOwnRows(uid, tablesToRows);
