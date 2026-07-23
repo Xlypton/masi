@@ -63,19 +63,31 @@ class FakeSyncRemote implements SyncRemote {
   Future<Map<String, List<Map<String, dynamic>>>> fetchOwnRows(String uid) async {
     return {
       for (final tableName in syncTableNames)
-        tableName: [
-          for (final row in _rows[tableName]!.values)
-            if (row['ownerId'] == uid) Map<String, dynamic>.from(row),
-        ],
+        tableName: filterValidSyncRows(
+          [
+            for (final row in _rows[tableName]!.values)
+              if (row['ownerId'] == uid) Map<String, dynamic>.from(row),
+          ],
+          const ['id'],
+          debugLabel: 'own $tableName',
+        ),
     };
   }
 
   @override
   Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
-    final sharedWalls = [
-      for (final wall in _rows['walls']!.values)
-        if (wall['visibility'] == 'shared') Map<String, dynamic>.from(wall),
-    ];
+    // Mirrors SupabaseSyncRemote.fetchSharedTopos's row-validity guard (P0
+    // fix, #72): a malformed wall row (missing id/sectorId) is skipped
+    // rather than throwing on the `as String` casts below, so a test can
+    // seed one directly into `_rows['walls']` to exercise the fix.
+    final sharedWalls = filterValidSyncRows(
+      [
+        for (final wall in _rows['walls']!.values)
+          if (wall['visibility'] == 'shared') Map<String, dynamic>.from(wall),
+      ],
+      const ['id', 'sectorId'],
+      debugLabel: 'shared wall',
+    );
     final wallIds = {for (final w in sharedWalls) w['id'] as String};
     final sectorIds = {for (final w in sharedWalls) w['sectorId'] as String};
     final sectors = [
@@ -244,6 +256,18 @@ class FakeSyncRemote implements SyncRemote {
       for (final row in _rows['profiles']!.values)
         if (uids.contains(row['id'])) Map<String, dynamic>.from(row),
     ];
+  }
+}
+
+/// [FakeSyncRemote] variant whose [fetchSharedTopos] always throws — used
+/// to prove the P0 fix (#72): a throw in the shared-topos fetch must not
+/// prevent the signed-in user's OWN rows from being fetched+imported by the
+/// SAME [SyncService.pullOwnAndShared] call (own is fetched+imported FIRST
+/// and in total isolation from every shared sub-fetch).
+class ThrowingFetchSharedToposRemote extends FakeSyncRemote {
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
+    throw Exception('shared topos fetch failed: simulated cloud error');
   }
 }
 
@@ -1766,6 +1790,137 @@ void main() {
         )..where((t) => t.id.equals(_uidU2))).getSingleOrNull();
         expect(u2Profile, isNotNull);
         expect(u2Profile!.displayName, 'u2 display name');
+      },
+    );
+  });
+
+  group('P0 fix (#72): per-section pull isolation', () {
+    test(
+      'a throw in fetchSharedTopos does not prevent the signed-in user\'s '
+      'OWN rows from being imported — PullResult.ownImported stays true '
+      'while sharedImported is false and the shared-topos failure is '
+      'recorded in errors (before this fix, ANY fetch throwing aborted the '
+      'WHOLE pull, own rows included — the root cause of a fresh install '
+      'ending up with neither own nor public topos)',
+      () async {
+        final workingRemote = FakeSyncRemote();
+        final auth = FakeAuthRepository(_signedInU1);
+
+        // Push u1's own data through a NORMAL (non-throwing) fake first, as
+        // if it had already synced from another device.
+        final containerA = makeContainer(remote: workingRemote, auth: auth);
+        addTearDown(() => containerA.db.close());
+        await seedWallHierarchy(
+          containerA.db,
+          ownerId: _uidU1,
+          areaId: 'area-own',
+          sectorId: 'sector-own',
+          wallId: 'wall-own',
+          photoId: 'photo-own',
+          routeId: 'route-own',
+        );
+        await containerA.service.pushOwn();
+
+        // Copy that same own-row data into a remote whose fetchSharedTopos
+        // is rigged to throw, so a pull against it exercises the isolation.
+        final throwingRemote = ThrowingFetchSharedToposRemote();
+        await throwingRemote.upsertOwnRows(_uidU1, await workingRemote.fetchOwnRows(_uidU1));
+
+        final containerB = makeContainer(remote: throwingRemote, auth: auth);
+        addTearDown(() => containerB.db.close());
+
+        final result = await containerB.service.pullOwnAndShared();
+
+        expect(result.didPull, isTrue);
+        expect(
+          result.ownImported,
+          isTrue,
+          reason: 'own rows must still import despite the shared-topos throw',
+        );
+        expect(result.sharedImported, isFalse);
+        expect(result.ownRowsPulled, greaterThan(0));
+        expect(
+          result.errors.any((e) => e.contains('shared topos fetch failed')),
+          isTrue,
+          reason: 'the shared-topos failure must be reported, not swallowed silently',
+        );
+
+        final area = await (containerB.db.select(
+          containerB.db.areas,
+        )..where((t) => t.id.equals('area-own'))).getSingleOrNull();
+        expect(
+          area,
+          isNotNull,
+          reason: 'own rows must be imported even though the shared fetch threw',
+        );
+        final wall = await (containerB.db.select(
+          containerB.db.walls,
+        )..where((t) => t.id.equals('wall-own'))).getSingleOrNull();
+        expect(wall, isNotNull);
+      },
+    );
+
+    test(
+      'a shared-topos batch containing one malformed wall row (null '
+      'required id) imports the OTHER valid shared wall and silently skips '
+      'the bad one, instead of throwing and losing the whole shared batch '
+      '(the real #72 trigger: a null field in one cloud row hit a non-null '
+      '`as String` cast)',
+      () async {
+        final remote = FakeSyncRemote();
+
+        final containerU2 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU2));
+        addTearDown(() => containerU2.db.close());
+        await seedWallHierarchy(
+          containerU2.db,
+          ownerId: _uidU2,
+          visibility: 'shared',
+          areaId: 'area-good',
+          sectorId: 'sector-good',
+          wallId: 'wall-good',
+          photoId: 'photo-good',
+          routeId: 'route-good',
+        );
+        await containerU2.service.pushOwn();
+
+        // Directly inject a malformed SECOND shared wall row (null id)
+        // bypassing normal push — simulates a real cloud row with an
+        // unexpectedly-null required column, the actual #72 trigger.
+        remote._rows['walls']!['malformed-wall-key'] = {
+          'id': null,
+          'createdAt': 100,
+          'updatedAt': 100,
+          'deletedAt': null,
+          'remoteId': null,
+          'dirty': false,
+          'ownerId': _uidU2,
+          'sectorId': 'sector-good',
+          'name': 'Malformed wall',
+          'sortOrder': 0,
+          'visibility': 'shared',
+        };
+
+        final containerU1 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => containerU1.db.close());
+
+        final result = await containerU1.service.pullOwnAndShared();
+
+        expect(result.didPull, isTrue);
+        expect(
+          result.sharedImported,
+          isTrue,
+          reason: 'the malformed row must be SKIPPED, not fatal to the whole batch',
+        );
+        expect(result.errors, isEmpty);
+
+        final goodWall = await (containerU1.db.select(
+          containerU1.db.walls,
+        )..where((t) => t.id.equals('wall-good'))).getSingleOrNull();
+        expect(
+          goodWall,
+          isNotNull,
+          reason: 'the valid shared wall must still import alongside the skipped bad row',
+        );
       },
     );
   });

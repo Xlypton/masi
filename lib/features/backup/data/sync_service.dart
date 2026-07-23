@@ -66,46 +66,89 @@ enum SyncPullOutcome {
 }
 
 /// Result of a [SyncService.pullOwnAndShared] call.
-class PullSyncResult {
-  const PullSyncResult.pulled({
+///
+/// P0 fix (#72, "fresh install syncs nothing after login"): the own and
+/// shared sides (and, within the shared side, its own sub-fetches — shared
+/// topos, shared ascents, profiles, photo downloads) are now fetched AND
+/// imported in independently try/caught sections (see [pullOwnAndShared]),
+/// so a throw in ANY one section — e.g. a malformed cloud row's null-cast,
+/// the original trigger — is caught and recorded in [errors] instead of
+/// aborting the others. [ownImported]/[sharedImported] report whether each
+/// side actually got imported this call; a `false` on one side never
+/// implies a `false` on the other.
+class PullResult {
+  const PullResult.pulled({
     required this.ownRowsPulled,
     required this.sharedRowsPulled,
     required this.photosDownloaded,
+    required this.ownImported,
+    required this.sharedImported,
+    required this.errors,
   }) : outcome = SyncPullOutcome.pulled;
 
-  const PullSyncResult.skippedSignedOut()
+  const PullResult.skippedSignedOut()
     : outcome = SyncPullOutcome.skippedSignedOut,
       ownRowsPulled = 0,
       sharedRowsPulled = 0,
-      photosDownloaded = 0;
+      photosDownloaded = 0,
+      ownImported = false,
+      sharedImported = false,
+      errors = const [];
 
   final SyncPullOutcome outcome;
 
   /// Total row count FETCHED from the signed-in user's own cloud rows
   /// (across all nine tables). Note this counts rows received, not rows
   /// actually WRITTEN locally — a row older than its local counterpart is
-  /// fetched but then skipped by last-write-wins during import. Always 0
-  /// when [outcome] isn't [SyncPullOutcome.pulled].
+  /// fetched but then skipped by last-write-wins during import. 0 when
+  /// [outcome] isn't [SyncPullOutcome.pulled], OR when the own-row fetch
+  /// itself failed (see [errors]).
   final int ownRowsPulled;
 
   /// Total row count FETCHED from every currently-shared topo (any owner),
-  /// same "fetched, not necessarily written" caveat as [ownRowsPulled].
-  /// Always 0 when [outcome] isn't [SyncPullOutcome.pulled].
+  /// same "fetched, not necessarily written" caveat as [ownRowsPulled]. 0
+  /// when [outcome] isn't [SyncPullOutcome.pulled], OR when every shared
+  /// sub-fetch failed (a partial shared failure still reports whatever the
+  /// OTHER shared sub-fetches returned — see [errors]).
   final int sharedRowsPulled;
 
   /// Number of distinct photo files actually downloaded (own + shared
   /// combined; excludes rows whose remote object was missing, which are
-  /// skipped gracefully). Always 0 when [outcome] isn't
+  /// skipped gracefully, and excludes a side whose photo-download section
+  /// threw — see [errors]). Always 0 when [outcome] isn't
   /// [SyncPullOutcome.pulled].
   final int photosDownloaded;
+
+  /// True when the signed-in user's OWN rows were successfully fetched AND
+  /// imported this call. `false` when signed out, or when the own-row
+  /// fetch/import threw (see [errors]) — critically, a failure in the
+  /// SHARED section(s) below can never flip this to `false` (that
+  /// cross-contamination was the #72 bug: a single shared-fetch exception
+  /// used to abort the own import too).
+  final bool ownImported;
+
+  /// True when the shared import (every currently-shared topo + shared
+  /// ascent row gathered from whichever shared sub-fetches succeeded) was
+  /// successfully written locally this call. `false` when signed out, when
+  /// the shared import itself threw, or trivially when there was nothing to
+  /// import — never influenced by whether [ownImported] succeeded or not.
+  final bool sharedImported;
+
+  /// One human-readable message per section that threw during this call —
+  /// own-rows fetch/photo-download/import, shared-topos fetch,
+  /// shared-ascents fetch, profiles fetch, shared photo-download, or
+  /// shared import — each including the caught error's `toString()`. Empty
+  /// when every section succeeded (the common case).
+  final List<String> errors;
 
   bool get didPull => outcome == SyncPullOutcome.pulled;
 
   @override
   String toString() =>
-      'PullSyncResult(outcome: $outcome, ownRowsPulled: $ownRowsPulled, '
+      'PullResult(outcome: $outcome, ownRowsPulled: $ownRowsPulled, '
       'sharedRowsPulled: $sharedRowsPulled, '
-      'photosDownloaded: $photosDownloaded)';
+      'photosDownloaded: $photosDownloaded, ownImported: $ownImported, '
+      'sharedImported: $sharedImported, errors: $errors)';
 }
 
 /// Row-level cloud sync engine (P2 of the sync pivot): pushes the signed-in
@@ -336,13 +379,91 @@ class SyncService {
   /// the UI can tell a pulled shared topo apart from the signed-in user's
   /// own data.
   ///
+  /// P0 fix (#72, "fresh install syncs nothing after login"): every
+  /// independent section below — own (fetch + own photo-download + own
+  /// import), shared-topos fetch, shared-ascents fetch, profiles fetch,
+  /// shared photo-download, and the shared import — runs inside its OWN
+  /// try/catch. A throw ANYWHERE (the original trigger was a null field in
+  /// one cloud row hitting a non-null `as String` cast in the shared-topo/
+  /// ascent fetch — see [SyncRemote.fetchSharedTopos]/[fetchSharedAscents]
+  /// for the accompanying per-row guard) is caught, recorded in
+  /// [PullResult.errors], and does NOT prevent the OTHER sections from
+  /// running — most importantly, the own section is fetched+imported
+  /// FIRST and in total isolation, so a broken shared fetch can never again
+  /// leave a fresh install with EVERYTHING empty. Never throws.
+  ///
   /// No-ops (never throws) when signed out.
-  Future<PullSyncResult> pullOwnAndShared() async {
+  Future<PullResult> pullOwnAndShared() async {
     final uid = _authRepository.currentSession.uid;
-    if (uid == null) return const PullSyncResult.skippedSignedOut();
+    if (uid == null) return const PullResult.skippedSignedOut();
 
-    final ownTables = await _remote.fetchOwnRows(uid);
-    final sharedTables = await _remote.fetchSharedTopos();
+    var ownRowsPulled = 0;
+    var sharedRowsPulled = 0;
+    var ownPhotosDownloaded = 0;
+    var sharedPhotosDownloaded = 0;
+    var ownImported = false;
+    var sharedImported = false;
+    final errors = <String>[];
+
+    // ---- OWN section ----------------------------------------------------
+    // Fetched, its photos downloaded, and imported FIRST and entirely
+    // before any shared fetch is even attempted — the signed-in user's own
+    // topos must come back on a fresh install regardless of what happens
+    // below.
+    var ownFetchOk = false;
+    var ownHadError = false;
+    var ownTables = <String, List<Map<String, dynamic>>>{};
+    try {
+      ownTables = await _remote.fetchOwnRows(uid);
+      ownRowsPulled = _countRows(ownTables);
+      ownFetchOk = true;
+    } catch (e) {
+      ownHadError = true;
+      errors.add('own rows fetch failed: $e');
+    }
+
+    if (ownFetchOk) {
+      try {
+        ownPhotosDownloaded = await _downloadAndRewritePhotos(
+          ownTables,
+          (canonicalId, ext) =>
+              _remote.downloadPhoto(uid: uid, objectPath: '$uid/$canonicalId$ext'),
+        );
+      } catch (e) {
+        ownHadError = true;
+        errors.add('own photo downloads failed: $e');
+      }
+
+      try {
+        await _backupRepository.importSnapshot({'tables': ownTables}, mode: ConflictMode.lww);
+        // ownImported reflects the WHOLE own pipeline (fetch + photo
+        // download + import), not just this final write — a hiccup earlier
+        // (e.g. the photo download) still means "own" wasn't a clean,
+        // fully-successful pull this time, even though the rows themselves
+        // did get written.
+        ownImported = !ownHadError;
+      } catch (e) {
+        errors.add('own rows import failed: $e');
+      }
+    }
+
+    // ---- SHARED section(s) -----------------------------------------------
+    // Every currently-shared topo (any owner) — gathered from FOUR
+    // independent sub-fetches (shared topos, shared ascents, profiles) plus
+    // a photo-download pass, each isolated so one failing sub-fetch can't
+    // lose rows another sub-fetch already gathered; the final shared
+    // import is isolated too, so a photo-download exception (e.g. a
+    // Storage error) still lets the metadata rows import (minus their
+    // photo bytes) rather than losing the whole shared batch.
+    final sharedTables = <String, List<Map<String, dynamic>>>{};
+    var sharedHadError = false;
+
+    try {
+      sharedTables.addAll(await _remote.fetchSharedTopos());
+    } catch (e) {
+      sharedHadError = true;
+      errors.add('shared topos fetch failed: $e');
+    }
 
     // Feature #12 (public opt-in ascent logs): pull every OTHER owner's
     // opt-in-`shared` ascents via the separate fetchSharedAscents call and
@@ -364,14 +485,22 @@ class SyncService {
     // AND host to a shared ascent would otherwise get double-fetched rows,
     // which is harmless (idempotent per-id upsert on import) but the
     // concatenation avoids silently dropping either side's rows.
-    final sharedAscentTables = await _remote.fetchSharedAscents();
-    for (final key in const ['areas', 'sectors', 'walls', 'photos', 'routes']) {
-      sharedTables[key] = [
-        ...(sharedTables[key] ?? const []),
-        ...(sharedAscentTables[key] ?? const []),
+    try {
+      final sharedAscentTables = await _remote.fetchSharedAscents();
+      for (final key in const ['areas', 'sectors', 'walls', 'photos', 'routes']) {
+        sharedTables[key] = [
+          ...(sharedTables[key] ?? const []),
+          ...(sharedAscentTables[key] ?? const []),
+        ];
+      }
+      sharedTables['ascents'] = [
+        ...(sharedTables['ascents'] ?? const []),
+        ...(sharedAscentTables['ascents'] ?? const []),
       ];
+    } catch (e) {
+      sharedHadError = true;
+      errors.add('shared ascents fetch failed: $e');
     }
-    sharedTables['ascents'] = sharedAscentTables['ascents'] ?? const [];
 
     // Resolve display-name profiles for every uid a pulled SHARED row is
     // attributed to (e.g. a shared topo's owner), plus the signed-in user's
@@ -384,38 +513,49 @@ class SyncService {
     // every other shared row below; re-including the own uid here is
     // harmless (idempotent LWW re-write of the same row already imported
     // from `ownTables`).
-    final profileUids = <String>{uid};
-    for (final rows in sharedTables.values) {
-      for (final row in rows) {
-        final ownerId = row['ownerId'] as String?;
-        if (ownerId != null) profileUids.add(ownerId);
+    try {
+      final profileUids = <String>{uid};
+      for (final rows in sharedTables.values) {
+        for (final row in rows) {
+          final ownerId = row['ownerId'] as String?;
+          if (ownerId != null) profileUids.add(ownerId);
+        }
       }
+      sharedTables['profiles'] = await _remote.fetchProfiles(profileUids);
+    } catch (e) {
+      sharedHadError = true;
+      errors.add('profiles fetch failed: $e');
     }
-    sharedTables['profiles'] = await _remote.fetchProfiles(profileUids);
 
-    final ownPhotosDownloaded = await _downloadAndRewritePhotos(
-      ownTables,
-      (canonicalId, ext) =>
-          _remote.downloadPhoto(uid: uid, objectPath: '$uid/$canonicalId$ext'),
-    );
-    final sharedPhotosDownloaded = await _downloadAndRewritePhotos(
-      sharedTables,
-      (canonicalId, ext) => _remote.downloadSharedPhoto(sharedPhotoPath(canonicalId, ext)),
-    );
+    sharedRowsPulled = _countRows(sharedTables);
 
-    // Own rows first, then shared — order doesn't matter for correctness
-    // (distinct row ids on each side in the normal case; per-row LWW would
-    // make either order safe even if they overlapped), but pushing the
-    // user's own data through the identical, already-tested
-    // BackupRepository.importSnapshot() path first keeps this readable as
-    // "restore mine, then layer in everyone else's shared topos".
-    await _backupRepository.importSnapshot({'tables': ownTables}, mode: ConflictMode.lww);
-    await _backupRepository.importSnapshot({'tables': sharedTables}, mode: ConflictMode.lww);
+    try {
+      sharedPhotosDownloaded = await _downloadAndRewritePhotos(
+        sharedTables,
+        (canonicalId, ext) => _remote.downloadSharedPhoto(sharedPhotoPath(canonicalId, ext)),
+      );
+    } catch (e) {
+      sharedHadError = true;
+      errors.add('shared photo downloads failed: $e');
+    }
 
-    return PullSyncResult.pulled(
-      ownRowsPulled: _countRows(ownTables),
-      sharedRowsPulled: _countRows(sharedTables),
+    try {
+      await _backupRepository.importSnapshot({'tables': sharedTables}, mode: ConflictMode.lww);
+      // sharedImported reflects the WHOLE shared pipeline (shared-topos +
+      // shared-ascents + profiles fetches, photo downloads, and this final
+      // import), not just this write — mirrors ownImported above.
+      sharedImported = !sharedHadError;
+    } catch (e) {
+      errors.add('shared rows import failed: $e');
+    }
+
+    return PullResult.pulled(
+      ownRowsPulled: ownRowsPulled,
+      sharedRowsPulled: sharedRowsPulled,
       photosDownloaded: ownPhotosDownloaded + sharedPhotosDownloaded,
+      ownImported: ownImported,
+      sharedImported: sharedImported,
+      errors: errors,
     );
   }
 
@@ -465,7 +605,7 @@ class SyncService {
   }
 
   /// Total row count across every table in [tables] (rows FETCHED, not
-  /// necessarily written locally — see [PullSyncResult.ownRowsPulled]).
+  /// necessarily written locally — see [PullResult.ownRowsPulled]).
   int _countRows(Map<String, List<Map<String, dynamic>>> tables) =>
       tables.values.fold<int>(0, (sum, rows) => sum + rows.length);
 

@@ -1,5 +1,4 @@
-import 'dart:typed_data';
-
+import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 /// The nine row-level tables this app syncs, in FK dependency order
@@ -234,6 +233,50 @@ String sharedPhotoPath(String photoId, String ext) => 'shared/$photoId$ext';
 bool shouldPushLww({required int localUpdatedAt, required int? remoteUpdatedAt}) =>
     remoteUpdatedAt == null || localUpdatedAt >= remoteUpdatedAt;
 
+/// True when every field named in [requiredFields] is present in [row] as a
+/// non-null [String] — the guard [SupabaseSyncRemote.fetchOwnRows],
+/// [SupabaseSyncRemote.fetchSharedTopos], and
+/// [SupabaseSyncRemote.fetchSharedAscents] apply to each row (via
+/// [filterValidSyncRows]) before using any of [requiredFields] as an FK id
+/// to derive a follow-up query, or before returning the row at all.
+///
+/// P0 fix (#72, "fresh install syncs nothing after login"): a cloud row
+/// with an unexpectedly-null required column used to hit a non-null
+/// `as String` cast and throw, aborting the WHOLE fetch (and, upstream, the
+/// whole pull — see `SyncService.pullOwnAndShared`'s per-section isolation
+/// for the other half of this fix). This predicate lets the fetch SKIP just
+/// that one malformed row instead.
+bool hasRequiredSyncFields(Map<String, dynamic> row, List<String> requiredFields) {
+  for (final field in requiredFields) {
+    if (row[field] is! String) return false;
+  }
+  return true;
+}
+
+/// Filters [rows] down to those satisfying [hasRequiredSyncFields] for
+/// [requiredFields] — every OTHER (valid) row in the same batch still
+/// passes through untouched. A dropped row is logged via [debugPrint]
+/// (tagged with [debugLabel], e.g. `'shared wall'`) rather than silently
+/// vanishing, to aid diagnosing a real backend data-quality issue.
+List<Map<String, dynamic>> filterValidSyncRows(
+  Iterable<Map<String, dynamic>> rows,
+  List<String> requiredFields, {
+  required String debugLabel,
+}) {
+  final result = <Map<String, dynamic>>[];
+  for (final row in rows) {
+    if (hasRequiredSyncFields(row, requiredFields)) {
+      result.add(row);
+    } else {
+      debugPrint(
+        'SyncRemote: skipping malformed $debugLabel row (missing one of '
+        '$requiredFields as a non-null String): $row',
+      );
+    }
+  }
+  return result;
+}
+
 /// Real [SyncRemote], backed by the Supabase client.
 ///
 /// LIVE: all eight tables (`areas`/`sectors`/`walls`/`photos`/`routes`/
@@ -295,7 +338,11 @@ class SupabaseSyncRemote implements SyncRemote {
     final result = <String, List<Map<String, dynamic>>>{};
     for (final tableName in syncTableNames) {
       final rows = await _client.from(tableName).select().eq('ownerId', uid);
-      result[tableName] = [for (final row in rows) Map<String, dynamic>.from(row)];
+      final mapped = [for (final row in rows) Map<String, dynamic>.from(row)];
+      // `id` is every table's primary key — a row missing it can never be
+      // imported locally anyway, so it's skipped here rather than left to
+      // throw deeper in BackupRepository.importSnapshot (P0 fix, #72).
+      result[tableName] = filterValidSyncRows(mapped, const ['id'], debugLabel: 'own $tableName');
     }
     return result;
   }
@@ -310,10 +357,16 @@ class SupabaseSyncRemote implements SyncRemote {
     // `visibility` column of its own to filter on; it would need to derive
     // "ancestor of a shared wall" the same way this client-side code does,
     // e.g. via a security-definer function.
-    final wallRows = <Map<String, dynamic>>[
+    final rawWalls = <Map<String, dynamic>>[
       for (final row in await _client.from('walls').select().eq('visibility', 'shared'))
         Map<String, dynamic>.from(row),
     ];
+    // `id`/`sectorId` are both used below to derive follow-up queries (and
+    // `sectorId` is a NOT NULL FK), so a wall row missing either is skipped
+    // rather than throwing on the non-null `as String` casts that used to
+    // sit here directly — a single malformed row must not abort the whole
+    // fetch (P0 fix, #72; see [hasRequiredSyncFields]/[filterValidSyncRows]).
+    final wallRows = filterValidSyncRows(rawWalls, const ['id', 'sectorId'], debugLabel: 'shared wall');
     if (wallRows.isEmpty) {
       return {
         'areas': <Map<String, dynamic>>[],
@@ -330,32 +383,46 @@ class SupabaseSyncRemote implements SyncRemote {
     final wallIds = [for (final w in wallRows) w['id'] as String];
     final sectorIds = {for (final w in wallRows) w['sectorId'] as String}.toList();
 
-    final sectorRows = <Map<String, dynamic>>[
+    final rawSectors = <Map<String, dynamic>>[
       for (final row in await _client.from('sectors').select().inFilter('id', sectorIds))
         Map<String, dynamic>.from(row),
     ];
+    final sectorRows = filterValidSyncRows(
+      rawSectors,
+      const ['id', 'areaId'],
+      debugLabel: 'shared sector',
+    );
     final areaIds = {for (final s in sectorRows) s['areaId'] as String}.toList();
 
-    final areaRows = <Map<String, dynamic>>[
+    final rawAreas = <Map<String, dynamic>>[
       for (final row in await _client.from('areas').select().inFilter('id', areaIds))
         Map<String, dynamic>.from(row),
     ];
-    final photoRows = <Map<String, dynamic>>[
+    final areaRows = filterValidSyncRows(rawAreas, const ['id'], debugLabel: 'shared area');
+
+    final rawPhotos = <Map<String, dynamic>>[
       for (final row in await _client.from('photos').select().inFilter('wallId', wallIds))
         Map<String, dynamic>.from(row),
     ];
-    final routeRows = <Map<String, dynamic>>[
+    final photoRows = filterValidSyncRows(rawPhotos, const ['id'], debugLabel: 'shared photo');
+
+    final rawRoutes = <Map<String, dynamic>>[
       for (final row in await _client.from('routes').select().inFilter('wallId', wallIds))
         Map<String, dynamic>.from(row),
     ];
-    final commentRows = <Map<String, dynamic>>[
+    final routeRows = filterValidSyncRows(rawRoutes, const ['id'], debugLabel: 'shared route');
+
+    final rawComments = <Map<String, dynamic>>[
       for (final row in await _client.from('comments').select().inFilter('wallId', wallIds))
         Map<String, dynamic>.from(row),
     ];
-    final likeRows = <Map<String, dynamic>>[
+    final commentRows = filterValidSyncRows(rawComments, const ['id'], debugLabel: 'shared comment');
+
+    final rawLikes = <Map<String, dynamic>>[
       for (final row in await _client.from('likes').select().inFilter('wallId', wallIds))
         Map<String, dynamic>.from(row),
     ];
+    final likeRows = filterValidSyncRows(rawLikes, const ['id'], debugLabel: 'shared like');
 
     return {
       'areas': areaRows,
@@ -371,10 +438,20 @@ class SupabaseSyncRemote implements SyncRemote {
 
   @override
   Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents() async {
-    final ascentRows = <Map<String, dynamic>>[
+    final rawAscents = <Map<String, dynamic>>[
       for (final row in await _client.from('ascents').select().eq('visibility', 'shared'))
         Map<String, dynamic>.from(row),
     ];
+    // `id`/`wallId`/`routeId` are all used below to derive follow-up
+    // queries (both NOT NULL FKs), so an ascent row missing any of them is
+    // skipped rather than throwing on the non-null `as String` casts that
+    // used to sit here directly (P0 fix, #72; see
+    // [hasRequiredSyncFields]/[filterValidSyncRows]).
+    final ascentRows = filterValidSyncRows(
+      rawAscents,
+      const ['id', 'wallId', 'routeId'],
+      debugLabel: 'shared ascent',
+    );
     if (ascentRows.isEmpty) {
       return {
         'areas': <Map<String, dynamic>>[],
@@ -393,29 +470,50 @@ class SupabaseSyncRemote implements SyncRemote {
     final wallIds = {for (final a in ascentRows) a['wallId'] as String}.toList();
     final routeIds = {for (final a in ascentRows) a['routeId'] as String}.toList();
 
-    final wallRows = <Map<String, dynamic>>[
+    final rawWalls = <Map<String, dynamic>>[
       for (final row in await _client.from('walls').select().inFilter('id', wallIds))
         Map<String, dynamic>.from(row),
     ];
+    final wallRows = filterValidSyncRows(
+      rawWalls,
+      const ['id', 'sectorId'],
+      debugLabel: 'shared-ascent wall',
+    );
     final sectorIds = {for (final w in wallRows) w['sectorId'] as String}.toList();
-    final sectorRows = <Map<String, dynamic>>[
+
+    final rawSectors = <Map<String, dynamic>>[
       for (final row in await _client.from('sectors').select().inFilter('id', sectorIds))
         Map<String, dynamic>.from(row),
     ];
+    final sectorRows = filterValidSyncRows(
+      rawSectors,
+      const ['id', 'areaId'],
+      debugLabel: 'shared-ascent sector',
+    );
     final areaIds = {for (final s in sectorRows) s['areaId'] as String}.toList();
-    final areaRows = <Map<String, dynamic>>[
+
+    final rawAreas = <Map<String, dynamic>>[
       for (final row in await _client.from('areas').select().inFilter('id', areaIds))
         Map<String, dynamic>.from(row),
     ];
-    final routeRows = <Map<String, dynamic>>[
+    final areaRows = filterValidSyncRows(rawAreas, const ['id'], debugLabel: 'shared-ascent area');
+
+    final rawRoutes = <Map<String, dynamic>>[
       for (final row in await _client.from('routes').select().inFilter('id', routeIds))
         Map<String, dynamic>.from(row),
     ];
+    final routeRows = filterValidSyncRows(
+      rawRoutes,
+      const ['id', 'photoId'],
+      debugLabel: 'shared-ascent route',
+    );
     final photoIds = {for (final r in routeRows) r['photoId'] as String}.toList();
-    final photoRows = <Map<String, dynamic>>[
+
+    final rawPhotos = <Map<String, dynamic>>[
       for (final row in await _client.from('photos').select().inFilter('id', photoIds))
         Map<String, dynamic>.from(row),
     ];
+    final photoRows = filterValidSyncRows(rawPhotos, const ['id'], debugLabel: 'shared-ascent photo');
 
     return {
       'areas': areaRows,
