@@ -89,10 +89,10 @@ void main() {
     test(
       'a JPEG with EXIF GPS tags for Budapest (47.4979 N, 19.0402 E) '
       'decodes back to approximately those coordinates',
-      () {
+      () async {
         final bytes = _buildJpegBytes(latitude: 47.4979, longitude: 19.0402);
 
-        final gps = extractGpsFromImageBytes(Uint8List.fromList(bytes));
+        final gps = await extractGpsFromImageBytes(Uint8List.fromList(bytes));
 
         expect(gps, isNotNull);
         // DMS round-tripping loses a little precision (seconds rounded to
@@ -106,10 +106,10 @@ void main() {
     test(
       'southern/western hemisphere refs (S/W) decode to NEGATIVE decimal '
       'degrees',
-      () {
+      () async {
         final bytes = _buildJpegBytes(latitude: -33.8688, longitude: -70.6483);
 
-        final gps = extractGpsFromImageBytes(Uint8List.fromList(bytes));
+        final gps = await extractGpsFromImageBytes(Uint8List.fromList(bytes));
 
         expect(gps, isNotNull);
         expect(gps!.latitude, closeTo(-33.8688, 1e-4));
@@ -117,32 +117,34 @@ void main() {
       },
     );
 
-    test('a JPEG with no GPS EXIF tags at all returns null', () {
+    test('a JPEG with no GPS EXIF tags at all returns null', () async {
       final bytes = _buildJpegBytes();
 
-      final gps = extractGpsFromImageBytes(Uint8List.fromList(bytes));
+      final gps = await extractGpsFromImageBytes(Uint8List.fromList(bytes));
 
       expect(gps, isNull);
     });
 
-    test('non-image/garbage bytes return null, never throw', () {
+    test('non-image/garbage bytes return null, never throw', () async {
       final garbage = Uint8List.fromList(List<int>.filled(32, 0xFF));
 
-      expect(() => extractGpsFromImageBytes(garbage), returnsNormally);
-      expect(extractGpsFromImageBytes(garbage), isNull);
+      // Preserves the original two-fold intent (no throw, AND the
+      // completed value is null): `completion(isNull)` only matches if the
+      // future completes successfully with a null value, so any thrown
+      // error still fails the test just as `returnsNormally` would have.
+      await expectLater(extractGpsFromImageBytes(garbage), completion(isNull));
     });
 
-    test('empty bytes return null, never throw', () {
+    test('empty bytes return null, never throw', () async {
       final empty = Uint8List.fromList(const []);
 
-      expect(() => extractGpsFromImageBytes(empty), returnsNormally);
-      expect(extractGpsFromImageBytes(empty), isNull);
+      await expectLater(extractGpsFromImageBytes(empty), completion(isNull));
     });
 
     test(
       'an out-of-range latitude (> 90 degrees) returns null (no coords), '
       'even though the longitude is a normal in-range value',
-      () {
+      () async {
         // 95 degrees is well outside a real latitude's [-90, 90] range but
         // is a perfectly representable DMS value (nothing in the DMS
         // encoding itself constrains the degrees component), so this is
@@ -150,7 +152,7 @@ void main() {
         // exists to reject.
         final bytes = _buildJpegBytes(latitude: 95.0, longitude: 19.0402);
 
-        final gps = extractGpsFromImageBytes(Uint8List.fromList(bytes));
+        final gps = await extractGpsFromImageBytes(Uint8List.fromList(bytes));
 
         expect(gps, isNull);
       },
@@ -159,10 +161,10 @@ void main() {
     test(
       'an out-of-range longitude (> 180 degrees) returns null (no coords), '
       'even though the latitude is a normal in-range value',
-      () {
+      () async {
         final bytes = _buildJpegBytes(latitude: 47.4979, longitude: 200.0);
 
-        final gps = extractGpsFromImageBytes(Uint8List.fromList(bytes));
+        final gps = await extractGpsFromImageBytes(Uint8List.fromList(bytes));
 
         expect(gps, isNull);
       },
@@ -171,13 +173,13 @@ void main() {
     test(
       'an empty GPSLatitudeRef (present tag, empty string) returns null, '
       'never defaults to the positive (N) hemisphere',
-      () {
+      () async {
         final bytes = _buildJpegBytesWithRawGpsRefs(
           latitudeRef: '',
           longitudeRef: 'E',
         );
 
-        final gps = extractGpsFromImageBytes(Uint8List.fromList(bytes));
+        final gps = await extractGpsFromImageBytes(Uint8List.fromList(bytes));
 
         expect(gps, isNull);
       },
@@ -186,13 +188,13 @@ void main() {
     test(
       'an unexpected GPSLongitudeRef letter (neither E nor W) returns '
       'null, never defaults to the positive (E) hemisphere',
-      () {
+      () async {
         final bytes = _buildJpegBytesWithRawGpsRefs(
           latitudeRef: 'N',
           longitudeRef: 'Q',
         );
 
-        final gps = extractGpsFromImageBytes(Uint8List.fromList(bytes));
+        final gps = await extractGpsFromImageBytes(Uint8List.fromList(bytes));
 
         expect(gps, isNull);
       },

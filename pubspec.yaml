@@ -77,6 +77,7 @@ dependencies:
   # is unavailable), so this has no native effect.
   flutter_web_plugins:
     sdk: flutter
+  exif: ^3.3.0
 
 dev_dependencies:
   flutter_test:

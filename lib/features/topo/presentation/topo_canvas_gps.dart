@@ -81,7 +81,7 @@ Future<GpsCaptureResult> captureWallGpsFromPhoto(
 }) async {
   try {
     final bytes = await xfile.readAsBytes();
-    final gps = extractGpsFromImageBytes(bytes);
+    final gps = await extractGpsFromImageBytes(bytes);
     if (gps != null) {
       await libraryRepo.setWallCoordinates(
         wallId,
