@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:math' show min;
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show StandardMessageCodec;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -887,19 +888,30 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
           }
         }
 
-        final overlay = IgnorePointer(
-          child: CustomPaint(
-            painter: ArOverlayPainter(
-              routes: widget.routes,
-              refSize: widget.refSize,
-              homography: homography,
-              palette: kRoutePalette,
-              confidence: confidence,
-              routeColorResolver: topoRouteColor,
-              outline: showOutline ? widget.outline : null,
-              rockBox: highlightRock ? arState.rockBox : null,
+        // RepaintBoundary: this overlay repaints every alignment frame (a
+        // fresh homography warp on every ARKit/manual-gesture update, for
+        // the whole life of the AR session) — isolating it into its own
+        // compositor layer means those per-frame repaints stay local to
+        // this layer instead of forcing the camera view (widget.cameraView
+        // -- a real DOM <video> via PlatformView on web, a UiKitView on
+        // iOS) and the rest of the Stack to re-composite alongside it every
+        // time. Harmless/beneficial on both platforms; painter logic itself
+        // is untouched.
+        final overlay = RepaintBoundary(
+          child: IgnorePointer(
+            child: CustomPaint(
+              painter: ArOverlayPainter(
+                routes: widget.routes,
+                refSize: widget.refSize,
+                homography: homography,
+                palette: kRoutePalette,
+                confidence: confidence,
+                routeColorResolver: topoRouteColor,
+                outline: showOutline ? widget.outline : null,
+                rockBox: highlightRock ? arState.rockBox : null,
+              ),
+              child: const SizedBox.expand(),
             ),
-            child: const SizedBox.expand(),
           ),
         );
 
@@ -1042,27 +1054,53 @@ class _ArStatus extends StatelessWidget {
     // fill + kMasiAmbientShadow, via GlassChrome) as the topo canvas's own
     // floating chrome, instead of a hardcoded Colors.black54 pill with raw
     // white text — see the UX finding this addresses.
+    //
+    // Web exception (kIsWeb): on web, whatever sits beneath this pill is a
+    // real DOM <video> rendered via a PlatformView (see
+    // ar_camera_view_web.dart's HtmlElementView), not a Flutter-painted
+    // layer — the camera feed keeps updating for the entire life of the AR
+    // session. GlassChrome's BackdropFilter can't cheaply (or correctly)
+    // sample a platform view underneath it, so stacking it directly over
+    // that live video forces expensive cross-layer compositing work every
+    // single frame. On web this renders the SAME rounded shape, padding,
+    // and label/hint text styling as a solid, translucent
+    // MasiColors.chrome-tinted box instead — border + boxShadow matched to
+    // GlassChrome's own tintedCard so the two stay visually as close as
+    // possible; the only real difference is the missing frosted blur (and
+    // GlassChrome's extra neutral scrim layer, which only exists to tame a
+    // *blurred* backdrop and has nothing to mute here). Native (iOS) keeps
+    // calling GlassChrome exactly as before — this branch never runs there.
+    final statusContent = Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          key: const Key('ar-mode-label'),
+          style: TextStyle(color: colors.ink, fontWeight: FontWeight.bold),
+        ),
+        Text(
+          hint,
+          key: const Key('ar-hint'),
+          style: TextStyle(color: colors.ink2, fontSize: 12),
+        ),
+      ],
+    );
+    const pillPadding = EdgeInsets.symmetric(horizontal: 10, vertical: 6);
     final pill = ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 200),
-      child: GlassChrome(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              label,
-              key: const Key('ar-mode-label'),
-              style: TextStyle(color: colors.ink, fontWeight: FontWeight.bold),
-            ),
-            Text(
-              hint,
-              key: const Key('ar-hint'),
-              style: TextStyle(color: colors.ink2, fontSize: 12),
-            ),
-          ],
-        ),
-      ),
+      child: kIsWeb
+          ? Container(
+              padding: pillPadding,
+              decoration: BoxDecoration(
+                color: colors.chrome,
+                borderRadius: BorderRadius.circular(MasiRadii.large),
+                border: Border.all(color: colors.separator),
+                boxShadow: kMasiAmbientShadow,
+              ),
+              child: statusContent,
+            )
+          : GlassChrome(padding: pillPadding, child: statusContent),
     );
     if (onRetry == null) return pill;
     return GestureDetector(
