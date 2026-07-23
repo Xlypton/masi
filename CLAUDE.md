@@ -180,3 +180,37 @@ Commit **without being asked**. The goal is a clean, granular history we can rea
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
 - Never commit secrets (the `~/.config/climbtopo-mgmt-token`, any `sb_secret_…`/`sbp_…` key). The client
   uses only the anon/publishable key.
+
+## Supabase backend — auto-troubleshoot + schema edits (DEV env, standing approval)
+
+The live Supabase project is a **dev environment**; the user has given standing approval (2026-07-23) to
+**inspect and edit its schema directly** to troubleshoot sync/backend issues — no need to ask each time.
+The REST/PostgREST API can't run DDL, so use the **Management API** `POST
+https://api.supabase.com/v1/projects/{ref}/database/query` (the same endpoint the Dashboard SQL editor uses),
+which executes arbitrary SQL and returns JSON (`[]` for DDL success, rows for SELECT).
+
+- **Project ref:** `mnaipcqbkqzffgvxpato` (from `SUPABASE_URL` in `lib/core/config/supabase_config.dart`).
+- **Admin token:** a `sbp_…` personal access token in `~/.config/climbtopo-mgmt-token` — read it into a var,
+  **never print or commit it** (the app itself only ever uses the anon key; this token is admin-only, for
+  this workflow). `TOKEN="$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)"`.
+- **Recipe:**
+  ```bash
+  REF=mnaipcqbkqzffgvxpato
+  TOKEN="$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)"
+  API="https://api.supabase.com/v1/projects/$REF/database/query"
+  # inspect (SELECT):
+  curl -sS -X POST "$API" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    --data "$(jq -n --arg q 'SELECT ...;' '{query:$q}')" | jq .
+  # apply a whole .sql file (DDL):
+  curl -sS -X POST "$API" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+    --data "$(jq -Rs '{query: .}' path/to/migration.sql)"
+  ```
+- **Schema-drift is the recurring bug class here** (#64/#65/#72): local Drift schema runs ahead of live.
+  Delta migrations that must be hand-applied to live live in `supabase/migrations/*.sql` (+ the walls
+  lat/long ALTER documented in `supabase/schema.sql`). Keep every migration **idempotent** (`ADD COLUMN IF
+  NOT EXISTS`, `DROP POLICY IF EXISTS`+`CREATE`) and keep `schema.sql` in sync for fresh-run correctness.
+- **Classifier caveat:** a curl that reads the token file **and** hits the network is blocked by the
+  auto-mode permission classifier unless the user pre-authorizes it. To make it run automatically, the user
+  adds a Bash **allow** rule for this curl pattern in their settings; otherwise the user runs it via a
+  `! <cmd>` prompt (runs as the user). Standing verbal approval does NOT lift the classifier — a settings
+  rule does.
