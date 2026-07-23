@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show debugPrint;
+
 import '../../../core/db/app_database.dart' as db;
 
 /// Conflict-resolution strategy for [BackupRepository.importSnapshot].
@@ -22,12 +24,19 @@ enum ConflictMode {
 /// out for UI reads, but a backup must be a faithful mirror of local state
 /// so a restore doesn't resurrect a logically-deleted row as "not deleted".
 ///
-/// [importSnapshot] upserts every row by its `id` primary key inside a
-/// single [db.AppDatabase.transaction], in FK dependency order (Profiles →
-/// Areas → Sectors → Walls → Photos → Routes). Photos has a self-FK
-/// (`parentPhotoId`), so within Photos, rows with no parent (originals) are
-/// always imported before rows that reference a parent (slices), regardless
-/// of the order they appear in the snapshot.
+/// [importSnapshot] upserts every row by its `id` primary key, in FK
+/// dependency order (Profiles → Areas → Sectors → Walls → Photos → Routes →
+/// Ascents → Comments → Likes). Each table is imported inside its OWN
+/// [db.AppDatabase.transaction] rather than one transaction wrapping every
+/// table, so a malformed row that throws in one table only rolls back that
+/// table — every other table that already imported successfully persists.
+/// Any table that fails is recorded and importing continues with the rest;
+/// once all tables have been attempted, [importSnapshot] throws a single
+/// aggregate error if any table failed (callers still see a thrown error,
+/// but the tables that succeeded are not rolled back because of it). Photos
+/// has a self-FK (`parentPhotoId`), so within Photos, rows with no parent
+/// (originals) are always imported before rows that reference a parent
+/// (slices), regardless of the order they appear in the snapshot.
 class BackupRepository {
   BackupRepository(this._db);
 
@@ -65,26 +74,78 @@ class BackupRepository {
     ConflictMode mode = ConflictMode.replace,
   }) async {
     final tables = (snapshot['tables'] as Map).cast<String, dynamic>();
+    final failures = <String>[];
 
-    await _db.transaction(() async {
-      // Profiles have no FK deps (their `id` is the owning uid, not a
-      // caller-generated one referencing anything else), so they're
-      // imported first — matches [syncTableNames]'s ordering.
-      await _importProfiles(_rowsOf(tables, 'profiles'), mode);
-      await _importAreas(_rowsOf(tables, 'areas'), mode);
-      await _importSectors(_rowsOf(tables, 'sectors'), mode);
-      await _importWalls(_rowsOf(tables, 'walls'), mode);
-      await _importPhotos(_rowsOf(tables, 'photos'), mode);
-      await _importRoutes(_rowsOf(tables, 'routes'), mode);
-      // Ascents must be imported BEFORE Comments/Likes: Feature #12 (public
-      // opt-in ascent logs) added `Comments.ascentId`/`Likes.ascentId` FKs
-      // referencing `Ascents.id` (in addition to their pre-existing `wallId`
-      // FK), so a comment/like attached to an ascent would violate the FK
-      // (`PRAGMA foreign_keys = ON`) if imported before that ascent exists.
-      await _importAscents(_rowsOf(tables, 'ascents'), mode);
-      await _importComments(_rowsOf(tables, 'comments'), mode);
-      await _importLikes(_rowsOf(tables, 'likes'), mode);
-    });
+    // Runs one table's import inside its OWN transaction and isolates its
+    // failure: if `run` throws, only that table's transaction rolls back —
+    // tables already imported by earlier calls stay committed, and import
+    // continues with the remaining tables instead of aborting the whole
+    // section. This is the fix for the all-or-nothing bug where a single
+    // malformed row anywhere in a snapshot rolled back every table.
+    Future<void> importTable(String name, Future<void> Function() run) async {
+      try {
+        await _db.transaction(run);
+      } catch (e) {
+        failures.add('$name: $e');
+        debugPrint('importSnapshot: table "$name" failed to import: $e');
+      }
+    }
+
+    // Profiles have no FK deps (their `id` is the owning uid, not a
+    // caller-generated one referencing anything else), so they're
+    // imported first — matches [syncTableNames]'s ordering.
+    await importTable(
+      'profiles',
+      () => _importProfiles(_rowsOf(tables, 'profiles'), mode),
+    );
+    await importTable(
+      'areas',
+      () => _importAreas(_rowsOf(tables, 'areas'), mode),
+    );
+    await importTable(
+      'sectors',
+      () => _importSectors(_rowsOf(tables, 'sectors'), mode),
+    );
+    await importTable(
+      'walls',
+      () => _importWalls(_rowsOf(tables, 'walls'), mode),
+    );
+    await importTable(
+      'photos',
+      () => _importPhotos(_rowsOf(tables, 'photos'), mode),
+    );
+    await importTable(
+      'routes',
+      () => _importRoutes(_rowsOf(tables, 'routes'), mode),
+    );
+    // Ascents must be imported BEFORE Comments/Likes: Feature #12 (public
+    // opt-in ascent logs) added `Comments.ascentId`/`Likes.ascentId` FKs
+    // referencing `Ascents.id` (in addition to their pre-existing `wallId`
+    // FK), so a comment/like attached to an ascent would violate the FK
+    // (`PRAGMA foreign_keys = ON`) if imported before that ascent exists.
+    // Because each table now imports independently, a failed parent table
+    // (e.g. Walls) may cause a child table (e.g. Routes) to legitimately
+    // FK-violate and fail too — that's correct per-table isolation, not a
+    // bug: each failure is still independent and recorded below.
+    await importTable(
+      'ascents',
+      () => _importAscents(_rowsOf(tables, 'ascents'), mode),
+    );
+    await importTable(
+      'comments',
+      () => _importComments(_rowsOf(tables, 'comments'), mode),
+    );
+    await importTable(
+      'likes',
+      () => _importLikes(_rowsOf(tables, 'likes'), mode),
+    );
+
+    if (failures.isNotEmpty) {
+      throw StateError(
+        'importSnapshot: ${failures.length} table(s) failed: '
+        '${failures.join('; ')}',
+      );
+    }
   }
 
   List<Map<String, dynamic>> _rowsOf(Map<String, dynamic> tables, String key) {
@@ -311,7 +372,11 @@ class BackupRepository {
         : const <String, int>{};
 
     for (final json in rows) {
-      final ascent = db.Ascent.fromJson(json);
+      // `visibility` (Feature #12) is absent from pre-#12 snapshots; default it
+      // to the column's DB default so cross-version restore/sync never crashes
+      // on a non-null String cast in Ascent.fromJson. Any value present in
+      // `json` wins.
+      final ascent = db.Ascent.fromJson({'visibility': 'private', ...json});
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[ascent.id],
