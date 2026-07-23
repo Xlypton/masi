@@ -28,7 +28,15 @@
   <!-- iOS / PWA meta tags & icons -->
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <!-- black-translucent (NOT default): the status bar is transparent so the
+       app's theme-aware html/body background (light #F3F1F9 / dark #100D17,
+       below) paints right through it — seamless in both themes. `default`
+       reserves an opaque, non-theme-aware strip that meets the app background
+       below it, showing a hairline seam at the top in both light and dark
+       (bug #74). Content stays clear of the notch because viewport-fit=cover
+       feeds the top safe-area inset into Flutter's MediaQuery (same mechanism
+       that lifts the bottom nav off the home indicator, #63). -->
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Masi">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
 
