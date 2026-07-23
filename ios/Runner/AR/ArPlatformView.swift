@@ -117,23 +117,14 @@ extension ArPlatformView: ArSessionControlling {
             uiImage.imageOrientation.rawValue, rawCG.width, rawCG.height, uprightCG.width, uprightCG.height
         )
 
-        // Rock segmentation (iOS 17+, best-effort): crop the reference photo
-        // down to the detected foreground (the rock/wall) so ARKit's
-        // detectionImages target is tighter and less cluttered with
-        // background. Any failure (unsupported OS, no confident instance,
-        // Vision error) falls back to the full upright photo untouched --
-        // see `ArRockSegmentation.segmentAndCrop`.
-        var referenceCG = uprightCG
-        var rockQuadPercent: [Double]? = nil
-        var rockMask: RockMask? = nil
-        if let crop = ArRockSegmentation.segmentAndCrop(uprightCG) {
-            referenceCG = crop.cgImage
-            rockQuadPercent = crop.quadPercent
-            rockMask = crop.mask
-            NSLog("AR_DBG seg: using rock crop quad=\(crop.quadPercent)")
-        } else {
-            NSLog("AR_DBG seg: no crop, using full upright photo")
-        }
+        // Rock-box (Ship 1): the AR reference image is now ALWAYS the full
+        // upright photo -- no Vision foreground crop. The rock box itself is
+        // computed and drawn entirely in Dart from the tracked corners this
+        // view publishes, so native no longer needs to segment anything.
+        // `ArRockSegmentation`/`ArSegmentationChannelHandler` are left
+        // dormant in the target (unused, but still compiling) rather than
+        // removed.
+        NSLog("AR_DBG using full-photo reference image, no crop")
 
         // 0.3m is a nominal physical width -- ARKit only uses it to scale
         // the tracked image's pose in world space. Because we read the
@@ -141,7 +132,7 @@ extension ArPlatformView: ArSessionControlling {
         // ARKit derives from this same value plus the image's pixel aspect
         // ratio), the corner projection stays self-consistent regardless of
         // the real-world print size.
-        let ref = ARReferenceImage(referenceCG, orientation: .up, physicalWidth: 0.3)
+        let ref = ARReferenceImage(uprightCG, orientation: .up, physicalWidth: 0.3)
         referenceImage = ref
 
         guard ARWorldTrackingConfiguration.isSupported else {
@@ -163,7 +154,7 @@ extension ArPlatformView: ArSessionControlling {
             self.pinnedManualCorners = nil
             self.sceneView.session.run(config, options: [.resetTracking, .removeExistingAnchors])
             NSLog("AR_DBG ARKit world session.run detectionImages=1")
-            completion(true, rockQuadPercent, rockMask)
+            completion(true, nil, nil)
         }
     }
 

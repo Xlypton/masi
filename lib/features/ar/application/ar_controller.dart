@@ -1,5 +1,4 @@
-import 'dart:ui' as ui;
-import 'dart:ui' show Offset;
+import 'dart:ui' show Offset, Rect;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -36,52 +35,38 @@ class ArState {
     required this.mode,
     this.latest,
     required this.active,
-    this.rockQuadPercent,
-    this.rockMask,
+    this.rockBox,
   });
 
   final ArMode mode;
   final ArAlignment? latest;
   final bool active;
 
-  /// The native-reported rock/crop quad from the most recent `channel.start`
-  /// result (see `ar_channel.dart`'s `ArChannel.start` doc for the wire
-  /// contract): 4 fractional (0..1) corners of the ORIENTED full reference
-  /// photo, TL/TR/BR/BL. `null` means either no session has started yet, or
-  /// native found no confident segmentation — `ArAlignmentStage` treats both
-  /// the same way (fall back to the full-photo rect as the `fromQuad` source
-  /// quad). Set via [ArController.setRockSegmentation]; reset to `null` on
-  /// every AR-screen re-entry/wall switch (see `ar_screen.dart`'s
-  /// `_resetArViewState`) so a prior session's crop can never leak into a
-  /// new session that returns none.
-  final List<Offset>? rockQuadPercent;
-
-  /// The native-reported per-pixel rock mask from the most recent
-  /// `channel.start` result, expanded to a paint-ready [ui.Image] (see
-  /// `rock_mask_codec.dart`'s [decodeRockMaskAlpha] / `ar_channel.dart`'s
-  /// `ArChannel.start` doc for the wire contract). `null` means either no
-  /// session has started yet, or native found no confident segmentation.
-  /// Set via [ArController.setRockSegmentation]; reset to `null` on every
-  /// AR-screen re-entry/wall switch (see `ar_screen.dart`'s
-  /// `_resetArViewState`) alongside [rockQuadPercent], so a prior session's
-  /// mask can never leak into a new session that returns none. Surfaced by
-  /// the "highlight rock" toggle ([arRockHighlightProvider]) as a glowing
-  /// silhouette over the tracked wall.
-  final ui.Image? rockMask;
+  /// The route-derived rock bounding box for the current session (see
+  /// `rock_box.dart`'s `rockBoxFromRoutes` — Ship 1 of the #68 AR overhaul:
+  /// this REPLACES the earlier Vision-based foreground-segmentation quad/
+  /// mask, which selected PEOPLE instead of the rock), in 0..1 fractions of
+  /// the ORIENTED full reference photo, TL/TR/BR/BL via
+  /// `rock_box.dart`'s `rockBoxCornersNorm`. `null` means either no session
+  /// has started yet, or the wall's routes have no geometry to derive a box
+  /// from — `ArAlignmentStage` treats both the same way (fall back to the
+  /// full-photo rect as the `fromQuad` source quad; no highlight to paint).
+  /// Set via [ArController.setRockBox]; reset to `null` on every AR-screen
+  /// re-entry/wall switch (see `ar_screen.dart`'s `_resetArViewState`) so a
+  /// prior session's box can never leak into a new session.
+  final Rect? rockBox;
 
   ArState copyWith({
     ArMode? mode,
     ArAlignment? latest,
     bool? active,
-    List<Offset>? rockQuadPercent,
-    ui.Image? rockMask,
+    Rect? rockBox,
   }) {
     return ArState(
       mode: mode ?? this.mode,
       latest: latest ?? this.latest,
       active: active ?? this.active,
-      rockQuadPercent: rockQuadPercent ?? this.rockQuadPercent,
-      rockMask: rockMask ?? this.rockMask,
+      rockBox: rockBox ?? this.rockBox,
     );
   }
 
@@ -92,32 +77,16 @@ class ArState {
         other.mode == mode &&
         other.latest == latest &&
         other.active == active &&
-        other.rockMask == rockMask &&
-        _quadEqual(other.rockQuadPercent, rockQuadPercent);
-  }
-
-  static bool _quadEqual(List<Offset>? a, List<Offset>? b) {
-    if (a == null || b == null) return a == b;
-    if (a.length != b.length) return false;
-    for (int i = 0; i < a.length; i++) {
-      if (a[i] != b[i]) return false;
-    }
-    return true;
+        other.rockBox == rockBox;
   }
 
   @override
-  int get hashCode => Object.hash(
-    mode,
-    latest,
-    active,
-    rockQuadPercent == null ? null : Object.hashAll(rockQuadPercent!),
-    rockMask,
-  );
+  int get hashCode => Object.hash(mode, latest, active, rockBox);
 
   @override
   String toString() =>
       'ArState(mode: $mode, latest: $latest, active: $active, '
-      'rockQuadPercent: $rockQuadPercent, rockMask: $rockMask)';
+      'rockBox: $rockBox)';
 }
 
 /// Holds [ArState] and mediates mode changes/alignment updates for the AR
@@ -188,29 +157,26 @@ class ArController extends Notifier<ArState> {
     state = state.copyWith(active: active);
   }
 
-  /// Records the native-reported rock segmentation from the most recent
-  /// `channel.start` result — both the crop [quadPercent] (see
-  /// [ArState.rockQuadPercent]) and the per-pixel [mask] (see
-  /// [ArState.rockMask]) — or clears BOTH back to `null` (called with no
-  /// args by `ar_screen.dart`'s `_resetArViewState` on every AR-screen
-  /// re-entry/wall switch).
+  /// Records the route-derived rock box (see `rock_box.dart`'s
+  /// `rockBoxFromRoutes`) for the current session, or clears it back to
+  /// `null` (called with `null` by `ar_screen.dart`'s `_resetArViewState` on
+  /// every AR-screen re-entry/wall switch).
   ///
   /// Deliberately builds a fresh [ArState] directly rather than through
   /// [ArState.copyWith]: copyWith's `newValue ?? this.field` pattern (the
   /// same idiom every other nullable field on this class uses) can never
-  /// null out an already-set field, since passing `null` for [quadPercent]/
-  /// [mask] just falls through to the CURRENT value. These two fields
-  /// specifically must be resettable to `null` on demand (both together, on
-  /// a wall switch, or independently when native returns only one of them),
-  /// so they need a real reset path rather than that shared (and, for every
-  /// other field, harmless) limitation.
-  void setRockSegmentation({List<Offset>? quadPercent, ui.Image? mask}) {
+  /// null out an already-set field, since passing `null` for [box] would
+  /// just fall through to the CURRENT value. [ArState.rockBox] specifically
+  /// must be resettable to `null` on demand (a wall switch, or a wall whose
+  /// routes have no geometry to derive a box from), so it needs a real
+  /// reset path rather than that shared (and, for every other field,
+  /// harmless) limitation.
+  void setRockBox(Rect? box) {
     state = ArState(
       mode: state.mode,
       latest: state.latest,
       active: state.active,
-      rockQuadPercent: quadPercent,
-      rockMask: mask,
+      rockBox: box,
     );
   }
 
@@ -253,9 +219,9 @@ class ArLockedController extends Notifier<bool> {
 }
 
 /// Whether the "highlight rock" overlay is currently on: while on, the AR
-/// overlay paints the native-reported rock mask ([ArState.rockMask]) as a
-/// flat glowing silhouette over the tracked wall, so the user can see exactly
-/// which surface AR segmented the route onto. Defaults to off.
+/// overlay paints the route-derived rock box ([ArState.rockBox]) as a
+/// tinted outline over the tracked wall, so the user can see the (coarse)
+/// area AR considers "the rock" the routes are drawn on. Defaults to off.
 ///
 /// An app-lifetime singleton mirroring [arLockedProvider] — flipped by the
 /// "highlight rock" FAB ([_ArControls]'s `ar-highlight-rock-toggle`).

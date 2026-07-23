@@ -1,63 +1,79 @@
-import 'dart:ui' as ui;
-
 import 'package:flutter/material.dart';
 
-/// The translucent tint the rock mask is painted with. The decoded mask image
-/// (see `decodeRockMaskAlpha`) is a per-texel alpha stencil (0 or 255 alpha)
-/// with a constant baked RGB; this [ColorFilter] recolors it to this tint via
-/// [BlendMode.srcIn] (output = tint.rgb, alpha = tint.alpha * maskAlpha), so
-/// the highlight reads as a semi-transparent wash over the rock rather than an
-/// opaque fill that would hide the photo underneath. Cyan reads well over most
-/// rock/foliage.
-const Color _kRockHighlightTint = Color(0x6600E5FF);
+import 'package:masi/core/coordinates/coordinate_transformer.dart';
+import 'package:masi/features/ar/domain/rock_box.dart';
 
-/// A standalone [CustomPainter] that draws a rock-segmentation [mask] stretched
-/// to cover [imageSize], tinted via a [BlendMode.srcIn] [ColorFilter] so only
-/// the masked (rock) region is washed in [_kRockHighlightTint].
+/// The flat tint the rock box is drawn with. Cyan reads well as a highlight
+/// over most rock/foliage photos. Mirrors `ar_overlay_painter.dart`'s
+/// `_rockHighlightTint` (same hex, same fill/stroke alpha split) so the
+/// topo-canvas preview and the AR overlay read as the same highlight.
+const Color _kRockHighlightTint = Color(0xFF00E5FF);
+
+/// Alpha (0-255) applied to [_kRockHighlightTint] for the box's STROKE (its
+/// outline).
+const int _kRockHighlightStrokeAlpha = 160;
+
+/// Alpha (0-255) applied to [_kRockHighlightTint] for the box's faint FILL
+/// (~18% opacity) -- translucent enough that the photo underneath still
+/// clearly shows through the highlighted area.
+const int _kRockBoxFillAlpha = 46;
+
+/// Stroke width (canvas px) for the box's outline.
+const double _kRockBoxStrokeWidth = 3.0;
+
+/// A standalone [CustomPainter] that draws the route-derived rock [box] (see
+/// `rock_box.dart`'s `rockBoxFromRoutes`) over [imageSize]: a faint tinted
+/// fill plus a tinted stroke outline, both in [_kRockHighlightTint].
 ///
-/// Deliberately self-contained — it takes ONLY a decoded [ui.Image] and a
-/// target [Size], with no provider/channel/IO dependency — so it is directly
-/// widget-testable with a fake image and needs no device or real segmentation.
+/// Deliberately self-contained -- it takes ONLY a normalized [box] and a
+/// target [Size], with no provider/route-list/IO dependency -- so it is
+/// directly widget-testable with a plain [Rect] and needs no device, no
+/// image decode, and no drawn routes.
 ///
-/// Coordinate frame: the mask lives in the same 0..1 frame as the full upright
-/// reference photo (its pixel dims are the DOWNSAMPLED mask dims, not the
-/// photo's — see `ArSegmentationResult.mask`), so it is drawn with an
-/// independent-x/y `drawImageRect` from the full mask rect onto the full
-/// [imageSize] rect; that stretch self-corrects any aspect mismatch. It shares
-/// the enclosing `InteractiveViewer` transform automatically (same as the
-/// photo and route painter it's layered between), so no homography is applied
-/// here.
-class RockMaskPainter extends CustomPainter {
-  const RockMaskPainter({required this.mask, required this.imageSize});
+/// Coordinate frame: [box] is expressed in the same 0..1 percent space
+/// [TopoRoute.points] already uses, so each corner is converted to scene
+/// pixels via [CoordinateTransformer.percentToScene] before drawing. It
+/// shares the enclosing `InteractiveViewer` transform automatically (same as
+/// the photo and route painter it's layered between), so no homography is
+/// applied here -- unlike `ArOverlayPainter.rockBox`, which warps the same
+/// corners through a `Homography` instead.
+class RockBoxPainter extends CustomPainter {
+  const RockBoxPainter({required this.box, required this.imageSize});
 
-  /// The paint-ready RGBA segmentation image (per-texel alpha stencil).
-  final ui.Image mask;
+  /// The route-derived rock box, in 0..1 fractions of [imageSize] (top-left
+  /// origin) -- see `rockBoxFromRoutes`.
+  final Rect box;
 
-  /// The natural (decoded) size of the photo the mask is stretched over — the
-  /// same `imageSize` the photo and `TopoPainter` use, so all three layers
+  /// The natural (decoded) size of the photo the box is drawn over -- the
+  /// same `imageSize` the photo and `TopoPainter` use, so all layers
   /// register pixel-for-pixel under the shared view transform.
   final Size imageSize;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final src = Rect.fromLTWH(
-      0,
-      0,
-      mask.width.toDouble(),
-      mask.height.toDouble(),
-    );
-    final dst = Rect.fromLTWH(0, 0, imageSize.width, imageSize.height);
-    final paint = Paint()
-      ..colorFilter = const ColorFilter.mode(
-        _kRockHighlightTint,
-        BlendMode.srcIn,
-      )
-      ..filterQuality = FilterQuality.low
-      ..isAntiAlias = true;
-    canvas.drawImageRect(mask, src, dst, paint);
+    final path = Path()
+      ..addPolygon(
+        [
+          for (final corner in rockBoxCornersNorm(box))
+            CoordinateTransformer.percentToScene(corner, imageSize),
+        ],
+        true,
+      );
+
+    final fillPaint = Paint()
+      ..style = PaintingStyle.fill
+      ..color = _kRockHighlightTint.withAlpha(_kRockBoxFillAlpha);
+    canvas.drawPath(path, fillPaint);
+
+    final strokePaint = Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = _kRockBoxStrokeWidth
+      ..isAntiAlias = true
+      ..color = _kRockHighlightTint.withAlpha(_kRockHighlightStrokeAlpha);
+    canvas.drawPath(path, strokePaint);
   }
 
   @override
-  bool shouldRepaint(RockMaskPainter oldDelegate) =>
-      !identical(oldDelegate.mask, mask) || oldDelegate.imageSize != imageSize;
+  bool shouldRepaint(RockBoxPainter oldDelegate) =>
+      oldDelegate.box != box || oldDelegate.imageSize != imageSize;
 }

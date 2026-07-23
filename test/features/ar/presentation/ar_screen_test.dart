@@ -89,20 +89,6 @@ Future<ui.Image> _decode2x2() {
 ///    exercise its overlay/toggle/gesture logic without ever touching
 ///    `UiKitView`). This drives the REAL `ArOverlayPainter` /
 ///    `ArController` / `ManualAlignController` wiring.
-/// Decodes a tiny 1x1 RGBA image, standing in for a decoded rock mask in the
-/// "highlight rock" toggle tests below.
-Future<ui.Image> _createTinyImage() {
-  final completer = Completer<ui.Image>();
-  ui.decodeImageFromPixels(
-    Uint8List.fromList(<int>[0, 229, 255, 255]),
-    1,
-    1,
-    ui.PixelFormat.rgba8888,
-    completer.complete,
-  );
-  return completer.future;
-}
-
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -303,8 +289,8 @@ void main() {
 
     testWidgets(
       'B3: entering AR for a different wall resets arControllerProvider.'
-      "rockQuadPercent back to null, so a prior session's native rock/crop "
-      'quad can never leak into a new session that returns none',
+      "rockBox back to null, so a prior session's route-derived rock box "
+      'can never leak into a new session',
       (tester) async {
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
@@ -330,17 +316,12 @@ void main() {
         );
         await tester.pumpAndSettle();
 
-        // Simulate a leftover rockQuadPercent from wall A's session, as if a
-        // real channel.start had returned a confident native segmentation.
+        // Simulate a leftover rockBox from wall A's session, as if a real
+        // AR session had actually computed one from wall A's routes.
         container
             .read(arControllerProvider.notifier)
-            .setRockSegmentation(quadPercent: const <Offset>[
-              Offset(0.1, 0.1),
-              Offset(0.9, 0.1),
-              Offset(0.9, 0.9),
-              Offset(0.1, 0.9),
-            ]);
-        expect(container.read(arControllerProvider).rockQuadPercent, isNotNull);
+            .setRockBox(const Rect.fromLTRB(0.1, 0.1, 0.9, 0.9));
+        expect(container.read(arControllerProvider).rockBox, isNotNull);
 
         // Back out and enter AR for a DIFFERENT wall — same real-navigation
         // mirroring as Fix 1 above (a brand-new ArScreen widget subtree, not
@@ -357,11 +338,10 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(
-          container.read(arControllerProvider).rockQuadPercent,
+          container.read(arControllerProvider).rockBox,
           isNull,
           reason:
-              "wall B's AR entry must not inherit wall A's leftover "
-              'rockQuadPercent',
+              "wall B's AR entry must not inherit wall A's leftover rockBox",
         );
       },
     );
@@ -380,14 +360,13 @@ void main() {
         // `instantiateImageCodec` on the picked file's raw bytes -- see
         // `topos_screen.dart`'s `_handleNewTopo`), which honors EXIF
         // orientation -- so PhotoRef.width/height are already the
-        // EXIF-ORIENTED dims by the time AR ever sees them. A
-        // rockQuadPercent fraction (documented in `ar_channel.dart` as "0..1
-        // of the ORIENTED full reference photo") is only meaningful if
-        // native's segmentation and Dart's refSize agree on what "oriented"
-        // means -- this test guards that agreement holds all the way
-        // through ArScreen -> ArAlignmentStage, using deliberately
-        // non-square width/height (1000x2000) so a width/height swap bug
-        // would be caught.
+        // EXIF-ORIENTED dims by the time AR ever sees them. A route-derived
+        // rockBox fraction (documented in `rock_box.dart` as "0..1 of the
+        // upright photo") is only meaningful if the routes' own percent
+        // space and Dart's refSize agree on what "upright" means -- this
+        // test guards that agreement holds all the way through ArScreen ->
+        // ArAlignmentStage, using deliberately non-square width/height
+        // (1000x2000) so a width/height swap bug would be caught.
         testWidgets(
           'ArScreen constructs ArAlignmentStage.refSize as exactly '
           "Size(photo.width, photo.height) -- the same oriented dims "
@@ -468,12 +447,11 @@ void main() {
               Size(photo.width.toDouble(), photo.height.toDouble()),
               reason:
                   "ArAlignmentStage's refSize -- the scale base every "
-                  "rockQuadPercent fraction is multiplied against (see "
+                  "rockBox fraction is multiplied against (see "
                   "ar_screen.dart's ArAlignmentStage.build) -- must be "
                   "exactly PhotoRef's own oriented width/height, never a "
-                  'second re-decoded size that could disagree with what '
-                  'native used to compute rockQuadPercent in the first '
-                  'place',
+                  'second re-decoded size that could disagree with the '
+                  "routes' own percent space",
             );
           },
         );
@@ -726,126 +704,69 @@ void main() {
       expect(bottomRight.dy, closeTo(750, 1e-6));
     });
 
-    group('B2: rockQuadPercent as the fromQuad SOURCE quad', () {
-      const corners = <Offset>[
-        Offset(50, 50),
-        Offset(350, 50),
-        Offset(350, 750),
-        Offset(50, 750),
-      ];
-      const rockQuadPercent = <Offset>[
-        Offset(0.1, 0.1),
-        Offset(0.9, 0.1),
-        Offset(0.9, 0.9),
-        Offset(0.1, 0.9),
-      ];
+    group(
+      'Ship 1 (#68): the fromQuad SOURCE quad is ALWAYS the full-photo '
+      'rect -- the earlier rockQuadPercent-scoped Vision-segmentation crop '
+      '(which selected PEOPLE instead of the rock) has been removed',
+      () {
+        const corners = <Offset>[
+          Offset(50, 50),
+          Offset(350, 50),
+          Offset(350, 750),
+          Offset(50, 750),
+        ];
 
+        testWidgets(
+          'AUTO + tracking, regardless of arState.rockBox: the SOURCE quad '
+          'is the unchanged full-photo rect',
+          (tester) async {
+            pinViewSize(tester);
+            final container = ProviderContainer();
+            addTearDown(container.dispose);
+            // Even with a rock box set (used only as a highlight -- see the
+            // group below), the fromQuad SOURCE must be unaffected.
+            container
+                .read(arControllerProvider.notifier)
+                .setRockBox(const Rect.fromLTRB(0.1, 0.1, 0.9, 0.9));
+
+            await tester.pumpWidget(buildStage(container));
+            await tester.pump();
+
+            container
+                .read(arControllerProvider.notifier)
+                .onAlignment(
+                  const ArAlignment(
+                    confidence: 0.0,
+                    tracking: true,
+                    screenCorners: corners,
+                  ),
+                );
+            await tester.pump();
+
+            final expected = Homography.fromQuad([
+              Offset.zero,
+              Offset(refSize.width, 0),
+              Offset(refSize.width, refSize.height),
+              Offset(0, refSize.height),
+            ], corners);
+
+            expect(currentPainter(tester).homography, expected);
+          },
+        );
+      },
+    );
+
+    group('rock-highlight toggle gates the painter\'s rockBox', () {
       testWidgets(
-        'AUTO + tracking with arState.rockQuadPercent set: the SOURCE quad '
-        'is rockQuadPercent scaled by refSize, not the full-photo rect -- '
-        'the rendered homography differs from the full-photo-src case',
+        'with a box set on the controller but the highlight OFF (default), '
+        'the painter receives rockBox: null; toggling the highlight ON '
+        'passes the box through, and toggling OFF again clears it',
         (tester) async {
           pinViewSize(tester);
+          const box = Rect.fromLTRB(0.1, 0.1, 0.9, 0.9);
           final container = ProviderContainer();
           addTearDown(container.dispose);
-          container
-              .read(arControllerProvider.notifier)
-              .setRockSegmentation(quadPercent: rockQuadPercent);
-
-          await tester.pumpWidget(buildStage(container));
-          await tester.pump();
-
-          container
-              .read(arControllerProvider.notifier)
-              .onAlignment(
-                const ArAlignment(
-                  confidence: 0.0,
-                  tracking: true,
-                  screenCorners: corners,
-                ),
-              );
-          await tester.pump();
-
-          final expectedRefCorners = [
-            for (final p in rockQuadPercent)
-              Offset(p.dx * refSize.width, p.dy * refSize.height),
-          ];
-          final expected = Homography.fromQuad(expectedRefCorners, corners);
-          final fullPhotoHomography = Homography.fromQuad([
-            Offset.zero,
-            Offset(refSize.width, 0),
-            Offset(refSize.width, refSize.height),
-            Offset(0, refSize.height),
-          ], corners);
-
-          expect(currentPainter(tester).homography, expected);
-          expect(
-            currentPainter(tester).homography,
-            isNot(fullPhotoHomography),
-            reason:
-                'a rockQuadPercent-scoped source quad must produce a '
-                'different homography from the full-photo-rect source quad',
-          );
-        },
-      );
-
-      testWidgets(
-        'AUTO + tracking with arState.rockQuadPercent null (the default): '
-        'the SOURCE quad is the unchanged full-photo rect -- identical to '
-        'current (pre-rockQuad) behavior',
-        (tester) async {
-          pinViewSize(tester);
-          final container = ProviderContainer();
-          addTearDown(container.dispose);
-          expect(
-            container.read(arControllerProvider).rockQuadPercent,
-            isNull,
-          );
-
-          await tester.pumpWidget(buildStage(container));
-          await tester.pump();
-
-          container
-              .read(arControllerProvider.notifier)
-              .onAlignment(
-                const ArAlignment(
-                  confidence: 0.0,
-                  tracking: true,
-                  screenCorners: corners,
-                ),
-              );
-          await tester.pump();
-
-          final expected = Homography.fromQuad([
-            Offset.zero,
-            Offset(refSize.width, 0),
-            Offset(refSize.width, refSize.height),
-            Offset(0, refSize.height),
-          ], corners);
-
-          expect(currentPainter(tester).homography, expected);
-        },
-      );
-    });
-
-    group('rock-highlight toggle gates the painter\'s rockMask', () {
-      testWidgets(
-        'with a mask set on the controller but the highlight OFF (default), '
-        'the painter receives rockMask: null; toggling the highlight ON '
-        'passes the mask through, and toggling OFF again clears it',
-        (tester) async {
-          pinViewSize(tester);
-          // Decode via runAsync: `decodeImageFromPixels` is real
-          // (non-fake-async) engine work that never completes under
-          // testWidgets' fake clock — the same reason every other
-          // ui.Image-decoding test in this suite lives in a plain `test()`.
-          final mask = (await tester.runAsync(_createTinyImage))!;
-          addTearDown(mask.dispose);
-          final container = ProviderContainer();
-          addTearDown(container.dispose);
-          container
-              .read(arControllerProvider.notifier)
-              .setRockSegmentation(mask: mask);
+          container.read(arControllerProvider.notifier).setRockBox(box);
 
           await tester.pumpWidget(buildStage(container));
           await tester.pump();
@@ -856,37 +777,37 @@ void main() {
             reason: 'sanity: highlight defaults off',
           );
           expect(
-            currentPainter(tester).rockMask,
+            currentPainter(tester).rockBox,
             isNull,
             reason:
-                'a mask is present on the controller, but with the highlight '
-                'toggle off the painter must receive null (no silhouette)',
+                'a box is present on the controller, but with the highlight '
+                'toggle off the painter must receive null (no highlight)',
           );
 
           container.read(arRockHighlightProvider.notifier).toggle();
           await tester.pump();
 
           expect(
-            currentPainter(tester).rockMask,
-            same(mask),
+            currentPainter(tester).rockBox,
+            box,
             reason:
                 'with the highlight on, the painter must receive the '
-                "controller's rockMask",
+                "controller's rockBox",
           );
 
           container.read(arRockHighlightProvider.notifier).toggle();
           await tester.pump();
 
           expect(
-            currentPainter(tester).rockMask,
+            currentPainter(tester).rockBox,
             isNull,
-            reason: 'toggling the highlight back off must clear the mask again',
+            reason: 'toggling the highlight back off must clear the box again',
           );
         },
       );
 
       testWidgets(
-        'with the highlight ON but NO mask on the controller, the painter '
+        'with the highlight ON but NO box on the controller, the painter '
         'still receives null (nothing to highlight)',
         (tester) async {
           pinViewSize(tester);
@@ -898,7 +819,7 @@ void main() {
           await tester.pump();
 
           expect(container.read(arRockHighlightProvider), isTrue);
-          expect(currentPainter(tester).rockMask, isNull);
+          expect(currentPainter(tester).rockBox, isNull);
         },
       );
 

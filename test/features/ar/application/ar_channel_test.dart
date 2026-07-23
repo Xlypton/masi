@@ -349,7 +349,8 @@ void main() {
     });
 
     test(
-      'A1: start() invokes "start" with exactly the 4 documented args',
+      'A1: start() invokes "start" with exactly the 3 documented args (no '
+      'routesJson -- native never needed route geometry)',
       () async {
         final channel = ArChannel(method: method, event: event);
 
@@ -357,7 +358,6 @@ void main() {
           referenceImagePath: '/p.jpg',
           refWidth: 1000,
           refHeight: 800,
-          routesJson: '[]',
         );
 
         expect(calls, hasLength(1));
@@ -366,250 +366,12 @@ void main() {
           'referenceImagePath': '/p.jpg',
           'refWidth': 1000,
           'refHeight': 800,
-          'routesJson': '[]',
         });
       },
     );
 
-    group(
-      'B1: start() parses the new {success, rockQuadPercent} result map',
-      () {
-        test(
-          'a well-formed 8-double rockQuadPercent parses into 4 Offsets in '
-          'TL/TR/BR/BL order',
-          () async {
-            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-                .setMockMethodCallHandler(method, (MethodCall call) async {
-                  calls.add(call);
-                  return <String, Object?>{
-                    'success': true,
-                    'rockQuadPercent': <double>[
-                      0.1, 0.2, //
-                      0.8, 0.2, //
-                      0.8, 0.9, //
-                      0.1, 0.9, //
-                    ],
-                  };
-                });
-            final channel = ArChannel(method: method, event: event);
-
-            final result = await channel.start(
-              referenceImagePath: '/p.jpg',
-              refWidth: 1000,
-              refHeight: 800,
-              routesJson: '[]',
-            );
-
-            expect(result.quadPercent, const <Offset>[
-              Offset(0.1, 0.2),
-              Offset(0.8, 0.2),
-              Offset(0.8, 0.9),
-              Offset(0.1, 0.9),
-            ]);
-          },
-        );
-
-        test(
-          'rockQuadPercent key absent -> null (the documented "use the '
-          'full-photo rect" fallback signal, never an error)',
-          () async {
-            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-                .setMockMethodCallHandler(method, (MethodCall call) async {
-                  calls.add(call);
-                  return <String, Object?>{'success': true};
-                });
-            final channel = ArChannel(method: method, event: event);
-
-            final result = await channel.start(
-              referenceImagePath: '/p.jpg',
-              refWidth: 1000,
-              refHeight: 800,
-              routesJson: '[]',
-            );
-
-            expect(result.quadPercent, isNull);
-          },
-        );
-
-        test('rockQuadPercent a non-List value -> null, no throw', () async {
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-              .setMockMethodCallHandler(method, (MethodCall call) async {
-                calls.add(call);
-                return <String, Object?>{
-                  'success': true,
-                  'rockQuadPercent': 'nope',
-                };
-              });
-          final channel = ArChannel(method: method, event: event);
-
-          final result = await channel.start(
-            referenceImagePath: '/p.jpg',
-            refWidth: 1000,
-            refHeight: 800,
-            routesJson: '[]',
-          );
-
-          expect(result.quadPercent, isNull);
-        });
-
-        test(
-          'rockQuadPercent a wrong-length List -> null, no throw',
-          () async {
-            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-                .setMockMethodCallHandler(method, (MethodCall call) async {
-                  calls.add(call);
-                  return <String, Object?>{
-                    'success': true,
-                    'rockQuadPercent': <double>[0.1, 0.2, 0.3],
-                  };
-                });
-            final channel = ArChannel(method: method, event: event);
-
-            final result = await channel.start(
-              referenceImagePath: '/p.jpg',
-              refWidth: 1000,
-              refHeight: 800,
-              routesJson: '[]',
-            );
-
-            expect(result.quadPercent, isNull);
-          },
-        );
-
-        test(
-          'rockQuadPercent containing a non-num entry -> null, no throw',
-          () async {
-            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-                .setMockMethodCallHandler(method, (MethodCall call) async {
-                  calls.add(call);
-                  return <String, Object?>{
-                    'success': true,
-                    'rockQuadPercent': <Object?>[
-                      0.1,
-                      0.2,
-                      0.3,
-                      0.4,
-                      0.5,
-                      0.6,
-                      0.7,
-                      'nope',
-                    ],
-                  };
-                });
-            final channel = ArChannel(method: method, event: event);
-
-            final result = await channel.start(
-              referenceImagePath: '/p.jpg',
-              refWidth: 1000,
-              refHeight: 800,
-              routesJson: '[]',
-            );
-
-            expect(result.quadPercent, isNull);
-          },
-        );
-
-        test(
-          'a non-Map result (e.g. a legacy bare bool) -> null, no throw',
-          () async {
-            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-                .setMockMethodCallHandler(method, (MethodCall call) async {
-                  calls.add(call);
-                  return true;
-                });
-            final channel = ArChannel(method: method, event: event);
-
-            final result = await channel.start(
-              referenceImagePath: '/p.jpg',
-              refWidth: 1000,
-              refHeight: 800,
-              routesJson: '[]',
-            );
-
-            expect(result.quadPercent, isNull);
-          },
-        );
-
-        test(
-          'a null result (the default mock handler in setUp) -> null, no '
-          'throw',
-          () async {
-            final channel = ArChannel(method: method, event: event);
-
-            final result = await channel.start(
-              referenceImagePath: '/p.jpg',
-              refWidth: 1000,
-              refHeight: 800,
-              routesJson: '[]',
-            );
-
-            expect(result.quadPercent, isNull);
-          },
-        );
-
-        test(
-          'a well-formed rockQuadPercent WITHOUT mask keys leaves mask null',
-          () async {
-            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-                .setMockMethodCallHandler(method, (MethodCall call) async {
-                  calls.add(call);
-                  return <String, Object?>{
-                    'success': true,
-                    'rockQuadPercent': <double>[
-                      0.1, 0.2, 0.8, 0.2, 0.8, 0.9, 0.1, 0.9, //
-                    ],
-                  };
-                });
-            final channel = ArChannel(method: method, event: event);
-
-            final result = await channel.start(
-              referenceImagePath: '/p.jpg',
-              refWidth: 1000,
-              refHeight: 800,
-              routesJson: '[]',
-            );
-
-            expect(result.quadPercent, isNotNull);
-            expect(result.mask, isNull);
-          },
-        );
-      },
-    );
-
-    group('B4: start() parses the rock mask (rockMaskAlpha/Width/Height)', () {
-      test(
-        'a well-formed raw-alpha mask expands into a paint-ready ui.Image at '
-        'the reported dims',
-        () async {
-          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
-              .setMockMethodCallHandler(method, (MethodCall call) async {
-                calls.add(call);
-                return <String, Object?>{
-                  'success': true,
-                  'rockMaskAlpha': Uint8List.fromList(<int>[
-                    255, 0, //
-                    0, 255, //
-                  ]),
-                  'rockMaskWidth': 2,
-                  'rockMaskHeight': 2,
-                };
-              });
-          final channel = ArChannel(method: method, event: event);
-
-          final result = await channel.start(
-            referenceImagePath: '/p.jpg',
-            refWidth: 1000,
-            refHeight: 800,
-            routesJson: '[]',
-          );
-
-          expect(result.mask, isNotNull);
-          expect(result.mask!.width, 2);
-          expect(result.mask!.height, 2);
-        },
-      );
-
-      test('mask keys absent -> mask null, no throw', () async {
+    group('start() returns native\'s {success} bool', () {
+      test('success: true -> returns true', () async {
         TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
             .setMockMethodCallHandler(method, (MethodCall call) async {
               calls.add(call);
@@ -621,25 +383,35 @@ void main() {
           referenceImagePath: '/p.jpg',
           refWidth: 1000,
           refHeight: 800,
-          routesJson: '[]',
         );
 
-        expect(result.mask, isNull);
+        expect(result, isTrue);
+      });
+
+      test('success: false -> returns false', () async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(method, (MethodCall call) async {
+              calls.add(call);
+              return <String, Object?>{'success': false};
+            });
+        final channel = ArChannel(method: method, event: event);
+
+        final result = await channel.start(
+          referenceImagePath: '/p.jpg',
+          refWidth: 1000,
+          refHeight: 800,
+        );
+
+        expect(result, isFalse);
       });
 
       test(
-        'an alpha byte length that mismatches width*height -> mask null, no '
-        'throw',
+        'a non-Map result (e.g. a legacy bare bool) -> false, no throw',
         () async {
           TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
               .setMockMethodCallHandler(method, (MethodCall call) async {
                 calls.add(call);
-                return <String, Object?>{
-                  'success': true,
-                  'rockMaskAlpha': Uint8List.fromList(<int>[255, 0, 0]),
-                  'rockMaskWidth': 2,
-                  'rockMaskHeight': 2,
-                };
+                return true;
               });
           final channel = ArChannel(method: method, event: event);
 
@@ -647,12 +419,44 @@ void main() {
             referenceImagePath: '/p.jpg',
             refWidth: 1000,
             refHeight: 800,
-            routesJson: '[]',
           );
 
-          expect(result.mask, isNull);
+          expect(result, isFalse);
         },
       );
+
+      test(
+        'a null result (the default mock handler in setUp) -> false, no '
+        'throw',
+        () async {
+          final channel = ArChannel(method: method, event: event);
+
+          final result = await channel.start(
+            referenceImagePath: '/p.jpg',
+            refWidth: 1000,
+            refHeight: 800,
+          );
+
+          expect(result, isFalse);
+        },
+      );
+
+      test('a Map with a non-bool success value -> false, no throw', () async {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(method, (MethodCall call) async {
+              calls.add(call);
+              return <String, Object?>{'success': 'nope'};
+            });
+        final channel = ArChannel(method: method, event: event);
+
+        final result = await channel.start(
+          referenceImagePath: '/p.jpg',
+          refWidth: 1000,
+          refHeight: 800,
+        );
+
+        expect(result, isFalse);
+      });
     });
 
     test('A1: stop() invokes "stop"', () async {

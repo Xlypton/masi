@@ -1,8 +1,6 @@
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
 
-import 'package:masi/features/ar/domain/rock_mask_codec.dart';
-
 /// The AR alignment mode: whether the native side continuously re-solves the
 /// homography from tracked features ([auto]), or holds the last-solved (or
 /// manually nudged) homography fixed ([manual]).
@@ -306,33 +304,25 @@ class ArChannel {
   bool get isNoop => _noop;
 
   /// Starts native AR tracking/alignment against the reference photo at
-  /// [referenceImagePath] (with pixel dimensions [refWidth]x[refHeight]),
-  /// seeded with the route geometry in [routesJson].
+  /// [referenceImagePath] (with pixel dimensions [refWidth]x[refHeight]).
   ///
   /// Invokes the native `start` method with exactly:
-  /// `{'referenceImagePath': ..., 'refWidth': ..., 'refHeight': ...,
-  /// 'routesJson': ...}`.
+  /// `{'referenceImagePath': ..., 'refWidth': ..., 'refHeight': ...}`.
   ///
-  /// Native's result is
-  /// `{"success": bool, "rockQuadPercent": [Double]?, "rockMaskAlpha":
-  /// Uint8List?, "rockMaskWidth": Int?, "rockMaskHeight": Int?}`.
-  /// Returns an [ArSegmentationResult] holding both the parsed
-  /// `rockQuadPercent` (4 [Offset]s, TL/TR/BR/BL, each component a 0..1
-  /// fraction of the ORIENTED full reference photo — see
-  /// [parseRockQuadPercent]) and the per-pixel rock mask expanded to a
-  /// paint-ready [ui.Image] (see [decodeRockMaskAlpha]). Both fields are
-  /// independently `null` when native found no confident segmentation (the
-  /// keys are simply omitted — callers must treat that as "use the full-photo
-  /// rect / no highlight", never as an error), on any malformed result, and
-  /// on the noop channel (which never calls native at all, returning a const
-  /// empty result).
-  Future<ArSegmentationResult> start({
+  /// Native builds its `ARReferenceImage` from the FULL upright reference
+  /// photo (no Vision-based foreground crop — see #68's Ship 1: that
+  /// approach selected PEOPLE instead of the rock, so it's been replaced by
+  /// a route-derived box computed in Dart, see `rock_box.dart`) and returns
+  /// `{"success": bool}`. Returns that bool — `true` means native actually
+  /// started tracking; `false` means it couldn't (or the result was
+  /// missing/malformed — never throws on a malformed result). The noop
+  /// channel (web) returns `false` without ever calling native.
+  Future<bool> start({
     required String referenceImagePath,
     required int refWidth,
     required int refHeight,
-    required String routesJson,
   }) async {
-    if (_noop) return const ArSegmentationResult();
+    if (_noop) return false;
     debugPrint(
       'AR_DBG ar_channel.start invoking (refPath=$referenceImagePath '
       '${refWidth}x$refHeight)',
@@ -344,14 +334,13 @@ class ArChannel {
           'referenceImagePath': referenceImagePath,
           'refWidth': refWidth,
           'refHeight': refHeight,
-          'routesJson': routesJson,
         },
       );
       debugPrint('AR_DBG ar_channel.start returned OK');
-      return ArSegmentationResult(
-        quadPercent: parseRockQuadPercent(result),
-        mask: await decodeRockMaskAlpha(result),
-      );
+      if (result is Map && result['success'] is bool) {
+        return result['success'] as bool;
+      }
+      return false;
     } catch (e) {
       debugPrint('AR_DBG ar_channel.start ERROR $e');
       rethrow;

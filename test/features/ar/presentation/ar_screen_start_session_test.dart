@@ -3,7 +3,7 @@ import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/ar/application/ar_channel.dart';
 import 'package:masi/features/ar/application/ar_controller.dart';
-import 'package:masi/features/ar/domain/rock_mask_codec.dart';
+import 'package:masi/features/ar/domain/rock_box.dart';
 import 'package:masi/features/ar/presentation/ar_screen.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
@@ -28,25 +28,20 @@ class _FakePathProviderPlatform extends PathProviderPlatform {
       '/tmp/ar_screen_start_session_test_docs';
 }
 
-/// A fake [ArChannel] whose [start] resolves to a fixed, distinctive
-/// `rockQuadPercent` rather than [ArChannel.noop]'s always-`null` result —
-/// this is exactly what distinguishes this test from every other rockQuad
-/// test in this suite: every OTHER test seeds `rockQuadPercent` directly via
-/// `ArController.setRockQuadPercent` and never actually round-trips through
-/// `channel.start()` -> `_ArScreenState._startSession`'s forwarding line.
+/// A fake [ArChannel] whose [start] resolves to `true` (a "native started
+/// successfully" result) rather than [ArChannel.noop]'s always-`false`
+/// result, so this test can exercise `_ArScreenState._startSession`'s
+/// success path for real.
 ///
 /// Constructed via `super.noop()` — [ArChannel.noop]'s own constructor sets
 /// the private `_noop` flag every OTHER public method
-/// (`alignments`/`stop`/`setMode`/`rescan`/`lockManual`/`unlockManual`)
-/// checks first (`if (_noop) return ...`) — so leaving all of them
-/// un-overridden here already gives the exact same safe no-op behavior
-/// `ArChannel.noop()` itself provides, with no need to duplicate that logic.
-/// Only [start] needs overriding, since it's the one call this test needs to
-/// return something other than `null`.
+/// (`alignments`/`setMode`/`rescan`/`lockManual`/`unlockManual`) checks first
+/// (`if (_noop) return ...`) — so leaving all of them un-overridden here
+/// already gives the exact same safe no-op behavior `ArChannel.noop()` itself
+/// provides, with no need to duplicate that logic. [start]/[stop] are
+/// overridden since this test needs to observe/control them directly.
 class _FakeArChannel extends ArChannel {
-  _FakeArChannel(this.result) : super.noop();
-
-  final List<Offset> result;
+  _FakeArChannel() : super.noop();
 
   /// Set by [stop] when called. Lets this test assert that
   /// `_ArScreenState.dispose()` actually invokes `channel.stop()` (releasing
@@ -55,12 +50,11 @@ class _FakeArChannel extends ArChannel {
   bool stopCalled = false;
 
   @override
-  Future<ArSegmentationResult> start({
+  Future<bool> start({
     required String referenceImagePath,
     required int refWidth,
     required int refHeight,
-    required String routesJson,
-  }) async => ArSegmentationResult(quadPercent: result);
+  }) async => true;
 
   @override
   Future<void> stop() {
@@ -69,32 +63,20 @@ class _FakeArChannel extends ArChannel {
   }
 }
 
-/// Covers the one end-to-end forwarding gap no other AR test closes:
-/// `_ArScreenState._startSession`'s
-/// `ref.read(arControllerProvider.notifier).setRockQuadPercent(rockQuad)`
-/// line, where `rockQuad` is exactly whatever `channel.start(...)` returned.
+/// Covers the end-to-end forwarding `_ArScreenState._startSession` is
+/// responsible for post-Ship-1 (#68): once `channel.start(...)` resolves,
+/// the session is marked active and `ArController.setRockBox` is called with
+/// the box `rockBoxFromRoutes` derives from the wall's OWN routes (a pure
+/// function of `_routes`, never anything native returns — see
+/// `rock_box.dart`).
 ///
-/// `ArChannel.start`'s wire-parsing (`_parseRockQuadPercent`),
-/// `ArController.setRockQuadPercent`'s state update, and the
-/// `arState.rockQuadPercent` render seam in `ArAlignmentStage.build` are each
-/// tested in isolation elsewhere (`ar_channel_test.dart`,
-/// `ar_controller_test.dart`, and `ar_screen_test.dart`'s "B2:
-/// rockQuadPercent as the fromQuad SOURCE quad" group, respectively) — but
-/// none of them drive a real `_startSession` call and assert its `start()`
-/// result actually lands in the controller. This test reaches `_startSession`
-/// for real, by mounting a genuine `UiKitView` (native/auto-tracking branch)
-/// and letting its `onPlatformViewCreated` callback fire — the same gate
+/// This test reaches `_startSession` for real, by mounting a genuine
+/// `UiKitView` (native/auto-tracking branch) and letting its
+/// `onPlatformViewCreated` callback fire — the same gate
 /// `_maybeStartSession`'s doc describes as the only legitimate way
 /// `_startSession` is ever invoked.
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
-
-  const fakeRockQuad = <Offset>[
-    Offset(0.1, 0.2),
-    Offset(0.9, 0.2),
-    Offset(0.9, 0.8),
-    Offset(0.1, 0.8),
-  ];
 
   late PathProviderPlatform originalPathProviderPlatform;
   setUp(() {
@@ -126,14 +108,14 @@ void main() {
   });
 
   testWidgets(
-    "_startSession forwards channel.start()'s rockQuad result into "
-    'arControllerProvider.rockQuadPercent -- deleting that forwarding line '
-    '(the setRockQuadPercent(rockQuad) call in ar_screen.dart) must fail '
+    '_startSession marks the session active and sets arControllerProvider.'
+    "rockBox to rockBoxFromRoutes(_routes)'s result once channel.start() "
+    'resolves -- deleting that forwarding line in ar_screen.dart must fail '
     'this test',
     (tester) async {
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);
-      final fakeChannel = _FakeArChannel(fakeRockQuad);
+      final fakeChannel = _FakeArChannel();
       final container = ProviderContainer(
         overrides: [
           appDatabaseProvider.overrideWithValue(db),
@@ -153,6 +135,20 @@ void main() {
       );
       addTearDown(container.dispose);
 
+      const route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.2), Offset(0.4, 0.5)],
+        // visible defaults to true -- _maybeStartSession's hasVisibleRoute
+        // gate needs at least one visible route or it bails before ever
+        // calling _startSession.
+      );
+      // Computed via the SAME pure function `_startSession` must call --
+      // this test proves the forwarding wire-up, not `rockBoxFromRoutes`'s
+      // geometry itself (that's covered in isolation by rock_box_test.dart).
+      final expectedBox = rockBoxFromRoutes(const [route]);
+      expect(expectedBox, isNotNull);
+
       final crud = container.read(libraryCrudRepositoryProvider);
       final area = await crud.createArea('Area');
       final sector = await crud.createSector(area.id, 'Sector');
@@ -166,24 +162,18 @@ void main() {
           2000,
         );
         final routeRepo = RouteRepository(db, nowMs: () => 1000);
-        await routeRepo.upsertRoute(
-          wall.id,
-          photoId,
-          const TopoRoute(
-            id: 1,
-            number: 1,
-            points: [Offset(0.1, 0.1), Offset(0.2, 0.2)],
-            // visible defaults to true -- _maybeStartSession's
-            // hasVisibleRoute gate needs at least one visible route or it
-            // bails before ever calling _startSession.
-          ),
-        );
+        await routeRepo.upsertRoute(wall.id, photoId, route);
       });
 
       expect(
-        container.read(arControllerProvider).rockQuadPercent,
+        container.read(arControllerProvider).rockBox,
         isNull,
         reason: 'sanity: nothing set yet before the session ever starts',
+      );
+      expect(
+        container.read(arControllerProvider).active,
+        isFalse,
+        reason: 'sanity: nothing marked active yet',
       );
 
       await tester.pumpWidget(
@@ -206,60 +196,39 @@ void main() {
             'thus _startSession) is never reached at all',
       );
       expect(
-        container.read(arControllerProvider).rockQuadPercent,
-        fakeRockQuad,
+        container.read(arControllerProvider).active,
+        isTrue,
         reason:
-            "_startSession must forward channel.start()'s returned rockQuad "
-            'straight into arControllerProvider via setRockQuadPercent -- '
-            'this must be non-null and equal to fakeRockQuad, never left at '
-            'its initial null',
+            '_startSession must mark the session active once channel.start() '
+            'resolves',
+      );
+      expect(
+        container.read(arControllerProvider).rockBox,
+        expectedBox,
+        reason:
+            '_startSession must call '
+            'setRockBox(rockBoxFromRoutes(_routes)) -- the same pure '
+            'function computed independently above from the identical '
+            'route geometry',
       );
 
       // Explicitly unmount (mirrors the same pattern `ar_screen_test.dart`'s
       // Fix 1/B3 tests already use to simulate a real Navigator.pop) so this
       // test controls exactly when `_ArScreenState.dispose()` runs, rather
       // than leaving it to the framework's own implicit end-of-test teardown.
-      //
-      // This is the FIRST test in the whole AR suite to actually drive
-      // `_startSession` to completion (every other ArScreen-mounting test
-      // takes either the unsupported-placeholder branch or the
-      // web/KeyedSubtree branch, where `_sessionStarted` never flips true —
-      // see this file's class doc and `ar_web_manual_test.dart`'s C4 group),
-      // so it's also the first to exercise `dispose()`'s
-      // `if (_sessionStarted) { ... }` branch at all.
-      //
-      // FORMERLY a pre-existing bug lived here: Flutter's
-      // `StatefulElement.unmount()` calls `super.unmount()` (which marks the
-      // element `defunct`) BEFORE calling `state.dispose()`, and Riverpod
-      // 3.3.2's `WidgetRef.read` starts with an unconditional
-      // `_assertNotDisposed()` check against exactly that flag (see
-      // `flutter_riverpod`'s `consumer.dart`) — so a `ref.read` called
-      // directly in `dispose()`'s body threw a `StateError` on every real
-      // dispose of an AR screen that ever started a session, silently
-      // aborting `channel.stop()`/`markActive(false)` (caught and reported by
-      // `FlutterError`, hence never surfacing as an app crash on-device).
-      // Fixed in `ar_screen.dart` by caching the channel/controller-notifier
-      // in State fields (assigned in `initState`, where `ref.read` is safe)
-      // and reading those cached fields in `dispose()` instead — exactly the
-      // fix Riverpod's own assertion message advises. This test now asserts
-      // both halves of that fix: dispose no longer throws, and the teardown
-      // it used to skip (`channel.stop()`) actually runs.
       await tester.pumpWidget(const SizedBox());
       await tester.pumpAndSettle();
       expect(
         tester.takeException(),
         isNull,
-        reason:
-            'dispose() must not throw — the cached-field fix means no '
-            '`ref.read` ever runs in the dispose body',
+        reason: 'dispose() must not throw',
       );
       expect(
         fakeChannel.stopCalled,
         isTrue,
         reason:
             "dispose() must actually call the cached channel's stop() to "
-            'release the native camera/tracking session — this is the '
-            'load-bearing teardown the pre-existing bug used to skip',
+            'release the native camera/tracking session',
       );
     },
   );

@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 import 'dart:math' show min;
 import 'dart:ui' as ui;
 
@@ -15,7 +14,7 @@ import 'package:masi/features/ar/application/ar_controller.dart';
 import 'package:masi/features/ar/application/manual_align_controller.dart';
 import 'package:masi/features/ar/application/outline_extractor.dart';
 import 'package:masi/features/ar/domain/homography.dart';
-import 'package:masi/features/ar/domain/rock_mask_codec.dart';
+import 'package:masi/features/ar/domain/rock_box.dart';
 import 'package:masi/features/ar/presentation/ar_camera_view.dart';
 import 'package:masi/features/ar/presentation/ar_overlay_painter.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
@@ -45,26 +44,6 @@ const String _kArPlatformViewType = 'masi/ar';
 /// comfortably below [kLowConfidenceThreshold] so `ArOverlayPainter`
 /// always renders it in its faint "searching" treatment.
 const double _kHeldFrameConfidenceCap = 0.2;
-
-/// Encodes [routes] as the `routesJson` payload handed to
-/// [ArChannel.start]. Kept intentionally simple (number/colorIndex/
-/// visible/points, points as `{x,y}` percent-space pairs) — the native side
-/// only needs route geometry to seed its own alignment/rendering, and this
-/// screen is the sole producer of this JSON, so there's no shared contract
-/// to keep in sync with (unlike `route_mapper.dart`'s DB-column encoding).
-String _encodeRoutesForAr(List<TopoRoute> routes) {
-  return jsonEncode([
-    for (final route in routes)
-      {
-        'number': route.number,
-        'colorIndex': route.colorIndex,
-        'visible': route.visible,
-        'points': [
-          for (final p in route.points) {'x': p.dx, 'y': p.dy},
-        ],
-      },
-  ]);
-}
 
 /// The AR live-alignment screen for a wall: overlays that wall's routes
 /// (warped through the current camera-alignment [Homography]) on top of a
@@ -268,15 +247,13 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     // corners against a previous wall's leftover filter state.
     ref.read(arControllerProvider.notifier).resetCornerSmoothing();
     // Same app-lifetime-singleton concern as corner-smoothing just above:
-    // rockQuadPercent (the native-reported rock/crop quad from the PREVIOUS
-    // session's `channel.start` result — see ArState.rockQuadPercent's doc)
-    // must never leak into a new wall's session, since _startSession only
-    // overwrites it once a fresh channel.start call actually resolves — a
-    // wall whose own session never returns a quad/mask at all (e.g. no
-    // confident native segmentation) would otherwise keep rendering the PRIOR
-    // wall's crop/highlight instead of falling back to its own full-photo
-    // rect. Called with no args so BOTH rockQuadPercent and rockMask reset.
-    ref.read(arControllerProvider.notifier).setRockSegmentation();
+    // rockBox (the route-derived rock box from the PREVIOUS session — see
+    // ArState.rockBox's doc) must never leak into a new wall's session,
+    // since _startSession only overwrites it once _routes for the NEW wall
+    // has loaded — a wall whose own routes have no geometry to derive a box
+    // from would otherwise keep rendering the PRIOR wall's box/highlight
+    // instead of falling back to null (full-photo rect / no highlight).
+    ref.read(arControllerProvider.notifier).setRockBox(null);
     // arAutoTrackingProvider (not a direct arSupportsAutoTracking() call) so
     // this is overridable in tests, same as arSupportedProvider elsewhere in
     // this file.
@@ -340,13 +317,11 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     _sessionStarted = true;
     final channel = ref.read(arChannelProvider);
     debugPrint('AR_DBG _startSession calling channel.start');
-    final ArSegmentationResult segmentation;
     try {
-      segmentation = await channel.start(
+      await channel.start(
         referenceImagePath: photo.localPath,
         refWidth: photo.width,
         refHeight: photo.height,
-        routesJson: _encodeRoutesForAr(routes),
       );
     } catch (error) {
       // Native start threw (e.g. camera permission denied, or no camera on
@@ -365,12 +340,11 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       setState(() => _startError = null);
     }
     ref.read(arControllerProvider.notifier).markActive(true);
-    ref
-        .read(arControllerProvider.notifier)
-        .setRockSegmentation(
-          quadPercent: segmentation.quadPercent,
-          mask: segmentation.mask,
-        );
+    // Ship 1 of the #68 AR overhaul: the rock "highlight"/tracking box is no
+    // longer a native Vision-segmentation result (which selected PEOPLE
+    // instead of the rock) — it's derived directly from the wall's own drawn
+    // route geometry, which is always on the rock. See rock_box.dart.
+    ref.read(arControllerProvider.notifier).setRockBox(rockBoxFromRoutes(routes));
     _alignmentSubscription = channel.alignments().listen(
       ref.read(arControllerProvider.notifier).onAlignment,
     );
@@ -733,9 +707,10 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
     final arState = ref.watch(arControllerProvider);
     final manualHomography = ref.watch(manualAlignProvider);
     final locked = ref.watch(arLockedProvider);
-    // When the "highlight rock" toggle is on AND native returned a mask for
-    // this session, paint that mask as a glowing silhouette over the wall;
-    // otherwise pass null (no highlight). See arRockHighlightProvider.
+    // When the "highlight rock" toggle is on AND this session has a
+    // route-derived rock box (arState.rockBox — see rock_box.dart), paint
+    // that box as a tinted outline over the wall; otherwise pass null (no
+    // highlight). See arRockHighlightProvider.
     final highlightRock = ref.watch(arRockHighlightProvider);
     // Web (widget.autoTracking == false) has no continuous tracking session
     // to ever fall back on, so alignment is ALWAYS effectively manual there,
@@ -866,31 +841,18 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
             // `ArController.onAlignment`) — no intermediate camera-frame
             // space involved.
             //
-            // When native found a confident rock/crop segmentation
-            // (arState.rockQuadPercent non-null — see ar_channel.dart's
-            // ArChannel.start doc for the wire contract), the SOURCE quad is
-            // that segmentation's 4 fractional corners scaled up into pixel
-            // space instead of the full reference-photo rect: the tracked
-            // anchor corresponds to just the rock face ARKit locked onto,
-            // not the whole photo (which may include background/other
-            // holds/other rock). `null` (no confident segmentation, or no
-            // session started yet) falls back to the unchanged full-photo
-            // rect — Homography.fromQuad is agnostic to what the source
-            // quad represents either way.
-            final refCorners = arState.rockQuadPercent != null
-                ? [
-                    for (final p in arState.rockQuadPercent!)
-                      Offset(
-                        p.dx * widget.refSize.width,
-                        p.dy * widget.refSize.height,
-                      ),
-                  ]
-                : [
-                    Offset.zero,
-                    Offset(widget.refSize.width, 0),
-                    Offset(widget.refSize.width, widget.refSize.height),
-                    Offset(0, widget.refSize.height),
-                  ];
+            // Ship 1 of the #68 AR overhaul: the SOURCE quad is ALWAYS the
+            // full reference-photo rect (the earlier Vision-segmentation
+            // crop quad has been removed — it selected PEOPLE instead of the
+            // rock; the AR *reference image* itself is the full photo again,
+            // and the route-derived rock box (arState.rockBox) is now used
+            // only as a highlight, never as this fromQuad source).
+            final refCorners = [
+              Offset.zero,
+              Offset(widget.refSize.width, 0),
+              Offset(widget.refSize.width, widget.refSize.height),
+              Offset(0, widget.refSize.height),
+            ];
             final solved = Homography.fromQuad(refCorners, corners);
             if (Homography.isDegenerateQuadSolve(solved, refCorners, corners)) {
               // Degenerate/implausible solve (see
@@ -935,7 +897,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
               confidence: confidence,
               routeColorResolver: topoRouteColor,
               outline: showOutline ? widget.outline : null,
-              rockMask: highlightRock ? arState.rockMask : null,
+              rockBox: highlightRock ? arState.rockBox : null,
             ),
             child: const SizedBox.expand(),
           ),

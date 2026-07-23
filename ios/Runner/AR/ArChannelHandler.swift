@@ -33,20 +33,19 @@ protocol ArSessionControlling: AnyObject {
 /// Dart contract (must stay byte-for-byte in sync with
 /// `lib/features/ar/.../ar_channel*.dart`):
 ///   MethodChannel('masi/ar')
-///     - "start" args: {referenceImagePath: String, refWidth: Int, refHeight: Int, routesJson: String}
-///       result: {success: Bool, rockQuadPercent: [Double]x8?, rockMaskAlpha: Uint8List?,
-///       rockMaskWidth: Int?, rockMaskHeight: Int?}. `rockQuadPercent` is
-///       [tlX,tlY, trX,trY, brX,brY, blX,blY], each 0..1, the fraction of the FULL
-///       upright reference photo that native's best-effort rock/wall segmentation
-///       (`ArRockSegmentation`, iOS 17+) cropped ARKit's detectionImages target down
-///       to. `rockMaskAlpha` is a raw 8-bit alpha silhouette buffer (row-major, one
-///       byte per texel, each 0 or 255 -- NOT PNG), length == rockMaskWidth*rockMaskHeight,
-///       in the same FULL upright photo 0..1 frame (long edge downsampled to <= 256px).
-///       All THREE mask keys plus rockQuadPercent are OMITTED TOGETHER whenever
-///       segmentation didn't run/found nothing and the full upright photo was used as
-///       the detection target instead (never a null sentinel). The identical mask wire
-///       shape is also produced statelessly by `ArSegmentationChannelHandler`
-///       ("masi/arSegmentation" -> "segmentPreview").
+///     - "start" args: {referenceImagePath: String, refWidth: Int, refHeight: Int}
+///       result: {success: Bool}. Dart no longer sends `routesJson` (accepted but
+///       optional, defaulted to "" -- kept only so `ArSessionControlling.startSession`'s
+///       signature doesn't have to change); the rock box is computed and drawn
+///       entirely in Dart from the tracked corners this class publishes, so the
+///       ARReferenceImage built in `ArPlatformView.startSession` is always the FULL
+///       upright reference photo -- no Vision foreground crop. `rockQuadPercent`/
+///       `rockMaskAlpha`/`rockMaskWidth`/`rockMaskHeight` are therefore never sent:
+///       `startSession`'s completion always passes `nil` for both the quad and mask,
+///       and each key is only added to `payload` when non-nil, so they naturally
+///       vanish. `ArRockSegmentation` (iOS 17+ Vision crop) and
+///       `ArSegmentationChannelHandler` ("masi/arSegmentation" -> "segmentPreview")
+///       are left in the target, dormant and unused, rather than removed.
 ///     - "stop" (no args)
 ///     - "setMode" args: {mode: 'auto'|'manual'}
 ///     - "rescan" (no args) -- clears the pinned world transform and re-runs
@@ -103,16 +102,20 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
                 let args = call.arguments as? [String: Any],
                 let referenceImagePath = args["referenceImagePath"] as? String,
                 let refWidth = args["refWidth"] as? Int,
-                let refHeight = args["refHeight"] as? Int,
-                let routesJson = args["routesJson"] as? String
+                let refHeight = args["refHeight"] as? Int
             else {
                 result(FlutterError(
                     code: "bad_args",
-                    message: "start requires referenceImagePath: String, refWidth: Int, refHeight: Int, routesJson: String",
+                    message: "start requires referenceImagePath: String, refWidth: Int, refHeight: Int",
                     details: nil
                 ))
                 return
             }
+            // `routesJson` is no longer sent by Dart (the rock box is
+            // computed and drawn entirely in Dart from tracked corners) --
+            // tolerate its absence rather than requiring it, to avoid
+            // changing the `ArSessionControlling.startSession` signature.
+            let routesJson = args["routesJson"] as? String ?? ""
             sessionController?.startSession(
                 referenceImagePath: referenceImagePath,
                 refWidth: refWidth,

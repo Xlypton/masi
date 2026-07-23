@@ -1,26 +1,9 @@
-import 'dart:async';
-import 'dart:ui' as ui;
-
 import 'package:masi/features/ar/application/ar_channel.dart';
 import 'package:masi/features/ar/application/ar_controller.dart';
 import 'package:masi/features/ar/domain/corner_smoother.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-
-/// Decodes a tiny 1x1 RGBA image, for tests that need a real (non-null)
-/// `ui.Image` to stand in for a decoded rock mask.
-Future<ui.Image> _createTinyImage() {
-  final completer = Completer<ui.Image>();
-  ui.decodeImageFromPixels(
-    Uint8List.fromList(<int>[0, 229, 255, 255]),
-    1,
-    1,
-    ui.PixelFormat.rgba8888,
-    completer.complete,
-  );
-  return completer.future;
-}
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -58,43 +41,29 @@ void main() {
       expect(a, isNot(c));
     });
 
-    group('rockQuadPercent', () {
-      const quad = <Offset>[
-        Offset(0.1, 0.1),
-        Offset(0.9, 0.1),
-        Offset(0.9, 0.9),
-        Offset(0.1, 0.9),
-      ];
+    group('rockBox', () {
+      const box = Rect.fromLTRB(0.1, 0.1, 0.9, 0.9);
 
       test('defaults to null', () {
         const state = ArState(mode: ArMode.auto, active: false);
-        expect(state.rockQuadPercent, isNull);
+        expect(state.rockBox, isNull);
       });
 
       test('copyWith sets it when given a value', () {
         const state = ArState(mode: ArMode.auto, active: false);
-        final withQuad = state.copyWith(rockQuadPercent: quad);
-        expect(withQuad.rockQuadPercent, quad);
+        final withBox = state.copyWith(rockBox: box);
+        expect(withBox.rockBox, box);
       });
 
       test(
         'equality/hashCode treat two states with equal (but distinct) '
-        'quad lists as equal, and a differing quad as unequal',
+        'rock boxes as equal, and a differing box as unequal',
         () {
-          const a = ArState(
-            mode: ArMode.auto,
-            active: false,
-            rockQuadPercent: quad,
-          );
+          const a = ArState(mode: ArMode.auto, active: false, rockBox: box);
           const b = ArState(
             mode: ArMode.auto,
             active: false,
-            rockQuadPercent: <Offset>[
-              Offset(0.1, 0.1),
-              Offset(0.9, 0.1),
-              Offset(0.9, 0.9),
-              Offset(0.1, 0.9),
-            ],
+            rockBox: Rect.fromLTRB(0.1, 0.1, 0.9, 0.9),
           );
           const c = ArState(mode: ArMode.auto, active: false);
 
@@ -143,7 +112,7 @@ void main() {
       expect(state.mode, ArMode.auto);
       expect(state.active, isFalse);
       expect(state.latest, isNull);
-      expect(state.rockQuadPercent, isNull);
+      expect(state.rockBox, isNull);
     });
 
     test(
@@ -196,73 +165,33 @@ void main() {
       expect(container.read(arControllerProvider).active, isFalse);
     });
 
-    group('B1/B3: setRockSegmentation', () {
-      const quad = <Offset>[
-        Offset(0.1, 0.1),
-        Offset(0.9, 0.1),
-        Offset(0.9, 0.9),
-        Offset(0.1, 0.9),
-      ];
+    group('setRockBox', () {
+      const box = Rect.fromLTRB(0.1, 0.1, 0.9, 0.9);
 
-      test('setRockSegmentation(quadPercent: quad) sets state.rockQuadPercent', () {
-        container.read(arControllerProvider.notifier).setRockSegmentation(quadPercent: quad);
+      test('setRockBox(box) sets state.rockBox', () {
+        container.read(arControllerProvider.notifier).setRockBox(box);
 
-        expect(container.read(arControllerProvider).rockQuadPercent, quad);
+        expect(container.read(arControllerProvider).rockBox, box);
       });
 
       test(
-        'setRockSegmentation(quadPercent: null) after a previously-set quad '
-        'ACTUALLY resets it back to null -- the copyWith-style `?? this.field` '
-        'idiom every other nullable ArState field uses can never null out '
-        'an already-set field, so this must not go through a naive '
-        'state.copyWith(rockQuadPercent: null) call',
+        'setRockBox(null) after a previously-set box ACTUALLY resets it '
+        'back to null -- the copyWith-style `?? this.field` idiom every '
+        'other nullable ArState field uses can never null out an '
+        'already-set field, so this must not go through a naive '
+        'state.copyWith(rockBox: null) call',
         () {
-          container
-              .read(arControllerProvider.notifier)
-              .setRockSegmentation(quadPercent: quad);
-          expect(container.read(arControllerProvider).rockQuadPercent, quad);
+          container.read(arControllerProvider.notifier).setRockBox(box);
+          expect(container.read(arControllerProvider).rockBox, box);
 
-          container.read(arControllerProvider.notifier).setRockSegmentation(quadPercent: null);
+          container.read(arControllerProvider.notifier).setRockBox(null);
 
-          expect(
-            container.read(arControllerProvider).rockQuadPercent,
-            isNull,
-          );
-        },
-      );
-
-      test('setRockSegmentation(mask: img) sets state.rockMask', () async {
-        final mask = await _createTinyImage();
-        addTearDown(mask.dispose);
-
-        container
-            .read(arControllerProvider.notifier)
-            .setRockSegmentation(mask: mask);
-
-        expect(container.read(arControllerProvider).rockMask, same(mask));
-      });
-
-      test(
-        'setRockSegmentation() with NO args resets BOTH quadPercent and mask '
-        'back to null (the wall-switch reset path)',
-        () async {
-          final mask = await _createTinyImage();
-          addTearDown(mask.dispose);
-          container
-              .read(arControllerProvider.notifier)
-              .setRockSegmentation(quadPercent: quad, mask: mask);
-          expect(container.read(arControllerProvider).rockQuadPercent, quad);
-          expect(container.read(arControllerProvider).rockMask, same(mask));
-
-          container.read(arControllerProvider.notifier).setRockSegmentation();
-
-          expect(container.read(arControllerProvider).rockQuadPercent, isNull);
-          expect(container.read(arControllerProvider).rockMask, isNull);
+          expect(container.read(arControllerProvider).rockBox, isNull);
         },
       );
 
       test(
-        'setRockSegmentation leaves every other ArState field untouched',
+        'setRockBox leaves every other ArState field untouched',
         () {
           container.read(arControllerProvider.notifier).setMode(ArMode.manual);
           container.read(arControllerProvider.notifier).markActive(true);
@@ -272,15 +201,13 @@ void main() {
           });
           container.read(arControllerProvider.notifier).onAlignment(alignment);
 
-          container
-              .read(arControllerProvider.notifier)
-              .setRockSegmentation(quadPercent: quad);
+          container.read(arControllerProvider.notifier).setRockBox(box);
 
           final state = container.read(arControllerProvider);
           expect(state.mode, ArMode.manual);
           expect(state.active, isTrue);
           expect(state.latest, alignment);
-          expect(state.rockQuadPercent, quad);
+          expect(state.rockBox, box);
         },
       );
     });

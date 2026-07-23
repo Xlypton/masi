@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:masi/core/coordinates/coordinate_transformer.dart';
+import 'package:masi/features/ar/domain/rock_box.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/application/rock_highlight_controller.dart';
 import 'package:masi/features/topo/domain/route_hit_test.dart';
@@ -915,14 +916,17 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     final drawState = ref.watch(drawControllerProvider(widget.wallId));
     final isDrawMode = drawState.mode == DrawMode.draw;
 
-    // Rock-highlight overlay (see rock_highlight_controller.dart): the decoded
-    // segmentation mask for the ACTIVE photo, or null when there's no active
-    // photo, the highlight is toggled off, or segmentation found nothing. The
-    // provider is keyed by photoId, so switching photos gets its own state.
+    // Rock-highlight overlay (see rock_highlight_controller.dart): a
+    // route-derived box (see rock_box.dart's rockBoxFromRoutes) covering the
+    // ACTIVE photo's drawn routes, or null when there's no active photo, the
+    // highlight is toggled off, or the photo has no drawn routes/symbols to
+    // derive a box from. The toggle provider is keyed by photoId, so
+    // switching photos gets its own on/off state.
     final photoId = drawState.activePhotoId;
-    final rockMask = photoId == null
-        ? null
-        : ref.watch(rockHighlightControllerProvider(photoId)).mask;
+    final rockHighlightOn = photoId != null &&
+        ref.watch(rockHighlightControllerProvider(photoId));
+    final rockBox =
+        rockHighlightOn ? rockBoxFromRoutes(drawState.routes) : null;
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -987,18 +991,18 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   placeholder: () => const SizedBox.shrink(),
                 ),
                 // Rock-highlight overlay: painted BETWEEN the photo and the
-                // route overlay so the segmented rock is washed with a
-                // translucent tint under the routes. No homography/transform
-                // of its own — it fills the same SizedBox(imageSize) as the
-                // photo and TopoPainter, so it shares the InteractiveViewer
-                // transform automatically. Only present when the active
-                // photo's highlight is on AND a mask was found (see
-                // RockHighlightState).
-                if (rockMask != null)
+                // route overlay so the route-derived rock box is washed with
+                // a translucent tint under the routes. No homography/
+                // transform of its own — it fills the same
+                // SizedBox(imageSize) as the photo and TopoPainter, so it
+                // shares the InteractiveViewer transform automatically. Only
+                // present when the active photo's highlight is on AND the
+                // photo has drawn routes/symbols to derive a box from.
+                if (rockBox != null)
                   CustomPaint(
                     size: widget.imageSize,
-                    painter: RockMaskPainter(
-                      mask: rockMask,
+                    painter: RockBoxPainter(
+                      box: rockBox,
                       imageSize: widget.imageSize,
                     ),
                   ),

@@ -3,6 +3,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:masi/features/ar/domain/homography.dart';
+import 'package:masi/features/ar/domain/rock_box.dart';
 import 'package:masi/features/ar/presentation/ar_overlay_painter.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:flutter/material.dart';
@@ -380,79 +381,91 @@ void main() {
     );
   });
 
-  group('rockMask (rock-highlight silhouette)', () {
-    test('rockMask: null (default) draws no highlight image', () {
+  group('rockBox (route-derived rock-box highlight)', () {
+    test('rockBox: null (default) draws no highlight path', () {
       final route = TopoRoute(
         id: 1,
         number: 1,
         points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
       );
-      final painter = buildPainter(routes: [route]); // rockMask defaults null.
+      final painter = buildPainter(routes: [route]); // rockBox defaults null.
       final canvas = _RecordingCanvas();
 
       painter.paint(canvas, refSize);
 
-      expect(canvas.imageRects, isEmpty);
-      expect(canvas.transforms, isEmpty);
+      expect(canvas.paths, isEmpty);
       expect(canvas.lines, hasLength(1));
     });
 
     test(
-      'rockMask: non-null draws the mask image transformed by homography with '
-      'a (srcIn recolor) colorFilter, before route polylines',
-      () async {
-        final mask = await _createTinyImage();
+      'rockBox: non-null draws a closed path through its 4 corners warped by '
+      'homography, as a filled+stroked highlight, before route polylines',
+      () {
         final homography = Homography.translation(20, 10);
         final route = TopoRoute(
           id: 1,
           number: 1,
           points: const [Offset(0.0, 0.0), Offset(1.0, 1.0)],
         );
+        const box = Rect.fromLTRB(0.2, 0.3, 0.8, 0.7);
 
         final painter = ArOverlayPainter(
           routes: [route],
           refSize: refSize,
           homography: homography,
           palette: palette,
-          rockMask: mask,
+          rockBox: box,
         );
         final canvas = _RecordingCanvas();
 
         painter.paint(canvas, refSize);
 
-        expect(canvas.imageRects, hasLength(1));
-        final rec = canvas.imageRects.single;
-        expect(rec.image, same(mask));
-        expect(
-          rec.src,
-          Rect.fromLTWH(0, 0, mask.width.toDouble(), mask.height.toDouble()),
-        );
-        expect(rec.dst, Rect.fromLTWH(0, 0, refSize.width, refSize.height));
-        // The mask is recolored into a flat glowing silhouette via a srcIn
-        // ColorFilter (unlike the plain outline paint, which has none).
-        expect(rec.paint.colorFilter, isNotNull);
+        // Fill + stroke -> exactly 2 drawPath calls for the box, both before
+        // the route's drawLine.
+        expect(canvas.paths, hasLength(2));
+        final pathIndex0 = canvas.callOrder.indexOf('drawPath');
+        final lineIndex = canvas.callOrder.indexOf('drawLine');
+        expect(pathIndex0, lessThan(lineIndex));
+        expect(canvas.callOrder.lastIndexOf('drawPath'), lessThan(lineIndex));
 
-        // The mask's transform matches the homography (same warp as routes).
-        expect(canvas.transforms, hasLength(1));
-        final expected = homography.toMatrix4ColumnMajor();
-        final actual = canvas.transforms.single;
-        for (var i = 0; i < 16; i++) {
-          expect(actual[i], closeTo(expected[i], 1e-9));
+        // Both paths trace the same 4 corners, warped through the
+        // homography exactly like a route point would be
+        // (homography.warpOriginalPercent(percent, refSize)).
+        final expectedCorners = [
+          for (final p in rockBoxCornersNorm(box))
+            homography.warpOriginalPercent(p, refSize),
+        ];
+        for (final path in canvas.paths) {
+          final metrics = path.computeMetrics().toList();
+          expect(metrics, isNotEmpty);
+          final start = metrics.first.getTangentForOffset(0)?.position;
+          expect(start, isNotNull);
+          expect((start! - expectedCorners[0]).distance, lessThan(0.01));
         }
 
-        // Ordering: transform -> drawImageRect -> route polyline, so the
-        // highlight renders behind the routes.
-        final transformIndex = canvas.callOrder.indexOf('transform');
-        final imageIndex = canvas.callOrder.indexOf('drawImageRect');
-        final lineIndex = canvas.callOrder.indexOf('drawLine');
-        expect(transformIndex, lessThan(imageIndex));
-        expect(imageIndex, lessThan(lineIndex));
+        // One paint is a fill, the other a stroke -- both in the same
+        // highlight tint family (non-opaque, translucent alpha), and the
+        // stroke's alpha must be higher (more opaque) than the fill's,
+        // matching the "tinted stroke + faint fill" contract.
+        final fillPaint = canvas.pathPaints.firstWhere(
+          (p) => p.style == PaintingStyle.fill,
+        );
+        final strokePaint = canvas.pathPaints.firstWhere(
+          (p) => p.style == PaintingStyle.stroke,
+        );
+        expect(fillPaint.color.a, greaterThan(0));
+        expect(strokePaint.color.a, greaterThan(fillPaint.color.a));
+        expect(strokePaint.strokeWidth, greaterThan(0));
+        // Same tint family (RGB) for both.
+        expect(
+          (fillPaint.color.toARGB32() & 0x00FFFFFF),
+          (strokePaint.color.toARGB32() & 0x00FFFFFF),
+        );
 
-        // A single balanced save/restore, NO saveLayer (unlike the outline's
-        // opacity-layer recipe).
-        expect(canvas.saveCount, 1);
-        expect(canvas.restoreCount, 1);
-        expect(canvas.saveLayers, isEmpty);
+        // No image-based drawing at all -- the box is drawn purely as a
+        // vector path, unlike the outline block's canvas.transform +
+        // drawImageRect recipe.
+        expect(canvas.imageRects, isEmpty);
       },
     );
   });
@@ -553,31 +566,39 @@ void main() {
     );
 
     test(
-      'returns true when rockMask differs (one null, one non-null); '
-      'returns false when both share the identical rockMask reference',
-      () async {
-        final mask = await _createTinyImage();
-
-        final withoutMask = buildPainter();
-        final withMask = ArOverlayPainter(
+      'returns true when rockBox differs (one null, one non-null, or two '
+      'different boxes); returns false when both share an equal rockBox',
+      () {
+        const box = Rect.fromLTRB(0.1, 0.1, 0.9, 0.9);
+        final withoutBox = buildPainter();
+        final withBox = ArOverlayPainter(
           routes: const [],
           refSize: refSize,
           homography: Homography.identity(),
           palette: palette,
-          rockMask: mask,
+          rockBox: box,
         );
 
-        expect(withoutMask.shouldRepaint(withMask), isTrue);
-        expect(withMask.shouldRepaint(withoutMask), isTrue);
+        expect(withoutBox.shouldRepaint(withBox), isTrue);
+        expect(withBox.shouldRepaint(withoutBox), isTrue);
 
-        final sameMaskReference = ArOverlayPainter(
+        final sameBox = ArOverlayPainter(
           routes: const [],
           refSize: refSize,
           homography: Homography.identity(),
           palette: palette,
-          rockMask: mask,
+          rockBox: const Rect.fromLTRB(0.1, 0.1, 0.9, 0.9),
         );
-        expect(withMask.shouldRepaint(sameMaskReference), isFalse);
+        expect(withBox.shouldRepaint(sameBox), isFalse);
+
+        final differentBox = ArOverlayPainter(
+          routes: const [],
+          refSize: refSize,
+          homography: Homography.identity(),
+          palette: palette,
+          rockBox: const Rect.fromLTRB(0.2, 0.2, 0.8, 0.8),
+        );
+        expect(withBox.shouldRepaint(differentBox), isTrue);
       },
     );
   });

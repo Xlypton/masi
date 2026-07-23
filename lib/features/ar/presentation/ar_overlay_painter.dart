@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/rendering.dart' show CustomPainter;
 
 import 'package:masi/features/ar/domain/homography.dart';
+import 'package:masi/features/ar/domain/rock_box.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/topo_painter.dart';
 
@@ -32,15 +33,22 @@ const int kLowConfidenceAlpha = 89; // ~0.35 * 255, rounded.
 /// palette) even if the caller passes an empty palette list.
 const Color _fallbackRouteColor = Color(0xFF2E7D32);
 
-/// The flat tint the rock-highlight silhouette ([ArOverlayPainter.rockMask])
-/// is recolored to. Cyan reads as a glowing highlight over most rock/foliage
-/// photos; the `~160`/255 alpha keeps it translucent enough that the live
-/// camera feed still shows through the highlighted surface.
+/// The flat tint the rock-box highlight ([ArOverlayPainter.rockBox]) is
+/// drawn with. Cyan reads as a glowing highlight over most rock/foliage
+/// photos.
 const Color _rockHighlightTint = Color(0xFF00E5FF);
 
-/// Alpha (0-255) applied to [_rockHighlightTint] when painting the
-/// rock-highlight silhouette.
+/// Alpha (0-255) applied to [_rockHighlightTint] for the rock box's
+/// STROKE (its outline).
 const int _rockHighlightAlpha = 160;
+
+/// Alpha (0-255) applied to [_rockHighlightTint] for the rock box's faint
+/// FILL (~18% opacity) — translucent enough that the live camera feed still
+/// clearly shows through the highlighted area.
+const int _rockBoxFillAlpha = 46;
+
+/// Stroke width (canvas px) for the rock box's outline.
+const double _rockBoxStrokeWidth = 3.0;
 
 /// Paints topo routes warped through a [Homography] on top of a live camera
 /// feed, for the AR alignment view.
@@ -71,7 +79,7 @@ class ArOverlayPainter extends CustomPainter {
     this.confidence = 1.0,
     this.routeColorResolver,
     this.outline,
-    this.rockMask,
+    this.rockBox,
   });
 
   /// Routes to render, in percent-of-[refSize] space. Routes with
@@ -107,15 +115,14 @@ class ArOverlayPainter extends CustomPainter {
   /// default) draws no outline at all.
   final ui.Image? outline;
 
-  /// Optional rock-segmentation mask image (see `rock_mask_codec.dart`'s
-  /// [ui.Image] built by `decodeRockMaskAlpha`), painted — warped through
-  /// [homography] the same way [outline]/routes are — as a flat glowing
-  /// silhouette (recolored via a [BlendMode.srcIn] [ColorFilter] so only the
-  /// mask's alpha shape shows, in a constant [_rockHighlightTint]) over the
-  /// tracked wall. `null` (the default) draws no highlight at all — the
-  /// screen passes the mask only while the "highlight rock" toggle is on (see
-  /// `ar_screen.dart`).
-  final ui.Image? rockMask;
+  /// Optional route-derived rock box (see `rock_box.dart`'s
+  /// `rockBoxFromRoutes`), normalized 0..1 fractions of [refSize], painted
+  /// as a highlight — its 4 corners warped through [homography] the same
+  /// way route points are — over the tracked wall: a faint tinted fill plus
+  /// a tinted stroke outline, both in [_rockHighlightTint]. `null` (the
+  /// default) draws no highlight at all — the screen passes the box only
+  /// while the "highlight rock" toggle is on (see `ar_screen.dart`).
+  final Rect? rockBox;
 
   bool get _isLowConfidence => confidence < kLowConfidenceThreshold;
 
@@ -138,31 +145,35 @@ class ArOverlayPainter extends CustomPainter {
       canvas.restore(); // ends transform save
     }
 
-    final maskImage = rockMask;
-    if (maskImage != null) {
-      canvas.save();
-      canvas.transform(homography.toMatrix4ColumnMajor());
-      final dst = Rect.fromLTWH(0, 0, refSize.width, refSize.height);
-      final src = Rect.fromLTWH(
-        0,
-        0,
-        maskImage.width.toDouble(),
-        maskImage.height.toDouble(),
-      );
-      // srcIn recolors the mask's alpha shape into a flat glowing silhouette
-      // in the constant highlight tint (the mask's own RGB is discarded);
-      // bilinear filtering smooths the downsampled mask stretched over the
-      // full-photo rect the same way the outline block above smooths its
-      // upscaled edge image.
-      final maskPaint = Paint()
-        ..colorFilter = ColorFilter.mode(
-          _rockHighlightTint.withAlpha(_rockHighlightAlpha),
-          BlendMode.srcIn,
-        )
-        ..filterQuality = FilterQuality.high
+    final box = rockBox;
+    if (box != null) {
+      // Corners warped exactly the way route points are (homography.
+      // warpOriginalPercent on a 0..1 fraction of refSize) -- consistent
+      // with the rest of this painter's coordinate handling, and simpler
+      // than the outline block's canvas.transform+drawImageRect recipe
+      // since there's no image to stretch, just 4 points to draw a path
+      // through.
+      final corners = [
+        for (final p in rockBoxCornersNorm(box))
+          homography.warpOriginalPercent(p, refSize),
+      ];
+      final path = Path()..moveTo(corners[0].dx, corners[0].dy);
+      for (final c in corners.skip(1)) {
+        path.lineTo(c.dx, c.dy);
+      }
+      path.close();
+
+      final fillPaint = Paint()
+        ..color = _rockHighlightTint.withAlpha(_rockBoxFillAlpha)
+        ..style = PaintingStyle.fill;
+      canvas.drawPath(path, fillPaint);
+
+      final strokePaint = Paint()
+        ..color = _rockHighlightTint.withAlpha(_rockHighlightAlpha)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = _rockBoxStrokeWidth
         ..isAntiAlias = true;
-      canvas.drawImageRect(maskImage, src, dst, maskPaint);
-      canvas.restore();
+      canvas.drawPath(path, strokePaint);
     }
 
     for (final route in routes) {
@@ -247,7 +258,7 @@ class ArOverlayPainter extends CustomPainter {
         confidence != oldDelegate.confidence ||
         routeColorResolver != oldDelegate.routeColorResolver ||
         outline != oldDelegate.outline ||
-        rockMask != oldDelegate.rockMask ||
+        rockBox != oldDelegate.rockBox ||
         !listEquals(palette, oldDelegate.palette) ||
         !listEquals(routes, oldDelegate.routes);
   }

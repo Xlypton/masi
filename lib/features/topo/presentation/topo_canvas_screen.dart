@@ -1311,32 +1311,28 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
     }
 
-    // Rock-segmentation highlight toggle (#68): a sibling of the AR button,
-    // gated the same way (view mode, a photo loaded). Runs a one-shot native
-    // segmentation of the active photo and washes the detected rock with a
-    // translucent tint under the routes (see rock_highlight_controller.dart /
-    // rock_mask_painter.dart). Enabled only where native segmentation exists
-    // (isArSupported — iOS); disabled with an explanatory tooltip elsewhere.
+    // Rock-highlight toggle (#68): a sibling of the AR button, gated the
+    // same way (view mode, a photo loaded). Washes a route-derived box (see
+    // rock_box.dart's rockBoxFromRoutes) with a translucent tint under the
+    // routes (see rock_highlight_controller.dart / rock_mask_painter.dart's
+    // RockBoxPainter). Unlike the old Vision-segmentation flow, the box is a
+    // pure function of the routes already drawn on this photo, so this
+    // toggle needs no native call and works on every platform (no
+    // isArSupported gate).
     if (drawState.mode == DrawMode.view && drawState.activePhotoId != null) {
       final photoId = drawState.activePhotoId!;
-      final imagePath = ref.watch(selectedImageProvider);
-      final arSupported = isArSupported();
-      final rockState = ref.watch(rockHighlightControllerProvider(photoId));
+      final highlightOn = ref.watch(rockHighlightControllerProvider(photoId));
       actions.add(
         IconButton(
           key: const Key('topo-highlight-rock-toggle'),
-          icon: MasiIcon(rockState.enabled ? 'boulder_fill' : 'boulder'),
-          tooltip: arSupported
-              ? (rockState.enabled ? 'Hide rock highlight' : 'Highlight rock')
-              : 'Rock segmentation is available on iOS only',
-          onPressed: (arSupported && imagePath != null)
-              ? () => ref
-                    .read(rockHighlightControllerProvider(photoId).notifier)
-                    .toggle(imagePath)
-              : null,
+          icon: MasiIcon(highlightOn ? 'boulder_fill' : 'boulder'),
+          tooltip: highlightOn ? 'Hide rock highlight' : 'Highlight rock',
+          onPressed: () => ref
+              .read(rockHighlightControllerProvider(photoId).notifier)
+              .toggle(),
           color: colors.accent,
           style: _topRowIconStyle(
-            backgroundColor: rockState.enabled
+            backgroundColor: highlightOn
                 ? colors.accent.withValues(alpha: 0.16)
                 : null,
           ),
