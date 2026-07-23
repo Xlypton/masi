@@ -10,6 +10,7 @@ import '../features/library/application/library_providers.dart';
 import 'claim_ownership_bootstrap.dart';
 import 'router.dart';
 import 'theme.dart';
+import 'web_lifecycle.dart';
 
 class MasiApp extends ConsumerStatefulWidget {
   const MasiApp({super.key});
@@ -24,6 +25,21 @@ class _MasiAppState extends ConsumerState<MasiApp>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Web-only, best-effort hardening (ADDITIVE — the `WidgetsBindingObserver`
+    // above is unchanged and still runs on every platform including web):
+    // browsers don't reliably deliver `AppLifecycleState.paused` on a plain
+    // tab-hide/close the way iOS/Android deliver it on backgrounding, so
+    // there's otherwise no trigger to flush a pending debounced sync push
+    // before the tab disappears. `installWebLifecycleFlush` is a no-op on
+    // native (see `web_lifecycle_native.dart`) — this call is inert there.
+    // Same target as the native `AppLifecycleState.paused` branch below:
+    // push immediately, skipping any pending debounce window. See
+    // `web_lifecycle_web.dart` for exactly which browser events this hooks
+    // and its honest limitation (can't guarantee completion on abrupt close,
+    // only maximizes the chance the push starts in time).
+    installWebLifecycleFlush(
+      () => ref.read(syncOrchestratorProvider.notifier).onAppPaused(),
+    );
   }
 
   @override
