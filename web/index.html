@@ -132,6 +132,27 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
+  <script>
+    // iOS Safari PWA first-paint fix (flutter/flutter#84833): on WebKit,
+    // Flutter's web engine sizes its view from
+    // document.documentElement.clientHeight/clientWidth rather than
+    // window.innerHeight/innerWidth. On a cold-launched standalone PWA that
+    // value is briefly unsettled (missing the viewport-fit=cover safe-area
+    // adjustment), so Flutter's canvas paints a few px short of the true top
+    // edge for one frame, exposing a hairline strip at the top until any
+    // relayout (e.g. a back-navigation) makes WebKit settle it. Aliasing the
+    // getters to the already-correct window.innerHeight/innerWidth makes the
+    // very first read correct. Inert on Chrome/Android (Flutter doesn't read
+    // clientHeight there).
+    Object.defineProperty(document.documentElement, 'clientHeight', {
+      get: function () { return window.innerHeight; },
+      configurable: true,
+    });
+    Object.defineProperty(document.documentElement, 'clientWidth', {
+      get: function () { return window.innerWidth; },
+      configurable: true,
+    });
+  </script>
   <script src="flutter_bootstrap.js" async></script>
 
   <script>
