@@ -229,21 +229,40 @@ abstract final class MasiSpacing {
   static const double xxl = 32;
 }
 
-/// On web, every route uses a NON-interactive page transition. Native uses
-/// Flutter's platform defaults (iOS keeps its Cupertino swipe-back). On web
-/// the platform still resolves to iOS in Safari, which would add Flutter's
-/// own interactive edge-swipe-to-pop gesture ON TOP of Safari's native
-/// edge-swipe -> the back nav + pop animation fire twice (#76). Mapping all
-/// platforms to a gesture-less builder on web makes Safari's native swipe the
-/// sole back driver.
+/// A [PageTransitionsBuilder] that performs NO transition — [child] is
+/// returned untouched. Used on web (see [_webPageTransitionsTheme]).
+///
+/// Even after removing the double-back-swipe gesture (#76), Flutter's
+/// [ZoomPageTransitionsBuilder] still plays a real ~300ms scale+fade that is
+/// rendered LIVE on web (Flutter disables its transition-snapshot cache
+/// there — `useSnapshot => !kIsWeb`). On a browser-driven pop, iOS Safari's
+/// native edge-swipe has ALREADY completed its own visual transition before
+/// go_router's popstate handler runs; Flutter then replays its own unsynced
+/// animation on top of the already-settled frame, which reads as a single
+/// flash of the previous screen. Returning [child] unchanged removes
+/// Flutter's contribution entirely: in-app navigation is instant and the
+/// only motion on an edge-swipe is Safari's own native transition.
+class _InstantPageTransitionsBuilder extends PageTransitionsBuilder {
+  const _InstantPageTransitionsBuilder();
+
+  @override
+  Widget buildTransitions<T>(
+    PageRoute<T> route,
+    BuildContext context,
+    Animation<double> animation,
+    Animation<double> secondaryAnimation,
+    Widget child,
+  ) => child;
+}
+
 const PageTransitionsTheme _webPageTransitionsTheme = PageTransitionsTheme(
   builders: {
-    TargetPlatform.android: ZoomPageTransitionsBuilder(),
-    TargetPlatform.iOS: ZoomPageTransitionsBuilder(),
-    TargetPlatform.macOS: ZoomPageTransitionsBuilder(),
-    TargetPlatform.windows: ZoomPageTransitionsBuilder(),
-    TargetPlatform.linux: ZoomPageTransitionsBuilder(),
-    TargetPlatform.fuchsia: ZoomPageTransitionsBuilder(),
+    TargetPlatform.android: _InstantPageTransitionsBuilder(),
+    TargetPlatform.iOS: _InstantPageTransitionsBuilder(),
+    TargetPlatform.macOS: _InstantPageTransitionsBuilder(),
+    TargetPlatform.windows: _InstantPageTransitionsBuilder(),
+    TargetPlatform.linux: _InstantPageTransitionsBuilder(),
+    TargetPlatform.fuchsia: _InstantPageTransitionsBuilder(),
   },
 );
 
