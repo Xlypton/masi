@@ -101,6 +101,19 @@ class _CountingSyncRemote implements SyncRemote {
   }) async {}
 }
 
+/// A [_CountingSyncRemote] whose [fetchSharedTopos] always throws --
+/// exercises the #72 P1 fix's per-section pull isolation (see
+/// `sync_service.dart`'s `pullOwnAndShared` doc): the OWN side (via
+/// [_CountingSyncRemote.fetchOwnRows]) still succeeds and is counted, while
+/// this ONE shared sub-fetch's failure is caught by `SyncService` and
+/// surfaced in `PullResult.errors` rather than aborting the whole pull.
+class _ThrowingSharedToposSyncRemote extends _CountingSyncRemote {
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
+    throw Exception('shared-topos-boom');
+  }
+}
+
 /// Minimal [AuthRepository] test double standing in for the auth session
 /// [SyncService] itself reads (`currentSession.uid`) to gate push/pull —
 /// deliberately separate from `authStateProvider`'s stream, which is only
@@ -595,6 +608,72 @@ void main() {
               'be silently skipped, no matter how recently the last pull '
               'started',
         );
+      },
+    );
+  });
+
+  group('#72 P1: _runPull no longer swallows PullResult.errors', () {
+    test(
+      'a shared-side fetch failure surfaces in lastPullError as a human-'
+      'readable "Sync failed: ..." message, WITHOUT flipping status away '
+      'from idle -- the own side still succeeded (partial success, not a '
+      'total failure)',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _ThrowingSharedToposSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          nowMs: () => 123456,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+
+        final state = container.read(syncOrchestratorProvider);
+        expect(
+          state.lastPullError,
+          allOf(contains('Sync failed:'), contains('shared-topos-boom')),
+          reason: 'the actual PullResult.errors text must be retained, not '
+              'discarded by a bare debugPrint',
+        );
+        expect(
+          state.status,
+          SyncStatus.idle,
+          reason: 'a PARTIAL pull failure (own succeeded, shared threw) '
+              'must not be treated as a total failure',
+        );
+        expect(remote.pullCallCount, 1, reason: 'the own side still ran');
+      },
+    );
+
+    test(
+      'a fully successful pull clears any earlier lastPullError back to '
+      'null',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+
+        expect(container.read(syncOrchestratorProvider).lastPullError, isNull);
       },
     );
   });

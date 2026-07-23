@@ -52,11 +52,21 @@ class _NoopTileProvider extends TileProvider {
 /// needs `pullNow()` to have been invoked; it does not need (and, for a
 /// widget test, should not have to wire up) the real push/pull machinery
 /// `sync_orchestrator_test.dart`/`app_test.dart` already cover directly.
+///
+/// [initialState] (#72 P1 fix's `_SyncErrorEmptyState` group below) lets a
+/// test start the orchestrator already carrying a
+/// [SyncOrchestratorState.lastPullError] — every pre-existing call site
+/// here omits it and gets the exact same default `SyncOrchestratorState()`
+/// as before.
 class _FakeSyncOrchestrator extends SyncOrchestrator {
+  _FakeSyncOrchestrator({SyncOrchestratorState? initialState})
+    : _initialState = initialState ?? const SyncOrchestratorState();
+
+  final SyncOrchestratorState _initialState;
   int pullNowCallCount = 0;
 
   @override
-  SyncOrchestratorState build() => const SyncOrchestratorState();
+  SyncOrchestratorState build() => _initialState;
 
   @override
   Future<void> pullNow({bool throttled = false}) async {
@@ -309,6 +319,72 @@ void main() {
 
         expect(tester.takeException(), isNull);
         expect(fakeOrchestrator.pullNowCallCount, 1);
+      },
+    );
+  });
+
+  group('#72: CommunityFeedScreen sync-error empty state', () {
+    testWidgets(
+      'a genuinely empty feed with a lastPullError renders the '
+      "sync-error affordance (not the plain 'No shared topos yet' "
+      'message), and tapping Retry calls pullNow()',
+      (tester) async {
+        final fakeOrchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastPullError:
+                'Sync failed: shared topos fetch failed: Exception: boom',
+          ),
+        );
+        final container = _makeContainer(fakeOrchestrator: fakeOrchestrator);
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-sync-error-empty')),
+          findsOneWidget,
+          reason: 'a genuinely empty feed with a reported pull error must '
+              'show the sync-error affordance instead of the plain empty '
+              'state',
+        );
+        expect(find.byKey(const Key('community-empty')), findsNothing);
+        expect(
+          find.textContaining(
+            'Sync failed: shared topos fetch failed: Exception: boom',
+          ),
+          findsOneWidget,
+          reason: 'the actual PullResult.errors text must be readable '
+              'on-device without a debugger',
+        );
+        expect(
+          find.byKey(const Key('community-sync-error-retry')),
+          findsOneWidget,
+        );
+
+        expect(fakeOrchestrator.pullNowCallCount, 0);
+        await tester.tap(find.byKey(const Key('community-sync-error-retry')));
+        await tester.pump();
+
+        expect(fakeOrchestrator.pullNowCallCount, 1);
+      },
+    );
+
+    testWidgets(
+      'a genuinely empty feed with NO lastPullError renders the normal '
+      'empty state (no sync-error affordance)',
+      (tester) async {
+        final fakeOrchestrator = _FakeSyncOrchestrator();
+        final container = _makeContainer(fakeOrchestrator: fakeOrchestrator);
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('community-empty')), findsOneWidget);
+        expect(find.text('No shared topos yet'), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-sync-error-empty')),
+          findsNothing,
+        );
       },
     );
   });

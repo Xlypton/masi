@@ -9,6 +9,7 @@ import 'package:masi/core/grades/grade_system.dart';
 import 'package:masi/core/location/location_service.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/community/application/community_providers.dart';
 import 'package:masi/features/community/data/community_repository.dart';
 import 'package:masi/features/library/application/library_providers.dart';
@@ -103,7 +104,26 @@ void _setDms(
 /// `GeolocatorLocationService` still never throws under `flutter_test` (no
 /// platform channel is registered, so its internal try/catch resolves to
 /// `null`), so every pre-existing "no EXIF GPS" test is unaffected.
-ProviderContainer _makeContainer({LocationService? locationService}) {
+///
+/// [syncOrchestrator], when given, overrides `syncOrchestratorProvider` with
+/// it (see the "#72: sync-error empty state" group above, which passes an
+/// [_FakeSyncOrchestrator] carrying a `lastPullError`). Tests that don't
+/// pass it get a plain no-op [_FakeSyncOrchestrator] by default -- #72 P1
+/// fix: `ToposScreen`'s empty-state branch now `ref.watch`es
+/// `syncOrchestratorProvider` (see `topos_screen.dart`'s `build`), which
+/// wasn't referenced anywhere in this widget's tree before. In PRODUCTION
+/// that's a no-op (`MasiApp` already keeps the REAL orchestrator alive for
+/// the whole app run, well before `ToposScreen` ever renders — see that
+/// class's own doc), but a bare widget test here has no such root: without
+/// this default override, the "New topo" flow's real DB writes would tick
+/// the REAL `SyncOrchestrator`'s live `tableUpdates()` subscription and
+/// schedule a genuine 2-second debounce `Timer` that outlives the test's
+/// short `_drain()` window, tripping flutter_test's
+/// "A Timer is still pending" teardown assertion.
+ProviderContainer _makeContainer({
+  LocationService? locationService,
+  SyncOrchestrator? syncOrchestrator,
+}) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
@@ -111,6 +131,9 @@ ProviderContainer _makeContainer({LocationService? locationService}) {
       nowMsProvider.overrideWithValue(() => 1000),
       if (locationService != null)
         locationServiceProvider.overrideWithValue(locationService),
+      syncOrchestratorProvider.overrideWith(
+        () => syncOrchestrator ?? _FakeSyncOrchestrator(),
+      ),
     ],
   );
   addTearDown(db.close);
@@ -129,6 +152,31 @@ class _FakeLocationService implements LocationService {
 
   @override
   Future<DeviceLocation?> currentLocation() async => result;
+}
+
+/// A [SyncOrchestrator] test double that skips ALL of the real class's
+/// wiring (`build()`'s `ref.watch(appDatabaseProvider)` /
+/// `ref.listen(authStateProvider, ...)` / `tableUpdates()` subscription) and
+/// just counts [pullNow] calls -- mirrors
+/// `community_pull_refresh_test.dart`'s identical class (duplicated locally
+/// since that one is file-private). [initialState] lets a test start the
+/// orchestrator already carrying a
+/// [SyncOrchestratorState.lastPullError] -- every call site that omits it
+/// gets the plain default `SyncOrchestratorState()`.
+class _FakeSyncOrchestrator extends SyncOrchestrator {
+  _FakeSyncOrchestrator({SyncOrchestratorState? initialState})
+    : _initialState = initialState ?? const SyncOrchestratorState();
+
+  final SyncOrchestratorState _initialState;
+  int pullNowCallCount = 0;
+
+  @override
+  SyncOrchestratorState build() => _initialState;
+
+  @override
+  Future<void> pullNow({bool throttled = false}) async {
+    pullNowCallCount++;
+  }
 }
 
 /// Wraps [screen] in a real (minimal) [GoRouter] so `context.push` calls
@@ -426,6 +474,71 @@ void main() {
           sourceCompleter.complete(null);
         });
         await _drain(tester);
+      },
+    );
+  });
+
+  group('#72: sync-error empty state', () {
+    testWidgets(
+      'a genuinely empty Topos home with a lastPullError renders the '
+      "sync-error affordance (not the plain 'No topos yet' prompt), and "
+      'tapping Retry calls pullNow()',
+      (tester) async {
+        final fakeOrchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastPullError:
+                'Sync failed: own rows fetch failed: Exception: boom',
+          ),
+        );
+        final container = _makeContainer(syncOrchestrator: fakeOrchestrator);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('topos-sync-error-empty')),
+          findsOneWidget,
+          reason: 'a genuinely empty library with a reported pull error '
+              'must show the sync-error affordance instead of the plain '
+              'empty state',
+        );
+        expect(find.byKey(const Key('topos-empty-state')), findsNothing);
+        expect(
+          find.textContaining(
+            'Sync failed: own rows fetch failed: Exception: boom',
+          ),
+          findsOneWidget,
+          reason: 'the actual PullResult.errors text must be readable '
+              'on-device without a debugger',
+        );
+        expect(
+          find.byKey(const Key('topos-sync-error-retry')),
+          findsOneWidget,
+        );
+
+        expect(fakeOrchestrator.pullNowCallCount, 0);
+        await tester.tap(find.byKey(const Key('topos-sync-error-retry')));
+        await tester.pump();
+
+        expect(fakeOrchestrator.pullNowCallCount, 1);
+      },
+    );
+
+    testWidgets(
+      'a genuinely empty Topos home with NO lastPullError renders the '
+      'normal empty state (no sync-error affordance)',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topos-empty-state')), findsOneWidget);
+        expect(find.text('No topos yet'), findsOneWidget);
+        expect(
+          find.byKey(const Key('topos-sync-error-empty')),
+          findsNothing,
+        );
       },
     );
   });
@@ -1716,6 +1829,11 @@ void main() {
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
               libraryCrudRepositoryProvider.overrideWithValue(repo),
+              // See `_makeContainer`'s doc for why this is needed: this
+              // test performs a real DB write (`createTopo`) while
+              // `ToposScreen` is on its empty state, which now
+              // `ref.watch`es `syncOrchestratorProvider` (#72 P1 fix).
+              syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
             ],
           );
           addTearDown(container.dispose);

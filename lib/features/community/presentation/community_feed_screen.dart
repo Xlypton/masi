@@ -187,6 +187,20 @@ class _FeedView extends ConsumerWidget {
         ? 'No topos match your filters'
         : null;
 
+    // #72 P1 fix: when the feed is GENUINELY empty (no shared topos at
+    // all, not merely filtered/searched down to nothing) AND the most
+    // recent pull actually reported a problem
+    // (`SyncOrchestratorState.lastPullError`, non-null — see that field's
+    // doc), show `_SyncErrorEmptyState` instead of the plain "No shared
+    // topos yet" message — a user on a fresh install whose pull silently
+    // failed used to see the exact same empty feed a genuinely-synced,
+    // nothing-shared-yet account would, with no way to tell the two apart
+    // or retry. Deliberately gated on `items.isEmpty` specifically (not
+    // `emptyMessage != null`): the search/filter-narrowed empty states
+    // below are unaffected by a sync problem — there IS data in that case.
+    final syncError = ref.watch(syncOrchestratorProvider).lastPullError;
+    final showSyncError = items.isEmpty && syncError != null;
+
     return Column(
       children: [
         Padding(
@@ -260,7 +274,9 @@ class _FeedView extends ConsumerWidget {
                       children: [
                         SizedBox(
                           height: constraints.maxHeight,
-                          child: _EmptyState(message: emptyMessage),
+                          child: showSyncError
+                              ? _SyncErrorEmptyState(message: syncError)
+                              : _EmptyState(message: emptyMessage),
                         ),
                       ],
                     ),
@@ -421,6 +437,55 @@ class _EmptyState extends StatelessWidget {
         style: Theme.of(
           context,
         ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+      ),
+    );
+  }
+}
+
+/// Shown instead of [_EmptyState] when the feed is genuinely empty (no
+/// shared topos at all) AND the most recent pull actually reported a
+/// problem — see [_FeedView.build]'s `showSyncError` gate and
+/// `SyncOrchestratorState.lastPullError`'s doc for exactly when that is.
+/// [message] is that field's value verbatim (already formatted
+/// `'Sync failed: <the actual PullResult.errors text>'` by
+/// `SyncOrchestrator._runPull`), so the real failure is readable on-device
+/// without a debugger (#72). "Retry" re-runs the SAME `pullNow()` the
+/// list's own pull-to-refresh and `CommunityErrorState`'s "Try again" call
+/// — no explicit provider invalidation needed here either, for the same
+/// reason documented on this file's `RefreshIndicator.onRefresh` above.
+class _SyncErrorEmptyState extends ConsumerWidget {
+  const _SyncErrorEmptyState({required this.message});
+
+  final String message;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    return Center(
+      key: const Key('community-sync-error-empty'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MasiIcon('warning', size: 40, color: colors.gradeHard),
+          const SizedBox(height: MasiSpacing.md),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.lg),
+            child: Text(
+              "Couldn't sync — $message.",
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+            ),
+          ),
+          const SizedBox(height: MasiSpacing.md),
+          TextButton(
+            key: const Key('community-sync-error-retry'),
+            onPressed: () =>
+                ref.read(syncOrchestratorProvider.notifier).pullNow(),
+            child: const Text('Retry'),
+          ),
+        ],
       ),
     );
   }

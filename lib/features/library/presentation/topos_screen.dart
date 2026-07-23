@@ -15,6 +15,7 @@ import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/email_initials.dart';
+import '../../backup/application/sync_orchestrator.dart';
 import '../../community/data/community_repository.dart' show SharedTopo;
 import '../../topo/presentation/photo_image.dart';
 import '../../topo/presentation/photo_source_sheet.dart';
@@ -238,6 +239,29 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                       // `proximityEntries` degrades to exactly `topos` whenever
                       // no fix is available — see that provider's doc).
                       if (proximityEntries.isEmpty) {
+                        // #72 P1 fix: a genuinely empty topos home can mean
+                        // two very different things — a truly fresh
+                        // account with nothing yet, or a fresh install
+                        // whose own-rows pull actually failed (partially
+                        // or fully — see `PullResult`'s doc). Before this,
+                        // both looked identical: the same "No topos yet"
+                        // prompt, no way to tell a real sync failure apart
+                        // from an honestly-empty library, and no retry.
+                        // `SyncOrchestratorState.lastPullError` (see its
+                        // doc) distinguishes them; only the search/filter-
+                        // narrowed empty states below are left untouched
+                        // (there IS data in those cases).
+                        final syncError = ref
+                            .watch(syncOrchestratorProvider)
+                            .lastPullError;
+                        if (syncError != null) {
+                          return _SyncErrorEmptyState(
+                            message: syncError,
+                            onRetry: () => ref
+                                .read(syncOrchestratorProvider.notifier)
+                                .pullNow(),
+                          );
+                        }
                         return _EmptyState(
                           onNewTopo: canCreate ? _handleNewTopo : null,
                         );

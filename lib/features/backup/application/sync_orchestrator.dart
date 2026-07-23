@@ -34,15 +34,38 @@ enum SyncStatus {
 /// `pulled`, not merely attempted).
 @immutable
 class SyncOrchestratorState {
-  const SyncOrchestratorState({this.status = SyncStatus.idle, this.lastSyncedAt});
+  const SyncOrchestratorState({
+    this.status = SyncStatus.idle,
+    this.lastSyncedAt,
+    this.lastPullError,
+  });
 
   final SyncStatus status;
   final DateTime? lastSyncedAt;
+
+  /// Human-readable description of why the MOST RECENT `pullOwnAndShared()`
+  /// call (via [SyncOrchestrator.pullNow]) reported a problem — #72 P1 fix
+  /// (see [SyncOrchestrator._runPull]): set whenever [PullResult.errors]
+  /// came back non-empty (own or shared side partially/fully failed — see
+  /// that class's doc for what "partial" means; a partial failure is
+  /// surfaced here too, NOT discarded and NOT conflated with a total one)
+  /// OR the call to `pullOwnAndShared()` itself threw. `null` once a pull
+  /// completes with zero errors, or while signed out — this field is
+  /// deliberately CLEARED, not left stale, in either of those cases. The
+  /// Feed/Library empty states (`community_feed_screen.dart`'s
+  /// `_SyncErrorEmptyState`, `topos_empty_states.dart`'s
+  /// `_SyncErrorEmptyState`) key their "Couldn't sync — retry" affordance
+  /// directly off this being non-null, so it must never linger past a pull
+  /// that actually succeeded cleanly. A PUSH failure never touches this
+  /// field ([_runPush] only ever changes [status]/[lastSyncedAt]) — it is
+  /// pull-specific by design.
+  final String? lastPullError;
 
   SyncOrchestratorState copyWith({SyncStatus? status, DateTime? lastSyncedAt}) =>
       SyncOrchestratorState(
         status: status ?? this.status,
         lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
+        lastPullError: lastPullError,
       );
 
   @override
@@ -50,13 +73,16 @@ class SyncOrchestratorState {
       identical(this, other) ||
       (other is SyncOrchestratorState &&
           other.status == status &&
-          other.lastSyncedAt == lastSyncedAt);
+          other.lastSyncedAt == lastSyncedAt &&
+          other.lastPullError == lastPullError);
 
   @override
-  int get hashCode => Object.hash(status, lastSyncedAt);
+  int get hashCode => Object.hash(status, lastSyncedAt, lastPullError);
 
   @override
-  String toString() => 'SyncOrchestratorState(status: $status, lastSyncedAt: $lastSyncedAt)';
+  String toString() =>
+      'SyncOrchestratorState(status: $status, lastSyncedAt: $lastSyncedAt, '
+      'lastPullError: $lastPullError)';
 }
 
 /// Debounce window [SyncOrchestrator] waits after the LAST local table write
@@ -248,19 +274,53 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
     return future;
   }
 
+  /// #72 P1 fix: this used to swallow every [PullResult] whole — only the
+  /// coarse `outcome` (`pulled`/`skippedSignedOut`) was ever looked at, so a
+  /// [PullResult.errors]-carrying partial failure (e.g. the shared side
+  /// threw on a malformed cloud row while the own side imported fine, or
+  /// vice versa — see that class's doc) was silently discarded, and a
+  /// top-level throw only ever reached a `debugPrint` no one but a
+  /// developer attached to a debugger would see. Both are now retained in
+  /// [SyncOrchestratorState.lastPullError] as one human-readable message —
+  /// a PARTIAL success (`outcome == pulled` but `errors` non-empty) is
+  /// surfaced there WITHOUT flipping [SyncOrchestratorState.status] away
+  /// from [SyncStatus.idle]/`lastSyncedAt` updating (some data DID come
+  /// through — this isn't a total failure), while a genuine top-level throw
+  /// still sets [SyncStatus.error] exactly as before. Every existing state
+  /// transition below is therefore preserved, just augmented with the
+  /// message.
   Future<void> _runPull() async {
     state = state.copyWith(status: SyncStatus.syncing);
     try {
       final result = await ref.read(syncServiceProvider).pullOwnAndShared();
+      // `PullResult.skippedSignedOut()` always carries an empty `errors`
+      // list (see its doc), so `pullError` naturally comes out `null` in
+      // that branch too — clearing any stale message from an earlier
+      // signed-in pull rather than leaving it to linger.
+      final pullError = result.errors.isEmpty
+          ? null
+          : 'Sync failed: ${result.errors.join('; ')}';
       switch (result.outcome) {
         case SyncPullOutcome.pulled:
-          state = state.copyWith(status: SyncStatus.idle, lastSyncedAt: _now());
+          state = SyncOrchestratorState(
+            status: SyncStatus.idle,
+            lastSyncedAt: _now(),
+            lastPullError: pullError,
+          );
         case SyncPullOutcome.skippedSignedOut:
-          state = state.copyWith(status: SyncStatus.idle);
+          state = SyncOrchestratorState(
+            status: SyncStatus.idle,
+            lastSyncedAt: state.lastSyncedAt,
+            lastPullError: pullError,
+          );
       }
     } catch (e, st) {
       debugPrint('SyncOrchestrator: pullOwnAndShared failed: $e\n$st');
-      state = state.copyWith(status: SyncStatus.error);
+      state = SyncOrchestratorState(
+        status: SyncStatus.error,
+        lastSyncedAt: state.lastSyncedAt,
+        lastPullError: 'Sync failed: $e',
+      );
     }
   }
 

@@ -14,6 +14,7 @@
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/library/presentation/areas_screen.dart';
@@ -34,17 +35,47 @@ import 'package:flutter_test/flutter_test.dart';
 /// the underlying Drift connection is closed, otherwise closing the database
 /// out from under a still-active watch stream hangs waiting on the
 /// background executor isolate. (Mirrors `areas_screen_test.dart`.)
+///
+/// [syncOrchestratorProvider] is overridden to a no-op [_FakeSyncOrchestrator]
+/// (test-harness only — nothing under `lib/` changes) -- #72 P1 fix:
+/// `ToposScreen`'s empty-state branch now `ref.watch`es
+/// `syncOrchestratorProvider` (see `topos_screen.dart`'s `build`), which
+/// this file's A6e group reaches by seeding rows into a genuinely-empty
+/// screen. In PRODUCTION that's a no-op (`MasiApp` already keeps the REAL
+/// orchestrator alive for the whole app run well before `ToposScreen` ever
+/// renders), but a bare widget test here has no such root: without this,
+/// the real `SyncOrchestrator`'s live `tableUpdates()` subscription would
+/// tick on that seed write and schedule a genuine 2-second debounce `Timer`
+/// that outlives the test, tripping flutter_test's "A Timer is still
+/// pending" teardown assertion. Mirrors `topos_screen_test.dart`'s
+/// identical fix.
 ProviderContainer _makeContainer() {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
+      syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
     ],
   );
   addTearDown(db.close);
   addTearDown(container.dispose);
   return container;
+}
+
+/// A [SyncOrchestrator] test double that skips ALL of the real class's
+/// wiring (`build()`'s `ref.watch(appDatabaseProvider)` /
+/// `ref.listen(authStateProvider, ...)` / `tableUpdates()` subscription) --
+/// mirrors `community_pull_refresh_test.dart`'s/`topos_screen_test.dart`'s
+/// identical class (duplicated locally since those are file-private). This
+/// file never taps a retry affordance, so [pullNow] doesn't need to count
+/// calls -- just resolve immediately.
+class _FakeSyncOrchestrator extends SyncOrchestrator {
+  @override
+  SyncOrchestratorState build() => const SyncOrchestratorState();
+
+  @override
+  Future<void> pullNow({bool throttled = false}) async {}
 }
 
 /// Plain (router-less) wrap: every screen exercised in this file only calls
