@@ -998,12 +998,20 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                 // shares the InteractiveViewer transform automatically. Only
                 // present when the active photo's highlight is on AND the
                 // photo has drawn routes/symbols to derive a box from.
+                // RepaintBoundary (web-perf fix): isolates this painter's
+                // repaints into their own compositing layer so they don't
+                // force the (potentially large, decoded-bitmap) `PhotoImage`
+                // layer right above in this same `Stack` to re-composite
+                // alongside them. Doesn't change `RockBoxPainter` or its
+                // `shouldRepaint` — purely a layer-boundary hint.
                 if (rockBox != null)
-                  CustomPaint(
-                    size: widget.imageSize,
-                    painter: RockBoxPainter(
-                      box: rockBox,
-                      imageSize: widget.imageSize,
+                  RepaintBoundary(
+                    child: CustomPaint(
+                      size: widget.imageSize,
+                      painter: RockBoxPainter(
+                        box: rockBox,
+                        imageSize: widget.imageSize,
+                      ),
                     ),
                   ),
                 // Wrapped in a ListenableBuilder on the transformation
@@ -1025,36 +1033,47 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                 // line width constant during live pinch-zoom.
                 ListenableBuilder(
                   listenable: widget.transformationController,
-                  builder: (context, _) => CustomPaint(
-                    size: widget.imageSize,
-                    painter: TopoPainter(
-                      imageSize: widget.imageSize,
-                      routes: drawState.routes,
-                      currentPoints: drawState.currentPoints,
-                      currentSymbols: drawState.currentSymbols,
-                      showHandles:
-                          isDrawMode && drawState.activeSymbol == null,
-                      selectedRouteId: drawState.selectedRouteId,
-                      palette: kRoutePalette,
-                      // Live view-transform scale so TopoPainter can divide
-                      // its scene-space sizes by it and render at a constant
-                      // ON-SCREEN size instead of shrinking to a sub-pixel
-                      // hairline at small fit scales (see TopoPainter.scale).
-                      scale: _currentScale,
-                      // Wires grade-band coloring into the canvas itself
-                      // (not just the legend, see route_legend.dart): a
-                      // stable top-level function reference — not a closure
-                      // allocated fresh per build — so
-                      // TopoPainter.shouldRepaint's reference comparison of
-                      // routeColorResolver stays stable across rebuilds (see
-                      // topoRouteColor's doc).
-                      routeColorResolver: topoRouteColor,
-                      // The masi brand glyphs preloaded once in initState
-                      // (see [_symbolPictures]'s doc) — empty on the very
-                      // first frame(s), so TopoPainter falls back to its
-                      // hand-drawn geometry until the async SVG decode
-                      // completes.
-                      symbolPictures: _symbolPictures,
+                  // RepaintBoundary (web-perf fix): this painter repaints on
+                  // every transform-controller tick (live pinch-zoom/pan —
+                  // see this `ListenableBuilder`'s own doc) as well as every
+                  // `DrawState` change while drawing. Isolating it into its
+                  // own layer means those frequent repaints don't force the
+                  // `PhotoImage`/`RockBoxPainter` layers sharing this `Stack`
+                  // to re-composite alongside it. Doesn't change
+                  // `TopoPainter` or its `shouldRepaint` — purely a
+                  // layer-boundary hint.
+                  builder: (context, _) => RepaintBoundary(
+                    child: CustomPaint(
+                      size: widget.imageSize,
+                      painter: TopoPainter(
+                        imageSize: widget.imageSize,
+                        routes: drawState.routes,
+                        currentPoints: drawState.currentPoints,
+                        currentSymbols: drawState.currentSymbols,
+                        showHandles:
+                            isDrawMode && drawState.activeSymbol == null,
+                        selectedRouteId: drawState.selectedRouteId,
+                        palette: kRoutePalette,
+                        // Live view-transform scale so TopoPainter can divide
+                        // its scene-space sizes by it and render at a constant
+                        // ON-SCREEN size instead of shrinking to a sub-pixel
+                        // hairline at small fit scales (see TopoPainter.scale).
+                        scale: _currentScale,
+                        // Wires grade-band coloring into the canvas itself
+                        // (not just the legend, see route_legend.dart): a
+                        // stable top-level function reference — not a closure
+                        // allocated fresh per build — so
+                        // TopoPainter.shouldRepaint's reference comparison of
+                        // routeColorResolver stays stable across rebuilds (see
+                        // topoRouteColor's doc).
+                        routeColorResolver: topoRouteColor,
+                        // The masi brand glyphs preloaded once in initState
+                        // (see [_symbolPictures]'s doc) — empty on the very
+                        // first frame(s), so TopoPainter falls back to its
+                        // hand-drawn geometry until the async SVG decode
+                        // completes.
+                        symbolPictures: _symbolPictures,
+                      ),
                     ),
                   ),
                 ),

@@ -156,10 +156,21 @@ class RouteLegend extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final drawState = ref.watch(drawControllerProvider(wallId));
+    // Web-perf fix (draw-gesture rebuild storm): `DrawState` has no
+    // `operator==`, so watching the whole object rebuilt this legend on
+    // every `DrawController.addPoint()` call during a draw drag, even though
+    // it only ever reads `routes` and `selectedRouteId` below. `.select`-ing
+    // a named-field record of just those two means Riverpod compares by the
+    // record's structural `==` and only rebuilds when one of them actually
+    // changes — never for per-point/undo-redo churn.
+    final legendState = ref.watch(
+      drawControllerProvider(wallId).select(
+        (s) => (routes: s.routes, selectedRouteId: s.selectedRouteId),
+      ),
+    );
     final notifier = ref.read(drawControllerProvider(wallId).notifier);
 
-    if (drawState.routes.isEmpty) {
+    if (legendState.routes.isEmpty) {
       return const SizedBox.shrink();
     }
 
@@ -189,10 +200,10 @@ class RouteLegend extends ConsumerWidget {
         // already sits inside its own positioned container with its own
         // margins, so the outer safe-area inset must not leak in here.
         padding: EdgeInsets.zero,
-        itemCount: drawState.routes.length,
+        itemCount: legendState.routes.length,
         itemBuilder: (context, index) {
-          final route = drawState.routes[index];
-          final isSelected = route.id == drawState.selectedRouteId;
+          final route = legendState.routes[index];
+          final isSelected = route.id == legendState.selectedRouteId;
           final color = colorForRoute(route, kRoutePalette);
 
           // Compact rows (refined alongside #15's floating-overlay legend):

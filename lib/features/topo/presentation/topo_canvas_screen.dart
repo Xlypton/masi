@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart' show MapController, TileProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -922,7 +923,45 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     );
 
     final imagePath = ref.watch(selectedImageProvider);
-    final drawState = ref.watch(drawControllerProvider(widget.wallId));
+    // Web-perf fix (draw-gesture rebuild storm): `DrawState` has no
+    // `operator==`, so watching the whole object made THIS screen (top
+    // chrome, bottom chrome, route legend chip/card) rebuild on every single
+    // `DrawController.addPoint()` call during a draw drag — including
+    // `currentPoints`/`currentSymbols`/undo-redo churn nothing below actually
+    // reads. Everything reachable from `drawState` in this build (directly
+    // here, and via `_buildCanvasArea`→`TopoCanvasBody`,
+    // `_buildTopChromeRow`→`_topTrailingActions`, and `_buildBottomChrome`
+    // which only ever receives `drawState.mode`) only ever reads `mode`,
+    // `routes`, `activePhotoId`, `selectedRouteId` (and, defensively,
+    // `switchTargetPhotoId` — not currently read off THIS watched value, but
+    // included to match the audited safe field set / future-proof against
+    // drift). `.select`-ing a named-field record of just those means Riverpod
+    // compares by the record's structural `==` and only rebuilds this widget
+    // when one of them actually changes, never for a per-point mutation.
+    // `TopoCanvas` (topo_canvas.dart) is UNAFFECTED: it holds its own,
+    // independent `ref.watch(drawControllerProvider(wallId))` for the full
+    // per-point state it needs to paint, so it keeps repainting on every
+    // point exactly as before — only THIS screen's own chrome-rebuild is now
+    // gated.
+    ref.watch(
+      drawControllerProvider(widget.wallId).select(
+        (s) => (
+          mode: s.mode,
+          routes: s.routes,
+          activePhotoId: s.activePhotoId,
+          selectedRouteId: s.selectedRouteId,
+          switchTargetPhotoId: s.switchTargetPhotoId,
+        ),
+      ),
+    );
+    // One-shot read (not a watch) of the full object: everything downstream
+    // that needs the real `DrawState` type (`TopoCanvasBody`'s public
+    // `drawState` field, used directly by widget tests — see that class's
+    // doc) still gets it, just without ALSO being a rebuild trigger on its
+    // own; the `.select` watch above already governs when this widget
+    // rebuilds, so this always reflects the current state exactly when this
+    // method runs.
+    final drawState = ref.read(drawControllerProvider(widget.wallId));
     final drawNotifier = ref.read(drawControllerProvider(widget.wallId).notifier);
     // The topo/wall name backs the canvas title (DESIGN.md "Topo canvas"):
     // AsyncValue.maybeWhen falls back to "Topo" both while this is still
@@ -1801,6 +1840,15 @@ class TopoCanvasBody extends ConsumerWidget {
                           ? GlassChrome(
                               key: const Key('topo-route-legend-overlay'),
                               strong: true,
+                              // Web-perf fix (stacked-blur cap): this card
+                              // frequently coincides with the top title pill
+                              // + bottom action cluster while drawing (up to
+                              // 4 simultaneous `BackdropFilter`s on web) —
+                              // render it solid on web (iOS keeps the real
+                              // glass) so the floating chrome caps at ~1-2
+                              // simultaneous blurs there. See
+                              // `GlassChrome.blur`'s doc.
+                              blur: !kIsWeb,
                               // `Material(type: transparency)` — required so
                               // RouteLegend's ListTiles have a Material
                               // ANCESTOR closer than the Scaffold's own:
@@ -1876,6 +1924,10 @@ class _LegendChip extends StatelessWidget {
     final colors = MasiColors.of(context);
     return GlassChrome(
       strong: true,
+      // Web-perf fix (stacked-blur cap): same reasoning as the expanded
+      // legend card — solid on web, real glass on iOS. See
+      // `GlassChrome.blur`'s doc.
+      blur: !kIsWeb,
       padding: const EdgeInsets.symmetric(
         horizontal: MasiSpacing.md,
         vertical: MasiSpacing.sm,
