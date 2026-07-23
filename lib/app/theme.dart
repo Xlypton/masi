@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 
 /// Semantic color tokens for the MASI design language (see `DESIGN.md`).
@@ -228,6 +229,24 @@ abstract final class MasiSpacing {
   static const double xxl = 32;
 }
 
+/// On web, every route uses a NON-interactive page transition. Native uses
+/// Flutter's platform defaults (iOS keeps its Cupertino swipe-back). On web
+/// the platform still resolves to iOS in Safari, which would add Flutter's
+/// own interactive edge-swipe-to-pop gesture ON TOP of Safari's native
+/// edge-swipe -> the back nav + pop animation fire twice (#76). Mapping all
+/// platforms to a gesture-less builder on web makes Safari's native swipe the
+/// sole back driver.
+const PageTransitionsTheme _webPageTransitionsTheme = PageTransitionsTheme(
+  builders: {
+    TargetPlatform.android: ZoomPageTransitionsBuilder(),
+    TargetPlatform.iOS: ZoomPageTransitionsBuilder(),
+    TargetPlatform.macOS: ZoomPageTransitionsBuilder(),
+    TargetPlatform.windows: ZoomPageTransitionsBuilder(),
+    TargetPlatform.linux: ZoomPageTransitionsBuilder(),
+    TargetPlatform.fuchsia: ZoomPageTransitionsBuilder(),
+  },
+);
+
 /// Builds the light/dark [ThemeData] for the app, per DESIGN.md.
 abstract final class MasiTheme {
   static ThemeData light = _build(MasiColors.light, Brightness.light);
@@ -266,6 +285,7 @@ abstract final class MasiTheme {
         iconTheme: IconThemeData(color: colors.accent),
         actionsIconTheme: IconThemeData(color: colors.accent),
       ),
+      pageTransitionsTheme: kIsWeb ? _webPageTransitionsTheme : null,
       cardTheme: CardThemeData(
         color: colors.surface,
         surfaceTintColor: Colors.transparent,
