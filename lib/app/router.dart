@@ -4,6 +4,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import 'is_safari.dart';
 import 'nav_shell.dart';
 import '../features/account/application/auth_providers.dart';
 import '../features/account/presentation/account_screen.dart';
@@ -154,6 +155,7 @@ void _ensureAuthRefreshWired(ProviderContainer container) {
 
 final appRouter = GoRouter(
   redirect: _webAuthGateRedirect,
+  routerNeglect: isSafariBrowser(),
   routes: [
     // The persistent bottom-nav shell (see `nav_shell.dart`'s `NavShell`):
     // three `IndexedStack` branches — Topos (home, index 0) / Map (index 1)

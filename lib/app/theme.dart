@@ -1,5 +1,8 @@
+import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+
+import 'is_safari.dart';
 
 /// Semantic color tokens for the MASI design language (see `DESIGN.md`).
 ///
@@ -230,18 +233,15 @@ abstract final class MasiSpacing {
 }
 
 /// A [PageTransitionsBuilder] that performs NO transition — [child] is
-/// returned untouched. Used on web (see [_webPageTransitionsTheme]).
+/// returned untouched. Used on NON-Safari web (see [_webPageTransitions]).
 ///
-/// Even after removing the double-back-swipe gesture (#76), Flutter's
-/// [ZoomPageTransitionsBuilder] still plays a real ~300ms scale+fade that is
-/// rendered LIVE on web (Flutter disables its transition-snapshot cache
-/// there — `useSnapshot => !kIsWeb`). On a browser-driven pop, iOS Safari's
-/// native edge-swipe has ALREADY completed its own visual transition before
-/// go_router's popstate handler runs; Flutter then replays its own unsynced
-/// animation on top of the already-settled frame, which reads as a single
-/// flash of the previous screen. Returning [child] unchanged removes
-/// Flutter's contribution entirely: in-app navigation is instant and the
-/// only motion on an edge-swipe is Safari's own native transition.
+/// On Chromium/other web engines the platform's own back gesture drives
+/// browser history, so a gesture-less builder avoids doubling an animation on
+/// top of it; and any Flutter transition is rendered LIVE on web (Flutter
+/// disables its transition-snapshot cache there — `useSnapshot => !kIsWeb`),
+/// so an unsynced replay after a browser-driven pop reads as a flash.
+/// Returning [child] unchanged removes Flutter's contribution entirely.
+/// (Safari is handled separately — see [_safariWebPageTransitionsTheme].)
 class _InstantPageTransitionsBuilder extends PageTransitionsBuilder {
   const _InstantPageTransitionsBuilder();
 
@@ -255,7 +255,11 @@ class _InstantPageTransitionsBuilder extends PageTransitionsBuilder {
   ) => child;
 }
 
-const PageTransitionsTheme _webPageTransitionsTheme = PageTransitionsTheme(
+/// Non-Safari web (Chrome, Android, Edge, …): gesture-less instant transitions
+/// so Flutter never adds a swipe-back gesture on top of the platform's own
+/// browser-back, and never replays an unsynced (flashing) animation.
+const PageTransitionsTheme _instantWebPageTransitionsTheme =
+    PageTransitionsTheme(
   builders: {
     TargetPlatform.android: _InstantPageTransitionsBuilder(),
     TargetPlatform.iOS: _InstantPageTransitionsBuilder(),
@@ -265,6 +269,35 @@ const PageTransitionsTheme _webPageTransitionsTheme = PageTransitionsTheme(
     TargetPlatform.fuchsia: _InstantPageTransitionsBuilder(),
   },
 );
+
+/// Safari web: the browser's native edge-swipe-back is suppressed by
+/// `GoRouter.routerNeglect` (history stays at length 1, so iOS has nothing to
+/// swipe back to — see [isSafariBrowser]). With the native gesture out of the
+/// way, Flutter's OWN interactive Cupertino swipe-back becomes the sole
+/// gesture: an animated in-app swipe-back, no double-gesture, and no
+/// browser-compositor flash (#74/#76).
+const PageTransitionsTheme _safariWebPageTransitionsTheme =
+    PageTransitionsTheme(
+  builders: {
+    TargetPlatform.android: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.iOS: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.macOS: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.windows: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.linux: CupertinoPageTransitionsBuilder(),
+    TargetPlatform.fuchsia: CupertinoPageTransitionsBuilder(),
+  },
+);
+
+/// Resolves the page-transition theme. Native returns `null` (Flutter's
+/// per-platform defaults, unchanged). Safari web uses the interactive
+/// Cupertino swipe-back (paired with `routerNeglect`); all other web uses
+/// gesture-less instant transitions.
+PageTransitionsTheme? _webPageTransitions() {
+  if (!kIsWeb) return null;
+  return isSafariBrowser()
+      ? _safariWebPageTransitionsTheme
+      : _instantWebPageTransitionsTheme;
+}
 
 /// Builds the light/dark [ThemeData] for the app, per DESIGN.md.
 abstract final class MasiTheme {
@@ -304,7 +337,7 @@ abstract final class MasiTheme {
         iconTheme: IconThemeData(color: colors.accent),
         actionsIconTheme: IconThemeData(color: colors.accent),
       ),
-      pageTransitionsTheme: kIsWeb ? _webPageTransitionsTheme : null,
+      pageTransitionsTheme: _webPageTransitions(),
       cardTheme: CardThemeData(
         color: colors.surface,
         surfaceTintColor: Colors.transparent,
