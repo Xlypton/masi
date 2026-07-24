@@ -460,6 +460,21 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// regardless of this, matching the pre-existing (M5) behavior.
   Matrix4? _lastAutoFrameMatrix;
 
+  /// True once [_reframeIfNeeded]'s auto-fit transform for the CURRENT image
+  /// has actually been written into [widget.transformationController] — which
+  /// happens one frame LATE, in a post-frame callback, because the controller
+  /// cannot be mutated during the build that reads the viewport size. Until
+  /// then the controller is at identity (or a freshly-reset identity on image
+  /// switch); with `constrained: false` + the oversized natural-size child,
+  /// identity paints the photo's top-left corner at 1:1 scale — the "zoomed
+  /// into the top-left" flash of bug #78, seen only when a warm-cache decode
+  /// is ready on that very first frame (hence intermittent, and web-prone).
+  /// [build] gates the photo/overlay layer's opacity on this so that pre-fit
+  /// identity frame is never painted; it flips true (via setState) the instant
+  /// the fit lands, and for a pre-seeded controller it is set true immediately
+  /// (nothing to hide).
+  bool _autoFrameApplied = false;
+
   /// The pointer id that started the current view-mode down/up interaction
   /// (see [_beginViewTap]/[_endViewTap]), or null when none is in progress.
   int? _viewTapPointer;
@@ -608,6 +623,14 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         (_framedViewportSize!.height - viewportSize.height).abs() >
             _viewportChangeEpsilonPx;
 
+    // Whether this reframe is for NEW content — the first frame ever, or a
+    // switched-to image — as opposed to a same-image viewport change. Only
+    // content reframes hide the photo until the auto-fit lands (see
+    // [_autoFrameApplied]); a viewport-only reframe must NOT hide it, or the
+    // photo would flicker on every resize (e.g. the community detail header
+    // collapsing as it scrolls).
+    final isContentReframe = !_hasFramed || !sameImage;
+
     if (_hasFramed && sameImage && !viewportChanged) {
       return; // Truly unchanged: never stomp a manual pan/zoom.
     }
@@ -631,6 +654,9 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       _framedImageSize = widget.imageSize;
       _framedViewportSize = viewportSize;
       _lastAutoFrameMatrix = null;
+      // Pre-seeded controller already holds a valid transform — nothing to
+      // hide, so reveal immediately.
+      _autoFrameApplied = true;
       return;
     }
 
@@ -642,9 +668,21 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
 
     _lastAutoFrameMatrix = matrix;
 
+    if (isContentReframe) {
+      // Hide the photo for the single pre-fit frame: until the callback below
+      // writes `matrix`, the controller is at identity (or a just-reset
+      // identity on image switch), which — with `constrained: false` + the
+      // oversized child — paints the photo's top-left corner at 1:1 (bug #78).
+      // Revealed again the moment the fit is applied.
+      _autoFrameApplied = false;
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       widget.transformationController.value = matrix;
+      if (!_autoFrameApplied) {
+        setState(() => _autoFrameApplied = true);
+      }
     });
   }
 
@@ -934,7 +972,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         _reframeIfNeeded(viewportSize);
         final (minScale, maxScale) = _scaleRangeFor(viewportSize);
 
-        final viewer = InteractiveViewer(
+        final Widget interactiveViewer = InteractiveViewer(
           key: const Key('topo-interactive-viewer'),
           transformationController: widget.transformationController,
           // `constrained: false` is required because the child below is
@@ -1080,6 +1118,17 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
               ],
             ),
           ),
+        );
+
+        // Gate the photo/overlay layer's opacity on [_autoFrameApplied] so the
+        // single pre-fit identity frame — which paints the photo's top-left
+        // corner at 1:1 — is never shown (bug #78). Opacity keeps the subtree
+        // laid out and decoding (so the image is ready the instant the fit
+        // lands and this flips to 1.0) and, unlike IgnorePointer/Offstage,
+        // does NOT block InteractiveViewer's gestures.
+        final viewer = Opacity(
+          opacity: _autoFrameApplied ? 1.0 : 0.0,
+          child: interactiveViewer,
         );
 
         // Full-bleed canvas rework: the viewport used to be VISUALLY clipped
