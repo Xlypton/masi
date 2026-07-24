@@ -87,6 +87,19 @@
       }
     }
 
+    /* #74 residual: on an installed iOS PWA, WebKit antialiases the top edge
+       of Flutter's canvas layer against the page background into a faint
+       hairline. Overscan the Flutter host up 2px (standalone only) so the
+       seam falls into the blank top safe-area, off-screen. In-browser tabs
+       don't show the seam. Cosmetic; Flutter's logical size is effectively
+       unchanged. Do NOT extend this to flt-glass-pane/flt-scene-host/canvas —
+       those carry a scale transform and forcing them breaks rendering. */
+    @media all and (display-mode: standalone) {
+      flutter-view {
+        top: -2px !important;
+      }
+    }
+
     /* Branded splash shown while the Flutter engine boots. Removed once the
        first frame is painted (see the `flutter-first-frame` listener below),
        so there is never a flash of blank/white background on load. */
