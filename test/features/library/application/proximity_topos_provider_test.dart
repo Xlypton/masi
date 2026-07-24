@@ -62,8 +62,8 @@ void main() {
 
   group('mergeAndSortByProximity', () {
     test(
-      'no location fix: falls back to own topos in original order, all '
-      'distances null, community entirely omitted (even a coordinate match)',
+      'no fix: community still shown (null distance), after own, own topos '
+      'in original order, all distances null',
       () {
         final own = [
           _own('a', latitude: null, longitude: null),
@@ -78,11 +78,17 @@ void main() {
           fix: null,
         );
 
-        expect(result.map((e) => e.wallId).toList(), ['a', 'b', 'c']);
+        expect(result.map((e) => e.wallId).toList(), ['a', 'b', 'c', 'near']);
         expect(result.every((e) => e.distanceKm == null), isTrue);
         expect(
-          result.every((e) => e.source == ProximityTopoSource.own),
+          result
+              .where((e) => e.wallId != 'near')
+              .every((e) => e.source == ProximityTopoSource.own),
           isTrue,
+        );
+        expect(
+          result.firstWhere((e) => e.wallId == 'near').source,
+          ProximityTopoSource.community,
         );
       },
     );
@@ -122,18 +128,17 @@ void main() {
     );
 
     test(
-      'community de-dup + radius: a far community topo is excluded, a '
-      'near one is included, and one colliding with an own wallId is '
-      'de-duped to the own entry',
+      'community shown regardless of distance; still de-dups vs own; '
+      'nearest-first',
       () {
         const fix = (latitude: 0.0, longitude: 0.0);
         final own = [_own('w1', latitude: 0.0, longitude: 0.0)];
         final community = [
           // Same wallId as an own topo -- must be de-duped away (own wins).
           _community('w1', latitude: 0.0, longitude: 0.0),
-          // ~5560 km away -- outside the default 100 km radius, excluded.
+          // ~5559.75 km away -- far, but no cutoff any more, so included.
           _community('w2-far', latitude: 0.0, longitude: 50.0),
-          // ~55.6 km away -- inside the default radius, included.
+          // ~55.6 km away -- included, and sorts before the far one.
           _community('w3-near', latitude: 0.0, longitude: 0.5),
         ];
 
@@ -143,32 +148,147 @@ void main() {
           fix: fix,
         );
 
-        expect(result.map((e) => e.wallId).toList(), ['w1', 'w3-near']);
+        expect(result.map((e) => e.wallId).toList(), [
+          'w1',
+          'w3-near',
+          'w2-far',
+        ]);
         expect(result[0].source, ProximityTopoSource.own);
         expect(result[1].source, ProximityTopoSource.community);
-        expect(result[1].distanceKm, closeTo(55.66, 2.0));
+        expect(result[2].source, ProximityTopoSource.community);
+        // haversineKm(0,0, 0,0.5) == 6371.0 * (0.5 * pi/180) exactly (equator
+        // arc, dLat == 0) == 55.597463222279... km.
+        expect(result[1].distanceKm, closeTo(55.5975, 0.01));
+        // haversineKm(0,0, 0,50) == 6371.0 * (50 * pi/180) exactly ==
+        // 5559.746322227937... km.
+        expect(result[2].distanceKm, closeTo(5559.7463, 0.01));
       },
     );
 
-    test('a custom radiusKm is honored', () {
+    test(
+      'community is capped at kMaxCommunityTopos, keeping the nearest when '
+      'a fix is available',
+      () {
+        const fix = (latitude: 0.0, longitude: 0.0);
+        // 25 community topos at increasing longitude (and thus increasing
+        // distance from the fix at the equator): c1 nearest, c25 farthest.
+        final community = [
+          for (var i = 1; i <= 25; i++)
+            _community('c$i', latitude: 0.0, longitude: i.toDouble()),
+        ];
+
+        final result = mergeAndSortByProximity(
+          own: const [],
+          community: community,
+          fix: fix,
+        );
+
+        expect(result.length, 20);
+        expect(
+          result.every((e) => e.source == ProximityTopoSource.community),
+          isTrue,
+        );
+        expect(result.map((e) => e.wallId).toList(), [
+          for (var i = 1; i <= 20; i++) 'c$i',
+        ]);
+        expect(result.any((e) => e.wallId == 'c1'), isTrue);
+        expect(result.any((e) => e.wallId == 'c25'), isFalse);
+        for (var i = 1; i < result.length; i++) {
+          expect(result[i].distanceKm! >= result[i - 1].distanceKm!, isTrue);
+        }
+
+        final capped = mergeAndSortByProximity(
+          own: const [],
+          community: community,
+          fix: fix,
+          maxCommunity: 2,
+        );
+        expect(capped.map((e) => e.wallId).toList(), ['c1', 'c2']);
+      },
+    );
+
+    test(
+      'no fix: community still shown, null distance, feed order preserved, '
+      'capped at maxCommunity',
+      () {
+        final community = [
+          _community('c1', latitude: 10.0, longitude: 10.0),
+          _community('c2', latitude: 20.0, longitude: 20.0),
+        ];
+
+        final result = mergeAndSortByProximity(
+          own: const [],
+          community: community,
+          fix: null,
+        );
+
+        expect(result.map((e) => e.wallId).toList(), ['c1', 'c2']);
+        expect(
+          result.every((e) => e.source == ProximityTopoSource.community),
+          isTrue,
+        );
+        expect(result.every((e) => e.distanceKm == null), isTrue);
+      },
+    );
+
+    test('own topos are never capped, only the community subset is', () {
       const fix = (latitude: 0.0, longitude: 0.0);
-      final community = [_community('c1', latitude: 0.0, longitude: 1.0)]; // ~111 km
+      final own = [
+        for (var i = 1; i <= 25; i++)
+          _own('own$i', latitude: 0.0, longitude: i.toDouble()),
+      ];
+      final community = [
+        for (var i = 1; i <= 25; i++)
+          _community('comm$i', latitude: 0.0, longitude: (i + 100).toDouble()),
+      ];
 
-      final excluded = mergeAndSortByProximity(
-        own: const [],
+      final result = mergeAndSortByProximity(
+        own: own,
         community: community,
         fix: fix,
-        radiusKm: 50.0,
       );
-      expect(excluded, isEmpty);
 
-      final included = mergeAndSortByProximity(
-        own: const [],
-        community: community,
-        fix: fix,
-        radiusKm: 200.0,
+      expect(
+        result.where((e) => e.source == ProximityTopoSource.own).length,
+        25,
       );
-      expect(included.map((e) => e.wallId).toList(), ['c1']);
+      expect(
+        result.where((e) => e.source == ProximityTopoSource.community).length,
+        20,
+      );
+      expect(result.length, 45);
     });
+
+    test(
+      'cap prefers located community topos over coordless ones when a fix '
+      'exists',
+      () {
+        const fix = (latitude: 0.0, longitude: 0.0);
+        final located = [
+          for (var i = 1; i <= 21; i++)
+            _community('loc$i', latitude: 0.0, longitude: i.toDouble()),
+        ];
+        final coordless = _community(
+          'coordless',
+          latitude: null,
+          longitude: null,
+        );
+        final community = [...located, coordless];
+
+        final result = mergeAndSortByProximity(
+          own: const [],
+          community: community,
+          fix: fix,
+        );
+
+        expect(result.length, 20);
+        expect(
+          result.every((e) => e.source == ProximityTopoSource.community),
+          isTrue,
+        );
+        expect(result.every((e) => e.distanceKm != null), isTrue);
+        expect(result.any((e) => e.wallId == 'coordless'), isFalse);
+      },
+    );
   });
 }

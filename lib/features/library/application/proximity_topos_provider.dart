@@ -12,12 +12,16 @@ import 'library_providers.dart';
 /// constant every other haversine implementation uses.
 const double kEarthRadiusKm = 6371.0;
 
-/// How far (km) a [SharedTopo] may be from the device's current position and
-/// still count as "nearby community" for [sortedByProximityToposProvider].
-/// Community topos farther than this are omitted entirely rather than sunk
-/// to the bottom of the list — the Topos-home proximity list is meant to
-/// surface only topos actually near the climber, not a full community feed.
-const double kNearbyRadiusKm = 100.0;
+/// Maximum number of community-shared topos surfaced in the Topos-home list
+/// ([sortedByProximityToposProvider]). Community topos are shown regardless of
+/// how far away they are (there is intentionally no distance cutoff any more —
+/// this replaced the old fixed-radius cutoff constant); this cap just keeps
+/// the Topos tab a focused list rather than the full global community feed.
+/// When a location fix is available the NEAREST [kMaxCommunityTopos] are
+/// kept; without a fix, the first [kMaxCommunityTopos] in the community
+/// list's own (newest-first) order. The device's OWN topos are never capped
+/// or dropped.
+const int kMaxCommunityTopos = 20;
 
 /// Great-circle distance (km) between two WGS84 points via the haversine
 /// formula. Pure and top-level (no provider/ref dependency) so it is
@@ -126,28 +130,27 @@ class ProximityTopoEntry {
 /// it's unit-testable without standing up a [ProviderContainer]/database.
 ///
 /// - Every entry in [own] is always included, regardless of distance.
-/// - Entries in [community] are included only when [fix] is non-null AND
-///   the community topo [SharedTopo.hasCoordinates] AND its distance from
-///   [fix] is `<= radiusKm`. A community topo whose [SharedTopo.wallId]
-///   matches one already in [own] is dropped (de-duplicated) — the own
-///   entry wins since it's the device's own record of that same wall.
+/// - Every entry in [community] is always included too (there is no distance
+///   or fix-presence cutoff any more), except one whose [SharedTopo.wallId]
+///   matches one already in [own] — that's dropped (de-duplicated), since the
+///   own entry wins as the device's own record of that same wall. When [fix]
+///   is available and a community topo [SharedTopo.hasCoordinates], its
+///   distance is computed and the community subset is sorted nearest-first
+///   (coordinate-less ones sort last, in their original relative order) before
+///   being capped to [maxCommunity] — so when there are more matches than the
+///   cap, the ones actually nearest the climber are kept. Without a usable
+///   distance (no [fix], or no coordinates on the topo), the community
+///   subset's original (feed) order is preserved and the first [maxCommunity]
+///   are kept.
 /// - The combined list sorts ascending by [ProximityTopoEntry.distanceKm];
-///   entries with no distance (no [fix], or the topo itself has no
-///   coordinates) sort last, in their original relative order (own topos in
-///   [own]'s order, since no community entry is ever distance-less —
-///   distance-less community topos are excluded above, not sunk to the
-///   bottom). The sort is stable by explicit index tie-break rather than
-///   relying on [List.sort]'s unspecified stability.
-/// - When [fix] is `null` (no fix / still loading / denied — callers pass
-///   `null` for all of those, never let an error propagate), every [own]
-///   entry gets a `null` distance and no [community] entry is ever added,
-///   so the result is exactly [own] in its original order — the documented
-///   fallback behaviour.
+///   entries with no distance sort last, in their original relative order.
+///   The sort is stable by explicit index tie-break rather than relying on
+///   [List.sort]'s unspecified stability.
 List<ProximityTopoEntry> mergeAndSortByProximity({
   required List<TopoRef> own,
   required List<SharedTopo> community,
   required DeviceLocation? fix,
-  double radiusKm = kNearbyRadiusKm,
+  int maxCommunity = kMaxCommunityTopos,
 }) {
   final ownWallIds = {for (final topo in own) topo.wallId};
 
@@ -156,9 +159,7 @@ List<ProximityTopoEntry> mergeAndSortByProximity({
       ProximityTopoEntry.own(
         topo,
         distanceKm:
-            (fix == null ||
-                topo.latitude == null ||
-                topo.longitude == null)
+            (fix == null || topo.latitude == null || topo.longitude == null)
             ? null
             : haversineKm(
                 fix.latitude,
@@ -169,21 +170,37 @@ List<ProximityTopoEntry> mergeAndSortByProximity({
       ),
   ];
 
-  if (fix != null) {
-    for (final topo in community) {
-      if (ownWallIds.contains(topo.wallId)) continue;
-      if (!topo.hasCoordinates) continue;
-      final distance = haversineKm(
-        fix.latitude,
-        fix.longitude,
-        topo.latitude!,
-        topo.longitude!,
-      );
-      if (distance > radiusKm) continue;
-      entries.add(ProximityTopoEntry.community(topo, distanceKm: distance));
-    }
+  // Community topos are included regardless of distance and regardless of
+  // whether there is a location fix (formerly both were hard filters). They
+  // are de-duplicated against own walls (own wins), sorted nearest-first when
+  // a fix exists (coordinate-less ones sort last, keeping their original
+  // order), then capped to [maxCommunity] so the tab stays focused.
+  final communityEntries = <ProximityTopoEntry>[];
+  for (final topo in community) {
+    if (ownWallIds.contains(topo.wallId)) continue;
+    final distance = (fix != null && topo.hasCoordinates)
+        ? haversineKm(
+            fix.latitude,
+            fix.longitude,
+            topo.latitude!,
+            topo.longitude!,
+          )
+        : null;
+    communityEntries.add(
+      ProximityTopoEntry.community(topo, distanceKm: distance),
+    );
   }
+  entries.addAll(_sortedByDistanceStable(communityEntries).take(maxCommunity));
 
+  return _sortedByDistanceStable(entries);
+}
+
+/// Stable sort of [entries] ascending by [ProximityTopoEntry.distanceKm], with
+/// null distances last, ties broken by original index (rather than relying on
+/// [List.sort]'s unspecified stability). Returns a new list.
+List<ProximityTopoEntry> _sortedByDistanceStable(
+  List<ProximityTopoEntry> entries,
+) {
   final indexed = List<MapEntry<int, ProximityTopoEntry>>.generate(
     entries.length,
     (i) => MapEntry(i, entries[i]),
@@ -197,23 +214,24 @@ List<ProximityTopoEntry> mergeAndSortByProximity({
     final byDistance = da.compareTo(db);
     return byDistance != 0 ? byDistance : a.key.compareTo(b.key);
   });
-
   return [for (final pair in indexed) pair.value];
 }
 
 /// Proximity-sorted list backing the Topos-home "nearby" tab: every one of
-/// the device's own topos ([toposProvider]) plus any community-shared topo
-/// ([sharedToposProvider]) within [kNearbyRadiusKm] of the device's current
-/// position ([myLocationProvider]), nearest-first — see
-/// [mergeAndSortByProximity] for the exact merge/sort/de-dup rules.
+/// the device's own topos ([toposProvider]) plus community-shared topos
+/// ([sharedToposProvider]), capped to [kMaxCommunityTopos] — see
+/// [mergeAndSortByProximity] for the exact merge/sort/de-dup/cap rules.
+/// Community topos are always shown regardless of distance or whether a
+/// location fix is available; when [myLocationProvider] does have a fix,
+/// entries carry a distance and sort nearest-first, otherwise distances are
+/// `null` and order falls back to each source's original order.
 ///
 /// Reads all three source providers via `.asData?.value` (loading/error
 /// reads as "no data yet" — `const []`/`null` — never a crash), the same
-/// pattern `mapContentSearchProvider` uses. In particular a `null`
-/// [myLocationProvider] result (no fix, still resolving, or a denied
-/// permission — [LocationService.currentLocation] never throws) falls back
-/// to the plain [toposProvider] order with every [ProximityTopoEntry.
-/// distanceKm] `null`, per [mergeAndSortByProximity]'s doc.
+/// pattern `mapContentSearchProvider` uses. A `null` [myLocationProvider]
+/// result (no fix, still resolving, or a denied permission —
+/// [LocationService.currentLocation] never throws) is handled the same as
+/// any other `null` fix by [mergeAndSortByProximity].
 final sortedByProximityToposProvider = Provider<List<ProximityTopoEntry>>((
   ref,
 ) {
