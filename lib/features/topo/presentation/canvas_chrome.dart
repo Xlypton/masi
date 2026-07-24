@@ -167,15 +167,27 @@ class GlassChrome extends StatelessWidget {
       child: child,
     );
 
-    // Web opt-out: render a SOLID `chrome`-tinted panel — identical shape,
-    // padding, and border — with no `BackdropFilter`/scrim at all. Still
-    // wrapped in the same `ClipRRect` as the real-blur path (cheap, no
-    // filter) so content clips to the exact same rounded shape either way.
-    // See [blur]'s doc: this only ever triggers on web, and only when a
-    // caller explicitly asks for it; iOS always takes the real-blur path
-    // below.
+    // Web opt-out: skip the expensive `BackdropFilter` blur, but STILL render
+    // the same neutral `surface @ scrimAlpha` scrim BEHIND the tinted card as
+    // the real-blur path below. Without that scrim the panel is only the
+    // semi-transparent `chrome` tint (~54%/50% alpha) over bare content, so a
+    // busy photo (topo canvas route legend) bleeds straight through and the
+    // text is unreadable. Blur normally boosts perceived coverage; with no
+    // blur on web the scrim alone must carry legibility, so we keep it.
+    // Wrapped in the same `ClipRRect` so content clips to the identical
+    // rounded shape either way. See [blur]'s doc: this only triggers on web,
+    // and only when a caller explicitly asks for it; iOS always blurs below.
     if (kIsWeb && !blur) {
-      return ClipRRect(borderRadius: radius, child: tintedCard);
+      return ClipRRect(
+        borderRadius: radius,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            color: colors.surface.withValues(alpha: scrimAlpha),
+            borderRadius: radius,
+          ),
+          child: tintedCard,
+        ),
+      );
     }
 
     return ClipRRect(
