@@ -86,16 +86,19 @@ class GlassChrome extends StatelessWidget {
 
   /// Web-perf opt-out: when `false`, this instance renders as a SOLID
   /// `chrome`-tinted panel (same shape/padding/border) with no
-  /// [BackdropFilter] at all — for callers that would otherwise stack
-  /// several simultaneous [GlassChrome] blurs on web (e.g. the topo canvas's
-  /// route legend, which frequently coincides with the bottom action
-  /// cluster + title pill while drawing).
+  /// [BackdropFilter] at all — for a caller that would otherwise stack too
+  /// many simultaneous [GlassChrome] blurs on web.
   ///
   /// Only takes effect on web (`kIsWeb`) — **iOS always gets the real blur**
   /// regardless of this flag: the simultaneous-BackdropFilter compositing
   /// cost this solves is web-specific (`BackdropFilter` is comparatively
   /// cheap on Skia/Impeller on-device, and iOS never stacks this many at
   /// once), so there's no reason to give up the frosted-glass look there.
+  ///
+  /// #80: every current call site — including the topo canvas's route
+  /// legend, which used to opt out — now blurs on web too, so the header
+  /// pill and the legend frost consistently. This flag is kept as an
+  /// opt-out escape hatch and has NO callers passing `false` today.
   /// Defaults to `true` (real blur everywhere), preserving every existing
   /// call site's appearance exactly.
   final bool blur;
@@ -112,11 +115,12 @@ class GlassChrome extends StatelessWidget {
   /// mutes whatever color is behind the card first, so the card's tint
   /// reads as nearly invariant to what's underneath. The default `false`
   /// path (used by the top pill, bottom cluster, and symbol palette bar)
-  /// renders the SAME kind of scrim at a lighter alpha (0.78 vs. `strong`'s
-  /// 0.92) — enough to kill saturated photo-color smears while staying
-  /// visibly glassier than the `strong` variant, which is reserved for
-  /// chrome that floats over the most uncontrolled photo content (e.g. the
-  /// route legend).
+  /// renders the SAME kind of scrim at a lighter alpha than `strong`'s —
+  /// enough to kill saturated photo-color smears while staying visibly
+  /// glassier than the `strong` variant, which is reserved for chrome that
+  /// floats over the most uncontrolled photo content (e.g. the route
+  /// legend). Current scrim alphas (see [build]'s `scrimAlpha`, #80): web
+  /// strong 0.68 / non-strong 0.60, native strong 0.68 / non-strong 0.45.
   final bool strong;
 
   @override
@@ -135,12 +139,18 @@ class GlassChrome extends StatelessWidget {
     // fill in both paths — see [strong]'s doc for the motivating bug. Only
     // the alpha differs. On native, BackdropFilter blur (sigma 18–30) carries
     // most of the visual separation, so a lower scrim alpha keeps the glass
-    // feel. On web there is no blur (`blur: !kIsWeb`), so the scrim ALONE
-    // must guarantee legibility over a busy photo — hence the higher web
-    // values. `strong` (route legend, a content panel) stays more opaque than
-    // the floating pills in both modes.
+    // feel. #80: web now blurs too by default (the `blur: false` solid
+    // opt-out in [blur]'s doc is retained but has no callers today) — its
+    // sigma (10/16) is still lower than native's (18/30), though, so web
+    // keeps a higher scrim alpha to carry more of the legibility itself.
+    // `strong` (route legend, a content panel) stays more opaque than the
+    // floating pills in both modes. #80: strong-web was 0.88 — now the
+    // legend blurs on web too, and an 0.88 scrim would mask that frost;
+    // 0.68 lets the strong (sigma-16) blur read while staying legible — a
+    // touch more opaque than the header's 0.60, appropriate for a content
+    // panel.
     final scrimAlpha = kIsWeb
-        ? (strong ? 0.88 : 0.60)
+        ? (strong ? 0.68 : 0.60)
         : (strong ? 0.68 : 0.45);
     final tintedCard = Container(
       padding: padding,

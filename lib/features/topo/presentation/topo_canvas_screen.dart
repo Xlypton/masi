@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart' show MapController, TileProvider;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1840,15 +1839,11 @@ class TopoCanvasBody extends ConsumerWidget {
                           ? GlassChrome(
                               key: const Key('topo-route-legend-overlay'),
                               strong: true,
-                              // Web-perf fix (stacked-blur cap): this card
-                              // frequently coincides with the top title pill
-                              // + bottom action cluster while drawing (up to
-                              // 4 simultaneous `BackdropFilter`s on web) —
-                              // render it solid on web (iOS keeps the real
-                              // glass) so the floating chrome caps at ~1-2
-                              // simultaneous blurs there. See
-                              // `GlassChrome.blur`'s doc.
-                              blur: !kIsWeb,
+                              // #80: was solid-on-web (`!kIsWeb`) to cap
+                              // simultaneous `BackdropFilter`s, leaving the
+                              // legend flat next to the frosted title pill —
+                              // now blurs on web too, to match the header.
+                              blur: true, // #80: frost the legend on web too, to match the header pill
                               // `Material(type: transparency)` — required so
                               // RouteLegend's ListTiles have a Material
                               // ANCESTOR closer than the Scaffold's own:
@@ -1924,10 +1919,9 @@ class _LegendChip extends StatelessWidget {
     final colors = MasiColors.of(context);
     return GlassChrome(
       strong: true,
-      // Web-perf fix (stacked-blur cap): same reasoning as the expanded
-      // legend card — solid on web, real glass on iOS. See
-      // `GlassChrome.blur`'s doc.
-      blur: !kIsWeb,
+      // #80: was solid-on-web (stacked-blur cap), same reasoning as the
+      // expanded legend card — now blurs on web too, for the same reason.
+      blur: true, // #80: frost the legend on web too, to match the header pill
       padding: const EdgeInsets.symmetric(
         horizontal: MasiSpacing.md,
         vertical: MasiSpacing.sm,
