@@ -328,7 +328,15 @@ abstract final class MasiTheme {
       scaffoldBackgroundColor: colors.ground,
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
-        backgroundColor: Colors.transparent,
+        // Opaque ground (not transparent): visually identical to a transparent
+        // AppBar over the `ground` scaffold, but paints one continuous opaque
+        // layer across the whole AppBar (incl. the status-bar region). This
+        // aims to eliminate a faint 2px WebKit compositor seam that shows on
+        // web at the safe-area-inset-top boundary when the AppBar is a
+        // transparent see-through layer (#74). No effect on full-bleed screens
+        // (topo canvas has no AppBar; community detail's SliverAppBar sets its
+        // own backgroundColor).
+        backgroundColor: colors.ground,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         scrolledUnderElevation: 0,
