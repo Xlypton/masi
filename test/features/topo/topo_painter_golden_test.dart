@@ -1386,11 +1386,11 @@ void main() {
             reason: 'label offset must be perpendicular to the first segment',
           );
 
-          // Magnitude is the fixed on-screen offset distance (22.0, see
+          // Magnitude is the fixed on-screen offset distance (16.0, see
           // _labelOffsetDistance) and doubles in SCENE space at scale 0.5
           // (the ON-SCREEN distance itself stays constant).
-          expect(delta1.distance, closeTo(22.0, 1e-6));
-          expect(delta05.distance, closeTo(44.0, 1e-6));
+          expect(delta1.distance, closeTo(16.0, 1e-6));
+          expect(delta05.distance, closeTo(32.0, 1e-6));
 
           // Same direction at both scales — only the magnitude changes.
           expect(
@@ -1433,7 +1433,7 @@ void main() {
 
           expect(delta.dx, lessThan(0), reason: 'fallback must offset left');
           expect(delta.dy, lessThan(0), reason: 'fallback must offset up');
-          expect(delta.distance, closeTo(22.0, 1e-6));
+          expect(delta.distance, closeTo(16.0, 1e-6));
         },
       );
 

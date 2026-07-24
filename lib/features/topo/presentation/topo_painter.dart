@@ -48,7 +48,7 @@ const double _labelFontSize = 14.0;
 /// size in this painter) the route-number label is offset from its route's
 /// first point — #18 fix: clear of the (5.5px-wide) route stroke, rather
 /// than the old fixed `Offset(-6, -20)` which sat on top of it.
-const double _labelOffsetDistance = 22.0;
+const double _labelOffsetDistance = 16.0;
 
 /// Fallback stroke color used when [TopoPainter.palette] is empty, so a
 /// route can still be painted (rather than throwing
@@ -56,15 +56,13 @@ const double _labelOffsetDistance = 22.0;
 /// even if the caller passes an empty palette list.
 const Color _fallbackRouteColor = Color(0xFF2E7D32);
 
-/// Fixed high-contrast color used to paint route-number labels, regardless
-/// of the route's own stroke color. A route-colored (e.g. orange) label
-/// can be nearly invisible over a similarly colored photo region; the
-/// route's color identity is already conveyed by the colored line itself
-/// plus the legend swatch, so the number doesn't need to match it. White
-/// paired with the dark shadow(s) baked into the label's [TextStyle] (see
-/// [TopoPainter._paintLabel]) reads clearly over both light and dark photo
+/// #79: route-number labels are tinted to the route's OWN resolved color
+/// (the same color as its drawn line and legend swatch) rather than a fixed
+/// white, so the number reads as an at-a-glance match to its route. The two
+/// dark [Shadow]s baked into the label's [TextStyle] (see
+/// [TopoPainter._paintLabel]) still provide the legibility outline that
+/// keeps the colored glyph readable over both light and dark photo
 /// backgrounds.
-const Color _labelColor = Color(0xFFFFFFFF);
 
 /// Minimum on-screen distance (scaled by 1/[TopoPainter._safeScale], like
 /// every other on-screen-constant size in this painter) a route-number
@@ -254,7 +252,7 @@ class TopoPainter extends CustomPainter {
       );
 
       if (scenePoints.isNotEmpty) {
-        _paintLabel(canvas, size, scenePoints, route.number);
+        _paintLabel(canvas, size, scenePoints, route.number, color);
       }
 
       // Feature #43: a committed route's symbols (disabled-hold markers +
@@ -311,12 +309,12 @@ class TopoPainter extends CustomPainter {
   /// single-point route) has no segment to be perpendicular to, so falls
   /// back to the pre-existing up-and-left placement.
   ///
-  /// The bold number is painted directly on the photo in a FIXED
-  /// high-contrast color ([_labelColor], white) rather than the route's own
-  /// color — a route-colored (e.g. orange) label can be nearly invisible
-  /// over a similarly colored photo region, whereas white plus the dark
-  /// shadows baked into its [TextStyle.shadows] reads clearly over both
-  /// light and dark backgrounds. There is no background chip.
+  /// The bold number is painted in [color] — the SAME resolved color as the
+  /// route's own line and legend swatch (#79) — so the number reads as an
+  /// at-a-glance match to its route, rather than the old fixed white. The
+  /// dark shadows baked into its [TextStyle.shadows] still keep the
+  /// colored glyph legible over both light and dark photo backgrounds.
+  /// There is no background chip.
   ///
   /// [size] is the painter's on-screen/image-pixel bounds (the `size`
   /// [paint] receives). The label's final origin is clamped so its FULL
@@ -329,6 +327,7 @@ class TopoPainter extends CustomPainter {
     Size size,
     List<Offset> scenePoints,
     int number,
+    Color color,
   ) {
     final anchor = scenePoints.first;
 
@@ -353,7 +352,7 @@ class TopoPainter extends CustomPainter {
       text: TextSpan(
         text: '$number',
         style: TextStyle(
-          color: _labelColor,
+          color: color,
           fontSize: _labelFontSize / _safeScale,
           fontWeight: FontWeight.bold,
           shadows: [
