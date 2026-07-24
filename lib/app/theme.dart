@@ -329,11 +329,15 @@ abstract final class MasiTheme {
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
         // Opaque ground (not transparent): visually identical to a transparent
-        // AppBar over the `ground` scaffold, but paints one continuous opaque
-        // layer across the whole AppBar (incl. the status-bar region). This
-        // aims to eliminate a faint 2px WebKit compositor seam that shows on
-        // web at the safe-area-inset-top boundary when the AppBar is a
-        // transparent see-through layer (#74). No effect on full-bleed screens
+        // AppBar over the `ground` scaffold, kept as the explicit, robust
+        // default (no accidental see-through). NOTE: this was tried to remove
+        // the faint 2px WebKit compositor seam at the web PWA's
+        // safe-area-inset-top boundary (#74) — it did NOT (device-confirmed),
+        // because the seam is a WebKit canvas-layer artifact, not a
+        // transparency boundary. #74 is accepted as a WebKit limitation: the
+        // seam only shows on list screens, and the only "cover it" fix would
+        // smear a line across the full-bleed photo/canvas + community-detail
+        // screens, so it's not worth shipping. No effect on full-bleed screens
         // (topo canvas has no AppBar; community detail's SliverAppBar sets its
         // own backgroundColor).
         backgroundColor: colors.ground,
