@@ -133,14 +133,15 @@ class GlassChrome extends StatelessWidget {
         : (strong ? 30.0 : blurSigma);
     // Content-invariant neutral scrim, rendered BEHIND the tinted `chrome`
     // fill in both paths — see [strong]'s doc for the motivating bug. Only
-    // the alpha differs. Deliberately kept more SEE-THROUGH (per user
-    // request): the default path uses 0.45 and `strong` 0.68 — still enough
-    // neutral scrim to mute (not eliminate) a saturated photo region before
-    // the semi-transparent `chrome` tint reaches the surface, so the old
-    // "blue smear" stays suppressed, but noticeably glassier than the prior
-    // 0.78/0.92. `strong` (route legend, a content panel) stays a touch more
-    // opaque than the floating pills for legibility.
-    final scrimAlpha = strong ? 0.68 : 0.45;
+    // the alpha differs. On native, BackdropFilter blur (sigma 18–30) carries
+    // most of the visual separation, so a lower scrim alpha keeps the glass
+    // feel. On web there is no blur (`blur: !kIsWeb`), so the scrim ALONE
+    // must guarantee legibility over a busy photo — hence the higher web
+    // values. `strong` (route legend, a content panel) stays more opaque than
+    // the floating pills in both modes.
+    final scrimAlpha = kIsWeb
+        ? (strong ? 0.88 : 0.60)
+        : (strong ? 0.68 : 0.45);
     final tintedCard = Container(
       padding: padding,
       decoration: BoxDecoration(
