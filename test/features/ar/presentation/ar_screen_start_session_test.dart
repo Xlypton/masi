@@ -54,6 +54,8 @@ class _FakeArChannel extends ArChannel {
     required String referenceImagePath,
     required int refWidth,
     required int refHeight,
+    ArPlacementEngine engine = ArPlacementEngine.arkit,
+    List<double>? rockQuad,
   }) async => true;
 
   @override

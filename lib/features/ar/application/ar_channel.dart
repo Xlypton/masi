@@ -1,5 +1,9 @@
+import 'dart:math' show min;
+
 import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/services.dart';
+
+import 'package:masi/features/ar/application/ar_controller.dart' show ArPlacementEngine;
 
 /// The AR alignment mode: whether the native side continuously re-solves the
 /// homography from tracked features ([auto]), or holds the last-solved (or
@@ -154,11 +158,29 @@ class ArAlignment {
   final String? limitedReason;
 
   /// The confidence estimate actually driven by tracking quality: derives
-  /// from [trackingState] via [confidenceForTrackingState]. This — NOT the
-  /// [confidence] field above (which native never populates) — is what
-  /// `ArAlignmentStage` uses to drive the low-confidence fade and status
-  /// pill.
-  double get derivedConfidence => confidenceForTrackingState(trackingState);
+  /// from [trackingState] via [confidenceForTrackingState] -- the
+  /// `trackingState`-band value. This is what `ArAlignmentStage` uses to
+  /// drive the low-confidence fade and status pill.
+  ///
+  /// #66 runtime engine selector: the [confidence] field, historically
+  /// unpopulated by the ARKit path (so this getter was purely
+  /// [trackingState]-band-driven for every native payload before now), is
+  /// now populated by the non-ARKit placement engines (vision/orb/opencv)
+  /// with a numeric match-confidence score. When [confidence] is `> 0`, the
+  /// returned value is `min(band, confidence)` -- a low engine-reported
+  /// match confidence can only PULL DOWN the trust the overlay renders at
+  /// (fading the overlay / surfacing the manual fallback), never raise it
+  /// above what the tracking-state band already allows. When [confidence]
+  /// is `0` (its default -- see [fromMap]) or absent, this is the exact
+  /// pre-#66 band-only behavior, so the ARKit path (which sends no
+  /// `confidence`) is byte-for-byte unchanged.
+  double get derivedConfidence {
+    final band = confidenceForTrackingState(trackingState);
+    if (confidence > 0) {
+      return min(band, confidence);
+    }
+    return band;
+  }
 
   /// Parses [map] into an [ArAlignment].
   ///
@@ -304,10 +326,19 @@ class ArChannel {
   bool get isNoop => _noop;
 
   /// Starts native AR tracking/alignment against the reference photo at
-  /// [referenceImagePath] (with pixel dimensions [refWidth]x[refHeight]).
+  /// [referenceImagePath] (with pixel dimensions [refWidth]x[refHeight]),
+  /// using [engine] as the native placement engine (default
+  /// [ArPlacementEngine.arkit] -- the only engine before the #66 runtime
+  /// selector existed) and, when available, [rockQuad] as the route-derived
+  /// rock quad (see `rock_box.dart`'s `rockBoxCornersNorm`, flattened to
+  /// `[x0,y0,x1,y1,x2,y2,x3,y3]`, TL/TR/BR/BL, normalized 0..1).
   ///
-  /// Invokes the native `start` method with exactly:
-  /// `{'referenceImagePath': ..., 'refWidth': ..., 'refHeight': ...}`.
+  /// Invokes the native `start` method with `{'referenceImagePath': ...,
+  /// 'refWidth': ..., 'refHeight': ..., 'engine': engine.name}`, plus
+  /// `'rockQuad': rockQuad` ONLY when [rockQuad] is non-null and has exactly
+  /// 8 entries -- a null/malformed quad is omitted entirely rather than sent
+  /// as `null`/a wrong-length list, so native's arg-presence check (rather
+  /// than a null check) is enough to detect "no quad available".
   ///
   /// Native builds its `ARReferenceImage` from the FULL upright reference
   /// photo (no Vision-based foreground crop — see #68's Ship 1: that
@@ -321,21 +352,25 @@ class ArChannel {
     required String referenceImagePath,
     required int refWidth,
     required int refHeight,
+    ArPlacementEngine engine = ArPlacementEngine.arkit,
+    List<double>? rockQuad,
   }) async {
     if (_noop) return false;
     debugPrint(
       'AR_DBG ar_channel.start invoking (refPath=$referenceImagePath '
-      '${refWidth}x$refHeight)',
+      '${refWidth}x$refHeight engine=${engine.name})',
     );
     try {
-      final result = await _method.invokeMethod<Object?>(
-        'start',
-        <String, Object?>{
-          'referenceImagePath': referenceImagePath,
-          'refWidth': refWidth,
-          'refHeight': refHeight,
-        },
-      );
+      final args = <String, Object?>{
+        'referenceImagePath': referenceImagePath,
+        'refWidth': refWidth,
+        'refHeight': refHeight,
+        'engine': engine.name,
+      };
+      if (rockQuad != null && rockQuad.length == 8) {
+        args['rockQuad'] = rockQuad;
+      }
+      final result = await _method.invokeMethod<Object?>('start', args);
       debugPrint('AR_DBG ar_channel.start returned OK');
       if (result is Map && result['success'] is bool) {
         return result['success'] as bool;

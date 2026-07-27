@@ -270,3 +270,41 @@ class ArRockHighlightController extends Notifier<bool> {
   /// Flips the rock-highlight overlay on <-> off (the highlight FAB's action).
   void toggle() => state = !state;
 }
+
+/// The native AR placement engine to align against, for the runtime 4-way
+/// A/B selector (#66 morning tester). `.name` (`arkit`/`vision`/`orb`/
+/// `opencv`) is the EXACT wire string sent to native via
+/// [ArChannel.start]'s `engine` argument -- do not rename these values
+/// without also updating the native side.
+enum ArPlacementEngine { arkit, vision, orb, opencv }
+
+/// Which [ArPlacementEngine] the next (or current) AR session should use.
+///
+/// An app-lifetime singleton mirroring [arRockHighlightProvider]/
+/// [arLockedProvider] -- flipped by the "engine" FAB ([_ArControls]'s
+/// `ar-engine-toggle`, see `ar_screen.dart`), which also restarts the AR
+/// session so the newly-picked engine takes effect immediately rather than
+/// only on the next wall entry. Defaults to [ArPlacementEngine.arkit], the
+/// existing (only) engine before this selector existed, so every pre-#66
+/// call site is unaffected until a tester deliberately cycles away from it.
+final arEngineProvider = NotifierProvider<ArEngineController, ArPlacementEngine>(
+  ArEngineController.new,
+);
+
+class ArEngineController extends Notifier<ArPlacementEngine> {
+  @override
+  ArPlacementEngine build() => ArPlacementEngine.arkit;
+
+  /// Walks to the next engine in declaration order, wrapping back to the
+  /// first (arkit -> vision -> orb -> opencv -> arkit -> ...). The
+  /// "engine" FAB's action.
+  void cycle() {
+    final values = ArPlacementEngine.values;
+    final nextIndex = (values.indexOf(state) + 1) % values.length;
+    state = values[nextIndex];
+  }
+
+  /// Sets the engine directly (e.g. for tests, or a future explicit picker
+  /// UI rather than the cycling FAB).
+  void set(ArPlacementEngine engine) => state = engine;
+}

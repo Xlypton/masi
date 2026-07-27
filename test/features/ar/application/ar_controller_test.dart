@@ -491,4 +491,55 @@ void main() {
       expect(container.read(arRockHighlightProvider), isFalse);
     });
   });
+
+  group('ArEngineController (#66 runtime 4-way engine selector)', () {
+    late ProviderContainer container;
+
+    setUp(() {
+      container = ProviderContainer();
+      addTearDown(container.dispose);
+    });
+
+    test('build() defaults to arkit', () {
+      expect(container.read(arEngineProvider), ArPlacementEngine.arkit);
+    });
+
+    test(
+      'cycle() walks arkit -> vision -> orb -> opencv -> arkit, wrapping '
+      'around',
+      () {
+        final notifier = container.read(arEngineProvider.notifier);
+
+        notifier.cycle();
+        expect(container.read(arEngineProvider), ArPlacementEngine.vision);
+
+        notifier.cycle();
+        expect(container.read(arEngineProvider), ArPlacementEngine.orb);
+
+        notifier.cycle();
+        expect(container.read(arEngineProvider), ArPlacementEngine.opencv);
+
+        notifier.cycle();
+        expect(container.read(arEngineProvider), ArPlacementEngine.arkit);
+      },
+    );
+
+    test('set(engine) sets the engine directly', () {
+      final notifier = container.read(arEngineProvider.notifier);
+
+      notifier.set(ArPlacementEngine.opencv);
+
+      expect(container.read(arEngineProvider), ArPlacementEngine.opencv);
+    });
+
+    test(
+      'the enum .name values are the exact wire strings native expects',
+      () {
+        expect(ArPlacementEngine.arkit.name, 'arkit');
+        expect(ArPlacementEngine.vision.name, 'vision');
+        expect(ArPlacementEngine.orb.name, 'orb');
+        expect(ArPlacementEngine.opencv.name, 'opencv');
+      },
+    );
+  });
 }

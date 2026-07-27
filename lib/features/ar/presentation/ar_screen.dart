@@ -352,15 +352,69 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     unawaited(_startSession(photo, routes));
   }
 
+  /// Computes the route-derived rock quad (see `rock_box.dart`'s
+  /// `rockBoxFromRoutes`/`rockBoxCornersNorm`) as the flat
+  /// `[x0,y0,x1,y1,x2,y2,x3,y3]` (TL,TR,BR,BL, normalized 0..1) list
+  /// [ArChannel.start]'s `rockQuad` argument expects, or `null` when
+  /// [routes] has no geometry to derive a box from (or, defensively, if the
+  /// flattened result is somehow not exactly 8 entries).
+  List<double>? _rockQuadFor(List<TopoRoute> routes) {
+    final box = rockBoxFromRoutes(routes);
+    if (box == null) return null;
+    final flat = <double>[];
+    for (final corner in rockBoxCornersNorm(box)) {
+      flat
+        ..add(corner.dx)
+        ..add(corner.dy);
+    }
+    return flat.length == 8 ? flat : null;
+  }
+
+  /// Restarts the native AR session using whatever engine [arEngineProvider]
+  /// currently holds -- the `ar-engine-toggle` FAB's action (see
+  /// [_ArControls]), invoked right after [ArEngineController.cycle] so a
+  /// freshly-picked engine takes effect immediately rather than only on the
+  /// next wall entry.
+  ///
+  /// Cancels the existing alignment subscription and stops the current
+  /// native session (best-effort -- there might not be an active one, e.g.
+  /// this engine's own previous start attempt already failed) before
+  /// re-running [_startSession], which re-invokes `channel.start` with the
+  /// new engine and re-subscribes to `alignments()`. Also resets the
+  /// corner-smoothing filter -- an engine swap is a fresh tracking source,
+  /// the same discontinuity rationale [ArController.setMode] already
+  /// guards against (see [CornerSmoother]'s class doc) -- so the new
+  /// engine's first corner sample is never blended against the previous
+  /// engine's leftover filter state.
+  Future<void> _restartSessionForEngineChange() async {
+    if (!mounted) return;
+    final photo = _photo;
+    final routes = _routes;
+    if (photo == null || routes == null || routes.isEmpty) return;
+    await _alignmentSubscription?.cancel();
+    _alignmentSubscription = null;
+    if (_sessionStarted) {
+      await ref.read(arChannelProvider).stop();
+      _sessionStarted = false;
+      ref.read(arControllerProvider.notifier).markActive(false);
+    }
+    ref.read(arControllerProvider.notifier).resetCornerSmoothing();
+    if (!mounted) return;
+    await _startSession(photo, routes);
+  }
+
   Future<void> _startSession(PhotoRef photo, List<TopoRoute> routes) async {
     _sessionStarted = true;
     final channel = ref.read(arChannelProvider);
-    debugPrint('AR_DBG _startSession calling channel.start');
+    final engine = ref.read(arEngineProvider);
+    debugPrint('AR_DBG _startSession calling channel.start engine=${engine.name}');
     try {
       await channel.start(
         referenceImagePath: photo.localPath,
         refWidth: photo.width,
         refHeight: photo.height,
+        engine: engine,
+        rockQuad: _rockQuadFor(routes),
       );
     } catch (error) {
       // Native start threw (e.g. camera permission denied, or no camera on
@@ -538,6 +592,10 @@ class _ArScreenState extends ConsumerState<ArScreen> {
         startError: _startError,
         onRetryStart: _startError == null ? null : _retryStartSession,
         autoTracking: autoTracking,
+        onEngineToggle: () {
+          ref.read(arEngineProvider.notifier).cycle();
+          unawaited(_restartSessionForEngineChange());
+        },
       ),
     );
   }
@@ -645,6 +703,7 @@ class ArAlignmentStage extends ConsumerStatefulWidget {
     this.startError,
     this.onRetryStart,
     this.autoTracking = true,
+    this.onEngineToggle,
   });
 
   /// The live camera surface to render underneath the overlay. In the real
@@ -687,6 +746,24 @@ class ArAlignmentStage extends ConsumerStatefulWidget {
   /// and [_ArControls] hides the mode-toggle/re-scan FABs (there is no other
   /// mode to toggle to, and nothing to re-scan).
   final bool autoTracking;
+
+  /// Invoked when the "engine" FAB ([_ArControls]'s `ar-engine-toggle`) is
+  /// tapped: [ArScreen] wires this to cycle [arEngineProvider] (see
+  /// `ar_controller.dart`'s `ArEngineController.cycle`) and then restart the
+  /// native AR session (see [_ArScreenState._restartSessionForEngineChange])
+  /// so the freshly-picked engine takes effect immediately, letting a
+  /// morning tester A/B all four native placement engines without leaving
+  /// the screen. Only reachable when [autoTracking] is true (see
+  /// [_ArControls], which hides the FAB entirely on web).
+  ///
+  /// Optional (`null` by default) so every pre-#66 direct
+  /// [ArAlignmentStage] construction (this widget's own tests build it
+  /// standalone — see its class doc) keeps compiling unchanged; `null`
+  /// simply leaves the `ar-engine-toggle` FAB disabled (same as `active:
+  /// false`, via [_ArControls]'s `onPressed` gate) rather than forcing every
+  /// such call site to supply a callback it has no use for. [ArScreen]
+  /// always supplies a real one.
+  final VoidCallback? onEngineToggle;
 
   @override
   ConsumerState<ArAlignmentStage> createState() => _ArAlignmentStageState();
@@ -751,6 +828,12 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
     // that box as a tinted outline over the wall; otherwise pass null (no
     // highlight). See arRockHighlightProvider.
     final highlightRock = ref.watch(arRockHighlightProvider);
+    // The active placement engine (#66 runtime A/B selector -- see
+    // arEngineProvider's doc). Watched here (rather than only inside
+    // _ArControls, which also watches it for its own tooltip) so it can be
+    // threaded down into _ArStatus too -- that's a StatelessWidget with no
+    // `ref` of its own.
+    final engine = ref.watch(arEngineProvider);
     // Web (widget.autoTracking == false) has no continuous tracking session
     // to ever fall back on, so alignment is ALWAYS effectively manual there,
     // regardless of arState.mode (ArState.mode still literally flips
@@ -978,6 +1061,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
                 error: widget.startError,
                 onRetry: widget.onRetryStart,
                 autoTracking: widget.autoTracking,
+                engine: engine,
               ),
             ),
             Positioned(
@@ -989,6 +1073,7 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
                 active: arState.active,
                 onToggleLock: onToggleLock,
                 autoTracking: widget.autoTracking,
+                onEngineToggle: widget.onEngineToggle,
               ),
             ),
           ],
@@ -1013,6 +1098,7 @@ class _ArStatus extends StatelessWidget {
     this.error,
     this.onRetry,
     required this.autoTracking,
+    required this.engine,
   });
 
   final ArMode mode;
@@ -1047,6 +1133,15 @@ class _ArStatus extends StatelessWidget {
 
   /// Invoked when the pill is tapped while [error] is non-null.
   final VoidCallback? onRetry;
+
+  /// The active native placement engine (#66 runtime A/B selector -- see
+  /// `ar_controller.dart`'s `arEngineProvider`). Surfaced as an extra status
+  /// line whenever [autoTracking] is true (native only -- there is no engine
+  /// selection on web, see [ArAlignmentStage.autoTracking]'s doc), so a
+  /// morning tester always knows which engine is live, including while
+  /// [error] is shown (the failing engine's name is exactly what they need
+  /// then).
+  final ArPlacementEngine engine;
 
   @override
   Widget build(BuildContext context) {
@@ -1124,6 +1219,12 @@ class _ArStatus extends StatelessWidget {
           key: const Key('ar-hint'),
           style: TextStyle(color: colors.ink2, fontSize: 12),
         ),
+        if (autoTracking)
+          Text(
+            'Engine: ${engine.name}',
+            key: const Key('ar-engine-status'),
+            style: TextStyle(color: colors.ink2, fontSize: 11),
+          ),
       ],
     );
     const pillPadding = EdgeInsets.symmetric(horizontal: 10, vertical: 6);
@@ -1175,9 +1276,11 @@ String _limitedReasonHint(String? reason) {
 
 /// The "highlight rock" toggle (always shown), the mode toggle (auto-tracking
 /// platforms only — see [autoTracking]), "reset alignment" button (unlocked
-/// manual mode only), the Lock/Unlock button (manual mode only), and the
-/// Re-scan button (auto mode AND auto-tracking platforms only), floating over
-/// the top-right of [ArAlignmentStage].
+/// manual mode only), the Lock/Unlock button (manual mode only), the Re-scan
+/// button (auto mode AND auto-tracking platforms only), and the "engine"
+/// toggle (auto-tracking platforms only — #66's runtime 4-way placement-
+/// engine A/B selector, see [onEngineToggle]/`arEngineProvider`), floating
+/// over the top-right of [ArAlignmentStage].
 class _ArControls extends ConsumerWidget {
   const _ArControls({
     required this.mode,
@@ -1185,6 +1288,7 @@ class _ArControls extends ConsumerWidget {
     required this.active,
     required this.onToggleLock,
     required this.autoTracking,
+    this.onEngineToggle,
   });
 
   final ArMode mode;
@@ -1220,6 +1324,12 @@ class _ArControls extends ConsumerWidget {
   /// for a "re-scan" to mean without a native tracking session.
   final bool autoTracking;
 
+  /// Invoked by the `ar-engine-toggle` FAB's `onPressed`: see
+  /// [ArAlignmentStage.onEngineToggle]'s doc for what it actually does
+  /// (cycle [arEngineProvider], restart the native session). `null` leaves
+  /// the FAB disabled, same as `active: false`.
+  final VoidCallback? onEngineToggle;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     // Mirrors ArAlignmentStage.build's own isManual (see that method's
@@ -1229,6 +1339,10 @@ class _ArControls extends ConsumerWidget {
     // ArController's ArMode.auto default.
     final isManual = !autoTracking || mode == ArMode.manual;
     final highlightRock = ref.watch(arRockHighlightProvider);
+    // #66 runtime engine selector: only meaningful on autoTracking
+    // (native) platforms -- see the FAB's own `if (autoTracking)` gate
+    // below, and arEngineProvider's doc.
+    final engine = ref.watch(arEngineProvider);
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -1281,6 +1395,16 @@ class _ArControls extends ConsumerWidget {
                     }
                   : null,
               child: MasiIcon(locked ? 'lock' : 'lock_open'),
+            ),
+          ),
+        if (autoTracking)
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: FloatingActionButton.small(
+              key: const Key('ar-engine-toggle'),
+              tooltip: 'Switch placement engine (current: ${engine.name})',
+              onPressed: active ? onEngineToggle : null,
+              child: const MasiIcon('sync'),
             ),
           ),
         if (autoTracking)

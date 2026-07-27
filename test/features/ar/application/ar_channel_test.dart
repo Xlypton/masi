@@ -1,5 +1,6 @@
 
 import 'package:masi/features/ar/application/ar_channel.dart';
+import 'package:masi/features/ar/application/ar_controller.dart' show ArPlacementEngine;
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -324,6 +325,75 @@ void main() {
         expect(ArTrackingState.fromWire('nonsense'), ArTrackingState.normal);
       },
     );
+
+    group('#66: numeric engine confidence lowers derivedConfidence', () {
+      test(
+        'confidence: 0 (the fromMap default/absent case) leaves the band '
+        'value completely unchanged -- the ARKit path (which never sends '
+        'confidence) must be byte-for-byte identical to before #66',
+        () {
+          final alignment = ArAlignment.fromMap(<String, Object?>{
+            'tracking': true,
+            'trackingState': 'normal',
+          });
+
+          expect(alignment.confidence, 0.0);
+          expect(alignment.derivedConfidence, 1.0);
+        },
+      );
+
+      test(
+        'a low numeric confidence (0.2) pulls a normal band (1.0) DOWN to '
+        'the reported confidence',
+        () {
+          const alignment = ArAlignment(
+            confidence: 0.2,
+            tracking: true,
+            trackingState: ArTrackingState.normal,
+          );
+
+          expect(alignment.derivedConfidence, 0.2);
+        },
+      );
+
+      test(
+        'a high numeric confidence (0.9) can never raise a limited band '
+        '(0.35) above what the tracking-state band already allows -- min() '
+        'never lets confidence pull the value UP',
+        () {
+          const alignment = ArAlignment(
+            confidence: 0.9,
+            tracking: true,
+            trackingState: ArTrackingState.limited,
+          );
+
+          expect(alignment.derivedConfidence, 0.35);
+        },
+      );
+
+      test(
+        'fromMap parses a numeric confidence field as a double',
+        () {
+          final alignment = ArAlignment.fromMap(<String, Object?>{
+            'tracking': true,
+            'confidence': 0.42,
+          });
+
+          expect(alignment.confidence, 0.42);
+        },
+      );
+
+      test(
+        'fromMap defaults a missing confidence field to 0.0',
+        () {
+          final alignment = ArAlignment.fromMap(<String, Object?>{
+            'tracking': true,
+          });
+
+          expect(alignment.confidence, 0.0);
+        },
+      );
+    });
   });
 
   group('ArChannel', () {
@@ -349,8 +419,8 @@ void main() {
     });
 
     test(
-      'A1: start() invokes "start" with exactly the 3 documented args (no '
-      'routesJson -- native never needed route geometry)',
+      'A1/#66: start() invokes "start" with the 3 original args plus '
+      '"engine" (default arkit), no rockQuad when omitted',
       () async {
         final channel = ArChannel(method: method, event: event);
 
@@ -366,7 +436,87 @@ void main() {
           'referenceImagePath': '/p.jpg',
           'refWidth': 1000,
           'refHeight': 800,
+          'engine': 'arkit',
         });
+      },
+    );
+
+    test(
+      '#66: start() sends the non-default engine.name as the wire value',
+      () async {
+        final channel = ArChannel(method: method, event: event);
+
+        await channel.start(
+          referenceImagePath: '/p.jpg',
+          refWidth: 1000,
+          refHeight: 800,
+          engine: ArPlacementEngine.vision,
+        );
+
+        expect(calls.single.arguments, <String, Object?>{
+          'referenceImagePath': '/p.jpg',
+          'refWidth': 1000,
+          'refHeight': 800,
+          'engine': 'vision',
+        });
+      },
+    );
+
+    test(
+      '#66: start() includes rockQuad only when it has exactly 8 entries',
+      () async {
+        final channel = ArChannel(method: method, event: event);
+
+        await channel.start(
+          referenceImagePath: '/p.jpg',
+          refWidth: 1000,
+          refHeight: 800,
+          engine: ArPlacementEngine.orb,
+          rockQuad: const <double>[0.1, 0.1, 0.9, 0.1, 0.9, 0.9, 0.1, 0.9],
+        );
+
+        expect(calls.single.arguments, <String, Object?>{
+          'referenceImagePath': '/p.jpg',
+          'refWidth': 1000,
+          'refHeight': 800,
+          'engine': 'orb',
+          'rockQuad': const <double>[0.1, 0.1, 0.9, 0.1, 0.9, 0.9, 0.1, 0.9],
+        });
+      },
+    );
+
+    test(
+      '#66: start() omits rockQuad entirely (never sends it as null or a '
+      'wrong-length list) when the quad is null',
+      () async {
+        final channel = ArChannel(method: method, event: event);
+
+        await channel.start(
+          referenceImagePath: '/p.jpg',
+          refWidth: 1000,
+          refHeight: 800,
+          rockQuad: null,
+        );
+
+        final args = calls.single.arguments as Map<Object?, Object?>;
+        expect(args.containsKey('rockQuad'), isFalse);
+      },
+    );
+
+    test(
+      '#66: start() omits rockQuad when it does not have exactly 8 entries',
+      () async {
+        final channel = ArChannel(method: method, event: event);
+
+        await channel.start(
+          referenceImagePath: '/p.jpg',
+          refWidth: 1000,
+          refHeight: 800,
+          rockQuad: const <double>[0.1, 0.1, 0.9],
+        );
+
+        final args = calls.single.arguments as Map<Object?, Object?>;
+        expect(args.containsKey('rockQuad'), isFalse);
       },
     );
 
