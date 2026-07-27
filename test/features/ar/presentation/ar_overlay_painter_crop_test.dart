@@ -82,6 +82,20 @@ int _alphaAt(ByteData data, int size, int x, int y) {
   return data.getUint8(i + 3);
 }
 
+/// The green byte (0-255) at pixel ([x], [y]) of a straight-RGBA [data]
+/// buffer of a `size`x`size` image.
+int _greenAt(ByteData data, int size, int x, int y) {
+  final i = (y * size + x) * 4;
+  return data.getUint8(i + 1);
+}
+
+/// The blue byte (0-255) at pixel ([x], [y]) of a straight-RGBA [data]
+/// buffer of a `size`x`size` image.
+int _blueAt(ByteData data, int size, int x, int y) {
+  final i = (y * size + x) * 4;
+  return data.getUint8(i + 2);
+}
+
 void main() {
   const size = 16;
   const refSize = Size(16, 16);
@@ -193,4 +207,63 @@ void main() {
       expect(rightAlpha, lessThanOrEqualTo(5));
     },
   );
+
+  group('rock silhouette highlight', () {
+    test(
+      'highlight-on + mask present: the mask silhouette is drawn (follows '
+      'the mask shape, not a bounding rectangle) -- cyan tint on the LEFT '
+      'half where the mask is opaque, untouched on the RIGHT half where it '
+      "isn't",
+      () async {
+        final mask = await _halfMaskImage(size);
+        final painter = ArOverlayPainter(
+          routes: const [],
+          refSize: refSize,
+          homography: Homography.identity(),
+          palette: palette,
+          outline: null,
+          rockBox: const Rect.fromLTRB(0, 0, 1, 1),
+          rockMask: mask,
+        );
+
+        final data = await _renderStraightRgba(painter, size);
+
+        final leftAlpha = _alphaAt(data, size, 4, 8);
+        final leftGreen = _greenAt(data, size, 4, 8);
+        final leftBlue = _blueAt(data, size, 4, 8);
+        final rightAlpha = _alphaAt(data, size, 12, 8);
+
+        // ~40% of 255 (the silhouette saveLayer's 0x66 alpha) -- generously
+        // bounded to tolerate rounding/antialiasing.
+        expect(leftAlpha, greaterThan(20));
+        expect(leftGreen, greaterThan(0));
+        expect(leftBlue, greaterThan(0));
+        expect(rightAlpha, lessThanOrEqualTo(5));
+      },
+    );
+
+    test(
+      'highlight-on + no mask: falls back to the cyan bounding-box rectangle '
+      '-- both halves show cyan',
+      () async {
+        final painter = ArOverlayPainter(
+          routes: const [],
+          refSize: refSize,
+          homography: Homography.identity(),
+          palette: palette,
+          outline: null,
+          rockBox: const Rect.fromLTRB(0, 0, 1, 1),
+          rockMask: null,
+        );
+
+        final data = await _renderStraightRgba(painter, size);
+
+        final leftAlpha = _alphaAt(data, size, 4, 8);
+        final rightAlpha = _alphaAt(data, size, 12, 8);
+
+        expect(leftAlpha, greaterThan(20));
+        expect(rightAlpha, greaterThan(20));
+      },
+    );
+  });
 }

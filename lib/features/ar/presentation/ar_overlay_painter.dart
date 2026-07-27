@@ -50,6 +50,13 @@ const int _rockBoxFillAlpha = 46;
 /// Stroke width (canvas px) for the rock box's outline.
 const double _rockBoxStrokeWidth = 3.0;
 
+/// Layer opacity (ARGB, RGB ignored -- see the `saveLayer`-opacity idiom
+/// already used by the [ArOverlayPainter.outline] block's `Color(0x73000000)`)
+/// applied when compositing the [ArOverlayPainter.rockMask] silhouette, so the
+/// recognized-rock highlight reads as a translucent tint (~40% opacity) over
+/// the live camera feed rather than an opaque cyan cutout.
+const int _rockSilhouetteLayerAlpha = 0x66000000;
+
 /// Paints topo routes warped through a [Homography] on top of a live camera
 /// feed, for the AR alignment view.
 ///
@@ -182,33 +189,58 @@ class ArOverlayPainter extends CustomPainter {
 
     final box = rockBox;
     if (box != null) {
-      // Corners warped exactly the way route points are (homography.
-      // warpOriginalPercent on a 0..1 fraction of refSize) -- consistent
-      // with the rest of this painter's coordinate handling, and simpler
-      // than the outline block's canvas.transform+drawImageRect recipe
-      // since there's no image to stretch, just 4 points to draw a path
-      // through.
-      final corners = [
-        for (final p in rockBoxCornersNorm(box))
-          homography.warpOriginalPercent(p, refSize),
-      ];
-      final path = Path()..moveTo(corners[0].dx, corners[0].dy);
-      for (final c in corners.skip(1)) {
-        path.lineTo(c.dx, c.dy);
+      final mask = rockMask;
+      if (mask != null) {
+        // Recognized-rock silhouette: the mask is already cyan-tinted with
+        // binary alpha, so draw it translucently, warped onto the wall -- it
+        // follows the real rock shape instead of a bounding rectangle.
+        // Visible in auto mode (where a mask is available but no [outline]
+        // ghost is drawn).
+        canvas.save();
+        canvas.transform(homography.toMatrix4ColumnMajor());
+        final dst = Rect.fromLTWH(0, 0, refSize.width, refSize.height);
+        final maskSrc = Rect.fromLTWH(0, 0, mask.width.toDouble(), mask.height.toDouble());
+        canvas.saveLayer(dst, Paint()..color = const Color(_rockSilhouetteLayerAlpha));
+        canvas.drawImageRect(
+          mask,
+          maskSrc,
+          dst,
+          Paint()
+            ..filterQuality = FilterQuality.high
+            ..isAntiAlias = true,
+        );
+        canvas.restore(); // saveLayer
+        canvas.restore(); // transform
+      } else {
+        // Fallback (no mask yet / seg unavailable): the previous route-bbox
+        // rectangle. Corners warped exactly the way route points are
+        // (homography.warpOriginalPercent on a 0..1 fraction of refSize) --
+        // consistent with the rest of this painter's coordinate handling,
+        // and simpler than the outline block's
+        // canvas.transform+drawImageRect recipe since there's no image to
+        // stretch, just 4 points to draw a path through.
+        final corners = [
+          for (final p in rockBoxCornersNorm(box))
+            homography.warpOriginalPercent(p, refSize),
+        ];
+        final path = Path()..moveTo(corners[0].dx, corners[0].dy);
+        for (final c in corners.skip(1)) {
+          path.lineTo(c.dx, c.dy);
+        }
+        path.close();
+
+        final fillPaint = Paint()
+          ..color = _rockHighlightTint.withAlpha(_rockBoxFillAlpha)
+          ..style = PaintingStyle.fill;
+        canvas.drawPath(path, fillPaint);
+
+        final strokePaint = Paint()
+          ..color = _rockHighlightTint.withAlpha(_rockHighlightAlpha)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = _rockBoxStrokeWidth
+          ..isAntiAlias = true;
+        canvas.drawPath(path, strokePaint);
       }
-      path.close();
-
-      final fillPaint = Paint()
-        ..color = _rockHighlightTint.withAlpha(_rockBoxFillAlpha)
-        ..style = PaintingStyle.fill;
-      canvas.drawPath(path, fillPaint);
-
-      final strokePaint = Paint()
-        ..color = _rockHighlightTint.withAlpha(_rockHighlightAlpha)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = _rockBoxStrokeWidth
-        ..isAntiAlias = true;
-      canvas.drawPath(path, strokePaint);
     }
 
     for (final route in routes) {
