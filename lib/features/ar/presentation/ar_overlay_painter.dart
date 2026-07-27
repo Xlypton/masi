@@ -80,6 +80,8 @@ class ArOverlayPainter extends CustomPainter {
     this.routeColorResolver,
     this.outline,
     this.rockBox,
+    this.rockMask,
+    this.cropBox,
   });
 
   /// Routes to render, in percent-of-[refSize] space. Routes with
@@ -124,6 +126,22 @@ class ArOverlayPainter extends CustomPainter {
   /// while the "highlight rock" toggle is on (see `ar_screen.dart`).
   final Rect? rockBox;
 
+  /// Optional per-pixel rock silhouette in the same 0..1 fractions of
+  /// [refSize] as [rockBox]/[cropBox] (native, via Core ML segmentation —
+  /// see `ar_controller.dart`'s `ArState.rockMask`). When non-null, the
+  /// [outline] ghost is clipped to this silhouette (via `BlendMode.dstIn`)
+  /// instead of the full photo rect, so it only drapes over the rock, not
+  /// forest/sky/terrain. `null` (the default) falls back to [cropBox] (or, if
+  /// that's also `null`, no crop at all).
+  final ui.Image? rockMask;
+
+  /// Optional route-hull rectangle (0..1 fractions of [refSize], typically
+  /// `rockBoxFromRoutes`'s result) used to crop the [outline] ghost when
+  /// [rockMask] is `null` — the fallback tier for web, before the native
+  /// mask resolves, or on the simulator. `null` (the default) draws the
+  /// ghost over the full photo rect (unchanged legacy behavior).
+  final Rect? cropBox;
+
   bool get _isLowConfidence => confidence < kLowConfidenceThreshold;
 
   @override
@@ -133,6 +151,17 @@ class ArOverlayPainter extends CustomPainter {
       canvas.save();
       canvas.transform(homography.toMatrix4ColumnMajor());
       final dst = Rect.fromLTWH(0, 0, refSize.width, refSize.height);
+      final mask = rockMask;
+      final box = cropBox;
+      // Fallback rectangular crop (web / before the per-pixel mask resolves).
+      if (mask == null && box != null) {
+        canvas.clipRect(Rect.fromLTRB(
+          box.left * refSize.width,
+          box.top * refSize.height,
+          box.right * refSize.width,
+          box.bottom * refSize.height,
+        ));
+      }
       final src = Rect.fromLTWH(0, 0, outlineImage.width.toDouble(), outlineImage.height.toDouble());
       canvas.saveLayer(dst, Paint()..color = const Color(0x73000000)); // ~45% opacity layer
       // High-quality (bilinear) filtering smooths the upscaled binary edge
@@ -141,8 +170,14 @@ class ArOverlayPainter extends CustomPainter {
         ..filterQuality = FilterQuality.high
         ..isAntiAlias = true;
       canvas.drawImageRect(outlineImage, src, dst, outlinePaint);
+      // Per-pixel silhouette crop: keep the ghost only where the rock mask is
+      // opaque.
+      if (mask != null) {
+        final maskSrc = Rect.fromLTWH(0, 0, mask.width.toDouble(), mask.height.toDouble());
+        canvas.drawImageRect(mask, maskSrc, dst, Paint()..blendMode = BlendMode.dstIn..filterQuality = FilterQuality.high);
+      }
       canvas.restore(); // ends saveLayer
-      canvas.restore(); // ends transform save
+      canvas.restore(); // ends transform save (+ clip)
     }
 
     final box = rockBox;
@@ -259,6 +294,8 @@ class ArOverlayPainter extends CustomPainter {
         routeColorResolver != oldDelegate.routeColorResolver ||
         outline != oldDelegate.outline ||
         rockBox != oldDelegate.rockBox ||
+        rockMask != oldDelegate.rockMask ||
+        cropBox != oldDelegate.cropBox ||
         !listEquals(palette, oldDelegate.palette) ||
         !listEquals(routes, oldDelegate.routes);
   }

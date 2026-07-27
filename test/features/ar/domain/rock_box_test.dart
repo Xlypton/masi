@@ -202,4 +202,89 @@ void main() {
       ]);
     });
   });
+
+  group('flattenRoutesNorm', () {
+    test('a visible route flattens its points into [x0,y0,x1,y1,...]', () {
+      const route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.2), Offset(0.3, 0.4)],
+      );
+
+      expect(flattenRoutesNorm(const [route]), <double>[0.1, 0.2, 0.3, 0.4]);
+    });
+
+    test('an invisible route contributes nothing', () {
+      const route = TopoRoute(
+        id: 1,
+        number: 1,
+        visible: false,
+        points: [Offset(0.1, 0.2), Offset(0.3, 0.4)],
+      );
+
+      expect(flattenRoutesNorm(const [route]), isNull);
+    });
+
+    test('empty routes list -> null', () {
+      expect(flattenRoutesNorm(const []), isNull);
+    });
+
+    test(
+      'all-invisible routes (non-empty list, no visible geometry) -> null',
+      () {
+        const routeA = TopoRoute(
+          id: 1,
+          number: 1,
+          visible: false,
+          points: [Offset(0.1, 0.1)],
+        );
+        const routeB = TopoRoute(
+          id: 2,
+          number: 2,
+          visible: false,
+          points: [Offset(0.2, 0.2)],
+        );
+
+        expect(flattenRoutesNorm(const [routeA, routeB]), isNull);
+      },
+    );
+
+    test('a symbol position is appended after the route\'s points', () {
+      const route = TopoRoute(
+        id: 1,
+        number: 1,
+        points: [Offset(0.1, 0.2)],
+        symbols: [
+          TopoSymbol(type: SymbolType.anchor, position: Offset(0.5, 0.6)),
+        ],
+      );
+
+      expect(
+        flattenRoutesNorm(const [route]),
+        <double>[0.1, 0.2, 0.5, 0.6],
+      );
+    });
+
+    test(
+      'mixed visible/invisible routes: only the visible one contributes',
+      () {
+        const visibleRoute = TopoRoute(
+          id: 1,
+          number: 1,
+          points: [Offset(0.1, 0.2)],
+        );
+        const invisibleRoute = TopoRoute(
+          id: 2,
+          number: 2,
+          visible: false,
+          points: [Offset(0.9, 0.9)],
+        );
+
+        expect(
+          flattenRoutesNorm(const [invisibleRoute, visibleRoute]),
+          <double>[0.1, 0.2],
+        );
+      },
+    );
+  });
 }

@@ -12,6 +12,7 @@ import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/platform/ar_support.dart';
 import 'package:masi/features/ar/application/ar_channel.dart';
 import 'package:masi/features/ar/application/ar_controller.dart';
+import 'package:masi/features/ar/application/ar_segmentation_channel.dart';
 import 'package:masi/features/ar/application/manual_align_controller.dart';
 import 'package:masi/features/ar/application/outline_extractor.dart';
 import 'package:masi/features/ar/domain/homography.dart';
@@ -175,6 +176,17 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       _loading = false;
     });
 
+    // Kick off the native rock-segmentation pass alongside the ghost-outline
+    // extraction below — neither blocks the camera/routes above, and this
+    // one doesn't block (or wait on) the outline either: this is the
+    // per-pixel crop tier for the ghost outline (see
+    // ArOverlayPainter.rockMask's doc); the route-hull rockBoxFromRoutes
+    // rectangle covers the ghost crop until/unless this resolves (or on
+    // platforms where it never runs at all).
+    if (photo != null) {
+      unawaited(_segmentRock(photo, routes));
+    }
+
     // Kick off the ghost-outline extraction without blocking the camera/
     // routes above — they render immediately; the outline (when it
     // succeeds) fades in a moment later via this second setState.
@@ -206,6 +218,28 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       final outline = await extractOutline(photo.localPath);
       if (!mounted) return;
       setState(() => _outline = outline);
+    }
+  }
+
+  /// Runs a one-shot native Core ML rock segmentation of [photo] (clipped to
+  /// [routes]' geometry via `flattenRoutesNorm`) and stores the resulting
+  /// per-pixel mask via [ArController.setRockMask]. Best-effort: any failure
+  /// (including running on a platform/session where segmentation isn't
+  /// supported) just leaves the mask `null`, so `ArOverlayPainter` falls back
+  /// to the route-hull `rockBoxFromRoutes` rectangle crop instead.
+  Future<void> _segmentRock(PhotoRef photo, List<TopoRoute> routes) async {
+    if (!isArSupported()) return; // web/unsupported → no Core ML; box-crop fallback covers it
+    try {
+      final result = await ref
+          .read(arSegmentationChannelProvider)
+          .segmentPreview(photo.localPath, routesNorm: flattenRoutesNorm(routes));
+      if (!mounted) {
+        result.mask?.dispose();
+        return;
+      }
+      _arController.setRockMask(result.mask);
+    } catch (_) {
+      // Segmentation is best-effort; the route-hull box crop is the fallback.
     }
   }
 
@@ -255,6 +289,10 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     // from would otherwise keep rendering the PRIOR wall's box/highlight
     // instead of falling back to null (full-photo rect / no highlight).
     ref.read(arControllerProvider.notifier).setRockBox(null);
+    // Same rationale as rockBox just above: the per-pixel rock mask (see
+    // ArState.rockMask's doc) is a fresh-per-session native segmentation
+    // result — it must never leak into a new wall's session either.
+    ref.read(arControllerProvider.notifier).setRockMask(null);
     // arAutoTrackingProvider (not a direct arSupportsAutoTracking() call) so
     // this is overridable in tests, same as arSupportedProvider elsewhere in
     // this file.
@@ -909,6 +947,8 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
                 routeColorResolver: topoRouteColor,
                 outline: showOutline ? widget.outline : null,
                 rockBox: highlightRock ? arState.rockBox : null,
+                rockMask: arState.rockMask,
+                cropBox: rockBoxFromRoutes(widget.routes),
               ),
               child: const SizedBox.expand(),
             ),

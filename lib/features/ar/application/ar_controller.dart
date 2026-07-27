@@ -1,4 +1,5 @@
 import 'dart:ui' show Offset, Rect;
+import 'dart:ui' as ui;
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -36,6 +37,7 @@ class ArState {
     this.latest,
     required this.active,
     this.rockBox,
+    this.rockMask,
   });
 
   final ArMode mode;
@@ -56,17 +58,30 @@ class ArState {
   /// prior session's box can never leak into a new session.
   final Rect? rockBox;
 
+  /// The per-pixel rock silhouette mask decoded from a native Core ML
+  /// segmentation pass (see `ar_segmentation_channel.dart`'s
+  /// `ArSegmentationResult.mask`), in the same 0..1 full-photo frame as
+  /// [rockBox]. `null` on web, before segmentation resolves, or when
+  /// segmentation found nothing — `ArOverlayPainter` falls back to the
+  /// route-hull `rockBoxFromRoutes` rectangle crop in that case. Set via
+  /// [ArController.setRockMask]; reset to `null` on every AR-screen
+  /// re-entry/wall switch (see `ar_screen.dart`'s `_resetArViewState`), same
+  /// as [rockBox].
+  final ui.Image? rockMask;
+
   ArState copyWith({
     ArMode? mode,
     ArAlignment? latest,
     bool? active,
     Rect? rockBox,
+    ui.Image? rockMask,
   }) {
     return ArState(
       mode: mode ?? this.mode,
       latest: latest ?? this.latest,
       active: active ?? this.active,
       rockBox: rockBox ?? this.rockBox,
+      rockMask: rockMask ?? this.rockMask,
     );
   }
 
@@ -77,16 +92,17 @@ class ArState {
         other.mode == mode &&
         other.latest == latest &&
         other.active == active &&
-        other.rockBox == rockBox;
+        other.rockBox == rockBox &&
+        other.rockMask == rockMask;
   }
 
   @override
-  int get hashCode => Object.hash(mode, latest, active, rockBox);
+  int get hashCode => Object.hash(mode, latest, active, rockBox, rockMask);
 
   @override
   String toString() =>
       'ArState(mode: $mode, latest: $latest, active: $active, '
-      'rockBox: $rockBox)';
+      'rockBox: $rockBox, rockMask: $rockMask)';
 }
 
 /// Holds [ArState] and mediates mode changes/alignment updates for the AR
@@ -177,7 +193,24 @@ class ArController extends Notifier<ArState> {
       latest: state.latest,
       active: state.active,
       rockBox: box,
+      rockMask: state.rockMask,
     );
+  }
+
+  /// Stores the decoded rock silhouette mask (or null). Builds a fresh state so
+  /// the mask can be cleared, and disposes the previous mask image to avoid a
+  /// GPU-memory leak on re-entry.
+  void setRockMask(ui.Image? mask) {
+    final previous = state.rockMask;
+    if (identical(previous, mask)) return;
+    state = ArState(
+      mode: state.mode,
+      latest: state.latest,
+      active: state.active,
+      rockBox: state.rockBox,
+      rockMask: mask,
+    );
+    previous?.dispose();
   }
 
   /// Resets the corner-smoothing filter so the next [onAlignment] call is

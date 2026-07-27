@@ -117,3 +117,20 @@ Rect? rockBoxFromRoutes(List<TopoRoute> routes) {
 List<Offset> rockBoxCornersNorm(Rect box) {
   return [box.topLeft, box.topRight, box.bottomRight, box.bottomLeft];
 }
+
+/// Flattens the normalized (0..1) points and symbol positions of all VISIBLE
+/// routes into a flat `[x0,y0,x1,y1,...]` list for the native `routesNorm`
+/// segmentation clip. Returns null when there is no visible geometry.
+List<double>? flattenRoutesNorm(List<TopoRoute> routes) {
+  final out = <double>[];
+  for (final r in routes) {
+    if (!r.visible) continue;
+    for (final p in r.points) {
+      out..add(p.dx)..add(p.dy);
+    }
+    for (final s in r.symbols) {
+      out..add(s.position.dx)..add(s.position.dy);
+    }
+  }
+  return out.isEmpty ? null : out;
+}
