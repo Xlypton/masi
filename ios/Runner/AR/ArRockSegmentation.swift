@@ -344,7 +344,12 @@ enum ArRockSegmentation {
             return nil
         }
         do {
-            let mlmodel = try MLModel(contentsOf: url)
+            // One-shot offline segmentation: force CPU (avoids the ANE/E5RT
+            // path, which the Simulator lacks — it returns a zero tensor there —
+            // and sidesteps ANE-specific quirks for a once-per-photo run).
+            let config = MLModelConfiguration()
+            config.computeUnits = .cpuOnly
+            let mlmodel = try MLModel(contentsOf: url, configuration: config)
             guard
                 let creatorMeta = mlmodel.modelDescription.metadata[MLModelMetadataKey.creatorDefinedKey] as? [String: String],
                 let labelsString = creatorMeta["ade20k_labels"]
