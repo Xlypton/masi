@@ -44,8 +44,14 @@ class ArSegmentationChannel {
   /// [imagePath], returning the crop quad + rock mask as an
   /// [ArSegmentationResult].
   ///
-  /// Invokes the native `segmentPreview` method with `{'imagePath': ...}`.
-  /// Native's result is the same shape as `ArChannel.start`'s, plus the mask
+  /// Invokes the native `segmentPreview` method with `{'imagePath': ...,
+  /// 'routesNorm': routesNorm}`. [routesNorm] is an optional FLAT list of the
+  /// wall's route points `[x0,y0,x1,y1,...]`, each 0..1 in the same
+  /// full-upright-photo frame as `rockQuadPercent`; native uses it to clip the
+  /// candidate rock mask to a padded bounding box around the routes before
+  /// picking the largest connected component. `null`/omitted skips the
+  /// route-region clip (native still segments the whole photo). Native's
+  /// result is the same shape as `ArChannel.start`'s, plus the mask
   /// keys: `{'rockQuadPercent': [Double]?, 'rockMaskAlpha': Uint8List?,
   /// 'rockMaskWidth': Int?, 'rockMaskHeight': Int?}` — every field optional and
   /// omitted-together-as-absent when native segmented nothing (see the shared
@@ -54,16 +60,19 @@ class ArSegmentationChannel {
   ///
   /// The no-op channel (web) returns a const empty result without ever calling
   /// native.
-  Future<ArSegmentationResult> segmentPreview(String imagePath) async {
+  Future<ArSegmentationResult> segmentPreview(
+    String imagePath, {
+    List<double>? routesNorm,
+  }) async {
     if (_noop) return const ArSegmentationResult();
     debugPrint(
       'AR_DBG ar_segmentation_channel.segmentPreview invoking '
-      '(imagePath=$imagePath)',
+      '(imagePath=$imagePath, routesNorm=${routesNorm?.length})',
     );
     try {
       final result = await _method.invokeMethod<Object?>(
         'segmentPreview',
-        <String, Object?>{'imagePath': imagePath},
+        <String, Object?>{'imagePath': imagePath, 'routesNorm': routesNorm},
       );
       debugPrint('AR_DBG ar_segmentation_channel.segmentPreview returned OK');
       return ArSegmentationResult(
