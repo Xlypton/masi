@@ -13,7 +13,11 @@ import UIKit
 ///
 /// Dart contract (must stay in sync with the Dart AR segmentation layer):
 ///   MethodChannel('masi/arSegmentation')
-///     - "segmentPreview" args: {imagePath: String}
+///     - "segmentPreview" args: {imagePath: String, routesNorm: [Double]?}
+///       -- `routesNorm` is the wall's route points flattened to
+///       `[x0,y0,x1,y1,...]`, each 0..1 in the full-upright-photo frame.
+///       Optional; nil/omitted/empty skips the route-region clip (the
+///       segmentation still runs on the whole photo).
 ///       result: {rockQuadPercent: [Double]x8?, rockMaskAlpha: Uint8List?,
 ///                rockMaskWidth: Int?, rockMaskHeight: Int?}
 ///       -- all four keys are OMITTED TOGETHER when segmentation found
@@ -64,11 +68,14 @@ final class ArSegmentationChannelHandler: NSObject {
                 ))
                 return
             }
+            // Optional: flat [x0,y0,x1,y1,...] route points, 0..1, in the
+            // full-upright-photo frame. nil/omitted/empty -> no route clip.
+            let routesNorm = args["routesNorm"] as? [Double]
             DispatchQueue.global(qos: .userInitiated).async {
                 var payload: [String: Any] = [:]
                 if let uiImage = UIImage(contentsOfFile: imagePath),
                    let uprightCG = ArRockSegmentation.uprightCGImage(from: uiImage),
-                   let crop = ArRockSegmentation.segmentAndCrop(uprightCG) {
+                   let crop = ArRockSegmentation.segmentAndCrop(uprightCG, routesNorm: routesNorm) {
                     payload["rockQuadPercent"] = crop.quadPercent
                     payload["rockMaskAlpha"] = FlutterStandardTypedData(bytes: crop.mask.alpha)
                     payload["rockMaskWidth"] = crop.mask.width

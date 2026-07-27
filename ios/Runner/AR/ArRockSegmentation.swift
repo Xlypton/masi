@@ -1,4 +1,5 @@
 import CoreVideo
+import CoreML
 import Vision
 import CoreGraphics
 import UIKit
@@ -51,88 +52,186 @@ enum ArRockSegmentation {
         return renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }.cgImage
     }
 
-    /// iOS 17+ only. Returns nil on <17, no confident foreground instance, or any Vision failure.
-    static func segmentAndCrop(_ image: CGImage) -> RockCrop? {
-        guard #available(iOS 17.0, *) else {
-            NSLog("AR_DBG seg: iOS<17, skip")
+    /// iOS 16+ only (the bundled `RockSeg` Core ML semantic-segmentation
+    /// model has a 16.0 minimum deployment target). Returns nil on <16, a
+    /// missing/unloadable model, no Core ML observation, an empty
+    /// candidate-rock mask (after the route-clip/person-subtract passes and
+    /// the largest-connected-component pass), or any Vision/Core ML
+    /// failure -- the caller (`ArSegmentationChannelHandler`) already treats
+    /// nil as "no segmentation" and falls back to the full upright photo, so
+    /// every early return below is safe.
+    ///
+    /// `routesNorm` is the wall's route points flattened to
+    /// `[x0,y0,x1,y1,...]`, each 0..1 in the SAME full-upright-photo frame as
+    /// `quadPercent`. `nil`/empty skips the route-region clip (step 4 below).
+    ///
+    /// Recipe (authoritative, see docs/superpowers/plans/2026-07-27-ar-rock-crop.md):
+    /// semantic-seg argmax -> ROCKPOS ∪ ¬NONROCK candidate mask -> clip to
+    /// padded route bbox -> subtract person mask -> largest connected
+    /// component overlapping the route bbox (or image center) -> existing
+    /// Pass-2 downsample-to-<=256 + quadPercent(bbox) + RockMask return.
+    static func segmentAndCrop(_ image: CGImage, routesNorm: [Double]? = nil) -> RockCrop? {
+        guard #available(iOS 16.0, *) else {
+            NSLog("AR_DBG seg: iOS<16, skip")
             return nil
         }
 
-        let request = VNGenerateForegroundInstanceMaskRequest()
+        guard let (vnModel, labels) = cachedModelAndLabels, !labels.isEmpty, labels.count <= 256 else {
+            NSLog("AR_DBG seg: RockSeg model/labels unavailable")
+            return nil
+        }
+
+        // 1. Semantic segmentation: run the bundled RockSeg model on the
+        // upright photo. The model was traced on a plain stretch-resize to
+        // 512x512 (ImageNet normalization baked into the graph), so
+        // `.scaleFill` (not `.centerCrop`) matches how it was trained.
+        let request = VNCoreMLRequest(model: vnModel)
+        request.imageCropAndScaleOption = .scaleFill
         let handler = VNImageRequestHandler(cgImage: image, options: [:])
         do {
             try handler.perform([request])
         } catch {
-            NSLog("AR_DBG seg: Vision perform failed error=%@", error.localizedDescription)
+            NSLog("AR_DBG seg: Core ML perform failed error=%@", error.localizedDescription)
             return nil
         }
 
-        guard let observation = request.results?.first else {
-            NSLog("AR_DBG seg: no VNInstanceMaskObservation in results")
+        guard
+            let observation = request.results?.first as? VNCoreMLFeatureValueObservation,
+            let logits = observation.featureValue.multiArrayValue
+        else {
+            NSLog("AR_DBG seg: no CoreML feature-value observation")
             return nil
         }
 
-        let instances = observation.allInstances
-        guard !instances.isEmpty else {
-            NSLog("AR_DBG seg: no confident foreground instances")
+        // logits shape (1, numClasses, gridH, gridW), C-contiguous; strides
+        // are in ELEMENTS (not bytes) per `MLMultiArray.strides`.
+        let shape = logits.shape.map { $0.intValue }
+        let elementStrides = logits.strides.map { $0.intValue }
+        guard
+            shape.count == 4, shape[0] == 1, shape[1] == labels.count,
+            elementStrides.count == 4
+        else {
+            NSLog("AR_DBG seg: unexpected logits shape=%@ (labels=%d)", shape.description, labels.count)
+            return nil
+        }
+        let numClasses = shape[1]
+        let gridH = shape[2]
+        let gridW = shape[3]
+        let strideC = elementStrides[1]
+        let strideY = elementStrides[2]
+        let strideX = elementStrides[3]
+        guard gridH > 0, gridW > 0 else {
+            NSLog("AR_DBG seg: degenerate logits grid %dx%d", gridW, gridH)
             return nil
         }
 
-        let maskBuffer = observation.instanceMask
-        guard CVPixelBufferLockBaseAddress(maskBuffer, .readOnly) == kCVReturnSuccess else {
-            NSLog("AR_DBG seg: could not lock mask base address")
-            return nil
-        }
-        defer { CVPixelBufferUnlockBaseAddress(maskBuffer, .readOnly) }
-
-        guard let base = CVPixelBufferGetBaseAddress(maskBuffer) else {
-            NSLog("AR_DBG seg: mask buffer has no base address")
-            return nil
-        }
-
-        let maskWidth = CVPixelBufferGetWidth(maskBuffer)
-        let maskHeight = CVPixelBufferGetHeight(maskBuffer)
-        let bytesPerRow = CVPixelBufferGetBytesPerRow(maskBuffer)
-        let pixelFormat = CVPixelBufferGetPixelFormatType(maskBuffer)
-
-        guard maskWidth > 0, maskHeight > 0 else {
-            NSLog("AR_DBG seg: degenerate mask dims %dx%d", maskWidth, maskHeight)
-            return nil
-        }
-
-        // A per-format "is this source mask pixel foreground?" test (any
-        // instance id != 0 -- 0 is background per Vision's contract). The
-        // mask's own pixel format isn't documented on the `instanceMask`
-        // property directly, so handle the two plausible formats explicitly
-        // and bail out (fall back to full photo) on anything else rather
-        // than mis-read. Reused by BOTH the bbox scan and the full-frame
-        // downsample below, so the two passes agree on foreground-ness.
-        //
-        // DEVICE-VERIFY: this scan (and the mask -> image scale below, see
-        // scaleX/scaleY) assumes the raw CVPixelBuffer's (x, y) = (0, 0) is
-        // the top-left corner and that rows/columns map 1:1 onto the
-        // reference image's own top-left-origin pixel space once scaled by
-        // imgWidth/maskWidth and imgHeight/maskHeight. This is standard
-        // Vision/Core Video behavior but is NOT documented on
-        // `VNInstanceMaskObservation.instanceMask` itself, so it must be
-        // sanity-checked on-device: confirm the actual CROP CONTENT
-        // (`RockCrop.cgImage`, or the AR overlay it feeds) is really the
-        // photographed rock face and not mirrored or shifted -- e.g. by
-        // dumping `cropped` to a file/log during a real device AR session
-        // and eyeballing it against the source photo, the same way
-        // `ArPlatformView.swift`'s corner-order DEVICE-VERIFY flag is
-        // checked.
-        let isForeground: (Int, Int) -> Bool
-        switch pixelFormat {
-        case kCVPixelFormatType_OneComponent8:
-            let ptr = base.assumingMemoryBound(to: UInt8.self)
-            isForeground = { x, y in (ptr + y * bytesPerRow)[x] != 0 }
-        case kCVPixelFormatType_OneComponent32Float:
-            isForeground = { x, y in (base + y * bytesPerRow).assumingMemoryBound(to: Float32.self)[x] != 0 }
+        // 2. Argmax over the class channels, per pixel -> an 8-bit classId
+        // grid (150 classes comfortably fits UInt8). Read via the raw
+        // `dataPointer` + `strides` (NOT the NSNumber subscript -- ~100x
+        // slower for 150 * 512 * 512 reads). One-shot/offline, so the plain
+        // nested loop (no vDSP/Accelerate) costing a few hundred ms is fine.
+        var classIds = [UInt8](repeating: 0, count: gridW * gridH)
+        switch logits.dataType {
+        case .float16:
+            let ptr = logits.dataPointer.assumingMemoryBound(to: Float16.self)
+            for y in 0..<gridH {
+                for x in 0..<gridW {
+                    let base = y * strideY + x * strideX
+                    var bestClass = 0
+                    var bestValue = ptr[base]
+                    var c = 1
+                    while c < numClasses {
+                        let v = ptr[c * strideC + base]
+                        if v > bestValue { bestValue = v; bestClass = c }
+                        c += 1
+                    }
+                    classIds[y * gridW + x] = UInt8(bestClass)
+                }
+            }
+        case .float32:
+            let ptr = logits.dataPointer.assumingMemoryBound(to: Float.self)
+            for y in 0..<gridH {
+                for x in 0..<gridW {
+                    let base = y * strideY + x * strideX
+                    var bestClass = 0
+                    var bestValue = ptr[base]
+                    var c = 1
+                    while c < numClasses {
+                        let v = ptr[c * strideC + base]
+                        if v > bestValue { bestValue = v; bestClass = c }
+                        c += 1
+                    }
+                    classIds[y * gridW + x] = UInt8(bestClass)
+                }
+            }
         default:
-            NSLog("AR_DBG seg: unsupported mask pixel format=%d", Int(pixelFormat))
+            NSLog("AR_DBG seg: unsupported logits dataType raw=%d", logits.dataType.rawValue)
             return nil
         }
+
+        // 3. Resolve ROCKPOS/NONROCK class-id sets by NAME (never hardcoded
+        // indices) and build the candidate-rock boolean grid:
+        // classId ∈ ROCKPOS OR classId ∉ NONROCK.
+        let rockPosIds = matchingClassIds(labels, containingAnyOf: [
+            "rock", "stone", "mountain", "mount", "cliff", "hill", "wall", "building", "house",
+        ])
+        let nonRockIds = matchingClassIds(labels, containingAnyOf: [
+            "sky", "tree", "grass", "plant", "flower", "person", "water", "sea", "river", "lake",
+            "animal", "road", "route", "sidewalk", "pavement", "path", "earth", "ground", "sand",
+            "field", "floor", "runway", "dirt",
+        ])
+        var candidateMask = [Bool](repeating: false, count: gridW * gridH)
+        for i in 0..<(gridW * gridH) {
+            let cid = Int(classIds[i])
+            candidateMask[i] = rockPosIds.contains(cid) || !nonRockIds.contains(cid)
+        }
+
+        // 4. Route-region clip: pad the routes' bbox by 6% on each side
+        // (clamped to [0,1]) and zero everything outside it. Skipped
+        // entirely when routesNorm is nil/empty (no clip).
+        let routeBoxGrid = paddedRouteBBoxGrid(routesNorm, gridWidth: gridW, gridHeight: gridH, pad: 0.06)
+        if let box = routeBoxGrid {
+            for y in 0..<gridH {
+                for x in 0..<gridW where x < box.minX || x > box.maxX || y < box.minY || y > box.maxY {
+                    candidateMask[y * gridW + x] = false
+                }
+            }
+        }
+
+        // 5. Person-subtract: Apple's built-in person segmentation, best
+        // effort (skipped gracefully pre-iOS15 or on any Vision failure --
+        // `personMaskGrid` returns nil rather than throwing).
+        if #available(iOS 15.0, *), let personGrid = personMaskGrid(image, gridWidth: gridW, gridHeight: gridH) {
+            for i in 0..<(gridW * gridH) where personGrid[i] {
+                candidateMask[i] = false
+            }
+        }
+
+        guard candidateMask.contains(true) else {
+            NSLog("AR_DBG seg: candidate mask empty after route-clip/person-subtract")
+            return nil
+        }
+
+        // 6. Largest connected component overlapping the route bbox (or the
+        // image-center cell when there are no routes).
+        let seedBox = routeBoxGrid ?? (
+            minX: gridW / 2 - 1, minY: gridH / 2 - 1,
+            maxX: gridW / 2 + 1, maxY: gridH / 2 + 1
+        )
+        let finalMask = largestComponentGrid(candidateMask, width: gridW, height: gridH, seedBox: seedBox)
+        guard finalMask.contains(true) else {
+            NSLog("AR_DBG seg: largest-component pass produced an empty mask")
+            return nil
+        }
+
+        // 7. Feed the 512x512 boolean mask into the EXISTING Pass-2
+        // max-pool downsample-to-<=256 + quadPercent(bbox) + RockMask return
+        // path below, unchanged -- only how `isForeground`/`maskWidth`/
+        // `maskHeight` are produced changed (Core ML mask, not a Vision
+        // CVPixelBuffer instance mask).
+        let maskWidth = gridW
+        let maskHeight = gridH
+        let isForeground: (Int, Int) -> Bool = { x, y in finalMask[y * maskWidth + x] }
 
         // Pass 1: scan the instance mask for the bounding box of ALL
         // foreground pixels.
@@ -228,5 +327,233 @@ enum ArRockSegmentation {
         )
 
         return RockCrop(cgImage: cropped, quadPercent: quadPercent, mask: rockMask)
+    }
+
+    // MARK: - Core ML model cache
+
+    /// Loaded ONCE (Swift static-let initializers are lazy + thread-safe)
+    /// and reused across calls. Loaded ROBUSTLY by URL/`MLModel(contentsOf:)`
+    /// rather than an Xcode-generated `RockSeg` class, so this file has no
+    /// build-time dependency on Xcode's mlmodel codegen step. `labels` is
+    /// the 150 ADE20K class names, parsed from the model's own
+    /// `user_defined_metadata["ade20k_labels"]` (pipe-joined, channel-index
+    /// order) -- see `tool/ml/README.md`.
+    private static let cachedModelAndLabels: (model: VNCoreMLModel, labels: [String])? = {
+        guard let url = Bundle.main.url(forResource: "RockSeg", withExtension: "mlmodelc") else {
+            NSLog("AR_DBG seg: RockSeg.mlmodelc not found in app bundle")
+            return nil
+        }
+        do {
+            let mlmodel = try MLModel(contentsOf: url)
+            guard
+                let creatorMeta = mlmodel.modelDescription.metadata[MLModelMetadataKey.creatorDefinedKey] as? [String: String],
+                let labelsString = creatorMeta["ade20k_labels"]
+            else {
+                NSLog("AR_DBG seg: RockSeg model missing ade20k_labels metadata")
+                return nil
+            }
+            let labels = labelsString.components(separatedBy: "|")
+            let vnModel = try VNCoreMLModel(for: mlmodel)
+            NSLog("AR_DBG seg: RockSeg model loaded, %d labels", labels.count)
+            return (vnModel, labels)
+        } catch {
+            NSLog("AR_DBG seg: failed to load RockSeg model error=%@", error.localizedDescription)
+            return nil
+        }
+    }()
+
+    // MARK: - Recipe helpers
+
+    /// Class ids (into `labels`) whose (lowercased) name contains ANY of
+    /// `substrings`. Name-based, never a hardcoded index, so a re-exported
+    /// model with a different label ordering stays correct.
+    private static func matchingClassIds(_ labels: [String], containingAnyOf substrings: [String]) -> Set<Int> {
+        var ids = Set<Int>()
+        for (index, label) in labels.enumerated() {
+            let lower = label.lowercased()
+            if substrings.contains(where: { lower.contains($0) }) {
+                ids.insert(index)
+            }
+        }
+        return ids
+    }
+
+    /// Bounding box of `routesNorm` (flat `[x0,y0,x1,y1,...]`, each 0..1 in
+    /// the full-upright-photo frame), padded by `pad` on every side, clamped
+    /// to `[0,1]`, then mapped onto a `gridWidth` x `gridHeight` pixel grid
+    /// (inclusive min/max cell indices). Returns nil when `routesNorm` is
+    /// nil, empty, or has no complete `(x,y)` pair.
+    private static func paddedRouteBBoxGrid(
+        _ routesNorm: [Double]?,
+        gridWidth: Int,
+        gridHeight: Int,
+        pad: Double
+    ) -> (minX: Int, minY: Int, maxX: Int, maxY: Int)? {
+        guard let points = routesNorm, points.count >= 2 else { return nil }
+
+        var minXNorm = Double.greatestFiniteMagnitude
+        var minYNorm = Double.greatestFiniteMagnitude
+        var maxXNorm = -Double.greatestFiniteMagnitude
+        var maxYNorm = -Double.greatestFiniteMagnitude
+        var i = 0
+        while i + 1 < points.count {
+            let x = points[i]
+            let y = points[i + 1]
+            minXNorm = min(minXNorm, x)
+            maxXNorm = max(maxXNorm, x)
+            minYNorm = min(minYNorm, y)
+            maxYNorm = max(maxYNorm, y)
+            i += 2
+        }
+        guard maxXNorm >= minXNorm, maxYNorm >= minYNorm else { return nil }
+
+        minXNorm = min(max(minXNorm - pad, 0), 1)
+        minYNorm = min(max(minYNorm - pad, 0), 1)
+        maxXNorm = min(max(maxXNorm + pad, 0), 1)
+        maxYNorm = min(max(maxYNorm + pad, 0), 1)
+
+        let gMinX = max(0, min(gridWidth - 1, Int((minXNorm * Double(gridWidth)).rounded(.down))))
+        let gMinY = max(0, min(gridHeight - 1, Int((minYNorm * Double(gridHeight)).rounded(.down))))
+        let gMaxX = max(0, min(gridWidth - 1, Int((maxXNorm * Double(gridWidth)).rounded(.up)) - 1))
+        let gMaxY = max(0, min(gridHeight - 1, Int((maxYNorm * Double(gridHeight)).rounded(.up)) - 1))
+        guard gMaxX >= gMinX, gMaxY >= gMinY else { return nil }
+
+        return (gMinX, gMinY, gMaxX, gMaxY)
+    }
+
+    /// Runs Apple's built-in person-segmentation Vision request on `image`
+    /// and resamples/thresholds its output alpha mask (nearest-neighbor)
+    /// onto a `gridWidth` x `gridHeight` boolean grid (true == person
+    /// pixel). Returns nil on any failure (Vision error, no observation, no
+    /// base address) so the caller simply skips the person-subtract step.
+    @available(iOS 15.0, *)
+    private static func personMaskGrid(_ image: CGImage, gridWidth: Int, gridHeight: Int) -> [Bool]? {
+        let request = VNGeneratePersonSegmentationRequest()
+        // NB: person seg is full-frame (no imageCropAndScaleOption on this request type),
+        // so the proportional resample below already aligns with the .scaleFill class grid.
+        request.qualityLevel = .accurate
+        request.outputPixelFormat = kCVPixelFormatType_OneComponent8
+
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            NSLog("AR_DBG seg: person-segmentation perform failed error=%@", error.localizedDescription)
+            return nil
+        }
+
+        guard let observation = request.results?.first else {
+            NSLog("AR_DBG seg: no person-segmentation observation")
+            return nil
+        }
+
+        let buffer = observation.pixelBuffer
+        guard CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else {
+            NSLog("AR_DBG seg: could not lock person-mask base address")
+            return nil
+        }
+        defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
+
+        guard let base = CVPixelBufferGetBaseAddress(buffer) else {
+            NSLog("AR_DBG seg: person mask buffer has no base address")
+            return nil
+        }
+        let srcWidth = CVPixelBufferGetWidth(buffer)
+        let srcHeight = CVPixelBufferGetHeight(buffer)
+        let bytesPerRow = CVPixelBufferGetBytesPerRow(buffer)
+        guard srcWidth > 0, srcHeight > 0 else {
+            NSLog("AR_DBG seg: degenerate person-mask dims %dx%d", srcWidth, srcHeight)
+            return nil
+        }
+
+        let ptr = base.assumingMemoryBound(to: UInt8.self)
+        var grid = [Bool](repeating: false, count: gridWidth * gridHeight)
+        for gy in 0..<gridHeight {
+            let sy = min(srcHeight - 1, gy * srcHeight / gridHeight)
+            for gx in 0..<gridWidth {
+                let sx = min(srcWidth - 1, gx * srcWidth / gridWidth)
+                grid[gy * gridWidth + gx] = (ptr + sy * bytesPerRow)[sx] > 127
+            }
+        }
+        return grid
+    }
+
+    /// Flood-fills `mask` (row-major `width` x `height`, 4-connectivity) into
+    /// connected components (BFS, explicit queue -- no recursion) and keeps
+    /// only the pixels of the LARGEST component that overlaps `seedBox`
+    /// (falling back to the largest component overall if none overlap it).
+    /// Everything else is zeroed.
+    private static func largestComponentGrid(
+        _ mask: [Bool],
+        width: Int,
+        height: Int,
+        seedBox: (minX: Int, minY: Int, maxX: Int, maxY: Int)
+    ) -> [Bool] {
+        var labels = [Int](repeating: -1, count: width * height)
+        var componentSizes: [Int: Int] = [:]
+        var componentOverlapsSeed: [Int: Bool] = [:]
+        var nextLabel = 0
+        var queue = [Int]()
+        queue.reserveCapacity(width * height)
+
+        for startY in 0..<height {
+            for startX in 0..<width {
+                let startIdx = startY * width + startX
+                guard mask[startIdx], labels[startIdx] == -1 else { continue }
+
+                let label = nextLabel
+                nextLabel += 1
+                var size = 0
+                var overlapsSeed = false
+
+                labels[startIdx] = label
+                queue.removeAll(keepingCapacity: true)
+                queue.append(startIdx)
+                var head = 0
+                while head < queue.count {
+                    let cur = queue[head]
+                    head += 1
+                    size += 1
+                    let cx = cur % width
+                    let cy = cur / width
+                    if cx >= seedBox.minX, cx <= seedBox.maxX, cy >= seedBox.minY, cy <= seedBox.maxY {
+                        overlapsSeed = true
+                    }
+                    if cx > 0 {
+                        let n = cur - 1
+                        if mask[n], labels[n] == -1 { labels[n] = label; queue.append(n) }
+                    }
+                    if cx < width - 1 {
+                        let n = cur + 1
+                        if mask[n], labels[n] == -1 { labels[n] = label; queue.append(n) }
+                    }
+                    if cy > 0 {
+                        let n = cur - width
+                        if mask[n], labels[n] == -1 { labels[n] = label; queue.append(n) }
+                    }
+                    if cy < height - 1 {
+                        let n = cur + width
+                        if mask[n], labels[n] == -1 { labels[n] = label; queue.append(n) }
+                    }
+                }
+
+                componentSizes[label] = size
+                componentOverlapsSeed[label] = overlapsSeed
+            }
+        }
+
+        guard !componentSizes.isEmpty else { return mask }
+
+        let overlapping = componentSizes.keys.filter { componentOverlapsSeed[$0] == true }
+        let candidates = overlapping.isEmpty ? Array(componentSizes.keys) : overlapping
+        guard let winner = candidates.max(by: { (componentSizes[$0] ?? 0) < (componentSizes[$1] ?? 0) }) else {
+            return mask
+        }
+
+        var out = [Bool](repeating: false, count: width * height)
+        for i in 0..<(width * height) where labels[i] == winner {
+            out[i] = true
+        }
+        return out
     }
 }
