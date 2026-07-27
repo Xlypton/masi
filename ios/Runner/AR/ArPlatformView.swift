@@ -131,21 +131,23 @@ extension ArPlatformView: ArSessionControlling {
 
         // Build the pluggable placement engine (see `RockRegistrationEngine`).
         // `.arkit` keeps `placementEngine == nil` so the untouched ARKit
-        // pin-once path runs; `.vision`/`.orb` build a continuous-registration
-        // engine and load the upright reference into it; `.opencv` is wired in
-        // a later task and currently falls back to ARKit. A `loadReference`
-        // failure discards the engine (falls back to ARKit) rather than keep a
-        // half-loaded one. ARKit's own config (below) is still set up either
-        // way -- harmless when an engine is active (the engine ignores ARKit
-        // anchors, world tracking just runs).
+        // pin-once path runs; `.vision`/`.orb`/`.opencv` each build a
+        // continuous-registration engine and load the upright reference into
+        // it. A `loadReference` failure discards the engine (falls back to
+        // ARKit) rather than keep a half-loaded one. ARKit's own config
+        // (below) is still set up either way -- harmless when an engine is
+        // active (the engine ignores ARKit anchors, world tracking just
+        // runs).
         engineKind = engine
         switch engine {
-        case .arkit, .opencv:
+        case .arkit:
             placementEngine = nil
         case .vision:
             placementEngine = VisionRegistrationEngine()
         case .orb:
             placementEngine = OrbRegistrationEngine()
+        case .opencv:
+            placementEngine = OpenCvRegistrationEngine()
         }
         if let pe = placementEngine {
             let engineRefSize = CGSize(width: uprightCG.width, height: uprightCG.height)

@@ -47,3 +47,8 @@ app.*.map.json
 .claude/
 .agents/
 skills-lock.json
+
+# Vendored OpenCV xcframework (hundreds of MB; fetched via curl into
+# ios/Frameworks -- see docs/superpowers/plans/2026-07-28-ar-placement-engines.md
+# Task 2, Tier 2). Never commit this.
+ios/Frameworks/
