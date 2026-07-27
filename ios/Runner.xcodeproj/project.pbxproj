@@ -14,6 +14,10 @@
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
 		4298565AE588814D37626765 /* ArRockSegmentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 950B9FDBE968C3E94588C277 /* ArRockSegmentation.swift */; };
 		66154F26435834793AE1FF92 /* ArVisionPipeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = EDB87454FC78A714DE279DF3 /* ArVisionPipeline.swift */; };
+		0BCD699C2565B4E06A016D6E /* RockRegistrationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 963468B8DE3365930F955CC1 /* RockRegistrationEngine.swift */; };
+		4F3B0EEC3847B7568B565451 /* VisionRegistrationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8889A3281644ADBDAE8DC89E /* VisionRegistrationEngine.swift */; };
+		67D2EBFD56F3C67D5390206B /* OrbRegistrationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 475D15136078B03DCAE6F92A /* OrbRegistrationEngine.swift */; };
+		0E5A3239B52C2121061A3863 /* RockFeatureMatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = 799B8EAB834DF5407837131B /* RockFeatureMatcher.swift */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
@@ -73,6 +77,10 @@
 		BA29ED418D1619F5857DBE70 /* ArChannelHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArChannelHandler.swift; sourceTree = "<group>"; };
 		C5B4A3928170F6E5D4C3B2A1 /* ArSegmentationChannelHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArSegmentationChannelHandler.swift; sourceTree = "<group>"; };
 		EDB87454FC78A714DE279DF3 /* ArVisionPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArVisionPipeline.swift; sourceTree = "<group>"; };
+		963468B8DE3365930F955CC1 /* RockRegistrationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RockRegistrationEngine.swift; sourceTree = "<group>"; };
+		8889A3281644ADBDAE8DC89E /* VisionRegistrationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionRegistrationEngine.swift; sourceTree = "<group>"; };
+		475D15136078B03DCAE6F92A /* OrbRegistrationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OrbRegistrationEngine.swift; sourceTree = "<group>"; };
+		799B8EAB834DF5407837131B /* RockFeatureMatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RockFeatureMatcher.swift; sourceTree = "<group>"; };
 		FCCF5AF57F263533738FB8B7 /* ArViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArViewFactory.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -154,6 +162,10 @@
 				BA29ED418D1619F5857DBE70 /* ArChannelHandler.swift */,
 				950B9FDBE968C3E94588C277 /* ArRockSegmentation.swift */,
 				C5B4A3928170F6E5D4C3B2A1 /* ArSegmentationChannelHandler.swift */,
+				963468B8DE3365930F955CC1 /* RockRegistrationEngine.swift */,
+				8889A3281644ADBDAE8DC89E /* VisionRegistrationEngine.swift */,
+				475D15136078B03DCAE6F92A /* OrbRegistrationEngine.swift */,
+				799B8EAB834DF5407837131B /* RockFeatureMatcher.swift */,
 			);
 			path = AR;
 			sourceTree = "<group>";
@@ -322,6 +334,10 @@
 				E9BB2E955FA41D5A317A9D66 /* ArChannelHandler.swift in Sources */,
 				4298565AE588814D37626765 /* ArRockSegmentation.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* ArSegmentationChannelHandler.swift in Sources */,
+				0BCD699C2565B4E06A016D6E /* RockRegistrationEngine.swift in Sources */,
+				4F3B0EEC3847B7568B565451 /* VisionRegistrationEngine.swift in Sources */,
+				67D2EBFD56F3C67D5390206B /* OrbRegistrationEngine.swift in Sources */,
+				0E5A3239B52C2121061A3863 /* RockFeatureMatcher.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

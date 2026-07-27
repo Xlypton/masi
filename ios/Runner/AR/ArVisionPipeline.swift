@@ -87,6 +87,17 @@ final class ArVisionPipeline {
         return true
     }
 
+    /// Loads an already-decoded, upright reference CGImage directly (used by
+    /// `VisionRegistrationEngine`, which receives the same EXIF-corrected image
+    /// the `.arkit` path feeds to `ARReferenceImage`, so there is nothing to
+    /// re-decode from disk).
+    func loadReference(cgImage: CGImage, refSize: CGSize) -> Bool {
+        referenceCGImage = cgImage
+        referenceSize = refSize
+        frameCounter = 0
+        return true
+    }
+
     func reset() {
         frameCounter = 0
     }

@@ -16,6 +16,8 @@ protocol ArSessionControlling: AnyObject {
         refWidth: Int,
         refHeight: Int,
         routesJson: String,
+        engine: ArPlacementEngineKind,
+        rockQuadPercent: [Double],
         completion: @escaping (Bool, [Double]?, RockMask?) -> Void
     )
     func stopSession()
@@ -113,14 +115,23 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
             }
             // `routesJson` is no longer sent by Dart (the rock box is
             // computed and drawn entirely in Dart from tracked corners) --
-            // tolerate its absence rather than requiring it, to avoid
-            // changing the `ArSessionControlling.startSession` signature.
+            // tolerate its absence rather than requiring it.
             let routesJson = args["routesJson"] as? String ?? ""
+            // Placement engine selector (Dart `ArPlacementEngine.name`); absent
+            // / unknown -> `.arkit` (the untouched baseline). `rockQuad` is 8
+            // normalized doubles (rock region, TL,TR,BR,BL) used only to
+            // restrict feature detection; absent -> `[]` (whole image).
+            let engineName = args["engine"] as? String ?? "arkit"
+            let engine = ArPlacementEngineKind(rawValue: engineName) ?? .arkit
+            let rockQuad = (args["rockQuad"] as? [Double]) ?? (args["rockQuad"] as? [NSNumber])?.map { $0.doubleValue } ?? []
+            let rockQuadPercentArg = rockQuad.count == 8 ? rockQuad : []
             sessionController?.startSession(
                 referenceImagePath: referenceImagePath,
                 refWidth: refWidth,
                 refHeight: refHeight,
-                routesJson: routesJson
+                routesJson: routesJson,
+                engine: engine,
+                rockQuadPercent: rockQuadPercentArg
             ) { success, rockQuadPercent, rockMask in
                 var payload: [String: Any] = ["success": success]
                 if let rockQuadPercent { payload["rockQuadPercent"] = rockQuadPercent }
@@ -230,7 +241,8 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
         frameWidth: Int,
         frameHeight: Int,
         trackingState: String,
-        limitedReason: String? = nil
+        limitedReason: String? = nil,
+        confidence: Double = 0
     ) {
         var payload: [String: Any] = ["tracking": tracking, "trackingState": trackingState]
         if let limitedReason { payload["limitedReason"] = limitedReason }
@@ -239,6 +251,12 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
             payload["frameWidth"] = frameWidth
             payload["frameHeight"] = frameHeight
         }
+        // Graded numeric match confidence from the registration engines
+        // (vision/orb/opencv). The ARKit path leaves this 0 (omitted), so
+        // Dart's `derivedConfidence` keeps its existing trackingState-band
+        // behaviour; a non-zero value lets a low engine score fade the overlay
+        // + surface the manual-align affordance.
+        if confidence > 0 { payload["confidence"] = confidence }
         eventSink?(payload)
     }
 }

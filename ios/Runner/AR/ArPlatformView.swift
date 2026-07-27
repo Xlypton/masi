@@ -40,6 +40,16 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
     private var frameCounter = 0
     private var pinnedTransform: simd_float4x4?
     private var pinnedPhysicalSize: CGSize?
+    /// Pluggable continuous-registration placement engine (see
+    /// `RockRegistrationEngine`), set by `startSession` from the `engine` arg.
+    /// `nil` whenever `engineKind == .arkit` (the untouched default) or a
+    /// non-ARKit engine failed to load -- in which case the existing ARKit
+    /// pin-once path in `session(_:didUpdate:)` runs unchanged. When non-nil
+    /// (and `mode == .auto`), it replaces the ARKit pin/reproject for the frame.
+    private var placementEngine: RockRegistrationEngine?
+    /// Which engine `startSession` was asked for (retained for logging even
+    /// when the engine fell back to `nil`).
+    private var engineKind: ArPlacementEngineKind = .arkit
     /// Last `trackingState` string sent to Dart -- used only to log ARKit
     /// tracking-state TRANSITIONS (AR_DBG) rather than spamming a log line
     /// every frame.
@@ -91,6 +101,8 @@ extension ArPlatformView: ArSessionControlling {
         refWidth: Int,
         refHeight: Int,
         routesJson: String,
+        engine: ArPlacementEngineKind,
+        rockQuadPercent: [Double],
         completion: @escaping (Bool, [Double]?, RockMask?) -> Void
     ) {
         NSLog("AR_DBG startSession invoked")
@@ -116,6 +128,34 @@ extension ArPlatformView: ArSessionControlling {
             "AR_DBG ref exif imageOrientation=%d rawSize=%dx%d uprightSize=%dx%d",
             uiImage.imageOrientation.rawValue, rawCG.width, rawCG.height, uprightCG.width, uprightCG.height
         )
+
+        // Build the pluggable placement engine (see `RockRegistrationEngine`).
+        // `.arkit` keeps `placementEngine == nil` so the untouched ARKit
+        // pin-once path runs; `.vision`/`.orb` build a continuous-registration
+        // engine and load the upright reference into it; `.opencv` is wired in
+        // a later task and currently falls back to ARKit. A `loadReference`
+        // failure discards the engine (falls back to ARKit) rather than keep a
+        // half-loaded one. ARKit's own config (below) is still set up either
+        // way -- harmless when an engine is active (the engine ignores ARKit
+        // anchors, world tracking just runs).
+        engineKind = engine
+        switch engine {
+        case .arkit, .opencv:
+            placementEngine = nil
+        case .vision:
+            placementEngine = VisionRegistrationEngine()
+        case .orb:
+            placementEngine = OrbRegistrationEngine()
+        }
+        if let pe = placementEngine {
+            let engineRefSize = CGSize(width: uprightCG.width, height: uprightCG.height)
+            if pe.loadReference(uprightCG, refSize: engineRefSize, rockQuadPercent: rockQuadPercent) {
+                NSLog("AR_DBG engine %@ loaded reference %dx%d", engine.rawValue, uprightCG.width, uprightCG.height)
+            } else {
+                NSLog("AR_DBG engine %@ loadReference FAILED, falling back to ARKit", engine.rawValue)
+                placementEngine = nil
+            }
+        }
 
         // Rock-box (Ship 1): the AR reference image is now ALWAYS the full
         // upright photo -- no Vision foreground crop. The rock box itself is
@@ -469,6 +509,59 @@ extension ArPlatformView: ARSessionDelegate {
                 self.channelHandler.sendAlignment(
                     corners: out, tracking: true, frameWidth: fw, frameHeight: fh,
                     trackingState: trackingStateStr, limitedReason: limitedReasonStr
+                )
+            } else if self.mode == .auto, let engine = self.placementEngine {
+                // Pluggable continuous-registration engine (vision/orb/opencv)
+                // -- replaces ARKit pin-once for this frame. The engine returns
+                // the reference photo's 4 corners in NORMALIZED captured-image
+                // space; map them to view points via `ARFrame.displayTransform`
+                // (orientation + aspect-fill correct, matching how the AR
+                // preview is displayed) before publishing. Gated to `.auto`;
+                // manual mode is handled by the `pinnedManualCorners` branch
+                // above, and `.arkit` keeps `placementEngine == nil` so the
+                // existing auto pin path below runs instead.
+                let buffer = frame.capturedImage
+                let ebw = CVPixelBufferGetWidth(buffer)
+                let ebh = CVPixelBufferGetHeight(buffer)
+                guard let a = engine.process(pixelBuffer: buffer) else {
+                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG engine %@ no match, tracking=false", self.engineKind.rawValue) }
+                    self.channelHandler.sendAlignment(
+                        corners: [], tracking: false, frameWidth: ebw, frameHeight: ebh,
+                        trackingState: "notAvailable", limitedReason: nil, confidence: 0
+                    )
+                    return
+                }
+                let orientation = self.sceneView.window?.windowScene?.interfaceOrientation ?? .portrait
+                let dt = frame.displayTransform(for: orientation, viewportSize: self.sceneView.bounds.size)
+                var out: [Double] = []
+                out.reserveCapacity(8)
+                var allValid = true
+                var ci = 0
+                while ci + 1 < a.corners.count {
+                    let vp = RockEngineMath.imageNormToView(
+                        CGPoint(x: a.corners[ci], y: a.corners[ci + 1]),
+                        displayTransform: dt, viewSize: self.sceneView.bounds.size
+                    )
+                    if !vp.x.isFinite || !vp.y.isFinite { allValid = false; break }
+                    out.append(Double(vp.x)); out.append(Double(vp.y))
+                    ci += 2
+                }
+                guard allValid, out.count == 8 else {
+                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG engine %@ invalid view mapping, tracking=false", self.engineKind.rawValue) }
+                    self.channelHandler.sendAlignment(
+                        corners: [], tracking: false, frameWidth: ebw, frameHeight: ebh,
+                        trackingState: "notAvailable", limitedReason: nil, confidence: 0
+                    )
+                    return
+                }
+                if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG engine %@ tracking=true conf=%.2f", self.engineKind.rawValue, a.confidence) }
+                self.frameCounter += 1
+                if self.frameCounter == 1 || self.frameCounter % 60 == 0 {
+                    NSLog("AR_DBG engine %@ corners=%@ conf=%.2f", self.engineKind.rawValue, out.description, a.confidence)
+                }
+                self.channelHandler.sendAlignment(
+                    corners: out, tracking: a.tracking, frameWidth: ebw, frameHeight: ebh,
+                    trackingState: a.tracking ? "normal" : "notAvailable", limitedReason: nil, confidence: a.confidence
                 )
             } else if let t = pinned, let size = phys {
                 // EXISTING auto path -- unchanged aside from the corner
