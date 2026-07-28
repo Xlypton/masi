@@ -120,12 +120,45 @@ final class RockFeatureMatcher {
         CVPixelBufferLockBaseAddress(pb, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
 
+        let fmt = CVPixelBufferGetPixelFormatType(pb)
+
+        // ARKit's `ARFrame.capturedImage` is bi-planar YUV
+        // (420YpCbCr8, full- OR video-range) -- NOT BGRA. For a planar buffer
+        // `CVPixelBufferGetBaseAddress` returns the plane-info struct, not
+        // pixels, so the old BGRA path read garbage on-device (FAST then found
+        // zero/garbage corners). The Y (luma) plane IS the grayscale image we
+        // want, so copy plane 0 directly -- correct AND faster than any matrix
+        // multiply. This is the path that actually runs on the phone.
+        if fmt == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            || fmt == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange {
+            guard CVPixelBufferGetPlaneCount(pb) >= 1,
+                  let yBase = CVPixelBufferGetBaseAddressOfPlane(pb, 0) else { return nil }
+            let pw = CVPixelBufferGetWidthOfPlane(pb, 0)
+            let ph = CVPixelBufferGetHeightOfPlane(pb, 0)
+            let yRowBytes = CVPixelBufferGetBytesPerRowOfPlane(pb, 0)
+            guard pw > 0, ph > 0 else { return nil }
+            var grayData = [UInt8](repeating: 0, count: pw * ph)
+            let src = yBase.assumingMemoryBound(to: UInt8.self)
+            grayData.withUnsafeMutableBufferPointer { dst in
+                guard let dstBase = dst.baseAddress else { return }
+                if yRowBytes == pw {
+                    memcpy(dstBase, src, pw * ph)
+                } else {
+                    // Strip row padding.
+                    for row in 0..<ph {
+                        memcpy(dstBase + row * pw, src + row * yRowBytes, pw)
+                    }
+                }
+            }
+            return (grayData, pw, ph)
+        }
+
+        // Fallback: 32BGRA single-plane (unit tests / non-ARKit sources).
         let srcW = CVPixelBufferGetWidth(pb)
         let srcH = CVPixelBufferGetHeight(pb)
         guard let baseAddr = CVPixelBufferGetBaseAddress(pb) else { return nil }
 
         let bytesPerRow = CVPixelBufferGetBytesPerRow(pb)
-        // Source as BGRA
         var srcBuf = vImage_Buffer(
             data: baseAddr,
             height: vImagePixelCount(srcH),
