@@ -50,6 +50,21 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
     /// Which engine `startSession` was asked for (retained for logging even
     /// when the engine fell back to `nil`).
     private var engineKind: ArPlacementEngineKind = .arkit
+    /// Engine-path throttle + hold-last-good state (all touched ONLY on the main
+    /// queue via `dispatchEngineFrame`). `engineBusy` is a single-flight guard so
+    /// the heavy matcher never piles up; `engineLastCorners`/`engineWeakFrames`
+    /// keep the overlay locked through intermittent matcher misses instead of
+    /// flickering to "not tracked" every dropped frame.
+    private var engineFrameTick = 0
+    private var engineBusy = false
+    private var engineLastCorners: [Double]?
+    private var engineWeakFrames = 0
+    /// Run the matcher on every Nth ARFrame (heat/battery control); the held
+    /// position bridges the skipped frames so the overlay stays put.
+    private static let engineStride = 2
+    /// Keep publishing the last good corners through up to this many consecutive
+    /// misses before admitting the track is lost.
+    private static let engineHoldFrames = 45
     /// Last `trackingState` string sent to Dart -- used only to log ARKit
     /// tracking-state TRANSITIONS (AR_DBG) rather than spamming a log line
     /// every frame.
@@ -139,6 +154,10 @@ extension ArPlatformView: ArSessionControlling {
         // active (the engine ignores ARKit anchors, world tracking just
         // runs).
         engineKind = engine
+        engineLastCorners = nil
+        engineWeakFrames = 0
+        engineFrameTick = 0
+        engineBusy = false
         switch engine {
         case .arkit:
             placementEngine = nil
@@ -473,6 +492,21 @@ extension ArPlatformView: ARSessionDelegate {
         let pinned = pinnedTransform
         let phys = pinnedPhysicalSize
 
+        // Pluggable registration engine (vision/orb/opencv) path: the heavy
+        // feature matching runs OFF the main thread (it was blocking the UI at
+        // ~3fps), single-flight + frame-strided, with hold-last-good so an
+        // intermittent matcher renders as a STABLE overlay. `.arkit`/manual keep
+        // the existing main-thread paths below (placementEngine == nil).
+        if mode == .auto, placementEngine != nil, pinnedManualCorners == nil {
+            let buffer = frame.capturedImage
+            let ebw = CVPixelBufferGetWidth(buffer)
+            let ebh = CVPixelBufferGetHeight(buffer)
+            DispatchQueue.main.async { [weak self] in
+                self?.dispatchEngineFrame(frame: frame, buffer: buffer, frameWidth: ebw, frameHeight: ebh)
+            }
+            return
+        }
+
         // `projectPoint` reads current render/view-port state, and the
         // event sink must be called on the main thread -- ARSessionDelegate
         // callbacks arrive on ARKit's own background queue, so hop to main
@@ -511,59 +545,6 @@ extension ArPlatformView: ARSessionDelegate {
                 self.channelHandler.sendAlignment(
                     corners: out, tracking: true, frameWidth: fw, frameHeight: fh,
                     trackingState: trackingStateStr, limitedReason: limitedReasonStr
-                )
-            } else if self.mode == .auto, let engine = self.placementEngine {
-                // Pluggable continuous-registration engine (vision/orb/opencv)
-                // -- replaces ARKit pin-once for this frame. The engine returns
-                // the reference photo's 4 corners in NORMALIZED captured-image
-                // space; map them to view points via `ARFrame.displayTransform`
-                // (orientation + aspect-fill correct, matching how the AR
-                // preview is displayed) before publishing. Gated to `.auto`;
-                // manual mode is handled by the `pinnedManualCorners` branch
-                // above, and `.arkit` keeps `placementEngine == nil` so the
-                // existing auto pin path below runs instead.
-                let buffer = frame.capturedImage
-                let ebw = CVPixelBufferGetWidth(buffer)
-                let ebh = CVPixelBufferGetHeight(buffer)
-                guard let a = engine.process(pixelBuffer: buffer) else {
-                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG engine %@ no match, tracking=false", self.engineKind.rawValue) }
-                    self.channelHandler.sendAlignment(
-                        corners: [], tracking: false, frameWidth: ebw, frameHeight: ebh,
-                        trackingState: "notAvailable", limitedReason: nil, confidence: 0
-                    )
-                    return
-                }
-                let orientation = self.sceneView.window?.windowScene?.interfaceOrientation ?? .portrait
-                let dt = frame.displayTransform(for: orientation, viewportSize: self.sceneView.bounds.size)
-                var out: [Double] = []
-                out.reserveCapacity(8)
-                var allValid = true
-                var ci = 0
-                while ci + 1 < a.corners.count {
-                    let vp = RockEngineMath.imageNormToView(
-                        CGPoint(x: a.corners[ci], y: a.corners[ci + 1]),
-                        displayTransform: dt, viewSize: self.sceneView.bounds.size
-                    )
-                    if !vp.x.isFinite || !vp.y.isFinite { allValid = false; break }
-                    out.append(Double(vp.x)); out.append(Double(vp.y))
-                    ci += 2
-                }
-                guard allValid, out.count == 8 else {
-                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG engine %@ invalid view mapping, tracking=false", self.engineKind.rawValue) }
-                    self.channelHandler.sendAlignment(
-                        corners: [], tracking: false, frameWidth: ebw, frameHeight: ebh,
-                        trackingState: "notAvailable", limitedReason: nil, confidence: 0
-                    )
-                    return
-                }
-                if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG engine %@ tracking=true conf=%.2f", self.engineKind.rawValue, a.confidence) }
-                self.frameCounter += 1
-                if self.frameCounter == 1 || self.frameCounter % 60 == 0 {
-                    NSLog("AR_DBG engine %@ corners=%@ conf=%.2f", self.engineKind.rawValue, out.description, a.confidence)
-                }
-                self.channelHandler.sendAlignment(
-                    corners: out, tracking: a.tracking, frameWidth: ebw, frameHeight: ebh,
-                    trackingState: a.tracking ? "normal" : "notAvailable", limitedReason: nil, confidence: a.confidence
                 )
             } else if let t = pinned, let size = phys {
                 // EXISTING auto path -- unchanged aside from the corner
@@ -630,6 +611,89 @@ extension ArPlatformView: ARSessionDelegate {
                 )
             }
         }
+    }
+
+    // MARK: - Engine path (off-main matching + hold-last-good)
+
+    /// Runs on MAIN. Frame-strides + single-flights the heavy matcher: either
+    /// republish the held position (skipped/busy frame) or kick a background CV
+    /// pass whose result lands back here via `finishEngineFrame`. Keeping the
+    /// matcher off the main thread is what stops it blocking rendering; the
+    /// hold-last-good keeps an intermittent matcher from flickering the overlay.
+    private func dispatchEngineFrame(frame: ARFrame, buffer: CVPixelBuffer, frameWidth ebw: Int, frameHeight ebh: Int) {
+        guard let engine = placementEngine else { return }
+        engineFrameTick += 1
+        if engineBusy || engineFrameTick % Self.engineStride != 0 {
+            publishEngineHeld(frameWidth: ebw, frameHeight: ebh)
+            return
+        }
+        engineBusy = true
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = engine.process(pixelBuffer: buffer)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.engineBusy = false
+                self.finishEngineFrame(result, frame: frame, frameWidth: ebw, frameHeight: ebh)
+            }
+        }
+    }
+
+    /// Runs on MAIN. Maps a fresh match to view space (via `displayTransform`)
+    /// and publishes + caches it as the held position, else falls back to hold.
+    private func finishEngineFrame(_ a: EngineAlignment?, frame: ARFrame, frameWidth ebw: Int, frameHeight ebh: Int) {
+        if let a = a, a.corners.count == 8 {
+            let orientation = sceneView.window?.windowScene?.interfaceOrientation ?? .portrait
+            let dt = frame.displayTransform(for: orientation, viewportSize: sceneView.bounds.size)
+            var out: [Double] = []
+            out.reserveCapacity(8)
+            var ok = true
+            var ci = 0
+            while ci + 1 < a.corners.count {
+                let vp = RockEngineMath.imageNormToView(
+                    CGPoint(x: a.corners[ci], y: a.corners[ci + 1]),
+                    displayTransform: dt, viewSize: sceneView.bounds.size
+                )
+                if !vp.x.isFinite || !vp.y.isFinite { ok = false; break }
+                out.append(Double(vp.x)); out.append(Double(vp.y))
+                ci += 2
+            }
+            if ok, out.count == 8 {
+                engineLastCorners = out
+                engineWeakFrames = 0
+                if !wasTracked { wasTracked = true; NSLog("AR_DBG engine %@ tracking=true conf=%.2f", engineKind.rawValue, a.confidence) }
+                frameCounter += 1
+                if frameCounter == 1 || frameCounter % 60 == 0 {
+                    NSLog("AR_DBG engine %@ corners=%@ conf=%.2f", engineKind.rawValue, out.description, a.confidence)
+                }
+                channelHandler.sendAlignment(
+                    corners: out, tracking: true, frameWidth: ebw, frameHeight: ebh,
+                    trackingState: "normal", limitedReason: nil, confidence: a.confidence
+                )
+                return
+            }
+        }
+        publishEngineHeld(frameWidth: ebw, frameHeight: ebh)
+    }
+
+    /// Runs on MAIN. Keeps the overlay locked to the last good corners (fading
+    /// confidence so the UI shows it's coasting) for up to `engineHoldFrames`
+    /// consecutive misses, then admits the track is lost.
+    private func publishEngineHeld(frameWidth ebw: Int, frameHeight ebh: Int) {
+        engineWeakFrames += 1
+        if let held = engineLastCorners, held.count == 8, engineWeakFrames <= Self.engineHoldFrames {
+            let decay = max(0.15, 0.85 * (1.0 - Double(engineWeakFrames) / Double(Self.engineHoldFrames)))
+            channelHandler.sendAlignment(
+                corners: held, tracking: true, frameWidth: ebw, frameHeight: ebh,
+                trackingState: "normal", limitedReason: nil, confidence: decay
+            )
+            return
+        }
+        if wasTracked { wasTracked = false; NSLog("AR_DBG engine %@ lost after hold, tracking=false", engineKind.rawValue) }
+        engineLastCorners = nil
+        channelHandler.sendAlignment(
+            corners: [], tracking: false, frameWidth: ebw, frameHeight: ebh,
+            trackingState: "notAvailable", limitedReason: nil, confidence: 0
+        )
     }
 
     func session(_ session: ARSession, didFailWithError error: Error) {
