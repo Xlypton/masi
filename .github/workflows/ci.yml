@@ -5,10 +5,13 @@ name: CI
 # the enforceable spec for when one exists. The same gates run locally via
 # `tool/build_web.sh` and the standard `flutter analyze` / `flutter test`.
 #
-# NOTE: the `web-build` job (and its dart:io grep gate) only pass once the
-# db/photo pipeline is split behind conditional imports (v2 Phases 1-2). It is
-# marked continue-on-error until M2 so the analyze/test floor stays enforceable
-# from day one without a red pipeline blocking the port.
+# NOTE: the `dart:io` gate is enforceable today — it matches import/export
+# DIRECTIVES only, exactly as `tool/build_web.sh` does. A raw substring grep
+# flags the seam files' doc comments (which legitimately mention `dart:io` when
+# explaining the wasm conditional-import split) and can never be empty; that
+# false-positive form is what used to keep this gate red on clean code.
+# The `web-build` job stays continue-on-error until the Stage 2 offline-shell
+# work lands, so a build regression can't block the analyze/test floor.
 
 on:
   push:
@@ -32,10 +35,27 @@ jobs:
       - run: flutter analyze
       - run: flutter test
 
-  web-build:
-    name: web build + dart:io gate
+  dart-io-gate:
+    name: dart:io gate
     runs-on: ubuntu-latest
-    # Goes green at M2; until then a leaked dart:io / build failure is expected.
+    # Enforceable: needs no Flutter toolchain, and is green on clean code.
+    steps:
+      - uses: actions/checkout@v4
+      - name: dart:io grep gate (must be empty)
+        # Keep this regex byte-identical to tool/build_web.sh — directives only,
+        # never prose. Any divergence lets a real leak through or reddens on
+        # comments.
+        run: |
+          offenders="$(grep -rlE "^[[:space:]]*(import|export)[[:space:]]+['\"]dart:io['\"]" lib --include="*.dart" | grep -v '_native.dart' || true)"
+          if [ -n "$offenders" ]; then
+            echo "dart:io found outside *_native.dart:"; echo "$offenders"; exit 1
+          fi
+          echo "ok: no dart:io outside *_native.dart"
+
+  web-build:
+    name: web build (wasm)
+    runs-on: ubuntu-latest
+    # Goes green with the Stage 2 offline-shell work; non-blocking until then.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4
@@ -44,11 +64,5 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
       - run: flutter pub get
-      - name: dart:io grep gate (must be empty)
-        run: |
-          offenders="$(grep -rl 'dart:io' lib --include='*.dart' | grep -v '_native.dart' || true)"
-          if [ -n "$offenders" ]; then
-            echo "dart:io found outside *_native.dart:"; echo "$offenders"; exit 1
-          fi
       - name: build web (wasm)
         run: flutter build web --wasm
