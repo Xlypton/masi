@@ -4,6 +4,23 @@
 
 ---
 
+## 0. Device test results (2026-07-28) — READ THIS FIRST
+
+Installed on PetiTeló and tested with live `AR_DBG` logs. Verdict per engine:
+
+| Engine | On-device | Verdict |
+|---|---|---|
+| `arkit` | **works** — routes stick | the pragmatic keep; the old "it's unstable" premise didn't hold up here |
+| `opencv` | **works, corners correct** (matched ARKit placement, conf 0.6–0.95) — but was slow/hot/flickery | **the one to pursue** — fixed in commit `6df4147` (see below), needs a re-test |
+| `vision` | **0 matches ever** (923 no-match) | dead end — Apple's registration can't align a stored photo to a live wall. Don't use. |
+| `orb` | almost no matches (`too_few_good_matches count=0`) | weak — needs the same downscale fix `opencv` got; left as-is (bonus engine) |
+
+**The `opencv` fix (`6df4147`, installed):** the matcher was running the full 24-megapixel-reference ORB **on the UI thread** every frame (→ ~3 fps, heat, freeze) and blanking the overlay on every missed frame (→ flicker). Now: matching runs **off-main** (single-flight + every-2nd-frame), on a **~1000px downscale** (≈10× faster, more matches), and **holds the last good position** through misses (up to ~45 frames, fading) so it stays stuck instead of blinking. **Re-test `opencv` specifically** — it should be smooth, cool, and sticky now.
+
+**Bottom line:** it's `arkit` (works today) vs `opencv` (correct placement, now made fast + stable — verify). `vision`/`orb` are out.
+
+---
+
 ## 1. What this is
 
 Replaces the unstable ARKit "pin-once" image-anchor tracking (routes float mid-air / drift at angle) with **continuous per-frame reference→live homography registration**, behind one `RockRegistrationEngine` protocol. You can switch engines at runtime and compare them on the same wall.
