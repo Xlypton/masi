@@ -9,8 +9,8 @@ import 'storage_durability.dart';
 /// [onStorageReport] receives drift's verdict — which storage implementation
 /// was actually chosen, and which browser features were missing — exactly
 /// once, as soon as `WasmDatabase.open`'s feature probe resolves. That
-/// verdict used to be thrown away behind an `if (kDebugMode) debugPrint(...)`,
-/// which is L1 in
+/// verdict used to be thrown away behind a debug-only conditional wrapping a
+/// `debugPrint(...)` call, which is L1 in
 /// `docs/superpowers/specs/2026-07-30-web-offline-reliability-design.md`:
 /// `WasmDatabase.open` NEVER throws, it silently degrades to
 /// `WasmStorageImplementation.inMemory` ("doesn't store anything"), so every
@@ -29,6 +29,26 @@ QueryExecutor openConnection({
       databaseName: 'climbtopo',
       sqlite3Uri: Uri.parse('sqlite3.wasm'),
       driftWorkerUri: Uri.parse('drift_worker.js'),
+      // L8 lock-in mitigation. Without this, `WasmDatabase.open`'s
+      // `_selectExistingDatabase` downgrades the chosen implementation back
+      // to whatever storage API an EXISTING `climbtopo` database already
+      // lives in, on EVERY open — so any install that first landed on
+      // IndexedDB (i.e. every visitor served before the COOP/COEP headers in
+      // `web/_headers` shipped) stays on IndexedDB forever, even once the
+      // browser would happily give us OPFS.
+      //
+      // Safe by drift's own construction: `moveFromIndexedDBToOpfs` COPIES
+      // the IndexedDB files into OPFS and only then deletes the IndexedDB
+      // originals, and drift wraps the whole move in a try/catch that falls
+      // back to "keep using the old IndexedDB database" on any throw
+      // (drift-2.34.2/lib/wasm.dart:184-199). The worst case is therefore
+      // "no upgrade", never "no data". The browser assertion that seeded
+      // rows actually survive it lives in
+      // `integration_test/web_storage_backend_test.dart`; the OPFS half of
+      // that (which needs cross-origin isolation, and so cannot happen under
+      // `flutter drive -d web-server`) is proven on real Chrome via
+      // `tool/serve_web_isolated.py`.
+      moveExistingIndexedDbToOpfs: true,
     );
     onStorageReport?.call(
       StorageDurability(
