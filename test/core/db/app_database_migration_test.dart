@@ -1,6 +1,7 @@
 import 'dart:io';
 
 import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/settings_store.dart';
 import 'package:drift/drift.dart'
     show BooleanExpressionOperators, OrderingTerm, Value;
 import 'package:drift/native.dart';
@@ -1815,6 +1816,7 @@ void main() {
           'likes',
           'ascents',
           'profiles',
+          'app_settings',
         },
         reason: 'onCreate must build every table declared on AppDatabase',
       );
@@ -2002,5 +2004,77 @@ void main() {
       expect(profile.dirty, isTrue);
       expect(profile.ownerId, 'user-1');
     });
+  });
+
+  group('v8 -> v9 migration (local-only app_settings KV table)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('masi_v9_migration_');
+      dbFile = File(p.join(tempDir.path, 'v8.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    test(
+      'creates app_settings on an existing v8 database without losing rows',
+      () async {
+        // Build a REAL current-schema file via onCreate, seed a row, then
+        // rewind it to the pre-v9 shape on disk (drop the new table, stamp
+        // user_version = 8). Reopening then forces drift down the
+        // onUpgrade(m, 8, 9) path a real updating device takes.
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh
+            .into(fresh.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-v8',
+                createdAt: 100,
+                updatedAt: 100,
+                name: 'Pre-v9 Area',
+              ),
+            );
+        await fresh.close();
+
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute('DROP TABLE app_settings; PRAGMA user_version = 8;');
+        expect(raw.select('PRAGMA user_version;').first.values.first, 8);
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        // Forces the migration to actually run (drift is lazy).
+        final area = await (db.select(db.areas)
+              ..where((t) => t.id.equals('area-v8')))
+            .getSingle();
+        expect(
+          area.name,
+          'Pre-v9 Area',
+          reason: 'pre-existing row must survive the v8 -> v9 migration',
+        );
+
+        final tableNames = await db
+            .customSelect(
+              "SELECT name FROM sqlite_master WHERE type = 'table' "
+              "AND name NOT LIKE 'sqlite_%'",
+            )
+            .map((row) => row.read<String>('name'))
+            .get();
+        expect(
+          tableNames,
+          contains('app_settings'),
+          reason: 'the from < 9 branch must createTable(appSettings)',
+        );
+
+        // The new table is usable immediately after the migration.
+        final store = SettingsStore(db, nowMs: () => 900);
+        await store.write(SettingsStore.lastKnownUidKey, 'user-u1');
+        expect(await store.read(SettingsStore.lastKnownUidKey), 'user-u1');
+      },
+    );
   });
 }

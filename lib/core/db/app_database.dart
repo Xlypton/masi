@@ -22,13 +22,14 @@ part 'app_database.g.dart';
     Likes,
     Ascents,
     Profiles,
+    AppSettings,
   ],
 )
 class AppDatabase extends _$AppDatabase {
   AppDatabase(super.e);
 
   @override
-  int get schemaVersion => 8;
+  int get schemaVersion => 9;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -189,6 +190,19 @@ class AppDatabase extends _$AppDatabase {
       // UUID.
       if (from < 8) {
         await m.createTable(profiles);
+      }
+      // v8 -> v9: adds the local-only `AppSettings` key/value table (§1c),
+      // the durable home of `lastKnownUid` — the uid local reads/writes are
+      // scoped by when no live session is available (a captive-portal hard
+      // sign-out, an offline token-refresh failure, or a cold boot before
+      // Supabase resolves). Same shape as the v7 -> v8 `Profiles` addition: a
+      // brand-new table unrelated to any existing row/column, so a pure
+      // `m.createTable` with nothing to backfill and no pre-existing data
+      // touched. NOT a SyncColumns table and NOT in `syncTableNames` — see
+      // `tables.dart`'s `AppSettings` doc for why device state must never
+      // sync.
+      if (from < 9) {
+        await m.createTable(appSettings);
       }
     },
     beforeOpen: (details) async {

@@ -22,6 +22,38 @@ mixin SyncColumns on Table {
   TextColumn get ownerId => text().nullable()();
 }
 
+/// LOCAL-ONLY key/value store for tiny device-scoped settings. Deliberately
+/// does NOT mix in [SyncColumns] and is deliberately absent from
+/// `syncTableNames` (`features/backup/data/sync_remote.dart`) and from
+/// `BackupRepository`'s hand-enumerated export/import lists — both enumerate
+/// tables explicitly, so nothing here can ever reach the cloud. This is where
+/// state that must survive a *sign-out* lives, which is exactly why it must
+/// not be owned by, keyed by, or synced with any account.
+///
+/// Introduced (schema v9) for `lastKnownUid` — see
+/// `features/account/application/auth_providers.dart`'s `LastKnownUid`. Drift
+/// is used rather than `shared_preferences` because it is the ONLY durable
+/// local store this repo already has on both web (OPFS/IndexedDB) and native
+/// (SQLite file), with one implementation and no conditional-import seam.
+@DataClassName('AppSettingRow')
+class AppSettings extends Table {
+  /// Opaque setting name. Not called `key` — `KEY` is a SQLite keyword and
+  /// `key` collides with `Widget.key` conventions in generated code.
+  TextColumn get settingKey => text()();
+
+  /// The setting's value, always TEXT (callers encode/decode). Nullable so a
+  /// present-but-unset key is expressible; `SettingsStore.remove` deletes the
+  /// row outright rather than nulling it.
+  TextColumn get settingValue => text().nullable()();
+
+  /// ms-epoch of the last write, from the injected `nowMs` clock seam — purely
+  /// diagnostic (nothing reads it for behavior).
+  IntColumn get updatedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {settingKey};
+}
+
 /// A signed-in user's editable, synced display name (#18).
 ///
 /// Unlike every other [SyncColumns] table, [id] here is NOT a caller-

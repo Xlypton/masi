@@ -13,8 +13,8 @@ void main() {
     await db.close();
   });
 
-  test('schemaVersion is 8', () {
-    expect(db.schemaVersion, 8);
+  test('schemaVersion is 9', () {
+    expect(db.schemaVersion, 9);
   });
 
   test('insert and read back one row per table, satisfying FKs', () async {

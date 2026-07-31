@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app_database.dart';
 import 'connection/connection.dart';
+import 'settings_store.dart';
 import 'storage_durability_provider.dart';
 import '../../features/account/application/auth_providers.dart';
 import '../../features/topo/data/photo_files.dart';
@@ -50,6 +51,16 @@ final appDatabaseProvider = Provider<AppDatabase>((ref) {
 final nowMsProvider = Provider<int Function()>(
   (ref) =>
       () => DateTime.now().millisecondsSinceEpoch,
+);
+
+/// The shared [SettingsStore] over the local-only `AppSettings` table, wired
+/// to the same [appDatabaseProvider]/[nowMsProvider] seams every repository
+/// provider here uses. Override `appDatabaseProvider` in tests, as usual.
+final settingsStoreProvider = Provider<SettingsStore>(
+  (ref) => SettingsStore(
+    ref.watch(appDatabaseProvider),
+    nowMs: ref.watch(nowMsProvider),
+  ),
 );
 
 final routeRepositoryProvider = Provider<RouteRepository>(
