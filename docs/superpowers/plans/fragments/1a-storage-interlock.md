@@ -474,7 +474,7 @@ addTearDown(() => debugPrint = original);
 - `const StorageDurability.probing()` has `isProbing == true`, `isDurable == false`, `isEphemeral == false` — a not-yet-known backend is never treated as non-durable.
 - `StorageDurability(backend: StorageBackend.inMemory)` has `isEphemeral == true` and `isDurable == false`.
 - `logStorageDurability` emits exactly ONE `debugPrint` line containing `masi/storage:`, `backend=inMemory`, `durable=false` and the missing-feature name — captured by swapping the mutable `debugPrint` top-level.
-- `grep -c kDebugMode lib/core/db/connection/storage_durability.dart` is 0.
+- `grep -c kDebugMode lib/core/db/connection/storage_durability.dart` is **2**, and **both hits are prose-only doc-comment lines** — not code. Do NOT assert 0 here: the doc comments deliberately *name* `kDebugMode` to explain that the log is intentionally not gated behind it, and commit `df10b6d` restored that wording after it had been degraded purely to satisfy a naive substring grep. This project's rule is that token-grep guards match **code, not prose** (same fix as the `dart:io` gate in `tool/build_web.sh:40`). The real, enforced assertion is the one in `test/core/db/connection_seam_source_test.dart`, which strips whole-line comments before matching and therefore requires **zero `kDebugMode` in code** anywhere under `lib/`.
 - `grep -rlE "^[[:space:]]*(import|export)[[:space:]]+['\"]dart:io['\"]" lib --include="*.dart" | grep -v '_native.dart'` is empty.
 - `flutter analyze` reports 0 issues; `flutter test` is green at baseline + 7 (D-13 correction: never gate on the absolute number 1584).
 

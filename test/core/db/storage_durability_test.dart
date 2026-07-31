@@ -71,6 +71,31 @@ void main() {
       }
     });
 
+    test('an unavailable verdict IS a verdict — ephemeral, never probing', () {
+      const verdict = StorageDurability.unavailable('WasmDatabase.open blew up');
+      // The whole point: `probing` reads as "not yet known to be bad", which
+      // the create-topo interlock treats as "allow creation". A failed open
+      // must NOT land there, or the interlock silently stays open.
+      expect(verdict.isProbing, isFalse);
+      expect(verdict.isEphemeral, isTrue);
+      expect(verdict.isDurable, isFalse);
+      expect(verdict.unavailable, isTrue);
+      expect(verdict.unavailableReason, 'WasmDatabase.open blew up');
+      expect(verdict.backend, isNull);
+    });
+
+    test('unavailable and probing are NOT equal despite both having a null '
+        'backend', () {
+      const unavailable = StorageDurability.unavailable('boom');
+      const probing = StorageDurability.probing();
+      // Equality keyed on `backend` alone would conflate these two, which are
+      // opposites for the interlock (ephemeral vs allow-creation).
+      expect(unavailable, isNot(probing));
+      expect(unavailable.hashCode, isNot(probing.hashCode));
+      expect(unavailable, const StorageDurability.unavailable('boom'));
+      expect(unavailable, isNot(const StorageDurability.unavailable('other')));
+    });
+
     test('equality covers the missing-feature set, not just the backend', () {
       const a = StorageDurability(
         backend: StorageBackend.inMemory,
@@ -117,6 +142,20 @@ void main() {
       });
       expect(lines.single, contains('backend=opfsLocks'));
       expect(lines.single, contains('durable=true'));
+    });
+
+    test('logs a failed open with its reason — without this, a throwing '
+        'WasmDatabase.open leaves no production signal at all', () {
+      final lines = _captureDebugPrint(() {
+        logStorageDurability(
+          const StorageDurability.unavailable('MissingBrowserFeature.workerError'),
+        );
+      });
+      expect(lines, hasLength(1));
+      expect(lines.single, contains('masi/storage:'));
+      expect(lines.single, contains('backend=unavailable'));
+      expect(lines.single, contains('durable=false'));
+      expect(lines.single, contains('reason=MissingBrowserFeature.workerError'));
     });
   });
 }

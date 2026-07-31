@@ -16,6 +16,17 @@ import 'storage_durability.dart';
 /// `WasmStorageImplementation.inMemory` ("doesn't store anything"), so every
 /// write succeeds, every list populates, and the whole library is gone on the
 /// next page load with zero production signal.
+///
+/// If `WasmDatabase.open` itself THROWS instead of degrading, there is no
+/// result to report and no executor to return — every query on this database
+/// will fail loudly regardless of what happens here. What this `catch` adds
+/// is observability: without it, `storageDurabilityProvider` would never see
+/// a success-path report and would stay `probing` forever, which the
+/// create-topo interlock reads as "allow creation" — exactly the gap §1a
+/// exists to close. So it reports [StorageDurability.unavailable] (which
+/// counts as `isEphemeral`, blocking creation) and then rethrows unchanged —
+/// this does not swallow the error or attempt to fabricate a working
+/// database.
 QueryExecutor openConnection({
   void Function(StorageDurability verdict)? onStorageReport,
 }) {
@@ -25,40 +36,45 @@ QueryExecutor openConnection({
   // preserves `streamQueries` (via a `DelayedStreamQueryStore`) while still
   // deferring the async WASM setup.
   return DatabaseConnection.delayed(Future(() async {
-    final result = await WasmDatabase.open(
-      databaseName: 'climbtopo',
-      sqlite3Uri: Uri.parse('sqlite3.wasm'),
-      driftWorkerUri: Uri.parse('drift_worker.js'),
-      // L8 lock-in mitigation. Without this, `WasmDatabase.open`'s
-      // `_selectExistingDatabase` downgrades the chosen implementation back
-      // to whatever storage API an EXISTING `climbtopo` database already
-      // lives in, on EVERY open — so any install that first landed on
-      // IndexedDB (i.e. every visitor served before the COOP/COEP headers in
-      // `web/_headers` shipped) stays on IndexedDB forever, even once the
-      // browser would happily give us OPFS.
-      //
-      // Safe by drift's own construction: `moveFromIndexedDBToOpfs` COPIES
-      // the IndexedDB files into OPFS and only then deletes the IndexedDB
-      // originals, and drift wraps the whole move in a try/catch that falls
-      // back to "keep using the old IndexedDB database" on any throw
-      // (drift-2.34.2/lib/wasm.dart:184-199). The worst case is therefore
-      // "no upgrade", never "no data". The browser assertion that seeded
-      // rows actually survive it lives in
-      // `integration_test/web_storage_backend_test.dart`; the OPFS half of
-      // that (which needs cross-origin isolation, and so cannot happen under
-      // `flutter drive -d web-server`) is proven on real Chrome via
-      // `tool/serve_web_isolated.py`.
-      moveExistingIndexedDbToOpfs: true,
-    );
-    onStorageReport?.call(
-      StorageDurability(
-        backend: _backendOf(result.chosenImplementation),
-        missingFeatures: {
-          for (final feature in result.missingFeatures) _featureOf(feature),
-        },
-      ),
-    );
-    return result.resolvedExecutor;
+    try {
+      final result = await WasmDatabase.open(
+        databaseName: 'climbtopo',
+        sqlite3Uri: Uri.parse('sqlite3.wasm'),
+        driftWorkerUri: Uri.parse('drift_worker.js'),
+        // L8 lock-in mitigation. Without this, `WasmDatabase.open`'s
+        // `_selectExistingDatabase` downgrades the chosen implementation back
+        // to whatever storage API an EXISTING `climbtopo` database already
+        // lives in, on EVERY open — so any install that first landed on
+        // IndexedDB (i.e. every visitor served before the COOP/COEP headers
+        // in `web/_headers` shipped) stays on IndexedDB forever, even once
+        // the browser would happily give us OPFS.
+        //
+        // Safe by drift's own construction: `moveFromIndexedDBToOpfs` COPIES
+        // the IndexedDB files into OPFS and only then deletes the IndexedDB
+        // originals, and drift wraps the whole move in a try/catch that falls
+        // back to "keep using the old IndexedDB database" on any throw
+        // (drift-2.34.2/lib/wasm.dart:184-199). The worst case is therefore
+        // "no upgrade", never "no data". The browser assertion that seeded
+        // rows actually survive it lives in
+        // `integration_test/web_storage_backend_test.dart`; the OPFS half of
+        // that (which needs cross-origin isolation, and so cannot happen
+        // under `flutter drive -d web-server`) is proven on real Chrome via
+        // `tool/serve_web_isolated.py`.
+        moveExistingIndexedDbToOpfs: true,
+      );
+      onStorageReport?.call(
+        StorageDurability(
+          backend: _backendOf(result.chosenImplementation),
+          missingFeatures: {
+            for (final feature in result.missingFeatures) _featureOf(feature),
+          },
+        ),
+      );
+      return result.resolvedExecutor;
+    } catch (error) {
+      onStorageReport?.call(StorageDurability.unavailable('$error'));
+      rethrow;
+    }
   }));
 }
 

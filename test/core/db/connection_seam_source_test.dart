@@ -73,6 +73,40 @@ void main() {
       );
     });
 
+    test(
+      'returns DatabaseConnection.delayed(resolvedExecutor), never a bare '
+      'LazyDatabase — a bare one discards drift\'s BroadcastStreamQueryStore '
+      'and silently breaks cross-tab watch()',
+      () {
+        final source = _normalized(webPath);
+        expect(source, contains('DatabaseConnection.delayed('));
+        expect(source, contains('return result.resolvedExecutor;'));
+      },
+    );
+
+    test(
+      'a throwing WasmDatabase.open REPORTS before it rethrows — reporting '
+      'after the rethrow would be dead code, leaving the verdict stuck at '
+      'probing (which the interlock reads as allow-creation)',
+      () {
+        final source = _normalized(webPath);
+        final reportIndex =
+            source.indexOf('onStorageReport?.call(StorageDurability.unavailable(');
+        final rethrowIndex = source.indexOf('rethrow;');
+        expect(
+          reportIndex,
+          greaterThan(-1),
+          reason: 'expected the catch to report an unavailable verdict',
+        );
+        expect(rethrowIndex, greaterThan(-1), reason: 'expected a rethrow');
+        expect(
+          reportIndex,
+          lessThan(rethrowIndex),
+          reason: 'the unavailable report must precede the rethrow',
+        );
+      },
+    );
+
     test('passes moveExistingIndexedDbToOpfs: true', () {
       expect(
         _normalized(webPath),

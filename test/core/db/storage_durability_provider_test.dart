@@ -52,12 +52,30 @@ void main() {
         final notifier = container.read(storageDurabilityProvider.notifier);
         container.dispose();
 
+        // `report()` deliberately logs BEFORE its `ref.mounted` guard, so a
+        // verdict arriving during teardown or a hot restart still reaches the
+        // console — which is exactly the case §1a exists to diagnose. Assert
+        // the log, not just the absence of a throw: without this, swapping the
+        // two lines would silently lose the only production signal, and every
+        // other test here would still pass.
+        final captured = <String>[];
+        final original = debugPrint;
+        debugPrint = (String? m, {int? wrapWidth}) {
+          if (m != null) captured.add(m);
+        };
+        addTearDown(() => debugPrint = original);
+
         expect(
           () => notifier.report(
             const StorageDurability(backend: StorageBackend.nativeFile),
           ),
           returnsNormally,
         );
+
+        debugPrint = original;
+        expect(captured, hasLength(1));
+        expect(captured.single, contains('masi/storage:'));
+        expect(captured.single, contains('backend=nativeFile'));
       },
     );
   });

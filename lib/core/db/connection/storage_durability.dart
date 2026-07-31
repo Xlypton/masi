@@ -68,12 +68,18 @@ enum StorageMissingFeature {
 }
 
 /// The platform connection layer's verdict on local persistence.
+///
+/// Comes in three shapes: not-yet-known ([probing]), a chosen backend (the
+/// default constructor, [backend] non-null), or a failed open where no
+/// backend was ever chosen at all ([unavailable] — e.g. `WasmDatabase.open`
+/// itself throwing in `connection_web.dart`).
 @immutable
 class StorageDurability {
   const StorageDurability({
     required this.backend,
     this.missingFeatures = const {},
-  });
+  })  : unavailable = false,
+        unavailableReason = null;
 
   /// The state before any verdict has arrived.
   ///
@@ -90,39 +96,76 @@ class StorageDurability {
   /// runs `openConnection`).
   const StorageDurability.probing()
       : backend = null,
-        missingFeatures = const {};
+        missingFeatures = const {},
+        unavailable = false,
+        unavailableReason = null;
 
-  /// `null` while [isProbing].
+  /// The connection layer's open call itself threw, so no [backend] was ever
+  /// chosen. [unavailableReason] is a short description (typically the
+  /// caught exception's `toString()`) so a "my data vanished" report is
+  /// answerable from the log line alone.
+  ///
+  /// Unlike [probing] this IS a verdict — [isProbing] is false. It counts as
+  /// [isEphemeral], so the create-topo interlock blocks creation exactly as
+  /// it does for [StorageBackend.inMemory]: a database that could not even be
+  /// opened cannot be trusted with new data either. This does not attempt to
+  /// recover or fabricate a working database — see `connection_web.dart`'s
+  /// `catch` around `WasmDatabase.open` for the only production caller.
+  const StorageDurability.unavailable(this.unavailableReason)
+      : backend = null,
+        missingFeatures = const {},
+        unavailable = true;
+
+  /// `null` while [isProbing] or [unavailable] — nothing was ever chosen.
   final StorageBackend? backend;
 
   /// Empty on native and whenever drift found everything it looked for.
   final Set<StorageMissingFeature> missingFeatures;
 
-  /// No verdict yet.
-  bool get isProbing => backend == null;
+  /// True when the connection layer's open call itself threw before any
+  /// backend could be chosen. See [StorageDurability.unavailable].
+  final bool unavailable;
 
-  /// The backend is KNOWN to keep data across a reload.
-  bool get isDurable => backend?.isDurable ?? false;
+  /// Short description of why [unavailable] is true. `null` unless
+  /// [unavailable].
+  final String? unavailableReason;
 
-  /// The backend is KNOWN to lose data across a reload. This is the single
-  /// condition the create-topo interlock blocks on.
-  bool get isEphemeral => backend != null && !backend!.isDurable;
+  /// No verdict yet. False once ANY verdict has landed — [unavailable] is
+  /// itself a (bad) verdict, not an absence of one.
+  bool get isProbing => backend == null && !unavailable;
+
+  /// The backend is KNOWN to keep data across a reload. Always false when
+  /// [unavailable]: there is no backend to be durable.
+  bool get isDurable => !unavailable && (backend?.isDurable ?? false);
+
+  /// The backend is KNOWN to lose data across a reload, or the database could
+  /// not even be opened ([unavailable]). This is the single condition the
+  /// create-topo interlock blocks on.
+  bool get isEphemeral =>
+      unavailable || (backend != null && !backend!.isDurable);
 
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
       (other is StorageDurability &&
           other.backend == backend &&
-          setEquals(other.missingFeatures, missingFeatures));
+          setEquals(other.missingFeatures, missingFeatures) &&
+          other.unavailable == unavailable &&
+          other.unavailableReason == unavailableReason);
 
   @override
-  int get hashCode =>
-      Object.hash(backend, Object.hashAllUnordered(missingFeatures));
+  int get hashCode => Object.hash(
+        backend,
+        Object.hashAllUnordered(missingFeatures),
+        unavailable,
+        unavailableReason,
+      );
 
   @override
   String toString() =>
       'StorageDurability(backend: $backend, durable: $isDurable, '
-      'missingFeatures: $missingFeatures)';
+      'missingFeatures: $missingFeatures, unavailable: $unavailable'
+      '${unavailableReason == null ? '' : ', unavailableReason: $unavailableReason'})';
 }
 
 /// Logs [durability] — deliberately NOT behind `kDebugMode`.
@@ -139,9 +182,16 @@ class StorageDurability {
 void logStorageDurability(StorageDurability durability) {
   final missing = durability.missingFeatures.map((f) => f.name).toList()
     ..sort();
+  final backendLabel = durability.unavailable
+      ? 'unavailable'
+      : durability.backend?.name ?? 'probing';
+  final reasonSuffix = durability.unavailable
+      ? ' reason=${durability.unavailableReason}'
+      : '';
   debugPrint(
-    'masi/storage: backend=${durability.backend?.name ?? 'probing'} '
+    'masi/storage: backend=$backendLabel '
     'durable=${durability.isDurable} '
-    'missingFeatures=${missing.join(',')}',
+    'missingFeatures=${missing.join(',')}'
+    '$reasonSuffix',
   );
 }
