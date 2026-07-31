@@ -9,6 +9,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
@@ -41,6 +42,7 @@ part 'topos_badges.dart';
 part 'topos_filter.dart';
 part 'topos_empty_states.dart';
 part 'topos_dialogs.dart';
+part 'topos_storage_banner.dart';
 
 /// The new flat "photo-first" home (see DESIGN.md "Topos home"): every
 /// non-deleted [db.Wall] rendered as a single "topo" row (thumbnail + name +
@@ -137,13 +139,26 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     final asyncTopos = ref.watch(toposProvider);
     final proximityEntries = ref.watch(sortedByProximityToposProvider);
     final filter = ref.watch(toposFilterProvider);
+    // L1 interlock (design doc §1a): the connection layer's verdict on
+    // whether the local database can actually keep what we write. On web,
+    // `WasmDatabase.open` silently degrades to an in-memory backend that
+    // "doesn't store anything" — writes succeed, lists populate, and the
+    // whole library is gone on the next page load. When that is the verdict,
+    // creation is turned OFF and `_StorageWarningBanner` says so, rather than
+    // letting the user record a topo into a store that will drop it. See
+    // `lib/core/db/storage_durability_provider.dart`.
+    final storage = ref.watch(storageDurabilityProvider);
+
     // Only an *actually loaded* topo list (AsyncData) is a safe source for
     // the "New topo" count; while still loading or errored there is no
     // trustworthy count to derive "Topo N+1" from, so the button must be
     // disabled rather than fall back to an empty list and mint "Topo 1"
-    // over an existing topo.
+    // over an existing topo. `storage.isEphemeral` is the third gate: it is
+    // false while the verdict is still unknown (`probing`), so the interlock
+    // only ever blocks on a KNOWN-bad backend.
     final loadedTopos = asyncTopos.asData?.value;
-    final canCreate = loadedTopos != null && !_creating;
+    final canCreate =
+        loadedTopos != null && !_creating && !storage.isEphemeral;
 
     // The account button shows initials once actually signed in with a
     // real (non-empty) email; any other state of the auth stream —
@@ -222,6 +237,8 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
             bottom: false,
             child: Column(
               children: [
+                if (storage.isEphemeral)
+                  _StorageWarningBanner(durability: storage),
                 _ToposFilterBar(
                   searchController: _searchController,
                   isActive: filter.isActive,
@@ -424,6 +441,13 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   Future<void> _handleNewTopo() async {
     if (_creating) return;
     if (ref.read(toposProvider).asData == null) return;
+
+    // Belt-and-braces, same shape as the two guards above: both buttons that
+    // reach this method are already disabled while the storage backend is
+    // known non-durable, so this only fires for a programmatic call — but a
+    // creation flow that writes into a store drift told us discards
+    // everything must be impossible, not merely hard to trigger.
+    if (ref.read(storageDurabilityProvider).isEphemeral) return;
 
     setState(() => _creating = true);
     try {

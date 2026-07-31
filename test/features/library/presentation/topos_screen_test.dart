@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/db/storage_durability_provider.dart';
 import 'package:masi/core/grades/grade_system.dart';
 import 'package:masi/core/location/location_service.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
@@ -120,9 +121,19 @@ void _setDms(
 /// schedule a genuine 2-second debounce `Timer` that outlives the test's
 /// short `_drain()` window, tripping flutter_test's
 /// "A Timer is still pending" teardown assertion.
+///
+/// [storageDurability] is the verdict the create-topo interlock sees (see
+/// `ToposScreen.build`'s `storage.isEphemeral` gate and
+/// `_StorageWarningBanner`). Defaults to `StorageDurability.probing()` — the
+/// "no verdict yet" state, which deliberately allows creation — so every
+/// pre-existing test in this file behaves exactly as it did before §1a. The
+/// override is unconditional so the REAL notifier (which would otherwise be
+/// fed by nothing, since `appDatabaseProvider` is overridden here) can never
+/// leak into a test.
 ProviderContainer _makeContainer({
   LocationService? locationService,
   SyncOrchestrator? syncOrchestrator,
+  StorageDurability storageDurability = const StorageDurability.probing(),
 }) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
@@ -133,6 +144,9 @@ ProviderContainer _makeContainer({
         locationServiceProvider.overrideWithValue(locationService),
       syncOrchestratorProvider.overrideWith(
         () => syncOrchestrator ?? _FakeSyncOrchestrator(),
+      ),
+      storageDurabilityProvider.overrideWith(
+        () => _FakeStorageDurability(storageDurability),
       ),
     ],
   );
@@ -177,6 +191,21 @@ class _FakeSyncOrchestrator extends SyncOrchestrator {
   Future<void> pullNow({bool throttled = false}) async {
     pullNowCallCount++;
   }
+}
+
+/// A [StorageDurabilityNotifier] double that just reports a fixed verdict —
+/// same shape as [_FakeSyncOrchestrator] above. Widget tests override
+/// `appDatabaseProvider` with an in-memory `NativeDatabase`, so the real
+/// notifier would never be fed by `openConnection()` at all and would sit at
+/// `StorageDurability.probing()` forever; this lets a test choose the verdict
+/// the create-topo interlock sees.
+class _FakeStorageDurability extends StorageDurabilityNotifier {
+  _FakeStorageDurability(this._verdict);
+
+  final StorageDurability _verdict;
+
+  @override
+  StorageDurability build() => _verdict;
 }
 
 /// Wraps [screen] in a real (minimal) [GoRouter] so `context.push` calls
@@ -539,6 +568,156 @@ void main() {
           find.byKey(const Key('topos-sync-error-empty')),
           findsNothing,
         );
+      },
+    );
+  });
+
+  group('§1a: storage-backend interlock (L1)', () {
+    testWidgets(
+      'an inMemory storage backend shows the topos-storage-warning banner '
+      'and disables BOTH create affordances',
+      (tester) async {
+        final container = _makeContainer(
+          storageDurability: const StorageDurability(
+            backend: StorageBackend.inMemory,
+            missingFeatures: {
+              StorageMissingFeature.sharedArrayBuffers,
+              StorageMissingFeature.indexedDb,
+            },
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('topos-storage-warning')),
+          findsOneWidget,
+          reason: 'an inMemory drift backend loses everything on reload — the '
+              'warning has to be on screen, not in a console nobody reads',
+        );
+        expect(
+          find.text("This browser can't save your topos"),
+          findsOneWidget,
+        );
+
+        expect(
+          tester
+              .widget<ElevatedButton>(find.byKey(const Key('topos-new-topo')))
+              .onPressed,
+          isNull,
+          reason: 'topos-new-topo must be disabled on a non-durable backend',
+        );
+        expect(
+          tester
+              .widget<ElevatedButton>(
+                find.byKey(const Key('topos-empty-new-topo')),
+              )
+              .onPressed,
+          isNull,
+          reason: "the empty state's inline button runs the SAME "
+              '_handleNewTopo flow and must be disabled too',
+        );
+      },
+    );
+
+    testWidgets(
+      'the banner names the backend and the missing browser features, so a '
+      'screenshot alone answers a "my data vanished" report',
+      (tester) async {
+        final container = _makeContainer(
+          storageDurability: const StorageDurability(
+            backend: StorageBackend.inMemory,
+            missingFeatures: {StorageMissingFeature.sharedArrayBuffers},
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        final detail = tester.widget<Text>(
+          find.byKey(const Key('topos-storage-warning-detail')),
+        );
+        expect(detail.data, contains('inMemory'));
+        expect(detail.data, contains('sharedArrayBuffers'));
+      },
+    );
+
+    testWidgets(
+      'a durable backend renders no banner and leaves creation enabled',
+      (tester) async {
+        final container = _makeContainer(
+          storageDurability: const StorageDurability(
+            backend: StorageBackend.opfsLocks,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topos-storage-warning')), findsNothing);
+        expect(
+          tester
+              .widget<ElevatedButton>(find.byKey(const Key('topos-new-topo')))
+              .onPressed,
+          isNotNull,
+        );
+      },
+    );
+
+    testWidgets(
+      'the still-probing default (web, the first few hundred ms of boot) is '
+      'NOT treated as non-durable — no banner, creation enabled',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topos-storage-warning')), findsNothing);
+        expect(
+          tester
+              .widget<ElevatedButton>(find.byKey(const Key('topos-new-topo')))
+              .onPressed,
+          isNotNull,
+        );
+      },
+    );
+
+    testWidgets(
+      'tapping the disabled create button on an inMemory backend creates '
+      'nothing — the photo picker is never even opened',
+      (tester) async {
+        var pickerOpened = 0;
+        final container = _makeContainer(
+          storageDurability: const StorageDurability(
+            backend: StorageBackend.inMemory,
+          ),
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async {
+                pickerOpened++;
+                return ImageSource.gallery;
+              },
+              photoPicker: (source) async => null,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+
+        expect(pickerOpened, 0);
+        final topos = await _dbWork(
+          tester,
+          () => container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(topos, isEmpty);
       },
     );
   });
