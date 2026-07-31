@@ -1,0 +1,818 @@
+{
+  "workstream": "§1f Photo integrity at full resolution (L3, S5, S6)",
+  "filesTouched": [
+    {
+      "path": "lib/features/topo/data/photo_write_exception.dart",
+      "action": "create",
+      "responsibility": "Platform-agnostic, import-free PhotoWriteFailure enum + PhotoWriteException (with userMessage) + string-based classifyPhotoWriteFailure. Must not import dart:io, dart:js_interop or package:idb_shim — the web backend throws it, the platform-agnostic repository propagates it, and two screens present it."
+    },
+    {
+      "path": "lib/features/topo/data/photo_files.dart",
+      "action": "modify",
+      "responsibility": "Add `export 'photo_write_exception.dart';` next to the existing `export 'photo_path_resolution.dart';` (line 9) so every PhotoFiles caller sees the exception type without a second import."
+    },
+    {
+      "path": "lib/features/topo/data/photo_files_web.dart",
+      "action": "modify",
+      "responsibility": "L3 fix: importPhoto (lines 25-43) and writePhotoBytes (49-64) stop swallowing the ORIGINAL's byte-write failure and throw a classified PhotoWriteException; thumbnail write stays best-effort, extracted into _writeThumbnailBestEffort."
+    },
+    {
+      "path": "lib/features/topo/data/photo_files_native.dart",
+      "action": "modify",
+      "responsibility": "Doc-comment only: state that the native backend never throws PhotoWriteException (its best-effort copy contract is deliberate and unchanged), so the shared callers' typed catch is dead code here. Zero behaviour change."
+    },
+    {
+      "path": "lib/features/library/data/library_crud_repository.dart",
+      "action": "modify",
+      "responsibility": "Doc-comment only on attachPhotoToWall (lines 571-573, which currently claims the copy is best-effort 'so the row is still created'): document that a PhotoWriteException from importPhoto now propagates and the insert transaction is never reached. No code change — the await at :592 already precedes the transaction at :601."
+    },
+    {
+      "path": "lib/features/topo/presentation/topo_canvas_photo_ops.dart",
+      "action": "modify",
+      "responsibility": "Add photoWriteFailureSnackBar(PhotoWriteException) and settleFailedPhotoAttach(...) — the shared, directly-testable user-facing half of the L3 fix, mirroring topo_canvas_gps.dart's gpsCaptureResultSnackBar. Adds package:flutter/material.dart, masi_icon.dart and photo_write_exception.dart imports."
+    },
+    {
+      "path": "lib/features/topo/presentation/topo_canvas_screen.dart",
+      "action": "modify",
+      "responsibility": "_attachPhotoAndLoad (615-698): insert an `on PhotoWriteException` clause before the catch-all at :682 that clears the optimistically-selected path, settles the switch generation and shows the SnackBar. Adds the photo_write_exception.dart import."
+    },
+    {
+      "path": "lib/features/library/presentation/topos_screen.dart",
+      "action": "modify",
+      "responsibility": "_handleNewTopo (424-515): wrap attachPhotoToWall (:480) in a typed catch that soft-deletes the wall createTopo already committed (:479), shows the SnackBar and aborts before GPS capture/navigation. Extends the show-list import at :22-23 and adds photo_write_exception.dart."
+    },
+    {
+      "path": "lib/features/backup/data/storage_pagination.dart",
+      "action": "create",
+      "responsibility": "kStoragePageSize + collectPagedObjects<T>() — the Supabase-type-free paging loop for Storage object listings, unit-testable with no SupabaseClient fake."
+    },
+    {
+      "path": "lib/features/backup/data/sync_remote.dart",
+      "action": "modify",
+      "responsibility": "S6: listPhotoObjectPaths (637-640) and listSharedPhotoObjectPaths (667-670) page through a new _listAllObjects(prefix) helper using SearchOptions(limit:, offset:) instead of one un-paged list(path:)."
+    },
+    {
+      "path": "lib/features/backup/data/backup_remote.dart",
+      "action": "modify",
+      "responsibility": "Same S6 fix for the duplicated listing at 158-161, removing the divergence the spec flags between CloudBackupService's photo logic and SyncService's."
+    },
+    {
+      "path": "lib/features/backup/data/sync_service.dart",
+      "action": "modify",
+      "responsibility": "PushSyncResult gains photosFailed/photosMissingLocalBytes/photoErrors; _uploadOwnPhotos (364-415) returns a PhotoUploadOutcome record counting failures instead of silently continuing (:404); pushOwn reorders bytes-before-metadata (moves :340-341 above the tablesToRows map at :288) and withholds the photo rows whose bytes did not land."
+    },
+    {
+      "path": "test/features/topo/data/photo_write_exception_test.dart",
+      "action": "create",
+      "responsibility": "Classifier + userMessage contract, on the plain Dart VM (quota shapes fed as DatabaseError strings)."
+    },
+    {
+      "path": "test/features/topo/data/photo_files_web_test.dart",
+      "action": "create",
+      "responsibility": "Drives the WEB PhotoFiles backend directly on the VM (verified importable) with a failing PhotoByteStore: importPhoto throws, nothing is written, thumbnail failures still swallowed, happy path unchanged."
+    },
+    {
+      "path": "test/features/topo/data/photo_byte_store_test.dart",
+      "action": "modify",
+      "responsibility": "Add a real-IdbPhotoByteStore-over-newIdbFactoryMemory() case proving writeBytes surfaces its store error (the failure importPhoto must now propagate) rather than resolving silently."
+    },
+    {
+      "path": "test/features/library/data/photo_ownership_test.dart",
+      "action": "modify",
+      "responsibility": "L3 group: attachPhotoToWall rethrows PhotoWriteException and leaves the photos table EMPTY. Adds a file-private _QuotaFailingPhotoFiles subclass."
+    },
+    {
+      "path": "test/features/topo/presentation/photo_write_failure_snackbar_test.dart",
+      "action": "create",
+      "responsibility": "Widget test that the quota and unknown variants render distinguishable, user-presentable copy in a real SnackBar."
+    },
+    {
+      "path": "test/features/topo/application/topo_canvas_wall_binding_test.dart",
+      "action": "modify",
+      "responsibility": "Container-level test that settleFailedPhotoAttach clears selectedImageProvider and drops isSwitchingPhoto back to false — the canvas failure path no widget test can reach (TopoCanvasScreen._pickImage has no injectable picker seam)."
+    },
+    {
+      "path": "test/features/library/presentation/topos_screen_test.dart",
+      "action": "modify",
+      "responsibility": "_makeContainer gains a photoFiles override; new test that the New topo flow reports the failure, leaves NO topo behind and does not navigate."
+    },
+    {
+      "path": "test/features/backup/data/storage_pagination_test.dart",
+      "action": "create",
+      "responsibility": "The paging loop itself: 150 items across two pages with offsets 0/100, exact-page-boundary, empty prefix, injectable pageSize, non-positive pageSize rejected."
+    },
+    {
+      "path": "test/features/backup/data/sync_service_test.dart",
+      "action": "modify",
+      "responsibility": "FakeSyncRemote gains a faithful truncating _listPage + collectPagedObjects-backed listings + listPageRequests + an ordered callLog; new FailingUploadSyncRemote; tests for bytes-before-metadata ordering, row withholding + heal-on-retry, missing-local-bytes reporting, and the 150-object zero-re-upload skip-set."
+    }
+  ],
+  "interfaces": {
+    "produces": [
+      "enum PhotoWriteFailure { quotaExceeded, unknown } — lib/features/topo/data/photo_write_exception.dart",
+      "class PhotoWriteException implements Exception { const PhotoWriteException({required PhotoWriteFailure failure, required String key, Object? cause}); final PhotoWriteFailure failure; final String key; final Object? cause; String get userMessage; }",
+      "PhotoWriteFailure classifyPhotoWriteFailure(Object error)",
+      "Future<String> PhotoFiles.importPhoto(XFile xfile, String photoId) — web branch now THROWS PhotoWriteException on original-byte-write failure (signature unchanged)",
+      "Future<String> PhotoFiles.writePhotoBytes(String photoId, String ext, List<int> bytes) — web branch now THROWS PhotoWriteException (signature unchanged)",
+      "SnackBar photoWriteFailureSnackBar(PhotoWriteException error) — lib/features/topo/presentation/topo_canvas_photo_ops.dart (re-exported by topo_canvas_screen.dart)",
+      "SnackBar settleFailedPhotoAttach(SelectedImageNotifier selectedImage, DrawController drawController, int generation, PhotoWriteException error)",
+      "const int kStoragePageSize = 100 — lib/features/backup/data/storage_pagination.dart",
+      "Future<List<T>> collectPagedObjects<T>(Future<List<T>> Function(int limit, int offset) fetchPage, {int pageSize = kStoragePageSize})",
+      "typedef PhotoUploadOutcome = ({int uploaded, int failed, int missingLocalBytes, Set<String> failedCanonicalIds, List<String> errors}) — lib/features/backup/data/sync_service.dart",
+      "const PushSyncResult.pushed({required int rowsPushed, required int photosUploaded, int photosFailed = 0, int photosMissingLocalBytes = 0, List<String> photoErrors = const []})",
+      "final int PushSyncResult.photosFailed — retryable byte-upload failures; the rows were WITHHELD from the metadata push. §1e keys its retry off this being > 0.",
+      "final int PushSyncResult.photosMissingLocalBytes — non-retryable (no local bytes exist); the rows WERE pushed. §1e must NOT retry on this alone or the backoff loop never terminates.",
+      "final List<String> PushSyncResult.photoErrors — one human-readable message per photo in either bucket",
+      "bool get PushSyncResult.hasPhotoFailures => photosFailed > 0"
+    ],
+    "consumes": [
+      "PhotoByteStore (abstract: writeBytes/readBytes/delete/exists) — lib/features/topo/data/photo_byte_store.dart:26-38",
+      "IdbPhotoByteStore({idb.IdbFactory? factory}) — photo_byte_store.dart:56-58",
+      "String thumbKeyFor(String storedOriginal) — lib/features/topo/data/photo_path_resolution.dart:36-39",
+      "Future<Uint8List> generateThumbnail(Uint8List src, {int maxEdge, int quality}) — lib/features/topo/data/image_ops/image_ops.dart:11-13 (resolves to image_ops_native.dart on the Dart VM, image_ops_web.dart on web)",
+      "Future<String> LibraryCrudRepository.attachPhotoToWall(String wallId, XFile xfile, int width, int height) — library_crud_repository.dart:584-622 (importPhoto awaited at :592, INSERT transaction at :601-620)",
+      "Future<void> LibraryCrudRepository.softDeleteWall(String id) — library_crud_repository.dart:389-398",
+      "final photoFilesProvider = Provider<PhotoFiles> — lib/core/db/database_provider.dart:47",
+      "SelectedImageNotifier.clear() / .select(String) + selectedImageProvider — lib/features/topo/presentation/topo_canvas_photo_ops.dart:8-18",
+      "int DrawController.beginPhotoSwitch() — lib/features/topo/application/draw_controller.dart:923",
+      "void DrawController.cancelPhotoSwitch(int generation) — draw_controller.dart:989",
+      "bool DrawState.isSwitchingPhoto / int DrawState.switchGeneration — draw_controller.dart:149, :165",
+      "SnackBar gpsCaptureResultSnackBar(GpsCaptureResult) — lib/features/topo/presentation/topo_canvas_gps.dart:135-149 (the shape photoWriteFailureSnackBar mirrors)",
+      "MasiIcon(String name, {double? size, Color? color, bool tinted}) — lib/shared/presentation/masi_icon.dart:21 (assets/icons/masi/masi_warning.svg exists)",
+      "Future<List<FileObject>> StorageFileApi.list({String? path, SearchOptions searchOptions = const SearchOptions()}) — storage_client-2.6.0/lib/src/storage_file_api.dart:594-596",
+      "SearchOptions({int? limit = 100, int? offset = 0, SortBy? sortBy = const SortBy(), String? search}) — storage_client-2.6.0/lib/src/types.dart:204-222; SearchOptions + FileObject are both re-exported by package:supabase_flutter/supabase_flutter.dart",
+      "List<Map<String, dynamic>> filterValidSyncRows(Iterable rows, List<String> requiredFields, {required String debugLabel}) — sync_remote.dart:317-334",
+      "const Map<String, List<String>> syncRequiredFields — sync_remote.dart:289-310",
+      "String sharedPhotoPath(String photoId, String ext) — sync_remote.dart:220",
+      "String SyncService._canonicalPhotoId(db.Photo photo) — sync_service.dart:663",
+      "FakeSyncRemote / FakeConnectivityService / FakeAuthRepository / makeContainer(...) / writeFile(...) / seedWallHierarchy(...) — test/features/backup/data/sync_service_test.dart:23-260, :276-307, :333-436",
+      "_makeContainer / _wrap / _drain / _drainNoSettle / _acceptTopoNameDialog / _dbWork / _tinyPngBytes — test/features/library/presentation/topos_screen_test.dart:37, :123-142, :194-239, :246-312",
+      "seedWall() / writeSource() / photosDirPath() / docsDir seam — test/features/library/data/photo_ownership_test.dart:38-66",
+      "makeContainer() + const _testWallId — test/features/topo/application/topo_canvas_wall_binding_test.dart:34-51",
+      "class DatabaseError extends Error { DatabaseError(String message); String toString() => message; } — package:idb_shim/idb.dart (public; DatabaseErrorNative.toString() is '<DOMException.name>: <message>')"
+    ]
+  },
+  "conventions": "Riverpod v3 only: `Notifier`/`NotifierProvider` (see `SelectedImageNotifier` at topo_canvas_photo_ops.dart:8-18 and `SyncOrchestrator extends Notifier<SyncOrchestratorState>`); never `StateProvider`. — Platform splits are conditional EXPORT facades, never `kIsWeb`: `lib/features/topo/data/photo_files.dart:10-12` is `export 'photo_files_stub.dart' if (dart.library.io) 'photo_files_native.dart' if (dart.library.js_interop) 'photo_files_web.dart';`, with `export 'photo_path_resolution.dart';` on line 9 for the shared, platform-agnostic types. New shared types go in their own import-free file and get exported from the facade — that is exactly how `photo_path_resolution.dart` and `PhotoPathResolution`/`thumbKeyFor` are structured, and `photo_write_exception.dart` must copy it. — The analyzer resolves a facade to its UNCONDITIONAL (stub) branch while the compiler picks the platform branch, so every variant must stay signature-compatible; `photo_files_stub.dart:22-23` documents this at length (`PhotoFiles({Object? docsDir, Object? byteStore})` is a permissive superset). A test subclass of `PhotoFiles` must therefore use a no-arg implicit constructor and override only `importPhoto`. — Grep gate: `grep -r \"dart:io\" lib --include=\"*.dart\" | grep -v _native.dart` must stay empty (`tool/build_web.sh:41`); `photo_write_exception.dart` and `storage_pagination.dart` must have ZERO platform imports, which is also why the quota classifier is string-based rather than type-based against `DatabaseError`/`FileSystemException`. — Doc comments are long, name the bug they fix and the regression they prevent (see `sync_service.dart:277-287`, `photo_files_native.dart:66-89`, `topo_canvas_screen.dart:593-614`). Match that density; every new branch gets a \"why\", and reference the spec's L/S ids (L3, S5, S6) and decision ids (D-5) the way existing comments reference \"#17\", \"#72 P0 fix\", \"FIX #4\". — Icons: `MasiIcon('warning', size: 18)`, never `Icons.X`/`CupertinoIcons.X`; the snackbar mirrors `gpsCaptureResultSnackBar`'s exact body (`Row(mainAxisSize: MainAxisSize.min, children: [MasiIcon(...), const SizedBox(width: 8), Flexible(child: Text(...))])`, topo_canvas_gps.dart:135-149). — Records via `typedef X = ({...})` is established (`typedef PhotoGps = ({double latitude, double longitude})` core/location/photo_gps.dart:7; `typedef RouteEntry` community_topo_detail_providers.dart:25). — Test doubles are hand-written classes named `Fake*` in `test/features/backup/data/sync_service_test.dart` and `_Fake*`/`_Throwing*` when file-private; duplicating a file-private double across test files is accepted and documented (topos_screen_test.dart:158-160). Extend `FakeSyncRemote` by subclassing, as `ThrowingFetchSharedToposRemote` (sync_service_test.dart:267-272) already does. — Widget tests must never drive a real image-codec decode under the fake clock; use `_drain`/`_drainNoSettle`/`tester.runAsync` (topos_screen_test.dart:246-274) and never `pumpAndSettle` when asserting on a live SnackBar (that helper's own doc, :256-266, explains why). — Every test command is `export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test <path>`; PATH does not persist between shell calls.",
+  "tasks": [
+    {
+      "title": "T1 — PhotoWriteException: a distinguishable, user-presentable local byte-write failure",
+      "files": {
+        "create": [
+          "lib/features/topo/data/photo_write_exception.dart",
+          "test/features/topo/data/photo_write_exception_test.dart"
+        ],
+        "modify": [
+          "lib/features/topo/data/photo_files.dart:9"
+        ],
+        "test": [
+          "test/features/topo/data/photo_write_exception_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Write the failing test file. It feeds the classifier the exact shapes idb_shim produces for a browser quota failure, using the public `DatabaseError` (whose `toString()` is the bare message) so no browser is needed.",
+          "code": "// test/features/topo/data/photo_write_exception_test.dart\n// Pure, dependency-free classification + user-message contract for the L3\n// fix. Runs on the plain Dart VM: classifyPhotoWriteFailure is deliberately\n// string-based (see its doc) precisely so the BROWSER quota shape is testable\n// without a browser test runner.\nimport 'package:flutter_test/flutter_test.dart';\nimport 'package:idb_shim/idb.dart' show DatabaseError;\nimport 'package:masi/features/topo/data/photo_write_exception.dart';\n\nvoid main() {\n  group('classifyPhotoWriteFailure', () {\n    test('a Blink/WebKit DOMException name is quotaExceeded', () {\n      // The exact shape idb_shim's DatabaseErrorNative.toString() produces:\n      // '<DOMException.name>: <DOMException.message>'.\n      expect(\n        classifyPhotoWriteFailure(\n          DatabaseError('QuotaExceededError: The quota has been exceeded.'),\n        ),\n        PhotoWriteFailure.quotaExceeded,\n      );\n    });\n\n    test('legacy Gecko NS_ERROR_DOM_QUOTA_REACHED is quotaExceeded', () {\n      expect(\n        classifyPhotoWriteFailure(\n          DatabaseError('NS_ERROR_DOM_QUOTA_REACHED: persistent storage full'),\n        ),\n        PhotoWriteFailure.quotaExceeded,\n      );\n    });\n\n    test('matching is case-insensitive', () {\n      expect(\n        classifyPhotoWriteFailure(Exception('quotaexceedederror')),\n        PhotoWriteFailure.quotaExceeded,\n      );\n    });\n\n    test('any other store error is unknown', () {\n      expect(\n        classifyPhotoWriteFailure(\n          DatabaseError('InvalidStateError: database is closed'),\n        ),\n        PhotoWriteFailure.unknown,\n      );\n    });\n  });\n\n  group('PhotoWriteException', () {\n    test('quotaExceeded userMessage names running out of space, in plain '\n        'words, without leaking the raw exception name', () {\n      const e = PhotoWriteException(\n        failure: PhotoWriteFailure.quotaExceeded,\n        key: 'photos/abc.jpg',\n      );\n      expect(e.userMessage, contains('Out of storage space'));\n      expect(e.userMessage, isNot(contains('QuotaExceededError')));\n    });\n\n    test('unknown userMessage is a plain retry prompt', () {\n      const e = PhotoWriteException(\n        failure: PhotoWriteFailure.unknown,\n        key: 'photos/abc.jpg',\n      );\n      expect(e.userMessage, contains('could not be saved'));\n    });\n\n    test('the two userMessages are distinguishable from each other', () {\n      const quota = PhotoWriteException(\n        failure: PhotoWriteFailure.quotaExceeded,\n        key: 'photos/abc.jpg',\n      );\n      const unknown = PhotoWriteException(\n        failure: PhotoWriteFailure.unknown,\n        key: 'photos/abc.jpg',\n      );\n      expect(quota.userMessage, isNot(unknown.userMessage));\n    });\n\n    test('toString carries the failure kind, the key and the cause', () {\n      final e = PhotoWriteException(\n        failure: PhotoWriteFailure.quotaExceeded,\n        key: 'photos/abc.jpg',\n        cause: DatabaseError('QuotaExceededError'),\n      );\n      expect(e.toString(), contains('quotaExceeded'));\n      expect(e.toString(), contains('photos/abc.jpg'));\n      expect(e.toString(), contains('QuotaExceededError'));\n    });\n  });\n}\n"
+        },
+        {
+          "action": "Run it and see it fail to compile (the target library does not exist yet).",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/topo/data/photo_write_exception_test.dart",
+          "expected": "Compile error: Error: Couldn't resolve the package 'masi' ... photo_write_exception.dart — i.e. RED for the right reason (missing implementation, not a bad test)."
+        },
+        {
+          "action": "Create the implementation file. Zero imports — this is load-bearing (see the library doc).",
+          "code": "// lib/features/topo/data/photo_write_exception.dart\n/// Why a photo's BYTES could not be persisted locally, and the plain words to\n/// tell the user about it.\n///\n/// Deliberately IMPORT-FREE and platform-agnostic. Three unrelated layers need\n/// this type: the web `PhotoFiles` backend that throws it\n/// (`photo_files_web.dart`), the platform-agnostic repository whose INSERT it\n/// aborts (`LibraryCrudRepository.attachPhotoToWall`), and the two screens that\n/// present it (`topos_screen.dart`'s `_handleNewTopo`,\n/// `topo_canvas_screen.dart`'s `_attachPhotoAndLoad`). So it must be importable\n/// from a file that touches NEITHER `dart:io` (the web grep gate —\n/// `grep -r \"dart:io\" lib --include=\"*.dart\" | grep -v _native.dart` must stay\n/// empty, `tool/build_web.sh:41`) NOR `dart:js_interop`/`package:idb_shim`\n/// (which would newly drag the browser byte store into the iOS/Android builds).\n/// Hence no imports at all, and a STRING-based classifier — see\n/// [classifyPhotoWriteFailure].\n///\n/// Structured exactly like this feature's other shared, platform-agnostic type\n/// file (`photo_path_resolution.dart`), and re-exported from the\n/// `photo_files.dart` facade the same way.\nlibrary;\n\n/// The kind of local byte-write failure a [PhotoWriteException] reports.\nenum PhotoWriteFailure {\n  /// The browser (or the device) refused the write because the origin is out of\n  /// room. On web this is IndexedDB rejecting the request/transaction with a\n  /// `DOMException` named `QuotaExceededError`.\n  ///\n  /// This is the REALISTIC trigger in ordinary use, not an edge case: photo\n  /// originals are deliberately kept at FULL resolution (decision D-5 — quota\n  /// is handled by failing loudly, never by shrinking the user's photo), and\n  /// only the 512px/q80 thumbnail is downscaled.\n  quotaExceeded,\n\n  /// Anything else: the store could not be opened, a version-change upgrade is\n  /// blocked, private-browsing storage restrictions, an aborted transaction, or\n  /// a failed read of the picked source.\n  unknown,\n}\n\n/// Thrown when a photo's BYTES could not be persisted locally.\n///\n/// L3 fix (silent data loss): `PhotoFiles.importPhoto` on web used to swallow\n/// this and return the logical key anyway, so\n/// `LibraryCrudRepository.attachPhotoToWall` went on to insert a `Photos` row\n/// whose `localPath` pointed at bytes that were never written — a topo whose\n/// photo is permanently a placeholder, with nothing anywhere reporting why.\n///\n/// `attachPhotoToWall` awaits `importPhoto` BEFORE opening its insert\n/// transaction, so this exception reaching a caller GUARANTEES no `Photos` row\n/// was created and there is nothing to clean up on the photo side.\nclass PhotoWriteException implements Exception {\n  const PhotoWriteException({\n    required this.failure,\n    required this.key,\n    this.cause,\n  });\n\n  /// What went wrong, classified for presentation.\n  final PhotoWriteFailure failure;\n\n  /// The logical store key the write was attempted under (e.g.\n  /// `photos/<photoId>.jpg`) — diagnostics only, never shown to the user.\n  final String key;\n\n  /// The underlying error, kept for logging only. Callers must present\n  /// [userMessage], never this.\n  final Object? cause;\n\n  /// A short, complete sentence safe to render straight into a `SnackBar`.\n  /// Deliberately free of any exception name or store key — the user gets an\n  /// actionable sentence, the log gets [toString].\n  String get userMessage => switch (failure) {\n    PhotoWriteFailure.quotaExceeded =>\n      'Out of storage space — this photo was not saved. Free up space on this '\n          'device and try again.',\n    PhotoWriteFailure.unknown =>\n      'This photo could not be saved on this device. Please try again.',\n  };\n\n  @override\n  String toString() =>\n      'PhotoWriteException(${failure.name}, key: $key, cause: $cause)';\n}\n\n/// Classifies a raw byte-store error into a [PhotoWriteFailure].\n///\n/// STRING-based rather than type-based, for two reasons:\n///  1. This file may not import `package:idb_shim` or `dart:io` (see the\n///     library doc), so `DatabaseError`/`FileSystemException` are unavailable\n///     here by construction.\n///  2. The browser exception shape is not stable across engines OR across\n///     Dart's two web compilers. IndexedDB signals an exhausted origin quota\n///     with a `DOMException` whose `name` is `QuotaExceededError`\n///     (`code == 22`); older Gecko used `NS_ERROR_DOM_QUOTA_REACHED`.\n///     `idb_shim`'s wasm-clean native backend rethrows that as its own\n///     `DatabaseErrorNative`, whose `toString()` is `'<name>: <message>'`\n///     (`idb_shim/lib/src/native_web/native_error.dart`) — e.g.\n///     `'QuotaExceededError: The quota has been exceeded.'` — while under\n///     dart2wasm the SAME failure can instead arrive as a plain `DatabaseError`\n///     carrying the stringified JS error (that file's `_handleError` has an\n///     explicit \"Happens on wasm, very unfortunate\" branch for it). Every one\n///     of those forms carries the marker text, so matching text covers them all\n///     with no interop — and keeps the whole thing unit-testable on the plain\n///     Dart VM.\nPhotoWriteFailure classifyPhotoWriteFailure(Object error) {\n  final text = error.toString().toLowerCase();\n  for (final marker in _quotaMarkers) {\n    if (text.contains(marker)) return PhotoWriteFailure.quotaExceeded;\n  }\n  return PhotoWriteFailure.unknown;\n}\n\n/// Lower-cased substrings that identify an out-of-room failure across engines:\n/// Blink/WebKit's `QuotaExceededError`, legacy Gecko's\n/// `NS_ERROR_DOM_QUOTA_REACHED`, the DOMException default messages, and POSIX\n/// `ENOSPC` (so the same classifier stays correct if a native backend ever\n/// calls it).\nconst List<String> _quotaMarkers = [\n  'quotaexceedederror',\n  'ns_error_dom_quota_reached',\n  'quota has been exceeded',\n  'quota exceeded',\n  'no space left on device',\n];\n"
+        },
+        {
+          "action": "Re-export the new types from the PhotoFiles facade so every existing PhotoFiles caller (including `library_crud_repository.dart`, which already imports it) sees them with no extra import.",
+          "code": "// lib/features/topo/data/photo_files.dart — replace line 9\n// OLD:\n// export 'photo_path_resolution.dart';\n// NEW:\nexport 'photo_path_resolution.dart';\n// L3 fix: the failure type `importPhoto`/`writePhotoBytes` now propagate.\n// Platform-agnostic (no imports at all — see that file's library doc), so it\n// sits alongside `photo_path_resolution.dart` on the unconditional side of\n// this facade rather than inside any one backend.\nexport 'photo_write_exception.dart';"
+        },
+        {
+          "action": "Run the test and see it pass.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/topo/data/photo_write_exception_test.dart",
+          "expected": "+8: All tests passed!"
+        },
+        {
+          "action": "Confirm the new file added no platform imports and the grep gate is still clean.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && grep -c \"^import\" lib/features/topo/data/photo_write_exception.dart; grep -r \"dart:io\" lib --include=\"*.dart\" | grep -v _native.dart | wc -l; flutter analyze",
+          "expected": "grep -c prints 0 (no imports); the dart:io grep prints 0; analyze reports 'No issues found!'"
+        }
+      ],
+      "assertions": [
+        "`flutter test test/features/topo/data/photo_write_exception_test.dart` is green with 8 tests.",
+        "`grep -c \"^import\" lib/features/topo/data/photo_write_exception.dart` is 0 — the file has no imports, so neither the iOS build nor the web grep gate is affected.",
+        "`grep -r \"dart:io\" lib --include=\"*.dart\" | grep -v _native.dart` is still empty.",
+        "`classifyPhotoWriteFailure(DatabaseError('QuotaExceededError: The quota has been exceeded.'))` returns `PhotoWriteFailure.quotaExceeded`, and `classifyPhotoWriteFailure(DatabaseError('InvalidStateError: database is closed'))` returns `PhotoWriteFailure.unknown`.",
+        "`PhotoWriteException(failure: quotaExceeded, ...).userMessage != PhotoWriteException(failure: unknown, ...).userMessage`, and neither contains the substring 'QuotaExceededError'.",
+        "`lib/features/topo/data/photo_files.dart` exports `photo_write_exception.dart`, so `library_crud_repository.dart` resolves `PhotoWriteException` with no new import.",
+        "`flutter analyze` = 0 issues."
+      ],
+      "commitMessage": "feat(photos): add PhotoWriteException + quota classifier for local byte-write failures"
+    },
+    {
+      "title": "T2 — web importPhoto/writePhotoBytes PROPAGATE the byte-write failure (L3)",
+      "files": {
+        "create": [
+          "test/features/topo/data/photo_files_web_test.dart"
+        ],
+        "modify": [
+          "lib/features/topo/data/photo_files_web.dart:1-64",
+          "lib/features/topo/data/photo_files_native.dart:66-90",
+          "test/features/topo/data/photo_byte_store_test.dart:1-77"
+        ],
+        "test": [
+          "test/features/topo/data/photo_files_web_test.dart",
+          "test/features/topo/data/photo_byte_store_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Write the new web-backend test file. VERIFIED FACT (probed in this session): `photo_files_web.dart` imports and RUNS on the plain Dart VM — its only platform-specific dependency is the `image_ops/image_ops.dart` conditional export, which resolves to the pure-Dart `image_ops_native.dart` under `dart.library.io`, and `photo_byte_store.dart` never evaluates its `idbFactoryWeb` default when a store is injected. Import the BRANCH file directly, not the facade (the facade would resolve to the native backend on the VM).",
+          "code": "// test/features/topo/data/photo_files_web_test.dart\n// Exercises the WEB `PhotoFiles` backend directly, on the plain Dart VM.\n//\n// `photo_files_web.dart` is VM-importable even though it is the web branch of\n// the `photo_files.dart` conditional-export facade: its only\n// platform-specific dependency is `image_ops/image_ops.dart`, itself a\n// conditional export that resolves to the pure-Dart `image_ops_native.dart`\n// here, plus `photo_byte_store.dart` (already VM-tested in\n// `photo_byte_store_test.dart` — its `idb.idbFactoryWeb` default is only ever\n// evaluated when no factory is supplied). Importing the BRANCH file directly\n// rather than the facade — which the VM would resolve to the NATIVE backend —\n// is what makes the L3 fix testable with no browser test runner.\nimport 'dart:typed_data';\n\nimport 'package:flutter_test/flutter_test.dart';\nimport 'package:idb_shim/idb.dart' show DatabaseError;\nimport 'package:idb_shim/idb_client_memory.dart';\nimport 'package:image_picker/image_picker.dart';\nimport 'package:masi/features/topo/data/photo_byte_store.dart';\nimport 'package:masi/features/topo/data/photo_files_web.dart';\nimport 'package:masi/features/topo/data/photo_write_exception.dart';\n\n/// [PhotoByteStore] whose writes under [failPrefix] always throw [error], while\n/// every other operation behaves like a plain in-memory map.\n///\n/// The prefix seam is what lets a test separate the two write sites\n/// `importPhoto` performs: the ORIGINAL (`photos/…`, which must now FAIL the\n/// call) and the THUMBNAIL (`thumbs/…`, which must still be swallowed).\nclass _FailingWriteStore implements PhotoByteStore {\n  _FailingWriteStore(this.error, {this.failPrefix = 'photos/'});\n\n  final Object error;\n  final String failPrefix;\n  final Map<String, Uint8List> written = {};\n\n  @override\n  Future<void> writeBytes(String key, Uint8List bytes) async {\n    if (key.startsWith(failPrefix)) throw error;\n    written[key] = bytes;\n  }\n\n  @override\n  Future<Uint8List?> readBytes(String key) async => written[key];\n\n  @override\n  Future<void> delete(String key) async {\n    written.remove(key);\n  }\n\n  @override\n  Future<bool> exists(String key) async => written.containsKey(key);\n}\n\n/// A picked photo whose bytes live in memory — `XFile.fromData` short-circuits\n/// `readAsBytes()` to exactly these bytes (no filesystem), and its `name` is\n/// the basename of `path`, which is what `importPhoto` reads the extension\n/// from.\nXFile _pickedJpeg([List<int> bytes = const [1, 2, 3, 4]]) =>\n    XFile.fromData(Uint8List.fromList(bytes), path: '/picked/wall.jpg');\n\nvoid main() {\n  group('importPhoto propagates a byte-write failure (L3)', () {\n    test('a QuotaExceededError-shaped failure throws a PhotoWriteException '\n        'classified as quotaExceeded, and nothing is left in the store',\n        () async {\n      final store = _FailingWriteStore(\n        DatabaseError('QuotaExceededError: The quota has been exceeded.'),\n      );\n      final files = PhotoFiles(byteStore: store);\n\n      await expectLater(\n        files.importPhoto(_pickedJpeg(), 'abc123'),\n        throwsA(\n          isA<PhotoWriteException>()\n              .having(\n                (e) => e.failure,\n                'failure',\n                PhotoWriteFailure.quotaExceeded,\n              )\n              .having((e) => e.key, 'key', 'photos/abc123.jpg'),\n        ),\n      );\n      expect(store.written, isEmpty);\n    });\n\n    test('any other store failure throws a PhotoWriteException classified as '\n        'unknown', () async {\n      final files = PhotoFiles(\n        byteStore: _FailingWriteStore(\n          DatabaseError('InvalidStateError: database is closed'),\n        ),\n      );\n\n      await expectLater(\n        files.importPhoto(_pickedJpeg(), 'abc123'),\n        throwsA(\n          isA<PhotoWriteException>()\n              .having((e) => e.failure, 'failure', PhotoWriteFailure.unknown),\n        ),\n      );\n    });\n\n    test('a THUMBNAIL write failure is still swallowed — the original landed, '\n        'so importPhoto succeeds and returns the key', () async {\n      final store = _FailingWriteStore(\n        DatabaseError('QuotaExceededError'),\n        failPrefix: 'thumbs/',\n      );\n      final files = PhotoFiles(byteStore: store);\n\n      final key = await files.importPhoto(_pickedJpeg(), 'abc123');\n\n      expect(key, 'photos/abc123.jpg');\n      expect(store.written.keys, ['photos/abc123.jpg']);\n    });\n\n    test('the happy path is unchanged: original AND thumbnail both stored '\n        'under their logical keys', () async {\n      final store = IdbPhotoByteStore(factory: newIdbFactoryMemory());\n      final files = PhotoFiles(byteStore: store);\n\n      final key = await files.importPhoto(_pickedJpeg(), 'abc123');\n\n      expect(key, 'photos/abc123.jpg');\n      expect(\n        await store.readBytes('photos/abc123.jpg'),\n        Uint8List.fromList([1, 2, 3, 4]),\n      );\n      // 4 undecodable bytes: generateThumbnail returns the SOURCE unchanged\n      // rather than throwing (image_ops_native.dart:19-34), so a thumbnail\n      // record still exists.\n      expect(await store.exists('thumbs/abc123.jpg'), isTrue);\n    });\n\n    test('an extensionless picked file still lands under .jpg', () async {\n      final store = IdbPhotoByteStore(factory: newIdbFactoryMemory());\n      final files = PhotoFiles(byteStore: store);\n\n      final key = await files.importPhoto(\n        XFile.fromData(Uint8List.fromList([9]), path: '/picked/noext'),\n        'abc123',\n      );\n\n      expect(key, 'photos/abc123.jpg');\n    });\n  });\n\n  group('writePhotoBytes propagates a byte-write failure (cloud restore)', () {\n    test('throws a classified PhotoWriteException instead of an opaque store '\n        'error', () async {\n      final files = PhotoFiles(\n        byteStore: _FailingWriteStore(\n          DatabaseError('QuotaExceededError: The quota has been exceeded.'),\n        ),\n      );\n\n      await expectLater(\n        files.writePhotoBytes('abc123', '.jpg', const [1, 2, 3]),\n        throwsA(\n          isA<PhotoWriteException>().having(\n            (e) => e.failure,\n            'failure',\n            PhotoWriteFailure.quotaExceeded,\n          ),\n        ),\n      );\n    });\n\n    test('the happy path still returns the key and writes the thumbnail',\n        () async {\n      final store = IdbPhotoByteStore(factory: newIdbFactoryMemory());\n      final files = PhotoFiles(byteStore: store);\n\n      final key = await files.writePhotoBytes('abc123', '.jpg', const [1, 2]);\n\n      expect(key, 'photos/abc123.jpg');\n      expect(await store.exists('thumbs/abc123.jpg'), isTrue);\n    });\n  });\n}\n"
+        },
+        {
+          "action": "Run it and watch the three failure-path tests fail (importPhoto currently returns the key instead of throwing).",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/topo/data/photo_files_web_test.dart",
+          "expected": "RED: the two importPhoto failure tests report 'Expected: throws PhotoWriteException / Actual: <Future> which: returned photos/abc123.jpg', and the writePhotoBytes failure test reports a raw DatabaseError instead of a PhotoWriteException. The three happy-path/thumbnail tests pass."
+        },
+        {
+          "action": "Replace `importPhoto` (currently lines 21-43) in `lib/features/topo/data/photo_files_web.dart` with the propagating version plus an extracted best-effort thumbnail helper. Keep the whole body in ONE try so there is no final-declared-then-assigned definite-assignment question.",
+          "code": "  /// Writes [xfile]'s bytes under `photos/<photoId><ext>` and derives + stores\n  /// a downscaled thumbnail under `thumbs/<photoId>.jpg`.\n  ///\n  /// L3 fix (silent data loss): the ORIGINAL's byte write is NO LONGER\n  /// best-effort. It used to sit inside a `catch (_) { return key; }`, so a\n  /// browser that refused the write still handed back a key that\n  /// `LibraryCrudRepository.attachPhotoToWall` then persisted as a `Photos`\n  /// row's `localPath` — a pixel-less row, i.e. a topo whose photo is\n  /// permanently a placeholder, with nothing anywhere reporting why. Quota\n  /// exhaustion is the realistic trigger and it is reachable in ORDINARY use\n  /// because originals are never downscaled (decision D-5): `pickPhotoFrom`\n  /// passes no `imageQuality`/`maxWidth` and this backend stores\n  /// `readAsBytes()` verbatim; only the 512px/q80 thumbnail is shrunk.\n  ///\n  /// Any failure now throws a [PhotoWriteException], classified via\n  /// [classifyPhotoWriteFailure] so a quota exhaustion is distinguishable and\n  /// user-presentable. `attachPhotoToWall` awaits this call BEFORE opening its\n  /// insert transaction, so a throw here means no row is ever written and\n  /// there is nothing to clean up.\n  ///\n  /// The THUMBNAIL write stays best-effort (see\n  /// [_writeThumbnailBestEffort]) — mirroring the native backend, and because\n  /// a thumbnail is derivable and disposable.\n  Future<String> importPhoto(XFile xfile, String photoId) async {\n    final ext = p.extension(xfile.name).isNotEmpty\n        ? p.extension(xfile.name)\n        : '.jpg';\n    final key = p.join('photos', '$photoId$ext');\n    try {\n      final bytes = await xfile.readAsBytes();\n      await _store.writeBytes(key, bytes);\n      await _writeThumbnailBestEffort(key, bytes);\n      return key;\n    } catch (e) {\n      throw PhotoWriteException(\n        failure: classifyPhotoWriteFailure(e),\n        key: key,\n        cause: e,\n      );\n    }\n  }\n\n  /// Best-effort thumbnail for the just-written original at [key]. NEVER\n  /// throws, which is what keeps it safe to call from inside [importPhoto]'s\n  /// single try block: a thumbnail is always regenerable and the photo strip /\n  /// `PhotoImageCache` fall back to the original, so a failed thumbnail must\n  /// never turn into a failed import. Mirrors the native backend's\n  /// `_writeThumbnailBestEffort`.\n  Future<void> _writeThumbnailBestEffort(String key, Uint8List bytes) async {\n    try {\n      final thumbBytes = await generateThumbnail(bytes);\n      await _store.writeBytes(thumbKeyFor(key), thumbBytes);\n    } catch (_) {\n      // Best-effort — never blocks importPhoto/writePhotoBytes.\n    }\n  }"
+        },
+        {
+          "action": "Replace `writePhotoBytes` (currently lines 45-64) in the same file so the cloud-restore write is classified too, and reuse the new helper.",
+          "code": "  /// Writes [bytes] under `photos/<photoId><ext>` and regenerates + stores its\n  /// thumbnail, mirroring [importPhoto]'s convention. This is the counterpart\n  /// used for cloud restore, where bytes arrive already decoded in memory\n  /// rather than as a picked [XFile].\n  ///\n  /// L3 fix (continued): the byte write already propagated its raw store error\n  /// here — now it propagates a CLASSIFIED [PhotoWriteException] instead, so\n  /// `SyncService._downloadAndRewritePhotos`' caller records a quota\n  /// exhaustion as such in `PullResult.errors` rather than an opaque\n  /// `DatabaseError` string.\n  Future<String> writePhotoBytes(\n    String photoId,\n    String ext,\n    List<int> bytes,\n  ) async {\n    final key = p.join('photos', '$photoId$ext');\n    final byteData = Uint8List.fromList(bytes);\n    try {\n      await _store.writeBytes(key, byteData);\n    } catch (e) {\n      throw PhotoWriteException(\n        failure: classifyPhotoWriteFailure(e),\n        key: key,\n        cause: e,\n      );\n    }\n    await _writeThumbnailBestEffort(key, byteData);\n    return key;\n  }"
+        },
+        {
+          "action": "Add the exception import to `photo_files_web.dart` (after `import 'photo_byte_store.dart';` on line 7) and update the class doc's \"best-effort\" claim.",
+          "code": "// lib/features/topo/data/photo_files_web.dart — imports (lines 1-8) become:\nimport 'dart:typed_data';\n\nimport 'package:image_picker/image_picker.dart';\nimport 'package:path/path.dart' as p;\n\nimport 'image_ops/image_ops.dart';\nimport 'photo_byte_store.dart';\nimport 'photo_path_resolution.dart';\nimport 'photo_write_exception.dart';\n\n// …and in the class doc (lines 10-14) replace the sentence fragment\n// \"Best-effort, mirroring the native backend's contract: any failure is\n// swallowed and the logical key is still returned.\" — that text lives on\n// importPhoto's own doc and is replaced wholesale by the new doc above."
+        },
+        {
+          "action": "Add the native-backend doc note. Comment-only: native behaviour must stay bit-identical.",
+          "code": "// lib/features/topo/data/photo_files_native.dart — append to importPhoto's\n// doc comment (immediately before `Future<String> importPhoto` at line 90):\n\n  /// DELIBERATELY still best-effort, unlike the WEB backend (see\n  /// `photo_files_web.dart`'s L3 fix): this backend never throws\n  /// [PhotoWriteException]. The two are not symmetric, and that is correct —\n  /// here the picked file still exists at [xfile]'s own path even when the\n  /// copy into the app-owned directory fails, and `resolvePhotoPath`'s\n  /// container-rotation healing can recover it later; on web the byte store IS\n  /// the only copy, so a failed write means the pixels do not exist anywhere.\n  /// The shared callers' `on PhotoWriteException` clauses are therefore dead\n  /// code on native, by design — native behaviour is unchanged by that fix."
+        },
+        {
+          "action": "Add the store-level companion test to `test/features/topo/data/photo_byte_store_test.dart` (append inside `main()`, after the existing 'distinct keys do not collide' test at line 70-76), proving the REAL IdbPhotoByteStore surfaces a write error rather than resolving silently — the failure importPhoto now propagates.",
+          "code": "  test(\n    'writeBytes surfaces a store-side failure rather than resolving silently '\n    '— this is the failure PhotoFiles.importPhoto now propagates as a '\n    'PhotoWriteException instead of swallowing (L3)',\n    () async {\n      final factory = newIdbFactoryMemory();\n      final store = IdbPhotoByteStore(factory: factory);\n      // Force the write into a store that does not exist: a real IndexedDB\n      // transaction against a missing object store rejects, exactly like a\n      // quota rejection does from this method's point of view.\n      final db = await factory.open(\n        kPhotoByteStoreDbName,\n        version: 1,\n        onUpgradeNeeded: (event) {\n          // Deliberately create NOTHING, so `kPhotoByteStoreName` is absent.\n        },\n      );\n      addTearDown(db.close);\n\n      await expectLater(\n        store.writeBytes('photos/abc.jpg', Uint8List.fromList([1, 2, 3])),\n        throwsA(anything),\n      );\n    },\n  );"
+        },
+        {
+          "action": "Run both files and see them pass.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/topo/data/photo_files_web_test.dart test/features/topo/data/photo_byte_store_test.dart",
+          "expected": "All tests passed! (8 web-backend + 8 byte-store)"
+        },
+        {
+          "action": "If the new byte-store test does not reject (idb_shim's memory factory may auto-create or the pre-opened DB may not be the one the store binds to), delete that ONE test rather than weakening it — the web-backend tests already cover the propagation contract with an injected failing store, which is the assertion that matters. Note the deletion in the commit body.",
+          "expected": "Either the test is green, or it is removed and `flutter test test/features/topo/data/` is green with the web-backend file carrying the contract."
+        },
+        {
+          "action": "Run the whole suite plus analyze to confirm nothing regressed — in particular that no native/other caller depended on importPhoto never throwing.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze && flutter test",
+          "expected": "analyze: No issues found! · test: 1576+ passing, 0 failing. Native tests are unaffected because `photo_files_native.dart` is byte-identical apart from a doc comment."
+        }
+      ],
+      "assertions": [
+        "`flutter test test/features/topo/data/photo_files_web_test.dart` is green and includes a test where a `_FailingWriteStore` makes `importPhoto` throw `PhotoWriteException(failure: quotaExceeded, key: 'photos/abc123.jpg')` with `store.written` left EMPTY.",
+        "A `thumbs/`-only write failure still lets `importPhoto` return `'photos/abc123.jpg'` — the thumbnail remains best-effort.",
+        "`PhotoFiles.writePhotoBytes` throws `PhotoWriteException` (not a bare `DatabaseError`) when its store write fails.",
+        "`git diff lib/features/topo/data/photo_files_native.dart` shows comment-only changes — no executable line differs, so native behaviour is bit-identical.",
+        "`grep -c 'catch (_)' lib/features/topo/data/photo_files_web.dart` no longer counts a catch-all around the ORIGINAL's write: the only remaining `catch (_)` is inside `_writeThumbnailBestEffort`, and `deletePhotoBytes`' two existing ones.",
+        "`flutter analyze` = 0 issues and `flutter test` still ≥1576 passing."
+      ],
+      "commitMessage": "fix(photos): propagate byte-write failures from the web PhotoFiles backend (L3)"
+    },
+    {
+      "title": "T3 — attachPhotoToWall creates NO Photos row when the byte write fails",
+      "files": {
+        "create": [],
+        "modify": [
+          "test/features/library/data/photo_ownership_test.dart:1-103",
+          "lib/features/library/data/library_crud_repository.dart:563-583"
+        ],
+        "test": [
+          "test/features/library/data/photo_ownership_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Add the failing PhotoFiles double to `test/features/library/data/photo_ownership_test.dart` as a top-level file-private class (place it directly after the `_testWallId` const at line 21).",
+          "code": "/// [PhotoFiles] whose [importPhoto] always fails the way the WEB backend now\n/// does when the browser refuses the byte write (see `photo_files_web.dart`'s\n/// L3 fix). Every other member is inherited, so the rest of the repository's\n/// real path handling still runs.\n///\n/// `PhotoFiles` is resolved by the ANALYZER to `photo_files_stub.dart` (the\n/// unconditional branch of the `photo_files.dart` facade, whose ctor is\n/// `PhotoFiles({Object? docsDir, Object? byteStore})`) and by the VM compiler\n/// to `photo_files_native.dart` (`PhotoFiles({Future<Directory> Function()?\n/// docsDir})`). Both declare `importPhoto(XFile, String) -> Future<String>`\n/// identically and both accept a zero-argument `super()`, so this subclass\n/// binds under either — see `photo_files_stub.dart`'s own doc for why the\n/// variants are kept signature-compatible.\nclass _QuotaFailingPhotoFiles extends PhotoFiles {\n  @override\n  Future<String> importPhoto(XFile xfile, String photoId) async {\n    throw PhotoWriteException(\n      failure: PhotoWriteFailure.quotaExceeded,\n      key: 'photos/$photoId.jpg',\n      cause: Exception('QuotaExceededError: The quota has been exceeded.'),\n    );\n  }\n}"
+        },
+        {
+          "action": "Add the failing test group. Insert after the existing `group('PhotoFiles helper', …)` block, which currently ends at line 103.",
+          "code": "  group('L3: a failed byte write creates no Photos row', () {\n    test(\n      \"attachPhotoToWall rethrows PhotoFiles.importPhoto's \"\n      'PhotoWriteException and leaves the photos table EMPTY — the insert '\n      'transaction is never reached, so a pixel-less row can no longer exist',\n      () async {\n        final wall = await seedWall();\n        final failingRepo = LibraryCrudRepository(\n          db,\n          nowMs: () => 1000,\n          photoFiles: _QuotaFailingPhotoFiles(),\n        );\n\n        await expectLater(\n          failingRepo.attachPhotoToWall(\n            wall.id,\n            XFile(p.join(srcDir.path, 'picked.jpg')),\n            640,\n            480,\n          ),\n          throwsA(\n            isA<PhotoWriteException>().having(\n              (e) => e.failure,\n              'failure',\n              PhotoWriteFailure.quotaExceeded,\n            ),\n          ),\n        );\n\n        expect(\n          await db.select(db.photos).get(),\n          isEmpty,\n          reason: 'no Photos row may be created when the pixels were never '\n              'written (L3) — attachPhotoToWall awaits importPhoto BEFORE its '\n              'insert transaction, which is what makes this hold',\n        );\n      },\n    );\n\n    test(\n      'the wall itself is untouched — the caller decides whether to undo it '\n      \"(topos_screen's New topo flow soft-deletes the wall it just created; \"\n      'the canvas flow has no wall to undo)',\n      () async {\n        final wall = await seedWall();\n        final failingRepo = LibraryCrudRepository(\n          db,\n          nowMs: () => 1000,\n          photoFiles: _QuotaFailingPhotoFiles(),\n        );\n\n        await expectLater(\n          failingRepo.attachPhotoToWall(wall.id, XFile('/tmp/x.jpg'), 1, 1),\n          throwsA(isA<PhotoWriteException>()),\n        );\n\n        final row = await (db.select(db.walls)\n              ..where((t) => t.id.equals(wall.id)))\n            .getSingle();\n        expect(row.deletedAt, isNull);\n      },\n    );\n  });"
+        },
+        {
+          "action": "Run it. It should already PASS — `attachPhotoToWall` awaits `importPhoto` at line 592, before the transaction at 601. This task's value is locking that ordering in; if it FAILS, the ordering has drifted and the fix is to move the `importPhoto` await above the transaction.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/library/data/photo_ownership_test.dart",
+          "expected": "All tests passed! — including the two new L3 tests. (Green-on-first-run is expected here and is the point: the guarantee is now regression-locked.)"
+        },
+        {
+          "action": "Prove the test is meaningful rather than vacuous by temporarily moving the `importPhoto` await INSIDE the transaction and re-running.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/library/data/photo_ownership_test.dart --plain-name 'leaves the photos table EMPTY'",
+          "expected": "With the await moved inside the transaction the test still passes (drift rolls the transaction back on a throw) — record this in the commit body. The test's real job is guarding against a future refactor that catches the exception and inserts anyway; note that explicitly rather than claiming it catches ordering drift. Restore the file to HEAD afterwards with `git checkout -- lib/features/library/data/library_crud_repository.dart`."
+        },
+        {
+          "action": "Correct `attachPhotoToWall`'s now-false doc claim. Replace lines 571-573 (\"The copy is best-effort: if the source doesn't exist (or the copy fails), [PhotoFiles.importPhoto] returns [xfile]'s path unchanged so the row is still created.\").",
+          "code": "  /// The copy is best-effort ON NATIVE only: if the source doesn't exist (or\n  /// the copy fails) [PhotoFiles.importPhoto] still returns the relative\n  /// destination form, so the row is created and the picker's own file remains\n  /// recoverable via `resolvePhotoPath`'s container-rotation healing.\n  ///\n  /// On WEB it is NOT best-effort (L3 fix): the byte store is the only copy of\n  /// the pixels, so a refused write — quota exhaustion above all, since\n  /// originals stay at FULL resolution per decision D-5 — throws a\n  /// [PhotoWriteException] out of [PhotoFiles.importPhoto], which this method\n  /// deliberately does NOT catch. Because that await happens BEFORE the insert\n  /// transaction below, the throw means no [db.Photos] row is ever created:\n  /// there is no such thing as a pixel-less row any more. Callers must handle\n  /// it — see `topos_screen.dart`'s `_handleNewTopo` (which soft-deletes the\n  /// wall it had just created) and `topo_canvas_screen.dart`'s\n  /// `_attachPhotoAndLoad` (which clears the optimistically-selected path);\n  /// both present [PhotoWriteException.userMessage] via\n  /// `photoWriteFailureSnackBar`."
+        },
+        {
+          "action": "Re-run the affected suites and analyze.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze && flutter test test/features/library/ test/features/topo/",
+          "expected": "analyze: No issues found! · both directories green."
+        }
+      ],
+      "assertions": [
+        "`flutter test test/features/library/data/photo_ownership_test.dart` is green and contains a test where `attachPhotoToWall` with a `PhotoFiles` whose `importPhoto` throws `PhotoWriteException` results in `db.select(db.photos).get()` being EMPTY.",
+        "The same test asserts the exception surfaces to the caller as `PhotoWriteException` with `failure == PhotoWriteFailure.quotaExceeded` (not swallowed, not rewrapped).",
+        "The wall passed to `attachPhotoToWall` still has `deletedAt == null` after the failure — cleanup is the caller's decision, asserted separately.",
+        "`library_crud_repository.dart`'s `attachPhotoToWall` doc no longer claims the row 'is still created' when the copy fails, and names both caller-side handlers.",
+        "`git diff --stat lib/features/library/data/library_crud_repository.dart` shows doc-comment lines only — zero executable change.",
+        "`flutter analyze` = 0 issues."
+      ],
+      "commitMessage": "test(photos): lock in that a failed byte write creates no Photos row (L3)"
+    },
+    {
+      "title": "T4 — the user-facing half: photoWriteFailureSnackBar + settleFailedPhotoAttach",
+      "files": {
+        "create": [
+          "test/features/topo/presentation/photo_write_failure_snackbar_test.dart"
+        ],
+        "modify": [
+          "lib/features/topo/presentation/topo_canvas_photo_ops.dart:1-6",
+          "lib/features/topo/presentation/topo_canvas_photo_ops.dart:139",
+          "test/features/topo/application/topo_canvas_wall_binding_test.dart:1-11"
+        ],
+        "test": [
+          "test/features/topo/presentation/photo_write_failure_snackbar_test.dart",
+          "test/features/topo/application/topo_canvas_wall_binding_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Write the failing SnackBar widget test. Two pumps, never `pumpAndSettle` — settling would run the SnackBar's full 4s duration and exit animation and take it off-screen before any assertion (the same trap `topos_screen_test.dart`'s `_drainNoSettle` doc documents at :256-266).",
+          "code": "// test/features/topo/presentation/photo_write_failure_snackbar_test.dart\n// The user-facing half of the L3 fix: a failed photo byte write must surface\n// as a distinguishable, plainly-worded SnackBar — not a debugPrint nobody but\n// a developer attached to a debugger would ever see.\nimport 'package:flutter/material.dart';\nimport 'package:flutter_test/flutter_test.dart';\nimport 'package:masi/features/topo/data/photo_write_exception.dart';\nimport 'package:masi/features/topo/presentation/topo_canvas_photo_ops.dart';\nimport 'package:masi/shared/presentation/masi_icon.dart';\n\n/// Pumps a trivial host, taps it to show [snackBar], and advances just far\n/// enough INTO the entrance animation to assert on it. Deliberately NOT\n/// `pumpAndSettle`: that runs the SnackBar's entrance, its full 4s default\n/// duration AND its exit to completion, settling it off-screen before any\n/// `find` could see it (same reasoning as `topos_screen_test.dart`'s\n/// `_drainNoSettle`).\nFuture<void> _showSnackBar(WidgetTester tester, SnackBar snackBar) async {\n  await tester.pumpWidget(\n    MaterialApp(\n      home: Scaffold(\n        body: Builder(\n          builder: (context) => ElevatedButton(\n            key: const Key('show'),\n            onPressed: () =>\n                ScaffoldMessenger.of(context).showSnackBar(snackBar),\n            child: const Text('show'),\n          ),\n        ),\n      ),\n    ),\n  );\n  await tester.tap(find.byKey(const Key('show')));\n  await tester.pump();\n  await tester.pump(const Duration(milliseconds: 300));\n}\n\nvoid main() {\n  testWidgets('a quota failure renders its own out-of-space wording behind a '\n      'warning glyph', (tester) async {\n    await _showSnackBar(\n      tester,\n      photoWriteFailureSnackBar(\n        const PhotoWriteException(\n          failure: PhotoWriteFailure.quotaExceeded,\n          key: 'photos/abc.jpg',\n        ),\n      ),\n    );\n\n    expect(find.byType(SnackBar), findsOneWidget);\n    expect(find.textContaining('Out of storage space'), findsOneWidget);\n    expect(find.byType(MasiIcon), findsOneWidget);\n  });\n\n  testWidgets('an unknown failure renders the plain retry wording', (\n    tester,\n  ) async {\n    await _showSnackBar(\n      tester,\n      photoWriteFailureSnackBar(\n        const PhotoWriteException(\n          failure: PhotoWriteFailure.unknown,\n          key: 'photos/abc.jpg',\n        ),\n      ),\n    );\n\n    expect(find.byType(SnackBar), findsOneWidget);\n    expect(find.textContaining('could not be saved'), findsOneWidget);\n  });\n\n  testWidgets('the two variants are visibly different, so a quota problem is '\n      'actionable rather than generic', (tester) async {\n    await _showSnackBar(\n      tester,\n      photoWriteFailureSnackBar(\n        const PhotoWriteException(\n          failure: PhotoWriteFailure.quotaExceeded,\n          key: 'photos/abc.jpg',\n        ),\n      ),\n    );\n\n    expect(find.textContaining('could not be saved'), findsNothing);\n  });\n}\n"
+        },
+        {
+          "action": "Run it and see it fail to compile (`photoWriteFailureSnackBar` does not exist).",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/topo/presentation/photo_write_failure_snackbar_test.dart",
+          "expected": "RED: \"Error: The method 'photoWriteFailureSnackBar' isn't defined\"."
+        },
+        {
+          "action": "Extend `topo_canvas_photo_ops.dart`'s imports (currently lines 1-5) — it has no material import yet.",
+          "code": "// lib/features/topo/presentation/topo_canvas_photo_ops.dart — lines 1-5 become:\nimport 'package:flutter/material.dart';\nimport 'package:flutter_riverpod/flutter_riverpod.dart';\n\nimport 'package:masi/features/library/data/library_crud_repository.dart';\nimport 'package:masi/features/topo/application/draw_controller.dart';\nimport 'package:masi/features/topo/data/photo_repository.dart';\nimport 'package:masi/features/topo/data/photo_write_exception.dart';\nimport 'package:masi/shared/presentation/masi_icon.dart';"
+        },
+        {
+          "action": "Append both functions to the end of `topo_canvas_photo_ops.dart` (after `resolveAttachedPhotoPath`, which currently ends at line 139).",
+          "code": "/// A [SnackBar] presenting [error]'s [PhotoWriteException.userMessage] behind a\n/// warning glyph — the user-facing half of the L3 fix, replacing a\n/// `debugPrint` no user could ever see.\n///\n/// Mirrors `topo_canvas_gps.dart`'s [gpsCaptureResultSnackBar] shape so both\n/// photo-attach outcomes read identically, and lives HERE rather than inline in\n/// either screen because BOTH photo-attach entry points must present the same\n/// words for the same failure: the Topos-home \"New topo\" flow\n/// (`topos_screen.dart`'s `_handleNewTopo`) and the canvas add/replace-photo\n/// flow (`topo_canvas_screen.dart`'s `_attachPhotoAndLoad`).\nSnackBar photoWriteFailureSnackBar(PhotoWriteException error) {\n  return SnackBar(\n    content: Row(\n      mainAxisSize: MainAxisSize.min,\n      children: [\n        MasiIcon('warning', size: 18),\n        const SizedBox(width: 8),\n        Flexible(child: Text(error.userMessage)),\n      ],\n    ),\n  );\n}\n\n/// Settles the canvas after a photo attach failed on its BYTE WRITE, and\n/// returns the [SnackBar] the caller should show.\n///\n/// Three things must happen together, which is exactly why they live in one\n/// function rather than three lines in a catch block:\n///  - [selectedImage] is CLEARED. `TopoCanvasScreen._pickImage` selects the\n///    picked path optimistically (so the screen shows a spinner for it\n///    immediately), but with the write failed there is no [db.Photos] row\n///    behind that path and never will be — leaving it selected strands the\n///    canvas on an image it can neither load nor persist against.\n///  - [drawController]'s switch [generation] is settled via\n///    [DrawController.cancelPhotoSwitch]. See `_attachPhotoAndLoad`'s FIX #4\n///    doc: EVERY exit path must settle the switch it opened, or\n///    `DrawState.isSwitchingPhoto` stays stuck `true` and corrupts the next\n///    `beginPhotoSwitch`'s routes handling.\n///  - the user is told why, in plain words.\n///\n/// Extracted as a standalone function taking its collaborators directly —\n/// mirroring [loadWallOriginalPhoto]/[resolveAttachedPhotoPath] above —\n/// because `TopoCanvasScreen._pickImage` calls the module-level\n/// `showPhotoSourceSheet`/`pickPhotoFrom` with NO injectable seam, so a widget\n/// test cannot drive the canvas pick flow at all. This makes the failure path\n/// testable against a plain `ProviderContainer` instead (see\n/// `test/features/topo/application/topo_canvas_wall_binding_test.dart`).\nSnackBar settleFailedPhotoAttach(\n  SelectedImageNotifier selectedImage,\n  DrawController drawController,\n  int generation,\n  PhotoWriteException error,\n) {\n  selectedImage.clear();\n  drawController.cancelPhotoSwitch(generation);\n  return photoWriteFailureSnackBar(error);\n}"
+        },
+        {
+          "action": "Run the SnackBar test and see it pass.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/topo/presentation/photo_write_failure_snackbar_test.dart",
+          "expected": "+3: All tests passed!"
+        },
+        {
+          "action": "Add the container-level state test to `test/features/topo/application/topo_canvas_wall_binding_test.dart`. First extend its imports (lines 1-11) with material and the exception type; `selectedImageProvider` and `settleFailedPhotoAttach` already resolve through the existing `topo_canvas_screen.dart` import, which re-exports `topo_canvas_photo_ops.dart` (see that file's line 43).",
+          "code": "// add to the import block:\nimport 'package:flutter/material.dart';\nimport 'package:masi/features/topo/data/photo_write_exception.dart';"
+        },
+        {
+          "action": "Append the test inside `main()` of `topo_canvas_wall_binding_test.dart`.",
+          "code": "  test(\n    'L3: settleFailedPhotoAttach clears the selected image, settles the switch '\n    'generation the failed attach opened (isSwitchingPhoto back to false), and '\n    'hands back a SnackBar — the canvas failure path no widget test can reach, '\n    'since TopoCanvasScreen._pickImage has no injectable picker seam',\n    () async {\n      final container = makeContainer();\n      final notifier = container.read(\n        drawControllerProvider(_testWallId).notifier,\n      );\n\n      // Exactly what _pickImage + build's ref.listen do before the attach:\n      // select the picked path optimistically, which opens a photo switch.\n      container.read(selectedImageProvider.notifier).select('/tmp/picked.jpg');\n      final generation = notifier.beginPhotoSwitch();\n      expect(\n        container.read(drawControllerProvider(_testWallId)).isSwitchingPhoto,\n        isTrue,\n        reason: 'precondition: the switch this attach would settle is open',\n      );\n\n      final snackBar = settleFailedPhotoAttach(\n        container.read(selectedImageProvider.notifier),\n        notifier,\n        generation,\n        const PhotoWriteException(\n          failure: PhotoWriteFailure.quotaExceeded,\n          key: 'photos/abc.jpg',\n        ),\n      );\n\n      expect(\n        container.read(selectedImageProvider),\n        isNull,\n        reason: 'no Photos row was created, so the canvas must not keep '\n            'showing the picked path',\n      );\n      expect(\n        container.read(drawControllerProvider(_testWallId)).isSwitchingPhoto,\n        isFalse,\n        reason: 'a stuck isSwitchingPhoto corrupts the NEXT beginPhotoSwitch '\n            \"— see _attachPhotoAndLoad's FIX #4 doc\",\n      );\n      expect(snackBar, isA<SnackBar>());\n    },\n  );"
+        },
+        {
+          "action": "Run both test files and analyze.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze && flutter test test/features/topo/presentation/photo_write_failure_snackbar_test.dart test/features/topo/application/topo_canvas_wall_binding_test.dart",
+          "expected": "analyze: No issues found! · both files green (3 new SnackBar tests + the existing wall-binding suite plus 1)."
+        },
+        {
+          "action": "If `flutter analyze` reports `prefer_const_constructors` on `MasiIcon('warning', size: 18)`, leave it non-const to match `gpsCaptureResultSnackBar`'s identical `MasiIcon('pin', size: 18)` — that call site is at 0 issues today, so the lint is not active for this shape. Only if it does fire, add `const`.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze lib/features/topo/presentation/topo_canvas_photo_ops.dart",
+          "expected": "No issues found!"
+        }
+      ],
+      "assertions": [
+        "`flutter test test/features/topo/presentation/photo_write_failure_snackbar_test.dart` is green with 3 tests; the quota variant renders text containing 'Out of storage space' and the unknown variant text containing 'could not be saved', and the quota variant does NOT render the unknown wording.",
+        "`find.byType(MasiIcon)` finds the warning glyph in the rendered SnackBar — no `Icons.*`/`CupertinoIcons.*` is introduced anywhere in the diff (`grep -n 'Icons\\.' lib/features/topo/presentation/topo_canvas_photo_ops.dart` is empty).",
+        "`flutter test test/features/topo/application/topo_canvas_wall_binding_test.dart` is green and includes a test where, after `settleFailedPhotoAttach`, `container.read(selectedImageProvider)` is null AND `container.read(drawControllerProvider(_testWallId)).isSwitchingPhoto` is false.",
+        "`photoWriteFailureSnackBar` and `settleFailedPhotoAttach` are reachable from `package:masi/features/topo/presentation/topo_canvas_screen.dart` via its existing `export 'topo_canvas_photo_ops.dart';` (line 43) — verifiable because `topos_screen.dart` will import them through that facade in T6.",
+        "`flutter analyze` = 0 issues."
+      ],
+      "commitMessage": "feat(topo): add photoWriteFailureSnackBar + settleFailedPhotoAttach for failed photo writes"
+    },
+    {
+      "title": "T5 — wire the canvas add/replace-photo flow to the failure path",
+      "files": {
+        "create": [],
+        "modify": [
+          "lib/features/topo/presentation/topo_canvas_screen.dart:21-22",
+          "lib/features/topo/presentation/topo_canvas_screen.dart:682-697"
+        ],
+        "test": [
+          "test/features/topo/application/draw_controller_persistence_test.dart",
+          "test/features/topo/application/topo_canvas_wall_binding_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Add the exception import to `topo_canvas_screen.dart`, immediately after `import 'package:masi/features/topo/data/photo_repository.dart';` (line 22).",
+          "code": "import 'package:masi/features/topo/data/photo_write_exception.dart';"
+        },
+        {
+          "action": "Insert a typed catch clause into `_attachPhotoAndLoad` BEFORE the existing catch-all. The existing clause starts at line 682 with `} catch (e, st) {` — the new clause goes immediately above it, closing the try that opened at line 618.",
+          "code": "    } on PhotoWriteException catch (e) {\n      // L3 fix: attachPhotoToWall PROPAGATES a byte-write failure now (quota\n      // exhaustion above all — originals stay FULL resolution per decision\n      // D-5) and throws BEFORE its insert transaction, so no Photos row was\n      // created and there is nothing to undo in the database. What DOES need\n      // undoing is the optimistic UI: _pickImage already selected the picked\n      // path so this screen would show a spinner for an image that will never\n      // have a row. settleFailedPhotoAttach clears it, settles the switch\n      // generation THIS call opened (see this method's FIX #4 doc — every exit\n      // path must), and hands back the SnackBar to show. Deliberately caught\n      // ABOVE the generic clause below so a quota problem gets its own\n      // actionable wording instead of the silent debugPrint every other\n      // failure still gets. Only while mounted — see this method's doc for why\n      // `ref` is unsafe to touch otherwise.\n      debugPrint('Failed to store photo bytes for ${xfile.path}: $e');\n      if (mounted) {\n        ScaffoldMessenger.of(context).showSnackBar(\n          settleFailedPhotoAttach(\n            ref.read(selectedImageProvider.notifier),\n            ref.read(drawControllerProvider(widget.wallId).notifier),\n            generation,\n            e,\n          ),\n        );\n      }\n    } catch (e, st) {"
+        },
+        {
+          "action": "Extend `_attachPhotoAndLoad`'s doc comment (the FIX #4 paragraph at lines 593-614) so the new exit path is documented alongside the others it enumerates.",
+          "code": "  /// L3 fix (photo-byte write failures): a [PhotoWriteException] out of\n  /// [LibraryCrudRepository.attachPhotoToWall] is caught in its OWN clause,\n  /// above the catch-all — it is the one failure with a specific, actionable\n  /// cause to tell the user about (out of storage space), and it is the one\n  /// failure that additionally requires clearing `selectedImageProvider`,\n  /// since the optimistically-selected picked path has no row behind it and\n  /// never will. Both effects plus the SnackBar come from the single\n  /// [settleFailedPhotoAttach] call, which settles [generation] exactly like\n  /// every other exit path in this method must."
+        },
+        {
+          "action": "Verify the typed clause precedes the catch-all in the compiled order (Dart matches clauses top-down, so an inverted order would silently swallow the typed case).",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && grep -n 'on PhotoWriteException catch\\|} catch (e, st) {' lib/features/topo/presentation/topo_canvas_screen.dart",
+          "expected": "The `on PhotoWriteException catch (e) {` line number is LOWER than the `} catch (e, st) {` line that follows it inside _attachPhotoAndLoad."
+        },
+        {
+          "action": "Confirm the pre-existing catch-all contract still holds: `draw_controller_persistence_test.dart:1442-1460` asserts that when attachPhotoToWall/loadForWall throw, the switch is still settled. That test uses a generic throw, so it must still take the catch-all branch.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/topo/application/draw_controller_persistence_test.dart",
+          "expected": "All tests passed! — the generic-throw path is unchanged."
+        },
+        {
+          "action": "Run analyze and the whole topo feature suite.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze && flutter test test/features/topo/",
+          "expected": "analyze: No issues found! · test/features/topo/ green."
+        }
+      ],
+      "assertions": [
+        "`grep -n 'on PhotoWriteException catch' lib/features/topo/presentation/topo_canvas_screen.dart` returns exactly one hit, at a LOWER line number than the `} catch (e, st) {` clause it precedes inside `_attachPhotoAndLoad`.",
+        "The new clause's only state effects go through `settleFailedPhotoAttach`, whose two effects (selected image cleared, `isSwitchingPhoto` false) are already asserted by T4's container test — no duplicate inline `clear()`/`cancelPhotoSwitch()` calls appear in the clause (`grep -c 'cancelPhotoSwitch' lib/features/topo/presentation/topo_canvas_screen.dart` is unchanged from HEAD).",
+        "`flutter test test/features/topo/application/draw_controller_persistence_test.dart` is still green — the generic catch-all path (the one that test drives) is untouched.",
+        "`flutter analyze` = 0 issues and `flutter test test/features/topo/` is green.",
+        "Native runtime behaviour is unchanged: `photo_files_native.dart` never throws `PhotoWriteException` (asserted by T2), so the new clause is unreachable on iOS/Android."
+      ],
+      "commitMessage": "fix(topo): surface a failed photo byte write on the canvas instead of a debugPrint"
+    },
+    {
+      "title": "T6 — wire the Topos-home New topo flow, with orphan-wall cleanup",
+      "files": {
+        "create": [],
+        "modify": [
+          "lib/features/library/presentation/topos_screen.dart:22-23",
+          "lib/features/library/presentation/topos_screen.dart:478-481",
+          "test/features/library/presentation/topos_screen_test.dart:123-142",
+          "test/features/library/presentation/topos_screen_test.dart:871-900"
+        ],
+        "test": [
+          "test/features/library/presentation/topos_screen_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Teach the test harness to inject a PhotoFiles. Replace `_makeContainer`'s signature and override list (lines 123-138).",
+          "code": "/// [photoFiles], when given, overrides `photoFilesProvider` (see\n/// `database_provider.dart:47`) so a test can make the photo BYTE WRITE fail\n/// the way the web backend now does — the L3 fix's failure path. Tests that\n/// don't pass it get the real `PhotoFiles`, whose `path_provider` lookup\n/// simply never resolves under `flutter_test` (its own try/catch leaves the\n/// docs-path cache cold), exactly as every pre-existing test here relies on.\nProviderContainer _makeContainer({\n  LocationService? locationService,\n  SyncOrchestrator? syncOrchestrator,\n  PhotoFiles? photoFiles,\n}) {\n  final db = AppDatabase(NativeDatabase.memory());\n  final container = ProviderContainer(\n    overrides: [\n      appDatabaseProvider.overrideWithValue(db),\n      nowMsProvider.overrideWithValue(() => 1000),\n      if (locationService != null)\n        locationServiceProvider.overrideWithValue(locationService),\n      if (photoFiles != null)\n        photoFilesProvider.overrideWithValue(photoFiles),\n      syncOrchestratorProvider.overrideWith(\n        () => syncOrchestrator ?? _FakeSyncOrchestrator(),\n      ),\n    ],\n  );\n  addTearDown(db.close);\n  addTearDown(container.dispose);\n  return container;\n}"
+        },
+        {
+          "action": "Add the failing-PhotoFiles double to `topos_screen_test.dart` (place it beside `_FakeLocationService` at line 148). Duplicating the class from `photo_ownership_test.dart` is deliberate and matches this file's own precedent — `_FakeSyncOrchestrator` is duplicated for exactly the same file-private reason (see its doc at line 158-160).",
+          "code": "/// [PhotoFiles] whose [importPhoto] always fails the way the WEB backend now\n/// does when the browser refuses the byte write (`photo_files_web.dart`'s L3\n/// fix). Duplicated from `photo_ownership_test.dart` because that copy is\n/// file-private — same reason `_FakeSyncOrchestrator` below is duplicated from\n/// `community_pull_refresh_test.dart`.\nclass _QuotaFailingPhotoFiles extends PhotoFiles {\n  @override\n  Future<String> importPhoto(XFile xfile, String photoId) async {\n    throw PhotoWriteException(\n      failure: PhotoWriteFailure.quotaExceeded,\n      key: 'photos/$photoId.jpg',\n      cause: Exception('QuotaExceededError: The quota has been exceeded.'),\n    );\n  }\n}"
+        },
+        {
+          "action": "Add the required import to `topos_screen_test.dart` (its import block ends at line 32). `photoFilesProvider` already resolves via the existing `database_provider.dart` import at line 7; `PhotoWriteException`/`PhotoWriteFailure` come free from the facade export added in T1.",
+          "code": "import 'package:masi/features/topo/data/photo_files.dart';"
+        },
+        {
+          "action": "Write the failing test. Append it inside the existing `group('A6: new-topo flow', …)` block (which opens at line 871).",
+          "code": "    testWidgets(\n      'L3: when the photo bytes cannot be written, the New topo flow reports '\n      'it in a SnackBar, leaves NO topo behind (the wall createTopo had '\n      'already committed is soft-deleted), and does not navigate into a canvas '\n      'with nothing to show',\n      (tester) async {\n        final container = _makeContainer(\n          photoFiles: _QuotaFailingPhotoFiles(),\n        );\n        late Directory tempDir;\n        late File pngFile;\n        await tester.runAsync(() async {\n          tempDir = await Directory.systemTemp.createTemp('topos_screen_l3');\n          pngFile = File('${tempDir.path}/photo.png');\n          await pngFile.writeAsBytes(_tinyPngBytes);\n        });\n        addTearDown(() {\n          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);\n        });\n\n        await tester.pumpWidget(\n          _wrap(\n            container,\n            ToposScreen(\n              photoSourcePicker: (context) async => ImageSource.gallery,\n              photoPicker: (source) async => XFile(pngFile.path),\n            ),\n          ),\n        );\n        await _drain(tester);\n\n        await tester.tap(find.byKey(const Key('topos-new-topo')));\n        await _acceptTopoNameDialog(tester);\n        // No trailing settle: the SnackBar must still be on screen.\n        await _drainNoSettle(tester);\n\n        expect(\n          find.textContaining('Out of storage space'),\n          findsOneWidget,\n          reason: 'the failure must be reported to the user, not debugPrinted',\n        );\n\n        final topos = await _dbWork(\n          tester,\n          () =>\n              container.read(libraryCrudRepositoryProvider).watchTopos().first,\n        );\n        expect(\n          topos,\n          isEmpty,\n          reason: 'createTopo committed a wall before attachPhotoToWall threw '\n              '— it must be soft-deleted, not left as an empty photo-less '\n              'topo on the home screen forever',\n        );\n\n        expect(\n          find.byKey(const Key('topos-new-topo')),\n          findsOneWidget,\n          reason: 'still on the Topos home — a successful flow would have '\n              'pushed /walls/:wallId (a SizedBox in this harness), removing '\n              'this button from the tree',\n        );\n      },\n    );\n\n    testWidgets(\n      'L3: the re-entrancy guard is released, so New topo can be retried '\n      'straight after a byte-write failure',\n      (tester) async {\n        final container = _makeContainer(\n          photoFiles: _QuotaFailingPhotoFiles(),\n        );\n        late Directory tempDir;\n        late File pngFile;\n        await tester.runAsync(() async {\n          tempDir = await Directory.systemTemp.createTemp('topos_screen_l3b');\n          pngFile = File('${tempDir.path}/photo.png');\n          await pngFile.writeAsBytes(_tinyPngBytes);\n        });\n        addTearDown(() {\n          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);\n        });\n\n        await tester.pumpWidget(\n          _wrap(\n            container,\n            ToposScreen(\n              photoSourcePicker: (context) async => ImageSource.gallery,\n              photoPicker: (source) async => XFile(pngFile.path),\n            ),\n          ),\n        );\n        await _drain(tester);\n\n        await tester.tap(find.byKey(const Key('topos-new-topo')));\n        await _acceptTopoNameDialog(tester);\n        await _drain(tester);\n\n        // A SECOND attempt must actually run (the _creating guard released in\n        // the finally block), reaching the name dialog again.\n        await tester.tap(find.byKey(const Key('topos-new-topo')));\n        await _drain(tester);\n        expect(find.byKey(const Key('topo-name-field')), findsOneWidget);\n      },\n    );"
+        },
+        {
+          "action": "Run it and see it fail: today the exception hits `_handleNewTopo`'s bare catch-all at line 508-509 (`debugPrint` only), so no SnackBar appears and the empty wall survives.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/library/presentation/topos_screen_test.dart --plain-name 'L3'",
+          "expected": "RED: the first test fails on `find.textContaining('Out of storage space')` (findsNothing) and on `topos` having length 1 instead of being empty."
+        },
+        {
+          "action": "Extend the import at `topos_screen.dart` lines 22-23 to pull in the SnackBar builder, and add the exception import.",
+          "code": "import '../../topo/data/photo_write_exception.dart';\nimport '../../topo/presentation/topo_canvas_screen.dart'\n    show\n        captureWallGpsFromPhoto,\n        gpsCaptureResultSnackBar,\n        photoWriteFailureSnackBar;"
+        },
+        {
+          "action": "Replace lines 478-480 of `_handleNewTopo` with the guarded attach.",
+          "code": "      final repo = ref.read(libraryCrudRepositoryProvider);\n      final wallId = await repo.createTopo(name);\n      // L3 fix: attachPhotoToWall PROPAGATES a byte-write failure now (quota\n      // exhaustion above all — originals stay FULL resolution per decision\n      // D-5) instead of creating a pixel-less Photos row. `createTopo` has\n      // ALREADY committed a wall by this point, so letting the throw fall\n      // through to the outer catch-all would leave an empty, photo-less topo\n      // sitting on this screen forever — the visible half of the very bug this\n      // fix exists to prevent. So: undo the wall, say why in plain words, and\n      // abort the flow (no GPS capture, no navigation into a canvas with\n      // nothing to show). The `finally` below still releases `_creating`, so\n      // the user can retry immediately. Every OTHER failure still falls\n      // through to the outer catch-all, unchanged.\n      try {\n        await repo.attachPhotoToWall(wallId, xfile, width, height);\n      } on PhotoWriteException catch (e) {\n        await repo.softDeleteWall(wallId);\n        if (!mounted) return;\n        ScaffoldMessenger.of(\n          context,\n        ).showSnackBar(photoWriteFailureSnackBar(e));\n        return;\n      }"
+        },
+        {
+          "action": "Update `_handleNewTopo`'s doc comment (the 'Deliberately defensive' paragraph at lines 412-415) to record the one non-defensive case.",
+          "code": "  /// ONE failure is not merely debugPrinted: a [PhotoWriteException] from\n  /// [LibraryCrudRepository.attachPhotoToWall] (the L3 fix — the photo's bytes\n  /// could not be stored, quota exhaustion above all) is caught in its own\n  /// clause, which soft-deletes the wall `createTopo` had already committed and\n  /// reports the reason via `photoWriteFailureSnackBar`. Without that undo, a\n  /// failed byte write would leave an empty photo-less topo on this screen —\n  /// so the \"never crash the Topos home\" rule stays intact while the user\n  /// still learns what happened and is left with exactly nothing created,\n  /// matching #25's abort semantics."
+        },
+        {
+          "action": "Run the new tests, then the whole file, then analyze.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/library/presentation/topos_screen_test.dart && flutter analyze",
+          "expected": "All tests passed! (the pre-existing suite plus the 2 new L3 tests) · analyze: No issues found!"
+        },
+        {
+          "action": "Run the whole suite to confirm the shared `_makeContainer` change broke nothing.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test",
+          "expected": "1576+ passing, 0 failing."
+        }
+      ],
+      "assertions": [
+        "`flutter test test/features/library/presentation/topos_screen_test.dart` is green and contains a test where, with `photoFilesProvider` overridden by a PhotoFiles whose `importPhoto` throws `PhotoWriteException`, the New topo flow leaves `watchTopos().first` EMPTY and renders text containing 'Out of storage space'.",
+        "The same test asserts `find.byKey(const Key('topos-new-topo'))` still finds one widget — i.e. `context.push('/walls/$wallId')` was NOT reached.",
+        "A second test proves `_creating` is released: a retry immediately after the failure reaches `topo-name-field` again.",
+        "`grep -n 'softDeleteWall' lib/features/library/presentation/topos_screen.dart` returns exactly one hit, inside `_handleNewTopo`'s `on PhotoWriteException` clause.",
+        "`_makeContainer` in `topos_screen_test.dart` accepts an optional `PhotoFiles? photoFiles` and overrides `photoFilesProvider` only when non-null, so every pre-existing call site behaves identically.",
+        "`flutter analyze` = 0 issues and `flutter test` is ≥1576 passing."
+      ],
+      "commitMessage": "fix(library): abort New topo cleanly when photo bytes cannot be stored (L3)"
+    },
+    {
+      "title": "T7 — paginate every Supabase Storage listing past its 100-object default (S6)",
+      "files": {
+        "create": [
+          "lib/features/backup/data/storage_pagination.dart",
+          "test/features/backup/data/storage_pagination_test.dart"
+        ],
+        "modify": [
+          "lib/features/backup/data/sync_remote.dart:1-2",
+          "lib/features/backup/data/sync_remote.dart:636-640",
+          "lib/features/backup/data/sync_remote.dart:666-670",
+          "lib/features/backup/data/backup_remote.dart:157-161"
+        ],
+        "test": [
+          "test/features/backup/data/storage_pagination_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Write the failing test for the paging loop. Note the exact `SearchOptions` facts this pins, verified in the pub cache: `list({String? path, SearchOptions searchOptions = const SearchOptions()})` at `storage_client-2.6.0/lib/src/storage_file_api.dart:594-596`, and `SearchOptions({this.limit = 100, this.offset = 0, this.sortBy = const SortBy(), this.search})` at `types.dart:217-222`.",
+          "code": "// test/features/backup/data/storage_pagination_test.dart\n// S6: every Supabase Storage listing must page. `list()`'s SearchOptions\n// default is `limit: 100, offset: 0`\n// (storage_client-2.6.0/lib/src/types.dart:217-222) and the endpoint returns at\n// most `limit` objects with NO total count and no \"there is more\" flag — so a\n// single un-paged call silently truncated the sync push's \"already uploaded\"\n// skip-set at 100, making every push re-read and re-upload the\n// FULL-RESOLUTION bytes of every photo past that cut.\nimport 'package:flutter_test/flutter_test.dart';\nimport 'package:masi/features/backup/data/storage_pagination.dart';\n\nvoid main() {\n  /// A page fetcher faithful to the Storage `list()` contract — at most [limit]\n  /// items starting at [offset], stable order — that records every request it\n  /// received so a test can prove the loop actually PAGED.\n  ({\n    Future<List<int>> Function(int limit, int offset) fetch,\n    List<({int limit, int offset})> requests,\n  })\n  fetcherOver(int total) {\n    final requests = <({int limit, int offset})>[];\n    Future<List<int>> fetch(int limit, int offset) async {\n      requests.add((limit: limit, offset: offset));\n      if (offset >= total) return const [];\n      final end = offset + limit;\n      final stop = end > total ? total : end;\n      return [for (var i = offset; i < stop; i++) i];\n    }\n\n    return (fetch: fetch, requests: requests);\n  }\n\n  test('kStoragePageSize matches the storage client SearchOptions default', () {\n    expect(kStoragePageSize, 100);\n  });\n\n  test('150 objects are ALL collected, across two pages at offsets 0 and 100',\n      () async {\n    final f = fetcherOver(150);\n\n    final all = await collectPagedObjects<int>(f.fetch);\n\n    expect(all, hasLength(150));\n    expect(all.first, 0);\n    expect(all.last, 149);\n    expect(f.requests, [(limit: 100, offset: 0), (limit: 100, offset: 100)]);\n  });\n\n  test('an exactly-full final page costs one more request, which comes back '\n      'empty — the only way to tell \"one page\" from \"the first of several\"',\n      () async {\n    final f = fetcherOver(100);\n\n    final all = await collectPagedObjects<int>(f.fetch);\n\n    expect(all, hasLength(100));\n    expect(f.requests, [(limit: 100, offset: 0), (limit: 100, offset: 100)]);\n  });\n\n  test('an empty prefix costs exactly one request', () async {\n    final f = fetcherOver(0);\n\n    expect(await collectPagedObjects<int>(f.fetch), isEmpty);\n    expect(f.requests, [(limit: 100, offset: 0)]);\n  });\n\n  test('a short first page terminates immediately', () async {\n    final f = fetcherOver(7);\n\n    expect(await collectPagedObjects<int>(f.fetch), hasLength(7));\n    expect(f.requests, [(limit: 100, offset: 0)]);\n  });\n\n  test('pageSize is injectable so fixtures stay small', () async {\n    final f = fetcherOver(7);\n\n    final all = await collectPagedObjects<int>(f.fetch, pageSize: 3);\n\n    expect(all, [0, 1, 2, 3, 4, 5, 6]);\n    expect(f.requests.map((r) => r.offset), [0, 3, 6]);\n  });\n\n  test('a non-positive pageSize is rejected rather than looping forever',\n      () async {\n    await expectLater(\n      collectPagedObjects<int>(\n        (limit, offset) async => const [],\n        pageSize: 0,\n      ),\n      throwsA(isA<ArgumentError>()),\n    );\n  });\n}\n"
+        },
+        {
+          "action": "Run it and see it fail to compile.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/backup/data/storage_pagination_test.dart",
+          "expected": "RED: \"Couldn't resolve … storage_pagination.dart\"."
+        },
+        {
+          "action": "Create the helper. No Supabase type appears in it, which is what makes the loop unit-testable with no SupabaseClient fake.",
+          "code": "// lib/features/backup/data/storage_pagination.dart\n/// Paging for Supabase Storage object listings.\n///\n/// S6 (silent 100-object truncation): `StorageFileApi.list()` takes\n/// `searchOptions: SearchOptions(limit:, offset:, sortBy:, search:)` whose\n/// defaults are `limit: 100, offset: 0, sortBy: name asc`\n/// (`storage_client-2.6.0/lib/src/types.dart:217-222`), and the endpoint\n/// returns AT MOST `limit` objects with no total count and no \"there is more\"\n/// flag. A single un-paged `list(path: …)` therefore TRUNCATES any prefix\n/// holding more than 100 objects — which is exactly how the sync push's\n/// \"already uploaded\" skip-set went stale past ~100 photos, making every push\n/// re-read and re-upload bytes already in the cloud. Originals are kept at FULL\n/// resolution (decision D-5), so that re-upload is the dominant push cost AND\n/// the dominant window for the byte phase to fail.\n///\n/// Deliberately its own file rather than a private method on\n/// `SupabaseSyncRemote`: three listings need it (`SyncRemote`'s private and\n/// shared prefixes, plus `BackupRemote.listPhotoObjectPaths`, whose identical\n/// duplicate is a known divergence risk), and keeping it free of every Supabase\n/// type makes the paging LOOP itself unit-testable against a plain fetcher —\n/// no `SupabaseClient` fake, no network.\nlibrary;\n\n/// Page size used for every paged Storage listing — the storage client's own\n/// `SearchOptions` default, restated here so the loop and the request it issues\n/// can never drift apart.\nconst int kStoragePageSize = 100;\n\n/// Collects EVERY item a paged listing can return.\n///\n/// [fetchPage] receives `(limit, offset)` and must behave exactly like the\n/// Storage `list()` endpoint: return at most `limit` items, starting at\n/// `offset`, in a stable order.\n///\n/// A SHORT page — fewer than `limit` items, the empty page included — is the\n/// ONLY termination signal the REST contract offers, so it is the only one used\n/// here. A page that comes back exactly full therefore always costs one more\n/// request; that is correct rather than wasteful, since it is the sole way to\n/// distinguish \"exactly one page of objects\" from \"the first of several\".\n///\n/// [pageSize] defaults to [kStoragePageSize]; tests shrink it to keep fixtures\n/// small. A non-positive value would spin forever and is rejected.\nFuture<List<T>> collectPagedObjects<T>(\n  Future<List<T>> Function(int limit, int offset) fetchPage, {\n  int pageSize = kStoragePageSize,\n}) async {\n  if (pageSize <= 0) {\n    throw ArgumentError.value(pageSize, 'pageSize', 'must be positive');\n  }\n  final all = <T>[];\n  var offset = 0;\n  while (true) {\n    final page = await fetchPage(pageSize, offset);\n    all.addAll(page);\n    if (page.length < pageSize) return all;\n    offset += page.length;\n  }\n}\n"
+        },
+        {
+          "action": "Run the helper test and see it pass.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/backup/data/storage_pagination_test.dart",
+          "expected": "+7: All tests passed!"
+        },
+        {
+          "action": "Add the import to `sync_remote.dart` (its import block is lines 1-2). `SearchOptions` and `FileObject` are already in scope via `package:supabase_flutter/supabase_flutter.dart` → `package:supabase/supabase.dart` → `package:storage_client/storage_client.dart` (verified).",
+          "code": "import 'package:flutter/foundation.dart';\nimport 'package:supabase_flutter/supabase_flutter.dart';\n\nimport 'storage_pagination.dart';"
+        },
+        {
+          "action": "Add the paging helper as a private method on `SupabaseSyncRemote` and rewrite both listings. Replace lines 636-640 and 666-670.",
+          "code": "  /// Lists EVERY object under [prefix], paging past the storage client's\n  /// 100-object `SearchOptions` default (S6 — see `storage_pagination.dart`\n  /// for why a single un-paged `list()` silently truncated the skip-set and\n  /// what that cost at full resolution).\n  Future<List<FileObject>> _listAllObjects(String prefix) {\n    return collectPagedObjects<FileObject>(\n      (limit, offset) => _client.storage.from(_bucket).list(\n        path: prefix,\n        searchOptions: SearchOptions(limit: limit, offset: offset),\n      ),\n    );\n  }\n\n  @override\n  Future<Set<String>> listPhotoObjectPaths(String uid) async {\n    final files = await _listAllObjects(uid);\n    return {for (final file in files) '$uid/${file.name}'};\n  }\n\n  // … (uploadSharedPhoto / downloadSharedPhoto unchanged in between) …\n\n  @override\n  Future<Set<String>> listSharedPhotoObjectPaths() async {\n    final files = await _listAllObjects('shared');\n    return {for (final file in files) 'shared/${file.name}'};\n  }"
+        },
+        {
+          "action": "Apply the same fix to the duplicated listing in `backup_remote.dart` (lines 157-161), removing the divergence the spec explicitly flags between `CloudBackupService`'s photo logic and `SyncService`'s.",
+          "code": "// lib/features/backup/data/backup_remote.dart — add to the import block:\nimport 'storage_pagination.dart';\n\n// …and replace listPhotoObjectPaths (lines 157-161):\n  /// S6: paged, for the identical reason `SupabaseSyncRemote`'s two listings\n  /// are — `list()` returns at most 100 objects per request with no signal\n  /// that more exist, so an un-paged call truncates the skip-set and makes\n  /// [CloudBackupService] re-upload full-resolution bytes already in the\n  /// cloud. Fixed here too even though `CloudBackupService` currently has no\n  /// caller outside `lib/features/backup/` (decision D-2), because leaving\n  /// one of two identical listings unfixed is exactly the divergence risk this\n  /// duplication is known for.\n  @override\n  Future<Set<String>> listPhotoObjectPaths(String uid) async {\n    final files = await collectPagedObjects<FileObject>(\n      (limit, offset) => _client.storage.from(_bucket).list(\n        path: uid,\n        searchOptions: SearchOptions(limit: limit, offset: offset),\n      ),\n    );\n    return {for (final file in files) '$uid/${file.name}'};\n  }"
+        },
+        {
+          "action": "Confirm no un-paged listing survives anywhere in lib/.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && grep -rn '\\.list(' lib --include=\"*.dart\"",
+          "expected": "Exactly two hits, both inside a `collectPagedObjects` callback and both passing `searchOptions: SearchOptions(limit: limit, offset: offset)` — one in `sync_remote.dart`'s `_listAllObjects`, one in `backup_remote.dart`'s `listPhotoObjectPaths`. No `list(path:` call without `searchOptions`."
+        },
+        {
+          "action": "Run analyze and the backup suite.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze && flutter test test/features/backup/",
+          "expected": "analyze: No issues found! · test/features/backup/ green (the existing `cloud_backup_service_test.dart` and `sync_service_test.dart` suites use fakes, so they are unaffected by the SupabaseSyncRemote/BackupRemote change)."
+        }
+      ],
+      "assertions": [
+        "`flutter test test/features/backup/data/storage_pagination_test.dart` is green with 7 tests, including one where a 150-item fetcher yields all 150 and receives exactly `[(limit: 100, offset: 0), (limit: 100, offset: 100)]`.",
+        "`kStoragePageSize == 100`, matching `SearchOptions`' documented default (`storage_client-2.6.0/lib/src/types.dart:218`).",
+        "`collectPagedObjects` with `pageSize: 0` rejects with `ArgumentError` instead of looping forever.",
+        "`grep -rn '\\.list(' lib --include=\"*.dart\"` returns exactly two call sites and BOTH pass `searchOptions: SearchOptions(limit: limit, offset: offset)` from inside a `collectPagedObjects` callback — no un-paged `list(path: …)` remains.",
+        "`lib/features/backup/data/storage_pagination.dart` references no Supabase type (`grep -c supabase lib/features/backup/data/storage_pagination.dart` is 0), which is what lets the loop be tested with no client fake.",
+        "`flutter analyze` = 0 issues and `flutter test test/features/backup/` is green."
+      ],
+      "commitMessage": "fix(sync): paginate Storage object listings past the 100-object default (S6)"
+    },
+    {
+      "title": "T8 — count byte-upload failures instead of continuing silently",
+      "files": {
+        "create": [],
+        "modify": [
+          "lib/features/backup/data/sync_service.dart:23-56",
+          "lib/features/backup/data/sync_service.dart:341-344",
+          "lib/features/backup/data/sync_service.dart:347-415",
+          "test/features/backup/data/sync_service_test.dart:23-34",
+          "test/features/backup/data/sync_service_test.dart:262-272",
+          "test/features/backup/data/sync_service_test.dart:438-763"
+        ],
+        "test": [
+          "test/features/backup/data/sync_service_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Add the toggleable failing-upload double to `sync_service_test.dart`, next to `ThrowingFetchSharedToposRemote` (which ends at line 272).",
+          "code": "/// [FakeSyncRemote] variant whose PRIVATE byte upload throws while\n/// [failUploads] is set — used to prove §1f-3 (a byte-upload failure is\n/// COUNTED and reported, never a silent `continue`) and §1f-2 (its `Photos`\n/// row is held back from the metadata push). Toggleable so a single test can\n/// also prove the retry HEALS: flip it off and push again.\nclass FailingUploadSyncRemote extends FakeSyncRemote {\n  bool failUploads = true;\n\n  @override\n  Future<void> uploadPhoto({\n    required String uid,\n    required String photoId,\n    required String ext,\n    required List<int> bytes,\n  }) async {\n    if (failUploads) {\n      throw Exception('uploadPhoto failed: simulated storage error');\n    }\n    await super.uploadPhoto(\n      uid: uid,\n      photoId: photoId,\n      ext: ext,\n      bytes: bytes,\n    );\n  }\n}"
+        },
+        {
+          "action": "Write the two failing tests. Append them inside the existing `group('pushOwn', …)` block (which ends at line 764).",
+          "code": "    test(\n      '1f-3: a byte-upload failure is COUNTED and reported, not a silent '\n      'continue — photosFailed/photoErrors carry it (pre-fix sync_service.dart '\n      'skipped the upload with no error and no counter)',\n      () async {\n        final remote = FailingUploadSyncRemote();\n        final c = makeContainer(\n          remote: remote,\n          auth: FakeAuthRepository(_signedInU1),\n        );\n        addTearDown(() => c.db.close());\n\n        final file = writeFile(c.srcDir, 'wall.jpg');\n        await seedWallHierarchy(\n          c.db,\n          ownerId: _uidU1,\n          areaId: 'area-1',\n          sectorId: 'sector-1',\n          wallId: 'wall-1',\n          photoId: 'photo-1',\n          routeId: 'route-1',\n          localPath: file.path,\n        );\n\n        final result = await c.service.pushOwn();\n\n        expect(result.didPush, isTrue);\n        expect(result.photosUploaded, 0);\n        expect(result.photosFailed, 1);\n        expect(result.hasPhotoFailures, isTrue);\n        expect(result.photosMissingLocalBytes, 0);\n        expect(result.photoErrors, hasLength(1));\n        expect(result.photoErrors.single, contains('photo-1'));\n        expect(result.photoErrors.single, contains('byte upload failed'));\n      },\n    );\n\n    test(\n      '1f-3: a photo whose LOCAL bytes are gone is reported separately, in '\n      'photosMissingLocalBytes — it is not retryable (nothing will ever make '\n      'the bytes appear on this device), so it must not be conflated with a '\n      'transient upload failure or the retry loop would never terminate',\n      () async {\n        final remote = FakeSyncRemote();\n        final c = makeContainer(\n          remote: remote,\n          auth: FakeAuthRepository(_signedInU1),\n        );\n        addTearDown(() => c.db.close());\n\n        await seedWallHierarchy(\n          c.db,\n          ownerId: _uidU1,\n          areaId: 'area-1',\n          sectorId: 'sector-1',\n          wallId: 'wall-1',\n          photoId: 'photo-1',\n          routeId: 'route-1',\n          localPath: 'photos/never-written.jpg',\n        );\n\n        final result = await c.service.pushOwn();\n\n        expect(result.photosUploaded, 0);\n        expect(result.photosFailed, 0);\n        expect(result.hasPhotoFailures, isFalse);\n        expect(result.photosMissingLocalBytes, 1);\n        expect(result.photoErrors.single, contains('no local bytes'));\n      },\n    );\n\n    test(\n      'a tombstoned photo is neither a failure nor a missing-bytes case — its '\n      'bytes are removed deliberately, so the counters stay clean',\n      () async {\n        final remote = FakeSyncRemote();\n        final c = makeContainer(\n          remote: remote,\n          auth: FakeAuthRepository(_signedInU1),\n        );\n        addTearDown(() => c.db.close());\n\n        await seedWallHierarchy(\n          c.db,\n          ownerId: _uidU1,\n          areaId: 'area-1',\n          sectorId: 'sector-1',\n          wallId: 'wall-1',\n          photoId: 'photo-1',\n          routeId: 'route-1',\n          localPath: 'photos/never-written.jpg',\n        );\n        await (c.db.update(c.db.photos)\n              ..where((t) => t.id.equals('photo-1')))\n            .write(\n          const PhotosCompanion(\n            deletedAt: Value(9999),\n            updatedAt: Value(9999),\n            dirty: Value(true),\n          ),\n        );\n\n        final result = await c.service.pushOwn();\n\n        expect(result.photosFailed, 0);\n        expect(result.photosMissingLocalBytes, 0);\n        expect(result.photoErrors, isEmpty);\n        expect(remote.removedPrivatePaths, ['$_uidU1/photo-1.jpg']);\n      },\n    );"
+        },
+        {
+          "action": "Run and see them fail to compile — `photosFailed`, `photosMissingLocalBytes`, `photoErrors` and `hasPhotoFailures` do not exist yet.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/backup/data/sync_service_test.dart",
+          "expected": "RED: \"The getter 'photosFailed' isn't defined for the class 'PushSyncResult'\" (and the other three)."
+        },
+        {
+          "action": "Replace `PushSyncResult` (lines 23-56 of `sync_service.dart`) with the version carrying the photo failure channel. New fields are OPTIONAL with defaults so this is additive — see sequencingNotes for merging with §1d's `rowsFailed`.",
+          "code": "/// Result of a [SyncService.pushOwn] call.\nclass PushSyncResult {\n  const PushSyncResult.pushed({\n    required this.rowsPushed,\n    required this.photosUploaded,\n    this.photosFailed = 0,\n    this.photosMissingLocalBytes = 0,\n    this.photoErrors = const [],\n  }) : outcome = SyncPushOutcome.pushed;\n\n  const PushSyncResult.skippedSignedOut()\n    : outcome = SyncPushOutcome.skippedSignedOut,\n      rowsPushed = 0,\n      photosUploaded = 0,\n      photosFailed = 0,\n      photosMissingLocalBytes = 0,\n      photoErrors = const [];\n\n  const PushSyncResult.skippedNotWifi()\n    : outcome = SyncPushOutcome.skippedNotWifi,\n      rowsPushed = 0,\n      photosUploaded = 0,\n      photosFailed = 0,\n      photosMissingLocalBytes = 0,\n      photoErrors = const [];\n\n  final SyncPushOutcome outcome;\n\n  /// Total row count pushed across all nine tables (profiles/areas/sectors/\n  /// walls/photos/routes/comments/likes/ascents), INCLUDING tombstones — and\n  /// EXCLUDING any photo row withheld because its bytes did not land (see\n  /// [photosFailed]). Always 0 when [outcome] isn't [SyncPushOutcome.pushed].\n  final int rowsPushed;\n\n  /// Number of distinct photo FILES actually uploaded (private copy and/or\n  /// shared copy; excludes files already present remotely under a given path).\n  /// Always 0 when [outcome] isn't [SyncPushOutcome.pushed].\n  final int photosUploaded;\n\n  /// Number of distinct photo files whose upload was REQUIRED this push and\n  /// FAILED — the byte read threw, or `uploadPhoto`/`uploadSharedPhoto` threw.\n  ///\n  /// RETRYABLE, and therefore the signal §1e's backoff loop keys off (see\n  /// [hasPhotoFailures]): a network blip / transient Storage error will\n  /// succeed on a later attempt, at which point the rows withheld below go up\n  /// too. Each of these photos' `Photos` rows was HELD BACK from this push's\n  /// metadata upsert (S5 — see [SyncService._uploadOwnPhotos]), which is what\n  /// stops another device from ever pulling a row pointing at a Storage object\n  /// that does not exist.\n  ///\n  /// Pre-fix this was a bare `continue` with no error and no counter, while\n  /// the metadata had already been pushed.\n  final int photosMissingLocalBytes;\n\n  /// Number of distinct photo files that have NO local bytes on this device at\n  /// all (`PhotoFiles.readPhotoBytes` returned `null`) despite an upload being\n  /// required.\n  ///\n  /// Deliberately SEPARATE from [photosFailed], and deliberately NOT retried:\n  /// nothing will ever make those bytes appear on this device (they were\n  /// evicted, or the row predates the L3 fix), so counting it as a retryable\n  /// failure would spin §1e's \"retry until clean\" loop forever. Such a row's\n  /// metadata IS still pushed — it is the only surviving record of the photo\n  /// (wall, dimensions, crop, isPrimary, sortOrder) and another device may\n  /// well already hold the object — but it is reported in [photoErrors] rather\n  /// than vanishing silently.\n  final int photosFailed;\n\n  /// One human-readable message per photo counted in [photosFailed] OR\n  /// [photosMissingLocalBytes], each naming the canonical photo id and what\n  /// went wrong. Empty on a clean push.\n  final List<String> photoErrors;\n\n  bool get didPush => outcome == SyncPushOutcome.pushed;\n\n  /// True when at least one photo's bytes failed to upload for a RETRYABLE\n  /// reason — the condition §1e must schedule a retry on. Deliberately does\n  /// NOT include [photosMissingLocalBytes].\n  bool get hasPhotoFailures => photosFailed > 0;\n\n  @override\n  String toString() =>\n      'PushSyncResult(outcome: $outcome, rowsPushed: $rowsPushed, '\n      'photosUploaded: $photosUploaded, photosFailed: $photosFailed, '\n      'photosMissingLocalBytes: $photosMissingLocalBytes, '\n      'photoErrors: $photoErrors)';\n}"
+        },
+        {
+          "action": "CAREFUL: the two field doc comments above are swapped relative to their declarations (`photosMissingLocalBytes` is declared where `photosFailed`'s doc sits, and vice versa). Fix by pairing each doc with its own field: the 'RETRYABLE …' doc belongs to `final int photosFailed;` and the 'NO local bytes …' doc belongs to `final int photosMissingLocalBytes;`. Declare them in that order.",
+          "expected": "`flutter analyze` shows no dangling doc references and each field's doc describes that field."
+        },
+        {
+          "action": "Add the outcome record typedef immediately above the `SyncService` class (before line 196's class doc).",
+          "code": "/// Outcome of one [SyncService._uploadOwnPhotos] pass.\n///\n/// [failedCanonicalIds] is what makes bytes-before-metadata enforceable (S5):\n/// a photo row whose canonical file id is in this set MUST be held back from\n/// [SyncRemote.upsertOwnRows], so the cloud can never hold a `Photos` row\n/// pointing at a Storage object that does not exist. It contains ONLY the\n/// retryable failures — a photo with no local bytes at all is counted in\n/// [PushSyncResult.photosMissingLocalBytes] and its row still pushes (see that\n/// field's doc).\ntypedef PhotoUploadOutcome = ({\n  int uploaded,\n  int failed,\n  int missingLocalBytes,\n  Set<String> failedCanonicalIds,\n  List<String> errors,\n});"
+        },
+        {
+          "action": "Replace `_uploadOwnPhotos`' signature and body (lines 364-415) so every skip becomes a counted, described outcome. Keep the two `list*ObjectPaths` calls UN-guarded — their throw semantics are §1d's concern, not this workstream's.",
+          "code": "  Future<PhotoUploadOutcome> _uploadOwnPhotos(\n    String uid,\n    List<db.Photo> photos,\n    Map<String, String> wallVisibility,\n  ) async {\n    if (photos.isEmpty) {\n      return (\n        uploaded: 0,\n        failed: 0,\n        missingLocalBytes: 0,\n        failedCanonicalIds: <String>{},\n        errors: <String>[],\n      );\n    }\n\n    final alreadyPrivate = await _remote.listPhotoObjectPaths(uid);\n    final alreadyShared = await _remote.listSharedPhotoObjectPaths();\n    final seenCanonicalIds = <String>{};\n    final failedCanonicalIds = <String>{};\n    final errors = <String>[];\n    var uploaded = 0;\n    var missingLocalBytes = 0;\n\n    for (final photo in photos) {\n      final canonicalId = _canonicalPhotoId(photo);\n      if (!seenCanonicalIds.add(canonicalId)) {\n        continue; // this on-disk file was already handled via another row\n      }\n\n      final ext = p.extension(photo.localPath);\n\n      if (photo.deletedAt != null) {\n        await _remote.removePhoto(uid: uid, photoId: canonicalId, ext: ext);\n        await _remote.removeSharedPhoto(photoId: canonicalId, ext: ext);\n        continue;\n      }\n\n      final needsPrivate = !alreadyPrivate.contains('$uid/$canonicalId$ext');\n      final needsShared =\n          wallVisibility[photo.wallId] == 'shared' &&\n          !alreadyShared.contains(sharedPhotoPath(canonicalId, ext));\n      if (!needsPrivate && !needsShared) continue;\n\n      // `photo.localPath` as stored may be RELATIVE (`photos/<id>.jpg`, the\n      // canonical form since #17) or an already-valid legacy ABSOLUTE path —\n      // `readPhotoBytes` resolves either against the current platform's\n      // storage (app documents dir natively, byte store on web) rather than\n      // touching `dart:io` directly. Read at most once even when both copies\n      // are missing. Typed `List<int>?` (not `Uint8List?`) purely to avoid a\n      // `dart:typed_data` import here; `uploadPhoto` takes `List<int>`.\n      List<int>? bytes;\n      try {\n        bytes = await _photoFiles.readPhotoBytes(photo.localPath);\n      } catch (e) {\n        // Web only, in practice: the native backend swallows read errors into\n        // `null` itself, while the browser byte store can reject the read\n        // outright (blocked upgrade, closed connection). Retryable, so this\n        // withholds the row.\n        failedCanonicalIds.add(canonicalId);\n        errors.add('photo $canonicalId: reading local bytes failed: $e');\n        continue;\n      }\n      if (bytes == null) {\n        // NOT retryable and NOT withheld — see\n        // [PushSyncResult.photosMissingLocalBytes]. Pre-fix this was a bare\n        // `continue` with no error and no counter (the S5/1f-3 silent skip).\n        missingLocalBytes++;\n        errors.add(\n          'photo $canonicalId: no local bytes at \"${photo.localPath}\" — '\n          'nothing to upload; the row is still pushed',\n        );\n        continue;\n      }\n\n      try {\n        if (needsPrivate) {\n          await _remote.uploadPhoto(\n            uid: uid,\n            photoId: canonicalId,\n            ext: ext,\n            bytes: bytes,\n          );\n        }\n        if (needsShared) {\n          await _remote.uploadSharedPhoto(\n            photoId: canonicalId,\n            ext: ext,\n            bytes: bytes,\n          );\n        }\n        uploaded++;\n      } catch (e) {\n        failedCanonicalIds.add(canonicalId);\n        errors.add('photo $canonicalId: byte upload failed: $e');\n      }\n    }\n\n    return (\n      uploaded: uploaded,\n      failed: failedCanonicalIds.length,\n      missingLocalBytes: missingLocalBytes,\n      failedCanonicalIds: failedCanonicalIds,\n      errors: errors,\n    );\n  }"
+        },
+        {
+          "action": "Extend `_uploadOwnPhotos`' doc comment (lines 347-363) with the new contract.",
+          "code": "  /// §1f-3: every skip is now COUNTED and DESCRIBED rather than a silent\n  /// `continue`. Three outcomes are distinguished, because they need three\n  /// different responses:\n  ///  - upload attempted and THREW (or the local read threw) -> retryable;\n  ///    counted in `failed`, id added to `failedCanonicalIds` so `pushOwn`\n  ///    withholds that row's metadata (S5), and surfaced so §1e retries;\n  ///  - no local bytes AT ALL -> not retryable; counted in\n  ///    `missingLocalBytes`, row still pushed (see\n  ///    [PushSyncResult.photosMissingLocalBytes]);\n  ///  - already present remotely, or tombstoned -> not a problem at all;\n  ///    counted nowhere.\n  ///\n  /// The two `list*ObjectPaths` calls are deliberately left UN-guarded: their\n  /// throw semantics (and the `photos.isEmpty` short-circuit above them) are\n  /// §1d's honesty fix, not this method's."
+        },
+        {
+          "action": "Adapt the single existing call site (lines 341-344) so the file compiles; the ORDER change is T9's job, so keep it exactly where it is for now.",
+          "code": "    final wallVisibility = {for (final wall in walls) wall.id: wall.visibility};\n    final photoUpload = await _uploadOwnPhotos(uid, photos, wallVisibility);\n\n    final rowsPushed = tablesToRows.values.fold<int>(\n      0,\n      (sum, rows) => sum + rows.length,\n    );\n    return PushSyncResult.pushed(\n      rowsPushed: rowsPushed,\n      photosUploaded: photoUpload.uploaded,\n      photosFailed: photoUpload.failed,\n      photosMissingLocalBytes: photoUpload.missingLocalBytes,\n      photoErrors: photoUpload.errors,\n    );"
+        },
+        {
+          "action": "Run the sync suite. The first new test's `photosFailed == 1` should now pass; the withholding assertions arrive in T9.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/backup/data/sync_service_test.dart",
+          "expected": "All tests passed! — the 28 pre-existing tests plus the 3 new ones. In particular the many tests that seed the default `localPath: '/tmp/placeholder.jpg'` (e.g. C1a at :1123, which asserts `rowsPushed == 8`) still pass, because a missing-bytes photo row is still pushed."
+        },
+        {
+          "action": "Run analyze and the full suite.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze && flutter test",
+          "expected": "analyze: No issues found! · 1576+ passing, 0 failing."
+        }
+      ],
+      "assertions": [
+        "`PushSyncResult.pushed` accepts `photosFailed`, `photosMissingLocalBytes` and `photoErrors` as OPTIONAL named params with defaults, so no existing construction site breaks; `hasPhotoFailures` is `photosFailed > 0` and excludes `photosMissingLocalBytes`.",
+        "With `FailingUploadSyncRemote`, `pushOwn()` returns `photosUploaded == 0`, `photosFailed == 1`, `hasPhotoFailures == true`, `photosMissingLocalBytes == 0`, and `photoErrors.single` contains both `'photo-1'` and `'byte upload failed'`.",
+        "With a photo whose `localPath` resolves to nothing, `pushOwn()` returns `photosFailed == 0`, `hasPhotoFailures == false`, `photosMissingLocalBytes == 1`, and `photoErrors.single` contains `'no local bytes'`.",
+        "A tombstoned photo leaves all three counters at 0 and still records the removal in `removedPrivatePaths`.",
+        "`grep -n 'if (bytes == null) continue;' lib/features/backup/data/sync_service.dart` is EMPTY — the silent skip at the old line 404 is gone.",
+        "`sync_service.dart` gained no new import (the bytes local is typed `List<int>?`, not `Uint8List?`): `git diff lib/features/backup/data/sync_service.dart | grep '^+import'` is empty.",
+        "Pre-existing sync tests that seed the default `/tmp/placeholder.jpg` localPath still pass unchanged — notably C1a's `expect(result.rowsPushed, 8)` — proving a missing-bytes row is still pushed.",
+        "`flutter analyze` = 0 issues and `flutter test` ≥1576 passing."
+      ],
+      "commitMessage": "fix(sync): count and report photo byte-upload failures instead of skipping silently"
+    },
+    {
+      "title": "T9 — flip the push to bytes-then-metadata and withhold failed photo rows (S5)",
+      "files": {
+        "create": [],
+        "modify": [
+          "lib/features/backup/data/sync_service.dart:288-345",
+          "test/features/backup/data/sync_service_test.dart:23-60"
+        ],
+        "test": [
+          "test/features/backup/data/sync_service_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Give `FakeSyncRemote` an ordered call log so a test can assert the push ORDER, not just the end state. Add the field beside the existing tracking lists (lines 28-33).",
+          "code": "  /// Ordered log of every remote MUTATION this fake received, so a test can\n  /// assert the push ORDER (bytes before metadata — S5) rather than only the\n  /// end state. Entries are `'upload:<objectPath>'` and `'upsert:<table>'`.\n  final List<String> callLog = [];"
+        },
+        {
+          "action": "Log an entry per non-empty table in `upsertOwnRows`. Replace its loop header (lines 40-41) — the current form is `for (final row in tablesToRows[tableName] ?? const [])`, which has no place to hook a per-table event.",
+          "code": "    for (final tableName in syncTableNames) {\n      final rows =\n          tablesToRows[tableName] ?? const <Map<String, dynamic>>[];\n      if (rows.isNotEmpty) callLog.add('upsert:$tableName');\n      for (final row in rows) {\n        assert(\n          row['ownerId'] == uid,\n          'upsertOwnRows($uid): row ${row['id']} in $tableName has ownerId '\n          '${row['ownerId']}',\n        );\n        // Client-side LWW guard on push (#2), mirroring\n        // SupabaseSyncRemote.upsertOwnRows: drop the row if a cloud row\n        // already exists here with a strictly newer updatedAt.\n        final remote = _rows[tableName]![row['id'] as String];\n        if (!shouldPushLww(\n          localUpdatedAt: row['updatedAt'] as int,\n          remoteUpdatedAt: remote?['updatedAt'] as int?,\n        )) {\n          continue;\n        }\n        _rows[tableName]![row['id'] as String] =\n            Map<String, dynamic>.from(row);\n      }\n    }"
+        },
+        {
+          "action": "Log the upload entries in `uploadPhoto` (line 198-201) and `uploadSharedPhoto` (line 221-223).",
+          "code": "  // in uploadPhoto, after `uploadedPrivatePaths.add(path);`\n    callLog.add('upload:$path');\n\n  // in uploadSharedPhoto, after `uploadedSharedPaths.add(path);`\n    callLog.add('upload:$path');"
+        },
+        {
+          "action": "Write the failing tests. Append inside `group('pushOwn', …)`.",
+          "code": "    test(\n      '1f-2: bytes go up BEFORE the metadata — the photo object is uploaded '\n      'before the photos table is upserted, so no window exists in which the '\n      'cloud holds a row whose object is missing (S5)',\n      () async {\n        final remote = FakeSyncRemote();\n        final c = makeContainer(\n          remote: remote,\n          auth: FakeAuthRepository(_signedInU1),\n        );\n        addTearDown(() => c.db.close());\n\n        final file = writeFile(c.srcDir, 'wall.jpg');\n        await seedWallHierarchy(\n          c.db,\n          ownerId: _uidU1,\n          areaId: 'area-1',\n          sectorId: 'sector-1',\n          wallId: 'wall-1',\n          photoId: 'photo-1',\n          routeId: 'route-1',\n          localPath: file.path,\n        );\n\n        await c.service.pushOwn();\n\n        final uploadIndex = remote.callLog.indexOf(\n          'upload:$_uidU1/photo-1.jpg',\n        );\n        final upsertIndex = remote.callLog.indexOf('upsert:photos');\n        expect(uploadIndex, greaterThanOrEqualTo(0));\n        expect(upsertIndex, greaterThanOrEqualTo(0));\n        expect(\n          uploadIndex,\n          lessThan(upsertIndex),\n          reason: 'pre-fix the metadata upsert ran first '\n              '(sync_service.dart:338 then :341)',\n        );\n      },\n    );\n\n    test(\n      '1f-2: a photo whose byte upload THROWS has its Photos row held back '\n      'from the metadata push, while every other table still pushes — and the '\n      'next push, once uploads succeed, heals it',\n      () async {\n        final remote = FailingUploadSyncRemote();\n        final c = makeContainer(\n          remote: remote,\n          auth: FakeAuthRepository(_signedInU1),\n        );\n        addTearDown(() => c.db.close());\n\n        final file = writeFile(c.srcDir, 'wall.jpg');\n        await seedWallHierarchy(\n          c.db,\n          ownerId: _uidU1,\n          areaId: 'area-1',\n          sectorId: 'sector-1',\n          wallId: 'wall-1',\n          photoId: 'photo-1',\n          routeId: 'route-1',\n          localPath: file.path,\n        );\n\n        final first = await c.service.pushOwn();\n\n        expect(first.didPush, isTrue);\n        expect(first.photosFailed, 1);\n        expect(\n          first.rowsPushed,\n          4,\n          reason: 'area + sector + wall + route; the photo row is withheld',\n        );\n\n        final afterFailure = await remote.fetchOwnRows(_uidU1);\n        expect(\n          afterFailure['photos'],\n          isEmpty,\n          reason: 'no cloud row may point at a Storage object that does not '\n              'exist (S5) — another device would keep the ORIGINATING '\n              \"device's localPath forever, and on web resolvePhotoPath is an \"\n              'identity passthrough with no existence check',\n        );\n        expect(afterFailure['walls']!.map((r) => r['id']), ['wall-1']);\n        expect(afterFailure['routes']!.map((r) => r['id']), ['route-1']);\n        expect(afterFailure['areas']!.map((r) => r['id']), ['area-1']);\n\n        // The retry §1e schedules: uploads now succeed, so both the bytes AND\n        // the previously-withheld row land. Nothing was lost — pushOwn re-reads\n        // a full own-row snapshot every time (decision D-4).\n        remote.failUploads = false;\n        final second = await c.service.pushOwn();\n\n        expect(second.photosFailed, 0);\n        expect(second.photosUploaded, 1);\n        final healed = await remote.fetchOwnRows(_uidU1);\n        expect(healed['photos']!.map((r) => r['id']), ['photo-1']);\n        expect(\n          remote.privateStorage.containsKey('$_uidU1/photo-1.jpg'),\n          isTrue,\n        );\n      },\n    );\n\n    test(\n      '1f-2: a SLICE sharing a failed original\\'s file is withheld too — its '\n      'localPath points at the same object, so pushing it would reproduce the '\n      'exact orphan-row problem',\n      () async {\n        final remote = FailingUploadSyncRemote();\n        final c = makeContainer(\n          remote: remote,\n          auth: FakeAuthRepository(_signedInU1),\n        );\n        addTearDown(() => c.db.close());\n\n        final file = writeFile(c.srcDir, 'wall.jpg');\n        await seedWallHierarchy(\n          c.db,\n          ownerId: _uidU1,\n          areaId: 'area-1',\n          sectorId: 'sector-1',\n          wallId: 'wall-1',\n          photoId: 'photo-1',\n          routeId: 'route-1',\n          localPath: file.path,\n        );\n        await c.db.into(c.db.photos).insert(\n          PhotosCompanion.insert(\n            id: 'slice-1',\n            createdAt: 100,\n            updatedAt: 100,\n            ownerId: const Value(_uidU1),\n            wallId: 'wall-1',\n            localPath: file.path,\n            kind: 'slice',\n            width: 800,\n            height: 600,\n            parentPhotoId: const Value('photo-1'),\n          ),\n        );\n\n        await c.service.pushOwn();\n\n        final ownRows = await remote.fetchOwnRows(_uidU1);\n        expect(\n          ownRows['photos'],\n          isEmpty,\n          reason: 'both the original AND its slice resolve to the same '\n              'canonical file id, so both are withheld',\n        );\n      },\n    );"
+        },
+        {
+          "action": "Run and see the three new tests fail: today the upsert precedes the upload, and the photo row is pushed regardless.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/backup/data/sync_service_test.dart --plain-name '1f-2'",
+          "expected": "RED: the ordering test fails with `uploadIndex` NOT less than `upsertIndex`; the withholding tests fail with `ownRows['photos']` containing `photo-1` and `rowsPushed == 5`."
+        },
+        {
+          "action": "Move the upload block above the `tablesToRows` map. Insert this immediately after the snapshot transaction closes (currently line 275) and BEFORE the push-side NOT-NULL-guard comment at line 277.",
+          "code": "    // Bytes BEFORE metadata (S5). A `Photos` row must never reach the cloud\n    // ahead of the Storage object it points at: on the receiving device\n    // `_downloadAndRewritePhotos` only rewrites `localPath` when bytes actually\n    // arrived, so a row whose object is missing keeps the ORIGINATING device's\n    // path — and on web `resolvePhotoPath`/`resolvePhotoPathSync` are identity\n    // passthroughs with no existence check, making that path permanently dead\n    // there. Uploading first and then filtering the photos table down to the\n    // rows whose bytes DID land means the cloud can briefly hold an orphan\n    // OBJECT (harmless — idempotently overwritten by the next push, and\n    // removed outright once the photo is tombstoned) but never an orphan ROW.\n    final wallVisibility = {for (final wall in walls) wall.id: wall.visibility};\n    final photoUpload = await _uploadOwnPhotos(uid, photos, wallVisibility);\n\n    // Hold back exactly the photo rows whose bytes did NOT land this push.\n    // Keyed by CANONICAL id (see [_canonicalPhotoId]) so a slice — which\n    // shares its original's single on-disk file, and therefore its single\n    // Storage object — is withheld alongside that original rather than\n    // becoming an orphan row of its own. Every OTHER photo row (already\n    // uploaded, just uploaded, tombstoned, or lacking local bytes entirely —\n    // see [PushSyncResult.photosMissingLocalBytes]) still pushes, and every\n    // other TABLE is untouched. The withheld rows are not lost: `pushOwn`\n    // re-reads a full own-row snapshot every call (decision D-4), so the next\n    // successful push carries them.\n    final pushablePhotos = photoUpload.failedCanonicalIds.isEmpty\n        ? photos\n        : [\n            for (final photo in photos)\n              if (!photoUpload.failedCanonicalIds.contains(\n                _canonicalPhotoId(photo),\n              ))\n                photo,\n          ];"
+        },
+        {
+          "action": "Point the photos entry of `tablesToRows` (lines 309-313) at the filtered list.",
+          "code": "      'photos': filterValidSyncRows(\n        [for (final row in pushablePhotos) row.toJson()],\n        syncRequiredFields['photos'] ?? const ['id'],\n        debugLabel: 'local photos (push)',\n      ),"
+        },
+        {
+          "action": "Delete the now-duplicated lines that followed `upsertOwnRows` (the old lines 340-341: the `wallVisibility` map and the `_uploadOwnPhotos` call), leaving the upsert followed directly by the result construction.",
+          "code": "    await _remote.upsertOwnRows(uid, tablesToRows);\n\n    final rowsPushed = tablesToRows.values.fold<int>(\n      0,\n      (sum, rows) => sum + rows.length,\n    );\n    return PushSyncResult.pushed(\n      rowsPushed: rowsPushed,\n      photosUploaded: photoUpload.uploaded,\n      photosFailed: photoUpload.failed,\n      photosMissingLocalBytes: photoUpload.missingLocalBytes,\n      photoErrors: photoUpload.errors,\n    );"
+        },
+        {
+          "action": "Update `pushOwn`'s doc comment (lines 226-237) so the ordering is documented as a contract, not an accident.",
+          "code": "  /// ORDER MATTERS (S5): the photo BYTES are uploaded FIRST, and only then are\n  /// the metadata rows upserted — with any photo whose bytes did not land held\n  /// back from that upsert. Previously the metadata went first, so a failed\n  /// byte upload left every OTHER device holding a `Photos` row pointing at a\n  /// Storage object that never existed, unhealable on web. See\n  /// [_uploadOwnPhotos] for the three outcomes it distinguishes and\n  /// [PushSyncResult.photosFailed] for which of them withholds a row."
+        },
+        {
+          "action": "Run the sync suite.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/backup/data/sync_service_test.dart",
+          "expected": "All tests passed! — 34 tests (28 pre-existing + T8's 3 + T9's 3). Confirm the pre-existing two-device pull tests (:766-1112) and C1a's `rowsPushed == 8` are still green: their photos either have real bytes or fall in the missing-bytes bucket, which still pushes."
+        },
+        {
+          "action": "Run analyze and the full suite.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze && flutter test",
+          "expected": "analyze: No issues found! · 1576+ passing, 0 failing."
+        }
+      ],
+      "assertions": [
+        "`FakeSyncRemote.callLog.indexOf('upload:<uid>/photo-1.jpg') < callLog.indexOf('upsert:photos')` after a successful push — bytes precede metadata.",
+        "With `FailingUploadSyncRemote`, `remote.fetchOwnRows(uid)['photos']` is EMPTY while `['walls']`, `['routes']` and `['areas']` each still carry their row, and `rowsPushed == 4` (the withheld photo row excluded from the count).",
+        "Setting `remote.failUploads = false` and pushing again yields `photosFailed == 0`, `photosUploaded == 1`, `fetchOwnRows(uid)['photos']` == `['photo-1']`, and the object present in `privateStorage` — the withheld row heals on retry with no local write, which is what makes §1e's loop terminate.",
+        "A slice row sharing a failed original's file is withheld too (both resolve to the same `_canonicalPhotoId`), so `['photos']` is empty rather than containing the slice alone.",
+        "In `sync_service.dart`, the `await _uploadOwnPhotos(...)` line number is LOWER than the `await _remote.upsertOwnRows(...)` line number: `grep -n '_uploadOwnPhotos(uid\\|upsertOwnRows(uid' lib/features/backup/data/sync_service.dart` confirms the order.",
+        "All pre-existing `sync_service_test.dart` tests still pass unchanged, including C1a's `expect(result.rowsPushed, 8)` with the default `/tmp/placeholder.jpg` localPath.",
+        "`flutter analyze` = 0 issues and `flutter test` ≥1576 passing."
+      ],
+      "commitMessage": "fix(sync): upload photo bytes before pushing their metadata rows (S5)"
+    },
+    {
+      "title": "T10 — prove the skip-set sees all 150 objects and re-uploads nothing",
+      "files": {
+        "create": [],
+        "modify": [
+          "test/features/backup/data/sync_service_test.dart:1-16",
+          "test/features/backup/data/sync_service_test.dart:209-213",
+          "test/features/backup/data/sync_service_test.dart:229-230",
+          "test/features/backup/data/sync_service_test.dart:438-763"
+        ],
+        "test": [
+          "test/features/backup/data/sync_service_test.dart"
+        ]
+      },
+      "steps": [
+        {
+          "action": "Make `FakeSyncRemote`'s listings faithful to the Storage `list()` contract — truncating at a page limit and paging via the SAME `collectPagedObjects` helper `SupabaseSyncRemote` uses. Without the truncation the fake would never reproduce S6 and the 150-object test would be a false green. Add the import first.",
+          "code": "// add to the import block of sync_service_test.dart:\nimport 'package:masi/features/backup/data/storage_pagination.dart';"
+        },
+        {
+          "action": "Replace `FakeSyncRemote.listPhotoObjectPaths` (lines 209-213) and `listSharedPhotoObjectPaths` (lines 229-230) with paged versions over a truncating page function, and add the request log.",
+          "code": "  /// Every `(limit, offset)` pair the two listings below requested, in order —\n  /// lets a test prove the listing actually PAGED rather than issuing one\n  /// unbounded call.\n  final List<({int limit, int offset})> listPageRequests = [];\n\n  /// Simulates ONE Supabase Storage `list()` request over [storage]'s keys\n  /// under [prefix]: sorted by name ascending (the API's `SortBy` default) and\n  /// TRUNCATED to at most [limit] entries starting at [offset] — exactly the\n  /// contract that silently hid every object past the 100th (S6). Both\n  /// listings page through [collectPagedObjects], the same helper\n  /// `SupabaseSyncRemote._listAllObjects` uses, so this fake exercises the real\n  /// paging logic rather than a parallel reimplementation of it.\n  List<String> _listPage(\n    Map<String, List<int>> storage,\n    String prefix,\n    int limit,\n    int offset,\n  ) {\n    listPageRequests.add((limit: limit, offset: offset));\n    final keys = storage.keys.where((k) => k.startsWith(prefix)).toList()\n      ..sort();\n    if (offset >= keys.length) return const [];\n    final end = offset + limit;\n    return keys.sublist(offset, end > keys.length ? keys.length : end);\n  }\n\n  @override\n  Future<Set<String>> listPhotoObjectPaths(String uid) async {\n    final paths = await collectPagedObjects<String>(\n      (limit, offset) async => _listPage(privateStorage, '$uid/', limit, offset),\n    );\n    return paths.toSet();\n  }\n\n  @override\n  Future<Set<String>> listSharedPhotoObjectPaths() async {\n    final paths = await collectPagedObjects<String>(\n      (limit, offset) async =>\n          _listPage(sharedStorage, 'shared/', limit, offset),\n    );\n    return paths.toSet();\n  }"
+        },
+        {
+          "action": "Write the 150-object test. Append inside `group('pushOwn', …)`. Note the file writes are ESSENTIAL: without real bytes on disk a truncated skip-set would fall into the missing-bytes bucket and `photosUploaded` would stay 0, making the test a false green.",
+          "code": "    test(\n      'S6: with 150 objects already in the remote, the skip-set contains all '\n      '150 and ZERO bytes are re-uploaded — pre-fix the un-paged 100-object '\n      'listing truncated the skip-set and re-uploaded the other 50 at FULL '\n      'resolution on every single push',\n      () async {\n        final remote = FakeSyncRemote();\n        final c = makeContainer(\n          remote: remote,\n          auth: FakeAuthRepository(_signedInU1),\n        );\n        addTearDown(() => c.db.close());\n\n        // 150 originals on one private wall. Each has REAL bytes under\n        // <docsDir>/photos/<id>.jpg (the canonical relative form since #17) AND\n        // an already-present private object in the fake bucket. The real files\n        // matter: with a truncated skip-set the 50 unseen photos must actually\n        // RE-UPLOAD (photosUploaded == 50), not fall into the\n        // missing-local-bytes bucket, or this test could not fail.\n        final photosDir = Directory(p.join(c.docsDir.path, 'photos'))\n          ..createSync(recursive: true);\n        final bytes = List<int>.filled(4, 1);\n\n        String idAt(int i) => 'photo-${i.toString().padLeft(3, '0')}';\n\n        await seedWallHierarchy(\n          c.db,\n          ownerId: _uidU1,\n          areaId: 'area-1',\n          sectorId: 'sector-1',\n          wallId: 'wall-1',\n          photoId: idAt(0),\n          routeId: 'route-1',\n          localPath: 'photos/${idAt(0)}.jpg',\n        );\n        File(p.join(photosDir.path, '${idAt(0)}.jpg')).writeAsBytesSync(bytes);\n        remote.privateStorage['$_uidU1/${idAt(0)}.jpg'] = bytes;\n\n        for (var i = 1; i < 150; i++) {\n          final id = idAt(i);\n          await c.db.into(c.db.photos).insert(\n            PhotosCompanion.insert(\n              id: id,\n              createdAt: 100,\n              updatedAt: 100,\n              ownerId: const Value(_uidU1),\n              wallId: 'wall-1',\n              localPath: 'photos/$id.jpg',\n              kind: 'original',\n              width: 800,\n              height: 600,\n              sortOrder: Value(i),\n            ),\n          );\n          File(p.join(photosDir.path, '$id.jpg')).writeAsBytesSync(bytes);\n          remote.privateStorage['$_uidU1/$id.jpg'] = bytes;\n        }\n\n        final result = await c.service.pushOwn();\n\n        expect(result.didPush, isTrue);\n        expect(\n          result.photosUploaded,\n          0,\n          reason: 'all 150 objects are already in the bucket, so the skip-set '\n              'must cover every one of them',\n        );\n        expect(remote.uploadedPrivatePaths, isEmpty);\n        expect(result.photosFailed, 0);\n        expect(result.photosMissingLocalBytes, 0);\n        expect(result.photoErrors, isEmpty);\n\n        // The listing PAGED: the private prefix holds 150 keys, so page 1\n        // comes back exactly full at offset 0 and forces a second request at\n        // offset 100.\n        expect(\n          remote.listPageRequests.where((r) => r.offset == 100),\n          isNotEmpty,\n          reason: 'the private listing must page past the 100-object default',\n        );\n        expect(\n          remote.listPageRequests.every((r) => r.limit == kStoragePageSize),\n          isTrue,\n        );\n\n        // And all 150 rows still push (nothing withheld — nothing failed).\n        final ownRows = await remote.fetchOwnRows(_uidU1);\n        expect(ownRows['photos'], hasLength(150));\n      },\n    );\n\n    test(\n      'S6: the paged skip-set is what prevents the re-upload — with the fake '\n      'listing artificially truncated to one page, the 50 objects past the '\n      'cut ARE re-uploaded (this is the pre-fix behaviour, asserted so the '\n      'test above cannot silently become vacuous)',\n      () async {\n        final remote = _SinglePageListingRemote();\n        final c = makeContainer(\n          remote: remote,\n          auth: FakeAuthRepository(_signedInU1),\n        );\n        addTearDown(() => c.db.close());\n\n        final photosDir = Directory(p.join(c.docsDir.path, 'photos'))\n          ..createSync(recursive: true);\n        final bytes = List<int>.filled(4, 1);\n        String idAt(int i) => 'photo-${i.toString().padLeft(3, '0')}';\n\n        await seedWallHierarchy(\n          c.db,\n          ownerId: _uidU1,\n          areaId: 'area-1',\n          sectorId: 'sector-1',\n          wallId: 'wall-1',\n          photoId: idAt(0),\n          routeId: 'route-1',\n          localPath: 'photos/${idAt(0)}.jpg',\n        );\n        File(p.join(photosDir.path, '${idAt(0)}.jpg')).writeAsBytesSync(bytes);\n        remote.privateStorage['$_uidU1/${idAt(0)}.jpg'] = bytes;\n\n        for (var i = 1; i < 150; i++) {\n          final id = idAt(i);\n          await c.db.into(c.db.photos).insert(\n            PhotosCompanion.insert(\n              id: id,\n              createdAt: 100,\n              updatedAt: 100,\n              ownerId: const Value(_uidU1),\n              wallId: 'wall-1',\n              localPath: 'photos/$id.jpg',\n              kind: 'original',\n              width: 800,\n              height: 600,\n              sortOrder: Value(i),\n            ),\n          );\n          File(p.join(photosDir.path, '$id.jpg')).writeAsBytesSync(bytes);\n          remote.privateStorage['$_uidU1/$id.jpg'] = bytes;\n        }\n\n        final result = await c.service.pushOwn();\n\n        expect(\n          result.photosUploaded,\n          50,\n          reason: 'exactly the objects past the 100-object cut — the cost S6 '\n              'imposed on every push, at full resolution',\n        );\n      },\n    );"
+        },
+        {
+          "action": "Add the deliberately-truncating subclass beside `FailingUploadSyncRemote`, to make the anti-vacuity test possible.",
+          "code": "/// [FakeSyncRemote] that lists only the FIRST page of a prefix and stops —\n/// i.e. the pre-fix, un-paged `list(path: …)` behaviour. Exists purely so the\n/// 150-object test above can prove it would FAIL without pagination: an\n/// assertion that \"nothing was re-uploaded\" is only meaningful next to a\n/// demonstration that the truncated case really does re-upload.\nclass _SinglePageListingRemote extends FakeSyncRemote {\n  @override\n  Future<Set<String>> listPhotoObjectPaths(String uid) async {\n    final prefix = '$uid/';\n    final keys = privateStorage.keys.where((k) => k.startsWith(prefix)).toList()\n      ..sort();\n    return keys.take(kStoragePageSize).toSet();\n  }\n}"
+        },
+        {
+          "action": "Run just the two new tests.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/backup/data/sync_service_test.dart --plain-name 'S6'",
+          "expected": "Both green: the paged case reports `photosUploaded == 0` with a request at `offset: 100`; the artificially-truncated case reports `photosUploaded == 50`."
+        },
+        {
+          "action": "Run the whole sync suite, then analyze, then the full suite.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter test test/features/backup/data/sync_service_test.dart && flutter analyze && flutter test",
+          "expected": "sync suite green (36 tests) · analyze: No issues found! · full suite 1576+ passing, 0 failing."
+        },
+        {
+          "action": "Correct the two stale docs this workstream touches, as the spec's \"Docs to correct\" section requires for anything it invalidates: CLAUDE.md's '~377 tests' baseline (it is 1576+) stays for §1d/§1e to fix if they get there first — but if it is still wrong at this point, fix it here in one line rather than leaving it.",
+          "code": "// CLAUDE.md — in the 'Fast checks' block, replace\n//   flutter test        # ~377 tests, must be green\n// with\n//   flutter test        # 1576+ tests, must be green"
+        },
+        {
+          "action": "Commit and confirm the tree is clean apart from intended files.",
+          "command": "export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && git status --short | grep -E '^\\s*M|^\\?\\?' | grep -v -E 'ios/|masi_icons|android/build|\\.wrangler|docs/superpowers'",
+          "expected": "Only the files listed in filesTouched (plus CLAUDE.md) appear as modified/new."
+        }
+      ],
+      "assertions": [
+        "`flutter test test/features/backup/data/sync_service_test.dart --plain-name 'S6'` is green with two tests.",
+        "With 150 photo rows all backed by real local files AND all 150 objects pre-present in `FakeSyncRemote.privateStorage`, `pushOwn()` returns `photosUploaded == 0`, `uploadedPrivatePaths` is empty, and `photosFailed`/`photosMissingLocalBytes` are both 0 — the skip-set saw all 150.",
+        "`remote.listPageRequests` contains an entry with `offset == 100` and every entry has `limit == kStoragePageSize`, proving the listing paged rather than issuing one unbounded call.",
+        "`fetchOwnRows(uid)['photos']` has length 150 — pagination did not cause any row to be withheld.",
+        "The anti-vacuity test with `_SinglePageListingRemote` reports `photosUploaded == 50`, demonstrating the un-paged behaviour the fix removes; without it the primary assertion could pass trivially.",
+        "`FakeSyncRemote`'s two listings route through `collectPagedObjects` — the same helper `SupabaseSyncRemote._listAllObjects` uses — so the test exercises the real paging logic, not a parallel reimplementation.",
+        "`flutter analyze` = 0 issues and `flutter test` ≥1576 passing.",
+        "CLAUDE.md's `flutter test` comment no longer claims '~377 tests'."
+      ],
+      "commitMessage": "test(sync): prove a 150-object skip-set is complete and re-uploads nothing (S6)"
+    }
+  ],
+  "risks": [
+    "SHARED-FILE COLLISION is the top risk. `lib/features/backup/data/sync_service.dart`, `lib/features/backup/data/sync_remote.dart` and `test/features/backup/data/sync_service_test.dart` are all edited by §1d and §1e as well. T7–T10 MUST NOT run in parallel with those workstreams (see sequencingNotes) — a concurrent edit here means a git-stash recovery, which this repo has been bitten by before.",
+    "`PushSyncResult` is edited by both §1d (adding `rowsFailed` + a table-failure channel) and §1f (adding `photosFailed`/`photosMissingLocalBytes`/`photoErrors`). The three new params are OPTIONAL with defaults specifically so the merge is additive, but the constructor bodies and `toString()` will conflict textually. Reconciliation if §1d landed first: append the three params to the existing `pushed` ctor, add the three `= 0`/`= const []` initializers to BOTH `skipped*` ctors, and extend the single `toString()` interpolation. Do not create a second result class.",
+    "Withholding a photo row means the RECEIVING device's `routes` import can FK-violate (`Routes.photoId` → `Photos.id`, `PRAGMA foreign_keys = ON`) while the photo row is absent from the cloud. `BackupRepository.importSnapshot` isolates that per table (backup_repository.dart:85-92, and its own comment at :126-129 already anticipates exactly this), so it surfaces as a visible `PullResult.errors` entry and self-heals on the next successful push — but it WILL make the receiving device show 'Couldn't sync' for a cycle. Deliberate: honest and transient beats S5's silent permanent orphan. Verified the live Postgres schema has NO FK on `routes.photoId`/`photos.wallId` (supabase/schema.sql — only `comments.ascentId`/`likes.ascentId` carry REFERENCES), so the push side itself cannot FK-fail.",
+    "Treating `readPhotoBytes() == null` as WITHHOLDING would have broken ~15 existing tests that seed `seedWallHierarchy`'s default `localPath: '/tmp/placeholder.jpg'` and assert the photo row reaches the remote (C1a's `rowsPushed == 8` at sync_service_test.dart:1171, plus the whole two-device pull suite). It would also spin §1e's retry loop forever on a row whose bytes can never reappear. Hence the deliberate split into `photosFailed` (retryable, withheld) vs `photosMissingLocalBytes` (not retryable, still pushed). If a reviewer wants the spec's assertion read literally for BOTH cases, that is a larger change requiring those fixtures to write real files, and it must be raised before implementing rather than patched mid-task.",
+    "`§1e` must key its retry on `PushSyncResult.hasPhotoFailures` (i.e. `photosFailed > 0`), NOT on `photoErrors.isNotEmpty`. Keying on the error list would make a permanently-missing-bytes row retry forever at the backoff ceiling. This is the single most important cross-workstream contract in this plan.",
+    "`test/features/topo/data/photo_files_web_test.dart` imports the WEB branch file directly, which has no precedent in this repo. PROVEN to work in this session (probe test ran green on the VM: `image_ops/image_ops.dart` resolves to the pure-Dart native branch under `dart.library.io`, and `idbFactoryWeb` is never evaluated when a store is injected). If a future change adds a real `dart:js_interop` import to `photo_files_web.dart`, that test file stops compiling — the fallback is to move the propagation contract onto an interface-level test with an injected store abstraction.",
+    "`_QuotaFailingPhotoFiles extends PhotoFiles` relies on the stub/native constructors both accepting a zero-arg `super()` and on both declaring `importPhoto(XFile, String)` identically. `photo_files_stub.dart:12-21` documents that this signature-compatibility is maintained on purpose, but a future divergence breaks the subclass silently on one platform only. The class is duplicated in two test files (photo_ownership_test.dart, topos_screen_test.dart) because both copies are file-private — matching this repo's `_FakeSyncOrchestrator` precedent, but it is two places to update.",
+    "`softDeleteWall` in `_handleNewTopo`'s failure path runs a cascade soft-delete transaction (`_cascadeSoftDeleteWallSubtree`). If IT throws, the exception escapes the typed clause into the outer catch-all and the user gets no SnackBar plus an orphan wall — strictly worse than today. Consider wrapping it, or verify by inspection that a freshly-created empty wall's cascade cannot fail. Not covered by a test in this plan.",
+    "`MasiIcon` renders `SvgPicture.asset`, which needs the asset bundle under `flutter test`. Existing tests do assert `find.byType(MasiIcon)` successfully, so this should be fine — but if the new SnackBar widget test fails on asset loading, drop the icon (matching `gpsCaptureResultSnackBar`'s own icon-less `GpsCaptureResult.none` branch) rather than mocking the bundle.",
+    "The `removePhoto`/`removeSharedPhoto` calls in the tombstone branch of `_uploadOwnPhotos` are still un-guarded: a non-`StorageException` throw there propagates out of `pushOwn` and lands as `SyncStatus.error`. Pre-existing behaviour, deliberately left alone to keep this diff scoped — but it means the tombstone path has no counter while the upload path now does.",
+    "The Supabase Storage `list()` endpoint returns a `.emptyFolderPlaceholder` row for some prefixes, which would enter the skip-set as a bogus path. Pre-existing in both listings and not introduced here, but pagination makes the set larger and more visible. Worth a follow-up filter on `file.name`.",
+    "T3's second verification step showed the 'no Photos row' guarantee ALSO holds if the `importPhoto` await moves inside the transaction (drift rolls back on throw). The test therefore guards against a future refactor that CATCHES the exception and inserts anyway — not against ordering drift. Do not oversell it in the commit message.",
+    "`writePhotoBytes` now throws `PhotoWriteException` on the pull/restore path, and `_downloadAndRewritePhotos` is NOT per-photo guarded — the first failure aborts that whole section (caught upstream into `PullResult.errors`). The exception TYPE improves, the blast radius does not. Out of scope for §1f's assertions but a real quota-on-restore behaviour worth noting."
+  ],
+  "sequencingNotes": "Split this workstream into two independently-schedulable halves.\n\n**Half A — photo path (T1–T6). Fully write-disjoint from §1d and §1e; can run in parallel with them.** Touches `lib/features/topo/data/{photo_write_exception,photo_files,photo_files_web,photo_files_native}.dart`, `lib/features/topo/presentation/{topo_canvas_photo_ops,topo_canvas_screen}.dart`, `lib/features/library/presentation/topos_screen.dart`, `lib/features/library/data/library_crud_repository.dart` (doc comment only), and their tests. T1→T2→T3 are strictly serial (each depends on the previous symbol). T4 depends on T1. T5 and T6 both depend on T4 and are file-disjoint from each other, so they may run in parallel.\n\n**Half B — sync path (T7–T10). MUST be serialized against §1d and §1e.** Shared files:\n- `lib/features/backup/data/sync_service.dart` — §1d rewrites `pushOwn`'s `upsertOwnRows` call and `PushSyncResult`; §1e rewrites the snapshot reads (dirty filter) and strips `dirty`/`remoteId` from the payload. T8/T9 rewrite `PushSyncResult`, `_uploadOwnPhotos` and `pushOwn`'s body. **Recommended order: §1d → §1e → §1f Half B**, so §1d defines the canonical failure-channel shape and §1f slots its photo counters alongside `rowsFailed` rather than the reverse.\n- `lib/features/backup/data/sync_remote.dart` — §1d changes `upsertOwnRows`' return type and routes `filterValidSyncRows` skips into the failure channel; T7 changes only the two `list*ObjectPaths` methods and adds one import. Low overlap but still the same file: do not run concurrently.\n- `test/features/backup/data/sync_service_test.dart` — §1d and §1e both extend `FakeSyncRemote` (§1d needs a per-table throwing variant, §1e needs `syncRemoteProvider`/`connectivityServiceProvider` override points). T9/T10 add `callLog`, paged listings, `listPageRequests`, `FailingUploadSyncRemote` and `_SinglePageListingRemote` to the same class. **Highest collision risk in the plan** — serialize.\n- `lib/features/backup/data/storage_pagination.dart` is NEW and owned solely by §1f; §1d/§1e do not touch it.\n\n**Not touched by §1f, deliberately:** `lib/features/backup/application/sync_orchestrator.dart`. §1f-3's \"retried through §1e's loop\" is delivered as a SEAM only — `PushSyncResult.hasPhotoFailures` — which §1e must consume in `_runPush` (currently sync_orchestrator.dart:204-220, which sets `idle` + a fresh `lastSyncedAt` on any `pushed` outcome). §1f asserts the count exists and heals on retry; §1e owns scheduling that retry and owns the honesty of the `sync-status` label.\n\n**Other workstreams sharing Half A's files:** §1c edits `lib/features/library/data/library_crud_repository.dart` (row-count guards on `_ownOrUnowned` mutations) — T3 changes only `attachPhotoToWall`'s doc comment there, a small but real textual overlap; land T3 first or rebase it. §1c also edits `library_providers.dart`/`toposProvider`, which T6's `topos_screen_test.dart` harness reads — §1c may touch `_makeContainer` in that same test file, so coordinate the `photoFiles` parameter addition. Stage 3 edits `topos_empty_states.dart`, a `part` of the `topos_screen.dart` library — same library, different file, so no direct conflict.\n\n**Baseline gate after every task:** `export PATH=\"/opt/homebrew/bin:$PATH\" && cd /Users/kerip/Projects/masi && flutter analyze && flutter test` → 0 issues, ≥1576 passing. Commit at each task boundary (one logical change per commit, straight to `main`, never pushed)."
+}
