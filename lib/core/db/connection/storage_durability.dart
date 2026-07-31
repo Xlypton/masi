@@ -125,7 +125,7 @@ class StorageDurability {
       'missingFeatures: $missingFeatures)';
 }
 
-/// Logs [durability] — deliberately not gated behind a debug-only build flag.
+/// Logs [durability] — deliberately NOT behind `kDebugMode`.
 ///
 /// This line is the only thing that can answer a "my data vanished" web
 /// report (design doc §1a / L1), and a RELEASE web build is exactly where it
@@ -135,7 +135,7 @@ class StorageDurability {
 /// reaches the browser console, where `masi/storage:` is greppable.
 /// `test/core/db/storage_durability_test.dart` swaps `debugPrint` out to
 /// assert this fires; `test/core/db/connection_seam_source_test.dart`
-/// asserts no debug-only logging gate has crept back into `lib/`.
+/// asserts no `kDebugMode` gate has crept back into `lib/`.
 void logStorageDurability(StorageDurability durability) {
   final missing = durability.missingFeatures.map((f) => f.name).toList()
     ..sort();

@@ -9,8 +9,8 @@ import 'storage_durability.dart';
 /// [onStorageReport] receives drift's verdict — which storage implementation
 /// was actually chosen, and which browser features were missing — exactly
 /// once, as soon as `WasmDatabase.open`'s feature probe resolves. That
-/// verdict used to be thrown away behind a debug-only conditional wrapping a
-/// `debugPrint(...)` call, which is L1 in
+/// verdict used to be thrown away behind an `if (kDebugMode) debugPrint(...)`,
+/// which is L1 in
 /// `docs/superpowers/specs/2026-07-30-web-offline-reliability-design.md`:
 /// `WasmDatabase.open` NEVER throws, it silently degrades to
 /// `WasmStorageImplementation.inMemory` ("doesn't store anything"), so every

@@ -70,8 +70,8 @@ class StoragePersistenceController extends Notifier<StoragePersistenceStatus> {
       estimate: estimate,
     );
     if (outcome != StoragePersistOutcome.notApplicable) {
-      // Deliberately not gated behind a debug-only build flag: alongside the
-      // drift storage backend logged by `connection_web.dart`, this is the first thing to
+      // Deliberately NOT behind `kDebugMode`: alongside the drift storage
+      // backend logged by `connection_web.dart`, this is the first thing to
       // check in any "my data vanished" web report — and release builds are
       // exactly where those come from. Silent on native, where the outcome
       // is always `notApplicable`.

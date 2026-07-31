@@ -30,6 +30,24 @@ String _normalized(String path) {
   return file.readAsStringSync().replaceAll(RegExp(r'\s+'), ' ');
 }
 
+/// Strips whole-line `//`/`///` comments, keeping only lines that contain
+/// real Dart code, so the `kDebugMode` guards below match *usage* — an
+/// `if (kDebugMode)`, a `kDebugMode ?`/`&&` expression, an import-and-use —
+/// rather than prose. Doc comments legitimately NAME `kDebugMode` to explain
+/// that a log is deliberately not gated behind it (see
+/// `connection_web.dart`, `storage_durability.dart`,
+/// `storage_persistence_providers.dart`); a bare substring grep over the raw
+/// file flags those as false positives. Same fix as the `dart:io` gate in
+/// `tool/build_web.sh`, which anchors on import/export directives instead of
+/// grepping the raw token — this is that gate's comment-stripping analogue
+/// for an identifier rather than a directive.
+String _stripCommentLines(String source) {
+  return source
+      .split('\n')
+      .where((line) => !line.trimLeft().startsWith('//'))
+      .join('\n');
+}
+
 void main() {
   const webPath = 'lib/core/db/connection/connection_web.dart';
   const nativePath = 'lib/core/db/connection/connection_native.dart';
@@ -43,12 +61,15 @@ void main() {
     });
 
     test('logs OUTSIDE kDebugMode — no kDebugMode gate anywhere', () {
+      final code = _stripCommentLines(File(webPath).readAsStringSync());
       expect(
-        _normalized(webPath),
+        code,
         isNot(contains('kDebugMode')),
         reason: 'the pre-fix code hid the storage verdict behind '
             '`if (kDebugMode)`, which is precisely why total data loss was '
-            'invisible in the release web build',
+            'invisible in the release web build (the doc comment above '
+            '`openConnection` legitimately NAMES `kDebugMode` in prose to '
+            'explain that history — this checks code, not comments)',
       );
     });
 
@@ -102,13 +123,14 @@ void main() {
   });
 
   group('lib/ has no kDebugMode-gated diagnostics left', () {
-    test('zero kDebugMode occurrences under lib/', () {
+    test('zero kDebugMode occurrences under lib/ (code, not comments)', () {
       final offenders = <String>[];
       for (final entity in Directory('lib').listSync(recursive: true)) {
         if (entity is! File) continue;
         if (!entity.path.endsWith('.dart')) continue;
         if (entity.path.endsWith('.g.dart')) continue;
-        if (entity.readAsStringSync().contains('kDebugMode')) {
+        final code = _stripCommentLines(entity.readAsStringSync());
+        if (code.contains('kDebugMode')) {
           offenders.add(entity.path);
         }
       }
@@ -118,7 +140,10 @@ void main() {
         reason: 'lib/ had exactly ONE kDebugMode before this work — the '
             'swallowed drift storage verdict (L1). Any new one is a '
             'diagnostic that will be invisible in the release web build, '
-            'which is the only place it matters.',
+            'which is the only place it matters. (Doc comments are allowed '
+            'to NAME `kDebugMode` in prose — e.g. to explain a log is '
+            'deliberately not gated behind it — only real code usage fails '
+            'this guard.)',
       );
     });
   });
