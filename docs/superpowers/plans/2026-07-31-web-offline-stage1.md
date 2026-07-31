@@ -35,8 +35,15 @@ Work stopped when the org's **monthly API spend limit** was reached, killing fou
 - Gates at that point: `flutter analyze` **0 issues**, `flutter test` **1586 passing** (baseline 1576 + 10), `dart:io` directive gate empty.
 - Unrelated but shipped: `14332a1` reconciled the CI `dart:io` gate with `tool/build_web.sh` (it had a false-positive substring grep that would fail on clean code).
 
-**Carries a caveat**
-- §1b tasks 1–2 have **not had an independent verify pass**. The implementing agent was terminated immediately before its own verification run; I ran analyze + the full suite and both are green, but no clean-context reviewer has read the diff. Per this plan's verify-gate rule that is not "done" — re-run the gate on `694e7f2..02b854b` before building further on it.
+- §1b task 3 — `e682e27` one-shot persistence controller + provider. **Independently verified: PASS.**
+- §1b tasks 1–2 — **independently verified: PASS.** (D-21 confirmed handled *soundly*, not merely analyzer-clean: the `isA<JSObject>()` guard proves exactly what the `StorageManager` extension-type cast erases to at runtime. The impl also deliberately bypasses `StorageEstimate`'s non-nullable typed getters, so a browser omitting `usage` or `quota` still yields the other instead of collapsing both to null.)
+- Live gates after task 3: `flutter analyze` **0 issues**, `flutter test` **1595 passing** (1576 + 19).
+
+**Open findings carried forward (non-blocking)**
+
+- **For §1b task 4's implementer and verifier:** `ref.read(storagePersistenceServiceProvider)` at the head of `_request()`/`refresh()` sits **outside** any try/catch. On an already-disposed container the returned future completes with an error, which task 4's `unawaited(...)` would surface as an unhandled async error. Unreachable in the specified boot wiring (the read happens immediately after container creation), but task 4 is exactly where it *could* become reachable — verify it there.
+- **Cosmetic, fold into §1b task 4's commit:** `test/core/storage/storage_persistence_providers_test.dart` carries an `// ignore: unused_element_parameter` on the fake's `estimateSnapshot` constructor parameter. The narrowest fix is to delete that parameter and initialise the mutable field directly — `StorageEstimateSnapshot? estimateSnapshot = const StorageEstimateSnapshot(usageBytes: 1024, quotaBytes: 8192);` — which removes the suppression with byte-identical behaviour. Note the sibling `persisted` parameter **must** keep its constructor form (one test passes `persisted: false`). Also note the diagnostic is an **SDK-level analyzer warning**, not a `flutter_lints` rule as the commit implies.
+- **Plan bug, §1b task 3 assertion 7:** it asserts `grep -rn 'StateProvider' lib/core/storage` is empty, which the plan's own prescribed code cannot satisfy — that code contains the string in a doc comment ("never `StateProvider`"). The substance (no `StateProvider` *usage*) passes. Anyone re-running that assertion literally will see a false failure.
 
 **Plan fragments — three are not yet converted**
 - Corrected and ready: `1a-storage-interlock.md` (1898 lines), `1b-persistent-storage.md` (1599), `1c-a-uid-door.md` (1681), `1c-b-router-rowguards.md` (1701).
@@ -166,6 +173,8 @@ Consequences the implementer must handle:
 
 The fragments were written independently and five of these would break the build or reintroduce a spec-level bug. Each fragment file has them applied inline; they are restated here because a task's implementer may read only one fragment.
 
+0. **`_clearDirty` must be narrowed to tables that actually landed — THE most dangerous defect found, and it would have caused the very data loss this project prevents.** §1d wraps `upsertOwnRows` in try/catch and converts a throw into an all-tables-`failed` *result*; it **no longer throws**. §1e's unconditional `await _clearDirty(tablesToRows)` therefore clears `dirty` for rows that never reached the cloud. Since `dirty` is what drives "retry until clean", those rows would never be pushed again — an offline edit would be silently and permanently discarded, with the UI reporting success. Narrow the clear to the tables whose outcome is `ok`. Reconciliation decision #14 restates the plain call and misses this; §1e's own risks list flagged it only as a future note. Two knock-on fixes travel with it: a §1e test asserting `pushOwn()` *throws* can never pass post-§1d (rewrite as a result assertion plus a dirty-survival check), and `_scheduleRetry()` must be armed on the returning `!fullyLanded` path as well as in `catch` — post-§1d the dominant failure is a returned result, not an exception, so the retry loop was dead for per-table rejections.
+
 1. **`fullyLanded` must include `photosFailed`** (reconciliation D-2, highest severity). §1d defines `fullyLanded => didPush && rowsFailed == 0 && errors.isEmpty`, and it is the *sole* gate the orchestrator uses for `idle` + a fresh `lastSyncedAt`. §1f withholds a failed photo's row *from* the push, so `rowsFailed` stays 0 — meaning a push where **every photo's bytes failed** would report success and render "Synced • just now". That is precisely the S1 lie §1d exists to kill, re-entering through the photo path. Final form, owned by §1f: `bool get fullyLanded => didPush && rowsFailed == 0 && errors.isEmpty && photosFailed == 0;` with `lastPushError` concatenating `errors + photoErrors`. `photosMissingLocalBytes` is **deliberately excluded** — it is non-retryable, and including it would stop §1e's retry loop from ever terminating.
 2. **Three §1e test doubles will not compile after §1d.** `_ThrowingUpsertRemote` → delete, use §1d's public `ThrowingUpsertSyncRemote`. `_MidPushWriteRemote` and `_OfflineToggleSyncRemote` → retype to `Future<List<TablePushOutcome>>`.
 3. **§1f's `wallVisibility` derivation is wrong under dirty scoping.** Deriving it from the dirty-filtered `walls` list silently stops uploading the shared copy of a new photo on an already-pushed shared wall. Consume §1e's `selectOnly` projection over *all* own walls.
@@ -174,6 +183,36 @@ The fragments were written independently and five of these would break the build
 6. **§1d tasks 3 and 4 both declare `errors`/`rowsFailed`** in different places, yielding a duplicate-declaration error if split across engineers. Task 3 declares them where task 4 wants them.
 7. **All four `app_test.dart` containers need the `connectivityServiceProvider` override**, not the two named — `_makeContainer` (`:148`) and the inline container (`:318`) were missed. Benign under §1d alone, fatal under §1e's unconditional `statusChanges()` listener.
 8. **`ConnectivityService` gains two members from two fragments** — `isBackendReachable()` (§1d) and `statusChanges()` (§1e). Added once each; neither fragment may re-declare the abstract class wholesale. All four fakes need both.
+
+### Amendments found during §1d's conversion (supersede `reconciliation.md`)
+
+9. **The merged connectivity fakes must NOT carry `@override` on `statusChanges()` yet.** Reconciliation decisions #4/#5 have §1d write the four fakes as the union with §1e's additions — but as written that fails `flutter analyze`, because a fake cannot `@override` an abstract member that does not exist until §1e declares it. §1d omits the annotation; **§1e's task adds `@override` to all four fakes** when it declares the abstract member.
+10. **`classifyConnectivityResults` is extracted by §1d, not §1e.** Reconciliation decision #3 assigned the extraction to §1e, but §1d rewrites `connectivity_service.dart` first and must leave it compiling, so the extraction physically lands in §1d's task 6. §1e's task 7 is correspondingly reduced to adding `statusChanges()` plus the `@override` annotations from item 9.
+11. **§1d's task 1 adds 5 tests, not the 7 it claims** (same class of error as D-15), so §1d adds **28** tests in total, not 30. Gate on green, not on counts.
+12. Line-number drift corrected during conversion: `app_test.dart:506` → `:505`; `account_screen_test.dart:785/:786` → `:786/:787`; `nowMsProvider` is `database_provider.dart:24` (not `:23`); the `SyncStatus.offline` doc is `:26-29` (not `:25-29`).
+
+### Amendments found during §1e/§1f conversion
+
+13. **`_clearDirty` must be narrowed to *landed* tables — reconciliation decision #14 is wrong.** #14 writes the final step as a plain `_clearDirty(tablesToRows)`, which would mark rows from tables that **failed** to push as clean, i.e. silently treat unsynced rows as synced. §1e narrows it to landed tables only; §1f adopts §1e's narrowed form everywhere its composed blocks show a dirty-clear. This is a data-integrity bug, not a style point.
+14. **§1e already arms `_scheduleRetry()` on the not-fully-landed branch.** §1f's orchestrator edit is therefore scoped down to the `lastPushError` interpolation alone (`[...result.errors, ...result.photoErrors].join('; ')`) — it must NOT add a second retry call.
+15. **§1f's `_makeContainer` block silently reverted §1a's `storageDurability` parameter.** Restored during conversion (reconciliation decision #7). Watch for this when applying §1f's Topos-home task.
+16. **The `.list(` invariant is "zero un-paged listings", not a count.** There are three call sites (`sync_remote.dart:638`, `:668`, `backup_remote.dart:159`), not the two D-14 claims — and post-fix the two `sync_remote.dart` sites collapse into one `_listAllObjects`, so a numeric assertion would be wrong either way. D-14's claim that §1f's final task repeats the bad count is also false; both occurrences are in the pagination task.
+17. **§1f's web-backend task claims 8 tests; the file has 7.** Same class as D-15/item 11. Gate on green, never on counts.
+18. **`app_test.dart`'s `_CountingSyncRemote` has only `pullCallCount`** (it is at `:30`, not the cited `:34`), but §1e's app-resume task reads `remote.pushCallCount` twice — a compile error. The field and its increment must be added.
+19. **`widget_test.dart` has a SECOND un-overridden `MasiApp` mount at `:2119`**, which the reconciliation's "One caveat" missed. It matters for the same reason as the others: after §1e's task 8 the orchestrator's `build()` unconditionally subscribes to `statusChanges()`, so an un-overridden mount constructs the real `SystemConnectivityService`.
+20. **§1e's whole-file re-emit of `connectivity_service.dart` would have deleted §1d's `isBackendReachable()` and its third positional parameter.** Restructured into four surgical additions. Any "re-emit the whole file" step in a later fragment is a red flag for exactly this.
+21. Counts corrected: `library_crud_repository.dart` has **17** `dirty: const Value(true)` sites (→ 29, not 18 → 30); repo-wide **35**, not 30. §1e adds **31** tests, not ~25. Load-bearing line drift: `SyncPushOutcome` `:11` not `:10`; `app_test.dart` resume group `:385-555` not `:390-479`; `SyncRemote` `:80`, `SupabaseSyncRemote` `:347`, `_UnavailableSyncRemote` `:65` (all three also wrong in `reconciliation.md`).
+22. **D-17's flake is fixed properly, not weakened.** §1e's retry test now drives eight explicit awaited `pushNow()` calls against a 1-hour fixed schedule and asserts the exact requested attempts `[1…8]` — clock-free and *stronger* than the original `length > 5`. Only the "no user action required" test stays timer-driven, since that property is its actual subject; it gets a widened 10 ms/250 ms margin plus a 20×-rerun step.
+
+### Token-grep assertions keep misfiring — fix the guard, not the prose
+
+Three separate instances now, all the same shape: a source-scan assertion greps for a bare token, and legitimately-written prose that *mentions* the token fails it.
+
+1. The CI `dart:io` gate matched 35 doc comments explaining the wasm split. **Fixed** in `14332a1` by anchoring on import/export *directives*.
+2. §1b task 3's assertion 7 greps `StateProvider` in `lib/core/storage`, which the plan's own doc comment ("never `StateProvider`") cannot satisfy.
+3. §1a task 3's guard asserts **zero `kDebugMode` anywhere under `lib/`**, which collides with §1b's release-logging doc comment that names the token to explain why the log is *not* gated on it.
+
+**Resolution:** the guard must match real usage — `if (kDebugMode)` / an actual reference in code — and must exclude comment lines, exactly as the `dart:io` gate now does. Rewording good comments to dodge a grep is the wrong layer and degrades the code: during §1a's implementation, §1b's comment was silently edited from naming `kDebugMode` to the vaguer "debug-only build flag" purely to satisfy the scan. **Restore that comment and tighten §1a's guard** as a follow-up. Apply the same rule to any further source-scan assertion in this plan.
 
 ---
 
