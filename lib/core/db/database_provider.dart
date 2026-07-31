@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app_database.dart';
 import 'connection/connection.dart';
+import 'storage_durability_provider.dart';
 import '../../features/account/application/auth_providers.dart';
 import '../../features/topo/data/photo_files.dart';
 import '../../features/topo/data/photo_repository.dart';
@@ -14,7 +15,32 @@ import '../../features/topo/data/route_repository.dart';
 /// Intended to be OVERRIDDEN in tests with an in-memory
 /// `AppDatabase(NativeDatabase.memory())`.
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
-  final db = AppDatabase(openConnection());
+  // The connection layer's storage verdict (native: "a real sqlite file, so
+  // durable"; web: whatever `WasmDatabase.open`'s browser-feature probe
+  // resolved to) is published on `storageDurabilityProvider` instead of being
+  // discarded — that discard is L1 in
+  // `docs/superpowers/specs/2026-07-30-web-offline-reliability-design.md`.
+  //
+  // The notifier is captured HERE, at build time, rather than `ref.read` from
+  // inside the callback: on web that callback fires long after this build
+  // returns, and reaching through a possibly-disposed `ref` then would throw.
+  //
+  // The report is deferred by one microtask because `connection_native.dart`
+  // calls `onStorageReport` SYNCHRONOUSLY, i.e. while this provider is still
+  // initializing — and Riverpod asserts "Providers are not allowed to modify
+  // other providers during their initialization."
+  // (riverpod/src/core/element.dart). One microtask puts the state write
+  // safely outside both this build and any widget build that triggered it; on
+  // web it changes nothing, since the callback is already asynchronous.
+  // `report()` is itself `ref.mounted`-guarded, so a verdict that lands after
+  // teardown is logged and dropped rather than crashing.
+  final storage = ref.read(storageDurabilityProvider.notifier);
+  final db = AppDatabase(
+    openConnection(
+      onStorageReport: (verdict) =>
+          Future<void>.microtask(() => storage.report(verdict)),
+    ),
+  );
   ref.onDispose(() => db.close());
   return db;
 });
