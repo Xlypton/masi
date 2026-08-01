@@ -402,11 +402,9 @@ class FakeConnectivityService implements ConnectivityService {
   @override
   Future<bool> isBackendReachable() async => reachable;
 
-  /// §1e's second seam member, written here as part of the ONE merged
-  /// rewrite of this class (reconciliation decision #5). No `@override`
-  /// yet: `ConnectivityService` does not declare `statusChanges()` until
-  /// §1e T7, and annotating a non-overriding member is an analyzer error.
-  /// §1e T7's only remaining job on this class is to add that annotation.
+  /// §1e's second seam member. `SyncService` never subscribes to it (only
+  /// `SyncOrchestrator` does), so an always-empty stream is exactly right.
+  @override
   Stream<NetworkStatus> statusChanges() => const Stream<NetworkStatus>.empty();
 }
 

@@ -144,12 +144,11 @@ class _FakeConnectivityService implements ConnectivityService {
   @override
   Future<bool> isBackendReachable() async => true;
 
-  /// §1e's second seam member, written here as part of the ONE merged
-  /// rewrite (reconciliation decision #5). An inert stream is exactly right
-  /// for a widget test: §1e T8 makes `SyncOrchestrator.build()`
-  /// unconditionally `statusChanges().listen(...)`, and "never emits" means
-  /// "no transitions", never an error. No `@override` until §1e T7 declares
-  /// the abstract member.
+  /// §1e's second seam member. An inert stream is exactly right for a widget
+  /// test: §1e T8 makes `SyncOrchestrator.build()` unconditionally
+  /// `statusChanges().listen(...)`, and "never emits" means "no transitions",
+  /// never an error.
+  @override
   Stream<NetworkStatus> statusChanges() => const Stream<NetworkStatus>.empty();
 }
 

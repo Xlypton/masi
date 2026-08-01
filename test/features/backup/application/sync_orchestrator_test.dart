@@ -300,9 +300,7 @@ class _FakeConnectivityService implements ConnectivityService {
     return reachable;
   }
 
-  /// No `@override` yet: `ConnectivityService` does not declare
-  /// `statusChanges()` until §1e T7, and annotating a non-overriding member
-  /// is an analyzer error. §1e T7 adds the annotation and nothing else.
+  @override
   Stream<NetworkStatus> statusChanges() => _statusController.stream;
 
   /// Drives a connectivity transition from a test (§1e).
