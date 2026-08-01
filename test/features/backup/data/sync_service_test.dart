@@ -288,6 +288,81 @@ class ThrowingFetchSharedToposRemote extends FakeSyncRemote {
   }
 }
 
+/// [FakeSyncRemote] variant whose [upsertOwnRows] reports EVERY attempted
+/// table as failed — exactly the shape `SupabaseSyncRemote.upsertOwnRows`
+/// returns when each table's round trip throws (offline, captive portal,
+/// expired JWT, ...). Storage/photo methods are inherited and keep working,
+/// so a test can isolate "the row phase failed" from "the photo phase
+/// failed".
+///
+/// S1 regression guard: before §1d this class was unrepresentable —
+/// `upsertOwnRows` returned `void` and swallowed per-table errors, so
+/// `pushOwn` counted the rows it handed over as pushed and reported success.
+class AllTablesFailingSyncRemote extends FakeSyncRemote {
+  AllTablesFailingSyncRemote({this.message = 'simulated cloud error'});
+
+  final String message;
+
+  @override
+  Future<List<TablePushOutcome>> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async => [
+    for (final entry in tablesToRows.entries)
+      if (entry.value.isNotEmpty)
+        TablePushOutcome.failed(
+          table: entry.key,
+          rowsFailed: entry.value.length,
+          error: Exception(message),
+        ),
+  ];
+}
+
+/// [FakeSyncRemote] variant whose [upsertOwnRows] THROWS outright rather
+/// than reporting per-table failures — the "remote itself is unreachable"
+/// shape. `pushOwn` must convert this into an all-tables-failed RESULT, not
+/// propagate it, so the orchestrator sees a truthful push result either way.
+class ThrowingUpsertSyncRemote extends FakeSyncRemote {
+  @override
+  Future<List<TablePushOutcome>> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {
+    throw Exception('upsertOwnRows boom');
+  }
+}
+
+/// [FakeSyncRemote] variant where exactly ONE table fails and every other
+/// table pushes normally — proves per-table isolation is preserved (the
+/// other tables really do land) while the failure is now REPORTED.
+class OneTableFailingSyncRemote extends FakeSyncRemote {
+  OneTableFailingSyncRemote(this.failingTable);
+
+  final String failingTable;
+
+  @override
+  Future<List<TablePushOutcome>> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {
+    final failingRows = tablesToRows[failingTable];
+    final outcomes = await super.upsertOwnRows(uid, {
+      for (final entry in tablesToRows.entries)
+        if (entry.key != failingTable) entry.key: entry.value,
+    });
+    if (failingRows != null && failingRows.isNotEmpty) {
+      outcomes.add(
+        TablePushOutcome.failed(
+          table: failingTable,
+          rowsFailed: failingRows.length,
+          error: Exception('$failingTable rejected'),
+        ),
+      );
+    }
+    return outcomes;
+  }
+}
+
 /// In-memory [ConnectivityService] test double: reports whatever [status]
 /// is currently set to (no `connectivity_plus` platform channel).
 class FakeConnectivityService implements ConnectivityService {
@@ -488,6 +563,14 @@ void main() {
         expect(result.didPush, isTrue);
         expect(result.photosUploaded, 1);
         expect(result.rowsPushed, 6);
+        expect(result.rowsFailed, 0);
+        expect(result.errors, isEmpty);
+        expect(
+          result.fullyLanded,
+          isTrue,
+          reason: 'a clean push is the ONLY thing allowed to read as a '
+              'complete sync',
+        );
 
         final ownRows = await remote.fetchOwnRows(_uidU1);
         expect(
@@ -841,6 +924,175 @@ void main() {
         expect(outcomes.single.ok, isTrue);
         expect(outcomes.single.rowsUpserted, 0);
         expect(outcomes.single.rowsSkippedNewerRemote, 1);
+      },
+    );
+  });
+
+  group('§1d (S1): pushOwn tells the truth about what landed', () {
+    /// Two own rows and NO photo rows — the exact S1 precondition.
+    Future<void> seedAreaAndSectorOnly(AppDatabase db) async {
+      await db
+          .into(db.areas)
+          .insert(
+            AreasCompanion.insert(
+              id: 'area-1',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value(_uidU1),
+              name: 'Area 1',
+            ),
+          );
+      await db
+          .into(db.sectors)
+          .insert(
+            SectorsCompanion.insert(
+              id: 'sector-1',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value(_uidU1),
+              areaId: 'area-1',
+              name: 'Sector 1',
+              sortOrder: 0,
+            ),
+          );
+    }
+
+    test(
+      'S1 REGRESSION: an account with ZERO photo rows whose every table '
+      'failed reports the failure. Pre-fix this exact case reported '
+      'outcome=pushed with rowsPushed counting rows merely handed to the '
+      'remote, because `_uploadOwnPhotos` short-circuits at '
+      '`if (photos.isEmpty) return 0;` BEFORE the unguarded '
+      'listPhotoObjectPaths call that was the only thing surfacing a failed '
+      'push — so the Account screen rendered "Synced • just now"',
+      () async {
+        final remote = AllTablesFailingSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedAreaAndSectorOnly(c.db);
+
+        final result = await c.service.pushOwn();
+
+        expect(
+          await c.db.select(c.db.photos).get(),
+          isEmpty,
+          reason: 'the zero-photo precondition this regression depends on',
+        );
+        expect(result.rowsFailed, 2);
+        expect(result.rowsPushed, 0);
+        expect(result.errors, hasLength(2));
+        expect(result.errors.join(' '), contains('simulated cloud error'));
+        expect(
+          result.fullyLanded,
+          isFalse,
+          reason:
+              'nothing reached the cloud — this must never read as a '
+              'complete sync',
+        );
+      },
+    );
+
+    test(
+      'the same all-tables-failed push with photo rows PRESENT also reports '
+      'the failure, and the photo phase still runs (per-phase isolation is '
+      'preserved, just no longer silent)',
+      () async {
+        final remote = AllTablesFailingSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.rowsFailed, 5);
+        expect(result.rowsPushed, 0);
+        expect(result.fullyLanded, isFalse);
+        expect(
+          result.photosUploaded,
+          1,
+          reason: 'the byte phase is independent of the row phase and still ran',
+        );
+      },
+    );
+
+    test(
+      'upsertOwnRows throwing outright is converted into an all-tables-failed '
+      'RESULT, not propagated out of pushOwn',
+      () async {
+        final remote = ThrowingUpsertSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedAreaAndSectorOnly(c.db);
+
+        final result = await c.service.pushOwn();
+
+        expect(result.didPush, isTrue);
+        expect(result.fullyLanded, isFalse);
+        expect(result.rowsFailed, 2);
+        expect(result.errors.join(' '), contains('upsertOwnRows boom'));
+      },
+    );
+
+    test(
+      'ONE failing table is reported while every OTHER table genuinely lands '
+      '— rowsPushed and rowsFailed split the batch, and the partial push is '
+      'not fullyLanded',
+      () async {
+        final remote = OneTableFailingSyncRemote('photos');
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.rowsPushed, 4, reason: 'area + sector + wall + route');
+        expect(result.rowsFailed, 1, reason: 'the one photos row');
+        expect(result.errors, hasLength(1));
+        expect(result.errors.single, contains('photos'));
+        expect(result.fullyLanded, isFalse);
+
+        final ownRows = await remote.fetchOwnRows(_uidU1);
+        expect(ownRows['areas']!.map((r) => r['id']), ['area-1']);
+        expect(ownRows['routes']!.map((r) => r['id']), ['route-1']);
+        expect(
+          ownRows['photos'],
+          isEmpty,
+          reason: 'the failing table really did not land',
+        );
       },
     );
   });

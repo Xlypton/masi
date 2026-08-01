@@ -21,25 +21,47 @@ enum SyncPushOutcome {
 }
 
 /// Result of a [SyncService.pushOwn] call.
+///
+/// S1 fix (§1d): [rowsFailed]/[errors] mirror [PullResult.errors]' shape on
+/// the push side. Before this, a push could only report how many rows it
+/// HANDED to the remote — every per-table failure was swallowed inside
+/// [SyncRemote.upsertOwnRows] — so a push where literally nothing landed
+/// still produced `outcome == pushed` with a healthy row count, and the
+/// Account screen's `sync-status` line rendered "Synced • just now".
 class PushSyncResult {
-  const PushSyncResult.pushed({required this.rowsPushed, required this.photosUploaded})
-    : outcome = SyncPushOutcome.pushed;
+  const PushSyncResult.pushed({
+    required this.rowsPushed,
+    required this.photosUploaded,
+    this.rowsFailed = 0,
+    this.errors = const [],
+  }) : outcome = SyncPushOutcome.pushed;
 
   const PushSyncResult.skippedSignedOut()
     : outcome = SyncPushOutcome.skippedSignedOut,
       rowsPushed = 0,
-      photosUploaded = 0;
+      photosUploaded = 0,
+      rowsFailed = 0,
+      errors = const [];
 
   const PushSyncResult.skippedNotWifi()
     : outcome = SyncPushOutcome.skippedNotWifi,
       rowsPushed = 0,
-      photosUploaded = 0;
+      photosUploaded = 0,
+      rowsFailed = 0,
+      errors = const [];
 
   final SyncPushOutcome outcome;
 
-  /// Total row count pushed across all nine tables (profiles/areas/sectors/
-  /// walls/photos/routes/comments/likes/ascents), INCLUDING tombstones.
-  /// Always 0 when [outcome] isn't [SyncPushOutcome.pushed].
+  /// Total row count now KNOWN TO BE IN THE CLOUD across all nine tables
+  /// (profiles/areas/sectors/walls/photos/routes/comments/likes/ascents),
+  /// INCLUDING tombstones — rows this call upserted, plus rows the
+  /// last-writer-wins pre-check skipped because the cloud copy is strictly
+  /// newer (nothing left to send for those; see
+  /// [TablePushOutcome.rowsSkippedNewerRemote]).
+  ///
+  /// S1 fix: this used to count rows merely HANDED TO the remote. Rows that
+  /// did NOT land are in [rowsFailed]. Always 0 when [outcome] isn't
+  /// [SyncPushOutcome.pushed].
   final int rowsPushed;
 
   /// Number of distinct photo FILES actually uploaded (private copy and/or
@@ -47,12 +69,51 @@ class PushSyncResult {
   /// path). Always 0 when [outcome] isn't [SyncPushOutcome.pushed].
   final int photosUploaded;
 
+  /// Rows this push did NOT get into the cloud: every row of a table whose
+  /// upsert failed (see [TablePushOutcome.failed]) PLUS every local row
+  /// excluded by [SyncService.pushOwn]'s required-NOT-NULL-field guard (L5 —
+  /// with no outbox, an excluded row used to be dropped from this and every
+  /// future push, visible only as a `debugPrint`).
+  final int rowsFailed;
+
+  /// One human-readable message per table that failed to push or that had
+  /// rows excluded by the required-field guard, each including the caught
+  /// error's `toString()` where there was one. Empty when everything landed
+  /// (the common case). Mirrors [PullResult.errors].
+  final List<String> errors;
+
   bool get didPush => outcome == SyncPushOutcome.pushed;
+
+  /// True only when the push actually RAN and every row it was responsible
+  /// for reached the cloud. The ONLY condition under which
+  /// `SyncOrchestrator._runPush` may report [SyncStatus.idle] and stamp a
+  /// fresh `lastSyncedAt` (S1).
+  ///
+  /// DELIBERATELY INCOMPLETE — **§1f MUST AMEND THIS** (reconciliation D-2 /
+  /// decision #9, the highest-severity cross-fragment defect). §1f adds
+  /// `photosFailed` and withholds a failed photo's row FROM the push, so
+  /// `rowsFailed` stays 0 and `errors` stays empty for a push in which
+  /// EVERY photo's bytes failed to upload. Left as written, that push
+  /// reports `fullyLanded == true`, `_runPush` stamps a fresh
+  /// `lastSyncedAt`, and the Account screen renders "Synced • just now" —
+  /// the exact S1 lie this whole workstream exists to kill, re-entering
+  /// through the photo path. §1f's reconciled FINAL form is:
+  ///
+  ///     bool get fullyLanded =>
+  ///         didPush && rowsFailed == 0 && errors.isEmpty && photosFailed == 0;
+  ///
+  /// with `_runPush`'s `lastPushError` message concatenating
+  /// `errors + photoErrors`, and `photosMissingLocalBytes` DELIBERATELY
+  /// EXCLUDED (it is non-retryable; including it would stop §1e's retry
+  /// loop from ever terminating). Do not delete this paragraph until §1f
+  /// has landed the amendment.
+  bool get fullyLanded => didPush && rowsFailed == 0 && errors.isEmpty;
 
   @override
   String toString() =>
       'PushSyncResult(outcome: $outcome, rowsPushed: $rowsPushed, '
-      'photosUploaded: $photosUploaded)';
+      'photosUploaded: $photosUploaded, rowsFailed: $rowsFailed, '
+      'errors: $errors)';
 }
 
 /// Outcome of a [SyncService.pullOwnAndShared] call.
@@ -274,6 +335,13 @@ class SyncService {
       ascents = await (_db.select(_db.ascents)..where((t) => t.ownerId.equals(uid))).get();
     });
 
+    // S1/L5 fix (§1d): the two accumulators EVERY push-failure channel
+    // writes into — the required-field guard (immediately below) and the
+    // per-table upsert outcomes further down. Declared HERE, above both, so
+    // they exist exactly once in `pushOwn`.
+    final errors = <String>[];
+    var rowsFailed = 0;
+
     // Push-side NOT-NULL guard (sync-resilience hardening): drops (+
     // debugPrints, via filterValidSyncRows) any local row missing a required
     // NOT-NULL field before it's ever sent to Supabase, reusing the exact
@@ -335,13 +403,53 @@ class SyncService {
       ),
     };
 
-    await _remote.upsertOwnRows(uid, tablesToRows);
+    // S1 fix (§1d): upsertOwnRows now reports per-table outcomes instead of
+    // swallowing each table's error behind a debugPrint and returning void.
+    // A WHOLE-CALL throw (the remote itself unreachable) is converted into
+    // an all-tables-failed result here, so the row phase never propagates
+    // and never lies about what landed.
+    //
+    // `errors`/`rowsFailed` are the accumulators declared ABOVE the
+    // `tablesToRows` construction — do NOT declare them again here.
+    List<TablePushOutcome> outcomes;
+    try {
+      outcomes = await _remote.upsertOwnRows(uid, tablesToRows);
+    } catch (e) {
+      outcomes = [
+        for (final entry in tablesToRows.entries)
+          if (entry.value.isNotEmpty)
+            TablePushOutcome.failed(
+              table: entry.key,
+              rowsFailed: entry.value.length,
+              error: e,
+            ),
+      ];
+    }
+
+    var rowsPushed = 0;
+    for (final outcome in outcomes) {
+      if (outcome.ok) {
+        // A row the LWW pre-check skipped counts as pushed: the cloud holds
+        // a strictly NEWER copy of it, so there is nothing left to send.
+        rowsPushed += outcome.rowsUpserted + outcome.rowsSkippedNewerRemote;
+      } else {
+        rowsFailed += outcome.rowsFailed;
+        errors.add(
+          '${outcome.table}: ${outcome.rowsFailed} row(s) failed to push: '
+          '${outcome.error}',
+        );
+      }
+    }
 
     final wallVisibility = {for (final wall in walls) wall.id: wall.visibility};
     final photosUploaded = await _uploadOwnPhotos(uid, photos, wallVisibility);
 
-    final rowsPushed = tablesToRows.values.fold<int>(0, (sum, rows) => sum + rows.length);
-    return PushSyncResult.pushed(rowsPushed: rowsPushed, photosUploaded: photosUploaded);
+    return PushSyncResult.pushed(
+      rowsPushed: rowsPushed,
+      photosUploaded: photosUploaded,
+      rowsFailed: rowsFailed,
+      errors: errors,
+    );
   }
 
   /// Uploads every DISTINCT on-disk photo file referenced by [photos],
