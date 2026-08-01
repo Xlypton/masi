@@ -47,3 +47,8 @@ app.*.map.json
 .claude/
 .agents/
 skills-lock.json
+
+# Test-only AR fixture, staged here by tool/drive_ar_seg.sh for the duration
+# of one integration-test run. It lives un-bundled in test_fixtures/ so it
+# never ships in a production build — never commit it back under assets/.
+/assets/test/

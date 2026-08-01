@@ -18,6 +18,17 @@
 // dir, since the native side needs a filesystem path (a Flutter asset key
 // isn't independently readable from Swift).
 //
+// IMPORTANT -- that asset is NOT bundled by default. It is 9.9 MB and used
+// by nothing under `lib/`, so it no longer sits in `pubspec.yaml`'s `assets:`
+// where it shipped in every production build. It lives un-bundled in
+// `test_fixtures/crag_sample.jpg`, and `tool/drive_ar_seg.sh` stages it into
+// `assets/test/` (git-ignored) + adds the pubspec entry for exactly the
+// length of one drive, restoring both afterwards. RUN THIS TEST THROUGH THAT
+// SCRIPT -- a bare `flutter drive` will fail in `rootBundle.load` because the
+// asset genuinely is not in the bundle. See the script header for why the
+// tidier Flutter mechanisms (dev-dependency assets, asset flavors) do not
+// work here.
+//
 // Invokes `ArSegmentationChannel.segmentPreview` TWICE on the same photo:
 //   (a) `routesNorm: null` -- no route clip, exercises the plain
 //       ROCKPOS-union-INVERT + person-subtract + largest-CC (seeded at the
@@ -62,11 +73,8 @@
 // header for the exact `find`/`cp` step, or the implementer's run log).
 //
 // Run with (see CLAUDE.md's "Running the app on a real screen" iOS
-// Simulator loop):
-//   export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && \
-//     flutter drive --driver=test_driver/integration_test.dart \
-//       --target=integration_test/ar_seg_channel_test.dart \
-//       -d <simulator-udid>
+// Simulator loop) -- via the staging wrapper, NOT a bare `flutter drive`:
+//   cd /Users/kerip/Projects/masi && tool/drive_ar_seg.sh <simulator-udid>
 //   # then copy the PNGs out of the simulator's (host-visible) app sandbox:
 //   find ~/Library/Developer/CoreSimulator/Devices/<udid>/data/Containers/Data/Application \
 //     -name 'sim-rock-mask-*.png' -exec cp {} build/screenshots/ \;
