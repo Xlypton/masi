@@ -24,6 +24,27 @@ void main() {
     await db.close();
   });
 
+  /// Resets `dirty` to false on every table a fixture can seed, the way a
+  /// confirmed push does.
+  ///
+  /// §1e made EVERY push-worthy write in [LibraryCrudRepository] set
+  /// `dirty: true` alongside `updatedAt` (the push is gated on that flag, so a
+  /// write that left it false would never sync). Consequently a freshly seeded
+  /// fixture row is legitimately dirty *before* the operation under test even
+  /// runs, and `expect(row.dirty, isFalse)` stops being a valid "this row was
+  /// NOT touched" proxy. Calling this immediately before the act step restores
+  /// the proxy: any `dirty == true` afterwards can only have come from the
+  /// operation being tested.
+  Future<void> clearAllDirty() async {
+    await db.update(db.areas).write(const AreasCompanion(dirty: Value(false)));
+    await db
+        .update(db.sectors)
+        .write(const SectorsCompanion(dirty: Value(false)));
+    await db.update(db.walls).write(const WallsCompanion(dirty: Value(false)));
+    await db.update(db.photos).write(const PhotosCompanion(dirty: Value(false)));
+    await db.update(db.routes).write(const RoutesCompanion(dirty: Value(false)));
+  }
+
   group('A1: create/rename/sortOrder', () {
     test('createArea -> listAreas returns it', () async {
       final area = await repo.createArea('Squamish', description: 'BC');
@@ -115,6 +136,104 @@ void main() {
         // The internal sentinel find-or-create path must still work.
         final wallId = await repo.createTopo('Photo First Topo');
         expect(wallId, isNotEmpty);
+      },
+    );
+
+    test(
+      'create/rename mark the row dirty -- the push is gated on `dirty` '
+      '(S8), so a write that leaves it false would never sync',
+      () async {
+        final area = await repo.createArea('Squamish');
+        var areaRow = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals(area.id))).getSingle();
+        expect(areaRow.dirty, isTrue, reason: 'createArea');
+
+        // Clear it the way a confirmed push does, then prove the rename
+        // re-dirties it.
+        await (db.update(db.areas)..where((t) => t.id.equals(area.id))).write(
+          const AreasCompanion(dirty: Value(false)),
+        );
+        await repo.renameArea(area.id, 'Squamish Renamed');
+        areaRow = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals(area.id))).getSingle();
+        expect(areaRow.dirty, isTrue, reason: 'renameArea');
+
+        final sector = await repo.createSector(area.id, 'Sector');
+        final sectorRow = await (db.select(
+          db.sectors,
+        )..where((t) => t.id.equals(sector.id))).getSingle();
+        expect(sectorRow.dirty, isTrue, reason: 'createSector');
+
+        await repo.renameSector(sector.id, 'Sector Renamed');
+        expect(
+          (await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(sector.id))).getSingle()).dirty,
+          isTrue,
+          reason: 'renameSector',
+        );
+
+        final wall = await repo.createWall(sector.id, 'Wall');
+        expect(
+          (await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(wall.id))).getSingle()).dirty,
+          isTrue,
+          reason: 'createWall',
+        );
+
+        await repo.renameWall(wall.id, 'Wall Renamed');
+        expect(
+          (await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(wall.id))).getSingle()).dirty,
+          isTrue,
+          reason: 'renameWall',
+        );
+      },
+    );
+
+    test(
+      'softDeleteArea leaves every tombstone in the cascaded subtree dirty '
+      '-- a tombstone that never reaches the cloud resurrects the row on '
+      'another device',
+      () async {
+        final area = await repo.createArea('Doomed');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final wall = await repo.createWall(sector.id, 'Wall');
+        // Start from a clean slate so the assertions below can only be
+        // satisfied by the soft-delete itself.
+        await db.update(db.areas).write(const AreasCompanion(dirty: Value(false)));
+        await db
+            .update(db.sectors)
+            .write(const SectorsCompanion(dirty: Value(false)));
+        await db.update(db.walls).write(const WallsCompanion(dirty: Value(false)));
+
+        await repo.softDeleteArea(area.id);
+
+        expect(
+          (await (db.select(
+            db.areas,
+          )..where((t) => t.id.equals(area.id))).getSingle()).dirty,
+          isTrue,
+          reason: 'area tombstone',
+        );
+        expect(
+          (await (db.select(
+            db.sectors,
+          )..where((t) => t.id.equals(sector.id))).getSingle()).dirty,
+          isTrue,
+          reason: 'sector tombstone',
+        );
+        expect(
+          (await (db.select(
+            db.walls,
+          )..where((t) => t.id.equals(wall.id))).getSingle()).dirty,
+          isTrue,
+          reason: 'wall tombstone',
+        );
       },
     );
   });
@@ -501,6 +620,30 @@ void main() {
         expect(photo.width, 640);
         expect(photo.height, 480);
         expect(photo.deletedAt, isNull);
+      },
+    );
+
+    test(
+      'the inserted photo row is dirty -- the push is gated on `dirty` (S8), '
+      'so a newly attached photo whose row stayed clean would never sync',
+      () async {
+        final area = await repo.createArea('Area');
+        final sector = await repo.createSector(area.id, 'Sector');
+        final wall = await repo.createWall(sector.id, 'Wall');
+
+        final photoId = await repo.attachPhotoToWall(
+          wall.id,
+          XFile('/tmp/photo.jpg'),
+          640,
+          480,
+        );
+
+        expect(
+          (await (db.select(
+            db.photos,
+          )..where((t) => t.id.equals(photoId))).getSingle()).dirty,
+          isTrue,
+        );
       },
     );
 
@@ -1609,7 +1752,10 @@ void main() {
       )..where((t) => t.id.equals(photoId))).getSingle();
       expect(after.localPath, 'photos/$photoId.jpg');
       expect(after.updatedAt, before.updatedAt);
-      expect(after.dirty, isFalse);
+      // The heal must leave `dirty` exactly as it found it (§1e: `attach`
+      // itself legitimately sets it, so `isFalse` is no longer the right
+      // baseline — "unchanged by the heal" is what this test is about).
+      expect(after.dirty, before.dirty);
     });
 
     test('watchTopos resolves a RELATIVE stored thumbnail path to an '
@@ -1660,7 +1806,8 @@ void main() {
       )..where((t) => t.id.equals(photoId))).getSingle();
       expect(after.localPath, 'photos/$photoId.jpg');
       expect(after.updatedAt, stored.updatedAt);
-      expect(after.dirty, isFalse);
+      // Unchanged by watchTopos — not "false" (§1e: `attach` sets it).
+      expect(after.dirty, stored.dirty);
     });
 
     test(
@@ -2126,6 +2273,7 @@ void main() {
         10,
         10,
       );
+      await clearAllDirty();
 
       await repo.publishTopo(wallId);
 
@@ -2153,6 +2301,7 @@ void main() {
       await (db.update(db.photos)..where((t) => t.id.equals(photoId))).write(
         const PhotosCompanion(deletedAt: Value(1500)),
       );
+      await clearAllDirty();
 
       await repo.publishTopo(wallId);
 
@@ -2241,6 +2390,7 @@ void main() {
         final sector = await repo.createSector(area.id, 'Sector');
         final wall = await repo.createWall(sector.id, 'Wall');
         final sibling = await repo.createWall(sector.id, 'Sibling');
+        await clearAllDirty();
 
         await repo.setWallCoordinates(wall.id, 47.4979, 19.0402);
 
@@ -2298,6 +2448,7 @@ void main() {
         final wall = await repo.createWall(sourceSector.id, 'Wall');
         final sibling = await repo.createWall(sourceSector.id, 'Sibling');
         final destWall = await repo.createWall(destSector.id, 'Dest Wall');
+        await clearAllDirty();
 
         await repo.moveWall(wall.id, destSector.id);
 
@@ -2351,6 +2502,8 @@ void main() {
           'Dest Sector 1',
         );
 
+        await clearAllDirty();
+
         final moveRepo = LibraryCrudRepository(db, nowMs: () => 2000);
         await moveRepo.moveSector(sector.id, destArea.id);
 
@@ -2393,6 +2546,7 @@ void main() {
         final destSector = await repo.createSector(area.id, 'Dest');
         final wall = await repo.createWall(sourceSector.id, 'Wall');
         await repo.softDeleteWall(wall.id);
+        await clearAllDirty();
 
         await repo.moveWall(wall.id, destSector.id);
 
@@ -2414,6 +2568,7 @@ void main() {
         final destArea = await repo.createArea('Dest Area');
         final sector = await repo.createSector(sourceArea.id, 'Sector');
         await repo.softDeleteSector(sector.id);
+        await clearAllDirty();
 
         await repo.moveSector(sector.id, destArea.id);
 
@@ -2544,6 +2699,8 @@ void main() {
             'Foreign Wall',
           );
 
+          await clearAllDirty();
+
           final myRepo = LibraryCrudRepository(
             db,
             nowMs: () => 2000,
@@ -2605,6 +2762,7 @@ void main() {
             'Unowned Sector',
           );
           final destArea = await repo.createArea('Dest Area');
+          await clearAllDirty();
 
           // `myRepo` attempts to mutate the foreign Area/Sector — must be
           // silent no-ops. It also renames its own Area/Sector, and moves
@@ -3297,6 +3455,7 @@ void main() {
         final wall = await owned.createWall(sector.id, 'Wall');
 
         final lost = lostUidRepo();
+        await clearAllDirty();
 
         await expectLater(
           lost.publishTopo(wall.id),

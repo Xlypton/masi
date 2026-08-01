@@ -335,6 +335,7 @@ class LibraryCrudRepository {
             id: id,
             createdAt: now,
             updatedAt: now,
+            dirty: const Value(true),
             name: name,
             description: Value(description),
             ownerId: Value(currentUid()),
@@ -359,7 +360,13 @@ class LibraryCrudRepository {
                 t.deletedAt.isNull() &
                 _ownOrUnowned(t.ownerId),
           ))
-          .write(db.AreasCompanion(name: Value(name), updatedAt: Value(now))),
+          .write(
+            db.AreasCompanion(
+              name: Value(name),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          ),
     );
   }
 
@@ -452,6 +459,7 @@ class LibraryCrudRepository {
             id: id,
             createdAt: now,
             updatedAt: now,
+            dirty: const Value(true),
             areaId: areaId,
             name: name,
             sortOrder: sortOrder,
@@ -477,7 +485,13 @@ class LibraryCrudRepository {
                 t.deletedAt.isNull() &
                 _ownOrUnowned(t.ownerId),
           ))
-          .write(db.SectorsCompanion(name: Value(name), updatedAt: Value(now))),
+          .write(
+            db.SectorsCompanion(
+              name: Value(name),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          ),
     );
   }
 
@@ -553,6 +567,7 @@ class LibraryCrudRepository {
             id: id,
             createdAt: now,
             updatedAt: now,
+            dirty: const Value(true),
             sectorId: sectorId,
             name: name,
             sortOrder: sortOrder,
@@ -583,7 +598,13 @@ class LibraryCrudRepository {
                 t.deletedAt.isNull() &
                 _ownOrUnowned(t.ownerId),
           ))
-          .write(db.WallsCompanion(name: Value(name), updatedAt: Value(now))),
+          .write(
+            db.WallsCompanion(
+              name: Value(name),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          ),
     );
   }
 
@@ -638,9 +659,8 @@ class LibraryCrudRepository {
 
   /// Records [latitude]/[longitude] as [wallId]'s GPS coordinates and marks
   /// the wall dirty for sync, bumping `updatedAt` — the same wall-row update
-  /// shape [_setWallVisibility] uses (rather than [renameWall]'s, which
-  /// leaves `dirty` untouched): coordinates, like visibility, need to reach
-  /// the backend on the next push.
+  /// shape [_setWallVisibility] and [renameWall] use (every push-worthy write
+  /// in this class now bumps `updatedAt` and sets `dirty` together, §1e).
   ///
   /// Called automatically after a fresh photo pick that carries EXIF GPS
   /// (see `core/location/photo_gps.dart`'s `extractGpsFromImageBytes`, wired
@@ -877,6 +897,7 @@ class LibraryCrudRepository {
               id: id,
               createdAt: now,
               updatedAt: now,
+              dirty: const Value(true),
               wallId: wallId,
               localPath: ownedPath,
               kind: 'original',
@@ -1561,7 +1582,11 @@ class LibraryCrudRepository {
                 _ownOrUnowned(t.ownerId),
           ))
           .write(
-            db.AreasCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+            db.AreasCompanion(
+              deletedAt: Value(now),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
           ),
     );
   }
@@ -1594,7 +1619,11 @@ class LibraryCrudRepository {
                 _ownOrUnowned(t.ownerId),
           ))
           .write(
-            db.SectorsCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+            db.SectorsCompanion(
+              deletedAt: Value(now),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
           ),
     );
   }
@@ -1603,20 +1632,30 @@ class LibraryCrudRepository {
     await (_db.update(
       _db.photos,
     )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).write(
-      db.PhotosCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+      db.PhotosCompanion(
+        deletedAt: Value(now),
+        updatedAt: Value(now),
+        dirty: const Value(true),
+      ),
     );
     await (_db.update(
       _db.routes,
     )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).write(
-      db.RoutesCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+      db.RoutesCompanion(
+        deletedAt: Value(now),
+        updatedAt: Value(now),
+        dirty: const Value(true),
+      ),
     );
     // Bug #5: a soft-deleted wall's live Ascents (Logbook entries) were
     // previously left untouched, so a deleted topo's ascents lingered in
     // the Logbook forever. Comments/Likes are cascaded alongside for the
-    // same reason. Unlike Photos/Routes/Walls above, these three are also
-    // marked `dirty` for sync hygiene: these community rows may already
-    // have been pushed to the backend and need the tombstone to reach it
-    // on the next push.
+    // same reason. Every row in the cascade — Photos/Routes/Walls included —
+    // is marked `dirty` (§1e): the push is gated on that flag (see
+    // `SyncService.hasPendingLocalChanges`), so an unflagged tombstone would
+    // never reach the backend and the row would resurrect on another device.
+    // The Photos/Routes/Walls asymmetry this comment used to describe was
+    // exactly that bug.
     await (_db.update(
       _db.ascents,
     )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).write(
@@ -1646,7 +1685,13 @@ class LibraryCrudRepository {
     );
     await (_db.update(_db.walls)
           ..where((t) => t.id.equals(wallId) & t.deletedAt.isNull()))
-        .write(db.WallsCompanion(deletedAt: Value(now), updatedAt: Value(now)));
+        .write(
+          db.WallsCompanion(
+            deletedAt: Value(now),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+          ),
+        );
   }
 
   // ---------------------------------------------------------------------

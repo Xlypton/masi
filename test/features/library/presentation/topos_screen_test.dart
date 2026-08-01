@@ -2780,6 +2780,16 @@ void main() {
               .read(libraryCrudRepositoryProvider)
               .createTopo('Shareable Wall'),
         );
+        // §1e: `createTopo` now legitimately marks its rows `dirty` (the push
+        // is gated on that flag). Reset it the way a confirmed push does, so
+        // the `dirty == false` assertion at the end of this test is once again
+        // a valid proxy for "the publish write never happened".
+        await _dbWork(
+          tester,
+          () => container
+              .read(appDatabaseProvider)
+              .customStatement('UPDATE walls SET dirty = 0'),
+        );
 
         await tester.pumpWidget(_wrap(container, const ToposScreen()));
         await _drain(tester);

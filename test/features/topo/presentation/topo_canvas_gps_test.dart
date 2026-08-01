@@ -93,6 +93,12 @@ void main() {
     final area = await repo.createArea('Area');
     final sector = await repo.createSector(area.id, 'Sector');
     final wall = await repo.createWall(sector.id, 'Wall');
+    // §1e: every push-worthy write in LibraryCrudRepository now sets
+    // `dirty: true` (the sync push is gated on that flag), so a freshly
+    // created fixture wall is legitimately dirty. Reset it the way a confirmed
+    // push does, so this file's `dirty` assertions keep meaning
+    // "setWallCoordinates did / did not write" rather than "the wall exists".
+    await db.customStatement('UPDATE walls SET dirty = 0');
     return wall.id;
   }
 
