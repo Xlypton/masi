@@ -76,6 +76,19 @@ part 'topos_storage_banner.dart';
 /// double-tap on "New topo" would fire two concurrent creation flows that
 /// both read the same stale topo count and both push a route, stacking two
 /// navigations and leaving a duplicate topo behind.
+/// What the user is told when creating a topo failed for a reason with no
+/// specific, actionable cause to name (UF-5). A genuine [PhotoWriteException]
+/// is reported through `photoWriteFailureSnackBar` instead, which DOES have
+/// something useful to say ("out of storage space").
+///
+/// Matches this feature's established house phrasing for a write that could
+/// not be applied — `"Couldn't rename — please try again"`,
+/// `"Couldn't delete — please try again"`, `"Couldn't move — please try
+/// again"` (see `topos_row.dart` / `crud_list_scaffold.dart`) — so the whole
+/// library speaks with one voice rather than growing a bespoke variant here.
+const String _createFailedMessage =
+    "Couldn't create the topo — please try again";
+
 class ToposScreen extends ConsumerStatefulWidget {
   const ToposScreen({
     super.key,
@@ -430,27 +443,38 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   /// gets exactly nothing created, not a surprise "Topo N" they didn't ask
   /// for.
   ///
-  /// Deliberately defensive (try/catch + `debugPrint`, no rethrow) to match
-  /// the rest of the app's style for picker/decode failures (see
-  /// `topo_canvas_screen.dart`'s `_attachPhotoAndLoad`): a cancelled/failed
-  /// picker or a corrupt image must never crash the Topos home.
+  /// Deliberately defensive (try/catch, no rethrow) to match the rest of the
+  /// app's style for picker/decode failures (see `topo_canvas_screen.dart`'s
+  /// `_attachPhotoAndLoad`): a cancelled/failed picker or a corrupt image must
+  /// never crash the Topos home. Defensive, but no longer SILENT — see below.
   ///
-  /// ONE failure is not merely debugPrinted: a [PhotoWriteException] from
-  /// [LibraryCrudRepository.attachPhotoToWall] (the L3 fix — the photo's bytes
-  /// could not be stored, quota exhaustion above all) is caught in its own
-  /// clause, which soft-deletes the wall `createTopo` had already committed and
-  /// reports the reason via `photoWriteFailureSnackBar`. Without that undo, a
-  /// failed byte write would leave an empty photo-less topo on this screen —
-  /// so the "never crash the Topos home" rule stays intact while the user
-  /// still learns what happened and is left with exactly nothing created,
-  /// matching #25's abort semantics.
+  /// COMPENSATE AND NOTIFY, uniformly (UF-5). `createTopo` commits a wall
+  /// before the photo is attached, so ANY attach failure strands an empty,
+  /// photo-less topo on this screen. Every attach failure therefore runs the
+  /// same two steps — soft-delete the orphan wall, then tell the user —
+  /// rather than special-casing the quota one and letting the rest fall
+  /// through to a `debugPrint` nobody can see. Only the WORDING varies:
+  /// a [PhotoWriteException] (the L3 fix — the photo's bytes could not be
+  /// stored, quota exhaustion above all) has a specific actionable cause and
+  /// gets `photoWriteFailureSnackBar`; everything else gets
+  /// [_createFailedMessage], because inventing a diagnosis for an FK violation
+  /// or a locked database would be a guess dressed up as a fact. Either way
+  /// the user is left with exactly nothing created, matching #25's abort
+  /// semantics.
   ///
-  /// That undo is BEST-EFFORT and cannot gate the message: it is a database
+  /// The undo is BEST-EFFORT and cannot gate the message: it is a database
   /// write that can fail for the very reason the photo write just did (an
-  /// exhausted origin quota), so it runs in its own try/catch and the
-  /// `photoWriteFailureSnackBar` is shown unconditionally. In the rare case
-  /// where the undo also fails the user keeps a visible, hand-deletable empty
-  /// topo — strictly better than the silent orphan they used to get.
+  /// exhausted origin quota), so it runs in its own try/catch and the SnackBar
+  /// is shown unconditionally. In the rare case where the undo also fails the
+  /// user keeps a visible, hand-deletable empty topo — strictly better than
+  /// the silent orphan they used to get.
+  ///
+  /// Failures BEFORE any wall exists (the picker throwing, a corrupt image)
+  /// have nothing to compensate but are still reported, via the outer
+  /// catch-all. That catch-all is gated on a `topoCommitted` flag so it stays
+  /// quiet once the topo genuinely exists and only the tail (the GPS SnackBar,
+  /// `context.push`) failed — claiming "couldn't create the topo" about a topo
+  /// sitting right there on screen would be worse than saying nothing.
   ///
   /// Guarded twice against a stale/absent topo count and against
   /// re-entrancy: it bails out (no-op) unless `toposProvider` currently
@@ -471,6 +495,10 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     if (ref.read(storageDurabilityProvider).isEphemeral) return;
 
     setState(() => _creating = true);
+    // Tracks whether the wall+photo pair actually landed, so the catch-all
+    // below can tell "nothing was created" apart from "everything was created
+    // and then the tail (GPS SnackBar, navigation) tripped".
+    var topoCommitted = false;
     try {
       final source = await widget.photoSourcePicker(context);
       if (source == null) return;
@@ -522,23 +550,30 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
 
       final repo = ref.read(libraryCrudRepositoryProvider);
       final wallId = await repo.createTopo(name);
-      // L3 fix: attachPhotoToWall PROPAGATES a byte-write failure now (quota
-      // exhaustion above all — originals stay FULL resolution per decision
-      // D-5) instead of creating a pixel-less Photos row. `createTopo` has
-      // ALREADY committed a wall by this point, so letting the throw fall
-      // through to the outer catch-all would leave an empty, photo-less topo
-      // sitting on this screen forever — the visible half of the very bug this
-      // fix exists to prevent. So: undo the wall, say why in plain words, and
-      // abort the flow (no GPS capture, no navigation into a canvas with
-      // nothing to show). The `finally` below still releases `_creating`, so
-      // the user can retry immediately. Every OTHER failure still falls
-      // through to the outer catch-all, unchanged.
+      // `createTopo` has ALREADY committed a wall by this point, so ANY attach
+      // failure strands an empty, photo-less topo on this screen forever
+      // unless it is compensated. Letting a throw reach the outer catch-all
+      // below (which only debugPrints) produces the exact bug this whole fix
+      // exists to prevent — so the compensate-and-notify below is deliberately
+      // UNIFORM across exception types, not special-cased to the quota one.
+      //
+      // Only the WORDING varies. A PhotoWriteException (the L3 fix: the
+      // browser refused the bytes, quota exhaustion above all, since originals
+      // stay FULL resolution per decision D-5) has a specific, actionable
+      // cause worth naming. Everything else — an FK violation, a locked or
+      // closed database, a LibraryWriteLostException out of the insert's own
+      // guard, a drift serialization error — has no actionable detail to offer
+      // and gets this file's house phrasing instead. Claiming "out of storage
+      // space" for those would be a guess presented as a diagnosis.
       try {
         await repo.attachPhotoToWall(wallId, xfile, width, height);
-      } on PhotoWriteException catch (e) {
+      } catch (attachError, attachStack) {
+        debugPrint(
+          'Failed to attach the new topo\'s photo: $attachError\n$attachStack',
+        );
         // The cleanup is BEST-EFFORT and deliberately contained in its own
         // try/catch: `softDeleteWall` is itself a database write, and the two
-        // ways it fails here are both realistic AND correlated with the photo
+        // ways it fails here are both realistic AND correlated with the
         // failure that got us here. (1) Quota — the browser origin whose quota
         // is exhausted is the SAME origin this delete writes into, so the very
         // condition that made `importPhoto` throw is the condition most likely
@@ -546,12 +581,12 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         // LibraryWriteLostException(ownerIdentityUnknown) if auth drops to an
         // unknown-uid state between `createTopo` and the failed attach.
         //
-        // Unguarded, either one escaped this clause into the outer catch-all
-        // below — which only debugPrints — so the user got the WORST of both
-        // outcomes at once: the empty photo-less topo survived on the home
-        // screen AND they were told nothing whatsoever. The message must never
-        // be contingent on its own cleanup succeeding, so the SnackBar below
-        // is now unconditional and this await can no longer abort it.
+        // Unguarded, either one escaped into the outer catch-all below, so the
+        // user got the WORST of both outcomes at once: the empty photo-less
+        // topo survived on the home screen AND they were told nothing
+        // whatsoever. The message must never be contingent on its own cleanup
+        // succeeding, so the SnackBar below is unconditional and this await
+        // can no longer abort it.
         try {
           await repo.softDeleteWall(wallId);
         } catch (cleanupError, cleanupStack) {
@@ -560,16 +595,24 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
           // an empty, correctly-named topo the user can see and delete by hand
           // — visible and recoverable, unlike the silence this replaces.
           debugPrint(
-            'Failed to undo the empty topo after a photo-write failure: '
+            'Failed to undo the empty topo after a failed photo attach: '
             '$cleanupError\n$cleanupStack',
           );
         }
         if (!mounted) return;
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(photoWriteFailureSnackBar(e));
+        // Abort the flow here: no GPS capture, no navigation into a canvas
+        // with nothing to show. The `finally` below still releases
+        // `_creating`, so the user can retry immediately.
+        ScaffoldMessenger.of(context).showSnackBar(
+          attachError is PhotoWriteException
+              ? photoWriteFailureSnackBar(attachError)
+              : const SnackBar(content: Text(_createFailedMessage)),
+        );
         return;
       }
+      // Past this point the topo is fully committed (wall + photo row), so the
+      // outer catch-all must NOT offer to have "not created" it — see there.
+      topoCommitted = true;
 
       // Best-effort GPS capture: delegates to the SAME
       // `captureWallGpsFromPhoto` the topo canvas's own add/replace-photo
@@ -599,6 +642,21 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       context.push('/walls/$wallId');
     } catch (e, st) {
       debugPrint('Failed to create new topo: $e\n$st');
+      // UF-5: this used to be debugPrint-ONLY, so every failure that is not
+      // the attach step — the picker throwing, a corrupt image the codec
+      // refuses, `createTopo` itself failing — left the user staring at an
+      // unchanged Topos home with no idea their tap had failed. Silence is not
+      // an acceptable outcome for a user-initiated action.
+      //
+      // Gated on `topoCommitted` because this catch-all also covers the tail
+      // AFTER a fully successful creation (the GPS SnackBar, `context.push`):
+      // saying "couldn't create the topo" there would be a plain lie about a
+      // topo that exists and is visible. Those keep the debugPrint alone.
+      if (mounted && !topoCommitted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(const SnackBar(content: Text(_createFailedMessage)));
+      }
     } finally {
       if (mounted) {
         setState(() => _creating = false);
