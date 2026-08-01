@@ -1,4 +1,24 @@
-# §1a — Storage-backend interlock (fixes L1), including `moveExistingIndexedDbToOpfs: true`
+# §1a — Storage-backend interlock (fixes L1), ~~including `moveExistingIndexedDbToOpfs: true`~~
+
+> ## ⚠️ Superseded in part — corrected 2026-08-01
+>
+> **The `moveExistingIndexedDbToOpfs: true` half of this fragment shipped and was then reverted**
+> (commit `09cf076`). In drift 2.34.2 that migration can **silently destroy an existing user's entire
+> library**, and — worse — it reports success while doing so, so this fragment's own storage-observability
+> deliverable cannot detect it. **Do not re-add the flag.**
+>
+> Still valid: everything about capturing `WasmDatabase.open`'s verdict, `StorageDurability`,
+> `storageDurabilityProvider`, the release-visible log, and the Topos-home interlock banner.
+>
+> Superseded: **Task 3**'s `moveExistingIndexedDbToOpfs: true` change and the
+> `connection_seam_source_test.dart` assertion that pins it; **Task 5**'s migration test case; the
+> `Files touched` row for `connection_web.dart` insofar as it demands the flag; and the "the failure mode
+> is 'no upgrade'" risk bullet in §Risks.
+>
+> **The full corrected analysis — six verified findings against
+> `~/.pub-cache/hosted/pub.dev/drift-2.34.2/` — is in §Risks below**, under the struck-through
+> "The move is one-way and destructive by design" bullet. The design doc
+> (`docs/superpowers/specs/2026-07-30-web-offline-reliability-design.md`, §1a) carries the same note.
 
 *Rendered from the §1a plan fragment (`fragment-0.json`) with the §1a-relevant corrections from the Stage-1 reconciliation pass (`reconciled.md`) applied. Corrections touch planning prose (test counts, sequencing notes, gate wording) only — every Dart/Python/bash code block below is preserved byte-for-byte from the source fragment.*
 
@@ -914,7 +934,15 @@ addTearDown(() => debugPrint = original);
 
 **Commit message:** `feat(db): surface the drift web storage verdict through a provider instead of discarding it`
 
-### Task 3: Pass moveExistingIndexedDbToOpfs: true and pin the web seam with a source guard
+### Task 3: ~~Pass moveExistingIndexedDbToOpfs: true and~~ pin the web seam with a source guard
+
+> **Superseded in part — corrected 2026-08-01.** The `moveExistingIndexedDbToOpfs: true` half of this task
+> shipped and was **reverted** (commit `09cf076`) — in drift 2.34.2 the migration can silently destroy an
+> existing user's library while reporting a durable verdict. Skip every step below that adds the flag, and
+> skip the `passes moveExistingIndexedDbToOpfs: true` case in `connection_seam_source_test.dart` (a source
+> guard pinning the flag's *presence* is now actively harmful — if anything, pin its **absence**). The rest
+> of the task — the source-scan guard over the two drift→masi enum mappings, the zero-`kDebugMode` check,
+> and the `connection_native.dart` byte-identity check — stands unchanged. Full analysis in §Risks.
 
 **Files:**
 - Create: `test/core/db/connection_seam_source_test.dart`
@@ -1862,8 +1890,51 @@ addTearDown(() => debugPrint = original);
 ## Risks
 
 - **Riverpod's mid-build mutation assert is a real trap here, and I confirmed it in the package source.** `riverpod-3.3.2/lib/src/core/element.dart:795-803` asserts `Providers are not allowed to modify other providers during their initialization.` Because `connection_native.dart` reports SYNCHRONOUSLY, wiring `openConnection(onStorageReport: storage.report)` directly (no microtask) would trip that assert on every native/widget-test read of `appDatabaseProvider` — i.e. it would break a large fraction of the 1576-test suite. The `Future<void>.microtask(...)` wrapper in `appDatabaseProvider` is load-bearing, and task 2's last test exists solely to lock it in. Do not 'simplify' it away.
-- **The OPFS half of `moveExistingIndexedDbToOpfs: true` cannot be proven in CI.** `flutter drive --help` has no `--web-header` flag (verified), so `-d web-server` cannot send COOP/COEP; without cross-origin isolation there is no SharedArrayBuffer, so drift's probe never offers `opfsLocks` (`drift/src/web/wasm_setup.dart:124-131`), and `opfsShared` needs nested-workers-in-shared-workers which only Firefox implements (and geckodriver is NOT installed on this machine). The browser test therefore proves the *lossless no-op* branch; the actual migration is proven manually on Chrome via `tool/serve_web_isolated.py`. Do not ship the flag on the CI test alone — the design doc explicitly gates it on a browser migration proof.
-- **The move is one-way and destructive by design.** `WasmDatabase.open` calls `probed.moveFromIndexedDBToOpfs(databaseName)`, which drift documents as 'unconditionally copies files stored in IndexedDB to OPFS, and then deletes the old IndexedDB database'. Drift wraps it in a try/catch that falls back to the old database on any throw (`wasm.dart:184-199`), so the failure mode is 'no upgrade'. But a copy that *succeeds* while being subtly wrong would be unrecoverable. This is exactly why the manual Chrome proof (seed → migrate → verify the topo is still there) is a hard gate, not a nice-to-have.
+- **The OPFS half of `moveExistingIndexedDbToOpfs: true` cannot be proven in CI.** `flutter drive --help` has no `--web-header` flag (verified), so `-d web-server` cannot send COOP/COEP; without cross-origin isolation there is no SharedArrayBuffer, so drift's probe never offers `opfsLocks` (`drift/src/web/wasm_setup.dart:124-131`), and `opfsShared` needs nested-workers-in-shared-workers which only Firefox implements (and geckodriver is NOT installed on this machine). The browser test therefore proves the *lossless no-op* branch; the actual migration is proven manually on Chrome via `tool/serve_web_isolated.py`. Do not ship the flag on the CI test alone — the design doc explicitly gates it on a browser migration proof. **(Corrected 2026-08-01: this bullet was right that CI cannot prove the flag, but wrong that a manual Chrome proof could. A one-machine happy-path run cannot exercise a crash mid-move or a second tab, which are the two loss paths. The flag is reverted — see the corrected bullet below.)**
+- ~~**The move is one-way and destructive by design.** `WasmDatabase.open` calls `probed.moveFromIndexedDBToOpfs(databaseName)`, which drift documents as 'unconditionally copies files stored in IndexedDB to OPFS, and then deletes the old IndexedDB database'. Drift wraps it in a try/catch that falls back to the old database on any throw (`wasm.dart:184-199`), so the failure mode is 'no upgrade'. But a copy that *succeeds* while being subtly wrong would be unrecoverable. This is exactly why the manual Chrome proof (seed → migrate → verify the topo is still there) is a hard gate, not a nice-to-have.~~
+
+  > **Corrected 2026-08-01 — the risk above understates it, and the flag has been reverted.**
+  >
+  > "So the failure mode is 'no upgrade'" is **wrong**. The try/catch fallback does not make the move safe,
+  > and the manual Chrome proof was never a sufficient gate — a migration that works on one machine says
+  > nothing about a crash or a second tab on someone else's. `moveExistingIndexedDbToOpfs: true` shipped and
+  > was then **reverted** (commit `09cf076`): in drift 2.34.2 it can silently destroy an existing user's
+  > entire library. Do not re-add it. Everything below was verified by direct reading of
+  > `~/.pub-cache/hosted/pub.dev/drift-2.34.2/`.
+  >
+  > - **No lock of any kind.** `navigator.locks`/`requestLock` appear nowhere in drift 2.34.2 or sqlite3
+  >   3.5.0. `indexeddb_to_opfs.dart:9-12` documents that the move runs **in the main tab**, not a worker —
+  >   so nothing serialises two tabs, and nothing survives the tab going away mid-move.
+  > - **The crash window opens earlier than "between the database copy and the meta write".** `copyFile`
+  >   creates the destination handle *before writing anything* (`indexeddb_to_opfs.dart:42`), and
+  >   `opfsDatabases()` (`wasm_setup/shared.dart:204-230`) decides an OPFS database exists purely by whether
+  >   `getFileHandle('database')` resolves — it never reads `meta`, never checks size. **From that moment
+  >   OPFS advertises a zero-byte database as real.**
+  > - **Write order is journal → `database` → `meta` → delete the IndexedDB source** (`indexeddb_to_opfs.dart:53,
+  >   54, 56-70, 72-79`), so the source is deleted *last*. (The original audit was imprecise here; this is the
+  >   correct order. It does not help — the zero-byte window above opens long before the delete.)
+  > - **No in-progress marker and no recovery.** On the next boot both databases exist and
+  >   `_selectExistingDatabase` (`wasm.dart:227-252`) returns the **first match in iteration order**, not the
+  >   one holding data. If it picks OPFS, drift opens the zero-byte copy, sqlite creates a fresh database,
+  >   `onCreate` runs, library empty — the real rows sit unreachable in IndexedDB forever.
+  > - **A second, distinct two-tab loss path.** Tab A completes the move and deletes the source; tab B's
+  >   concurrent attempt throws on the OPFS write conflict, is swallowed by the `catch` at
+  >   `wasm.dart:197-208`, and tab B reopens a now-deleted IndexedDB database — which IndexedDB silently
+  >   re-creates **empty**. The `if (!didMove)` fallback picks an implementation by storage API and never
+  >   re-checks that the target still exists.
+  > - **The verdict lies.** In this failure `chosenImplementation` is `opfsShared`, which maps to
+  >   `StorageBackend.opfsShared` — our *most durable* verdict — and because `WasmDatabaseResult.resolvedExecutor`
+  >   is a lazy `DatabaseConnection` (`wasm_setup/types.dart:239`), a successful `WasmDatabase.open` proves
+  >   nothing about the data behind it. **This fragment's entire storage-observability deliverable is blind to
+  >   exactly this case**: the banner would stay hidden and the console would log `durable=true` over an empty
+  >   library.
+  >
+  > **Resolution:** reverted to drift's default (no migration). Existing installs stay on `sharedIndexedDb`,
+  > which **is** durable — OPFS is a performance optimisation, not a durability requirement. The design doc's
+  > **L8 backend lock-in is therefore knowingly accepted, not overlooked**: leaving every install pinned to a
+  > durable IndexedDB backend forever is strictly preferable to a one-way, unrecoverable migration whose only
+  > failure signal is a *good* verdict. Task 3 below, its `connection_seam_source_test.dart` pin, and Task 5's
+  > migration half are all superseded by this note.
 - **`unsafeIndexedDb` is deliberately classified as durable.** It persists; drift only warns it cannot prevent cross-tab races. L8's race half is explicitly out of scope per the design doc, so a user on `unsafeIndexedDb` gets no banner and full creation. If that judgement is wrong, the single line to change is `StorageBackend.isDurable`.
 - **The interlock covers the Topos home only.** `/areas` → `CrudListScaffold`'s `area-add-fab` / `sector-add-fab` / `wall-add-fab` (`crud_list_scaffold.dart:157`) stay enabled on an ephemeral backend, as do the canvas's draw/route flows. That matches §1a's wording ('block topo creation') and keeps this workstream write-disjoint from four other screens, but it IS an inconsistency: a user on an inMemory backend can still create an Area that will vanish. Recommend a follow-up that threads a `disabledReason` through `CrudListScaffold` once §1a lands.
 - **`probing` allows creation.** On web there is a window (as long as `WasmDatabase.open`'s worker probe takes, typically tens to a few hundred ms from the first `appDatabaseProvider` read, which happens during boot) where the verdict is unknown and creation is enabled. Blocking on `probing` instead would (a) require creation to be disabled for a visible moment on every web boot and (b) disable creation in every widget test, since they all override `appDatabaseProvider` and so never run `openConnection`. The chosen trade-off is documented on `StorageDurability.probing`, and a test pins it.

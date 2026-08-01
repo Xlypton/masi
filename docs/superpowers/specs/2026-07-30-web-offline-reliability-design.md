@@ -103,6 +103,9 @@ Everything below is **proven from code**, with the evidence cited. Suspected-onl
   orchestrator. Aggravated by **permanent backend lock-in**: `moveExistingIndexedDbToOpfs` defaults
   `false` and is not passed, so `_selectExistingDatabase` downgrades the choice back to the existing
   DB's storage API on every open — any install that first landed on IndexedDB stays there forever.
+  **(Corrected 2026-08-01: that lock-in is now a knowingly accepted cost, not an open defect. The flag
+  shipped and was reverted — see §1a. `sharedIndexedDb` is durable; OPFS is a performance
+  optimisation, and drift 2.34.2's migration to it can silently destroy the library.)**
 
 ### Sync-stall paths
 
@@ -231,9 +234,41 @@ Everything below is **proven from code**, with the evidence cited. Suspected-onl
 creation behind an unmissable warning when the backend is `inMemory`**. Log the verdict in release
 builds, not behind `kDebugMode`.
 
-Also pass `moveExistingIndexedDbToOpfs: true` so installs pinned to IndexedDB (every visitor served
+> **Superseded — corrected 2026-08-01.** The paragraph below is struck through. `moveExistingIndexedDbToOpfs: true`
+> **shipped and was then reverted** (commit `09cf076`) because in drift 2.34.2 the migration can silently
+> destroy an existing user's entire library. Do **not** re-add the flag. Facts verified by direct reading of
+> `~/.pub-cache/hosted/pub.dev/drift-2.34.2/`; the full analysis lives in
+> `docs/superpowers/plans/fragments/1a-storage-interlock.md` (§Risks, same dated note).
+>
+> - **No lock of any kind.** `navigator.locks`/`requestLock` appear nowhere in drift 2.34.2 or sqlite3 3.5.0.
+>   `indexeddb_to_opfs.dart:9-12` documents that the move runs **in the main tab**, not a worker.
+> - **The crash window opens earlier than "between the copy and the meta write".** `copyFile` creates the
+>   destination handle *before writing anything* (`indexeddb_to_opfs.dart:42`), and `opfsDatabases()`
+>   (`wasm_setup/shared.dart:204-230`) decides an OPFS database exists purely by whether that handle
+>   resolves — it never reads `meta`, never checks size. **From that moment OPFS advertises a zero-byte
+>   database as real.** Write order is journal → `database` → `meta` → delete the IndexedDB source, so the
+>   source is deleted *last*.
+> - **No in-progress marker and no recovery.** On the next boot both databases exist and
+>   `_selectExistingDatabase` (`wasm.dart:227-252`) returns the **first match in iteration order**, not the
+>   one holding data. If it picks OPFS, drift opens the zero-byte copy, sqlite creates a fresh database,
+>   `onCreate` runs, library empty — the real rows sit unreachable in IndexedDB forever.
+> - **A second, distinct two-tab loss path.** Tab A completes the move and deletes the source; tab B's
+>   concurrent attempt throws on the OPFS write conflict, is swallowed by the `catch` at `wasm.dart:197-208`,
+>   and tab B reopens a now-deleted IndexedDB database — which IndexedDB silently re-creates **empty**. The
+>   fallback never re-checks that the target still exists.
+> - **The verdict lies.** In this failure `chosenImplementation` is `opfsShared`, which maps to our *most
+>   durable* verdict, and because `resolvedExecutor` is lazy a successful `WasmDatabase.open` proves nothing
+>   about the data behind it. §1a's storage-observability work is blind to exactly this case.
+>
+> **Resolution:** reverted to drift's default (no migration). Existing installs stay on `sharedIndexedDb`,
+> which **is** durable — OPFS is a performance optimisation, not a durability requirement. L8's backend
+> lock-in is therefore **knowingly accepted, not overlooked**: we would rather leave every install pinned to
+> a durable IndexedDB backend forever than run a one-way, unrecoverable migration whose only failure
+> signal is a *good* verdict.
+
+~~Also pass `moveExistingIndexedDbToOpfs: true` so installs pinned to IndexedDB (every visitor served
 before COOP/COEP landed) can migrate up, mitigating L8's lock-in. This must be covered by the
-browser migration test in §Testing before it ships.
+browser migration test in §Testing before it ships.~~
 
 > Assertions
 > - A container built over an `inMemory`-backed connection reports a non-durable storage state, and
@@ -484,8 +519,10 @@ substring) onto the stricter one, and evaluate promoting the `web-build` job off
 2. Is the deployed origin genuinely cross-origin isolated at runtime? Only `_headers`' *presence* is
    verified; Cloudflare path-specificity resolution is asserted only in a comment
    (`web/_headers:52-57`).
-3. Do existing installs already hold `climbtopo` in IndexedDB rather than OPFS? If so they are pinned
-   there until §1a's `moveExistingIndexedDbToOpfs` ships.
+3. Do existing installs already hold `climbtopo` in IndexedDB rather than OPFS? ~~If so they are pinned
+   there until §1a's `moveExistingIndexedDbToOpfs` ships.~~ **(Corrected 2026-08-01: the flag shipped and
+   was reverted — it will not ship again, so those installs stay on IndexedDB permanently and that is
+   fine. Still worth measuring, but as a performance question, not a durability one. See §1a.)**
 4. Has any browser DB ever been upgraded through v2→v8? All coverage is Dart-VM/`NativeDatabase`.
 5. Does the live project have a PostgREST max-rows cap? Zero pagination anywhere means silent
    truncation (S7).
