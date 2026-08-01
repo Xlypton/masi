@@ -17,6 +17,7 @@ import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 
 /// Builds a [ProviderContainer] wired to a fresh in-memory database, mirroring
@@ -104,6 +105,22 @@ class _FakeAuthRepository implements AuthRepository {
     _controller.addError(error);
   }
 
+  /// Errors on [authStateChanges] while [currentSession] STILL reports a
+  /// live signed-in session with a uid — the real offline shape (audit
+  /// "Auth / UI gaps"): gotrue's 10s refresh ticker throws
+  /// `AuthRetryableFetchException` and pushes it onto `onAuthStateChange`,
+  /// but it does NOT sign the user out, so the in-memory session (and the
+  /// persisted localStorage token) survive. Distinct from
+  /// [_FakeAuthRepository.erroring], whose `currentSession` is signed OUT
+  /// (the `Supabase.initialize()`-failed shape).
+  _FakeAuthRepository.erroringWithLiveSession(
+    Object error, {
+    String email = 'climber@example.com',
+    String uid = 'uid-1',
+  }) : _current = AuthSessionState.signedIn(email, uid: uid) {
+    _controller.addError(error);
+  }
+
   final _controller = StreamController<AuthSessionState>();
   final AuthSessionState _current;
 
@@ -150,6 +167,7 @@ ProviderContainer _makeGateContainer({
 ProviderContainer _makeGateContainerFromRepo(
   _FakeAuthRepository repo, {
   required bool gateEnabled,
+  List<Override> extraOverrides = const [],
 }) {
   addTearDown(repo.dispose);
   final db = AppDatabase(NativeDatabase.memory());
@@ -159,6 +177,7 @@ ProviderContainer _makeGateContainerFromRepo(
       nowMsProvider.overrideWithValue(() => 1000),
       authRepositoryProvider.overrideWithValue(repo),
       webAuthGateEnabledProvider.overrideWithValue(gateEnabled),
+      ...extraOverrides,
     ],
   );
   addTearDown(db.close);
@@ -709,6 +728,50 @@ void main() {
         expect(find.byKey(const Key('account-email-field')), findsOneWidget);
         expect(find.byType(ToposScreen), findsNothing);
         expect(find.byKey(const Key('nav-tab-topos')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + auth stream ERRORED but a known local session exists '
+      '(offline token-refresh failure): does NOT redirect — signed-in-offline '
+      'is not signed-out, and /account is unusable without a network anyway',
+      (tester) async {
+        final container = _makeGateContainerFromRepo(
+          _FakeAuthRepository.erroring(
+            StateError('AuthRetryableFetchException (offline)'),
+          ),
+          gateEnabled: true,
+          extraOverrides: [
+            hasKnownLocalSessionProvider.overrideWithValue(true),
+          ],
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byKey(const Key('nav-tab-topos')), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + auth stream errored while currentSession still carries '
+      'a live uid: the real wiring (no hasKnownLocalSessionProvider override) '
+      'also lets the user stay — the uid door must survive an AsyncError',
+      (tester) async {
+        final container = _makeGateContainerFromRepo(
+          _FakeAuthRepository.erroringWithLiveSession(
+            StateError('AuthRetryableFetchException (offline)'),
+          ),
+          gateEnabled: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
       },
     );
 

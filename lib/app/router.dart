@@ -80,11 +80,12 @@ final Expando<Object> _authRefreshWired = Expando<Object>(
 /// `main.dart`'s real app and every existing router test's
 /// `UncontrolledProviderScope`-wrapped harness alike.
 ///
-/// Order of checks — deliberately FAIL CLOSED: the only two ways past this
-/// function while the gate is on and you're not already on the sign-in
-/// route are (a) genuine first-load loading (case 3) and (b) a confirmed
-/// signed-in session (case 5). Everything else — signed-out OR errored —
-/// redirects to [webAuthGateSignInPath].
+/// Order of checks — fail closed ONLY when there is genuinely no session to
+/// speak of. The ways past this function while the gate is on and you're not
+/// already on the sign-in route are (a) genuine first-load loading (case 3),
+/// (b) an errored auth stream while a KNOWN LOCAL SESSION exists — i.e.
+/// signed-in-offline (case 4), and (c) a confirmed signed-in session
+/// (case 5).
 ///  1. Gate disabled -> `null` (no redirect, ever) — the native no-op.
 ///  2. [webAuthGateSignInPath] itself is ALWAYS exempt, gate or no gate — a
 ///     signed-out visitor already on the sign-in view must stay there (no
@@ -108,12 +109,37 @@ final Expando<Object> _authRefreshWired = Expando<Object>(
 ///     forever, i.e. the wall failed OPEN. `isLoading` is `false` once the
 ///     stream has settled to an error, so that case falls through to #4
 ///     instead.
-///  4. [AsyncValue.hasError] (the auth backend is unavailable — init failed
-///     or unreachable, per #3's note): treated as UNAUTHENTICATED, not as
-///     "unknown, let them through" — redirects to [webAuthGateSignInPath].
-///     Fail closed.
+///  4. [AsyncValue.hasError] — the auth stream is in an error state. This
+///     covers TWO materially different situations and must NOT treat them
+///     alike (the offline-reliability audit, 2026-07-30):
+///
+///       * **No session at all** ([hasKnownLocalSessionProvider] false):
+///         Supabase never initialized, or nobody has ever signed in on this
+///         device. Treated as UNAUTHENTICATED — redirect to
+///         [webAuthGateSignInPath]. Fail closed. This is what the original
+///         version of this comment was written against.
+///       * **Session present, backend unreachable**
+///         ([hasKnownLocalSessionProvider] true): gotrue's 10s refresh
+///         ticker throws `AuthRetryableFetchException` while offline and
+///         forwards it onto `onAuthStateChange`, WITHOUT signing anyone out —
+///         the in-memory session and the persisted localStorage token both
+///         survive. That is signed-in-OFFLINE, so pass through (`null`).
+///         Bouncing this user to `/account` ejects them to a screen whose
+///         only affordance (send a magic link / Google OAuth) needs the very
+///         network that just failed, i.e. a dead end. Decided by
+///         [hasKnownLocalSessionProvider], which is a purely local read —
+///         live-session uid, else the persisted `lastKnownUid` — so this
+///         decision NEVER makes a network call.
+///
+///     Read with `container.read` rather than watched: `lastKnownUid` only
+///     ever changes alongside an [authStateProvider] emission, and
+///     [_ensureAuthRefreshWired] already turns every such emission into a
+///     [GoRouter.refresh], so there is nothing a second listener would add.
 ///  5. Otherwise a resolved value is present: signed-in passes through
 ///     untouched (`null`); signed-out redirects to [webAuthGateSignInPath].
+///     An explicit signed-out EMISSION is authoritative (the user signed
+///     out, or the session expired hard) and is never softened by
+///     [hasKnownLocalSessionProvider] — only the ambiguous error case is.
 FutureOr<String?> _webAuthGateRedirect(
   BuildContext context,
   GoRouterState state,
@@ -129,7 +155,11 @@ FutureOr<String?> _webAuthGateRedirect(
 
   if (authAsync.isLoading && !authAsync.hasValue) return null;
 
-  if (authAsync.hasError) return webAuthGateSignInPath;
+  if (authAsync.hasError) {
+    return container.read(hasKnownLocalSessionProvider)
+        ? null
+        : webAuthGateSignInPath;
+  }
 
   return authAsync.value!.isSignedIn ? null : webAuthGateSignInPath;
 }
