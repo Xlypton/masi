@@ -3231,5 +3231,89 @@ void main() {
         expect(row.name, 'Area');
       },
     );
+
+    test(
+      'softDeleteArea/softDeleteSector/softDeleteWall with a lost uid throw '
+      'and roll the whole cascade back (no half-deleted subtree)',
+      () async {
+        final owned = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+          hasKnownSession: () => true,
+        );
+        final area = await owned.createArea('Area');
+        final sector = await owned.createSector(area.id, 'Sector');
+        final wall = await owned.createWall(sector.id, 'Wall');
+
+        final lost = lostUidRepo();
+
+        await expectLater(
+          lost.softDeleteWall(wall.id),
+          throwsA(
+            isA<LibraryWriteLostException>().having(
+              (e) => e.reason,
+              'reason',
+              LibraryWriteLostReason.ownerIdentityUnknown,
+            ),
+          ),
+        );
+        await expectLater(
+          lost.softDeleteSector(sector.id),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+        await expectLater(
+          lost.softDeleteArea(area.id),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+
+        final wallRow = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wall.id))).getSingle();
+        final sectorRow = await (db.select(
+          db.sectors,
+        )..where((t) => t.id.equals(sector.id))).getSingle();
+        final areaRow = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals(area.id))).getSingle();
+        expect(wallRow.deletedAt, isNull);
+        expect(sectorRow.deletedAt, isNull);
+        expect(areaRow.deletedAt, isNull);
+      },
+    );
+
+    test(
+      'publishTopo/unpublishTopo with a lost uid throw and leave the wall '
+      'plus its photos/routes untouched',
+      () async {
+        final owned = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+          hasKnownSession: () => true,
+        );
+        final area = await owned.createArea('Area');
+        final sector = await owned.createSector(area.id, 'Sector');
+        final wall = await owned.createWall(sector.id, 'Wall');
+
+        final lost = lostUidRepo();
+
+        await expectLater(
+          lost.publishTopo(wall.id),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+        await expectLater(
+          lost.unpublishTopo(wall.id),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+
+        final row = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wall.id))).getSingle();
+        expect(row.visibility, 'private');
+        expect(row.dirty, isFalse);
+        expect(row.updatedAt, 1000);
+      },
+    );
   });
 }

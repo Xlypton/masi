@@ -259,44 +259,49 @@ class LibraryCrudRepository {
     }
   }
 
-  /// Whether the (possibly nonexistent or already soft-deleted) [db.Wall]
-  /// [wallId] is own-or-unowned (see [_ownOrUnowned]) — the existence-check
-  /// half of the write-time guard for mutations that cascade to more than
-  /// one row/table (e.g. [softDeleteWall]/[_setWallVisibility]), where the
-  /// guard can't simply be inlined into a single UPDATE's WHERE because a
-  /// foreign wall's photos/routes must never be touched even though they
-  /// don't carry the wall's ownership check themselves.
-  Future<bool> _isOwnOrUnownedWall(String wallId) async {
-    final row =
-        await (_db.select(_db.walls)
-              ..where((t) => t.id.equals(wallId) & _ownOrUnowned(t.ownerId))
-              ..limit(1))
-            .getSingleOrNull();
-    return row != null;
-  }
-
-  /// Same existence-check guard as [_isOwnOrUnownedWall], for the
-  /// [db.Area] entry point of [softDeleteArea]'s cascade (Hole B follow-up,
-  /// adversarial-review 2026-07-21): checked BEFORE the cascade starts so a
-  /// foreign-owned area is never touched at all, at any level.
-  Future<bool> _isOwnOrUnownedArea(String areaId) async {
-    final row =
-        await (_db.select(_db.areas)
-              ..where((t) => t.id.equals(areaId) & _ownOrUnowned(t.ownerId))
-              ..limit(1))
-            .getSingleOrNull();
-    return row != null;
-  }
-
-  /// Same existence-check guard as [_isOwnOrUnownedWall], for the
-  /// [db.Sector] entry point of [softDeleteSector]'s cascade.
-  Future<bool> _isOwnOrUnownedSector(String sectorId) async {
-    final row =
-        await (_db.select(_db.sectors)
-              ..where((t) => t.id.equals(sectorId) & _ownOrUnowned(t.ownerId))
-              ..limit(1))
-            .getSingleOrNull();
-    return row != null;
+  /// Check-then-act half of the write-time ownership guard, for mutations
+  /// that cascade beyond a single row (see [softDeleteArea]/
+  /// [softDeleteSector]/[softDeleteWall]/[_setWallVisibility], whose inner
+  /// per-row updates key off the parent id alone and so cannot carry the
+  /// ownership predicate themselves).
+  ///
+  /// Replaces the three `_isOwnOrUnownedX` bool probes: `false` for the two
+  /// documented silent no-ops (absent/soft-deleted target, or a genuinely
+  /// foreign row under a known uid), `true` for an own-or-unowned target,
+  /// and a [LibraryWriteLostException] when ownership is UNKNOWABLE (L4) —
+  /// bailing quietly there is exactly the silent-write-loss bug.
+  ///
+  /// Called inside the caller's [db.AppDatabase.transaction], so a throw
+  /// rolls the whole cascade back rather than leaving a subtree half
+  /// soft-deleted.
+  Future<bool> _guardedCascadeAllowed({
+    required String operation,
+    required String id,
+    required TableInfo<Table, dynamic> table,
+    required TextColumn idColumn,
+    required TextColumn ownerColumn,
+    required IntColumn deletedAtColumn,
+  }) async {
+    final outcome = await _classifyGuardTarget(
+      table: table,
+      idColumn: idColumn,
+      ownerColumn: ownerColumn,
+      deletedAtColumn: deletedAtColumn,
+      id: id,
+    );
+    switch (outcome) {
+      case _GuardOutcome.absent:
+      case _GuardOutcome.notOwned:
+        return false;
+      case _GuardOutcome.identityUnknown:
+        throw LibraryWriteLostException(
+          operation: operation,
+          rowId: id,
+          reason: LibraryWriteLostReason.ownerIdentityUnknown,
+        );
+      case _GuardOutcome.writable:
+        return true;
+    }
   }
 
   /// Owns the on-disk lifecycle of attached photo files (copies a picked
@@ -376,7 +381,16 @@ class LibraryCrudRepository {
       // per-row selects/updates inside the cascade key off `areaId` alone,
       // so a check-then-act existence guard up front, mirroring
       // [softDeleteWall]'s, is what actually protects the whole subtree.
-      if (!await _isOwnOrUnownedArea(id)) return;
+      if (!await _guardedCascadeAllowed(
+        operation: 'softDeleteArea',
+        id: id,
+        table: _db.areas,
+        idColumn: _db.areas.id,
+        ownerColumn: _db.areas.ownerId,
+        deletedAtColumn: _db.areas.deletedAt,
+      )) {
+        return;
+      }
       await _cascadeSoftDeleteAreaSubtree(id, nowMs());
     });
   }
@@ -481,7 +495,16 @@ class LibraryCrudRepository {
   Future<void> softDeleteSector(String id) {
     return _db.transaction(() async {
       // Hole B guard, same rationale as [softDeleteArea]'s.
-      if (!await _isOwnOrUnownedSector(id)) return;
+      if (!await _guardedCascadeAllowed(
+        operation: 'softDeleteSector',
+        id: id,
+        table: _db.sectors,
+        idColumn: _db.sectors.id,
+        ownerColumn: _db.sectors.ownerId,
+        deletedAtColumn: _db.sectors.deletedAt,
+      )) {
+        return;
+      }
       await _cascadeSoftDeleteSectorSubtree(id, nowMs());
     });
   }
@@ -581,7 +604,16 @@ class LibraryCrudRepository {
       // FOREIGN-owned wall — the per-row updates below key off `wallId`
       // alone, with no ownership check of their own, so a check-then-act
       // existence guard up front is what actually protects them.
-      if (!await _isOwnOrUnownedWall(id)) return;
+      if (!await _guardedCascadeAllowed(
+        operation: 'softDeleteWall',
+        id: id,
+        table: _db.walls,
+        idColumn: _db.walls.id,
+        ownerColumn: _db.walls.ownerId,
+        deletedAtColumn: _db.walls.deletedAt,
+      )) {
+        return;
+      }
       await _cascadeSoftDeleteWallSubtree(id, nowMs());
     });
   }
@@ -746,7 +778,16 @@ class LibraryCrudRepository {
     // FOREIGN-owned wall — same check-then-act rationale as
     // [softDeleteWall], since the photos/routes updates below key off
     // `wallId` alone with no ownership check of their own.
-    if (!await _isOwnOrUnownedWall(wallId)) return;
+    if (!await _guardedCascadeAllowed(
+      operation: 'setWallVisibility',
+      id: wallId,
+      table: _db.walls,
+      idColumn: _db.walls.id,
+      ownerColumn: _db.walls.ownerId,
+      deletedAtColumn: _db.walls.deletedAt,
+    )) {
+      return;
+    }
     final now = nowMs();
     await (_db.update(
       _db.walls,
@@ -1490,13 +1531,23 @@ class LibraryCrudRepository {
     for (final sector in sectors) {
       await _cascadeSoftDeleteSectorSubtree(sector.id, now);
     }
-    await (_db.update(_db.areas)..where(
-          (t) =>
-              t.id.equals(areaId) &
-              t.deletedAt.isNull() &
-              _ownOrUnowned(t.ownerId),
-        ))
-        .write(db.AreasCompanion(deletedAt: Value(now), updatedAt: Value(now)));
+    await _guardedWrite(
+      operation: 'cascadeSoftDeleteArea',
+      id: areaId,
+      table: _db.areas,
+      idColumn: _db.areas.id,
+      ownerColumn: _db.areas.ownerId,
+      deletedAtColumn: _db.areas.deletedAt,
+      write: (_db.update(_db.areas)..where(
+            (t) =>
+                t.id.equals(areaId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.AreasCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+          ),
+    );
   }
 
   Future<void> _cascadeSoftDeleteSectorSubtree(String sectorId, int now) async {
@@ -1513,15 +1564,23 @@ class LibraryCrudRepository {
     for (final wall in walls) {
       await _cascadeSoftDeleteWallSubtree(wall.id, now);
     }
-    await (_db.update(_db.sectors)..where(
-          (t) =>
-              t.id.equals(sectorId) &
-              t.deletedAt.isNull() &
-              _ownOrUnowned(t.ownerId),
-        ))
-        .write(
-          db.SectorsCompanion(deletedAt: Value(now), updatedAt: Value(now)),
-        );
+    await _guardedWrite(
+      operation: 'cascadeSoftDeleteSector',
+      id: sectorId,
+      table: _db.sectors,
+      idColumn: _db.sectors.id,
+      ownerColumn: _db.sectors.ownerId,
+      deletedAtColumn: _db.sectors.deletedAt,
+      write: (_db.update(_db.sectors)..where(
+            (t) =>
+                t.id.equals(sectorId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.SectorsCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+          ),
+    );
   }
 
   Future<void> _cascadeSoftDeleteWallSubtree(String wallId, int now) async {
