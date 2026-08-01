@@ -26,7 +26,9 @@ enum ConflictMode {
 ///
 /// [importSnapshot] upserts every row by its `id` primary key, in FK
 /// dependency order (Profiles → Areas → Sectors → Walls → Photos → Routes →
-/// Ascents → Comments → Likes). Each table is imported inside its OWN
+/// Ascents → Comments → Likes), and writes every row `dirty: false` — see
+/// [_notDirty] for why that is a correctness requirement, not a detail.
+/// Each table is imported inside its OWN
 /// [db.AppDatabase.transaction] rather than one transaction wrapping every
 /// table, so a malformed row that throws in one table only rolls back that
 /// table — every other table that already imported successfully persists.
@@ -161,6 +163,31 @@ class BackupRepository {
     required int incomingUpdatedAt,
   }) => localUpdatedAt == null || incomingUpdatedAt > localUpdatedAt;
 
+  /// Every row arriving through [importSnapshot] is written `dirty: false`,
+  /// unconditionally, whatever the incoming payload says.
+  ///
+  /// TWO reasons, both load-bearing:
+  ///  1. S9 — an imported row is BY DEFINITION not a local change awaiting a
+  ///     push. `importSnapshot`'s writes fire the same `tableUpdates()`
+  ///     `SyncOrchestrator` debounces on, so before this every pull that
+  ///     wrote anything scheduled a full re-push ~2s later. Now that the
+  ///     push is gated on `dirty` (see `SyncService.hasPendingLocalChanges`),
+  ///     a pull's writes are correctly invisible to it.
+  ///  2. Decodability — `SyncService.pushOwn` no longer SENDS `dirty`/
+  ///     `remoteId` (see `stripLocalOnlySyncColumns`), so a cloud row fetched
+  ///     back may lack the key entirely, or carry the Postgres column default
+  ///     rather than anything meaningful. `<Table>.fromJson`'s
+  ///     `serializer.fromJson<bool>(json['dirty'])` throws on a null, so the
+  ///     key must always be present here. Forcing it AFTER the spread (rather
+  ///     than defaulting it before, the way `visibility`/`sortOrder`/
+  ///     `isPrimary` are defaulted in [_importWalls]/[_importPhotos]/
+  ///     [_importAscents]) is deliberate: those are "absent means use the
+  ///     column default", this is "whatever arrived is wrong".
+  static Map<String, dynamic> _notDirty(Map<String, dynamic> json) => {
+    ...json,
+    'dirty': false,
+  };
+
   Future<void> _importProfiles(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,
@@ -170,7 +197,7 @@ class BackupRepository {
         : const <String, int>{};
 
     for (final json in rows) {
-      final profile = db.Profile.fromJson(json);
+      final profile = db.Profile.fromJson(_notDirty(json));
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[profile.id],
@@ -191,7 +218,7 @@ class BackupRepository {
         : const <String, int>{};
 
     for (final json in rows) {
-      final area = db.Area.fromJson(json);
+      final area = db.Area.fromJson(_notDirty(json));
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[area.id],
@@ -212,7 +239,7 @@ class BackupRepository {
         : const <String, int>{};
 
     for (final json in rows) {
-      final sector = db.Sector.fromJson(json);
+      final sector = db.Sector.fromJson(_notDirty(json));
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[sector.id],
@@ -236,7 +263,9 @@ class BackupRepository {
       // `visibility` (schema v2) is absent from pre-v2 snapshots; default it to
       // the column's DB default so cross-version restore/sync never crashes on
       // a non-null String cast in Wall.fromJson. Any value present in `json` wins.
-      final wall = db.Wall.fromJson({'visibility': 'private', ...json});
+      final wall = db.Wall.fromJson(
+        _notDirty({'visibility': 'private', ...json}),
+      );
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[wall.id],
@@ -267,11 +296,9 @@ class BackupRepository {
     // null-cast error in the generated `Photo.fromJson`.
     final photos = [
       for (final json in rows)
-        db.Photo.fromJson({
-          'sortOrder': 0,
-          'isPrimary': false,
-          ...json,
-        }),
+        db.Photo.fromJson(
+          _notDirty({'sortOrder': 0, 'isPrimary': false, ...json}),
+        ),
     ];
     final originals = photos.where((p) => p.parentPhotoId == null);
     final slices = photos.where((p) => p.parentPhotoId != null);
@@ -297,7 +324,7 @@ class BackupRepository {
         : const <String, int>{};
 
     for (final json in rows) {
-      final route = db.Route.fromJson(json);
+      final route = db.Route.fromJson(_notDirty(json));
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[route.id],
@@ -318,7 +345,7 @@ class BackupRepository {
         : const <String, int>{};
 
     for (final json in rows) {
-      final comment = db.Comment.fromJson(json);
+      final comment = db.Comment.fromJson(_notDirty(json));
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[comment.id],
@@ -339,7 +366,7 @@ class BackupRepository {
         : const <String, int>{};
 
     for (final json in rows) {
-      final like = db.Like.fromJson(json);
+      final like = db.Like.fromJson(_notDirty(json));
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[like.id],
@@ -376,7 +403,9 @@ class BackupRepository {
       // to the column's DB default so cross-version restore/sync never crashes
       // on a non-null String cast in Ascent.fromJson. Any value present in
       // `json` wins.
-      final ascent = db.Ascent.fromJson({'visibility': 'private', ...json});
+      final ascent = db.Ascent.fromJson(
+        _notDirty({'visibility': 'private', ...json}),
+      );
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
             localUpdatedAt: existing[ascent.id],

@@ -1,10 +1,10 @@
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/features/backup/data/backup_repository.dart';
-// `hide isNotNull`: drift's query-builder helper of the same name collides
-// with `package:matcher`'s (via flutter_test) `isNotNull` MATCHER used
-// throughout this file's `expect(...)` calls — this file only needs the
-// latter.
-import 'package:drift/drift.dart' hide isNotNull;
+// `hide isNotNull, isNull`: drift's query-builder helpers of the same names
+// collide with `package:matcher`'s (via flutter_test) `isNotNull`/`isNull`
+// MATCHERS used throughout this file's `expect(...)` calls — this file only
+// needs the latter.
+import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -504,6 +504,60 @@ void main() {
           db.areas,
         )..where((t) => t.id.equals('area-brand-new'))).getSingle();
         expect(area.name, 'Brand new');
+      },
+    );
+  });
+
+  group('sync bookkeeping: imported rows are never locally dirty (S9)', () {
+    test(
+      'a row whose incoming payload says dirty:true is imported dirty:false '
+      '-- a pulled row is by definition NOT a local change awaiting push',
+      () async {
+        await repo.importSnapshot({
+          'tables': {
+            'areas': [
+              {
+                'id': 'area-cloud',
+                'createdAt': 100,
+                'updatedAt': 100,
+                'name': 'Cloud Area',
+                'dirty': true,
+                'ownerId': 'u1',
+              },
+            ],
+          },
+        });
+
+        final row = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals('area-cloud'))).getSingle();
+        expect(row.dirty, isFalse);
+      },
+    );
+
+    test(
+      'a row payload with NO dirty key at all still decodes (this is the '
+      'shape a cloud row comes back in once the push strips dirty/remoteId)',
+      () async {
+        await repo.importSnapshot({
+          'tables': {
+            'areas': [
+              {
+                'id': 'area-stripped',
+                'createdAt': 100,
+                'updatedAt': 100,
+                'name': 'Stripped Area',
+                'ownerId': 'u1',
+              },
+            ],
+          },
+        });
+
+        final row = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals('area-stripped'))).getSingle();
+        expect(row.dirty, isFalse);
+        expect(row.remoteId, isNull);
       },
     );
   });
