@@ -16,11 +16,6 @@ class _FakeStoragePersistenceService implements StoragePersistenceService {
   _FakeStoragePersistenceService({
     this.outcome = StoragePersistOutcome.granted,
     this.persisted = true,
-    // ignore: unused_element_parameter
-    this.estimateSnapshot = const StorageEstimateSnapshot(
-      usageBytes: 1024,
-      quotaBytes: 8192,
-    ),
     this.throwOnRequest = false,
     this.throwOnPersisted = false,
     this.throwOnEstimate = false,
@@ -32,9 +27,16 @@ class _FakeStoragePersistenceService implements StoragePersistenceService {
   final bool throwOnEstimate;
 
   // Mutable so a test can change what the browser "reports" between the
-  // boot request and a later refresh().
+  // boot request and a later refresh(). `persisted` keeps its constructor
+  // parameter because a test passes `persisted: false`; `estimateSnapshot` is
+  // only ever reassigned mid-test, so initialising it directly here avoids an
+  // unused constructor parameter (and the `unused_element_parameter`
+  // suppression that used to sit on it).
   bool persisted;
-  StorageEstimateSnapshot? estimateSnapshot;
+  StorageEstimateSnapshot? estimateSnapshot = const StorageEstimateSnapshot(
+    usageBytes: 1024,
+    quotaBytes: 8192,
+  );
 
   int requestCalls = 0;
   int persistedCalls = 0;

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
@@ -7,6 +9,8 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import 'app/app.dart';
 import 'core/config/supabase_config.dart';
 import 'core/db/database_provider.dart';
+import 'core/storage/storage_persistence_providers.dart';
+import 'features/account/application/auth_providers.dart';
 
 Future<void> main() => bootApp();
 
@@ -73,15 +77,73 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
   // moment auth state is touched. If that ever changes (e.g. the auth layer
   // moves behind a provider that tolerates a not-yet-initialized Supabase),
   // this can become non-blocking too.
+  //
+  // `LastKnownUid.hydrate()` joins them for a different reason: it must
+  // complete before the first frame so no provider ever observes a
+  // spuriously-null uid. `effectiveUidProvider` — THE single "who am I, for
+  // LOCAL data" door (`features/account/application/auth_providers.dart`) —
+  // falls back to this persisted uid whenever there is no live session, which
+  // is what makes local data ownership survive a cold restart with no
+  // network. Skipping it would leave §1c's fix half-applied: the uid is
+  // remembered within a run but forgotten across a restart, so a captive
+  // portal that triggers gotrue's hard sign-out (audit item L4) still
+  // collapses every owner filter to `ownerId IS NULL` — an invisible library
+  // whose subsequent edits are silently written to the wrong owner. It is
+  // independent of the other two and, unlike them, cannot throw at all (it
+  // catches its own database failures and degrades to "no last-known uid"),
+  // so it costs the boot path nothing but the one indexed read it already
+  // needs before any query runs.
   await Future.wait([
     _initSupabase(),
     container.read(photoFilesProvider).warmDocsPath(),
+    container.read(lastKnownUidProvider.notifier).hydrate(),
   ]);
   runApp(
     UncontrolledProviderScope(
       container: container,
       child: const MasiApp(),
     ),
+  );
+  // §1b of the web-offline-reliability design (mitigates data-loss path L2,
+  // "storage eviction with no cloud copy"): ask the browser ONCE to make
+  // this origin's storage persistent — the drift `climbtopo` database and
+  // the `climbtopo-photos` photo bytes are evictable best-effort storage
+  // otherwise — and record the answer for the Account screen's
+  // storage-diagnostics row.
+  //
+  // Placement is deliberate: AFTER `runApp`, fire-and-forget, and NOT part
+  // of the `Future.wait` above. `_initSupabase()`, `warmDocsPath()` and
+  // `hydrate()` are awaited because the first frame genuinely depends on them
+  // (see the long comment above); nothing rendered depends on this, so it
+  // must never sit between boot and the first frame.
+  // `requestPersistenceOnce()` can never complete with an error (see its
+  // doc), so the `unawaited` inside `requestPersistentStorageAtBoot` cannot
+  // produce an unhandled async error, and the call is INERT off the browser
+  // (`storage_persistence_stub.dart` answers `notApplicable`) — the same
+  // "call it unconditionally, the seam no-ops on native" shape as
+  // `installWebLifecycleFlush` in `app/app.dart`, never a `kIsWeb` gate.
+  requestPersistentStorageAtBoot(container);
+}
+
+/// Starts boot's one-shot persistent-storage request against [container] and
+/// returns IMMEDIATELY — synchronous by design so it can never delay the
+/// first frame (see the call site at the end of [bootApp]).
+///
+/// A named top-level function rather than an inline `unawaited(...)` purely
+/// so the wiring is unit-testable without calling [bootApp], which performs
+/// real side effects a plain `flutter test` cannot have (see
+/// `test/main_boot_app_seam_test.dart`'s header). Its tests live in
+/// `test/main_boot_storage_persistence_test.dart`; the real browser side is
+/// covered by `integration_test/web_storage_persistence_test.dart`.
+///
+/// `unawaited` is safe here specifically because
+/// `StoragePersistenceController.requestPersistenceOnce()` is documented and
+/// tested never to complete with an error.
+void requestPersistentStorageAtBoot(ProviderContainer container) {
+  unawaited(
+    container
+        .read(storagePersistenceProvider.notifier)
+        .requestPersistenceOnce(),
   );
 }
 
