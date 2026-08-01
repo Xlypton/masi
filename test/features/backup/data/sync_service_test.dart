@@ -363,6 +363,29 @@ class OneTableFailingSyncRemote extends FakeSyncRemote {
   }
 }
 
+/// [FakeSyncRemote] variant that runs [onPush] (a local DB write) in the
+/// MIDDLE of the row push — i.e. after `SyncService.pushOwn` has taken its
+/// snapshot but before it clears any `dirty` flag. This is the only way to
+/// exercise the compare-and-swap window deterministically from a unit test.
+///
+/// The per-table outcomes from `super` are returned UNCHANGED: this double
+/// simulates a successful push that races a local write, not a failure.
+class _MidPushWriteRemote extends FakeSyncRemote {
+  _MidPushWriteRemote(this.onPush);
+
+  final Future<void> Function() onPush;
+
+  @override
+  Future<List<TablePushOutcome>> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {
+    final outcomes = await super.upsertOwnRows(uid, tablesToRows);
+    await onPush();
+    return outcomes;
+  }
+}
+
 /// In-memory [ConnectivityService] test double: reports whatever [status]
 /// is currently set to (no `connectivity_plus` platform channel), and
 /// whatever [reachable] is set to for the §1d reachability probe (no real
@@ -986,6 +1009,244 @@ void main() {
         expect(outcomes.single.ok, isTrue);
         expect(outcomes.single.rowsUpserted, 0);
         expect(outcomes.single.rowsSkippedNewerRemote, 1);
+      },
+    );
+  });
+
+  group('dirty gating + confirmed-push clear (S2/S7/S8)', () {
+    test('hasPendingLocalChanges is false when signed out', () async {
+      final remote = FakeSyncRemote();
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedOut),
+      );
+      addTearDown(() => c.db.close());
+      expect(await c.service.hasPendingLocalChanges(), isFalse);
+    });
+
+    test(
+      'hasPendingLocalChanges tracks the dirty flag: true with a dirty own '
+      'row, false once a confirmed push has cleared it',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await c.db
+            .into(c.db.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-dirty',
+                createdAt: 100,
+                updatedAt: 100,
+                dirty: const Value(true),
+                ownerId: const Value(_uidU1),
+                name: 'Dirty',
+              ),
+            );
+        expect(await c.service.hasPendingLocalChanges(), isTrue);
+
+        await c.service.pushOwn();
+
+        expect(await c.service.hasPendingLocalChanges(), isFalse);
+        final row = await (c.db.select(
+          c.db.areas,
+        )..where((t) => t.id.equals('area-dirty'))).getSingle();
+        expect(row.dirty, isFalse);
+      },
+    );
+
+    test(
+      'a FAILED push leaves dirty set -- the flag is cleared only for the '
+      'tables the push CONFIRMED, which is what makes "retry until clean" '
+      'terminate. Note pushOwn does NOT throw here: §1d converts a '
+      'whole-call upsert throw into an all-tables-failed RESULT, which is '
+      'exactly why the clear must be narrowed to the landed tables.',
+      () async {
+        final remote = ThrowingUpsertSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await c.db
+            .into(c.db.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-dirty',
+                createdAt: 100,
+                updatedAt: 100,
+                dirty: const Value(true),
+                ownerId: const Value(_uidU1),
+                name: 'Dirty',
+              ),
+            );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.fullyLanded, isFalse);
+        expect(result.rowsFailed, 1);
+        expect(result.errors.join(' '), contains('upsertOwnRows boom'));
+
+        final row = await (c.db.select(
+          c.db.areas,
+        )..where((t) => t.id.equals('area-dirty'))).getSingle();
+        expect(row.dirty, isTrue);
+        expect(await c.service.hasPendingLocalChanges(), isTrue);
+      },
+    );
+
+    test(
+      'a PARTIAL failure clears dirty ONLY for the tables that landed: the '
+      'rejected table keeps its flag while its siblings go clean. This is '
+      'the narrowing in its sharpest form -- an unconditional '
+      '_clearDirty(tablesToRows) passes every other test in this group but '
+      'fails here, and in production it would discard the offline edit.',
+      () async {
+        final remote = OneTableFailingSyncRemote('areas');
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+        );
+        await c.db.customStatement('UPDATE areas SET dirty = 1');
+        await c.db.customStatement('UPDATE sectors SET dirty = 1');
+
+        final result = await c.service.pushOwn();
+
+        expect(result.fullyLanded, isFalse);
+        expect(
+          (await (c.db.select(
+            c.db.areas,
+          )..where((t) => t.id.equals('area-1'))).getSingle()).dirty,
+          isTrue,
+          reason: 'the areas upsert was REJECTED — that row is not in the '
+              'cloud, so it must stay queued for the retry loop',
+        );
+        expect(
+          (await (c.db.select(
+            c.db.sectors,
+          )..where((t) => t.id.equals('sector-1'))).getSingle()).dirty,
+          isFalse,
+          reason: 'sectors landed, so its flag is correctly cleared — the '
+              'narrowing must be per-table, not all-or-nothing',
+        );
+        expect(await c.service.hasPendingLocalChanges(), isTrue);
+      },
+    );
+
+    test(
+      'PushScope.dirtyOnly sends ONLY the dirty rows (S7), while the default '
+      'PushScope.full still sends everything',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-clean',
+          sectorId: 'sector-clean',
+          wallId: 'wall-clean',
+          photoId: 'photo-clean',
+          routeId: 'route-clean',
+        );
+        await c.db
+            .into(c.db.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-dirty',
+                createdAt: 100,
+                updatedAt: 100,
+                dirty: const Value(true),
+                ownerId: const Value(_uidU1),
+                name: 'Dirty',
+              ),
+            );
+
+        final dirtyPush = await c.service.pushOwn(scope: PushScope.dirtyOnly);
+        expect(dirtyPush.rowsPushed, 1);
+        expect(
+          (await remote.fetchOwnRows(_uidU1))['areas']!.map((r) => r['id']),
+          ['area-dirty'],
+          reason: 'the seeded clean hierarchy must not be re-sent',
+        );
+
+        final fullPush = await c.service.pushOwn();
+        expect(fullPush.rowsPushed, 6);
+      },
+    );
+
+    test(
+      'a local write that lands DURING an in-flight push keeps its dirty '
+      'flag -- the clear is an (id, updatedAt) compare-and-swap, so the '
+      'newer edit is picked up by the next push instead of being lost',
+      () async {
+        late final AppDatabase raceDb;
+        final remote = _MidPushWriteRemote(() async {
+          // Simulates the user editing the same row while the push is
+          // awaiting the network: a fresh updatedAt AND dirty re-set, exactly
+          // what every repository write does.
+          await (raceDb.update(
+            raceDb.areas,
+          )..where((t) => t.id.equals('area-dirty'))).write(
+            const AreasCompanion(
+              updatedAt: Value(999),
+              dirty: Value(true),
+              name: Value('Edited mid-push'),
+            ),
+          );
+        });
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        raceDb = c.db;
+        addTearDown(() => c.db.close());
+
+        await c.db
+            .into(c.db.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-dirty',
+                createdAt: 100,
+                updatedAt: 100,
+                dirty: const Value(true),
+                ownerId: const Value(_uidU1),
+                name: 'Original',
+              ),
+            );
+
+        await c.service.pushOwn(scope: PushScope.dirtyOnly);
+
+        final row = await (c.db.select(
+          c.db.areas,
+        )..where((t) => t.id.equals('area-dirty'))).getSingle();
+        expect(
+          row.dirty,
+          isTrue,
+          reason: 'the mid-push edit must NOT be marked as pushed',
+        );
+        expect(row.updatedAt, 999);
+        expect(await c.service.hasPendingLocalChanges(), isTrue);
       },
     );
   });
