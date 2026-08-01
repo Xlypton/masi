@@ -46,6 +46,39 @@ final appDatabaseProvider = Provider<AppDatabase>((ref) {
   return db;
 });
 
+/// Proves the local database can actually ANSWER, and publishes
+/// [StorageDurability.unavailable] if it cannot.
+///
+/// The connection layer's verdict is reported before the database has done
+/// any real work, on both platforms:
+///  - native's `openConnection` reports `nativeFile` SYNCHRONOUSLY around an
+///    unopened `LazyDatabase` (`connection_native.dart`);
+///  - on web, `WasmDatabase.open`'s `resolvedExecutor` is a connection to a
+///    worker whose own sqlite open is itself deferred behind a `LazyDatabase`
+///    (`drift-2.34.2/lib/src/web/wasm_setup/shared.dart:284`), so the whole
+///    `WasmSqlite3.loadFromUrl` + VFS setup happens on the FIRST QUERY, well
+///    after `connection_web.dart` reported which backend was chosen.
+///
+/// A green `opfsShared`/`opfsLocks`/`nativeFile` verdict is therefore not
+/// evidence that storage works — only a completed query is. Without this, a
+/// worker that reports green and then fails on its first statement leaves
+/// `topos_screen` with creation ENABLED and no warning banner: the L1
+/// silent-data-loss shape the verdict exists to end.
+///
+/// Called from `main.dart`'s pre-first-frame `Future.wait`, where it shares
+/// `hydrate()`'s `ensureOpen` (so it costs one trivial statement, not a
+/// second open) and is bounded by the same `awaitBootWork` deadlines. Never
+/// throws: boot must not be taken down by its own probe.
+Future<void> verifyDatabaseUsable(ProviderContainer container) async {
+  try {
+    await container.read(appDatabaseProvider).customSelect('SELECT 1').get();
+  } catch (error) {
+    container
+        .read(storageDurabilityProvider.notifier)
+        .report(StorageDurability.unavailable('$error'));
+  }
+}
+
 /// The only place `DateTime.now()` is read for persistence timestamps, so
 /// tests can override it with a deterministic clock.
 final nowMsProvider = Provider<int Function()>(

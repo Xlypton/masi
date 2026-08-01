@@ -102,7 +102,16 @@ void main() {
       int lineOf(String needle) =>
           lines.indexWhere((line) => line.contains(needle));
 
-      final waitLine = lineOf('await Future.wait(');
+      // The `Future.wait` is no longer awaited DIRECTLY: it is handed to
+      // `awaitBootWork`, which is what is awaited. That indirection is the
+      // ship-blocker fix — awaiting the wait bare hangs boot forever when
+      // drift's unbounded web open never answers (see
+      // `test/main_boot_timeout_test.dart`). The ordering this test exists to
+      // pin is unchanged and now checked as a full chain: hydrate sits inside
+      // the Future.wait, which sits inside the awaited boot gate, which
+      // precedes runApp.
+      final gateLine = lineOf('await awaitBootWork(');
+      final waitLine = lineOf('Future.wait(');
       // Anchored on the CALL, not the bare token: `bootApp`'s own doc comment
       // legitimately names `LastKnownUid.hydrate()` to explain why the entry
       // is awaited, and a looser needle matches that comment instead. Same
@@ -111,7 +120,12 @@ void main() {
       final hydrateLine = lineOf('.notifier).hydrate()');
       final runAppLine = lineOf('runApp(');
 
-      expect(waitLine, isNonNegative, reason: 'no awaited Future.wait found');
+      expect(
+        gateLine,
+        isNonNegative,
+        reason: 'boot no longer goes through the bounded awaitBootWork gate',
+      );
+      expect(waitLine, isNonNegative, reason: 'no Future.wait found');
       expect(
         hydrateLine,
         isNonNegative,
@@ -120,11 +134,14 @@ void main() {
       expect(runAppLine, isNonNegative, reason: 'no runApp call found');
 
       expect(
-        waitLine < hydrateLine && hydrateLine < runAppLine,
+        gateLine < waitLine &&
+            waitLine < hydrateLine &&
+            hydrateLine < runAppLine,
         isTrue,
-        reason: 'the hydrate call must sit inside the awaited Future.wait '
-            '(line $waitLine) and therefore before runApp (line $runAppLine), '
-            'not after it; found it at line $hydrateLine',
+        reason: 'the hydrate call must sit inside the Future.wait (line '
+            '$waitLine) passed to the awaited awaitBootWork (line $gateLine), '
+            'and therefore before runApp (line $runAppLine); found hydrate at '
+            'line $hydrateLine',
       );
     },
   );
