@@ -4,6 +4,7 @@ import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/features/backup/application/backup_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/backup/application/sync_providers.dart';
 import 'package:masi/features/backup/data/backup_repository.dart';
@@ -180,15 +181,9 @@ class _FakeAuthRepository implements AuthRepository {
 }
 
 class _FakeConnectivityService implements ConnectivityService {
-  // `reachable`/`probeThrows` get their first call sites in §1d Task 7's
-  // offline-vs-error classification group; the analyzer's
-  // `unused_element_parameter` warning is therefore correct but premature
-  // for exactly one commit. Task 7 removes these two suppressions.
   _FakeConnectivityService(
     this.status, {
-    // ignore: unused_element_parameter
     this.reachable = true,
-    // ignore: unused_element_parameter
     this.probeThrows = false,
   });
 
@@ -264,8 +259,11 @@ void main() {
     Duration debounce = const Duration(milliseconds: 25),
     bool wifiOnly = false,
     NetworkStatus connectivity = NetworkStatus.wifi,
+    _FakeConnectivityService? connectivityService,
     int Function()? nowMs,
   }) {
+    final connectivityFake =
+        connectivityService ?? _FakeConnectivityService(connectivity);
     final container = ProviderContainer(
       overrides: [
         appDatabaseProvider.overrideWithValue(db),
@@ -274,13 +272,18 @@ void main() {
         authStateProvider.overrideWith(
           (ref) => authStream ?? Stream.value(const AuthSessionState.signedOut()),
         ),
+        // §1d/S4: SyncOrchestrator probes real backend reachability to choose
+        // between `error` and `offline` for a failed push. Without this
+        // override the REAL SystemConnectivityService would be constructed
+        // and would issue a live HTTP request from a unit test.
+        connectivityServiceProvider.overrideWithValue(connectivityFake),
         syncServiceProvider.overrideWithValue(
           SyncService(
             db: db,
             backupRepository: BackupRepository(db),
             remote: remote,
             authRepository: syncServiceAuth,
-            connectivity: _FakeConnectivityService(connectivity),
+            connectivity: connectivityFake,
             wifiOnly: wifiOnly ? () => true : null,
           ),
         ),
@@ -780,6 +783,9 @@ void main() {
             authStateProvider.overrideWith(
               (ref) => Stream.value(const AuthSessionState.signedOut()),
             ),
+            connectivityServiceProvider.overrideWithValue(
+              _FakeConnectivityService(NetworkStatus.wifi),
+            ),
             syncServiceProvider.overrideWithValue(
               SyncService(
                 db: db,
@@ -913,6 +919,96 @@ void main() {
 
         expect(container.read(syncOrchestratorProvider).lastPullError, isNull);
         expect(container.read(syncOrchestratorProvider).lastPushError, isNotNull);
+      },
+    );
+  });
+
+  group('§1d (S4): SyncStatus.offline comes from a real reachability probe', () {
+    /// One failed-push run, returning the state it settled on plus the
+    /// connectivity fake so the probe can be inspected.
+    Future<({SyncOrchestratorState state, _FakeConnectivityService connectivity})>
+    runFailedPush({
+      bool reachable = true,
+      bool probeThrows = false,
+      SyncRemote? remote,
+    }) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final connectivity = _FakeConnectivityService(
+        // Deliberately wifi: connectivity_plus says "connected" behind a
+        // captive portal and reports wifi unconditionally on web, so the
+        // interface state must NOT be what decides this.
+        NetworkStatus.wifi,
+        reachable: reachable,
+        probeThrows: probeThrows,
+      );
+      final container = makeContainer(
+        db: db,
+        remote: remote ?? _FailingPushSyncRemote(),
+        syncServiceAuth: _FakeAuthRepository(
+          const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+        ),
+        connectivityService: connectivity,
+        debounce: const Duration(milliseconds: 15),
+      );
+
+      primeOrchestrator(container);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+
+      await insertArea(db, 'a1', ownerId: 'u1');
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+
+      return (
+        state: container.read(syncOrchestratorProvider),
+        connectivity: connectivity,
+      );
+    }
+
+    test(
+      'a failed push with the backend UNREACHABLE reports offline — even '
+      'though connectivity_plus reports wifi, which is exactly the captive-'
+      'portal / web case that made SyncStatus.offline unreachable before',
+      () async {
+        final result = await runFailedPush(reachable: false);
+
+        expect(result.state.status, SyncStatus.offline);
+        expect(result.state.lastPushError, isNotNull);
+        expect(result.state.lastSyncedAt, isNull);
+        expect(result.connectivity.probeCallCount, 1);
+      },
+    );
+
+    test(
+      'the SAME failed push with the backend REACHABLE (reachable-but-not-'
+      'authenticated, e.g. an expired JWT) reports error, NOT offline — the '
+      'two conditions are distinguishable',
+      () async {
+        final result = await runFailedPush(reachable: true);
+
+        expect(result.state.status, SyncStatus.error);
+        expect(result.connectivity.probeCallCount, 1);
+      },
+    );
+
+    test(
+      'a probe that itself throws degrades to error — a broken probe must '
+      'never let a genuine backend error masquerade as "you are offline"',
+      () async {
+        final result = await runFailedPush(probeThrows: true);
+
+        expect(result.state.status, SyncStatus.error);
+      },
+    );
+
+    test(
+      'a SUCCESSFUL push never probes at all — no extra round trip on the '
+      'happy path',
+      () async {
+        final result = await runFailedPush(remote: _CountingSyncRemote());
+
+        expect(result.state.status, SyncStatus.idle);
+        expect(result.state.lastPushError, isNull);
+        expect(result.connectivity.probeCallCount, 0);
       },
     );
   });

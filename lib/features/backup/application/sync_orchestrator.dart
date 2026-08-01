@@ -7,6 +7,7 @@ import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/data/auth_repository.dart';
 import '../data/sync_service.dart';
+import 'backup_providers.dart';
 import 'sync_providers.dart';
 
 /// Coarse status the opportunistic auto-sync engine can be in at any
@@ -23,9 +24,16 @@ enum SyncStatus {
   /// caught here, never rethrown past this class.
   error,
 
-  /// The most recent push was skipped because `wifiOnly` is on and the
-  /// device isn't currently on wifi (see [ConnectivityService] /
-  /// `wifiOnlySettingProvider`).
+  /// The device could not reach the backend. Produced EITHER by a real
+  /// reachability probe ([ConnectivityService.isBackendReachable]) coming
+  /// back false after a push that didn't land, OR by the `wifiOnly` skip
+  /// (see `wifiOnlySettingProvider`).
+  ///
+  /// S4 fix (§1d): the `wifiOnly` skip used to be the ONLY producer — and
+  /// it is off by default with no UI, and `connectivity_plus` reports
+  /// interface state only (wifi unconditionally on web), so this status was
+  /// unreachable in production and the Account screen's "Offline" label
+  /// could never render.
   offline,
 }
 
@@ -243,7 +251,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             );
           } else {
             state = SyncOrchestratorState(
-              status: SyncStatus.error,
+              status: await _failedPushStatus(),
               lastSyncedAt: state.lastSyncedAt,
               lastPullError: state.lastPullError,
               lastPushError:
@@ -259,11 +267,35 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
     } catch (e, st) {
       debugPrint('SyncOrchestrator: pushOwn failed: $e\n$st');
       state = SyncOrchestratorState(
-        status: SyncStatus.error,
+        status: await _failedPushStatus(),
         lastSyncedAt: state.lastSyncedAt,
         lastPullError: state.lastPullError,
         lastPushError: 'Sync failed: $e',
       );
+    }
+  }
+
+  /// Whether a push that failed did so because THE BACKEND IS UNREACHABLE
+  /// ([SyncStatus.offline]) or for some other reason ([SyncStatus.error]).
+  ///
+  /// S4 fix (§1d): `connectivity_plus` reports INTERFACE state only — it
+  /// answers "connected" behind a captive portal and its web implementation
+  /// returns wifi unconditionally — so `currentStatus()` can never be the
+  /// signal here. [ConnectivityService.isBackendReachable] does a real round
+  /// trip to the Supabase origin instead. Called ONLY on the failure path,
+  /// so a healthy push costs no extra request.
+  ///
+  /// A probe that itself throws is treated as REACHABLE: a broken probe must
+  /// never let a genuine backend error masquerade as "you're offline".
+  Future<SyncStatus> _failedPushStatus() async {
+    try {
+      final reachable = await ref
+          .read(connectivityServiceProvider)
+          .isBackendReachable();
+      return reachable ? SyncStatus.error : SyncStatus.offline;
+    } catch (e) {
+      debugPrint('SyncOrchestrator: reachability probe failed: $e');
+      return SyncStatus.error;
     }
   }
 

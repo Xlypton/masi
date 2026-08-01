@@ -6,6 +6,7 @@ import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/features/backup/application/backup_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/backup/application/sync_providers.dart';
 import 'package:masi/features/backup/data/backup_repository.dart';
@@ -182,6 +183,11 @@ ProviderContainer _makeContainer() {
       syncDebounceDurationProvider.overrideWithValue(
         const Duration(milliseconds: 5),
       ),
+      // §1d/D-6: every container in this file mounts `MasiApp`; without
+      // this override each constructs the real `SystemConnectivityService`,
+      // which §1d's failed-push probe (and §1e's `statusChanges()` listener)
+      // would drive into a live HTTP request from a widget test.
+      connectivityServiceProvider.overrideWithValue(_FakeConnectivityService()),
     ],
   );
   addTearDown(db.close);
@@ -348,6 +354,9 @@ void main() {
             syncDebounceDurationProvider.overrideWithValue(
               const Duration(milliseconds: 5),
             ),
+            connectivityServiceProvider.overrideWithValue(
+              _FakeConnectivityService(),
+            ),
           ],
         );
         addTearDown(container.dispose);
@@ -436,6 +445,9 @@ void main() {
             syncDebounceDurationProvider.overrideWithValue(
               const Duration(milliseconds: 5),
             ),
+            connectivityServiceProvider.overrideWithValue(
+              _FakeConnectivityService(),
+            ),
             syncServiceProvider.overrideWithValue(
               SyncService(
                 db: db,
@@ -519,6 +531,9 @@ void main() {
             ),
             syncDebounceDurationProvider.overrideWithValue(
               const Duration(milliseconds: 5),
+            ),
+            connectivityServiceProvider.overrideWithValue(
+              _FakeConnectivityService(),
             ),
             syncServiceProvider.overrideWithValue(
               SyncService(
