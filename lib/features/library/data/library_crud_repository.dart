@@ -43,6 +43,73 @@ List<double> _parseGradeKeys(String? raw) {
 /// it can't collide with a legitimate `ownerUid` argument.
 const _unsetOwnerUid = '__unset_owner_uid__';
 
+/// Why an `_ownOrUnowned`-guarded mutation refused to report success — see
+/// [LibraryWriteLostException].
+enum LibraryWriteLostReason {
+  /// The write ran with NO uid while this device DOES have a known local
+  /// session ([LibraryCrudRepository.hasKnownSession] is `true`), so the
+  /// ownership predicate collapsed to `ownerId IS NULL` and could not match
+  /// the caller's own owner-stamped rows. Audit item L4 (2026-07-30): this
+  /// used to update 0 rows and report success — a rename/move/GPS-stamp/
+  /// delete silently discarded.
+  ownerIdentityUnknown,
+
+  /// The target row is present, live and own-or-unowned under the CURRENT
+  /// uid, yet the UPDATE still matched 0 rows — an invariant violation (e.g.
+  /// ownership changed underneath the statement). Never swallowed.
+  unexpectedZeroRows,
+}
+
+/// Thrown by a guarded [LibraryCrudRepository] mutation that matched **no
+/// rows** for a reason that is NOT one of the two documented no-ops (target
+/// absent or soft-deleted; target genuinely foreign-owned under a known
+/// uid).
+///
+/// Exists because those UPDATEs previously discarded their affected-row
+/// count: `.write(...)` returns the number of rows it touched and nothing
+/// read it, so "I could not tell whose row this is" was indistinguishable
+/// from "done". Callers surface this as a user-visible failure (see
+/// `crud_list_scaffold.dart`'s `_runGuarded` and `topos_row.dart`'s).
+class LibraryWriteLostException implements Exception {
+  const LibraryWriteLostException({
+    required this.operation,
+    required this.rowId,
+    required this.reason,
+  });
+
+  /// The repository method that failed, e.g. `'renameWall'` — for logs.
+  final String operation;
+
+  /// The primary key the mutation targeted.
+  final String rowId;
+
+  final LibraryWriteLostReason reason;
+
+  @override
+  String toString() =>
+      'LibraryWriteLostException($operation, row $rowId, ${reason.name}): '
+      'the write matched 0 rows and must not be reported as success';
+}
+
+/// Ownership verdict for one guarded-mutation target, resolved by
+/// [LibraryCrudRepository._classifyGuardTarget].
+enum _GuardOutcome {
+  /// No such row, or it is already soft-deleted — a documented silent no-op.
+  absent,
+
+  /// Live and owned by a DIFFERENT, known uid — the deliberate Hole-B
+  /// rejection, also a documented silent no-op.
+  notOwned,
+
+  /// Live and own-or-unowned: the mutation SHOULD have matched it.
+  writable,
+
+  /// Live and owner-stamped, but this device has no uid to compare against
+  /// while it does have a known local session — ownership is unknowable, so
+  /// neither "yours" nor "theirs" may be asserted. Audit item L4.
+  identityUnknown,
+}
+
 /// CRUD + cascading soft-delete for the Area -> Sector -> Wall library
 /// hierarchy (and the Photos/Routes hanging off a Wall).
 ///
@@ -58,6 +125,7 @@ class LibraryCrudRepository {
     required this.nowMs,
     PhotoFiles? photoFiles,
     this.currentUid = _noUid,
+    this.hasKnownSession = _noSession,
   }) : _photoFiles = photoFiles ?? PhotoFiles();
 
   final db.AppDatabase _db;
@@ -70,6 +138,26 @@ class LibraryCrudRepository {
   final String? Function() currentUid;
 
   static String? _noUid() => null;
+
+  /// Whether this device has a KNOWN local session — wired from
+  /// `hasKnownLocalSessionProvider` (spec §1c: live-session uid, else the
+  /// persisted `lastKnownUid`). Read only to DISAMBIGUATE a `null`
+  /// [currentUid]:
+  ///
+  ///  * `currentUid() == null && !hasKnownSession()` — a device nobody has
+  ///    ever signed in on. `ownerId IS NULL` is then the honest predicate and
+  ///    an owner-stamped row genuinely is somebody else's: silent no-op,
+  ///    exactly as before.
+  ///  * `currentUid() == null && hasKnownSession()` — L4. We had an identity
+  ///    and lost it; `ownerId IS NULL` is a LIE and the row may well be ours.
+  ///    The mutation must fail loudly instead of updating 0 rows and
+  ///    returning normally.
+  ///
+  /// Defaults to always-`false` so every existing constructor/test keeps its
+  /// current behaviour unchanged.
+  final bool Function() hasKnownSession;
+
+  static bool _noSession() => false;
 
   /// Write-time own-or-unowned guard (Hole B, adversarial-review
   /// 2026-07-21): every wall/topo mutation reachable from the Topos home
@@ -89,6 +177,86 @@ class LibraryCrudRepository {
     return uid == null
         ? ownerId.isNull()
         : (ownerId.isNull() | ownerId.equals(uid));
+  }
+
+  /// Classifies one guarded-mutation target with a single ownership-FREE
+  /// re-read, run only when the guarded statement affected 0 rows (or, for
+  /// the cascade entry points, before the cascade starts). Reads `ownerId` +
+  /// `deletedAt` by primary key — one indexed row, no join.
+  Future<_GuardOutcome> _classifyGuardTarget({
+    required TableInfo<Table, dynamic> table,
+    required TextColumn idColumn,
+    required TextColumn ownerColumn,
+    required IntColumn deletedAtColumn,
+    required String id,
+  }) async {
+    final query = _db.selectOnly(table)
+      ..addColumns([ownerColumn, deletedAtColumn])
+      ..where(idColumn.equals(id))
+      ..limit(1);
+    final row = await query.getSingleOrNull();
+    if (row == null) return _GuardOutcome.absent;
+    if (row.read(deletedAtColumn) != null) return _GuardOutcome.absent;
+
+    final owner = row.read(ownerColumn);
+    final uid = currentUid();
+    if (uid == null) {
+      // An unowned row matches `ownerId IS NULL` regardless of who we are,
+      // so it is never ambiguous.
+      if (owner == null) return _GuardOutcome.writable;
+      return hasKnownSession()
+          ? _GuardOutcome.identityUnknown
+          : _GuardOutcome.notOwned;
+    }
+    return (owner == null || owner == uid)
+        ? _GuardOutcome.writable
+        : _GuardOutcome.notOwned;
+  }
+
+  /// Awaits [write] — an already-issued `_ownOrUnowned`-guarded UPDATE — and
+  /// VERIFIES its affected-row count instead of discarding it. A 0-row result
+  /// stays silent only for the two documented no-ops ([_GuardOutcome.absent],
+  /// [_GuardOutcome.notOwned]); anything else throws
+  /// [LibraryWriteLostException].
+  ///
+  /// Every guarded single-row mutation routes through this ONE helper rather
+  /// than growing its own ad-hoc row-count check, so the "when is 0 rows OK"
+  /// policy lives in exactly one place.
+  Future<void> _guardedWrite({
+    required String operation,
+    required String id,
+    required Future<int> write,
+    required TableInfo<Table, dynamic> table,
+    required TextColumn idColumn,
+    required TextColumn ownerColumn,
+    required IntColumn deletedAtColumn,
+  }) async {
+    final updated = await write;
+    if (updated > 0) return;
+    final outcome = await _classifyGuardTarget(
+      table: table,
+      idColumn: idColumn,
+      ownerColumn: ownerColumn,
+      deletedAtColumn: deletedAtColumn,
+      id: id,
+    );
+    switch (outcome) {
+      case _GuardOutcome.absent:
+      case _GuardOutcome.notOwned:
+        return;
+      case _GuardOutcome.identityUnknown:
+        throw LibraryWriteLostException(
+          operation: operation,
+          rowId: id,
+          reason: LibraryWriteLostReason.ownerIdentityUnknown,
+        );
+      case _GuardOutcome.writable:
+        throw LibraryWriteLostException(
+          operation: operation,
+          rowId: id,
+          reason: LibraryWriteLostReason.unexpectedZeroRows,
+        );
+    }
   }
 
   /// Whether the (possibly nonexistent or already soft-deleted) [db.Wall]
@@ -173,14 +341,21 @@ class LibraryCrudRepository {
   Future<void> renameArea(String id, String name) async {
     _rejectReservedName(name);
     final now = nowMs();
-    await (_db.update(_db.areas)
-          ..where(
+    await _guardedWrite(
+      operation: 'renameArea',
+      id: id,
+      table: _db.areas,
+      idColumn: _db.areas.id,
+      ownerColumn: _db.areas.ownerId,
+      deletedAtColumn: _db.areas.deletedAt,
+      write: (_db.update(_db.areas)..where(
             (t) =>
                 t.id.equals(id) &
                 t.deletedAt.isNull() &
                 _ownOrUnowned(t.ownerId),
           ))
-        .write(db.AreasCompanion(name: Value(name), updatedAt: Value(now)));
+          .write(db.AreasCompanion(name: Value(name), updatedAt: Value(now))),
+    );
   }
 
   Future<List<AreaRef>> listAreas() async {
@@ -275,14 +450,21 @@ class LibraryCrudRepository {
   Future<void> renameSector(String id, String name) async {
     _rejectReservedName(name);
     final now = nowMs();
-    await (_db.update(_db.sectors)
-          ..where(
+    await _guardedWrite(
+      operation: 'renameSector',
+      id: id,
+      table: _db.sectors,
+      idColumn: _db.sectors.id,
+      ownerColumn: _db.sectors.ownerId,
+      deletedAtColumn: _db.sectors.deletedAt,
+      write: (_db.update(_db.sectors)..where(
             (t) =>
                 t.id.equals(id) &
                 t.deletedAt.isNull() &
                 _ownOrUnowned(t.ownerId),
           ))
-        .write(db.SectorsCompanion(name: Value(name), updatedAt: Value(now)));
+          .write(db.SectorsCompanion(name: Value(name), updatedAt: Value(now))),
+    );
   }
 
   Future<List<SectorRef>> listSectors(String areaId) async {
@@ -365,14 +547,21 @@ class LibraryCrudRepository {
 
   Future<void> renameWall(String id, String name) async {
     final now = nowMs();
-    await (_db.update(_db.walls)
-          ..where(
+    await _guardedWrite(
+      operation: 'renameWall',
+      id: id,
+      table: _db.walls,
+      idColumn: _db.walls.id,
+      ownerColumn: _db.walls.ownerId,
+      deletedAtColumn: _db.walls.deletedAt,
+      write: (_db.update(_db.walls)..where(
             (t) =>
                 t.id.equals(id) &
                 t.deletedAt.isNull() &
                 _ownOrUnowned(t.ownerId),
           ))
-        .write(db.WallsCompanion(name: Value(name), updatedAt: Value(now)));
+          .write(db.WallsCompanion(name: Value(name), updatedAt: Value(now))),
+    );
   }
 
   Future<List<WallRef>> listWalls(String sectorId) async {
@@ -432,20 +621,28 @@ class LibraryCrudRepository {
     double longitude,
   ) async {
     final now = nowMs();
-    await (_db.update(_db.walls)..where(
-          (t) =>
-              t.id.equals(wallId) &
-              t.deletedAt.isNull() &
-              _ownOrUnowned(t.ownerId),
-        ))
-        .write(
-          db.WallsCompanion(
-            latitude: Value(latitude),
-            longitude: Value(longitude),
-            updatedAt: Value(now),
-            dirty: const Value(true),
+    await _guardedWrite(
+      operation: 'setWallCoordinates',
+      id: wallId,
+      table: _db.walls,
+      idColumn: _db.walls.id,
+      ownerColumn: _db.walls.ownerId,
+      deletedAtColumn: _db.walls.deletedAt,
+      write: (_db.update(_db.walls)..where(
+            (t) =>
+                t.id.equals(wallId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.WallsCompanion(
+              latitude: Value(latitude),
+              longitude: Value(longitude),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
           ),
-        );
+    );
   }
 
   /// Re-parents [wallId] to [newSectorId]: updates its `sectorId`,
@@ -475,20 +672,28 @@ class LibraryCrudRepository {
         sortOrderColumn: _db.walls.sortOrder,
         scope: _db.walls.sectorId.equals(newSectorId),
       );
-      await (_db.update(_db.walls)..where(
-            (t) =>
-                t.id.equals(wallId) &
-                t.deletedAt.isNull() &
-                _ownOrUnowned(t.ownerId),
-          ))
-          .write(
-            db.WallsCompanion(
-              sectorId: Value(newSectorId),
-              sortOrder: Value(sortOrder),
-              updatedAt: Value(now),
-              dirty: const Value(true),
+      await _guardedWrite(
+        operation: 'moveWall',
+        id: wallId,
+        table: _db.walls,
+        idColumn: _db.walls.id,
+        ownerColumn: _db.walls.ownerId,
+        deletedAtColumn: _db.walls.deletedAt,
+        write: (_db.update(_db.walls)..where(
+              (t) =>
+                  t.id.equals(wallId) &
+                  t.deletedAt.isNull() &
+                  _ownOrUnowned(t.ownerId),
+            ))
+            .write(
+              db.WallsCompanion(
+                sectorId: Value(newSectorId),
+                sortOrder: Value(sortOrder),
+                updatedAt: Value(now),
+                dirty: const Value(true),
+              ),
             ),
-          );
+      );
     });
   }
 
@@ -511,20 +716,28 @@ class LibraryCrudRepository {
         sortOrderColumn: _db.sectors.sortOrder,
         scope: _db.sectors.areaId.equals(newAreaId),
       );
-      await (_db.update(_db.sectors)..where(
-            (t) =>
-                t.id.equals(sectorId) &
-                t.deletedAt.isNull() &
-                _ownOrUnowned(t.ownerId),
-          ))
-          .write(
-            db.SectorsCompanion(
-              areaId: Value(newAreaId),
-              sortOrder: Value(sortOrder),
-              updatedAt: Value(now),
-              dirty: const Value(true),
+      await _guardedWrite(
+        operation: 'moveSector',
+        id: sectorId,
+        table: _db.sectors,
+        idColumn: _db.sectors.id,
+        ownerColumn: _db.sectors.ownerId,
+        deletedAtColumn: _db.sectors.deletedAt,
+        write: (_db.update(_db.sectors)..where(
+              (t) =>
+                  t.id.equals(sectorId) &
+                  t.deletedAt.isNull() &
+                  _ownOrUnowned(t.ownerId),
+            ))
+            .write(
+              db.SectorsCompanion(
+                areaId: Value(newAreaId),
+                sortOrder: Value(sortOrder),
+                updatedAt: Value(now),
+                dirty: const Value(true),
+              ),
             ),
-          );
+      );
     });
   }
 

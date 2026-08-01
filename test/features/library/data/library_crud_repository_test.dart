@@ -3057,4 +3057,179 @@ void main() {
       );
     },
   );
+
+  group('L4: a guarded mutation that matches 0 rows never reports success', () {
+    // The L4 state (audit 2026-07-30): a captive portal makes gotrue throw a
+    // non-retryable AuthUnknownException -> `_removeSession()` -> the uid
+    // door returns null while the device still HAS a local session. Every
+    // `_ownOrUnowned` predicate then collapses to `ownerId IS NULL`, matches
+    // 0 of the caller's own owner-stamped rows, and the pre-fix code
+    // reported success.
+    LibraryCrudRepository lostUidRepo() => LibraryCrudRepository(
+      db,
+      nowMs: () => 2000,
+      currentUid: () => null,
+      hasKnownSession: () => true,
+    );
+
+    test(
+      'renameArea/renameSector/renameWall throw ownerIdentityUnknown and '
+      'leave the rows untouched',
+      () async {
+        final owned = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+          hasKnownSession: () => true,
+        );
+        final area = await owned.createArea('Area');
+        final sector = await owned.createSector(area.id, 'Sector');
+        final wall = await owned.createWall(sector.id, 'Wall');
+
+        final lost = lostUidRepo();
+
+        await expectLater(
+          lost.renameArea(area.id, 'Hijacked Area'),
+          throwsA(
+            isA<LibraryWriteLostException>()
+                .having(
+                  (e) => e.reason,
+                  'reason',
+                  LibraryWriteLostReason.ownerIdentityUnknown,
+                )
+                .having((e) => e.rowId, 'rowId', area.id),
+          ),
+        );
+        await expectLater(
+          lost.renameSector(sector.id, 'Hijacked Sector'),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+        await expectLater(
+          lost.renameWall(wall.id, 'Hijacked Wall'),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+
+        final areaRow = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals(area.id))).getSingle();
+        final sectorRow = await (db.select(
+          db.sectors,
+        )..where((t) => t.id.equals(sector.id))).getSingle();
+        final wallRow = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wall.id))).getSingle();
+        expect(areaRow.name, 'Area');
+        expect(sectorRow.name, 'Sector');
+        expect(wallRow.name, 'Wall');
+      },
+    );
+
+    test(
+      'setWallCoordinates/moveWall/moveSector throw ownerIdentityUnknown '
+      'and leave the rows untouched',
+      () async {
+        final owned = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+          hasKnownSession: () => true,
+        );
+        final area = await owned.createArea('Area');
+        final destArea = await owned.createArea('Dest Area');
+        final sector = await owned.createSector(area.id, 'Sector');
+        final destSector = await owned.createSector(area.id, 'Dest Sector');
+        final wall = await owned.createWall(sector.id, 'Wall');
+
+        final lost = lostUidRepo();
+
+        await expectLater(
+          lost.setWallCoordinates(wall.id, 47.4979, 19.0402),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+        await expectLater(
+          lost.moveWall(wall.id, destSector.id),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+        await expectLater(
+          lost.moveSector(sector.id, destArea.id),
+          throwsA(isA<LibraryWriteLostException>()),
+        );
+
+        final wallRow = await (db.select(
+          db.walls,
+        )..where((t) => t.id.equals(wall.id))).getSingle();
+        expect(wallRow.latitude, isNull);
+        expect(wallRow.longitude, isNull);
+        expect(wallRow.sectorId, sector.id);
+        expect(wallRow.updatedAt, 1000);
+        final sectorRow = await (db.select(
+          db.sectors,
+        )..where((t) => t.id.equals(sector.id))).getSingle();
+        expect(sectorRow.areaId, area.id);
+      },
+    );
+
+    test(
+      'a device with NO known session keeps the documented silent no-op on a '
+      'foreign/owner-stamped row (a genuinely signed-out device must not '
+      'start throwing)',
+      () async {
+        final owned = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'someone-else',
+        );
+        final area = await owned.createArea('Their Area');
+
+        // `repo` from setUp: currentUid always null, hasKnownSession default
+        // false — the never-signed-in device.
+        await repo.renameArea(area.id, 'Hijacked');
+
+        final row = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals(area.id))).getSingle();
+        expect(row.name, 'Their Area');
+      },
+    );
+
+    test(
+      'an UNOWNED row stays writable with a lost uid — only owner-stamped '
+      'rows are ambiguous, so the guard must not over-throw',
+      () async {
+        final area = await repo.createArea('Unowned Area');
+
+        final lost = lostUidRepo();
+        await lost.renameArea(area.id, 'Renamed Unowned');
+
+        final row = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals(area.id))).getSingle();
+        expect(row.name, 'Renamed Unowned');
+      },
+    );
+
+    test(
+      'a nonexistent / already soft-deleted target stays a silent no-op even '
+      'with a lost uid (absent is not ambiguous)',
+      () async {
+        final owned = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          currentUid: () => 'u1',
+          hasKnownSession: () => true,
+        );
+        final area = await owned.createArea('Area');
+        await owned.softDeleteArea(area.id);
+
+        final lost = lostUidRepo();
+        await lost.renameArea('no-such-area-id', 'Nope');
+        await lost.renameArea(area.id, 'Also Nope');
+
+        final row = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals(area.id))).getSingle();
+        expect(row.name, 'Area');
+      },
+    );
+  });
 }

@@ -21,6 +21,11 @@ final libraryCrudRepositoryProvider = Provider<LibraryCrudRepository>(
     ref.watch(appDatabaseProvider),
     nowMs: ref.watch(nowMsProvider),
     currentUid: ref.watch(currentUidProvider),
+    // Disambiguates a null `currentUid` (see `hasKnownSession`'s doc): read
+    // lazily per call, like `currentUid` itself, so this provider never
+    // rebuilds on an auth change and no guarded mutation freezes a stale
+    // answer into itself.
+    hasKnownSession: () => ref.read(hasKnownLocalSessionProvider),
     photoFiles: ref.watch(photoFilesProvider),
   ),
 );
