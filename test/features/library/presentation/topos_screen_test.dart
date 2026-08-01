@@ -17,6 +17,7 @@ import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/library/presentation/topos_screen.dart';
+import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -130,10 +131,22 @@ void _setDms(
 /// override is unconditional so the REAL notifier (which would otherwise be
 /// fed by nothing, since `appDatabaseProvider` is overridden here) can never
 /// leak into a test.
+///
+/// [photoFiles], when given, overrides `photoFilesProvider` (see
+/// `database_provider.dart`) so a test can make the photo BYTE WRITE fail the
+/// way the web backend now does — the L3 fix's failure path. Tests that don't
+/// pass it get the real `PhotoFiles`, whose `path_provider` lookup simply never
+/// resolves under `flutter_test` (its own try/catch leaves the docs-path cache
+/// cold), exactly as every pre-existing test here relies on.
+///
+/// Reconciled union signature, in this exact parameter order (reconciliation
+/// decision #7): `{LocationService?, SyncOrchestrator?, StorageDurability
+/// storageDurability, PhotoFiles? photoFiles}`.
 ProviderContainer _makeContainer({
   LocationService? locationService,
   SyncOrchestrator? syncOrchestrator,
   StorageDurability storageDurability = const StorageDurability.probing(),
+  PhotoFiles? photoFiles,
 }) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
@@ -142,6 +155,8 @@ ProviderContainer _makeContainer({
       nowMsProvider.overrideWithValue(() => 1000),
       if (locationService != null)
         locationServiceProvider.overrideWithValue(locationService),
+      if (photoFiles != null)
+        photoFilesProvider.overrideWithValue(photoFiles),
       syncOrchestratorProvider.overrideWith(
         () => syncOrchestrator ?? _FakeSyncOrchestrator(),
       ),
@@ -166,6 +181,22 @@ class _FakeLocationService implements LocationService {
 
   @override
   Future<DeviceLocation?> currentLocation() async => result;
+}
+
+/// [PhotoFiles] whose [importPhoto] always fails the way the WEB backend now
+/// does when the browser refuses the byte write (`photo_files_web.dart`'s L3
+/// fix). Duplicated from `photo_ownership_test.dart` because that copy is
+/// file-private — same reason `_FakeSyncOrchestrator` below is duplicated from
+/// `community_pull_refresh_test.dart`.
+class _QuotaFailingPhotoFiles extends PhotoFiles {
+  @override
+  Future<String> importPhoto(XFile xfile, String photoId) async {
+    throw PhotoWriteException(
+      failure: PhotoWriteFailure.quotaExceeded,
+      key: 'photos/$photoId.jpg',
+      cause: Exception('QuotaExceededError: The quota has been exceeded.'),
+    );
+  }
 }
 
 /// A [SyncOrchestrator] test double that skips ALL of the real class's
@@ -1592,6 +1623,124 @@ void main() {
               container.read(libraryCrudRepositoryProvider).watchTopos().first,
         );
         expect(topos, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'L3: when the photo bytes cannot be written, the New topo flow reports '
+      'it in a SnackBar, leaves NO topo behind (the wall createTopo had '
+      'already committed is soft-deleted), and does not navigate into a canvas '
+      'with nothing to show',
+      (tester) async {
+        final container = _makeContainer(
+          photoFiles: _QuotaFailingPhotoFiles(),
+        );
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp('topos_screen_l3');
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
+        // No trailing settle: the SnackBar must still be on screen.
+        await _drainNoSettle(tester);
+
+        expect(
+          find.textContaining('Out of storage space'),
+          findsOneWidget,
+          reason: 'the failure must be reported to the user, not debugPrinted',
+        );
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(
+          topos,
+          isEmpty,
+          reason: 'createTopo committed a wall before attachPhotoToWall threw '
+              '— it must be soft-deleted, not left as an empty photo-less '
+              'topo on the home screen forever',
+        );
+
+        expect(
+          find.byKey(const Key('topos-new-topo')),
+          findsOneWidget,
+          reason: 'still on the Topos home — a successful flow would have '
+              'pushed /walls/:wallId (a SizedBox in this harness), removing '
+              'this button from the tree',
+        );
+      },
+    );
+
+    testWidgets(
+      'L3: the re-entrancy guard is released, so New topo can be retried '
+      'straight after a byte-write failure',
+      (tester) async {
+        final container = _makeContainer(
+          photoFiles: _QuotaFailingPhotoFiles(),
+        );
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp('topos_screen_l3b');
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
+        await _drain(tester);
+
+        // The failure SnackBar is genuinely covering the FAB at this point:
+        // it sits at the bottom of the Scaffold, exactly where
+        // `topos-new-topo` is, and `_drain`'s trailing `pumpAndSettle()` does
+        // NOT take it away — a SnackBar's `duration` is a plain `Timer`, which
+        // schedules no frame, so `pumpAndSettle` returns with the bar fully
+        // shown (the same property `_drainNoSettle`'s doc relies on above).
+        // Advance past that 4s timer and settle the exit animation so the
+        // retry tap lands on the button rather than on the SnackBar.
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pumpAndSettle();
+        expect(find.byType(SnackBar), findsNothing);
+
+        // A SECOND attempt must actually run (the _creating guard released in
+        // the finally block), reaching the name dialog again.
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+        expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
       },
     );
   });

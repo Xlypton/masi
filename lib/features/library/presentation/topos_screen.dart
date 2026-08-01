@@ -20,8 +20,12 @@ import '../../backup/application/sync_orchestrator.dart';
 import '../../community/data/community_repository.dart' show SharedTopo;
 import '../../topo/presentation/photo_image.dart';
 import '../../topo/presentation/photo_source_sheet.dart';
+import '../../topo/data/photo_write_exception.dart';
 import '../../topo/presentation/topo_canvas_screen.dart'
-    show captureWallGpsFromPhoto, gpsCaptureResultSnackBar;
+    show
+        captureWallGpsFromPhoto,
+        gpsCaptureResultSnackBar,
+        photoWriteFailureSnackBar;
 import '../application/library_providers.dart';
 import '../application/proximity_topos_provider.dart';
 import '../data/library_crud_repository.dart';
@@ -431,6 +435,16 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   /// `topo_canvas_screen.dart`'s `_attachPhotoAndLoad`): a cancelled/failed
   /// picker or a corrupt image must never crash the Topos home.
   ///
+  /// ONE failure is not merely debugPrinted: a [PhotoWriteException] from
+  /// [LibraryCrudRepository.attachPhotoToWall] (the L3 fix — the photo's bytes
+  /// could not be stored, quota exhaustion above all) is caught in its own
+  /// clause, which soft-deletes the wall `createTopo` had already committed and
+  /// reports the reason via `photoWriteFailureSnackBar`. Without that undo, a
+  /// failed byte write would leave an empty photo-less topo on this screen —
+  /// so the "never crash the Topos home" rule stays intact while the user
+  /// still learns what happened and is left with exactly nothing created,
+  /// matching #25's abort semantics.
+  ///
   /// Guarded twice against a stale/absent topo count and against
   /// re-entrancy: it bails out (no-op) unless `toposProvider` currently
   /// holds real `AsyncData` (never invoked while loading/erroring — the
@@ -501,7 +515,27 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
 
       final repo = ref.read(libraryCrudRepositoryProvider);
       final wallId = await repo.createTopo(name);
-      await repo.attachPhotoToWall(wallId, xfile, width, height);
+      // L3 fix: attachPhotoToWall PROPAGATES a byte-write failure now (quota
+      // exhaustion above all — originals stay FULL resolution per decision
+      // D-5) instead of creating a pixel-less Photos row. `createTopo` has
+      // ALREADY committed a wall by this point, so letting the throw fall
+      // through to the outer catch-all would leave an empty, photo-less topo
+      // sitting on this screen forever — the visible half of the very bug this
+      // fix exists to prevent. So: undo the wall, say why in plain words, and
+      // abort the flow (no GPS capture, no navigation into a canvas with
+      // nothing to show). The `finally` below still releases `_creating`, so
+      // the user can retry immediately. Every OTHER failure still falls
+      // through to the outer catch-all, unchanged.
+      try {
+        await repo.attachPhotoToWall(wallId, xfile, width, height);
+      } on PhotoWriteException catch (e) {
+        await repo.softDeleteWall(wallId);
+        if (!mounted) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(photoWriteFailureSnackBar(e));
+        return;
+      }
 
       // Best-effort GPS capture: delegates to the SAME
       // `captureWallGpsFromPhoto` the topo canvas's own add/replace-photo
