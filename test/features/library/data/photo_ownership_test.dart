@@ -20,6 +20,31 @@ import 'package:path/path.dart' as p;
 /// the provider directly.
 const _testWallId = 'test-wall';
 
+/// [PhotoFiles] whose [importPhoto] always fails the way the WEB backend now
+/// does when the browser refuses the byte write (see `photo_files_web.dart`'s
+/// L3 fix). Every other member is inherited, so the rest of the repository's
+/// real path handling still runs.
+///
+/// `PhotoFiles` is resolved by the ANALYZER to `photo_files_stub.dart` (the
+/// unconditional branch of the `photo_files.dart` facade, whose ctor is
+/// `PhotoFiles({Object? docsDir, Object? byteStore})`) and by the VM compiler
+/// to `photo_files_native.dart`, whose ctor is
+/// `PhotoFiles({Future<Directory> Function()? docsDir})`. Both declare
+/// `importPhoto(XFile, String) -> Future<String>` identically and both accept
+/// a zero-argument `super()`, so this subclass binds under either — see
+/// `photo_files_stub.dart`'s own doc for why the variants are kept
+/// signature-compatible.
+class _QuotaFailingPhotoFiles extends PhotoFiles {
+  @override
+  Future<String> importPhoto(XFile xfile, String photoId) async {
+    throw PhotoWriteException(
+      failure: PhotoWriteFailure.quotaExceeded,
+      key: 'photos/$photoId.jpg',
+      cause: Exception('QuotaExceededError: The quota has been exceeded.'),
+    );
+  }
+}
+
 /// S1 (Own the photo files): a picked photo is COPIED into the app-owned
 /// `<appDocuments>/photos/<photoId>.<ext>` at attach, and `localPath` stores
 /// that app-owned path — closing the latent local-loss bug (picker cache is
@@ -100,6 +125,70 @@ void main() {
       },
     );
 
+  });
+
+  group('L3: a failed byte write creates no Photos row', () {
+    test(
+      "attachPhotoToWall rethrows PhotoFiles.importPhoto's "
+      'PhotoWriteException and leaves the photos table EMPTY — the insert '
+      'transaction is never reached, so a pixel-less row can no longer exist',
+      () async {
+        final wall = await seedWall();
+        final failingRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          photoFiles: _QuotaFailingPhotoFiles(),
+        );
+
+        await expectLater(
+          failingRepo.attachPhotoToWall(
+            wall.id,
+            XFile(p.join(srcDir.path, 'picked.jpg')),
+            640,
+            480,
+          ),
+          throwsA(
+            isA<PhotoWriteException>().having(
+              (e) => e.failure,
+              'failure',
+              PhotoWriteFailure.quotaExceeded,
+            ),
+          ),
+        );
+
+        expect(
+          await db.select(db.photos).get(),
+          isEmpty,
+          reason: 'no Photos row may be created when the pixels were never '
+              'written (L3) — attachPhotoToWall awaits importPhoto BEFORE its '
+              'insert transaction, which is what makes this hold',
+        );
+      },
+    );
+
+    test(
+      'the wall itself is untouched — the caller decides whether to undo it '
+      "(topos_screen's New topo flow soft-deletes the wall it just created; "
+      'the canvas flow has no wall to undo)',
+      () async {
+        final wall = await seedWall();
+        final failingRepo = LibraryCrudRepository(
+          db,
+          nowMs: () => 1000,
+          photoFiles: _QuotaFailingPhotoFiles(),
+        );
+
+        await expectLater(
+          failingRepo.attachPhotoToWall(wall.id, XFile('/tmp/x.jpg'), 1, 1),
+          throwsA(isA<PhotoWriteException>()),
+        );
+
+        final row = await (db.select(db.walls)
+              ..where((t) => t.id.equals(wall.id)))
+            .getSingle();
+        expect(row.deletedAt, isNull);
+      },
+    );
   });
 
   group('S1-a: attach owns the file', () {

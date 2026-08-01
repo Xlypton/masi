@@ -822,9 +822,25 @@ class LibraryCrudRepository {
   /// path — not the transient picker-cache path handed in — that is stored as
   /// `localPath`. This closes a latent local-loss bug (the OS may evict the
   /// picker cache out from under a row that still references it) and makes the
-  /// path portable for cloud backup. The copy is best-effort: if the source
-  /// doesn't exist (or the copy fails), [PhotoFiles.importPhoto] returns
-  /// [xfile]'s path unchanged so the row is still created.
+  /// path portable for cloud backup.
+  ///
+  /// The copy is best-effort ON NATIVE only: if the source doesn't exist (or
+  /// the copy fails) [PhotoFiles.importPhoto] still returns the relative
+  /// destination form, so the row is created and the picker's own file remains
+  /// recoverable via `resolvePhotoPath`'s container-rotation healing.
+  ///
+  /// On WEB it is NOT best-effort (L3 fix): the byte store is the only copy of
+  /// the pixels, so a refused write — quota exhaustion above all, since
+  /// originals stay at FULL resolution per decision D-5 — throws a
+  /// [PhotoWriteException] out of [PhotoFiles.importPhoto], which this method
+  /// deliberately does NOT catch. Because that await happens BEFORE the insert
+  /// transaction below, the throw means no [db.Photos] row is ever created:
+  /// there is no such thing as a pixel-less row any more. Callers must handle
+  /// it — see `topos_screen.dart`'s `_handleNewTopo` (which soft-deletes the
+  /// wall it had just created) and `topo_canvas_screen.dart`'s
+  /// `_attachPhotoAndLoad` (which clears the optimistically-selected path);
+  /// both present [PhotoWriteException.userMessage] via
+  /// `photoWriteFailureSnackBar`.
   ///
   /// Multi-photo bookkeeping: this ALWAYS inserts a new original (a wall can
   /// carry many) rather than replacing a previous one. The new row's
