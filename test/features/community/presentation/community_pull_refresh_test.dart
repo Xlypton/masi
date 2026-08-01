@@ -14,6 +14,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import '../../../support/async_drain.dart';
 
 /// #57 fix: the Community Feed/Map's manual refresh affordances
 /// (`community-feed-refresh`'s `RefreshIndicator`, `community-map-refresh`'s
@@ -128,12 +129,7 @@ Widget _wrap(ProviderContainer container, Widget screen) {
 /// Mirrors `community_screen_test.dart`'s `_drain`: advances real
 /// asynchronous Drift work alongside fake-clock pumps.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
 }
 
 void main() {

@@ -9,6 +9,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../../../support/async_drain.dart';
 
 /// Mirrors `_makeContainer` in areas_screen_test.dart: an in-memory DB + a
 /// fixed clock, with db.close registered before container.dispose (LIFO)
@@ -41,12 +42,7 @@ Widget _wrap(ProviderContainer container, Widget child) {
 /// own), then pumps to flush rebuilds/transitions — no `pumpAndSettle`, so
 /// the loading spinner can never hang the test.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
 }
 
 /// Runs [body]'s real Drift async work under the real event loop.

@@ -34,6 +34,7 @@ import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
+import '../../../support/async_drain.dart';
 
 /// A 1x1 PNG — a REAL decodable image, because `_attachPickedPhoto` runs the
 /// genuine `decodeImageSize` (`dart:ui`'s `instantiateImageCodec`) before it
@@ -73,12 +74,7 @@ class _QuotaFailingPhotoFiles extends PhotoFiles {
 /// (settling would run its 4s duration and exit animation to completion).
 /// Mirrors `topos_screen_test.dart`'s `_drainNoSettle`.
 Future<void> _drainNoSettle(WidgetTester tester) async {
-  for (var i = 0; i < 12; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 12, settle: false);
 }
 
 void main() {

@@ -30,6 +30,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import '../../../support/async_drain.dart';
 
 /// A minimal-but-real 1x1 transparent PNG (base64) — copied from
 /// `community_screen_test.dart`'s identical fixture — used as the
@@ -124,12 +125,7 @@ Future<void> _drain(WidgetTester tester) async {
   // `pumpWidget` time. A freshly-started Drift `.watch()` stream's first
   // emission needs a few more real event-loop turns than one that's
   // already warm.
-  for (var i = 0; i < 10; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 10, settle: false);
 }
 
 /// Seeds one located Area → Sector → Wall chain, all sharing a common name

@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
+import '../support/async_drain.dart';
 
 /// Builds a [ProviderContainer] wired to a fresh in-memory database, mirroring
 /// the pattern in `areas_screen_test.dart`: `db.close` is registered BEFORE
@@ -50,12 +51,7 @@ Widget _wrapRouter(ProviderContainer container) {
 /// `pumpAndSettle` would spin on forever), then settles bounded animations —
 /// see the identical helper's doc comment in `areas_screen_test.dart`.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
   await tester.pumpAndSettle();
 }
 

@@ -11,6 +11,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../../../support/async_drain.dart';
 
 /// A seeded (wallId, routeId) pair satisfying the FK constraints on
 /// `Ascents.wallId`/`Ascents.routeId` (this DB enforces
@@ -146,12 +147,7 @@ Widget _wrap(ProviderContainer container, Widget screen) {
 /// under `testWidgets`' fake-async clock, then pumps to flush the resulting
 /// Riverpod-triggered rebuilds. Mirrors `topos_screen_test.dart`'s `_drain`.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
   await tester.pumpAndSettle();
 }
 
