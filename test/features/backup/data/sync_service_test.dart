@@ -33,12 +33,17 @@ class FakeSyncRemote implements SyncRemote {
   final List<String> removedSharedPaths = [];
 
   @override
-  Future<void> upsertOwnRows(
+  Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
     Map<String, List<Map<String, dynamic>>> tablesToRows,
   ) async {
+    final outcomes = <TablePushOutcome>[];
     for (final tableName in syncTableNames) {
-      for (final row in tablesToRows[tableName] ?? const []) {
+      final rows = tablesToRows[tableName];
+      if (rows == null || rows.isEmpty) continue;
+      var upserted = 0;
+      var skipped = 0;
+      for (final row in rows) {
         assert(
           row['ownerId'] == uid,
           'upsertOwnRows($uid): row ${row['id']} in $tableName has ownerId '
@@ -52,11 +57,23 @@ class FakeSyncRemote implements SyncRemote {
           localUpdatedAt: row['updatedAt'] as int,
           remoteUpdatedAt: remote?['updatedAt'] as int?,
         )) {
+          skipped++;
           continue;
         }
         _rows[tableName]![row['id'] as String] = Map<String, dynamic>.from(row);
+        upserted++;
       }
+      // Mirrors SupabaseSyncRemote's contract (§1d): one outcome per
+      // ATTEMPTED table, LWW-skips counted as a success.
+      outcomes.add(
+        TablePushOutcome.ok(
+          table: tableName,
+          rowsUpserted: upserted,
+          rowsSkippedNewerRemote: skipped,
+        ),
+      );
     }
+    return outcomes;
   }
 
   @override
@@ -759,6 +776,71 @@ void main() {
         expect(remote.uploadedSharedPaths, isEmpty);
         expect(remote.removedPrivatePaths, ['$_uidU1/photo-1.jpg']);
         expect(remote.privateStorage, isEmpty);
+      },
+    );
+
+    test(
+      'S1: upsertOwnRows reports ONE ok outcome per non-empty table — it can '
+      'no longer return void and swallow what actually happened',
+      () async {
+        final remote = FakeSyncRemote();
+
+        final outcomes = await remote.upsertOwnRows(_uidU1, {
+          'areas': [
+            {
+              'id': 'area-1',
+              'createdAt': 100,
+              'updatedAt': 100,
+              'deletedAt': null,
+              'remoteId': null,
+              'dirty': false,
+              'ownerId': _uidU1,
+              'name': 'Area 1',
+            },
+          ],
+          'sectors': const <Map<String, dynamic>>[],
+        });
+
+        expect(
+          outcomes,
+          hasLength(1),
+          reason: 'an empty table is not attempted, so it is not reported',
+        );
+        expect(outcomes.single.table, 'areas');
+        expect(outcomes.single.ok, isTrue);
+        expect(outcomes.single.rowsUpserted, 1);
+        expect(outcomes.single.rowsSkippedNewerRemote, 0);
+        expect(outcomes.single.rowsFailed, 0);
+      },
+    );
+
+    test(
+      'a row the client-side LWW pre-check drops is reported as '
+      'rowsSkippedNewerRemote, NOT as a failure — the cloud already holds a '
+      'strictly newer copy, so there is nothing left to push for it',
+      () async {
+        final remote = FakeSyncRemote();
+        Map<String, dynamic> areaRow(int updatedAt, String name) => {
+          'id': 'area-1',
+          'createdAt': 100,
+          'updatedAt': updatedAt,
+          'deletedAt': null,
+          'remoteId': null,
+          'dirty': false,
+          'ownerId': _uidU1,
+          'name': name,
+        };
+
+        await remote.upsertOwnRows(_uidU1, {
+          'areas': [areaRow(500, 'Cloud (newer)')],
+        });
+        final outcomes = await remote.upsertOwnRows(_uidU1, {
+          'areas': [areaRow(100, 'Local (stale)')],
+        });
+
+        expect(outcomes.single.ok, isTrue);
+        expect(outcomes.single.rowsUpserted, 0);
+        expect(outcomes.single.rowsSkippedNewerRemote, 1);
       },
     );
   });

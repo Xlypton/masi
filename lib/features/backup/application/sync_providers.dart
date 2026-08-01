@@ -72,7 +72,7 @@ class _UnavailableSyncRemote implements SyncRemote {
   );
 
   @override
-  Future<void> upsertOwnRows(
+  Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
     Map<String, List<Map<String, dynamic>>> tablesToRows,
   ) => _unavailable();

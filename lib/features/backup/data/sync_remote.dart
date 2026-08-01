@@ -148,7 +148,22 @@ abstract class SyncRemote {
   /// tombstones (`deletedAt` set) — a tombstone must propagate to other
   /// devices the same as any other row change. Idempotent: re-upserting the
   /// same rows is a no-op change-wise.
-  Future<void> upsertOwnRows(
+  ///
+  /// Returns ONE [TablePushOutcome] per table it actually ATTEMPTED — a
+  /// table absent from [tablesToRows], or present but empty, is not
+  /// attempted and therefore not reported. Real implementations report in
+  /// [syncTableNames] (FK-dependency) order.
+  ///
+  /// S1 fix (§1d): implementations MUST NOT swallow a per-table failure. A
+  /// table whose round trip errors comes back as [TablePushOutcome.failed]
+  /// so `SyncService.pushOwn` can report `rowsFailed`/`errors` instead of
+  /// pretending every handed-in row landed. Per-table isolation is
+  /// unchanged and still required: one failing table must not prevent the
+  /// remaining tables (nor `pushOwn`'s later photo-upload phase) from
+  /// running — so implementations report a single table's failure rather
+  /// than throwing. (`pushOwn` additionally defends against a whole-call
+  /// throw, e.g. the remote being wholly unreachable.)
+  Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
     Map<String, List<Map<String, dynamic>>> tablesToRows,
   );
@@ -436,10 +451,11 @@ class SupabaseSyncRemote implements SyncRemote {
   static const String _bucket = 'topo-photos';
 
   @override
-  Future<void> upsertOwnRows(
+  Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
     Map<String, List<Map<String, dynamic>>> tablesToRows,
   ) async {
+    final outcomes = <TablePushOutcome>[];
     for (final tableName in syncTableNames) {
       final rows = tablesToRows[tableName];
       if (rows == null || rows.isEmpty) continue;
@@ -450,6 +466,11 @@ class SupabaseSyncRemote implements SyncRemote {
       // whole loop — every LATER table (and, upstream, `SyncService.pushOwn`'s
       // subsequent photo-upload phase) still needs to run regardless of one
       // earlier table's failure.
+      //
+      // S1 fix (§1d): the failure is now REPORTED to the caller as well as
+      // logged. It used to be a bare `debugPrint` + `continue` under a
+      // `Future<void>` return, which is what let a totally-failed offline
+      // push read as "Synced • just now".
       try {
         // Client-side last-writer-wins guard on push (#2): fetch the remote's
         // current id+updatedAt for exactly the ids about to be pushed (one
@@ -469,20 +490,49 @@ class SupabaseSyncRemote implements SyncRemote {
             ))
               row,
         ];
-        if (survivors.isEmpty) continue;
+        final skipped = rows.length - survivors.length;
+        if (survivors.isEmpty) {
+          outcomes.add(
+            TablePushOutcome.ok(
+              table: tableName,
+              rowsUpserted: 0,
+              rowsSkippedNewerRemote: skipped,
+            ),
+          );
+          continue;
+        }
 
         // Confirmed live: the real Postgres tables (see `supabase/schema.sql`)
         // use matching camelCase quoted columns (`"ownerId"`, `"wallId"`, ...)
         // for drift's `toJson()` keys — no snake_case mapping layer needed.
         await _client.from(tableName).upsert(survivors);
+        outcomes.add(
+          TablePushOutcome.ok(
+            table: tableName,
+            rowsUpserted: survivors.length,
+            rowsSkippedNewerRemote: skipped,
+          ),
+        );
       } catch (e) {
         debugPrint(
           'SyncRemote: upsertOwnRows failed for table "$tableName" '
-          '(${rows.length} row(s)), skipping — other tables still push: $e',
+          '(${rows.length} row(s)), reported to the caller — other tables '
+          'still push: $e',
         );
-        continue;
+        // Pessimistic on purpose: `rows.length`, not `survivors.length` —
+        // the throw may have come from the LWW pre-check itself, before any
+        // row was classified. Over-reporting unsynced work is safe;
+        // under-reporting it is exactly the S1 bug.
+        outcomes.add(
+          TablePushOutcome.failed(
+            table: tableName,
+            rowsFailed: rows.length,
+            error: e,
+          ),
+        );
       }
     }
+    return outcomes;
   }
 
   @override

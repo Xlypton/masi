@@ -31,10 +31,14 @@ class _CountingSyncRemote implements SyncRemote {
   int pullCallCount = 0;
 
   @override
-  Future<void> upsertOwnRows(
+  Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
     Map<String, List<Map<String, dynamic>>> tablesToRows,
-  ) async {}
+  ) async => [
+    for (final entry in tablesToRows.entries)
+      if (entry.value.isNotEmpty)
+        TablePushOutcome.ok(table: entry.key, rowsUpserted: entry.value.length),
+  ];
 
   @override
   Future<Map<String, List<Map<String, dynamic>>>> fetchOwnRows(String uid) async {
