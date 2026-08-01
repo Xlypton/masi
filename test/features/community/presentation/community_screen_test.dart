@@ -4,6 +4,7 @@ import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/location/location_service.dart';
+import 'package:masi/core/map/masi_tile_caching_provider.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/community/application/community_providers.dart';
@@ -2868,15 +2869,15 @@ void main() {
     );
 
     test(
-      'buildResilientTileProvider(isWeb: true) explicitly disables the '
-      'on-disk BuiltInMapCachingProvider (web port Phase 4, task 3) -- '
-      'DisabledMapCachingProvider.isSupported is false, matching what '
-      "flutter_map's own conditional-import web no-op already does, "
-      'just made deterministic at this call site',
+      'buildResilientTileProvider(isWeb: true) now gets the REAL IndexedDB '
+      'tile cache instead of the no-op (web offline Stage 3, task 6) -- the '
+      'Map tab was blank offline because flutter_map\'s built-in cache is '
+      'documented as a noop on web, so this call site used to make that '
+      'no-op explicit rather than fill the hole',
       () {
         final provider = buildResilientTileProvider(isWeb: true);
-        expect(provider.cachingProvider, isA<DisabledMapCachingProvider>());
-        expect(provider.cachingProvider!.isSupported, isFalse);
+        expect(provider.cachingProvider, isA<MasiTileCachingProvider>());
+        expect(provider.cachingProvider!.isSupported, isTrue);
       },
     );
 
@@ -2885,7 +2886,24 @@ void main() {
       '-- native keeps flutter_map\'s default on-disk cache, unchanged',
       () {
         final provider = buildResilientTileProvider(isWeb: false);
-        expect(provider.cachingProvider, isNull);
+        expect(
+          provider.cachingProvider,
+          isNull,
+          reason: 'null is what selects BuiltInMapCachingProvider; passing '
+              'our IndexedDB cache on native would REPLACE a working 1 GB '
+              'on-disk cache with a worse one',
+        );
+      },
+    );
+
+    test(
+      'both TileLayers share ONE cache instance, so the Community map and '
+      'the Set-location picker share one budget and one LRU ordering rather '
+      'than running competing caches over the same database',
+      () {
+        final a = buildResilientTileProvider(isWeb: true);
+        final b = buildResilientTileProvider(isWeb: true);
+        expect(identical(a.cachingProvider, b.cachingProvider), isTrue);
       },
     );
 
