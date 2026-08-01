@@ -17,10 +17,11 @@ import 'package:flutter_test/flutter_test.dart';
 ///    in a browser;
 ///  - THIS test pins the properties neither of those can assert: that the
 ///    verdict is surfaced rather than discarded, that the log is not gated
-///    behind `kDebugMode`, that `moveExistingIndexedDbToOpfs: true` is
-///    actually passed, and that the drift->masi enum mapping is
-///    value-for-value correct (analyze proves the switch is TOTAL, not that
-///    it maps `inMemory` to `inMemory`).
+///    behind `kDebugMode`, that `moveExistingIndexedDbToOpfs` is NOT passed
+///    (drift 2.34.2's IndexedDB->OPFS move is neither locked nor crash-safe —
+///    see the assertion's own reason), and that the drift->masi enum mapping
+///    is value-for-value correct (analyze proves the switch is TOTAL, not
+///    that it maps `inMemory` to `inMemory`).
 ///
 /// Whitespace is collapsed before matching so `dart format`'s line breaking
 /// can never make an assertion spuriously fail.
@@ -65,7 +66,8 @@ void main() {
       expect(
         code,
         isNot(contains('kDebugMode')),
-        reason: 'the pre-fix code hid the storage verdict behind '
+        reason:
+            'the pre-fix code hid the storage verdict behind '
             '`if (kDebugMode)`, which is precisely why total data loss was '
             'invisible in the release web build (the doc comment above '
             '`openConnection` legitimately NAMES `kDebugMode` in prose to '
@@ -73,47 +75,62 @@ void main() {
       );
     });
 
-    test(
-      'returns DatabaseConnection.delayed(resolvedExecutor), never a bare '
-      'LazyDatabase — a bare one discards drift\'s BroadcastStreamQueryStore '
-      'and silently breaks cross-tab watch()',
-      () {
-        final source = _normalized(webPath);
-        expect(source, contains('DatabaseConnection.delayed('));
-        expect(source, contains('return result.resolvedExecutor;'));
-      },
-    );
+    test('returns DatabaseConnection.delayed(resolvedExecutor), never a bare '
+        'LazyDatabase — a bare one discards drift\'s BroadcastStreamQueryStore '
+        'and silently breaks cross-tab watch()', () {
+      final source = _normalized(webPath);
+      expect(source, contains('DatabaseConnection.delayed('));
+      expect(source, contains('return result.resolvedExecutor;'));
+    });
 
-    test(
-      'a throwing WasmDatabase.open REPORTS before it rethrows — reporting '
-      'after the rethrow would be dead code, leaving the verdict stuck at '
-      'probing (which the interlock reads as allow-creation)',
-      () {
-        final source = _normalized(webPath);
-        final reportIndex =
-            source.indexOf('onStorageReport?.call(StorageDurability.unavailable(');
-        final rethrowIndex = source.indexOf('rethrow;');
-        expect(
-          reportIndex,
-          greaterThan(-1),
-          reason: 'expected the catch to report an unavailable verdict',
-        );
-        expect(rethrowIndex, greaterThan(-1), reason: 'expected a rethrow');
-        expect(
-          reportIndex,
-          lessThan(rethrowIndex),
-          reason: 'the unavailable report must precede the rethrow',
-        );
-      },
-    );
-
-    test('passes moveExistingIndexedDbToOpfs: true', () {
+    test('a throwing WasmDatabase.open REPORTS before it rethrows — reporting '
+        'after the rethrow would be dead code, leaving the verdict stuck at '
+        'probing (which the interlock reads as allow-creation)', () {
+      final source = _normalized(webPath);
+      final reportIndex = source.indexOf(
+        'onStorageReport?.call(StorageDurability.unavailable(',
+      );
+      final rethrowIndex = source.indexOf('rethrow;');
       expect(
-        _normalized(webPath),
-        contains('moveExistingIndexedDbToOpfs: true'),
-        reason: "drift's default is false, which makes "
-            '`_selectExistingDatabase` pin every install that first landed '
-            'on IndexedDB to IndexedDB forever (L8 lock-in)',
+        reportIndex,
+        greaterThan(-1),
+        reason: 'expected the catch to report an unavailable verdict',
+      );
+      expect(rethrowIndex, greaterThan(-1), reason: 'expected a rethrow');
+      expect(
+        reportIndex,
+        lessThan(rethrowIndex),
+        reason: 'the unavailable report must precede the rethrow',
+      );
+    });
+
+    test('does NOT pass moveExistingIndexedDbToOpfs — drift 2.34.2 cannot '
+        'perform that move safely', () {
+      // Comment-stripped: the doc block above the `WasmDatabase.open` call
+      // legitimately NAMES the flag in prose to record why it is off, exactly
+      // like the `kDebugMode` guard above. This checks the argument list.
+      final code = _stripCommentLines(File(webPath).readAsStringSync());
+      expect(
+        code,
+        isNot(contains('moveExistingIndexedDbToOpfs')),
+        reason:
+            'This pin was previously INVERTED — it required '
+            '`moveExistingIndexedDbToOpfs: true` to mitigate L8 lock-in, on '
+            "the belief that drift's move was atomic. It is not, in 2.34.2: "
+            '`moveIndexedDBDatabaseToOpfs` '
+            '(drift/src/web/wasm_setup/indexeddb_to_opfs.dart:13-79) takes no '
+            'Web Lock and creates the OPFS `database` file handle (:42) '
+            'before writing any bytes, while `opfsDatabases()` '
+            '(wasm_setup/shared.dart:204-230) treats the mere existence of '
+            'that handle as "a database lives here". A tab killed inside that '
+            'window therefore leaves a zero-byte OPFS database that '
+            '`_selectExistingDatabase` (wasm.dart:227-252) may pick over the '
+            'intact IndexedDB one, with no recovery and a fully DURABLE '
+            'verdict reported. That fires once per existing install on the '
+            'first load after deploy — i.e. only for users who already have '
+            'topos. L8 lock-in (staying on `sharedIndexedDb`, which persists '
+            'fine) is the accepted cost; losing a library is not. See the '
+            'comment block in connection_web.dart for the full trace.',
       );
     });
 
@@ -129,7 +146,8 @@ void main() {
         expect(
           source,
           contains('WasmStorageImplementation.$name => StorageBackend.$name,'),
-          reason: "mapping drift's $name onto anything but "
+          reason:
+              "mapping drift's $name onto anything but "
               'StorageBackend.$name would silently mis-report durability',
         );
       }
@@ -171,7 +189,8 @@ void main() {
       expect(
         offenders,
         isEmpty,
-        reason: 'lib/ had exactly ONE kDebugMode before this work — the '
+        reason:
+            'lib/ had exactly ONE kDebugMode before this work — the '
             'swallowed drift storage verdict (L1). Any new one is a '
             'diagnostic that will be invisible in the release web build, '
             'which is the only place it matters. (Doc comments are allowed '
@@ -192,7 +211,8 @@ void main() {
       expect(
         reportAt,
         lessThan(lazyAt),
-        reason: 'native has nothing to probe, so it must already be in its '
+        reason:
+            'native has nothing to probe, so it must already be in its '
             'final durable state on the very first frame',
       );
       expect(source, contains('StorageBackend.nativeFile'));
@@ -207,7 +227,8 @@ void main() {
           "final file = File(p.join(dir.path, 'climbtopo.sqlite')); "
           'return NativeDatabase(file); });',
         ),
-        reason: 'iOS/Android must stay bit-identical: same documents '
+        reason:
+            'iOS/Android must stay bit-identical: same documents '
             'directory, same filename, same NativeDatabase, still lazy',
       );
     });
