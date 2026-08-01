@@ -71,6 +71,8 @@ class FakeBackupRemote implements BackupRemote {
 
 /// In-memory [ConnectivityService] test double: reports whatever
 /// [status] is currently set to (no `connectivity_plus` platform channel).
+/// [isBackendReachable] is unused by [CloudBackupService] and exists only to
+/// satisfy the seam (§1d added it for the sync engine's offline detection).
 class FakeConnectivityService implements ConnectivityService {
   FakeConnectivityService(this.status);
 
@@ -78,6 +80,14 @@ class FakeConnectivityService implements ConnectivityService {
 
   @override
   Future<NetworkStatus> currentStatus() async => status;
+
+  @override
+  Future<bool> isBackendReachable() async => true;
+
+  /// §1e's second seam member, written here as part of the ONE merged
+  /// rewrite (reconciliation decision #5). No `@override` until §1e T7
+  /// declares the abstract member.
+  Stream<NetworkStatus> statusChanges() => const Stream<NetworkStatus>.empty();
 }
 
 /// Minimal [AuthRepository] test double for the backup engine: only

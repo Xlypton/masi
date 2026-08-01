@@ -129,13 +129,27 @@ class _FakeAuthRepository implements AuthRepository {
   Future<void> signOut() async {}
 }
 
-/// Always-wifi [ConnectivityService] double — duplicated locally from
-/// `sync_orchestrator_test.dart`'s identically-named class. [SyncService]'s
-/// constructor requires one even though `pullOwnAndShared()` (the only path
-/// this file's new #57 test exercises) never actually reads it.
+/// Always-wifi, always-reachable [ConnectivityService] double — duplicated
+/// locally from `sync_orchestrator_test.dart`'s identically-named class.
+/// [SyncService]'s constructor requires one even though
+/// `pullOwnAndShared()` (the only path this file's #57 test exercises) never
+/// reads it; [isBackendReachable] exists so no widget test can ever fall
+/// through to the real `SystemConnectivityService` and issue a live HTTP
+/// probe.
 class _FakeConnectivityService implements ConnectivityService {
   @override
   Future<NetworkStatus> currentStatus() async => NetworkStatus.wifi;
+
+  @override
+  Future<bool> isBackendReachable() async => true;
+
+  /// §1e's second seam member, written here as part of the ONE merged
+  /// rewrite (reconciliation decision #5). An inert stream is exactly right
+  /// for a widget test: §1e T8 makes `SyncOrchestrator.build()`
+  /// unconditionally `statusChanges().listen(...)`, and "never emits" means
+  /// "no transitions", never an error. No `@override` until §1e T7 declares
+  /// the abstract member.
+  Stream<NetworkStatus> statusChanges() => const Stream<NetworkStatus>.empty();
 }
 
 /// Mirrors `router_test.dart`'s `_makeContainer`: a fresh in-memory database

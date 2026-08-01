@@ -180,12 +180,57 @@ class _FakeAuthRepository implements AuthRepository {
 }
 
 class _FakeConnectivityService implements ConnectivityService {
-  _FakeConnectivityService(this.status);
+  // `reachable`/`probeThrows` get their first call sites in §1d Task 7's
+  // offline-vs-error classification group; the analyzer's
+  // `unused_element_parameter` warning is therefore correct but premature
+  // for exactly one commit. Task 7 removes these two suppressions.
+  _FakeConnectivityService(
+    this.status, {
+    // ignore: unused_element_parameter
+    this.reachable = true,
+    // ignore: unused_element_parameter
+    this.probeThrows = false,
+  });
 
   NetworkStatus status;
 
+  /// What [isBackendReachable] reports — the ONLY signal allowed to produce
+  /// `SyncStatus.offline` for a failed push (S4).
+  bool reachable;
+
+  /// When true, [isBackendReachable] throws instead of answering: a broken
+  /// probe must degrade to "reachable" and never masquerade as offline.
+  bool probeThrows;
+
+  int probeCallCount = 0;
+
+  /// §1e's connectivity-change seam, written here as part of the ONE merged
+  /// rewrite of this class (reconciliation decision #4). Broadcast so more
+  /// than one subscriber (orchestrator + assertion) can listen.
+  final _statusController = StreamController<NetworkStatus>.broadcast();
+
   @override
   Future<NetworkStatus> currentStatus() async => status;
+
+  @override
+  Future<bool> isBackendReachable() async {
+    probeCallCount++;
+    if (probeThrows) throw Exception('probe-boom');
+    return reachable;
+  }
+
+  /// No `@override` yet: `ConnectivityService` does not declare
+  /// `statusChanges()` until §1e T7, and annotating a non-overriding member
+  /// is an analyzer error. §1e T7 adds the annotation and nothing else.
+  Stream<NetworkStatus> statusChanges() => _statusController.stream;
+
+  /// Drives a connectivity transition from a test (§1e).
+  void emit(NetworkStatus next) {
+    status = next;
+    _statusController.add(next);
+  }
+
+  void dispose() => _statusController.close();
 }
 
 /// Builds [syncOrchestratorProvider] AND keeps it actively watched, exactly
