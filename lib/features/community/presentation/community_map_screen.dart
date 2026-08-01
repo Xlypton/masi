@@ -10,6 +10,7 @@ import 'package:http/retry.dart' show RetryClient;
 import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/map/masi_tile_caching_provider.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
@@ -71,16 +72,22 @@ Client buildResilientTileHttpClient({Client? inner}) {
 /// native, which never sets `tileHttpClientFactory`, is completely
 /// unaffected and keeps the real on-disk cache.
 ///
-/// Web: [BuiltInMapCachingProvider] already no-ops safely there on its own
-/// (flutter_map's conditional-import split for that class picks a web
-/// implementation that mixes in [DisabledMapCachingProvider] whenever
-/// `dart.library.io` is unavailable — see that class's own "safe to use...
-/// they will noop" doc), so this isn't fixing a crash. It's making that
-/// no-op explicit and deterministic at this call site — every caller here
-/// (this file and `set_location_picker.dart`, both via this shared
-/// function) skips flutter_map's `getOrCreateInstance()` singleton/UUID-
-/// keygen machinery on web entirely, rather than relying on it silently
-/// doing nothing three layers down.
+/// Web gets [MasiTileCachingProvider] — a real IndexedDB tile cache under a
+/// hard byte budget with LRU eviction. It exists because
+/// [BuiltInMapCachingProvider] is a documented NO-OP on web (flutter_map's
+/// conditional-import split picks an implementation that simply mixes in
+/// [DisabledMapCachingProvider] whenever `dart.library.io` is unavailable),
+/// so the web build had no tile cache whatsoever and the Map tab rendered
+/// blank the moment the network went away. This call site used to pass
+/// [DisabledMapCachingProvider] to make that no-op explicit; the hole is now
+/// filled instead. Both callers (this file and `set_location_picker.dart`,
+/// via this shared function) get the same process-wide instance, so they
+/// share one budget and one LRU ordering.
+///
+/// Native is deliberately unchanged: `cachingProvider` stays null there,
+/// which selects flutter_map's on-disk [BuiltInMapCachingProvider] (1 GB
+/// default). Substituting our smaller IndexedDB cache on iOS/Android would
+/// replace a working cache with a worse one.
 ///
 /// A named top-level function (rather than an inline `NetworkTileProvider()`
 /// call at the `TileLayer` call site) so this policy is unit-testable on its
@@ -99,7 +106,7 @@ NetworkTileProvider buildResilientTileProvider({
     httpClient: httpClient ?? buildResilientTileHttpClient(),
     cachingProvider:
         cachingProvider ??
-        ((isWeb ?? kIsWeb) ? const DisabledMapCachingProvider() : null),
+        ((isWeb ?? kIsWeb) ? webTileCachingProvider() : null),
   );
 }
 
