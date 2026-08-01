@@ -124,6 +124,35 @@ class _ThrowingSharedToposSyncRemote extends _CountingSyncRemote {
   }
 }
 
+/// A [_CountingSyncRemote] whose `upsertOwnRows` reports EVERY attempted
+/// table as failed — the shape `SupabaseSyncRemote.upsertOwnRows` returns
+/// when each table's round trip throws (offline / captive portal / expired
+/// JWT). The push still RUNS (so `pushCallCount` increments) but nothing
+/// lands, so `PushSyncResult.fullyLanded` is false.
+///
+/// Flip [failPush] to `false` mid-test to make the NEXT push land cleanly.
+class _FailingPushSyncRemote extends _CountingSyncRemote {
+  bool failPush = true;
+
+  @override
+  Future<List<TablePushOutcome>> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {
+    if (!failPush) return super.upsertOwnRows(uid, tablesToRows);
+    pushCallCount++;
+    return [
+      for (final entry in tablesToRows.entries)
+        if (entry.value.isNotEmpty)
+          TablePushOutcome.failed(
+            table: entry.key,
+            rowsFailed: entry.value.length,
+            error: Exception('push-boom'),
+          ),
+    ];
+  }
+}
+
 /// Minimal [AuthRepository] test double standing in for the auth session
 /// [SyncService] itself reads (`currentSession.uid`) to gate push/pull —
 /// deliberately separate from `authStateProvider`'s stream, which is only
@@ -730,6 +759,115 @@ void main() {
         final state = container.read(syncOrchestratorProvider);
         expect(state.status, SyncStatus.idle);
         expect(state.lastSyncedAt, DateTime.fromMillisecondsSinceEpoch(123456));
+      },
+    );
+  });
+
+  group('§1d (S1): a push that did not land never reports "synced"', () {
+    test(
+      'a push whose every table failed leaves status NOT idle, leaves '
+      'lastSyncedAt untouched, and records lastPushError — pre-fix this set '
+      'status: idle + lastSyncedAt: now, which the Account screen rendered '
+      'as "Synced • just now"',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _FailingPushSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(milliseconds: 15),
+          nowMs: () => 123456,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        final state = container.read(syncOrchestratorProvider);
+        expect(remote.pushCallCount, 1, reason: 'the push did run');
+        expect(
+          state.status,
+          isNot(SyncStatus.idle),
+          reason: 'a push where nothing landed must never read as idle',
+        );
+        expect(
+          state.lastSyncedAt,
+          isNull,
+          reason: 'lastSyncedAt must not be stamped by a push that failed',
+        );
+        expect(
+          state.lastPushError,
+          allOf(contains('Sync failed'), contains('push-boom')),
+        );
+      },
+    );
+
+    test(
+      'a later FULLY-LANDED push clears lastPushError, flips status back to '
+      'idle, and stamps lastSyncedAt',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _FailingPushSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(milliseconds: 15),
+          nowMs: () => 123456,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(container.read(syncOrchestratorProvider).lastPushError, isNotNull);
+
+        remote.failPush = false;
+        await insertArea(db, 'a2', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        final state = container.read(syncOrchestratorProvider);
+        expect(state.status, SyncStatus.idle);
+        expect(state.lastSyncedAt, DateTime.fromMillisecondsSinceEpoch(123456));
+        expect(state.lastPushError, isNull);
+      },
+    );
+
+    test(
+      'a failed push does NOT touch lastPullError — the two channels stay '
+      'independent (a pull-side retry affordance must not light up because a '
+      'push failed, and vice versa)',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _FailingPushSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(milliseconds: 15),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        expect(container.read(syncOrchestratorProvider).lastPullError, isNull);
+        expect(container.read(syncOrchestratorProvider).lastPushError, isNotNull);
       },
     );
   });

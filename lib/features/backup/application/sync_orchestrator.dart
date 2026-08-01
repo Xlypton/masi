@@ -38,9 +38,15 @@ class SyncOrchestratorState {
     this.status = SyncStatus.idle,
     this.lastSyncedAt,
     this.lastPullError,
+    this.lastPushError,
   });
 
   final SyncStatus status;
+
+  /// The last time a push or pull actually completed SUCCESSFULLY. S1 fix
+  /// (§1d): a push is only "successful" when [PushSyncResult.fullyLanded] —
+  /// a push where some or all rows never reached the cloud leaves this at
+  /// its previous value rather than stamping a fresh, false "just now".
   final DateTime? lastSyncedAt;
 
   /// Human-readable description of why the MOST RECENT `pullOwnAndShared()`
@@ -57,15 +63,29 @@ class SyncOrchestratorState {
   /// `_SyncErrorEmptyState`) key their "Couldn't sync — retry" affordance
   /// directly off this being non-null, so it must never linger past a pull
   /// that actually succeeded cleanly. A PUSH failure never touches this
-  /// field ([_runPush] only ever changes [status]/[lastSyncedAt]) — it is
-  /// pull-specific by design.
+  /// field ([_runPush] writes only [status]/[lastSyncedAt]/[lastPushError])
+  /// — it is pull-specific by design.
   final String? lastPullError;
+
+  /// Human-readable description of why the MOST RECENT push did not fully
+  /// land — S1 fix (§1d): set whenever [PushSyncResult.fullyLanded] came
+  /// back false (one or more tables failed, and/or rows were excluded by the
+  /// push-side required-field guard) OR the `pushOwn()` call itself threw.
+  /// `null` once a push lands completely.
+  ///
+  /// Deliberately NOT cleared by a successful PULL, unlike [lastPullError]:
+  /// a pull says nothing about whether local changes reached the cloud, and
+  /// "Synced • just now" (which a successful pull legitimately produces:
+  /// `idle` + a fresh [lastSyncedAt]) while the last push failed was exactly
+  /// the S1 lie. `account_screen.dart`'s `_syncStatusLabel` keys off this.
+  final String? lastPushError;
 
   SyncOrchestratorState copyWith({SyncStatus? status, DateTime? lastSyncedAt}) =>
       SyncOrchestratorState(
         status: status ?? this.status,
         lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
         lastPullError: lastPullError,
+        lastPushError: lastPushError,
       );
 
   @override
@@ -74,15 +94,17 @@ class SyncOrchestratorState {
       (other is SyncOrchestratorState &&
           other.status == status &&
           other.lastSyncedAt == lastSyncedAt &&
-          other.lastPullError == lastPullError);
+          other.lastPullError == lastPullError &&
+          other.lastPushError == lastPushError);
 
   @override
-  int get hashCode => Object.hash(status, lastSyncedAt, lastPullError);
+  int get hashCode =>
+      Object.hash(status, lastSyncedAt, lastPullError, lastPushError);
 
   @override
   String toString() =>
       'SyncOrchestratorState(status: $status, lastSyncedAt: $lastSyncedAt, '
-      'lastPullError: $lastPullError)';
+      'lastPullError: $lastPullError, lastPushError: $lastPushError)';
 }
 
 /// Debounce window [SyncOrchestrator] waits after the LAST local table write
@@ -201,13 +223,34 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
     unawaited(_runPush());
   }
 
+  /// S1 fix (§1d): only a push where EVERYTHING landed
+  /// ([PushSyncResult.fullyLanded]) may report [SyncStatus.idle] and stamp a
+  /// fresh `lastSyncedAt`. A partial or total failure keeps the previous
+  /// timestamp and records [SyncOrchestratorState.lastPushError] — before
+  /// this, `upsertOwnRows` swallowed every per-table error, so a totally
+  /// failed offline push reported "Synced • just now".
   Future<void> _runPush() async {
     state = state.copyWith(status: SyncStatus.syncing);
     try {
       final result = await ref.read(syncServiceProvider).pushOwn();
       switch (result.outcome) {
         case SyncPushOutcome.pushed:
-          state = state.copyWith(status: SyncStatus.idle, lastSyncedAt: _now());
+          if (result.fullyLanded) {
+            state = SyncOrchestratorState(
+              status: SyncStatus.idle,
+              lastSyncedAt: _now(),
+              lastPullError: state.lastPullError,
+            );
+          } else {
+            state = SyncOrchestratorState(
+              status: SyncStatus.error,
+              lastSyncedAt: state.lastSyncedAt,
+              lastPullError: state.lastPullError,
+              lastPushError:
+                  'Sync failed: ${result.rowsFailed} change(s) not uploaded — '
+                  '${result.errors.join('; ')}',
+            );
+          }
         case SyncPushOutcome.skippedSignedOut:
           state = state.copyWith(status: SyncStatus.idle);
         case SyncPushOutcome.skippedNotWifi:
@@ -215,7 +258,12 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       }
     } catch (e, st) {
       debugPrint('SyncOrchestrator: pushOwn failed: $e\n$st');
-      state = state.copyWith(status: SyncStatus.error);
+      state = SyncOrchestratorState(
+        status: SyncStatus.error,
+        lastSyncedAt: state.lastSyncedAt,
+        lastPullError: state.lastPullError,
+        lastPushError: 'Sync failed: $e',
+      );
     }
   }
 
@@ -306,12 +354,17 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             status: SyncStatus.idle,
             lastSyncedAt: _now(),
             lastPullError: pullError,
+            // A pull says nothing about whether local changes reached the
+            // cloud — carrying this through is what stops a successful pull
+            // from relabelling an unpushed library as "Synced" (S1).
+            lastPushError: state.lastPushError,
           );
         case SyncPullOutcome.skippedSignedOut:
           state = SyncOrchestratorState(
             status: SyncStatus.idle,
             lastSyncedAt: state.lastSyncedAt,
             lastPullError: pullError,
+            lastPushError: state.lastPushError,
           );
       }
     } catch (e, st) {
@@ -320,6 +373,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         status: SyncStatus.error,
         lastSyncedAt: state.lastSyncedAt,
         lastPullError: 'Sync failed: $e',
+        lastPushError: state.lastPushError,
       );
     }
   }
