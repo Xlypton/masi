@@ -427,6 +427,7 @@ void main() {
     required AuthRepository auth,
     ConnectivityService? connectivity,
     bool Function()? wifiOnly,
+    Map<String, List<String>>? pushRequiredFields,
   }) {
     final db = AppDatabase(NativeDatabase.memory());
     final docsDir = Directory(p.join(tmp.path, 'docs_${_counter++}'))..createSync();
@@ -439,6 +440,7 @@ void main() {
       connectivity: connectivity ?? FakeConnectivityService(NetworkStatus.wifi),
       photoFiles: PhotoFiles(docsDir: () async => docsDir),
       wifiOnly: wifiOnly,
+      pushRequiredFields: pushRequiredFields,
     );
     return (db: db, docsDir: docsDir, srcDir: srcDir, service: service);
   }
@@ -1093,6 +1095,73 @@ void main() {
           isEmpty,
           reason: 'the failing table really did not land',
         );
+      },
+    );
+
+    test(
+      'L5: a local row excluded by the push-side required-field guard lands '
+      'in the push result\'s failure channel (rowsFailed + errors) instead of '
+      'being dropped from this and every future push with only a debugPrint '
+      '— with no outbox, "excluded once" meant "excluded forever"',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+          // Every column syncRequiredFields names is NOT NULL in Drift, so a
+          // genuinely-missing required value is only reachable through local
+          // data corruption. Requiring a column that cannot exist is the
+          // faithful stand-in: it is exactly what a corrupted/absent
+          // required value looks like TO THE GUARD. Only 'areas' is
+          // overridden; every other table falls back to `const ['id']`,
+          // which every real row satisfies.
+          pushRequiredFields: const {
+            'areas': [
+              'id',
+              'createdAt',
+              'updatedAt',
+              'name',
+              'columnThatCannotExist',
+            ],
+          },
+        );
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.rowsFailed, 1);
+        expect(result.errors, hasLength(1));
+        expect(result.errors.single, contains('areas'));
+        expect(
+          result.errors.single,
+          contains('area-1'),
+          reason: 'the excluded row must be identifiable, not just counted',
+        );
+        expect(result.fullyLanded, isFalse);
+        expect(
+          result.rowsPushed,
+          4,
+          reason: 'sector + wall + photo + route still pushed — the guard is '
+              'per-row, not per-batch',
+        );
+
+        final ownRows = await remote.fetchOwnRows(_uidU1);
+        expect(
+          ownRows['areas'],
+          isEmpty,
+          reason: 'the excluded row genuinely never reached the cloud',
+        );
+        expect(ownRows['sectors']!.map((r) => r['id']), ['sector-1']);
       },
     );
   });

@@ -268,13 +268,15 @@ class SyncService {
     required ConnectivityService connectivity,
     PhotoFiles? photoFiles,
     bool Function()? wifiOnly,
+    Map<String, List<String>>? pushRequiredFields,
   }) : _db = db, // ignore: prefer_initializing_formals
        _backupRepository = backupRepository, // ignore: prefer_initializing_formals
        _remote = remote, // ignore: prefer_initializing_formals
        _authRepository = authRepository, // ignore: prefer_initializing_formals
        _connectivity = connectivity, // ignore: prefer_initializing_formals
        _photoFiles = photoFiles ?? PhotoFiles(),
-       _wifiOnly = wifiOnly ?? (() => false);
+       _wifiOnly = wifiOnly ?? (() => false),
+       _pushRequiredFields = pushRequiredFields ?? syncRequiredFields;
 
   final db.AppDatabase _db;
   final BackupRepository _backupRepository;
@@ -283,6 +285,19 @@ class SyncService {
   final ConnectivityService _connectivity;
   final PhotoFiles _photoFiles;
   final bool Function() _wifiOnly;
+
+  /// The per-table required-NOT-NULL-field map [pushOwn]'s push-side guard
+  /// validates each local row against, defaulting to [syncRequiredFields].
+  ///
+  /// Injectable ONLY so a test can make an ordinary, perfectly valid local
+  /// row fail that guard: every column [syncRequiredFields] names is NOT
+  /// NULL in Drift, so a genuinely-missing required value is unreachable
+  /// from a real local row set (it needs local data corruption) — yet the
+  /// guard's reject branch is exactly what L5 is about, and it must be
+  /// provable end-to-end that an excluded row reaches
+  /// [PushSyncResult.rowsFailed]/[PushSyncResult.errors]. Production always
+  /// uses the default.
+  final Map<String, List<String>> _pushRequiredFields;
 
   /// Pushes every LOCAL row owned by the signed-in user (all eight tables,
   /// INCLUDING soft-deleted tombstones) up to [SyncRemote.upsertOwnRows],
@@ -342,65 +357,56 @@ class SyncService {
     final errors = <String>[];
     var rowsFailed = 0;
 
-    // Push-side NOT-NULL guard (sync-resilience hardening): drops (+
-    // debugPrints, via filterValidSyncRows) any local row missing a required
-    // NOT-NULL field before it's ever sent to Supabase, reusing the exact
-    // same [syncRequiredFields] map + [hasRequiredSyncFields]/
-    // [filterValidSyncRows] helpers the fetch side validates with (imported
-    // from `sync_remote.dart`) — the symmetric guard to `fetchOwnRows`'s.
-    // A normal local row set is unaffected: local Drift NOT-NULL column
-    // constraints mean a genuinely null required field can only happen here
-    // via local data corruption, not everyday use. The `?? const ['id']`
-    // fallback is defensive only — every table name below has a matching
-    // entry in [syncRequiredFields].
+    // Push-side NOT-NULL guard (sync-resilience hardening): drops any local
+    // row missing a required NOT-NULL field before it's ever sent to
+    // Supabase, reusing the exact same [syncRequiredFields] map +
+    // [hasRequiredSyncFields]/[partitionSyncRows] helpers the fetch side
+    // validates with (imported from `sync_remote.dart`) — the symmetric
+    // guard to `fetchOwnRows`'s. A normal local row set is unaffected: local
+    // Drift NOT-NULL column constraints mean a genuinely null required field
+    // can only happen here via local data corruption, not everyday use. The
+    // `?? const ['id']` fallback is defensive only — every table name below
+    // has a matching entry in [syncRequiredFields].
+    //
+    // L5 fix (§1d): an excluded row is now REPORTED in [rowsFailed]/
+    // [errors] rather than dropped with nothing but a debugPrint. With no
+    // outbox, "excluded once" meant "excluded forever" — and invisibly.
+    //
+    // `errors`/`rowsFailed` were ALREADY declared immediately above this
+    // comment. Do NOT re-declare them here.
+    List<Map<String, dynamic>> guard(
+      String table,
+      List<Map<String, dynamic>> jsonRows,
+    ) {
+      final required = _pushRequiredFields[table] ?? const ['id'];
+      final split = partitionSyncRows(
+        jsonRows,
+        required,
+        debugLabel: 'local $table (push)',
+      );
+      if (split.invalid.isNotEmpty) {
+        rowsFailed += split.invalid.length;
+        errors.add(
+          '$table: ${split.invalid.length} local row(s) excluded by the '
+          'required-field guard ($required) and NOT pushed: '
+          '${[for (final row in split.invalid) row['id']]}',
+        );
+      }
+      return split.valid;
+    }
+
     final tablesToRows = <String, List<Map<String, dynamic>>>{
-      'profiles': filterValidSyncRows(
-        [for (final row in profiles) row.toJson()],
-        syncRequiredFields['profiles'] ?? const ['id'],
-        debugLabel: 'local profiles (push)',
-      ),
-      'areas': filterValidSyncRows(
-        [for (final row in areas) row.toJson()],
-        syncRequiredFields['areas'] ?? const ['id'],
-        debugLabel: 'local areas (push)',
-      ),
-      'sectors': filterValidSyncRows(
-        [for (final row in sectors) row.toJson()],
-        syncRequiredFields['sectors'] ?? const ['id'],
-        debugLabel: 'local sectors (push)',
-      ),
-      'walls': filterValidSyncRows(
-        [for (final row in walls) row.toJson()],
-        syncRequiredFields['walls'] ?? const ['id'],
-        debugLabel: 'local walls (push)',
-      ),
-      'photos': filterValidSyncRows(
-        [for (final row in photos) row.toJson()],
-        syncRequiredFields['photos'] ?? const ['id'],
-        debugLabel: 'local photos (push)',
-      ),
-      'routes': filterValidSyncRows(
-        [for (final row in routes) row.toJson()],
-        syncRequiredFields['routes'] ?? const ['id'],
-        debugLabel: 'local routes (push)',
-      ),
-      'comments': filterValidSyncRows(
-        [for (final row in comments) row.toJson()],
-        syncRequiredFields['comments'] ?? const ['id'],
-        debugLabel: 'local comments (push)',
-      ),
-      'likes': filterValidSyncRows(
-        [for (final row in likes) row.toJson()],
-        syncRequiredFields['likes'] ?? const ['id'],
-        debugLabel: 'local likes (push)',
-      ),
+      'profiles': guard('profiles', [for (final row in profiles) row.toJson()]),
+      'areas': guard('areas', [for (final row in areas) row.toJson()]),
+      'sectors': guard('sectors', [for (final row in sectors) row.toJson()]),
+      'walls': guard('walls', [for (final row in walls) row.toJson()]),
+      'photos': guard('photos', [for (final row in photos) row.toJson()]),
+      'routes': guard('routes', [for (final row in routes) row.toJson()]),
+      'comments': guard('comments', [for (final row in comments) row.toJson()]),
+      'likes': guard('likes', [for (final row in likes) row.toJson()]),
       // Ascents ARE pushed here (own-row push, no visibility distinction) —
       // it's fetchSharedTopos (pull side) that keeps them private, not push.
-      'ascents': filterValidSyncRows(
-        [for (final row in ascents) row.toJson()],
-        syncRequiredFields['ascents'] ?? const ['id'],
-        debugLabel: 'local ascents (push)',
-      ),
+      'ascents': guard('ascents', [for (final row in ascents) row.toJson()]),
     };
 
     // S1 fix (§1d): upsertOwnRows now reports per-table outcomes instead of
