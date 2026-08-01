@@ -155,4 +155,20 @@ if [[ -s "$LEGACY_SW" ]]; then
 fi
 echo "    ok: no legacy Flutter service worker emitted"
 
+echo "==> service-worker precache manifest"
+# Rewrites the two BUILD STAMP lines in build/web/sw.js (which `flutter build
+# web` copied verbatim from web/sw.js) with this build's precache list and a
+# content-derived version. Changing the version is what makes the browser
+# treat the worker as updated, which is the whole rollover mechanism.
+dart run tool/gen_sw_manifest.dart build/web
+
+if grep -q "const SHELL_VERSION = 'dev';" build/web/sw.js; then
+  echo "FAIL: build/web/sw.js still carries the dev stamp." >&2
+  echo "      The generator did not rewrite it, so this build would ship a" >&2
+  echo "      service worker that precaches NOTHING — the app would look" >&2
+  echo "      fine online and have no offline shell at all." >&2
+  exit 1
+fi
+echo "    ok: build/web/sw.js stamped"
+
 echo "==> build complete: build/web"

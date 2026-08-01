@@ -94,4 +94,20 @@ void main() {
       );
     });
   });
+
+  group('tool/build_web.sh service-worker stamping', () {
+    test('runs the precache-manifest generator', () {
+      expect(_buildScript(), contains('tool/gen_sw_manifest.dart'));
+    });
+
+    test('fails the build if sw.js is left with the dev stamp', () {
+      expect(
+        _buildScript(),
+        contains("const SHELL_VERSION = 'dev';"),
+        reason: 'an unstamped sw.js precaches NOTHING and the app still works '
+            'online, so this must be a build failure rather than something '
+            'discovered when a user goes offline',
+      );
+    });
+  });
 }
