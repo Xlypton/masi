@@ -212,12 +212,23 @@ SnackBar routeWriteFailureSnackBar(RouteWriteException error) {
 ///  - the user is told why, in plain words.
 ///
 /// Extracted as a standalone function taking its collaborators directly —
-/// mirroring [loadWallOriginalPhoto]/[resolveAttachedPhotoPath] above —
-/// because `TopoCanvasScreen._pickImage` calls the module-level
-/// `showPhotoSourceSheet`/`pickPhotoFrom` with NO injectable seam, so a widget
-/// test cannot drive the canvas pick flow at all. This makes the failure path
-/// testable against a plain `ProviderContainer` instead (see
+/// mirroring [loadWallOriginalPhoto]/[resolveAttachedPhotoPath] above — so the
+/// failure path can be exercised against a plain `ProviderContainer`, with no
+/// widget tree at all (see
 /// `test/features/topo/application/topo_canvas_wall_binding_test.dart`).
+///
+/// This comment used to add that `TopoCanvasScreen._pickImage` called the
+/// module-level `showPhotoSourceSheet`/`pickPhotoFrom` with NO injectable seam,
+/// "so a widget test cannot drive the canvas pick flow at all". **That is no
+/// longer true.** The screen now takes optional `@visibleForTesting`
+/// `photoSourcePicker`/`photoPicker` constructor params defaulting to those same
+/// module-level functions, and
+/// `test/features/topo/presentation/topo_canvas_photo_write_failure_test.dart`
+/// drives the whole pick-and-fail flow end to end through the real screen.
+///
+/// Both levels are worth keeping: the container test pins THIS function's three
+/// obligations in isolation, and the widget test pins that the screen actually
+/// calls it. Neither subsumes the other.
 SnackBar settleFailedPhotoAttach(
   SelectedImageNotifier selectedImage,
   DrawController drawController,
