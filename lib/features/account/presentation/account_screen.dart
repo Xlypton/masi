@@ -892,6 +892,11 @@ String emailLocalPart(String email) {
 /// `sync_orchestrator.dart`'s doc comment on why signed-out maps to `idle`
 /// rather than a distinct status — there's nothing to sync, which isn't an
 /// error or an offline condition).
+///
+/// S1 fix (§1d): `idle` no longer implies everything reached the cloud, so
+/// [SyncOrchestratorState.lastPushError] is consulted before the "Synced"
+/// branch. Per D-2 no unsynced-count badge or new affordance is added here —
+/// this only stops the existing line from lying.
 String _syncStatusLabel(SyncOrchestratorState state) {
   switch (state.status) {
     case SyncStatus.syncing:
@@ -901,6 +906,11 @@ String _syncStatusLabel(SyncOrchestratorState state) {
     case SyncStatus.offline:
       return 'Offline';
     case SyncStatus.idle:
+      // A push failure survives a later SUCCESSFUL pull (which legitimately
+      // sets idle + a fresh lastSyncedAt — the pull really did work), so
+      // without this check the line would read "Synced • just now" while the
+      // user's own changes were still only on this device.
+      if (state.lastPushError != null) return 'Sync error';
       final lastSyncedAt = state.lastSyncedAt;
       if (lastSyncedAt == null) return 'Not synced yet';
       return 'Synced • ${_relativeSyncTime(lastSyncedAt)}';

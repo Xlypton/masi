@@ -784,6 +784,52 @@ void main() {
         expect(find.text('Not synced yet'), findsOneWidget);
       },
     );
+
+    testWidgets(
+      'S1: an idle state carrying a lastPushError renders "Sync error", never '
+      '"Synced • …" — a successful PULL legitimately produces idle + a fresh '
+      'lastSyncedAt, but local changes that never reached the cloud must not '
+      'read as synced',
+      (tester) async {
+        final container = makeContainer(
+          SyncOrchestratorState(
+            status: SyncStatus.idle,
+            lastSyncedAt: DateTime.now(),
+            lastPushError: 'Sync failed: 3 change(s) not uploaded — areas: …',
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('sync-status')), findsOneWidget);
+        expect(find.text('Sync error'), findsOneWidget);
+        expect(
+          find.textContaining('Synced'),
+          findsNothing,
+          reason: 'this is the exact S1 lie the label must no longer tell',
+        );
+      },
+    );
+
+    testWidgets(
+      'a clean idle state (lastPushError null) still renders "Synced • …" — '
+      'per D-2 nothing is added to this line, the lying case is just removed',
+      (tester) async {
+        final container = makeContainer(
+          SyncOrchestratorState(
+            status: SyncStatus.idle,
+            lastSyncedAt: DateTime.now(),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('Synced'), findsOneWidget);
+        expect(find.text('Sync error'), findsNothing);
+      },
+    );
   });
 
   group('PWA install affordance', () {
