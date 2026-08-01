@@ -185,6 +185,44 @@ ProviderContainer _makeGateContainerFromRepo(
   return container;
 }
 
+/// A [LastKnownUid] whose persisted uid is already hydrated, so
+/// [effectiveUidProvider] (and therefore [hasKnownLocalSessionProvider])
+/// resolves to a real owner WITHOUT a live Supabase session.
+///
+/// This is the exact production shape of an involuntary sign-out: gotrue's
+/// `_removeSession()` has erased the session (so
+/// `AuthRepository.currentSession` reports signed OUT with no uid), but the
+/// locally-persisted `lastKnownUid` survives it — that is the whole point of
+/// §1c. Overriding this notifier rather than [hasKnownLocalSessionProvider]
+/// directly keeps the real `lastKnownUid -> effectiveUid -> hasKnownLocalSession`
+/// chain under test instead of stubbing its answer.
+class _SeededLastKnownUid extends LastKnownUid {
+  _SeededLastKnownUid(this.seededUid);
+
+  final String seededUid;
+
+  @override
+  String? build() => seededUid;
+}
+
+/// A gate container whose auth stream has emitted a signed-out VALUE carrying
+/// [cause], with a locally-known owner present iff [knownLocalSession].
+///
+/// A signed-out *value* (not an `AsyncError`) is what an involuntary sign-out
+/// actually looks like on `onAuthStateChange`, which is why the fail-open
+/// added for the errored-stream case never covered it.
+ProviderContainer _makeSignedOutWithCauseContainer(
+  AuthSignOutCause? cause, {
+  required bool knownLocalSession,
+}) => _makeGateContainerFromRepo(
+  _FakeAuthRepository(AuthSessionState.signedOut(cause: cause)),
+  gateEnabled: true,
+  extraOverrides: [
+    if (knownLocalSession)
+      lastKnownUidProvider.overrideWith(() => _SeededLastKnownUid('uid-1')),
+  ],
+);
+
 void main() {
   group('router: / renders the new Topos home', () {
     // `appRouter` is a module-level singleton (see `lib/app/router.dart`),
@@ -791,6 +829,116 @@ void main() {
         expect(find.byType(ToposScreen), findsOneWidget);
         expect(find.byKey(const Key('nav-tab-topos')), findsOneWidget);
         expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-out with cause sessionExpired while a known '
+      'local session exists (offline token refresh failed): does NOT '
+      'redirect — the user stays in the app with their local library',
+      (tester) async {
+        final container = _makeSignedOutWithCauseContainer(
+          AuthSignOutCause.sessionExpired,
+          knownLocalSession: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byKey(const Key('nav-tab-topos')), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-out with cause sessionMissing while a known '
+      'local session exists: does NOT redirect — an unrestorable session is '
+      'not a request to be signed out',
+      (tester) async {
+        final container = _makeSignedOutWithCauseContainer(
+          AuthSignOutCause.sessionMissing,
+          knownLocalSession: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-out with cause unknown while a known local '
+      'session exists: does NOT redirect — an unattributed sign-out is '
+      'treated as involuntary, exactly as LastKnownUid.forget already does',
+      (tester) async {
+        final container = _makeSignedOutWithCauseContainer(
+          AuthSignOutCause.unknown,
+          knownLocalSession: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-out with NO cause reported (gotrue leaves '
+      'signOutReason null on a cross-tab BroadcastChannel sign-out) while a '
+      'known local session exists: does NOT redirect',
+      (tester) async {
+        final container = _makeSignedOutWithCauseContainer(
+          null,
+          knownLocalSession: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(ToposScreen), findsOneWidget);
+        expect(find.byType(AccountScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-out with cause userInitiated, even WITH a known '
+      'local session: DOES redirect — an explicit sign-out is authoritative '
+      'and must never be softened into "offline"',
+      (tester) async {
+        final container = _makeSignedOutWithCauseContainer(
+          AuthSignOutCause.userInitiated,
+          knownLocalSession: true,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(AccountScreen), findsOneWidget);
+        expect(find.byKey(const Key('account-email-field')), findsOneWidget);
+        expect(find.byType(ToposScreen), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'gate enabled + signed-out with cause sessionExpired but NO known local '
+      'session (nobody ever signed in on this device): DOES redirect — the '
+      'wall still fails closed for a visitor with nothing to protect',
+      (tester) async {
+        final container = _makeSignedOutWithCauseContainer(
+          AuthSignOutCause.sessionExpired,
+          knownLocalSession: false,
+        );
+
+        await tester.pumpWidget(_wrapRouter(container));
+        await _drain(tester);
+
+        expect(find.byType(AccountScreen), findsOneWidget);
+        expect(find.byType(ToposScreen), findsNothing);
       },
     );
 

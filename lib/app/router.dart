@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'is_safari.dart';
 import 'nav_shell.dart';
 import '../features/account/application/auth_providers.dart';
+import '../features/account/data/auth_repository.dart';
 import '../features/account/presentation/account_screen.dart';
 import '../features/ar/presentation/ar_screen.dart';
 import '../features/community/presentation/ascent_detail_screen.dart';
@@ -135,11 +136,42 @@ final Expando<Object> _authRefreshWired = Expando<Object>(
 ///     ever changes alongside an [authStateProvider] emission, and
 ///     [_ensureAuthRefreshWired] already turns every such emission into a
 ///     [GoRouter.refresh], so there is nothing a second listener would add.
-///  5. Otherwise a resolved value is present: signed-in passes through
-///     untouched (`null`); signed-out redirects to [webAuthGateSignInPath].
-///     An explicit signed-out EMISSION is authoritative (the user signed
-///     out, or the session expired hard) and is never softened by
-///     [hasKnownLocalSessionProvider] — only the ambiguous error case is.
+///  5. Otherwise a resolved value is present. Signed-in passes through
+///     untouched (`null`). A signed-out VALUE is then split by WHY the
+///     session ended — [AuthSessionState.signOutCause] — because an
+///     involuntary sign-out emits a signed-out *value*, not an `AsyncError`,
+///     and so slips past case 4 entirely (the offline-reliability audit,
+///     2026-07-31):
+///
+///       * [AuthSignOutCause.userInitiated]: redirect, unconditionally. The
+///         user asked to be signed out; that is authoritative and is never
+///         softened by [hasKnownLocalSessionProvider]. Checked explicitly
+///         rather than relying on `LastKnownUid.forget()` having already
+///         cleared the uid — `forget()` is async and races this redirect,
+///         which runs on the very same emission.
+///       * Any other cause — [AuthSignOutCause.sessionExpired],
+///         [AuthSignOutCause.sessionMissing], [AuthSignOutCause.unknown], or
+///         no reported cause at all (gotrue leaves `signOutReason` null on a
+///         cross-tab `BroadcastChannel` sign-out) — means the NETWORK took
+///         the session away, not the user. gotrue's token refresh failing
+///         while offline (a captive portal answering with an HTML body is
+///         classified non-retryable, so `_removeSession()` runs) is exactly
+///         this shape. Treated as signed-in-OFFLINE and passed through
+///         (`null`) whenever [hasKnownLocalSessionProvider] is true, so the
+///         user keeps full read/write access to their local library —
+///         including topos they recorded offline and have not synced yet.
+///         Ejecting them instead would hide that data behind a wall whose
+///         only affordances (magic link / Google OAuth) need the very
+///         network that just failed.
+///       * The same non-userInitiated cause with NO known local session
+///         still redirects: a visitor who has never signed in on this device
+///         has nothing to protect, so the wall keeps failing closed.
+///
+///     This mirrors, deliberately, the policy `LastKnownUid.forget()` already
+///     applies to the persisted uid — one rule about what counts as a real
+///     sign-out, honoured by both consumers. Note this only governs
+///     REACHABILITY of local data; cloud reads stay RLS-gated by the (now
+///     absent) token regardless.
 FutureOr<String?> _webAuthGateRedirect(
   BuildContext context,
   GoRouterState state,
@@ -161,7 +193,16 @@ FutureOr<String?> _webAuthGateRedirect(
         : webAuthGateSignInPath;
   }
 
-  return authAsync.value!.isSignedIn ? null : webAuthGateSignInPath;
+  final session = authAsync.value!;
+  if (session.isSignedIn) return null;
+
+  if (session.signOutCause == AuthSignOutCause.userInitiated) {
+    return webAuthGateSignInPath;
+  }
+
+  return container.read(hasKnownLocalSessionProvider)
+      ? null
+      : webAuthGateSignInPath;
 }
 
 /// Wires a ONE-TIME [authStateProvider] listener onto [container] that calls
