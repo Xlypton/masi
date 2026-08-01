@@ -12,6 +12,7 @@ import 'package:flutter_test/flutter_test.dart';
 Widget _harness({
   required Future<void> Function(String item) onDelete,
   Future<void> Function(BuildContext context, String item)? onMove,
+  Future<void> Function(String item, String newName)? onRename,
 }) {
   return MaterialApp(
     theme: MasiTheme.light,
@@ -27,7 +28,7 @@ Widget _harness({
       onRetry: () {},
       onTap: (_) {},
       onCreate: (_) async {},
-      onRename: (item, name) async {},
+      onRename: onRename ?? (item, name) async {},
       onDelete: onDelete,
       onMove: onMove,
     ),
@@ -202,6 +203,54 @@ void main() {
         expect(moved, ['Test Area']);
         expect(capturedContext, isNotNull);
         expect(capturedContext!.mounted, isTrue);
+      },
+    );
+  });
+
+  group('CrudListScaffold surfaces a failed write instead of swallowing it', () {
+    testWidgets(
+      'a throwing onDelete shows a "Couldn\'t delete" SnackBar (audit L4: a '
+      'guarded delete that matches 0 rows must never look like success)',
+      (tester) async {
+        await tester.pumpWidget(
+          _harness(
+            onDelete: (_) async => throw Exception('0 rows affected (test)'),
+          ),
+        );
+
+        await tester.tap(find.byKey(const Key('area-delete-Test Area')));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(const Key('area-delete-confirm-Test Area')),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text("Couldn't delete — please try again"),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'a throwing onRename shows a "Couldn\'t rename" SnackBar',
+      (tester) async {
+        await tester.pumpWidget(
+          _harness(
+            onDelete: (_) async {},
+            onRename: (_, _) async => throw Exception('0 rows affected (test)'),
+          ),
+        );
+
+        await tester.tap(find.byKey(const Key('area-rename-Test Area')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('crud-name-submit')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text("Couldn't rename — please try again"),
+          findsOneWidget,
+        );
       },
     );
   });

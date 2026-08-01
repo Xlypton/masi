@@ -279,13 +279,32 @@ class _TopoRow extends ConsumerWidget {
       case 'publish':
         await _handlePublish(context, ref, topo);
       case 'unpublish':
-        await _handleUnpublish(ref, topo);
+        await _handleUnpublish(context, ref, topo);
       case 'show-on-map':
         _handleShowOnMap(context, topo);
       case 'set-location':
         await _handleSetLocation(context, ref, topo);
       case 'delete':
         await _handleDelete(context, ref, topo);
+    }
+  }
+
+  /// See `crud_list_scaffold.dart`'s identical helper: a guarded mutation
+  /// that could not be applied now throws (row-count verification, audit
+  /// L4), and the user must be told rather than shown a dismissed sheet.
+  Future<void> _runGuarded(
+    BuildContext context,
+    String failureMessage,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } catch (e, st) {
+      debugPrint('Topo write failed: $e\n$st');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(failureMessage)));
     }
   }
 
@@ -299,9 +318,14 @@ class _TopoRow extends ConsumerWidget {
       builder: (dialogContext) => _TopoNameDialog(initialValue: topo.name),
     );
     if (newName == null) return;
-    await ref
-        .read(libraryCrudRepositoryProvider)
-        .renameWall(topo.wallId, newName);
+    if (!context.mounted) return;
+    await _runGuarded(
+      context,
+      "Couldn't rename — please try again",
+      () => ref
+          .read(libraryCrudRepositoryProvider)
+          .renameWall(topo.wallId, newName),
+    );
   }
 
   /// "Move to…" flow: resolves [topo]'s destination-sector candidates
@@ -403,12 +427,25 @@ class _TopoRow extends ConsumerWidget {
       ),
     );
     if (confirmed == true) {
-      await ref.read(libraryCrudRepositoryProvider).publishTopo(topo.wallId);
+      if (!context.mounted) return;
+      await _runGuarded(
+        context,
+        "Couldn't publish — please try again",
+        () => ref.read(libraryCrudRepositoryProvider).publishTopo(topo.wallId),
+      );
     }
   }
 
-  Future<void> _handleUnpublish(WidgetRef ref, TopoRef topo) {
-    return ref.read(libraryCrudRepositoryProvider).unpublishTopo(topo.wallId);
+  Future<void> _handleUnpublish(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+  ) {
+    return _runGuarded(
+      context,
+      "Couldn't unpublish — please try again",
+      () => ref.read(libraryCrudRepositoryProvider).unpublishTopo(topo.wallId),
+    );
   }
 
   /// Pushes straight into `/community`'s Map tab, centered/zoomed on
@@ -499,7 +536,13 @@ class _TopoRow extends ConsumerWidget {
       ),
     );
     if (confirmed == true) {
-      await ref.read(libraryCrudRepositoryProvider).softDeleteWall(topo.wallId);
+      if (!context.mounted) return;
+      await _runGuarded(
+        context,
+        "Couldn't delete — please try again",
+        () =>
+            ref.read(libraryCrudRepositoryProvider).softDeleteWall(topo.wallId),
+      );
     }
   }
 }

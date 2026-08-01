@@ -249,10 +249,40 @@ class CrudListScaffold<T> extends StatelessWidget {
     );
   }
 
+  /// Runs [action] and turns a failure into a user-visible [SnackBar] instead
+  /// of an unhandled exception escaping a button callback.
+  ///
+  /// The repository's guarded mutations now VERIFY their affected row count
+  /// (see `LibraryWriteLostException`) rather than reporting success on a
+  /// 0-row update, so "the write did not land" reaches this widget as a
+  /// throw — and the whole point of that fix is that the user hears about it.
+  /// Catches [Object], not just that one type: a drift/IO failure is just as
+  /// much a lost write from the user's point of view.
+  Future<void> _runGuarded(
+    BuildContext context,
+    String failureMessage,
+    Future<void> Function() action,
+  ) async {
+    try {
+      await action();
+    } catch (e, st) {
+      debugPrint('$entityKey write failed: $e\n$st');
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(failureMessage)));
+    }
+  }
+
   Future<void> _handleCreate(BuildContext context) async {
     final name = await _showNameDialog(context, title: addDialogTitle);
     if (name == null) return;
-    await onCreate(name);
+    if (!context.mounted) return;
+    await _runGuarded(
+      context,
+      "Couldn't save — please try again",
+      () => onCreate(name),
+    );
   }
 
   Future<void> _handleRename(BuildContext context, T item) async {
@@ -262,7 +292,12 @@ class CrudListScaffold<T> extends StatelessWidget {
       initialValue: nameOf(item),
     );
     if (name == null) return;
-    await onRename(item, name);
+    if (!context.mounted) return;
+    await _runGuarded(
+      context,
+      "Couldn't rename — please try again",
+      () => onRename(item, name),
+    );
   }
 
   /// iOS-style delete confirmation: a [CupertinoActionSheet] with a single
@@ -304,7 +339,12 @@ class CrudListScaffold<T> extends StatelessWidget {
       ),
     );
     if (confirmed == true) {
-      await onDelete(item);
+      if (!context.mounted) return;
+      await _runGuarded(
+        context,
+        "Couldn't delete — please try again",
+        () => onDelete(item),
+      );
     }
   }
 

@@ -359,6 +359,23 @@ class _ThrowingSetCoordinatesRepository extends LibraryCrudRepository {
   }
 }
 
+/// A repository whose `softDeleteWall` fails the way a row-count-verified
+/// guarded delete does when ownership is unknowable (audit L4) — used to
+/// prove `_TopoRow._handleDelete` SURFACES that instead of dismissing the
+/// confirm sheet as if the topo were gone.
+class _ThrowingSoftDeleteWallRepository extends LibraryCrudRepository {
+  _ThrowingSoftDeleteWallRepository(super.db, {required super.nowMs});
+
+  @override
+  Future<void> softDeleteWall(String id) {
+    throw const LibraryWriteLostException(
+      operation: 'softDeleteWall',
+      rowId: 'test',
+      reason: LibraryWriteLostReason.ownerIdentityUnknown,
+    );
+  }
+}
+
 /// A tile provider that never performs any network/file I/O: every tile
 /// request resolves synchronously to the same tiny in-memory image. Copied
 /// from `community_screen_test.dart`'s identical class (library-private to
@@ -4760,4 +4777,46 @@ void main() {
       );
     },
   );
+
+  group('L4: a topo delete that cannot be applied is surfaced, not silent', () {
+    testWidgets(
+      'a repo whose softDeleteWall throws leaves the row in the list AND '
+      'shows a failure SnackBar',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final repo = _ThrowingSoftDeleteWallRepository(db, nowMs: () => 1000);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            libraryCrudRepositoryProvider.overrideWithValue(repo),
+            syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final wallId = await _dbWork(
+          tester,
+          () => repo.createTopo('Doomed Topo'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-delete-$wallId')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-delete-confirm-$wallId')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text("Couldn't delete — please try again"),
+          findsOneWidget,
+        );
+        expect(find.text('Doomed Topo'), findsOneWidget);
+      },
+    );
+  });
 }
