@@ -2,7 +2,9 @@ import 'dart:io';
 
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/db/storage_durability_provider.dart';
 import 'package:masi/features/library/application/library_providers.dart';
+import 'package:drift/drift.dart' show LazyDatabase;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -22,6 +24,19 @@ class _FakePathProviderPlatform extends PathProviderPlatform {
   @override
   Future<String?> getApplicationDocumentsPath() async => docsPath;
 }
+
+/// An [AppDatabase] whose executor resolves fine and then fails the moment a
+/// statement actually needs it — precisely drift-on-web's shape, where the
+/// real sqlite open lives behind a `LazyDatabase` INSIDE the worker
+/// (`drift-2.34.2/lib/src/web/wasm_setup/shared.dart:284`) and so cannot fail
+/// until the first query.
+///
+/// A closed `NativeDatabase.memory()` does NOT work as a stand-in here: drift
+/// simply opens a fresh in-memory database on the next statement, so every
+/// query keeps succeeding.
+AppDatabase _brokenDatabase() => AppDatabase(
+  LazyDatabase(() async => throw StateError('no storage backend')),
+);
 
 /// Regression coverage for the cold-cache device bug: `photoRepositoryProvider`
 /// and `libraryCrudRepositoryProvider` used to each construct their OWN
@@ -119,5 +134,66 @@ void main() {
 
     expect(original, isNotNull);
     expect(original!.localPath, expectedAbsolute);
+  });
+
+  // `WasmDatabase.open`'s verdict is reported BEFORE the database has done any
+  // real work: drift hands back a `resolvedExecutor` whose actual sqlite open
+  // is itself deferred behind a `LazyDatabase` inside the worker
+  // (`drift-2.34.2/lib/src/web/wasm_setup/shared.dart:284`), and native's
+  // `openConnection` reports synchronously around an unopened `LazyDatabase`.
+  // So a green `opfsShared`/`opfsLocks`/`nativeFile` verdict is NOT evidence
+  // that storage works — only a completed query is. Without this probe a
+  // worker that reports green and then dies on the first query leaves
+  // `topos_screen` with creation ENABLED and no warning banner, which is
+  // exactly the L1 silent-data-loss shape the storage verdict exists to end.
+  group('verifyDatabaseUsable', () {
+    test(
+      'a database that cannot answer a query is reported as unavailable, even '
+      'though the connection layer never complained',
+      () async {
+        final container = ProviderContainer(
+          overrides: [appDatabaseProvider.overrideWithValue(_brokenDatabase())],
+        );
+        addTearDown(container.dispose);
+
+        expect(container.read(storageDurabilityProvider).isProbing, isTrue);
+
+        await verifyDatabaseUsable(container);
+
+        final verdict = container.read(storageDurabilityProvider);
+        expect(verdict.unavailable, isTrue);
+        expect(verdict.isEphemeral, isTrue);
+        expect(verdict.unavailableReason, isNotNull);
+      },
+    );
+
+    test('never rethrows — boot must not be taken down by the probe', () async {
+      final container = ProviderContainer(
+        overrides: [appDatabaseProvider.overrideWithValue(_brokenDatabase())],
+      );
+      addTearDown(container.dispose);
+
+      await expectLater(verifyDatabaseUsable(container), completes);
+    });
+
+    test('a healthy database leaves the verdict exactly as it was', () async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [appDatabaseProvider.overrideWithValue(db)],
+      );
+      addTearDown(container.dispose);
+      container.read(storageDurabilityProvider.notifier).report(
+            const StorageDurability(backend: StorageBackend.opfsShared),
+          );
+
+      await verifyDatabaseUsable(container);
+
+      expect(
+        container.read(storageDurabilityProvider).backend,
+        StorageBackend.opfsShared,
+      );
+      expect(container.read(storageDurabilityProvider).unavailable, isFalse);
+    });
   });
 }

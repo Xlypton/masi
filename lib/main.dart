@@ -95,7 +95,15 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
   // so it costs the boot path nothing but the one indexed read it already
   // needs before any query runs.
   //
-  // …and all three go through [awaitBootWork], which is what guarantees this
+  // `verifyDatabaseUsable` rides along for a fourth reason: `hydrate()`
+  // swallows its own database failures by design, so a database that opens
+  // and then FAILS its first query would leave the connection layer's
+  // (optimistic, pre-query) verdict standing — creation enabled, no warning
+  // banner. The probe shares `hydrate()`'s `ensureOpen`, so it costs one
+  // trivial statement rather than a second open. See its doc in
+  // `core/db/database_provider.dart`.
+  //
+  // …and all four go through [awaitBootWork], which is what guarantees this
   // `await` terminates. `hydrate()` is the first REAL query against the local
   // database, so it is what actually opens it — and drift 2.34.2 has no
   // timeout anywhere on that path (see [awaitBootWork]'s doc for the four
@@ -107,6 +115,7 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
       _initSupabase(),
       container.read(photoFilesProvider).warmDocsPath(),
       container.read(lastKnownUidProvider.notifier).hydrate(),
+      verifyDatabaseUsable(container),
     ]),
   );
   runApp(
