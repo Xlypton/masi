@@ -164,6 +164,36 @@ SnackBar photoWriteFailureSnackBar(PhotoWriteException error) {
   );
 }
 
+/// A [SnackBar] presenting [error]'s [RouteWriteException.userMessage] behind a
+/// warning glyph — the route-side twin of [photoWriteFailureSnackBar], for UF-1
+/// (a route write that never reached the database).
+///
+/// Deliberately the same shape as the photo version rather than a new
+/// treatment: a climber whose device is out of room can hit BOTH in one session
+/// (the photo attach, then the route commit), and two different-looking
+/// warnings for one underlying problem read as two unrelated faults.
+///
+/// [DrawController] has already reverted the canvas by the time this is shown
+/// (see `DrawController._writeThrough`), so the route/marker/grade is gone from
+/// the screen. This is what turns that disappearance from a glitch into an
+/// explanation — present it from a `ref.listen` on
+/// `DrawState.lastWriteFailure`, then call
+/// [DrawController.clearWriteFailure] so the next failure registers as a new
+/// change. Follow `topo_canvas_screen.dart`'s existing `DrawState.mode`
+/// listener for the no-`fireImmediately` pattern.
+SnackBar routeWriteFailureSnackBar(RouteWriteException error) {
+  return SnackBar(
+    content: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        MasiIcon('warning', size: 18),
+        const SizedBox(width: 8),
+        Flexible(child: Text(error.userMessage)),
+      ],
+    ),
+  );
+}
+
 /// Settles the canvas after a photo attach failed on its BYTE WRITE, and
 /// returns the [SnackBar] the caller should show.
 ///
