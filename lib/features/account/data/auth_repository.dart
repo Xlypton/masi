@@ -1,6 +1,40 @@
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+/// Why a session ended, as this app's own narrow enum rather than gotrue's
+/// [SignOutReason].
+///
+/// Kept app-local (mapped by [authSignOutCauseFrom]) for two reasons: test
+/// doubles like `FakeAuthRepository` can emit plain values without
+/// constructing real Supabase types — the same rationale that keeps
+/// [AuthSessionState] free of `Session`/`User` — and [unknown] exists here
+/// with no gotrue counterpart, for a `signedOut` whose reason gotrue does not
+/// report (a cross-tab `BroadcastChannel` sign-out, `AuthState.fromBroadcast`).
+///
+/// Only [userInitiated] is allowed to clear locally-scoped ownership state
+/// (see `auth_providers.dart`'s `LastKnownUid.forget`). Everything else —
+/// [sessionExpired] (a captive portal answering the refresh with an HTML body,
+/// classified as a non-retryable `AuthUnknownException`, which is L4's
+/// trigger), [sessionMissing], [unknown] — means "the network took the session
+/// away", never "the user asked to be signed out".
+enum AuthSignOutCause { userInitiated, sessionExpired, sessionMissing, unknown }
+
+/// Maps gotrue's [SignOutReason] onto [AuthSignOutCause].
+///
+/// `null` in -> `null` out, deliberately: gotrue sets `signOutReason` only on
+/// [AuthChangeEvent.signedOut], and leaves it null even there when the event
+/// arrived cross-tab via `BroadcastChannel`. A null must therefore NEVER be
+/// read as "user initiated" — doing so would clear `lastKnownUid` on a
+/// transient refresh failure and re-open L4.
+AuthSignOutCause? authSignOutCauseFrom(SignOutReason? reason) {
+  return switch (reason) {
+    SignOutReason.userInitiated => AuthSignOutCause.userInitiated,
+    SignOutReason.sessionExpired => AuthSignOutCause.sessionExpired,
+    SignOutReason.sessionMissing => AuthSignOutCause.sessionMissing,
+    null => null,
+  };
+}
+
 /// Immutable snapshot of the app's auth session: signed-out when [email] is
 /// null, signed-in with that address otherwise.
 ///
@@ -10,10 +44,14 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 /// this narrow is what lets [FakeAuthRepository]-style test doubles emit
 /// plain values instead of constructing real Supabase types.
 class AuthSessionState {
-  const AuthSessionState.signedOut() : email = null, uid = null;
+  const AuthSessionState.signedOut({AuthSignOutCause? cause})
+    : email = null,
+      uid = null,
+      signOutCause = cause;
 
   const AuthSessionState.signedIn(String signedInEmail, {this.uid})
-    : email = signedInEmail;
+    : email = signedInEmail,
+      signOutCause = null;
 
   /// The signed-in user's email, or `null` when signed out.
   final String? email;
@@ -30,6 +68,14 @@ class AuthSessionState {
   /// existing equality-based assertions (see `account_screen_test.dart`).
   final String? uid;
 
+  /// Why this signed-out state came about, or `null` when unknown / when this
+  /// is a signed-in state. See [AuthSignOutCause]: ONLY
+  /// [AuthSignOutCause.userInitiated] may clear locally-scoped ownership
+  /// state. Like [uid], deliberately NOT part of [operator ==]/[hashCode] —
+  /// equality stays keyed on [email] alone so existing equality-based
+  /// assertions are unaffected.
+  final AuthSignOutCause? signOutCause;
+
   bool get isSignedIn => email != null;
 
   @override
@@ -40,7 +86,9 @@ class AuthSessionState {
   int get hashCode => email.hashCode;
 
   @override
-  String toString() => 'AuthSessionState(email: $email, uid: $uid)';
+  String toString() =>
+      'AuthSessionState(email: $email, uid: $uid, '
+      'signOutCause: $signOutCause)';
 }
 
 /// Seam over Supabase auth so `application`/`presentation` code never talks
@@ -147,7 +195,11 @@ class SupabaseAuthRepository implements AuthRepository {
   @override
   Stream<AuthSessionState> authStateChanges() {
     return _client.auth.onAuthStateChange.map(
-      (state) => _toSessionState(state.session),
+      // `state.signOutReason` is gotrue's own, non-null only on a
+      // `signedOut` event it originated itself — this is what lets §1c tell a
+      // deliberate sign-out apart from an involuntary one WITHOUT parsing
+      // error strings.
+      (state) => _toSessionState(state.session, state.signOutReason),
     );
   }
 
@@ -190,10 +242,13 @@ class SupabaseAuthRepository implements AuthRepository {
   @override
   Future<void> signOut() => _client.auth.signOut();
 
-  static AuthSessionState _toSessionState(Session? session) {
+  static AuthSessionState _toSessionState(
+    Session? session, [
+    SignOutReason? reason,
+  ]) {
     final email = session?.user.email;
     return (email == null || email.isEmpty)
-        ? const AuthSessionState.signedOut()
+        ? AuthSessionState.signedOut(cause: authSignOutCauseFrom(reason))
         : AuthSessionState.signedIn(email, uid: session?.user.id);
   }
 }
