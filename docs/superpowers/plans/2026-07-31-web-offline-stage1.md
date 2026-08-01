@@ -39,6 +39,26 @@ Work stopped when the org's **monthly API spend limit** was reached, killing fou
 - §1b tasks 1–2 — **independently verified: PASS.** (D-21 confirmed handled *soundly*, not merely analyzer-clean: the `isA<JSObject>()` guard proves exactly what the `StorageManager` extension-type cast erases to at runtime. The impl also deliberately bypasses `StorageEstimate`'s non-nullable typed getters, so a browser omitting `usage` or `quota` still yields the other instead of collapsing both to null.)
 - Live gates after task 3: `flutter analyze` **0 issues**, `flutter test` **1595 passing** (1576 + 19).
 
+### ⚠ §1b task 4 now carries a load-bearing §1c requirement — do not skip it
+
+§1c-A persists `lastKnownUid` and routes all 7 uid doors through `effectiveUidProvider`, **but it could not wire the cold-boot restore**, because `lib/main.dart` belongs to §1b task 4 which has not landed. Consequence: `lastKnownUid` is populated from the auth stream *within* a run but **is not restored across a cold boot**, so the offline-restart half of L4 remains open until this ships. §1b task 4 MUST add to the `Future.wait` in `lib/main.dart` (alongside `import 'features/account/application/auth_providers.dart';`):
+
+```dart
+container.read(lastKnownUidProvider.notifier).hydrate(),
+```
+
+It is independent of the other entries and cannot throw. Until it lands, treat L4 as only half-fixed.
+
+### Riverpod v3 facts the fragments got wrong (apply to every remaining task)
+
+Found while implementing §1c-A; all three will bite other fragments.
+
+1. **`WidgetRef.listen` has no `fireImmediately` in Riverpod 3.** The fragment's `app.dart` block does not compile. The naive fix is also unsafe — the handler writes notifier state, and Riverpod forbids modifying a provider during a widget build. Correct shape: a plain `ref.listen` for subsequent emissions **plus a one-shot `Future<void>.microtask` seed from `initState`**, sharing one handler. Same deferral `database_provider.dart` already uses, consistent with the load-bearing microtask in §1a.
+2. **Riverpod v3 *pauses* a provider's internal stream subscription while nothing is actively listening, and a paused subscription never delivers `done` — so `StreamController.close()` never completes.** This hung 8 tests on 30s timeouts. Reproducible with a bare `container.read(authStateProvider)` and no §1c code involved. **Any test fake that closes a controller must dispose the container BEFORE closing it.** This is a latent trap for every remaining fragment that builds a stream fake.
+3. **`Override` is not exported from the `flutter_riverpod` barrel in v3.** A container helper taking overrides needs `import 'package:flutter_riverpod/misc.dart' show Override;` (as `test/main_boot_app_seam_test.dart` already does).
+
+Also: state writes are flushed through Riverpod's own scheduler, not synchronously on assignment, so a test observing an emission *sequence* may need `container.pump()` before asserting.
+
 **§1a hardening follow-ups (from the tasks 1–3 verify pass)**
 
 - **`probing` is terminal if `WasmDatabase.open` itself throws — this is a hole in the interlock.** `onStorageReport` only fires on the success path, so an exception during open leaves the provider at `probing` forever, and `probing` reads as *not* ephemeral, which means **topo creation stays enabled**. It is not a durability mis-report (`isDurable` stays false) and every query would fail loudly, but the interlock's whole job is to refuse creation when storage can't be trusted, and this path evades it. **Fix:** wrap the open, and report an explicit failed verdict that counts as ephemeral, so creation is blocked. Decided: blocking creation when the database cannot even be opened is unambiguously correct.
