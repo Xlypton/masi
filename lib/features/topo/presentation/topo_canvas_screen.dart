@@ -20,6 +20,7 @@ import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/application/rock_highlight_controller.dart';
 import 'package:masi/features/topo/data/image_dimensions.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
+import 'package:masi/features/topo/data/photo_write_exception.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/canvas_chrome.dart';
 import 'package:masi/features/topo/presentation/photo_strip.dart';
@@ -612,6 +613,16 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// in this class), so those two paths return without settling -- if
   /// nothing else is watching this wallId's [drawControllerProvider], it
   /// will be torn down (autoDispose) along with the stuck flag anyway.
+  ///
+  /// L3 fix (photo-byte write failures): a [PhotoWriteException] out of
+  /// [LibraryCrudRepository.attachPhotoToWall] is caught in its OWN clause,
+  /// above the catch-all — it is the one failure with a specific, actionable
+  /// cause to tell the user about (out of storage space), and it is the one
+  /// failure that additionally requires clearing `selectedImageProvider`,
+  /// since the optimistically-selected picked path has no row behind it and
+  /// never will. Both effects plus the SnackBar come from the single
+  /// [settleFailedPhotoAttach] call, which settles [generation] exactly like
+  /// every other exit path in this method must.
   Future<void> _attachPhotoAndLoad(XFile xfile, int width, int height) async {
     final generation =
         ref.read(drawControllerProvider(widget.wallId)).switchGeneration;
@@ -679,6 +690,31 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       await ref
           .read(drawControllerProvider(widget.wallId).notifier)
           .loadForWall(widget.wallId, photoId);
+    } on PhotoWriteException catch (e) {
+      // L3 fix: attachPhotoToWall PROPAGATES a byte-write failure now (quota
+      // exhaustion above all — originals stay FULL resolution per decision
+      // D-5) and throws BEFORE its insert transaction, so no Photos row was
+      // created and there is nothing to undo in the database. What DOES need
+      // undoing is the optimistic UI: _pickImage already selected the picked
+      // path so this screen would show a spinner for an image that will never
+      // have a row. settleFailedPhotoAttach clears it, settles the switch
+      // generation THIS call opened (see this method's FIX #4 doc — every exit
+      // path must), and hands back the SnackBar to show. Deliberately caught
+      // ABOVE the generic clause below so a quota problem gets its own
+      // actionable wording instead of the silent debugPrint every other
+      // failure still gets. Only while mounted — see this method's doc for why
+      // `ref` is unsafe to touch otherwise.
+      debugPrint('Failed to store photo bytes for ${xfile.path}: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          settleFailedPhotoAttach(
+            ref.read(selectedImageProvider.notifier),
+            ref.read(drawControllerProvider(widget.wallId).notifier),
+            generation,
+            e,
+          ),
+        );
+      }
     } catch (e, st) {
       debugPrint('Failed to attach/load photo for ${xfile.path}: $e\n$st');
       // FIX #4 (continued): settle the switch this call opened even when
