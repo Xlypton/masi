@@ -8,6 +8,7 @@ import '../features/account/data/auth_repository.dart';
 import '../features/backup/application/sync_orchestrator.dart';
 import '../features/library/application/library_providers.dart';
 import 'claim_ownership_bootstrap.dart';
+import 'last_known_uid_bootstrap.dart';
 import 'router.dart';
 import 'theme.dart';
 import 'web_lifecycle.dart';
@@ -39,6 +40,35 @@ class _MasiAppState extends ConsumerState<MasiApp>
     // only maximizes the chance the push starts in time).
     installWebLifecycleFlush(
       () => ref.read(syncOrchestratorProvider.notifier).onAppPaused(),
+    );
+    // Seed the last-known-uid bootstrap (§1c) with whatever the auth stream
+    // ALREADY holds, once. `build()`'s `ref.listen` below only fires on
+    // SUBSEQUENT emissions — `WidgetRef.listen` has no `fireImmediately` — and
+    // `Supabase.initialize` has completed by the time MasiApp builds, so an
+    // `initialSession` emission may already have been delivered and would
+    // otherwise be missed entirely.
+    //
+    // The `Future<void>.microtask` wrapper is LOAD-BEARING, not cosmetic:
+    // `remember`/`forget` write `lastKnownUidProvider`'s state synchronously,
+    // and Riverpod forbids modifying a provider during a widget build. One
+    // microtask puts the write safely after the first frame's build — the same
+    // deferral `database_provider.dart` uses for its storage verdict.
+    Future<void>.microtask(() {
+      if (!mounted) return;
+      _handleLastKnownUid(ref.read(authStateProvider));
+    });
+  }
+
+  /// Wires `handleAuthStateForLastKnownUid` to the real providers. Shared by
+  /// the one-shot seed in [initState] and the `ref.listen` in [build] so both
+  /// paths apply identical semantics: keep the uid on an involuntary
+  /// sign-out, clear it only on a user-initiated one.
+  void _handleLastKnownUid(AsyncValue<AuthSessionState> next) {
+    final lastKnown = ref.read(lastKnownUidProvider.notifier);
+    handleAuthStateForLastKnownUid(
+      next,
+      remember: (uid) => unawaited(lastKnown.remember(uid)),
+      forget: () => unawaited(lastKnown.forget()),
     );
   }
 
@@ -115,6 +145,18 @@ class _MasiAppState extends ConsumerState<MasiApp>
         (uid) => ref.read(libraryCrudRepositoryProvider).claimOwnership(uid),
       );
     });
+
+    // Last-known-uid bootstrap (§1c): keep `lastKnownUidProvider` in step with
+    // the live auth stream so local data scoping survives an involuntary
+    // sign-out. A SEPARATE listener from the claim-ownership one above,
+    // deliberately: the claim handler is an edge-detector whose semantics
+    // depend on `previous`, whereas this one is a pure function of the current
+    // emission. The already-held value is covered by `initState`'s one-shot
+    // seed, since `WidgetRef.listen` cannot fire immediately.
+    ref.listen<AsyncValue<AuthSessionState>>(
+      authStateProvider,
+      (previous, next) => _handleLastKnownUid(next),
+    );
 
     return MaterialApp.router(
       title: 'masi',
