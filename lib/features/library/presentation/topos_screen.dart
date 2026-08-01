@@ -445,6 +445,13 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   /// still learns what happened and is left with exactly nothing created,
   /// matching #25's abort semantics.
   ///
+  /// That undo is BEST-EFFORT and cannot gate the message: it is a database
+  /// write that can fail for the very reason the photo write just did (an
+  /// exhausted origin quota), so it runs in its own try/catch and the
+  /// `photoWriteFailureSnackBar` is shown unconditionally. In the rare case
+  /// where the undo also fails the user keeps a visible, hand-deletable empty
+  /// topo — strictly better than the silent orphan they used to get.
+  ///
   /// Guarded twice against a stale/absent topo count and against
   /// re-entrancy: it bails out (no-op) unless `toposProvider` currently
   /// holds real `AsyncData` (never invoked while loading/erroring — the
@@ -529,7 +536,34 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       try {
         await repo.attachPhotoToWall(wallId, xfile, width, height);
       } on PhotoWriteException catch (e) {
-        await repo.softDeleteWall(wallId);
+        // The cleanup is BEST-EFFORT and deliberately contained in its own
+        // try/catch: `softDeleteWall` is itself a database write, and the two
+        // ways it fails here are both realistic AND correlated with the photo
+        // failure that got us here. (1) Quota — the browser origin whose quota
+        // is exhausted is the SAME origin this delete writes into, so the very
+        // condition that made `importPhoto` throw is the condition most likely
+        // to make its compensation throw. (2) `_guardedCascadeAllowed` raises
+        // LibraryWriteLostException(ownerIdentityUnknown) if auth drops to an
+        // unknown-uid state between `createTopo` and the failed attach.
+        //
+        // Unguarded, either one escaped this clause into the outer catch-all
+        // below — which only debugPrints — so the user got the WORST of both
+        // outcomes at once: the empty photo-less topo survived on the home
+        // screen AND they were told nothing whatsoever. The message must never
+        // be contingent on its own cleanup succeeding, so the SnackBar below
+        // is now unconditional and this await can no longer abort it.
+        try {
+          await repo.softDeleteWall(wallId);
+        } catch (cleanupError, cleanupStack) {
+          // Nothing further to attempt: retrying the same write into the same
+          // exhausted/ownerless store would fail the same way. The leftover is
+          // an empty, correctly-named topo the user can see and delete by hand
+          // — visible and recoverable, unlike the silence this replaces.
+          debugPrint(
+            'Failed to undo the empty topo after a photo-write failure: '
+            '$cleanupError\n$cleanupStack',
+          );
+        }
         if (!mounted) return;
         ScaffoldMessenger.of(
           context,
