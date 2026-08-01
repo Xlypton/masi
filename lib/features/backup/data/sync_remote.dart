@@ -43,6 +43,71 @@ const List<String> syncTableNames = [
   'likes',
 ];
 
+/// Outcome of pushing ONE table's rows within a single
+/// [SyncRemote.upsertOwnRows] call.
+///
+/// S1 fix (§1d, web-offline reliability): `upsertOwnRows` used to return
+/// `void` and swallow every per-table failure behind a [debugPrint], so
+/// `SyncService.pushOwn` counted rows merely HANDED TO the remote as
+/// "pushed" — a push where every single table's round trip failed still
+/// surfaced as "Synced • just now" on the Account screen. Every attempted
+/// table now reports back, success or failure, so the push result can tell
+/// the truth.
+@immutable
+class TablePushOutcome {
+  /// The table landed: [rowsUpserted] rows were written remotely and
+  /// [rowsSkippedNewerRemote] were deliberately not sent because the cloud
+  /// already holds a strictly newer copy (see [shouldPushLww]) — which is a
+  /// SUCCESS, not a failure: there is nothing left to push for them.
+  const TablePushOutcome.ok({
+    required this.table,
+    required this.rowsUpserted,
+    this.rowsSkippedNewerRemote = 0,
+  }) : rowsFailed = 0,
+       error = null;
+
+  /// The table did NOT land: [rowsFailed] rows are still only local and
+  /// [error] (stringified, so this type stays free of any backend type)
+  /// says why.
+  ///
+  /// Cannot be `const` despite the `@immutable`: the `'$error'` interpolation
+  /// of an arbitrary caught [Object] is not a constant expression.
+  // ignore: prefer_const_constructors_in_immutables
+  TablePushOutcome.failed({
+    required this.table,
+    required this.rowsFailed,
+    required Object error,
+  }) : rowsUpserted = 0,
+       rowsSkippedNewerRemote = 0,
+       error = '$error';
+
+  /// Table name, one of [syncTableNames].
+  final String table;
+
+  /// Rows this call actually upserted remotely.
+  final int rowsUpserted;
+
+  /// Rows the last-writer-wins pre-check dropped because the cloud row is
+  /// strictly newer — counted separately from [rowsUpserted] so a caller can
+  /// tell "nothing needed sending" apart from "nothing was sent".
+  final int rowsSkippedNewerRemote;
+
+  /// Rows handed in that did not reach the cloud. 0 on success.
+  final int rowsFailed;
+
+  /// `null` iff this table landed.
+  final String? error;
+
+  bool get ok => error == null;
+
+  @override
+  String toString() => ok
+      ? 'TablePushOutcome.ok($table, rowsUpserted: $rowsUpserted, '
+            'rowsSkippedNewerRemote: $rowsSkippedNewerRemote)'
+      : 'TablePushOutcome.failed($table, rowsFailed: $rowsFailed, '
+            'error: $error)';
+}
+
 /// Seam over the cloud backend the row-level [SyncService] talks to.
 ///
 /// Unlike [BackupRemote] (one whole-snapshot JSON blob per user), this is
@@ -314,24 +379,43 @@ const Map<String, List<String>> syncRequiredFields = {
 /// passes through untouched. A dropped row is logged via [debugPrint]
 /// (tagged with [debugLabel], e.g. `'shared wall'`) rather than silently
 /// vanishing, to aid diagnosing a real backend data-quality issue.
-List<Map<String, dynamic>> filterValidSyncRows(
+/// [filterValidSyncRows]'s reporting counterpart: splits [rows] into those
+/// satisfying [hasRequiredSyncFields] for [requiredFields] (`valid`) and
+/// those that don't (`invalid`), logging each dropped row exactly the same
+/// way [filterValidSyncRows] does.
+///
+/// L5 fix (§1d): the PUSH side needs to know WHICH rows it excluded so they
+/// can surface in `PushSyncResult.rowsFailed`/`PushSyncResult.errors`. With
+/// no outbox, an excluded row used to be dropped from this and every future
+/// push with nothing but a [debugPrint] to show for it — "excluded once"
+/// meant "excluded forever", invisibly.
+({List<Map<String, dynamic>> valid, List<Map<String, dynamic>> invalid})
+partitionSyncRows(
   Iterable<Map<String, dynamic>> rows,
   List<String> requiredFields, {
   required String debugLabel,
 }) {
-  final result = <Map<String, dynamic>>[];
+  final valid = <Map<String, dynamic>>[];
+  final invalid = <Map<String, dynamic>>[];
   for (final row in rows) {
     if (hasRequiredSyncFields(row, requiredFields)) {
-      result.add(row);
+      valid.add(row);
     } else {
+      invalid.add(row);
       debugPrint(
         'SyncRemote: skipping malformed $debugLabel row (missing one of '
         '$requiredFields as a non-null value): $row',
       );
     }
   }
-  return result;
+  return (valid: valid, invalid: invalid);
 }
+
+List<Map<String, dynamic>> filterValidSyncRows(
+  Iterable<Map<String, dynamic>> rows,
+  List<String> requiredFields, {
+  required String debugLabel,
+}) => partitionSyncRows(rows, requiredFields, debugLabel: debugLabel).valid;
 
 /// Real [SyncRemote], backed by the Supabase client.
 ///
