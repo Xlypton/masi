@@ -93,7 +93,9 @@ Future<List<MapSearchResult>> _waitForResults(
   ProviderContainer container,
   String query,
   bool Function(List<MapSearchResult> results) predicate, {
-  Duration timeout = const Duration(seconds: 5),
+  // A safety valve, not a timing assumption — see the identical note in
+  // `test/features/library/application/library_providers_test.dart`.
+  Duration timeout = const Duration(seconds: 20),
 }) async {
   final deadline = DateTime.now().add(timeout);
   while (true) {
