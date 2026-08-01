@@ -37,30 +37,76 @@ QueryExecutor openConnection({
   // deferring the async WASM setup.
   return DatabaseConnection.delayed(Future(() async {
     try {
+      // `moveExistingIndexedDbToOpfs` is deliberately left at drift's default
+      // of `false` (drift-2.34.2/lib/wasm.dart:163).
+      //
+      // The cost of that default is real, and is accepted here. On every open,
+      // `_selectExistingDatabase` (wasm.dart:183-210) pins the chosen
+      // implementation back to whatever storage API an existing `climbtopo`
+      // database already lives in — so any install that first landed on
+      // IndexedDB (every visitor served before the COOP/COEP headers in
+      // `web/_headers` shipped) stays on `sharedIndexedDb` forever, even once
+      // the browser would happily give us OPFS. That is the L8 lock-in, and it
+      // is NOT fixed here; it is knowingly traded away. `sharedIndexedDb` does
+      // persist — it is drift's third-ranked implementation and is explicitly
+      // not the one drift flags unsafe (that warning is reserved for
+      // `unsafeIndexedDb`, wasm_setup/types.dart:78-83). OPFS is a performance
+      // upgrade, not a durability requirement.
+      //
+      // Passing `true` was tried and reverted, and an earlier version of this
+      // comment claimed it was "safe by drift's own construction… worst case
+      // 'no upgrade', never 'no data'". That claim was FALSE. Verified against
+      // drift 2.34.2's source:
+      //
+      //  - No lock. `moveIndexedDBDatabaseToOpfs`
+      //    (drift/src/web/wasm_setup/indexeddb_to_opfs.dart:13-79) runs in the
+      //    calling TAB, not in the worker, and takes no Web Lock — there is no
+      //    `navigator.locks` call anywhere in drift 2.34.2 or sqlite3 3.5.0.
+      //    Two tabs opening at once both run it, against the same files.
+      //  - A crash window, with no recovery. `copyFile` calls
+      //    `getFileHandle(file, create: true)` (:42) BEFORE writing a byte,
+      //    and `opfsDatabases()` (wasm_setup/shared.dart:204-230) decides an
+      //    OPFS database "exists" purely by whether that handle resolves — it
+      //    never reads `meta`, never checks the size. So from :42 until the
+      //    move completes, a killed tab leaves a zero-byte OPFS `database`
+      //    advertised as real. Drift has no in-progress marker and nothing
+      //    repairs it on the next boot. This is not a remote risk: the move
+      //    buffers the WHOLE database into one `Uint8List` on the main thread
+      //    during boot, which is exactly when iOS Safari reclaims a tab.
+      //  - Which copy then wins is a coin flip. With both an IndexedDB and an
+      //    OPFS `climbtopo` present, `_selectExistingDatabase`
+      //    (wasm.dart:227-252) returns the FIRST match in probe-insertion
+      //    order — not the one holding data. If it picks OPFS, sqlite sees a
+      //    zero-length file, creates a fresh database, drift runs `onCreate`,
+      //    and the library is empty. The real rows are still sitting in
+      //    IndexedDB, but nothing in the app will ever look there again.
+      //  - And it would report GREEN. `chosenImplementation` would be
+      //    `opfsShared`, which `_backendOf` maps to our most durable verdict,
+      //    for a database that just lost everything. `resolvedExecutor` is
+      //    lazy, so `WasmDatabase.open` returning successfully says nothing
+      //    about the data behind it. The interlock cannot catch this one.
+      //
+      // Drift's try/catch around the move (wasm.dart:197-202) does not rescue
+      // any of that: it catches thrown exceptions inside a live JS context,
+      // never process death, and the fallback it guards (:205-208,
+      // `firstWhere((e) => e.storageApi == currentDb)`) never re-checks that
+      // the fallback target still exists. Hence the two-tab race: tab A
+      // finishes the move and deletes the IndexedDB source
+      // (indexeddb_to_opfs.dart:72-79), tab B's concurrent attempt throws on
+      // the OPFS write conflict, is swallowed, and tab B reopens the
+      // just-deleted IndexedDB database — which IndexedDB silently re-creates
+      // EMPTY, and tab B starts writing into it.
+      //
+      // A `navigator.locks` guard of our own would fix only the two-tab race;
+      // locks are released when a tab dies, so the crash window would survive
+      // untouched, and the unguarded `getFileHandle` sits inside drift's own
+      // function where we cannot interpose. Re-enable this only behind a
+      // genuinely crash-safe migration (own in-progress marker, partial-OPFS
+      // cleanup before open), proven on a real cross-origin-isolated browser.
       final result = await WasmDatabase.open(
         databaseName: 'climbtopo',
         sqlite3Uri: Uri.parse('sqlite3.wasm'),
         driftWorkerUri: Uri.parse('drift_worker.js'),
-        // L8 lock-in mitigation. Without this, `WasmDatabase.open`'s
-        // `_selectExistingDatabase` downgrades the chosen implementation back
-        // to whatever storage API an EXISTING `climbtopo` database already
-        // lives in, on EVERY open — so any install that first landed on
-        // IndexedDB (i.e. every visitor served before the COOP/COEP headers
-        // in `web/_headers` shipped) stays on IndexedDB forever, even once
-        // the browser would happily give us OPFS.
-        //
-        // Safe by drift's own construction: `moveFromIndexedDBToOpfs` COPIES
-        // the IndexedDB files into OPFS and only then deletes the IndexedDB
-        // originals, and drift wraps the whole move in a try/catch that falls
-        // back to "keep using the old IndexedDB database" on any throw
-        // (drift-2.34.2/lib/wasm.dart:184-199). The worst case is therefore
-        // "no upgrade", never "no data". The browser assertion that seeded
-        // rows actually survive it lives in
-        // `integration_test/web_storage_backend_test.dart`; the OPFS half of
-        // that (which needs cross-origin isolation, and so cannot happen
-        // under `flutter drive -d web-server`) is proven on real Chrome via
-        // `tool/serve_web_isolated.py`.
-        moveExistingIndexedDbToOpfs: true,
       );
       onStorageReport?.call(
         StorageDurability(
