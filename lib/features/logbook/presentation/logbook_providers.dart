@@ -134,7 +134,10 @@ String? _normalizeRouteStyle(String? raw) {
 /// via [LogbookEntry.routeNumber] etc. rather than throwing.
 final logbookEntriesProvider = StreamProvider<List<LogbookEntry>>((ref) {
   final database = ref.watch(appDatabaseProvider);
-  final uid = ref.watch(currentUidProvider)();
+  // §1c: the single local-data uid door. Was `ref.watch(currentUidProvider)()`
+  // — a watch of a provider that never rebuilds, so this query was frozen at
+  // its first uid and never refreshed on sign-in.
+  final uid = ref.watch(effectiveUidProvider);
   final ownerClause = uid == null ? 'a.owner_id IS NULL' : 'a.owner_id = ?';
   final sql =
       '''

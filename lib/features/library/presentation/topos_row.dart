@@ -321,7 +321,9 @@ class _TopoRow extends ConsumerWidget {
     TopoRef topo,
   ) async {
     final repo = ref.read(libraryCrudRepositoryProvider);
-    final myUid = ref.read(authStateProvider).asData?.value.uid;
+    // §1c: the single local-data uid door — never `authStateProvider.asData`,
+    // which reads null on AsyncError too.
+    final myUid = ref.read(effectiveUidProvider);
     final currentSectorId = await repo.wallSectorId(topo.wallId);
     final areas = await repo.listAreas();
     final areaNames = {for (final area in areas) area.id: area.name};

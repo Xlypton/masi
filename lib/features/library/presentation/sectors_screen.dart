@@ -64,7 +64,9 @@ class SectorsScreen extends ConsumerWidget {
     SectorRef sector,
   ) async {
     final repo = ref.read(libraryCrudRepositoryProvider);
-    final myUid = ref.read(authStateProvider).asData?.value.uid;
+    // §1c: the single local-data uid door — never `authStateProvider.asData`,
+    // which reads null on AsyncError too.
+    final myUid = ref.read(effectiveUidProvider);
     final ownAreas = await repo.listOwnAreas(myUid);
     final candidates = ownAreas
         .where((area) => area.id != sector.areaId)

@@ -640,7 +640,9 @@ class _MapViewState extends ConsumerState<_MapView> {
     // Cross-referencing the ALREADY-FETCHED, unfiltered `topos` (rather than
     // adding an `ownerId` column to `TopoRef`) keeps this a pure read of
     // data this widget already has.
-    final myUid = ref.watch(authStateProvider).asData?.value.uid;
+    // §1c: the single local-data uid door — never `authStateProvider.asData`,
+    // which reads null on AsyncError too.
+    final myUid = ref.watch(effectiveUidProvider);
     final ownerByWallId = <String, String?>{
       for (final t in widget.topos) t.wallId: t.ownerId,
     };

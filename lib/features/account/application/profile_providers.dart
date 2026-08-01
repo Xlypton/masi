@@ -36,7 +36,9 @@ final profileDisplayNameProvider =
 /// `community_screen.dart`) rather than a `.stream`/`.valueOrNull` modifier,
 /// neither of which this project's pinned `riverpod` 3.3.2 exposes.
 final myDisplayNameProvider = StreamProvider<String?>((ref) {
-  final uid = ref.watch(authStateProvider).asData?.value.uid;
+  // §1c: the single local-data uid door — never `authStateProvider.asData`,
+  // which reads null on AsyncError too.
+  final uid = ref.watch(effectiveUidProvider);
   if (uid == null) return Stream<String?>.value(null);
   return ref.watch(profileRepositoryProvider).watchDisplayName(uid);
 });

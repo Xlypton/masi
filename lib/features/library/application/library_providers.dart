@@ -60,11 +60,17 @@ final wallsProvider = StreamProvider.family<List<WallRef>, String>(
 /// (where [LibraryCrudRepository.watchTopos]'s own-or-unowned predicate
 /// already includes the caller's not-yet-claimed unowned rows, so nothing
 /// has to wait for `claimOwnership` to land before it's visible).
-/// `.asData?.value.uid` degrades to `null` (same as signed-out) while
-/// [authStateProvider] is loading/erroring, matching [currentUidProvider]'s
-/// "unavailable auth -> signed-out" stance elsewhere in this app.
+/// Scoped through [effectiveUidProvider] — the SINGLE local-data uid door
+/// (§1c). It must NOT read `authStateProvider.asData?.value.uid`: `asData` is
+/// null for `AsyncError` as well as `AsyncLoading`, so one transient
+/// auth-stream error (gotrue's offline 10s refresh ticker `addError`s on every
+/// tick) collapsed `watchTopos`' owner filter to `owner_id IS NULL` and — since
+/// `claimOwnership` stamps `ownerId` on every row at first sign-in — rendered
+/// the whole library as a SUCCESSFUL empty stream ("No topos yet", no Retry).
+/// [effectiveUidProvider] still rebuilds this provider on every auth emission,
+/// so the account-switch reactivity described above is unchanged.
 final toposProvider = StreamProvider<List<TopoRef>>((ref) {
-  final ownerUid = ref.watch(authStateProvider).asData?.value.uid;
+  final ownerUid = ref.watch(effectiveUidProvider);
   return ref.watch(libraryCrudRepositoryProvider).watchTopos(ownerUid);
 });
 

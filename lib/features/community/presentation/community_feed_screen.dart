@@ -510,7 +510,9 @@ class _FeedRow extends ConsumerWidget {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final wallId = topo.wallId;
-    final myUid = ref.watch(authStateProvider).asData?.value.uid;
+    // §1c: the single local-data uid door — never `authStateProvider.asData`,
+    // which reads null on AsyncError too.
+    final myUid = ref.watch(effectiveUidProvider);
     final isMine = topo.ownerId != null && topo.ownerId == myUid;
 
     // #18: resolve the owner's synced display name rather than showing the
