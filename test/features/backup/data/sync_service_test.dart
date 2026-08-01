@@ -609,6 +609,53 @@ void main() {
     );
 
     test(
+      'the pushed row payload carries neither dirty nor remoteId -- both are '
+      'LOCAL-ONLY bookkeeping columns (S8) that used to ship inside every '
+      "row's JSON",
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+        );
+
+        await c.service.pushOwn();
+
+        final ownRows = await remote.fetchOwnRows(_uidU1);
+        for (final tableName in syncTableNames) {
+          for (final row in ownRows[tableName]!) {
+            expect(
+              row.keys,
+              isNot(contains('dirty')),
+              reason: '$tableName row ${row['id']} still ships dirty',
+            );
+            expect(
+              row.keys,
+              isNot(contains('remoteId')),
+              reason: '$tableName row ${row['id']} still ships remoteId',
+            );
+          }
+        }
+        expect(
+          ownRows['areas']!.single['id'],
+          'area-1',
+          reason: 'stripping must not drop the row itself',
+        );
+      },
+    );
+
+    test(
       'pushing again with nothing changed does not re-upload the '
       'already-present photo object',
       () async {

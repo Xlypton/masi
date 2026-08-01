@@ -432,6 +432,36 @@ List<Map<String, dynamic>> filterValidSyncRows(
   required String debugLabel,
 }) => partitionSyncRows(rows, requiredFields, debugLabel: debugLabel).valid;
 
+/// The columns present in every `<TableRow>.toJson()` that are LOCAL-ONLY
+/// sync bookkeeping and must never travel to the cloud.
+///
+/// - `dirty` is this device's "has an unpushed local change" flag (see
+///   `tables.dart`'s `SyncColumns` and `SyncService.hasPendingLocalChanges`).
+///   Sending it is worse than useless: it is per-DEVICE state, so device A's
+///   flag would land in the shared cloud row and come back down to device B
+///   as if B had a pending change.
+/// - `remoteId` is a reserved, never-written local column.
+///
+/// Both used to ship inside every pushed row (S8). Stripping them is safe on
+/// the wire in both directions: `supabase/schema.sql` declares
+/// `"dirty" BOOLEAN NOT NULL DEFAULT false` and `"remoteId" TEXT`, so an
+/// INSERT that omits them takes the default / NULL and an
+/// `ON CONFLICT DO UPDATE` leaves the stored value untouched; and on the way
+/// back `BackupRepository.importSnapshot` forces `dirty: false` on every row
+/// regardless (see its `_notDirty`). Neither name appears in
+/// [syncRequiredFields], so stripping can never trip the NOT-NULL guard.
+const Set<String> localOnlySyncColumns = {'dirty', 'remoteId'};
+
+/// [row] without any [localOnlySyncColumns] key. Returns a COPY — the caller
+/// still holds the original `toJson()` map, and `SyncService.pushOwn` relies
+/// on the stripped map keeping `id` and `updatedAt` (both required, both
+/// retained) for its confirmed-push `dirty` clear.
+Map<String, dynamic> stripLocalOnlySyncColumns(Map<String, dynamic> row) {
+  final stripped = Map<String, dynamic>.of(row);
+  stripped.removeWhere((key, _) => localOnlySyncColumns.contains(key));
+  return stripped;
+}
+
 /// Real [SyncRemote], backed by the Supabase client.
 ///
 /// LIVE: all eight tables (`areas`/`sectors`/`walls`/`photos`/`routes`/

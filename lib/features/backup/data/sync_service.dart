@@ -396,17 +396,35 @@ class SyncService {
     }
 
     final tablesToRows = <String, List<Map<String, dynamic>>>{
-      'profiles': guard('profiles', [for (final row in profiles) row.toJson()]),
-      'areas': guard('areas', [for (final row in areas) row.toJson()]),
-      'sectors': guard('sectors', [for (final row in sectors) row.toJson()]),
-      'walls': guard('walls', [for (final row in walls) row.toJson()]),
-      'photos': guard('photos', [for (final row in photos) row.toJson()]),
-      'routes': guard('routes', [for (final row in routes) row.toJson()]),
-      'comments': guard('comments', [for (final row in comments) row.toJson()]),
-      'likes': guard('likes', [for (final row in likes) row.toJson()]),
+      'profiles': guard('profiles', [
+        for (final row in profiles) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
+      'areas': guard('areas', [
+        for (final row in areas) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
+      'sectors': guard('sectors', [
+        for (final row in sectors) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
+      'walls': guard('walls', [
+        for (final row in walls) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
+      'photos': guard('photos', [
+        for (final row in photos) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
+      'routes': guard('routes', [
+        for (final row in routes) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
+      'comments': guard('comments', [
+        for (final row in comments) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
+      'likes': guard('likes', [
+        for (final row in likes) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
       // Ascents ARE pushed here (own-row push, no visibility distinction) —
       // it's fetchSharedTopos (pull side) that keeps them private, not push.
-      'ascents': guard('ascents', [for (final row in ascents) row.toJson()]),
+      'ascents': guard('ascents', [
+        for (final row in ascents) stripLocalOnlySyncColumns(row.toJson()),
+      ]),
     };
 
     // S1 fix (§1d): upsertOwnRows now reports per-table outcomes instead of
