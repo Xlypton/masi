@@ -106,6 +106,20 @@ class _MasiAppState extends ConsumerState<MasiApp>
       unawaited(
         ref.read(syncOrchestratorProvider.notifier).pullNow(throttled: true),
       );
+      // §1e (S2): a resume is also the moment to FLUSH anything that never
+      // made it up — an edit made offline, or a push that failed while the
+      // app was backgrounded. Before this, resume only ever pulled, so a user
+      // who edited offline and then merely backgrounded/foregrounded the app
+      // stayed unsynced indefinitely (the only push triggers were a local
+      // write's 2s debounce and `onAppPaused()`).
+      //
+      // Deliberately UNthrottled, unlike the pull above: `pushNow()` is
+      // already self-limiting in three independent ways — it coalesces
+      // against an in-flight push, it no-ops when nothing is locally `dirty`
+      // (so web's resume-on-every-tab-focus costs one indexed LIMIT-1 query,
+      // not a network round trip), and it is a safe no-op when signed out.
+      // Fire-and-forget: this lifecycle callback must return immediately.
+      unawaited(ref.read(syncOrchestratorProvider.notifier).pushNow());
     }
   }
 

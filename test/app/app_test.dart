@@ -14,6 +14,7 @@ import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/backup/data/sync_remote.dart';
 import 'package:masi/features/backup/data/sync_service.dart';
 import 'package:masi/features/library/presentation/topos_screen.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show StringCodec;
@@ -30,16 +31,23 @@ import 'package:flutter_test/flutter_test.dart';
 /// duplicating rather than sharing file-private test doubles).
 class _CountingSyncRemote implements SyncRemote {
   int pullCallCount = 0;
+  int pushCallCount = 0;
 
   @override
   Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
     Map<String, List<Map<String, dynamic>>> tablesToRows,
-  ) async => [
-    for (final entry in tablesToRows.entries)
-      if (entry.value.isNotEmpty)
-        TablePushOutcome.ok(table: entry.key, rowsUpserted: entry.value.length),
-  ];
+  ) async {
+    pushCallCount++;
+    return [
+      for (final entry in tablesToRows.entries)
+        if (entry.value.isNotEmpty)
+          TablePushOutcome.ok(
+            table: entry.key,
+            rowsUpserted: entry.value.length,
+          ),
+    ];
+  }
 
   @override
   Future<Map<String, List<Map<String, dynamic>>>> fetchOwnRows(String uid) async {
@@ -504,6 +512,89 @@ void main() {
         await _setAppLifecycleState(tester, AppLifecycleState.resumed);
         await _drain(tester);
         expect(remote.pullCallCount, 3);
+      },
+    );
+
+    testWidgets(
+      'returning to the foreground also PUSHES, not only pulls -- a user who '
+      'edited offline and then merely backgrounded/foregrounded the app used '
+      'to stay unsynced until their next local write (S2)',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            authStateProvider.overrideWith(
+              (ref) => Stream.value(
+                const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+              ),
+            ),
+            // 30s, deliberately longer than the whole test. The mount-time
+            // sign-in pull's `importSnapshot` transactions fire
+            // `tableUpdates()`, which arms a debounced push; left short, THAT
+            // push would land during `_drain` and this test could no longer
+            // tell "the resume pushed" from "the debounce pushed". The resume's
+            // own `pushNow()` cancels the pending timer on entry, so nothing is
+            // left pending at teardown either.
+            syncDebounceDurationProvider.overrideWithValue(
+              const Duration(seconds: 30),
+            ),
+            connectivityServiceProvider.overrideWithValue(
+              _FakeConnectivityService(),
+            ),
+            syncServiceProvider.overrideWithValue(
+              SyncService(
+                db: db,
+                backupRepository: BackupRepository(db),
+                remote: remote,
+                authRepository: _FakeAuthRepository(
+                  const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+                ),
+                connectivity: _FakeConnectivityService(),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const MasiApp(),
+          ),
+        );
+        await _drain(tester);
+
+        // Mounting pulls (the signed-in edge) but must not have pushed: the
+        // debounce armed by that pull's writes is 30s away, and nothing else
+        // triggers a push. So the resume below is the ONLY thing that can
+        // reach the remote on the push side.
+        //
+        // Deliberately NO local write anywhere in this test. A write would arm
+        // a second debounce and confound the attribution; the app-start
+        // full-scope safety net (`_fullResyncDue`) means the resume push
+        // reaches the remote even with a clean database, which is what makes a
+        // write-free assertion possible. The resume's throttled pull is
+        // skipped (fixed clock, so the mount pull is 0ms old), so the pull side
+        // cannot write either.
+        expect(
+          remote.pushCallCount,
+          0,
+          reason: 'no push trigger has fired yet — mounting only pulls',
+        );
+        final pushesBeforeResume = remote.pushCallCount;
+
+        await _setAppLifecycleState(tester, AppLifecycleState.resumed);
+        await _drain(tester);
+
+        expect(
+          remote.pushCallCount,
+          greaterThan(pushesBeforeResume),
+          reason: 'resume must flush a push, not only a throttled pull',
+        );
       },
     );
 
