@@ -100,6 +100,36 @@ void main() {
     });
   });
 
+  group('formatShellVersion', () {
+    // Regression: the obvious `hash.toRadixString(16).padLeft(16, '0')` is
+    // WRONG for any hash with its top bit set, because Dart ints are 64-bit
+    // SIGNED — such a hash is negative and renders as `-<magnitude>`, 17
+    // chars. A real build hit this (`-208049a153bacd51`). The generic
+    // "16 hex chars" test below cannot catch it: whether a given fixture
+    // hashes positive or negative is luck, and that fixture happens to be
+    // positive.
+    test('renders a NEGATIVE hash as unsigned 16-char hex', () {
+      final version = formatShellVersion(-0x208049a153bacd51);
+
+      expect(version, hasLength(16));
+      expect(version, isNot(contains('-')));
+      expect(version, matches(RegExp(r'^[0-9a-f]{16}$')));
+      // Two's complement of 0x208049a153bacd51.
+      expect(version, 'df7fb65eac4532af');
+    });
+
+    test('renders a positive hash unchanged, zero-padded to 16', () {
+      expect(formatShellVersion(0x1), '0000000000000001');
+      expect(formatShellVersion(0x7fffffffffffffff), '7fffffffffffffff');
+    });
+
+    test('is injective across the sign boundary', () {
+      expect(formatShellVersion(-1), 'ffffffffffffffff');
+      expect(formatShellVersion(0), '0000000000000000');
+      expect(formatShellVersion(-1), isNot(formatShellVersion(0)));
+    });
+  });
+
   group('buildShellManifest', () {
     test('precaches the shell core and nothing heavy', () {
       final manifest = buildShellManifest(_fakeBuildDir());

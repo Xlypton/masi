@@ -130,9 +130,11 @@ ShellManifest buildShellManifest(Directory buildDir) {
   void fold(List<int> bytes) {
     for (final byte in bytes) {
       hash ^= byte;
-      // Dart ints are 64-bit two's complement; the multiply wraps, which is
-      // exactly FNV's defined behaviour.
-      hash = (hash * prime) & 0xFFFFFFFFFFFFFFFF;
+      // Dart ints are 64-bit two's complement, so the multiply already wraps
+      // mod 2^64 — exactly FNV's defined behaviour. No mask is applied here:
+      // `& 0xFFFFFFFFFFFFFFFF` would be a no-op anyway, because that literal
+      // IS -1 as a signed 64-bit int.
+      hash = hash * prime;
     }
   }
 
@@ -144,10 +146,33 @@ ShellManifest buildShellManifest(Directory buildDir) {
   }
 
   return ShellManifest(
-    version: hash.toRadixString(16).padLeft(16, '0'),
+    version: formatShellVersion(hash),
     urls: urls,
     totalBytes: totalBytes,
   );
+}
+
+/// Renders a 64-bit FNV hash as exactly 16 lowercase hex characters.
+///
+/// NOT `hash.toRadixString(16).padLeft(16, '0')`. Dart ints are 64-bit
+/// SIGNED, so a hash with its top bit set is a negative int, and
+/// `toRadixString` renders that as a MINUS SIGN followed by the magnitude —
+/// `-208049a153bacd51`, 17 characters. `padLeft` then does nothing because the
+/// string is already too long. Roughly half of all builds would ship a version
+/// like that: it still round-trips through the stamp regexes and still rolls
+/// over correctly, but it is not the documented 16-hex value, it leaks a `-`
+/// into the `masi-shell-<version>` cache name, and it is exactly the kind of
+/// detail that later gets "tidied up" into a real bug.
+///
+/// `int.toUnsigned(64)` does not help either — it is defined as
+/// `this & ((1 << 64) - 1)`, and `(1 << 64) - 1` is itself -1 here, so it
+/// returns the value unchanged. Splitting into two 32-bit halves is the
+/// reliable way to get the unsigned rendering.
+String formatShellVersion(int hash) {
+  final high = (hash >> 32) & 0xFFFFFFFF;
+  final low = hash & 0xFFFFFFFF;
+  return high.toRadixString(16).padLeft(8, '0') +
+      low.toRadixString(16).padLeft(8, '0');
 }
 
 final _versionLine =
