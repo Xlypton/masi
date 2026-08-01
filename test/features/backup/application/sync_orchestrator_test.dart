@@ -1338,4 +1338,122 @@ void main() {
       },
     );
   });
+
+  group('S3: connectivity regain', () {
+    test(
+      'a regain event triggers BOTH a push and a pull, well inside the '
+      'debounce window and with no further local write -- before this, '
+      'nothing in lib reacted to the network coming back at all',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final connectivity = _FakeConnectivityService(NetworkStatus.none);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          // Deliberately far longer than the test: only the regain event can
+          // possibly produce the push asserted below.
+          debounce: const Duration(seconds: 30),
+          connectivityService: connectivity,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(remote.pushCallCount, 0, reason: 'the 30s debounce is pending');
+        expect(remote.pullCallCount, 0);
+
+        connectivity.emit(NetworkStatus.wifi);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+
+        expect(remote.pushCallCount, 1);
+        expect(remote.pullCallCount, 1);
+        expect(container.read(syncOrchestratorProvider).status, SyncStatus.idle);
+      },
+    );
+
+    test(
+      'a transition to NetworkStatus.none triggers nothing -- losing the '
+      'network is not a reason to attempt a sync',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final connectivity = _FakeConnectivityService(NetworkStatus.wifi);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          connectivityService: connectivity,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        connectivity.emit(NetworkStatus.none);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+
+        expect(remote.pushCallCount, 0);
+        expect(remote.pullCallCount, 0);
+      },
+    );
+
+    test(
+      'a regain RESETS the backoff and re-arms the full-scope safety net, so '
+      'a device that comes back after a long outage re-sends everything '
+      'rather than trusting flags a swallowed failure may have cleared',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _OfflineToggleSyncRemote();
+        // An hour, so an armed retry can never be mistaken for the
+        // regain-triggered push asserted below.
+        final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+        final connectivity = _FakeConnectivityService(NetworkStatus.none);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          retrySchedule: schedule,
+          connectivityService: connectivity,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await insertArea(db, 'a1', ownerId: 'u1');
+
+        // Establish "mid-backoff" DETERMINISTICALLY rather than by waiting.
+        await notifier.pushNow();
+        expect(schedule.attempts, [1]);
+        expect(remote.pushedAreas, isEmpty);
+
+        schedule.attempts.clear();
+        remote.offline = false;
+        connectivity.emit(NetworkStatus.wifi);
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+
+        expect(remote.pushedAreas.keys, contains('a1'));
+        expect(
+          schedule.attempts,
+          isEmpty,
+          reason: 'the regain push succeeded, so no retry was ever armed',
+        );
+      },
+    );
+  });
 }

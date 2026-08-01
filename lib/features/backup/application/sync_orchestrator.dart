@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/data/auth_repository.dart';
+import '../data/connectivity_service.dart';
 import '../data/sync_service.dart';
 import 'backup_providers.dart';
 import 'sync_providers.dart';
@@ -227,10 +228,29 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   /// ([PushSyncResult.fullyLanded]).
   bool _fullResyncDue = true;
 
+  /// The connectivity-transition subscription installed in [build], or `null`.
+  StreamSubscription<NetworkStatus>? _connectivitySubscription;
+
   @override
   SyncOrchestratorState build() {
     final db = ref.watch(appDatabaseProvider);
     _dbSubscription = db.tableUpdates().listen((_) => _scheduleDebouncedPush());
+
+    // S3: react to the network coming back. `statusChanges()` is
+    // contractually non-throwing and degrades to a never-emitting stream when
+    // the platform signal is unavailable (see its doc), which is exactly what
+    // makes this inert in every unit/widget test that doesn't override
+    // `connectivityServiceProvider`; `onError` below is belt-and-braces on top
+    // of that, never the primary defence.
+    final connectivity = ref.watch(connectivityServiceProvider);
+    _connectivitySubscription = connectivity.statusChanges().listen(
+      _onConnectivityChanged,
+      onError: (Object error) {
+        debugPrint(
+          'SyncOrchestrator: connectivity stream error (ignored): $error',
+        );
+      },
+    );
 
     // Pull-on-sign-in: fire exactly once on the signed-out (or unknown,
     // e.g. still-loading/erroring) -> signed-in edge of the live auth
@@ -253,6 +273,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       _debounceTimer?.cancel();
       _retryTimer?.cancel();
       _dbSubscription?.cancel();
+      _connectivitySubscription?.cancel();
     });
 
     return const SyncOrchestratorState();
@@ -411,6 +432,41 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         .read(syncRetryScheduleProvider)
         .delayFor(_consecutivePushFailures);
     _retryTimer = Timer(delay, () => unawaited(pushNow()));
+  }
+
+  /// A connectivity transition arrived.
+  ///
+  /// Anything other than [NetworkStatus.none] means "the network may be usable
+  /// again", which is genuinely NEW information, so three things happen:
+  ///  - the backoff resets — the accumulated failures were about the OLD
+  ///    network state, and making the user wait out a 5-minute ceiling after
+  ///    reconnecting is the opposite of "sync as soon as possible";
+  ///  - [_fullResyncDue] is re-armed, so the catch-up push re-sends EVERY own
+  ///    row rather than trusting `dirty` flags that a swallowed per-table
+  ///    failure during the outage may have cleared (D-4's loss-proofness);
+  ///  - BOTH a push and a pull fire immediately — the push flushes whatever
+  ///    was edited offline, the pull picks up what changed in the cloud
+  ///    meanwhile. §1e requires both; pushing only would leave another user's
+  ///    newly-published topo invisible until the next resume.
+  ///
+  /// Losing the network ([NetworkStatus.none]) triggers nothing: there is
+  /// nothing to attempt, and attempting anyway would just burn a retry
+  /// attempt and flip the status to `error`.
+  ///
+  /// Both entry points self-guard against overlapping runs ([pushNow] /
+  /// [pullNow]), so a flapping connection cannot stack up concurrent syncs —
+  /// at most one push and one pull are ever in flight. [pullNow] is called
+  /// UNTHROTTLED on purpose: a genuine offline→online transition is precisely
+  /// when fresh data matters, and its in-flight guard already collapses a
+  /// burst of `online` events (browsers fire them liberally) into a single
+  /// pull.
+  void _onConnectivityChanged(NetworkStatus status) {
+    if (status == NetworkStatus.none) return;
+    _consecutivePushFailures = 0;
+    _retryTimer?.cancel();
+    _fullResyncDue = true;
+    unawaited(pushNow());
+    unawaited(pullNow());
   }
 
   /// Whether a push that failed did so because THE BACKEND IS UNREACHABLE
