@@ -1,8 +1,11 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
+import 'package:masi/features/topo/data/photo_write_exception.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// Holds the path of the currently selected image, or null if none.
 class SelectedImageNotifier extends Notifier<String?> {
@@ -136,4 +139,62 @@ Future<String> resolveAttachedPhotoPath(
     selectedImage.select(ownedPath);
   }
   return ownedPath;
+}
+
+/// A [SnackBar] presenting [error]'s [PhotoWriteException.userMessage] behind a
+/// warning glyph — the user-facing half of the L3 fix, replacing a
+/// `debugPrint` no user could ever see.
+///
+/// Mirrors `topo_canvas_gps.dart`'s [gpsCaptureResultSnackBar] shape so both
+/// photo-attach outcomes read identically, and lives HERE rather than inline in
+/// either screen because BOTH photo-attach entry points must present the same
+/// words for the same failure: the Topos-home "New topo" flow
+/// (`topos_screen.dart`'s `_handleNewTopo`) and the canvas add/replace-photo
+/// flow (`topo_canvas_screen.dart`'s `_attachPhotoAndLoad`).
+SnackBar photoWriteFailureSnackBar(PhotoWriteException error) {
+  return SnackBar(
+    content: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        MasiIcon('warning', size: 18),
+        const SizedBox(width: 8),
+        Flexible(child: Text(error.userMessage)),
+      ],
+    ),
+  );
+}
+
+/// Settles the canvas after a photo attach failed on its BYTE WRITE, and
+/// returns the [SnackBar] the caller should show.
+///
+/// Three things must happen together, which is exactly why they live in one
+/// function rather than three lines in a catch block:
+///  - [selectedImage] is CLEARED. `TopoCanvasScreen._pickImage` selects the
+///    picked path optimistically (so the screen shows a spinner for it
+///    immediately), but with the write failed there is no [db.Photos] row
+///    behind that path and never will be — leaving it selected strands the
+///    canvas on an image it can neither load nor persist against.
+///  - [drawController]'s switch [generation] is settled via
+///    [DrawController.cancelPhotoSwitch]. See `_attachPhotoAndLoad`'s FIX #4
+///    doc: EVERY exit path must settle the switch it opened, or
+///    `DrawState.isSwitchingPhoto` stays stuck `true` and corrupts the next
+///    `beginPhotoSwitch`'s routes handling.
+///  - the user is told why, in plain words.
+///
+/// Extracted as a standalone function taking its collaborators directly —
+/// mirroring [loadWallOriginalPhoto]/[resolveAttachedPhotoPath] above —
+/// because `TopoCanvasScreen._pickImage` calls the module-level
+/// `showPhotoSourceSheet`/`pickPhotoFrom` with NO injectable seam, so a widget
+/// test cannot drive the canvas pick flow at all. This makes the failure path
+/// testable against a plain `ProviderContainer` instead (see
+/// `test/features/topo/application/topo_canvas_wall_binding_test.dart`).
+SnackBar settleFailedPhotoAttach(
+  SelectedImageNotifier selectedImage,
+  DrawController drawController,
+  int generation,
+  PhotoWriteException error,
+) {
+  selectedImage.clear();
+  drawController.cancelPhotoSwitch(generation);
+  return photoWriteFailureSnackBar(error);
 }

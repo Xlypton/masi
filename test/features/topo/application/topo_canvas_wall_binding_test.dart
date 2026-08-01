@@ -2,10 +2,12 @@ import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/data/photo_write_exception.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
@@ -412,4 +414,51 @@ void main() {
     expect(finalStateA.routes, hasLength(2));
     expect(finalStateA.routes.map((r) => r.number), containsAll([1, 2]));
   });
+
+  test(
+    'L3: settleFailedPhotoAttach clears the selected image, settles the switch '
+    'generation the failed attach opened (isSwitchingPhoto back to false), and '
+    'hands back a SnackBar — the canvas failure path no widget test can reach, '
+    'since TopoCanvasScreen._pickImage has no injectable picker seam',
+    () async {
+      final container = makeContainer();
+      final notifier = container.read(
+        drawControllerProvider(_testWallId).notifier,
+      );
+
+      // Exactly what _pickImage + build's ref.listen do before the attach:
+      // select the picked path optimistically, which opens a photo switch.
+      container.read(selectedImageProvider.notifier).select('/tmp/picked.jpg');
+      final generation = notifier.beginPhotoSwitch();
+      expect(
+        container.read(drawControllerProvider(_testWallId)).isSwitchingPhoto,
+        isTrue,
+        reason: 'precondition: the switch this attach would settle is open',
+      );
+
+      final snackBar = settleFailedPhotoAttach(
+        container.read(selectedImageProvider.notifier),
+        notifier,
+        generation,
+        const PhotoWriteException(
+          failure: PhotoWriteFailure.quotaExceeded,
+          key: 'photos/abc.jpg',
+        ),
+      );
+
+      expect(
+        container.read(selectedImageProvider),
+        isNull,
+        reason: 'no Photos row was created, so the canvas must not keep '
+            'showing the picked path',
+      );
+      expect(
+        container.read(drawControllerProvider(_testWallId)).isSwitchingPhoto,
+        isFalse,
+        reason: 'a stuck isSwitchingPhoto corrupts the NEXT beginPhotoSwitch '
+            "— see _attachPhotoAndLoad's FIX #4 doc",
+      );
+      expect(snackBar, isA<SnackBar>());
+    },
+  );
 }
