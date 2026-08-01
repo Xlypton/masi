@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'image_ops/image_ops.dart';
 import 'photo_byte_store.dart';
 import 'photo_path_resolution.dart';
+import 'photo_write_exception.dart';
 
 /// Web-only [PhotoFiles] backend: no filesystem, so originals + thumbnails
 /// live in the browser's IndexedDB via [PhotoByteStore], addressed by the
@@ -18,10 +19,29 @@ class PhotoFiles {
 
   final PhotoByteStore _store;
 
-  /// Writes [xfile]'s bytes under `photos/<photoId><ext>` and derives +
-  /// stores a downscaled thumbnail under `thumbs/<photoId>.jpg`. Best-effort,
-  /// mirroring the native backend's contract: any failure is swallowed and
-  /// the logical key is still returned.
+  /// Writes [xfile]'s bytes under `photos/<photoId><ext>` and derives + stores
+  /// a downscaled thumbnail under `thumbs/<photoId>.jpg`.
+  ///
+  /// L3 fix (silent data loss): the ORIGINAL's byte write is NO LONGER
+  /// best-effort. It used to sit inside a `catch (_) { return key; }`, so a
+  /// browser that refused the write still handed back a key that
+  /// `LibraryCrudRepository.attachPhotoToWall` then persisted as a `Photos`
+  /// row's `localPath` — a pixel-less row, i.e. a topo whose photo is
+  /// permanently a placeholder, with nothing anywhere reporting why. Quota
+  /// exhaustion is the realistic trigger and it is reachable in ORDINARY use
+  /// because originals are never downscaled (decision D-5): `pickPhotoFrom`
+  /// passes no `imageQuality`/`maxWidth` and this backend stores
+  /// `readAsBytes()` verbatim; only the 512px/q80 thumbnail is shrunk.
+  ///
+  /// Any failure now throws a [PhotoWriteException], classified via
+  /// [classifyPhotoWriteFailure] so a quota exhaustion is distinguishable and
+  /// user-presentable. `attachPhotoToWall` awaits this call BEFORE opening its
+  /// insert transaction, so a throw here means no row is ever written and
+  /// there is nothing to clean up.
+  ///
+  /// The THUMBNAIL write stays best-effort (see
+  /// [_writeThumbnailBestEffort]) — mirroring the native backend, and because
+  /// a thumbnail is derivable and disposable.
   Future<String> importPhoto(XFile xfile, String photoId) async {
     final ext = p.extension(xfile.name).isNotEmpty
         ? p.extension(xfile.name)
@@ -30,22 +50,42 @@ class PhotoFiles {
     try {
       final bytes = await xfile.readAsBytes();
       await _store.writeBytes(key, bytes);
-      try {
-        final thumbBytes = await generateThumbnail(bytes);
-        await _store.writeBytes(thumbKeyFor(key), thumbBytes);
-      } catch (_) {
-        // Thumbnail generation is best-effort — never blocks importPhoto.
-      }
+      await _writeThumbnailBestEffort(key, bytes);
       return key;
-    } catch (_) {
-      return key;
+    } catch (e) {
+      throw PhotoWriteException(
+        failure: classifyPhotoWriteFailure(e),
+        key: key,
+        cause: e,
+      );
     }
   }
 
-  /// Writes [bytes] under `photos/<photoId><ext>` and regenerates + stores
-  /// its thumbnail, mirroring [importPhoto]'s convention. This is the
-  /// counterpart used for cloud restore, where bytes arrive already decoded
-  /// in memory rather than as a picked [XFile].
+  /// Best-effort thumbnail for the just-written original at [key]. NEVER
+  /// throws, which is what keeps it safe to call from inside [importPhoto]'s
+  /// single try block: a thumbnail is always regenerable and the photo strip /
+  /// `PhotoImageCache` fall back to the original, so a failed thumbnail must
+  /// never turn into a failed import. Mirrors the native backend's
+  /// `_writeThumbnailBestEffort`.
+  Future<void> _writeThumbnailBestEffort(String key, Uint8List bytes) async {
+    try {
+      final thumbBytes = await generateThumbnail(bytes);
+      await _store.writeBytes(thumbKeyFor(key), thumbBytes);
+    } catch (_) {
+      // Best-effort — never blocks importPhoto/writePhotoBytes.
+    }
+  }
+
+  /// Writes [bytes] under `photos/<photoId><ext>` and regenerates + stores its
+  /// thumbnail, mirroring [importPhoto]'s convention. This is the counterpart
+  /// used for cloud restore, where bytes arrive already decoded in memory
+  /// rather than as a picked [XFile].
+  ///
+  /// L3 fix (continued): the byte write already propagated its raw store error
+  /// here — now it propagates a CLASSIFIED [PhotoWriteException] instead, so
+  /// `SyncService._downloadAndRewritePhotos`' caller records a quota
+  /// exhaustion as such in `PullResult.errors` rather than an opaque
+  /// `DatabaseError` string.
   Future<String> writePhotoBytes(
     String photoId,
     String ext,
@@ -53,13 +93,16 @@ class PhotoFiles {
   ) async {
     final key = p.join('photos', '$photoId$ext');
     final byteData = Uint8List.fromList(bytes);
-    await _store.writeBytes(key, byteData);
     try {
-      final thumbBytes = await generateThumbnail(byteData);
-      await _store.writeBytes(thumbKeyFor(key), thumbBytes);
-    } catch (_) {
-      // Thumbnail generation is best-effort — never blocks the write.
+      await _store.writeBytes(key, byteData);
+    } catch (e) {
+      throw PhotoWriteException(
+        failure: classifyPhotoWriteFailure(e),
+        key: key,
+        cause: e,
+      );
     }
+    await _writeThumbnailBestEffort(key, byteData);
     return key;
   }
 

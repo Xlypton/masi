@@ -87,6 +87,16 @@ class PhotoFiles {
   /// Thumbnail generation is itself best-effort: any failure there is
   /// swallowed and never prevents the original's relative dest from being
   /// returned.
+  ///
+  /// DELIBERATELY still best-effort, unlike the WEB backend (see
+  /// `photo_files_web.dart`'s L3 fix): this backend never throws
+  /// [PhotoWriteException]. The two are not symmetric, and that is correct —
+  /// here the picked file still exists at [xfile]'s own path even when the
+  /// copy into the app-owned directory fails, and `resolvePhotoPath`'s
+  /// container-rotation healing can recover it later; on web the byte store IS
+  /// the only copy, so a failed write means the pixels do not exist anywhere.
+  /// The shared callers' `on PhotoWriteException` clauses are therefore dead
+  /// code on native, by design — native behaviour is unchanged by that fix.
   Future<String> importPhoto(XFile xfile, String photoId) async {
     final ext = p.extension(xfile.name).isNotEmpty
         ? p.extension(xfile.name)

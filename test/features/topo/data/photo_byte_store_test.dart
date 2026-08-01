@@ -74,4 +74,30 @@ void main() {
     expect(await store.readBytes('photos/one.jpg'), equals(Uint8List.fromList([1])));
     expect(await store.readBytes('thumbs/one.jpg'), equals(Uint8List.fromList([2])));
   });
+
+  test(
+    'writeBytes surfaces a store-side failure rather than resolving silently '
+    '— this is the failure PhotoFiles.importPhoto now propagates as a '
+    'PhotoWriteException instead of swallowing (L3)',
+    () async {
+      final factory = newIdbFactoryMemory();
+      final store = IdbPhotoByteStore(factory: factory);
+      // Force the write into a store that does not exist: a real IndexedDB
+      // transaction against a missing object store rejects, exactly like a
+      // quota rejection does from this method's point of view.
+      final db = await factory.open(
+        kPhotoByteStoreDbName,
+        version: 1,
+        onUpgradeNeeded: (event) {
+          // Deliberately create NOTHING, so `kPhotoByteStoreName` is absent.
+        },
+      );
+      addTearDown(db.close);
+
+      await expectLater(
+        store.writeBytes('photos/abc.jpg', Uint8List.fromList([1, 2, 3])),
+        throwsA(anything),
+      );
+    },
+  );
 }
