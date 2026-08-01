@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/topo/data/photo_write_exception.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 
 /// Whether the topo canvas is in passive viewing mode or active route
@@ -84,6 +85,120 @@ class AddCommittedSymbolOp extends DrawOp {
 bool _isInProgressDraftOp(DrawOp op) =>
     op is AddPointOp || op is AddCurrentSymbolOp;
 
+/// Which [DrawController] write-through a [RouteWriteException] is reporting.
+///
+/// Diagnostics + copy selection only — never rendered verbatim. Kept as an
+/// enum rather than the free-text prefix the old `debugPrint` calls used so a
+/// listener can tell "the route you just drew is gone" apart from the smaller
+/// edits without string-matching a log line.
+enum RouteWriteOperation {
+  /// [DrawController.commitRoute] — the route the climber just finished
+  /// drawing. The one that matters most: this is the product.
+  commitRoute,
+
+  /// [DrawController.loadForWall]'s preserved-routes loop — a route committed
+  /// while a photo switch was still in flight, whose ONLY chance to reach disk
+  /// is that loop (its original `commitRoute` ran with a null
+  /// [DrawState.activeWallId] and so never persisted anything).
+  preserveRouteAcrossPhotoSwitch,
+
+  /// [DrawController.removeRoute] — a soft-delete that never landed. Nothing
+  /// is destroyed, but the canvas reported a deletion the database refused.
+  removeRoute,
+
+  /// [DrawController.placeSymbol] — a crux/bolt/anchor marker.
+  placeSymbol,
+
+  /// [DrawController.setRouteMetadata] — name, grade, style, description,
+  /// beta video, tags, stars: text the climber typed.
+  setRouteMetadata,
+
+  /// [DrawController.undo] of an [AddCommittedSymbolOp].
+  undo,
+
+  /// [DrawController.redo] of an [AddCommittedSymbolOp].
+  redo,
+}
+
+/// Why a route write could not be persisted, and the plain words to tell the
+/// climber about it — the route-side counterpart of [PhotoWriteException].
+///
+/// UF-1 (silent data loss). Every persisting [DrawController] method mutates
+/// [DrawState] first and writes second, and every one of them used to swallow
+/// a failed write into a `debugPrint`. The canvas therefore went on showing a
+/// route/marker/grade that had never reached the database: the climber drew a
+/// line, saw it, closed the app, and it was gone — with no warning at any
+/// point. On web that is the realistic case rather than an edge case, because
+/// an exhausted origin quota makes drift's own writes reject exactly the way
+/// it already makes the photo byte-writes reject.
+///
+/// Deliberately reuses [PhotoWriteFailure] and [classifyPhotoWriteFailure]
+/// rather than restating the quota-marker list: that classifier is already
+/// string-based and engine-agnostic precisely so other storage paths can share
+/// it (see its doc), and one shared classifier means one place to fix when a
+/// browser changes its wording. Only the user-facing nouns differ, since "this
+/// photo was not saved" is the wrong sentence for a route.
+class RouteWriteException implements Exception {
+  const RouteWriteException({
+    required this.operation,
+    required this.failure,
+    required this.rolledBack,
+    this.cause,
+  });
+
+  /// Which write-through failed. Diagnostics + [userMessage] wording.
+  final RouteWriteOperation operation;
+
+  /// What went wrong, classified for presentation.
+  final PhotoWriteFailure failure;
+
+  /// Whether [DrawState] was reverted to its pre-mutation value, i.e. whether
+  /// the canvas now matches the database again.
+  ///
+  /// `false` only in the rare case where something else mutated [DrawState]
+  /// during the failed write's own `await` gap, which makes a revert unsafe
+  /// (it would clobber that newer, unrelated change — see
+  /// [DrawController._writeThrough]). The failure is still reported; the
+  /// canvas is simply known to be ahead of the database until the next load.
+  final bool rolledBack;
+
+  /// The underlying error, kept for logging only. Callers must present
+  /// [userMessage], never this.
+  final Object? cause;
+
+  /// A short, complete sentence safe to render straight into a `SnackBar`.
+  ///
+  /// Mirrors [PhotoWriteException.userMessage]'s conventions exactly: no
+  /// exception name, no identifier, one actionable sentence, and the same
+  /// "Out of storage space — … Free up space on this device and try again."
+  /// phrasing for a quota failure, so a climber who has already seen the photo
+  /// version reads the same words for the same problem.
+  String get userMessage {
+    // Named for the climber, not for the method: a lost route is worth saying
+    // out loud, while a lost marker/grade/deletion is all "this change".
+    final (lower, upper) = switch (operation) {
+      RouteWriteOperation.commitRoute ||
+      RouteWriteOperation.preserveRouteAcrossPhotoSwitch => (
+        'this route',
+        'This route',
+      ),
+      _ => ('this change', 'This change'),
+    };
+    return switch (failure) {
+      PhotoWriteFailure.quotaExceeded =>
+        'Out of storage space — $lower was not saved. Free up space on this '
+            'device and try again.',
+      PhotoWriteFailure.unknown =>
+        '$upper could not be saved on this device. Please try again.',
+    };
+  }
+
+  @override
+  String toString() =>
+      'RouteWriteException(${operation.name}, ${failure.name}, '
+      'rolledBack: $rolledBack, cause: $cause)';
+}
+
 /// Immutable state for the topo route drawing feature.
 ///
 /// [currentPoints] and the points inside [routes] are expressed in percent
@@ -106,6 +221,7 @@ class DrawState {
     this.isSwitchingPhoto = false,
     this.switchGeneration = 0,
     this.switchTargetPhotoId,
+    this.lastWriteFailure,
   });
 
   final DrawMode mode;
@@ -196,6 +312,24 @@ class DrawState {
   /// [loadForWall] call that follows it will know that).
   final String? switchTargetPhotoId;
 
+  /// UF-1 (silent data loss): the most recent route write that FAILED, or null
+  /// if the last write succeeded / none has been attempted.
+  ///
+  /// Set by [DrawController._writeThrough] the moment a repository write
+  /// throws, and never cleared implicitly — only by
+  /// [DrawController.clearWriteFailure], which the presenter calls once it has
+  /// shown the message. Every failure is a fresh [RouteWriteException]
+  /// instance (no `==` override), so a `ref.listen` on this field fires again
+  /// even for two identical consecutive failures rather than deduplicating a
+  /// second lost route into silence.
+  ///
+  /// This is the SURFACE, not the presentation: the write-through also reverts
+  /// [DrawState] so the canvas stops showing unsaved work (see
+  /// [DrawController._writeThrough]), which is what actually protects the
+  /// data. This field is what lets the canvas additionally tell the climber
+  /// WHY their route just disappeared instead of leaving them guessing.
+  final RouteWriteException? lastWriteFailure;
+
   /// Operations applied so far, available to be inverted by [undo]. See
   /// [DrawOp].
   final List<DrawOp> undoStack;
@@ -240,6 +374,8 @@ class DrawState {
     int? switchGeneration,
     String? switchTargetPhotoId,
     bool switchTargetPhotoIdSet = false,
+    RouteWriteException? lastWriteFailure,
+    bool lastWriteFailureSet = false,
   }) {
     return DrawState(
       mode: mode ?? this.mode,
@@ -267,6 +403,9 @@ class DrawState {
       switchTargetPhotoId: switchTargetPhotoIdSet
           ? switchTargetPhotoId
           : (switchTargetPhotoId ?? this.switchTargetPhotoId),
+      lastWriteFailure: lastWriteFailureSet
+          ? lastWriteFailure
+          : (lastWriteFailure ?? this.lastWriteFailure),
     );
   }
 }
@@ -291,6 +430,95 @@ class DrawController extends Notifier<DrawState> {
 
   @override
   DrawState build() => const DrawState();
+
+  /// UF-1 (silent data loss): runs a repository write for a mutation that has
+  /// ALREADY been applied to [DrawState], and — if the write throws — reverts
+  /// that mutation and records a [RouteWriteException] on
+  /// [DrawState.lastWriteFailure].
+  ///
+  /// ## Why mutate-then-persist (with a revert) rather than persist-then-mutate
+  ///
+  /// Persist-first is the obvious way to make a failure impossible to miss,
+  /// and it is the WRONG trade here, for three concrete reasons:
+  ///
+  ///  1. **The climber would watch every line lag.** Drawing is the app's
+  ///     inner loop. Persist-first puts a database round-trip between "lift
+  ///     finger" and "see the line", on every single commit, for the ~100% of
+  ///     commits that succeed — a permanent, universal cost paid to improve
+  ///     the rare failure.
+  ///  2. **It would break the mid-photo-switch rescue.** [beginPhotoSwitch]
+  ///     deliberately nulls [DrawState.activeWallId] so a route committed
+  ///     during a switch persists NOTHING and survives purely in memory until
+  ///     [loadForWall] merges and writes it (see both methods' FIX #4 docs).
+  ///     That whole mechanism exists because in-memory-first is what keeps a
+  ///     route alive across a switch; persist-first would drop those routes on
+  ///     the floor instead.
+  ///  3. **Every persisting method here is documented and tested as mutating
+  ///     synchronously before its first `await`**, so callers that don't await
+  ///     still observe the change immediately. Inverting that is a rewrite of
+  ///     the controller's contract, not a bug fix.
+  ///
+  /// So the mutation stays optimistic and this method makes the OPTIMISM
+  /// honest: on failure the canvas snaps back to what the database actually
+  /// holds, and [DrawState.lastWriteFailure] carries the words explaining why.
+  /// The climber's worst case becomes "my line vanished and the app told me I
+  /// am out of space" instead of "my line looked saved for an hour and then
+  /// was never there again".
+  ///
+  /// ## The revert is conditional, on purpose
+  ///
+  /// [optimistic] must be the exact [DrawState] instance this call assigned
+  /// after applying its mutation. If [state] is still `identical` to it when
+  /// the write fails, nothing else touched the controller during the `await`
+  /// and reverting to [rollbackTo] is provably safe. If it is NOT — the
+  /// climber kept drawing, a photo switch started, another route was committed
+  /// — a revert would clobber that newer, unrelated work to undo an older
+  /// mutation, which is a second data-loss bug wearing the first one's
+  /// clothes. In that case the state is left alone and the failure is reported
+  /// with [RouteWriteException.rolledBack] `false`.
+  ///
+  /// [rollbackTo] is a whole pre-mutation [DrawState] rather than a patch
+  /// because the revert only ever runs under that identity guard: with nothing
+  /// else having changed, restoring the snapshot restores exactly the fields
+  /// this call touched and nothing more. That is what lets a failed
+  /// [commitRoute] hand the climber back their unsaved line as a live draft,
+  /// undo history and all, instead of just deleting it.
+  Future<void> _writeThrough({
+    required RouteWriteOperation operation,
+    required DrawState optimistic,
+    required DrawState rollbackTo,
+    required Future<void> Function() write,
+  }) async {
+    try {
+      await write();
+    } catch (error, stackTrace) {
+      debugPrint(
+        '${operation.name}: persistence write-through failed: '
+        '$error\n$stackTrace',
+      );
+      // The controller is autoDispose: if its screen was popped during the
+      // await, there is no state left to revert and assigning would throw.
+      if (!ref.mounted) return;
+      final canRollBack = identical(state, optimistic);
+      state = (canRollBack ? rollbackTo : state).copyWith(
+        lastWriteFailureSet: true,
+        lastWriteFailure: RouteWriteException(
+          operation: operation,
+          failure: classifyPhotoWriteFailure(error),
+          rolledBack: canRollBack,
+          cause: error,
+        ),
+      );
+    }
+  }
+
+  /// Clears [DrawState.lastWriteFailure] once the presenter has shown it, so
+  /// the next failure is observed as a fresh change. No-op when there is
+  /// nothing to clear, so calling it defensively never churns state.
+  void clearWriteFailure() {
+    if (state.lastWriteFailure == null) return;
+    state = state.copyWith(lastWriteFailureSet: true, lastWriteFailure: null);
+  }
 
   /// Flips between [DrawMode.view] and [DrawMode.draw].
   void toggleMode() {
@@ -333,6 +561,7 @@ class DrawController extends Notifier<DrawState> {
   Future<void> undo() async {
     if (state.undoStack.isEmpty) return;
 
+    final beforeUndo = state;
     final undoStack = [...state.undoStack];
     final op = undoStack.removeLast();
 
@@ -384,13 +613,16 @@ class DrawController extends Notifier<DrawState> {
         final wallId = state.activeWallId;
         final photoId = state.activePhotoId;
         if (wallId == null || photoId == null) return;
-        try {
-          await ref
+        await _writeThrough(
+          operation: RouteWriteOperation.undo,
+          optimistic: state,
+          // The symbol is still in the database, so it must go back on the
+          // wall -- along with the op, which was not actually consumed.
+          rollbackTo: beforeUndo,
+          write: () => ref
               .read(routeRepositoryProvider)
-              .upsertRoute(wallId, photoId, updatedRoute);
-        } catch (e, st) {
-          debugPrint('undo: persistence write-through failed: $e\n$st');
-        }
+              .upsertRoute(wallId, photoId, updatedRoute),
+        );
         return;
     }
   }
@@ -405,6 +637,7 @@ class DrawController extends Notifier<DrawState> {
   Future<void> redo() async {
     if (state.redoStack.isEmpty) return;
 
+    final beforeRedo = state;
     final redoStack = [...state.redoStack];
     final op = redoStack.removeLast();
 
@@ -450,13 +683,16 @@ class DrawController extends Notifier<DrawState> {
         final wallId = state.activeWallId;
         final photoId = state.activePhotoId;
         if (wallId == null || photoId == null) return;
-        try {
-          await ref
+        await _writeThrough(
+          operation: RouteWriteOperation.redo,
+          optimistic: state,
+          // The re-added symbol never reached the database, so it must come
+          // back off the wall -- and the op back onto the redo stack.
+          rollbackTo: beforeRedo,
+          write: () => ref
               .read(routeRepositoryProvider)
-              .upsertRoute(wallId, photoId, updatedRoute);
-        } catch (e, st) {
-          debugPrint('redo: persistence write-through failed: $e\n$st');
-        }
+              .upsertRoute(wallId, photoId, updatedRoute),
+        );
         return;
     }
   }
@@ -496,6 +732,7 @@ class DrawController extends Notifier<DrawState> {
   Future<void> commitRoute() async {
     if (state.currentPoints.length < 2) return;
 
+    final beforeCommit = state;
     final route = TopoRoute(
       id: state.nextId,
       number: state.nextNumber,
@@ -517,13 +754,19 @@ class DrawController extends Notifier<DrawState> {
     final wallId = state.activeWallId;
     final photoId = state.activePhotoId;
     if (wallId == null || photoId == null) return;
-    try {
-      await ref
+    await _writeThrough(
+      operation: RouteWriteOperation.commitRoute,
+      optimistic: state,
+      // UF-1: reverting the whole pre-commit snapshot hands the climber back
+      // the exact line they drew -- points, mid-draw symbols and undo history
+      // -- as a live draft, rather than just deleting an unsaved route out
+      // from under them. Their work survives the failure; only the (refused)
+      // save did not.
+      rollbackTo: beforeCommit,
+      write: () => ref
           .read(routeRepositoryProvider)
-          .upsertRoute(wallId, photoId, route);
-    } catch (e, st) {
-      debugPrint('commitRoute: persistence write-through failed: $e\n$st');
-    }
+          .upsertRoute(wallId, photoId, route),
+    );
   }
 
   /// Empties the in-progress route (points and symbols) and the undo/redo
@@ -558,6 +801,27 @@ class DrawController extends Notifier<DrawState> {
   ///
   /// Persistence write-through: see [commitRoute] doc for the sync-mutation
   /// / no-op-without-a-wall contract shared by all write-through methods.
+  ///
+  /// UF-1 EXCEPTION — this is the ONE write-through here that deliberately
+  /// keeps the old log-and-carry-on handling instead of [_writeThrough]'s
+  /// revert-and-report. That is a judgement about what the climber loses, not
+  /// an oversight, so please don't "finish the job" by wiring it up:
+  ///
+  ///  - **Nothing authored is destroyed.** Every other persisting method here
+  ///    can lose a route, a marker, or typed text. This one can only lose a
+  ///    show/hide preference; the route's points, name, grade and description
+  ///    are untouched and still on disk. (`visible` IS persisted and synced —
+  ///    see `tables.dart`'s `Routes.visible` — so a lost write does outlive
+  ///    the session; it is a small loss, not a local-only one.)
+  ///  - **Reverting would take away a working feature exactly when it is
+  ///    needed.** A revert here means the eye icon springs back on every tap
+  ///    for as long as storage is full, so a climber whose device is out of
+  ///    room could no longer hide routes to read their own topo — a real
+  ///    capability removed to protect a boolean that costs one tap to redo.
+  ///  - **Reporting it would make a one-tap display toggle shout.** Visibility
+  ///    gets toggled constantly while reviewing a wall; a snackbar per tap
+  ///    would train the climber to dismiss the very same warning that matters
+  ///    when it is their route that failed to save.
   Future<void> toggleRouteVisibility(int id) async {
     final index = state.routes.indexWhere((r) => r.id == id);
     if (index == -1) return;
@@ -602,6 +866,7 @@ class DrawController extends Notifier<DrawState> {
   Future<void> removeRoute(int id) async {
     final removedIndex = state.routes.indexWhere((r) => r.id == id);
     if (removedIndex == -1) return;
+    final beforeRemove = state;
     final removedRoute = state.routes[removedIndex];
 
     final routes = state.routes.where((r) => r.id != id).toList();
@@ -619,13 +884,17 @@ class DrawController extends Notifier<DrawState> {
     final wallId = state.activeWallId;
     final photoId = state.activePhotoId;
     if (wallId == null || photoId == null) return;
-    try {
-      await ref
+    await _writeThrough(
+      operation: RouteWriteOperation.removeRoute,
+      optimistic: state,
+      // The soft-delete was refused, so the route is still in the database and
+      // would simply reappear on the next load. Putting it straight back keeps
+      // the canvas honest instead of staging a deletion that never happened.
+      rollbackTo: beforeRemove,
+      write: () => ref
           .read(routeRepositoryProvider)
-          .softDeleteRoute(wallId, photoId, removedRoute.number);
-    } catch (e, st) {
-      debugPrint('removeRoute: persistence write-through failed: $e\n$st');
-    }
+          .softDeleteRoute(wallId, photoId, removedRoute.number),
+    );
   }
 
   /// Sets the symbol type that will be placed by [placeSymbol]. Passing
@@ -742,6 +1011,7 @@ class DrawController extends Notifier<DrawState> {
     required Offset percent,
     required SymbolPlacementOutcome outcome,
   }) async {
+    final beforePlace = state;
     final route = state.routes[index];
     final symbol = TopoSymbol(type: symbolType, position: percent);
     final routes = [...state.routes];
@@ -761,13 +1031,16 @@ class DrawController extends Notifier<DrawState> {
     final wallId = state.activeWallId;
     final photoId = state.activePhotoId;
     if (wallId == null || photoId == null) return outcome;
-    try {
-      await ref
+    await _writeThrough(
+      operation: RouteWriteOperation.placeSymbol,
+      optimistic: state,
+      // Takes the unsaved marker back off the route -- and, for the
+      // auto-select case, un-does the selection move it came with.
+      rollbackTo: beforePlace,
+      write: () => ref
           .read(routeRepositoryProvider)
-          .upsertRoute(wallId, photoId, updatedRoute);
-    } catch (e, st) {
-      debugPrint('placeSymbol: persistence write-through failed: $e\n$st');
-    }
+          .upsertRoute(wallId, photoId, updatedRoute),
+    );
     return outcome;
   }
 
@@ -815,6 +1088,7 @@ class DrawController extends Notifier<DrawState> {
     final index = state.routes.indexWhere((r) => r.id == routeId);
     if (index == -1) return;
 
+    final beforeMetadata = state;
     final gradeProvided = gradeSystem != null && gradeRaw != null;
     final newGradeSortKey = (gradeProvided && isValidGrade(gradeSystem, gradeRaw))
         ? gradeSortKey(gradeSystem, gradeRaw)
@@ -847,13 +1121,18 @@ class DrawController extends Notifier<DrawState> {
     final wallId = state.activeWallId;
     final photoId = state.activePhotoId;
     if (wallId == null || photoId == null) return;
-    try {
-      await ref
+    await _writeThrough(
+      operation: RouteWriteOperation.setRouteMetadata,
+      optimistic: state,
+      // Restores the route's previous name/grade/style/description rather than
+      // leaving the metadata sheet's edits looking accepted. The climber is
+      // told the save was refused while the old values are still on screen, so
+      // nothing they typed is quietly half-applied.
+      rollbackTo: beforeMetadata,
+      write: () => ref
           .read(routeRepositoryProvider)
-          .upsertRoute(wallId, photoId, updatedRoute);
-    } catch (e, st) {
-      debugPrint('setRouteMetadata: persistence write-through failed: $e\n$st');
-    }
+          .upsertRoute(wallId, photoId, updatedRoute),
+    );
   }
 
   /// Synchronously clears drawing/persistence state in preparation for
@@ -1127,16 +1406,24 @@ class DrawController extends Notifier<DrawState> {
     );
 
     for (final route in preserved) {
-      try {
-        await ref
+      // UF-1: this loop is a preserved route's ONLY chance to reach disk (its
+      // commitRoute ran with a null activeWallId and wrote nothing), so a
+      // failure here is the total loss of a route the climber drew. Dropping
+      // just that route from the merged list keeps the canvas matching the
+      // database; the reported failure is what tells them it happened.
+      // Rebuilt per iteration so an earlier route's rollback doesn't make a
+      // later one's identity guard spuriously fail.
+      final optimistic = state;
+      await _writeThrough(
+        operation: RouteWriteOperation.preserveRouteAcrossPhotoSwitch,
+        optimistic: optimistic,
+        rollbackTo: optimistic.copyWith(
+          routes: optimistic.routes.where((r) => r.id != route.id).toList(),
+        ),
+        write: () => ref
             .read(routeRepositoryProvider)
-            .upsertRoute(wallId, photoId, route);
-      } catch (e, st) {
-        debugPrint(
-          'loadForWall: persisting a route committed mid-switch failed: '
-          '$e\n$st',
-        );
-      }
+            .upsertRoute(wallId, photoId, route),
+      );
     }
   }
 }
