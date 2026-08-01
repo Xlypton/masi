@@ -976,6 +976,66 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       },
     );
 
+    // UF-1 (silent data loss), presentation half. [DrawController._writeThrough]
+    // already stops the CORRUPTION — a route/marker/grade whose repository
+    // write throws is reverted off the canvas and recorded on
+    // [DrawState.lastWriteFailure] — but nothing read that record, so all the
+    // climber saw was their line disappearing. This listener is what turns that
+    // disappearance into an explanation, which is the actual invariant: if the
+    // write failed, the climber is told.
+    //
+    // Deliberately the same shape as [_attachPhotoAndLoad]'s
+    // `on PhotoWriteException` clause — same warning glyph, same one-sentence
+    // frame, same "Out of storage space — … Free up space on this device and
+    // try again." words for the same underlying problem (see
+    // [routeWriteFailureSnackBar]/[RouteWriteException.userMessage]) — because
+    // one out-of-room device can refuse the photo attach and then the route
+    // commit in a single session, and two different-looking warnings for one
+    // problem read as two unrelated faults.
+    //
+    // Fires for EVERY failure, including
+    // [RouteWriteException.rolledBack] `false`. That case (the climber kept
+    // drawing during the failed write, so reverting would have clobbered the
+    // newer line) is the one where the canvas is knowingly ahead of the
+    // database — the loss is invisible to the climber precisely because
+    // nothing disappeared — so it is the LAST case that may be silent. It
+    // deliberately gets the SAME words rather than its own: "this route was
+    // not saved" is exactly as true whether or not the canvas reverted (the
+    // rollback governs the screen, never whether the write landed), the
+    // remedy is identical (free up space, save again), and the flag cannot
+    // support a more specific sentence — `rolledBack: false` only means "the
+    // revert was skipped because state moved on", NOT "the route is still on
+    // screen": the mutation that moved state on may itself have been a
+    // [DrawController.beginPhotoSwitch], which clears [DrawState.routes]. A
+    // message asserting "it is still showing but will be gone" would therefore
+    // be false some of the time, which is worse than one that is always true.
+    //
+    // No `fireImmediately` (Riverpod v3 has no such option on
+    // [WidgetRef.listen], and the callback writes provider state, which is
+    // forbidden mid-build — see the two listeners above). None is needed:
+    // every write-through runs behind an `await`, and the only ones reachable
+    // on a fresh canvas are kicked off from [initState]'s microtask, i.e.
+    // strictly after this listener is registered by the first build.
+    ref.listen<RouteWriteException?>(
+      drawControllerProvider(widget.wallId).select((s) => s.lastWriteFailure),
+      (previous, next) {
+        if (next == null) return;
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(routeWriteFailureSnackBar(next));
+        // Clears the record now that it has been presented, per
+        // [DrawState.lastWriteFailure]'s contract. Safe to call from here even
+        // though the provider is autoDispose: a `ref.listen` subscription is
+        // torn down with this widget, so this callback cannot run after the
+        // canvas is popped and cannot resurrect the post-await write
+        // [DrawController._writeThrough]'s own `ref.mounted` guard exists to
+        // prevent.
+        ref
+            .read(drawControllerProvider(widget.wallId).notifier)
+            .clearWriteFailure();
+      },
+    );
+
     final imagePath = ref.watch(selectedImageProvider);
     // Web-perf fix (draw-gesture rebuild storm): `DrawState` has no
     // `operator==`, so watching the whole object made THIS screen (top
