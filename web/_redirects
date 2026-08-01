@@ -1,0 +1,17 @@
+# Cloudflare Pages SPA fallback.
+#
+# Masi uses `usePathUrlStrategy()` (lib/main.dart), so a shared topo link is a
+# real path like /community/topo/<wallId>, not /#/community/topo/<wallId>.
+# Cloudflare Pages serves static files and 404s anything it has no file for —
+# unlike Firebase Hosting, whose `rewrites` block in firebase.json already does
+# this. Without this rule, the FIRST load of a shared link 404s.
+#
+# Note this only matters for a client with no service worker yet: web/sw.js
+# answers every in-scope navigation with the app shell, so once a visitor has
+# loaded the site once, deep links work with or without this rule, online or
+# off. It is the cold, never-visited case — i.e. every recipient of a shared
+# link — that needs it.
+#
+# 200 (rewrite), not 301/302: the browser must keep the requested URL so
+# GoRouter can route on it.
+/*    /index.html   200

@@ -33,3 +33,24 @@ Two ready-made configs are provided so either host works out of the box:
 If you ever put Masi behind a different static host, port these same
 three headers (COOP, COEP, and the wasm content-type) to that host's config
 format — that's the whole requirement.
+
+## The service worker and the SPA fallback
+
+Two more hosting requirements arrived with the offline shell (design doc §2b):
+
+- **`/sw.js` must be revalidated on every request.** `tool/build_web.sh` stamps
+  a content-derived `SHELL_VERSION` into `build/web/sw.js`; the resulting byte
+  change is the ONLY thing that tells a browser a new build exists. A cached
+  `sw.js` freezes an installation on one shell version. Both `web/_headers` and
+  `firebase.json` set `Cache-Control: no-cache` on it explicitly.
+- **Unmatched paths must serve `/index.html` with a 200.** The app uses
+  path-based URLs, so `/community/topo/<id>` is a real path. Firebase Hosting
+  already does this via its `rewrites` block; Cloudflare Pages needs
+  `web/_redirects` (`/* /index.html 200`), which `flutter build web` copies to
+  `build/web/_redirects` alongside `_headers`.
+
+Neither is verifiable from this repo. `python3 tool/verify_offline_shell.py`
+proves the app boots offline when these headers ARE applied (it serves
+`build/web` with the same policy via `tool/serve_web_isolated.py`), but whether
+Cloudflare actually applies them to the deployed origin is a one-off manual
+check — see the design doc's open question 2.

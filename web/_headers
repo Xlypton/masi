@@ -60,3 +60,17 @@
 
 /drift_worker.js
   Cache-Control: public, max-age=31536000, immutable
+
+# The service worker itself must ALWAYS be revalidated. `sw.js` is how a new
+# build reaches an existing installation: `tool/gen_sw_manifest.dart` stamps a
+# content-derived SHELL_VERSION into it at build time, the byte change is what
+# makes the browser treat the worker as updated, and its install then
+# precaches the new shell. A long-cached sw.js would freeze a user on one
+# shell version indefinitely — the exact "stranded on a half-updated shell"
+# failure the offline work exists to prevent. The blanket `/*` block above
+# already sets `no-cache`; this restates it explicitly and non-negotiably so a
+# future caching sweep cannot fold sw.js in with the `immutable` assets above
+# by accident. Browsers additionally cap service-worker script caching at 24h
+# regardless, but 24h of staleness is still 24h too many for a rollover path.
+/sw.js
+  Cache-Control: no-cache

@@ -73,6 +73,102 @@ if [[ "$GATE_ONLY" == "1" ]]; then
   exit 0
 fi
 
-echo "==> flutter build web ${RENDERER_ARGS[*]:-(js/canvaskit)}"
-flutter build web "${RENDERER_ARGS[@]}"
+echo "==> flutter build web ${RENDERER_ARGS[*]:-(js/canvaskit)} --no-web-resources-cdn --pwa-strategy=none"
+# --no-web-resources-cdn: self-host the renderer. Without it, flutter_bootstrap.js
+# resolves skwasm.js/skwasm.wasm (and canvaskit.js/wasm for the dart2js fallback
+# build) against https://www.gstatic.com/flutter-canvaskit/<engineRevision>/, so an
+# offline first paint dies on a cross-origin fetch and the local canvaskit/ payload
+# is dead weight. With it, buildConfig gains "useLocalCanvasKit":true and every
+# renderer asset is served from canvaskit/ on this origin.
+#
+# --pwa-strategy=none: do NOT emit Flutter's deprecated cleanup service worker or
+# the loader settings that register it. The default (offline-first) makes the
+# bootstrap end in `_flutter.loader.load({serviceWorkerSettings: {...}})`, and that
+# loader path does `navigator.serviceWorker.getRegistration().then(r => r ? … : …)`
+# — so the MOMENT web/index.html registers web/sw.js, Flutter registers
+# flutter_service_worker.js at the same scope, REPLACING ours with a 31-line shim
+# whose activate handler calls self.registration.unregister() and
+# client.navigate(client.url). That is bug #55's reload dance, permanently, plus no
+# offline shell at all. With `none`, generateServiceWorker() returns '' and
+# generateDefaultFlutterBootstrapScript() emits a bare `_flutter.loader.load();`.
+flutter build web "${RENDERER_ARGS[@]}" --no-web-resources-cdn --pwa-strategy=none
+
+echo "==> emitted-bootstrap gate"
+BOOTSTRAP="build/web/flutter_bootstrap.js"
+if [[ ! -f "$BOOTSTRAP" ]]; then
+  echo "FAIL: $BOOTSTRAP was not emitted" >&2
+  exit 1
+fi
+# Deliberately NOT `grep gstatic` — that can never be 0. flutter_bootstrap.js
+# inlines the minified flutter.js loader, which always contains the literal
+# "https://www.gstatic.com/flutter-canvaskit" as the FALLBACK branch of
+#   e.engineRevision && !e.useLocalCanvasKit ? <gstatic url> : "canvaskit"
+# The flag does not delete that string, it flips the boolean that selects it.
+# So the real signal is the buildConfig key.
+if ! grep -q '"useLocalCanvasKit":true' "$BOOTSTRAP"; then
+  echo "FAIL: $BOOTSTRAP has no \"useLocalCanvasKit\":true — the renderer is" >&2
+  echo "      still resolved against gstatic.com and the app cannot boot offline." >&2
+  echo "      Did --no-web-resources-cdn get dropped from the build line above?" >&2
+  exit 1
+fi
+echo "    ok: buildConfig sets useLocalCanvasKit"
+
+# Gate on the loader CALL SITE, not on the identifier `serviceWorkerSettings`.
+#
+# A bare `grep -q serviceWorkerSettings` can never be 0, for exactly the same
+# reason a `grep gstatic` can never be 0: flutter_bootstrap.js inlines the
+# MINIFIED flutter.js loader, whose own `load()` signature is
+#   async load({serviceWorkerSettings:e,onEntrypointLoaded:n,...}={})
+# and whose registration helper destructures `{serviceWorkerVersion:r,...}`.
+# Both identifiers are unconditionally present in the loader source regardless
+# of the build flag. (Measured on this build: 1 occurrence each, both inside
+# the minified loader.)
+#
+# What --pwa-strategy actually controls is the ARGUMENT the generated tail
+# passes. From flutter_tools/lib/src/web/bootstrap.dart:674-688:
+#   includeServiceWorkerSettings == true  -> `_flutter.loader.load({ serviceWorkerSettings: {...} });`
+#   includeServiceWorkerSettings == false -> `_flutter.loader.load();`
+# So the bare call is the positive signal, and an argument object is the
+# negative one. Both are checked.
+if ! grep -qE '^_flutter\.loader\.load\(\);$' "$BOOTSTRAP"; then
+  echo "FAIL: $BOOTSTRAP does not end in a bare \`_flutter.loader.load();\`." >&2
+  echo "      Flutter will register flutter_service_worker.js OVER web/sw.js," >&2
+  echo "      unregister it, and reload every client (bug #55). Did" >&2
+  echo "      --pwa-strategy=none get dropped from the build line above?" >&2
+  exit 1
+fi
+if grep -q '_flutter\.loader\.load({' "$BOOTSTRAP"; then
+  echo "FAIL: $BOOTSTRAP calls _flutter.loader.load() WITH a settings object," >&2
+  echo "      which means serviceWorkerSettings is being passed and Flutter's" >&2
+  echo "      deprecated worker will clobber web/sw.js (bug #55)." >&2
+  exit 1
+fi
+echo "    ok: bootstrap does not register Flutter's deprecated service worker"
+
+# `--pwa-strategy=none` makes generateServiceWorker() return '', so the tool
+# still WRITES build/web/flutter_service_worker.js but writes it empty. A
+# non-empty file here means the strategy did not take effect.
+LEGACY_SW="build/web/flutter_service_worker.js"
+if [[ -s "$LEGACY_SW" ]]; then
+  echo "FAIL: $LEGACY_SW is non-empty; --pwa-strategy=none did not take effect." >&2
+  exit 1
+fi
+echo "    ok: no legacy Flutter service worker emitted"
+
+echo "==> service-worker precache manifest"
+# Rewrites the two BUILD STAMP lines in build/web/sw.js (which `flutter build
+# web` copied verbatim from web/sw.js) with this build's precache list and a
+# content-derived version. Changing the version is what makes the browser
+# treat the worker as updated, which is the whole rollover mechanism.
+dart run tool/gen_sw_manifest.dart build/web
+
+if grep -q "const SHELL_VERSION = 'dev';" build/web/sw.js; then
+  echo "FAIL: build/web/sw.js still carries the dev stamp." >&2
+  echo "      The generator did not rewrite it, so this build would ship a" >&2
+  echo "      service worker that precaches NOTHING — the app would look" >&2
+  echo "      fine online and have no offline shell at all." >&2
+  exit 1
+fi
+echo "    ok: build/web/sw.js stamped"
+
 echo "==> build complete: build/web"

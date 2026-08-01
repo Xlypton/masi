@@ -181,6 +181,63 @@
       }, 300);
     });
 
+    // --- Offline shell (design doc §2b) ---------------------------------
+    // Registered HERE, not by the Flutter loader: `tool/build_web.sh` builds
+    // with `--pwa-strategy=none`, so `flutter_bootstrap.js` ends in a bare
+    // `_flutter.loader.load();` and never touches navigator.serviceWorker.
+    // That is deliberate — with Flutter's serviceWorkerSettings still emitted,
+    // the loader would see OUR registration, register its own deprecated
+    // worker at the same scope, and that shim's activate handler would
+    // `unregister()` itself and `client.navigate()` every client: bug #55's
+    // reload dance on every other load, plus no offline shell at all.
+    //
+    // Registration is on `load` so it never competes with the first paint for
+    // bandwidth. Failure is logged and ignored — no service worker just means
+    // no offline shell, never a broken app (private browsing and some
+    // enterprise policies block registration outright).
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('sw.js').catch(function (error) {
+          console.warn('masi/sw: registration failed:', error);
+        });
+      });
+      navigator.serviceWorker.addEventListener('message', function (event) {
+        if (!event.data || event.data.type !== 'masi-warm-done') return;
+        // Read by the Account screen's storage-diagnostics row (§2c) and by
+        // tool/verify_offline_shell.py, which waits for it before cutting the
+        // network.
+        window.__masiShellWarmed = true;
+        console.log(
+          'masi/sw: warmed ' + event.data.cached + '/' + event.data.total +
+          ' (version ' + event.data.version + ')'
+        );
+      });
+    }
+
+    window.addEventListener('flutter-first-frame', function () {
+      // A DOM-free "the app is actually running" signal. The Flutter app
+      // renders to a canvas, so there is no element a WebDriver harness can
+      // look for; this flag is what tool/verify_offline_shell.py polls.
+      window.__masiFirstFrame = true;
+
+      if (!('serviceWorker' in navigator)) return;
+      navigator.serviceWorker.ready.then(function (registration) {
+        var worker = registration.active || navigator.serviceWorker.controller;
+        if (!worker) return;
+        // Everything this page actually fetched from this origin — which is
+        // precisely the renderer variant the loader's feature probe chose,
+        // plus any lazily-loaded asset. The precache cannot know that
+        // statically; see web/sw.js's warmShell doc.
+        var prefix = location.origin + '/';
+        var urls = performance.getEntriesByType('resource')
+          .map(function (entry) { return entry.name; })
+          .filter(function (name) { return name.indexOf(prefix) === 0; });
+        worker.postMessage({ type: 'masi-warm', urls: urls });
+      }).catch(function (error) {
+        console.warn('masi/sw: warm failed:', error);
+      });
+    });
+
     // Long-press / right-click context menu must never interrupt canvas
     // interaction on web.
     window.addEventListener('contextmenu', function (e) {
