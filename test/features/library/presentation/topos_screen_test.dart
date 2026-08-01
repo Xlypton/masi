@@ -407,6 +407,58 @@ class _ThrowingSoftDeleteWallRepository extends LibraryCrudRepository {
   }
 }
 
+/// The DOUBLE failure the L3 fix's own compensation opens up: the photo byte
+/// write fails (quota — [_QuotaFailingPhotoFiles]) AND the `softDeleteWall`
+/// that `_handleNewTopo` runs to undo the wall `createTopo` had already
+/// committed fails too.
+///
+/// Both halves are realistic and, worse, CORRELATED. The cleanup is a database
+/// write into the very origin whose quota is exhausted, so the thing that made
+/// the photo write fail is the thing most likely to make its compensation fail;
+/// independently, a guarded cascade throws
+/// [LibraryWriteLostException] with [LibraryWriteLostReason.ownerIdentityUnknown]
+/// whenever auth drops to an unknown-uid state between `createTopo` and the
+/// failed attach. Either way the user must still be TOLD the photo could not be
+/// stored — a message that is contingent on its own cleanup succeeding is no
+/// message at all.
+class _QuotaThenCleanupFailingRepository extends LibraryCrudRepository {
+  _QuotaThenCleanupFailingRepository(super.db, {required super.nowMs})
+    : super(photoFiles: _QuotaFailingPhotoFiles());
+
+  @override
+  Future<void> softDeleteWall(String id) {
+    throw const LibraryWriteLostException(
+      operation: 'softDeleteWall',
+      rowId: 'test',
+      reason: LibraryWriteLostReason.ownerIdentityUnknown,
+    );
+  }
+}
+
+/// A repository whose [attachPhotoToWall] fails with an ORDINARY exception —
+/// not a [PhotoWriteException]. Every other method, `softDeleteWall` included,
+/// stays backed by the real implementation against the test db.
+///
+/// Models the whole non-quota half of the attach step: an FK violation, a
+/// closed/locked database, a `LibraryWriteLostException` from the insert's own
+/// guard, a drift serialization error. All of them leave the wall `createTopo`
+/// has ALREADY committed sitting on the home screen with no photo, which is
+/// precisely the orphan the [PhotoWriteException] clause exists to prevent —
+/// there is nothing quota-specific about that consequence.
+class _ThrowingAttachPhotoRepository extends LibraryCrudRepository {
+  _ThrowingAttachPhotoRepository(super.db, {required super.nowMs});
+
+  @override
+  Future<String> attachPhotoToWall(
+    String wallId,
+    XFile xfile,
+    int width,
+    int height,
+  ) {
+    throw Exception('attachPhotoToWall boom (test)');
+  }
+}
+
 /// A tile provider that never performs any network/file I/O: every tile
 /// request resolves synchronously to the same tiny in-memory image. Copied
 /// from `community_screen_test.dart`'s identical class (library-private to
@@ -1741,6 +1793,249 @@ void main() {
         await tester.tap(find.byKey(const Key('topos-new-topo')));
         await _drain(tester);
         expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
+      },
+    );
+  });
+
+  group('L3/F1: a failed orphan cleanup must not silence the failure', () {
+    testWidgets(
+      'when softDeleteWall ALSO throws, the photo-write failure is still '
+      'reported — the user is never left with an unexplained empty topo and '
+      'no message at all',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final repo = _QuotaThenCleanupFailingRepository(db, nowMs: () => 1000);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            libraryCrudRepositoryProvider.overrideWithValue(repo),
+            syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
+            storageDurabilityProvider.overrideWith(
+              () => _FakeStorageDurability(const StorageDurability.probing()),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp('topos_screen_f1');
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
+        // No trailing settle: the SnackBar must still be on screen.
+        await _drainNoSettle(tester);
+
+        expect(
+          find.textContaining('Out of storage space'),
+          findsOneWidget,
+          reason: 'the cleanup threw, so pre-fix the `await softDeleteWall` '
+              'escaped the `on PhotoWriteException` clause into the outer '
+              'debugPrint-only catch-all, skipping the SnackBar with it — the '
+              'user got a permanent empty topo AND total silence. The message '
+              'must never be contingent on the cleanup succeeding.',
+        );
+
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'a failed cleanup must stay contained, never surface as an '
+              'unhandled async error on the Topos home',
+        );
+      },
+    );
+
+    testWidgets(
+      'the re-entrancy guard is still released when the cleanup throws, so '
+      'New topo can be retried',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final repo = _QuotaThenCleanupFailingRepository(db, nowMs: () => 1000);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            libraryCrudRepositoryProvider.overrideWithValue(repo),
+            syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
+            storageDurabilityProvider.overrideWith(
+              () => _FakeStorageDurability(const StorageDurability.probing()),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp('topos_screen_f1b');
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
+        await _drain(tester);
+
+        // Clear the SnackBar off the FAB before retrying (see the L3
+        // re-entrancy test above for why a plain pumpAndSettle leaves it up).
+        await tester.pump(const Duration(seconds: 5));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drain(tester);
+        expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
+      },
+    );
+  });
+
+  group('UF-5: compensate-and-notify is uniform across exception types', () {
+    testWidgets(
+      'an ORDINARY attach failure (not a PhotoWriteException) also undoes the '
+      'orphan wall and tells the user — it must not fall through to the '
+      'silent debugPrint-only catch-all',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final repo = _ThrowingAttachPhotoRepository(db, nowMs: () => 1000);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            libraryCrudRepositoryProvider.overrideWithValue(repo),
+            syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
+            storageDurabilityProvider.overrideWith(
+              () => _FakeStorageDurability(const StorageDurability.probing()),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        late Directory tempDir;
+        late File pngFile;
+        await tester.runAsync(() async {
+          tempDir = await Directory.systemTemp.createTemp('topos_screen_uf5');
+          pngFile = File('${tempDir.path}/photo.png');
+          await pngFile.writeAsBytes(_tinyPngBytes);
+        });
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => XFile(pngFile.path),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _acceptTopoNameDialog(tester);
+        await _drainNoSettle(tester);
+
+        expect(
+          find.textContaining("Couldn't create the topo"),
+          findsOneWidget,
+          reason: 'a non-quota attach failure strands exactly the same empty '
+              'photo-less topo as a quota one — it must be reported too, not '
+              'debugPrinted into the void',
+        );
+
+        expect(
+          find.textContaining('Out of storage space'),
+          findsNothing,
+          reason: 'the quota-specific wording is reserved for a genuine '
+              'PhotoWriteException — a generic failure must not claim the '
+              'device is out of space',
+        );
+
+        final topos = await _dbWork(
+          tester,
+          () =>
+              container.read(libraryCrudRepositoryProvider).watchTopos().first,
+        );
+        expect(
+          topos,
+          isEmpty,
+          reason: 'createTopo committed a wall before attachPhotoToWall threw '
+              '— the compensating softDeleteWall must run for EVERY attach '
+              'failure, not only PhotoWriteException',
+        );
+
+        expect(
+          find.byKey(const Key('topos-new-topo')),
+          findsOneWidget,
+          reason: 'still on the Topos home — no navigation into a canvas with '
+              'nothing to show',
+        );
+      },
+    );
+
+    testWidgets(
+      'a failure BEFORE any topo exists (the picker throwing) is reported too '
+      'instead of vanishing into the catch-all',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            ToposScreen(
+              photoSourcePicker: (context) async => ImageSource.gallery,
+              photoPicker: (source) async => throw Exception('picker exploded'),
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        await _drainNoSettle(tester);
+
+        expect(
+          find.textContaining("Couldn't create the topo"),
+          findsOneWidget,
+          reason: 'nothing was created and nothing was said — the user tapped '
+              'New topo and got a silently unchanged screen',
+        );
+        expect(tester.takeException(), isNull);
       },
     );
   });

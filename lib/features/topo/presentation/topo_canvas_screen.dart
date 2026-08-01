@@ -59,12 +59,31 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
     @visibleForTesting this.setLocationTileProvider,
     @visibleForTesting this.setLocationMapController,
     @visibleForTesting this.setLocationLocationService,
+    @visibleForTesting this.photoSourcePicker = showPhotoSourceSheet,
+    @visibleForTesting this.photoPicker = pickPhotoFrom,
   });
 
   /// The wall this canvas is bound to (from the `/walls/:wallId` route).
   /// Routes/photos loaded and attached by this screen are always scoped to
   /// this wall — see [loadWallOriginalPhoto] and [_attachPhotoAndLoad].
   final String wallId;
+
+  /// TEST-ONLY seams for the two native choosers [_pickImage] drives: the
+  /// Camera/Library action sheet and the picker itself. They default to the
+  /// real module-level [showPhotoSourceSheet]/[pickPhotoFrom], so production
+  /// behavior is bit-identical and no call site changes.
+  ///
+  /// They exist because both defaults are native OS surfaces that
+  /// `flutter_test` cannot drive, which left [_attachPhotoAndLoad]'s
+  /// `on PhotoWriteException` clause — the whole user-visible half of the L3
+  /// fix on this screen — with no way to be reached from a test at all. It was
+  /// consequently deletable with the entire suite still green. These two
+  /// parameters are the smallest seam that closes that hole, and they
+  /// deliberately mirror `ToposScreen`'s long-standing
+  /// `photoSourcePicker`/`photoPicker` pair (same names, same signatures, same
+  /// defaults) rather than inventing a second convention.
+  final Future<ImageSource?> Function(BuildContext) photoSourcePicker;
+  final Future<XFile?> Function(ImageSource) photoPicker;
 
   /// When `true`, this screen renders strictly as a viewer: the photo,
   /// routes, and floating [RouteLegend] show exactly as they would
@@ -513,9 +532,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// Camera/Library choice as the Topos-home "New topo" flow.
   Future<void> _pickImage() async {
     if (widget.readOnly) return;
-    final source = await showPhotoSourceSheet(context);
+    final source = await widget.photoSourcePicker(context);
     if (source == null || !mounted) return;
-    final xfile = await pickPhotoFrom(source);
+    final xfile = await widget.photoPicker(source);
     if (xfile == null || !mounted) return;
     ref.read(selectedImageProvider.notifier).select(xfile.path);
     unawaited(_attachPickedPhoto(xfile));
