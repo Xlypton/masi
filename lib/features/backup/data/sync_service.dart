@@ -60,6 +60,9 @@ class PushSyncResult {
     required this.photosUploaded,
     this.rowsFailed = 0,
     this.errors = const [],
+    this.photosFailed = 0,
+    this.photosMissingLocalBytes = 0,
+    this.photoErrors = const [],
   }) : outcome = SyncPushOutcome.pushed;
 
   const PushSyncResult.skippedSignedOut()
@@ -67,14 +70,20 @@ class PushSyncResult {
       rowsPushed = 0,
       photosUploaded = 0,
       rowsFailed = 0,
-      errors = const [];
+      errors = const [],
+      photosFailed = 0,
+      photosMissingLocalBytes = 0,
+      photoErrors = const [];
 
   const PushSyncResult.skippedNotWifi()
     : outcome = SyncPushOutcome.skippedNotWifi,
       rowsPushed = 0,
       photosUploaded = 0,
       rowsFailed = 0,
-      errors = const [];
+      errors = const [],
+      photosFailed = 0,
+      photosMissingLocalBytes = 0,
+      photoErrors = const [];
 
   final SyncPushOutcome outcome;
 
@@ -86,7 +95,9 @@ class PushSyncResult {
   /// [TablePushOutcome.rowsSkippedNewerRemote]).
   ///
   /// S1 fix: this used to count rows merely HANDED TO the remote. Rows that
-  /// did NOT land are in [rowsFailed]. Always 0 when [outcome] isn't
+  /// did NOT land are in [rowsFailed]. It also EXCLUDES any photo row withheld
+  /// because its bytes did not land (§1f — see [photosFailed]): such a row
+  /// never entered `tablesToRows` at all. Always 0 when [outcome] isn't
   /// [SyncPushOutcome.pushed].
   final int rowsPushed;
 
@@ -108,38 +119,82 @@ class PushSyncResult {
   /// (the common case). Mirrors [PullResult.errors].
   final List<String> errors;
 
+  /// Number of distinct photo files whose upload was REQUIRED this push and
+  /// FAILED — the byte read threw, or `uploadPhoto`/`uploadSharedPhoto` threw.
+  ///
+  /// RETRYABLE, and therefore the signal §1e's backoff loop keys off (see
+  /// [hasPhotoFailures]): a network blip / transient Storage error will
+  /// succeed on a later attempt, at which point the rows withheld below go up
+  /// too. Each of these photos' `Photos` rows was HELD BACK from this push's
+  /// metadata upsert (S5 — see [SyncService._uploadOwnPhotos]), which is what
+  /// stops another device from ever pulling a row pointing at a Storage object
+  /// that does not exist.
+  ///
+  /// Pre-fix this was a bare `continue` with no error and no counter, while
+  /// the metadata had already been pushed.
+  final int photosFailed;
+
+  /// Number of distinct photo files that have NO local bytes on this device at
+  /// all (`PhotoFiles.readPhotoBytes` returned `null`) despite an upload being
+  /// required.
+  ///
+  /// Deliberately SEPARATE from [photosFailed], and deliberately NOT retried:
+  /// nothing will ever make those bytes appear on this device (they were
+  /// evicted, or the row predates the L3 fix), so counting it as a retryable
+  /// failure would spin §1e's "retry until clean" loop forever. Such a row's
+  /// metadata IS still pushed — it is the only surviving record of the photo
+  /// (wall, dimensions, crop, isPrimary, sortOrder) and another device may
+  /// well already hold the object — but it is reported in [photoErrors] rather
+  /// than vanishing silently.
+  ///
+  /// It is not silent to the USER either: `SyncOrchestrator` surfaces a
+  /// non-blocking `lastPushWarning` for it, so the Account screen can say the
+  /// photo is not in the cloud and is not going to be, WITHOUT the app
+  /// entering an error state or retrying forever. See
+  /// `SyncOrchestratorState.lastPushWarning`.
+  final int photosMissingLocalBytes;
+
+  /// One human-readable message per photo counted in [photosFailed] OR
+  /// [photosMissingLocalBytes], each naming the canonical photo id and what
+  /// went wrong. Empty on a clean push.
+  final List<String> photoErrors;
+
   bool get didPush => outcome == SyncPushOutcome.pushed;
 
-  /// True only when the push actually RAN and every row it was responsible
-  /// for reached the cloud. The ONLY condition under which
+  /// True only when the push actually RAN and every row AND every photo file
+  /// it was responsible for reached the cloud. The ONLY condition under which
   /// `SyncOrchestrator._runPush` may report [SyncStatus.idle] and stamp a
   /// fresh `lastSyncedAt` (S1).
   ///
-  /// DELIBERATELY INCOMPLETE — **§1f MUST AMEND THIS** (reconciliation D-2 /
-  /// decision #9, the highest-severity cross-fragment defect). §1f adds
-  /// `photosFailed` and withholds a failed photo's row FROM the push, so
-  /// `rowsFailed` stays 0 and `errors` stays empty for a push in which
-  /// EVERY photo's bytes failed to upload. Left as written, that push
-  /// reports `fullyLanded == true`, `_runPush` stamps a fresh
-  /// `lastSyncedAt`, and the Account screen renders "Synced • just now" —
-  /// the exact S1 lie this whole workstream exists to kill, re-entering
-  /// through the photo path. §1f's reconciled FINAL form is:
+  /// The `photosFailed == 0` term is load-bearing and closes the single
+  /// highest-severity defect in the Stage-1 plan (reconciliation D-2). §1f
+  /// WITHHOLDS a failed photo's row from `tablesToRows`, so a push in which
+  /// EVERY photo's bytes failed leaves [rowsFailed] at 0 and [errors] empty.
+  /// Without this term such a push reports `fullyLanded == true`, the
+  /// orchestrator stamps a fresh `lastSyncedAt`, and the Account screen
+  /// renders "Synced • just now" — precisely the S1 lie the whole of §1d
+  /// exists to kill, re-entering through the photo path.
   ///
-  ///     bool get fullyLanded =>
-  ///         didPush && rowsFailed == 0 && errors.isEmpty && photosFailed == 0;
-  ///
-  /// with `_runPush`'s `lastPushError` message concatenating
-  /// `errors + photoErrors`, and `photosMissingLocalBytes` DELIBERATELY
-  /// EXCLUDED (it is non-retryable; including it would stop §1e's retry
-  /// loop from ever terminating). Do not delete this paragraph until §1f
-  /// has landed the amendment.
-  bool get fullyLanded => didPush && rowsFailed == 0 && errors.isEmpty;
+  /// [photosMissingLocalBytes] is DELIBERATELY EXCLUDED: it is not retryable,
+  /// so including it would pin the app permanently outside [SyncStatus.idle]
+  /// and would stop §1e's retry loop from ever terminating. Those photos are
+  /// reported through [photoErrors] and, to the user, through
+  /// `SyncOrchestratorState.lastPushWarning` instead.
+  bool get fullyLanded =>
+      didPush && rowsFailed == 0 && errors.isEmpty && photosFailed == 0;
+
+  /// True when at least one photo's bytes failed to upload for a RETRYABLE
+  /// reason — the condition §1e's loop must schedule a retry on. Deliberately
+  /// does NOT include [photosMissingLocalBytes].
+  bool get hasPhotoFailures => photosFailed > 0;
 
   @override
   String toString() =>
       'PushSyncResult(outcome: $outcome, rowsPushed: $rowsPushed, '
       'photosUploaded: $photosUploaded, rowsFailed: $rowsFailed, '
-      'errors: $errors)';
+      'errors: $errors, photosFailed: $photosFailed, '
+      'photosMissingLocalBytes: $photosMissingLocalBytes, '
+      'photoErrors: $photoErrors)';
 }
 
 /// Outcome of a [SyncService.pullOwnAndShared] call.
@@ -237,6 +292,23 @@ class PullResult {
       'photosDownloaded: $photosDownloaded, ownImported: $ownImported, '
       'sharedImported: $sharedImported, errors: $errors)';
 }
+
+/// Outcome of one [SyncService._uploadOwnPhotos] pass.
+///
+/// [failedCanonicalIds] is what makes bytes-before-metadata enforceable (S5):
+/// a photo row whose canonical file id is in this set MUST be held back from
+/// [SyncRemote.upsertOwnRows], so the cloud can never hold a `Photos` row
+/// pointing at a Storage object that does not exist. It contains ONLY the
+/// retryable failures — a photo with no local bytes at all is counted in
+/// [PushSyncResult.photosMissingLocalBytes] and its row still pushes (see that
+/// field's doc).
+typedef PhotoUploadOutcome = ({
+  int uploaded,
+  int failed,
+  int missingLocalBytes,
+  Set<String> failedCanonicalIds,
+  List<String> errors,
+});
 
 /// Row-level cloud sync engine (P2 of the sync pivot): pushes the signed-in
 /// user's own rows (every table, INCLUDING tombstones) up to the cloud, and
@@ -521,7 +593,7 @@ class SyncService {
       }
     }
 
-    final photosUploaded = await _uploadOwnPhotos(uid, photos, wallVisibility);
+    final photoUpload = await _uploadOwnPhotos(uid, photos, wallVisibility);
 
     // Dirty flags are cleared HERE, LAST, and ONLY for the tables this push
     // CONFIRMED.
@@ -554,9 +626,12 @@ class SyncService {
 
     return PushSyncResult.pushed(
       rowsPushed: rowsPushed,
-      photosUploaded: photosUploaded,
+      photosUploaded: photoUpload.uploaded,
       rowsFailed: rowsFailed,
       errors: errors,
+      photosFailed: photoUpload.failed,
+      photosMissingLocalBytes: photoUpload.missingLocalBytes,
+      photoErrors: photoUpload.errors,
     );
   }
 
@@ -781,17 +856,44 @@ class SyncService {
   /// this, a deleted photo's bytes would linger in Storage forever, and
   /// worse, a naive re-upload of the row's still-referenced `localPath`
   /// would resurrect bytes that local storage may have already purged.
-  Future<int> _uploadOwnPhotos(
+  ///
+  /// §1f-3: every skip is now COUNTED and DESCRIBED rather than a silent
+  /// `continue`. Three outcomes are distinguished, because they need three
+  /// different responses:
+  ///  - upload attempted and THREW (or the local read threw) -> retryable;
+  ///    counted in `failed`, id added to `failedCanonicalIds` so [pushOwn]
+  ///    withholds that row's metadata (S5), and surfaced so §1e retries;
+  ///  - no local bytes AT ALL -> not retryable; counted in
+  ///    `missingLocalBytes`, row still pushed (see
+  ///    [PushSyncResult.photosMissingLocalBytes]);
+  ///  - already present remotely, or tombstoned -> not a problem at all;
+  ///    counted nowhere.
+  ///
+  /// The two `list*ObjectPaths` calls are deliberately left UN-guarded: their
+  /// throw semantics (and the `photos.isEmpty` short-circuit above them) are
+  /// §1d's honesty fix, not this method's.
+  Future<PhotoUploadOutcome> _uploadOwnPhotos(
     String uid,
     List<db.Photo> photos,
     Map<String, String> wallVisibility,
   ) async {
-    if (photos.isEmpty) return 0;
+    if (photos.isEmpty) {
+      return (
+        uploaded: 0,
+        failed: 0,
+        missingLocalBytes: 0,
+        failedCanonicalIds: <String>{},
+        errors: <String>[],
+      );
+    }
 
     final alreadyPrivate = await _remote.listPhotoObjectPaths(uid);
     final alreadyShared = await _remote.listSharedPhotoObjectPaths();
     final seenCanonicalIds = <String>{};
+    final failedCanonicalIds = <String>{};
+    final errors = <String>[];
     var uploaded = 0;
+    var missingLocalBytes = 0;
 
     for (final photo in photos) {
       final canonicalId = _canonicalPhotoId(photo);
@@ -819,19 +921,63 @@ class SyncService {
       // storage (app documents dir natively, byte store on web) rather than
       // touching `dart:io` directly, and returns `null` (instead of
       // throwing) when the file can't be found/read. Read at most once even
-      // when both copies are missing.
-      final bytes = await _photoFiles.readPhotoBytes(photo.localPath);
-      if (bytes == null) continue;
-      if (needsPrivate) {
-        await _remote.uploadPhoto(uid: uid, photoId: canonicalId, ext: ext, bytes: bytes);
+      // when both copies are missing. Typed `List<int>?` (not `Uint8List?`)
+      // purely to avoid a `dart:typed_data` import here; `uploadPhoto` takes
+      // `List<int>`.
+      List<int>? bytes;
+      try {
+        bytes = await _photoFiles.readPhotoBytes(photo.localPath);
+      } catch (e) {
+        // Web only, in practice: the native backend swallows read errors into
+        // `null` itself, while the browser byte store can reject the read
+        // outright (blocked upgrade, closed connection). Retryable, so this
+        // withholds the row.
+        failedCanonicalIds.add(canonicalId);
+        errors.add('photo $canonicalId: reading local bytes failed: $e');
+        continue;
       }
-      if (needsShared) {
-        await _remote.uploadSharedPhoto(photoId: canonicalId, ext: ext, bytes: bytes);
+      if (bytes == null) {
+        // NOT retryable and NOT withheld — see
+        // [PushSyncResult.photosMissingLocalBytes]. Pre-fix this was a bare
+        // `continue` with no error and no counter (the S5/1f-3 silent skip).
+        missingLocalBytes++;
+        errors.add(
+          'photo $canonicalId: no local bytes at "${photo.localPath}" — '
+          'nothing to upload; the row is still pushed',
+        );
+        continue;
       }
-      uploaded++;
+
+      try {
+        if (needsPrivate) {
+          await _remote.uploadPhoto(
+            uid: uid,
+            photoId: canonicalId,
+            ext: ext,
+            bytes: bytes,
+          );
+        }
+        if (needsShared) {
+          await _remote.uploadSharedPhoto(
+            photoId: canonicalId,
+            ext: ext,
+            bytes: bytes,
+          );
+        }
+        uploaded++;
+      } catch (e) {
+        failedCanonicalIds.add(canonicalId);
+        errors.add('photo $canonicalId: byte upload failed: $e');
+      }
     }
 
-    return uploaded;
+    return (
+      uploaded: uploaded,
+      failed: failedCanonicalIds.length,
+      missingLocalBytes: missingLocalBytes,
+      failedCanonicalIds: failedCanonicalIds,
+      errors: errors,
+    );
   }
 
   /// Fetches the signed-in user's own cloud rows AND every currently-shared

@@ -288,6 +288,28 @@ class ThrowingFetchSharedToposRemote extends FakeSyncRemote {
   }
 }
 
+/// [FakeSyncRemote] variant whose PRIVATE byte upload throws while
+/// [failUploads] is set — used to prove §1f-3 (a byte-upload failure is
+/// COUNTED and reported, never a silent `continue`) and §1f-2 (its `Photos`
+/// row is held back from the metadata push). Toggleable so a single test can
+/// also prove the retry HEALS: flip it off and push again.
+class FailingUploadSyncRemote extends FakeSyncRemote {
+  bool failUploads = true;
+
+  @override
+  Future<void> uploadPhoto({
+    required String uid,
+    required String photoId,
+    required String ext,
+    required List<int> bytes,
+  }) async {
+    if (failUploads) {
+      throw Exception('uploadPhoto failed: simulated storage error');
+    }
+    await super.uploadPhoto(uid: uid, photoId: photoId, ext: ext, bytes: bytes);
+  }
+}
+
 /// [FakeSyncRemote] variant whose [upsertOwnRows] reports EVERY attempted
 /// table as failed — exactly the shape `SupabaseSyncRemote.upsertOwnRows`
 /// returns when each table's round trip throws (offline, captive portal,
@@ -1007,6 +1029,198 @@ void main() {
         expect(outcomes.single.ok, isTrue);
         expect(outcomes.single.rowsUpserted, 0);
         expect(outcomes.single.rowsSkippedNewerRemote, 1);
+      },
+    );
+
+    test(
+      '1f-3: a byte-upload failure is COUNTED and reported, not a silent '
+      'continue — photosFailed/photoErrors carry it (pre-fix sync_service.dart '
+      'skipped the upload with no error and no counter)',
+      () async {
+        final remote = FailingUploadSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.didPush, isTrue);
+        expect(result.photosUploaded, 0);
+        expect(result.photosFailed, 1);
+        expect(result.hasPhotoFailures, isTrue);
+        expect(result.photosMissingLocalBytes, 0);
+        expect(result.photoErrors, hasLength(1));
+        expect(result.photoErrors.single, contains('photo-1'));
+        expect(result.photoErrors.single, contains('byte upload failed'));
+      },
+    );
+
+    test(
+      '1f-3: a photo whose LOCAL bytes are gone is reported separately, in '
+      'photosMissingLocalBytes — it is not retryable (nothing will ever make '
+      'the bytes appear on this device), so it must not be conflated with a '
+      'transient upload failure or the retry loop would never terminate',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: 'photos/never-written.jpg',
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.photosUploaded, 0);
+        expect(result.photosFailed, 0);
+        expect(result.hasPhotoFailures, isFalse);
+        expect(result.photosMissingLocalBytes, 1);
+        expect(result.photoErrors.single, contains('no local bytes'));
+      },
+    );
+
+    test(
+      'a tombstoned photo is neither a failure nor a missing-bytes case — its '
+      'bytes are removed deliberately, so the counters stay clean',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: 'photos/never-written.jpg',
+        );
+        await (c.db.update(c.db.photos)..where((t) => t.id.equals('photo-1')))
+            .write(
+              const PhotosCompanion(
+                deletedAt: Value(9999),
+                updatedAt: Value(9999),
+                dirty: Value(true),
+              ),
+            );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.photosFailed, 0);
+        expect(result.photosMissingLocalBytes, 0);
+        expect(result.photoErrors, isEmpty);
+        expect(remote.removedPrivatePaths, ['$_uidU1/photo-1.jpg']);
+      },
+    );
+
+    test(
+      'D-2: a push in which every photo\'s BYTES failed is NOT fullyLanded — '
+      'the withheld row keeps rowsFailed at 0 and errors empty, so without the '
+      'photosFailed term the orchestrator would report idle + a fresh '
+      'lastSyncedAt and the Account screen would render "Synced • just now" '
+      '(S1, re-entering through the photo path)',
+      () async {
+        final remote = FailingUploadSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(
+          result.rowsFailed,
+          0,
+          reason:
+              'the ROW channel is genuinely clean — every row that was sent '
+              'landed, and the photo row was never sent',
+        );
+        expect(result.errors, isEmpty, reason: 'and so is its error list');
+        expect(result.photosFailed, 1);
+        expect(
+          result.fullyLanded,
+          isFalse,
+          reason:
+              'photosFailed must gate fullyLanded (reconciliation D-2) — this '
+              'expectation IS the S1-through-photos regression test',
+        );
+      },
+    );
+
+    test(
+      'D-2: a photo with NO local bytes does NOT block fullyLanded — it is not '
+      'retryable, so gating on it would stop the retry loop ever terminating '
+      'and pin the app outside idle forever',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: 'photos/never-written.jpg',
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.photosMissingLocalBytes, 1);
+        expect(result.photoErrors, hasLength(1));
+        expect(
+          result.fullyLanded,
+          isTrue,
+          reason: 'reported, but not treated as a failure to retry',
+        );
       },
     );
   });

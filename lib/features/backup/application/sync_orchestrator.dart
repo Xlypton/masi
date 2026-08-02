@@ -389,9 +389,16 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
               status: await _failedPushStatus(),
               lastSyncedAt: state.lastSyncedAt,
               lastPullError: state.lastPullError,
+              // D-2, second half: a push can fail ENTIRELY in the photo
+              // channel, with `rowsFailed == 0` and `errors` empty, because
+              // the failed photo's row was withheld from `tablesToRows` and
+              // so never had a chance to fail. Reading only `errors` would
+              // render the useless "Sync failed: 0 change(s) not uploaded — "
+              // with an empty reason.
               lastPushError:
-                  'Sync failed: ${result.rowsFailed} change(s) not uploaded — '
-                  '${result.errors.join('; ')}',
+                  'Sync failed: ${result.rowsFailed} change(s) and '
+                  '${result.photosFailed} photo(s) not uploaded — '
+                  '${[...result.errors, ...result.photoErrors].join('; ')}',
             );
             _scheduleRetry();
           }

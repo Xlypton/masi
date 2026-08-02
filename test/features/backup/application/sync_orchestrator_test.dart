@@ -156,6 +156,43 @@ class _FailingPushSyncRemote extends _CountingSyncRemote {
   }
 }
 
+/// A [SyncService] that reports a push in which the ROW channel is entirely
+/// clean but a photo's BYTES failed — the exact shape §1f's row-withholding
+/// produces, and the one reconciliation D-2 is about.
+///
+/// Built as a `SyncService` subclass rather than a fake `SyncRemote` + real
+/// photo fixtures because the contract under test is the ORCHESTRATOR's, not
+/// the service's: given `fullyLanded == false` with `rowsFailed == 0` and
+/// `errors` empty, `_runPush` must still refuse `idle`, must not stamp
+/// `lastSyncedAt`, and must build `lastPushError` from the PHOTO channel — a
+/// message assembled only from `errors` would render the useless
+/// "Sync failed: 0 change(s) not uploaded — ".
+class _PhotoBytesFailedSyncService extends SyncService {
+  _PhotoBytesFailedSyncService({
+    required super.db,
+    required super.backupRepository,
+    required super.remote,
+    required super.authRepository,
+    required super.connectivity,
+  });
+
+  int pushCallCount = 0;
+
+  @override
+  Future<bool> hasPendingLocalChanges() async => true;
+
+  @override
+  Future<PushSyncResult> pushOwn({PushScope scope = PushScope.full}) async {
+    pushCallCount++;
+    return const PushSyncResult.pushed(
+      rowsPushed: 4,
+      photosUploaded: 0,
+      photosFailed: 1,
+      photoErrors: ['photo photo-1: byte upload failed: Exception: boom'],
+    );
+  }
+}
+
 /// A [SyncRetrySchedule] that returns a FIXED delay and records the attempt
 /// number it was asked for.
 ///
@@ -346,6 +383,10 @@ void main() {
     _FakeConnectivityService? connectivityService,
     SyncRetrySchedule? retrySchedule,
     int Function()? nowMs,
+    // Substitutes a pre-built service for the real one wired below. Used only
+    // where the contract under test belongs to the ORCHESTRATOR and the push
+    // RESULT has to be dictated exactly (see `_PhotoBytesFailedSyncService`).
+    SyncService? syncService,
   }) {
     final connectivityFake =
         connectivityService ?? _FakeConnectivityService(connectivity);
@@ -366,14 +407,15 @@ void main() {
         // and would issue a live HTTP request from a unit test.
         connectivityServiceProvider.overrideWithValue(connectivityFake),
         syncServiceProvider.overrideWithValue(
-          SyncService(
-            db: db,
-            backupRepository: BackupRepository(db),
-            remote: remote,
-            authRepository: syncServiceAuth,
-            connectivity: connectivityFake,
-            wifiOnly: wifiOnly ? () => true : null,
-          ),
+          syncService ??
+              SyncService(
+                db: db,
+                backupRepository: BackupRepository(db),
+                remote: remote,
+                authRepository: syncServiceAuth,
+                connectivity: connectivityFake,
+                wifiOnly: wifiOnly ? () => true : null,
+              ),
         ),
       ],
     );
@@ -1103,6 +1145,78 @@ void main() {
         expect(result.state.status, SyncStatus.idle);
         expect(result.state.lastPushError, isNull);
         expect(result.connectivity.probeCallCount, 0);
+      },
+    );
+  });
+
+  group('§1f (D-2): a push whose PHOTO BYTES failed never reports "synced"', () {
+    test(
+      'rowsFailed 0 + errors empty + photosFailed 1 must NOT read as idle, '
+      'must NOT stamp lastSyncedAt, and lastPushError must carry the PHOTO '
+      'channel — reading only `errors` would render '
+      '"Sync failed: 0 change(s) not uploaded — " with an empty reason, and '
+      'skipping the gate entirely would render "Synced • just now" for a push '
+      'in which every photo failed (S1, through the photo path)',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final serviceConnectivity = _FakeConnectivityService(
+          NetworkStatus.wifi,
+        );
+        addTearDown(serviceConnectivity.dispose);
+        final service = _PhotoBytesFailedSyncService(
+          db: db,
+          backupRepository: BackupRepository(db),
+          remote: _CountingSyncRemote(),
+          authRepository: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          connectivity: serviceConnectivity,
+        );
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(milliseconds: 15),
+          nowMs: () => 123456,
+          syncService: service,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        final state = container.read(syncOrchestratorProvider);
+        expect(service.pushCallCount, greaterThanOrEqualTo(1),
+            reason: 'the push did run');
+        expect(
+          state.status,
+          isNot(SyncStatus.idle),
+          reason:
+              'a push whose photo bytes did not land must never read as idle '
+              '— its Photos row was withheld, so the ROW channel is clean',
+        );
+        expect(
+          state.lastSyncedAt,
+          isNull,
+          reason:
+              'lastSyncedAt must not be stamped: the photo is not in the cloud',
+        );
+        expect(
+          state.lastPushError,
+          allOf(
+            contains('Sync failed'),
+            contains('1 photo(s) not uploaded'),
+            contains('byte upload failed'),
+          ),
+          reason:
+              'the message must be built from errors + photoErrors, not from '
+              'errors alone',
+        );
       },
     );
   });
