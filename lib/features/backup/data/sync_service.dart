@@ -416,6 +416,14 @@ class SyncService {
   /// orchestrator's retry-until-clean loop both correct and terminating. See
   /// [_clearDirty].
   ///
+  /// ORDER MATTERS (S5): the photo BYTES are uploaded FIRST, and only then are
+  /// the metadata rows upserted — with any photo whose bytes did not land held
+  /// back from that upsert. Previously the metadata went first, so a failed
+  /// byte upload left every OTHER device holding a `Photos` row pointing at a
+  /// Storage object that never existed, unhealable on web. See
+  /// [_uploadOwnPhotos] for the three outcomes it distinguishes and
+  /// [PushSyncResult.photosFailed] for which of them withholds a row.
+  ///
   /// No-ops (never throws) when signed out, or when `wifiOnly` is on and the
   /// current connection isn't wifi — both report a `skipped*` outcome
   /// rather than pushing partial data. Idempotent: pushing again with
@@ -478,6 +486,47 @@ class SyncService {
       };
     });
 
+    // Bytes BEFORE metadata (S5). A `Photos` row must never reach the cloud
+    // ahead of the Storage object it points at: on the receiving device
+    // `_downloadAndRewritePhotos` only rewrites `localPath` when bytes
+    // actually arrived, so a row whose object is missing keeps the
+    // ORIGINATING device's path — and on web `resolvePhotoPath`/
+    // `resolvePhotoPathSync` are identity passthroughs with no existence
+    // check, making that path permanently dead there. Uploading first and
+    // then filtering the photos table down to the rows whose bytes DID land
+    // means the cloud can briefly hold an orphan OBJECT (harmless —
+    // idempotently overwritten by the next push, and removed outright once
+    // the photo is tombstoned) but never an orphan ROW.
+    //
+    // `wallVisibility` is NOT built here. §1e already reads it inside the
+    // snapshot transaction as a `selectOnly` projection over EVERY own wall,
+    // dirty or not — consume that (reconciliation D-4). Deriving it from the
+    // `walls` list is silently wrong under [PushScope.dirtyOnly]: it stops
+    // uploading the SHARED copy of a newly-added photo whose wall is already
+    // pushed and therefore clean, so that wall's viewers never see the new
+    // photo.
+    final photoUpload = await _uploadOwnPhotos(uid, photos, wallVisibility);
+
+    // Hold back exactly the photo rows whose bytes did NOT land this push.
+    // Keyed by CANONICAL id (see [_canonicalPhotoId]) so a slice — which
+    // shares its original's single on-disk file, and therefore its single
+    // Storage object — is withheld alongside that original rather than
+    // becoming an orphan row of its own. Every OTHER photo row (already
+    // uploaded, just uploaded, tombstoned, or lacking local bytes entirely —
+    // see [PushSyncResult.photosMissingLocalBytes]) still pushes, and every
+    // other TABLE is untouched. The withheld rows are not lost: `pushOwn`
+    // re-reads a full own-row snapshot every call (decision D-4), so the next
+    // successful push carries them.
+    final pushablePhotos = photoUpload.failedCanonicalIds.isEmpty
+        ? photos
+        : [
+            for (final photo in photos)
+              if (!photoUpload.failedCanonicalIds.contains(
+                _canonicalPhotoId(photo),
+              ))
+                photo,
+          ];
+
     // S1/L5 fix (§1d): the two accumulators EVERY push-failure channel
     // writes into — the required-field guard (immediately below) and the
     // per-table upsert outcomes further down. Declared HERE, above both, so
@@ -536,8 +585,12 @@ class SyncService {
       'walls': guard('walls', [
         for (final row in walls) stripLocalOnlySyncColumns(row.toJson()),
       ]),
+      // `pushablePhotos`, NOT `photos`: a photo whose bytes did not land this
+      // push is withheld from the metadata upsert (S5 — see the
+      // bytes-before-metadata block above).
       'photos': guard('photos', [
-        for (final row in photos) stripLocalOnlySyncColumns(row.toJson()),
+        for (final row in pushablePhotos)
+          stripLocalOnlySyncColumns(row.toJson()),
       ]),
       'routes': guard('routes', [
         for (final row in routes) stripLocalOnlySyncColumns(row.toJson()),
@@ -593,8 +646,6 @@ class SyncService {
       }
     }
 
-    final photoUpload = await _uploadOwnPhotos(uid, photos, wallVisibility);
-
     // Dirty flags are cleared HERE, LAST, and ONLY for the tables this push
     // CONFIRMED.
     //
@@ -608,13 +659,14 @@ class SyncService {
     // strictly worse than the pre-fix behaviour, which at least never
     // claimed they were clean.
     //
-    // WHY LAST, after the photo phase: it needs `outcomes`, which only exist
-    // after the row push. Note this is NOT the original §1e reasoning ("a row
-    // must not go clean while its pixels are missing") — once §1f flips the
-    // order to bytes-then-metadata, a failed byte upload keeps that photo's
-    // row out of `tablesToRows` altogether and it stays dirty by
-    // construction. §1f moves `_uploadOwnPhotos` ABOVE `upsertOwnRows`; this
-    // clear stays at the bottom. Do not "restore" the old ordering.
+    // WHY LAST: it needs `outcomes`, which only exist after the row push.
+    // Note this is NOT the original §1e reasoning ("a row must not go clean
+    // while its pixels are missing") — §1f flipped the order to
+    // bytes-then-metadata, so a failed byte upload keeps that photo's row out
+    // of `tablesToRows` altogether and it stays dirty by construction.
+    // `_uploadOwnPhotos` now runs ABOVE `upsertOwnRows`; this clear stays at
+    // the bottom. Do not "restore" the old ordering, and do not un-narrow
+    // this clear.
     final failedTables = <String>{
       for (final outcome in outcomes)
         if (!outcome.ok) outcome.table,

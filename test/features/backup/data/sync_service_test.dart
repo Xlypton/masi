@@ -32,6 +32,11 @@ class FakeSyncRemote implements SyncRemote {
   final List<String> removedPrivatePaths = [];
   final List<String> removedSharedPaths = [];
 
+  /// Ordered log of every remote MUTATION this fake received, so a test can
+  /// assert the push ORDER (bytes before metadata — S5) rather than only the
+  /// end state. Entries are `'upload:<objectPath>'` and `'upsert:<table>'`.
+  final List<String> callLog = [];
+
   @override
   Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
@@ -41,6 +46,7 @@ class FakeSyncRemote implements SyncRemote {
     for (final tableName in syncTableNames) {
       final rows = tablesToRows[tableName];
       if (rows == null || rows.isEmpty) continue;
+      callLog.add('upsert:$tableName');
       var upserted = 0;
       var skipped = 0;
       for (final row in rows) {
@@ -215,6 +221,7 @@ class FakeSyncRemote implements SyncRemote {
     final path = '$uid/$photoId$ext';
     privateStorage[path] = bytes;
     uploadedPrivatePaths.add(path);
+    callLog.add('upload:$path');
   }
 
   @override
@@ -238,6 +245,7 @@ class FakeSyncRemote implements SyncRemote {
     final path = sharedPhotoPath(photoId, ext);
     sharedStorage[path] = bytes;
     uploadedSharedPaths.add(path);
+    callLog.add('upload:$path');
   }
 
   @override
@@ -1220,6 +1228,159 @@ void main() {
           result.fullyLanded,
           isTrue,
           reason: 'reported, but not treated as a failure to retry',
+        );
+      },
+    );
+
+    test(
+      '1f-2: bytes go up BEFORE the metadata — the photo object is uploaded '
+      'before the photos table is upserted, so no window exists in which the '
+      'cloud holds a row whose object is missing (S5)',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        await c.service.pushOwn();
+
+        final uploadIndex = remote.callLog.indexOf('upload:$_uidU1/photo-1.jpg');
+        final upsertIndex = remote.callLog.indexOf('upsert:photos');
+        expect(uploadIndex, greaterThanOrEqualTo(0));
+        expect(upsertIndex, greaterThanOrEqualTo(0));
+        expect(
+          uploadIndex,
+          lessThan(upsertIndex),
+          reason: 'pre-fix the metadata upsert ran first',
+        );
+      },
+    );
+
+    test(
+      '1f-2: a photo whose byte upload THROWS has its Photos row held back '
+      'from the metadata push, while every other table still pushes — and the '
+      'next push, once uploads succeed, heals it',
+      () async {
+        final remote = FailingUploadSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        final first = await c.service.pushOwn();
+
+        expect(first.didPush, isTrue);
+        expect(first.photosFailed, 1);
+        expect(
+          first.rowsPushed,
+          4,
+          reason: 'area + sector + wall + route; the photo row is withheld',
+        );
+
+        final afterFailure = await remote.fetchOwnRows(_uidU1);
+        expect(
+          afterFailure['photos'],
+          isEmpty,
+          reason:
+              'no cloud row may point at a Storage object that does not exist '
+              "(S5) — another device would keep the ORIGINATING device's "
+              'localPath forever, and on web resolvePhotoPath is an identity '
+              'passthrough with no existence check',
+        );
+        expect(afterFailure['walls']!.map((r) => r['id']), ['wall-1']);
+        expect(afterFailure['routes']!.map((r) => r['id']), ['route-1']);
+        expect(afterFailure['areas']!.map((r) => r['id']), ['area-1']);
+
+        // The retry §1e schedules: uploads now succeed, so both the bytes AND
+        // the previously-withheld row land. Nothing was lost — pushOwn
+        // re-reads a full own-row snapshot every time (decision D-4).
+        remote.failUploads = false;
+        final second = await c.service.pushOwn();
+
+        expect(second.photosFailed, 0);
+        expect(second.photosUploaded, 1);
+        final healed = await remote.fetchOwnRows(_uidU1);
+        expect(healed['photos']!.map((r) => r['id']), ['photo-1']);
+        expect(remote.privateStorage.containsKey('$_uidU1/photo-1.jpg'), isTrue);
+      },
+    );
+
+    test(
+      '1f-2: a SLICE sharing a failed original\'s file is withheld too — its '
+      'localPath points at the same object, so pushing it would reproduce the '
+      'exact orphan-row problem',
+      () async {
+        final remote = FailingUploadSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+        await c.db
+            .into(c.db.photos)
+            .insert(
+              PhotosCompanion.insert(
+                id: 'slice-1',
+                createdAt: 100,
+                updatedAt: 100,
+                ownerId: const Value(_uidU1),
+                wallId: 'wall-1',
+                localPath: file.path,
+                kind: 'slice',
+                width: 800,
+                height: 600,
+                parentPhotoId: const Value('photo-1'),
+              ),
+            );
+
+        await c.service.pushOwn();
+
+        final ownRows = await remote.fetchOwnRows(_uidU1);
+        expect(
+          ownRows['photos'],
+          isEmpty,
+          reason:
+              'both the original AND its slice resolve to the same canonical '
+              'file id, so both are withheld',
         );
       },
     );
