@@ -43,7 +43,10 @@ class RouteRepository {
 
   /// Inserts a new route row, or updates the existing non-deleted row for
   /// `(photoId, route.number)` if one exists. Sets `createdAt` only on
-  /// insert; always refreshes `updatedAt` to `nowMs()`.
+  /// insert; always refreshes `updatedAt` to `nowMs()`. Always sets
+  /// `dirty: true` (§1e) so a route-only edit is visible to
+  /// `SyncService.hasPendingLocalChanges`/`PushScope.dirtyOnly` immediately,
+  /// instead of only reaching the cloud on the next `PushScope.full` push.
   Future<void> upsertRoute(
     String wallId,
     String photoId,
@@ -92,6 +95,7 @@ class RouteRepository {
               betaVideoUrl: Value(route.betaVideoUrl),
               styleTagsJson: Value(styleTagsJson),
               stars: Value(route.stars),
+              dirty: const Value(true),
             ),
           );
     } else {
@@ -115,6 +119,7 @@ class RouteRepository {
           betaVideoUrl: Value(route.betaVideoUrl),
           styleTagsJson: Value(styleTagsJson),
           stars: Value(route.stars),
+          dirty: const Value(true),
         ),
       );
     }
@@ -182,7 +187,10 @@ class RouteRepository {
 
   /// Soft-deletes the non-deleted route identified by `(photoId, number)`
   /// by setting `deletedAt`/`updatedAt` to `nowMs()`. The row remains
-  /// physically present (tombstone) for future sync.
+  /// physically present (tombstone) for future sync. Also sets
+  /// `dirty: true` (§1e) so the tombstone pushes promptly — otherwise a
+  /// route deleted locally would keep reappearing from a stale cloud copy
+  /// until the next `PushScope.full` push.
   ///
   /// Scoped by [photoId] (not just [wallId]): since route numbers are now
   /// per-photo (see this class's doc), a `wallId`-only scope would soft-
@@ -205,6 +213,7 @@ class RouteRepository {
           db.RoutesCompanion(
             deletedAt: Value(now),
             updatedAt: Value(now),
+            dirty: const Value(true),
           ),
         );
   }

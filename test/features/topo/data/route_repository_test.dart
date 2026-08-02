@@ -2,6 +2,7 @@ import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/grades/grade_system.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:drift/drift.dart' show BooleanExpressionOperators;
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -771,4 +772,113 @@ void main() {
       },
     );
   });
+
+  group(
+    '§1e gap: route writes must mark `dirty` so a route-only edit pushes '
+    'immediately (SyncService.hasPendingLocalChanges / PushScope.dirtyOnly '
+    'both gate on `ownerId == uid & dirty == true` — see sync_service.dart)',
+    () {
+      const uid = 'u1';
+
+      // Mirrors exactly the WHERE clause `SyncService.hasPendingLocalChanges`
+      // and `PushScope.dirtyOnly` use for the `routes` table (sync_service.dart),
+      // so this test proves the real push-scheduling SIGNAL, not just the
+      // column value.
+      Future<bool> hasPendingRouteChanges() async {
+        final row = await (db.select(db.routes)
+              ..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))
+              ..limit(1))
+            .getSingleOrNull();
+        return row != null;
+      }
+
+      late RouteRepository ownedRepo;
+
+      setUp(() {
+        ownedRepo = RouteRepository(db, nowMs: () => 1000, currentUid: () => uid);
+      });
+
+      test(
+        'upsertRoute (insert path) marks the new row dirty and owned, so '
+        'hasPendingLocalChanges-equivalent reports pending work',
+        () async {
+          expect(
+            await hasPendingRouteChanges(),
+            isFalse,
+            reason: 'baseline: no routes exist yet',
+          );
+
+          await ownedRepo.upsertRoute(
+            wallId,
+            photoId,
+            TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+          );
+
+          expect(
+            await hasPendingRouteChanges(),
+            isTrue,
+            reason:
+                'a freshly inserted route must be visible to the dirty-scoped '
+                'push immediately, not just on the next full push',
+          );
+        },
+      );
+
+      test(
+        'upsertRoute (update path) re-marks an already-synced row dirty',
+        () async {
+          await ownedRepo.upsertRoute(
+            wallId,
+            photoId,
+            TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+          );
+          // Simulate a confirmed push having already cleared the flag (the
+          // same idiom `topo_canvas_gps_test.dart`/`topos_screen_test.dart`
+          // use for walls) so this test proves the UPDATE path re-dirties a
+          // row, not merely that insert leaves it dirty.
+          await db.customStatement('UPDATE routes SET dirty = 0');
+          expect(await hasPendingRouteChanges(), isFalse);
+
+          await ownedRepo.upsertRoute(
+            wallId,
+            photoId,
+            TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
+          );
+
+          expect(
+            await hasPendingRouteChanges(),
+            isTrue,
+            reason:
+                'editing an already-synced route must re-mark it dirty so '
+                'the edit pushes immediately',
+          );
+        },
+      );
+
+      test(
+        'softDeleteRoute re-marks an already-synced row dirty (the '
+        'tombstone itself must sync promptly, or a locally-deleted route '
+        'reappears from the cloud)',
+        () async {
+          await ownedRepo.upsertRoute(
+            wallId,
+            photoId,
+            TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+          );
+          await db.customStatement('UPDATE routes SET dirty = 0');
+          expect(await hasPendingRouteChanges(), isFalse);
+
+          await ownedRepo.softDeleteRoute(wallId, photoId, 1);
+
+          expect(
+            await hasPendingRouteChanges(),
+            isTrue,
+            reason:
+                'a local soft-delete must push promptly or the route '
+                'reappears from a later cloud pull',
+          );
+        },
+      );
+    },
+  );
 }
