@@ -400,6 +400,25 @@ Future<void> _awaitToposCount(
   return topos.length >= count;
 });
 
+/// Waits until [wallId] has had its coordinates written.
+///
+/// `setWallCoordinates` is the LAST DB write in `_handleNewTopo` — strictly
+/// after the `createTopo` that [_awaitToposCount] waits for — so a test that
+/// asserts on the coordinates needs its own wait, not that one's. Only for the
+/// tests that expect a NON-null result; the "no EXIF GPS leaves them null"
+/// cases have nothing to wait for.
+Future<void> _awaitWallCoordinates(
+  WidgetTester tester,
+  ProviderContainer container,
+  String wallId,
+) => pumpUntilAsync(tester, () async {
+  final db = container.read(appDatabaseProvider);
+  final wall = await (db.select(
+    db.walls,
+  )..where((t) => t.id.equals(wallId))).getSingle();
+  return wall.latitude != null && wall.longitude != null;
+});
+
 /// A [LibraryCrudRepository] whose [setWallCoordinates] always throws,
 /// leaving every other method (including [createTopo]/[attachPhotoToWall])
 /// backed by the real implementation against [db]. Used to prove that
@@ -1297,6 +1316,7 @@ void main() {
         );
         expect(topos.length, 1);
 
+        await _awaitWallCoordinates(tester, container, topos.single.wallId);
         final wall = await _dbWork(
           tester,
           () => (container.read(appDatabaseProvider).select(
@@ -1414,6 +1434,7 @@ void main() {
         );
         expect(topos.length, 1);
 
+        await _awaitWallCoordinates(tester, container, topos.single.wallId);
         final wall = await _dbWork(
           tester,
           () => (container.read(appDatabaseProvider).select(
@@ -1538,6 +1559,7 @@ void main() {
         );
         expect(topos.length, 1);
 
+        await _awaitWallCoordinates(tester, container, topos.single.wallId);
         final wall = await _dbWork(
           tester,
           () => (container.read(appDatabaseProvider).select(
@@ -2606,6 +2628,17 @@ void main() {
           // setWallCoordinates throw propagates out of the shared outer
           // try, skipping the `context.push` call below it entirely, so
           // this screen never appears and pushedWallId stays null.
+          //
+          // `context.push` is the LAST thing `_handleNewTopo` does — strictly
+          // after the createTopo that `_awaitToposCount` above waits for — so
+          // it needs its own wait rather than inheriting that one. Without it
+          // this is a wall-clock bet on the tail of the chain, and it loses
+          // under load (observed: "Found 0 widgets with key
+          // [<'fake-walls-screen'>]" at load ~66).
+          await pumpUntilFound(
+            tester,
+            find.byKey(const Key('fake-walls-screen')),
+          );
           expect(
             find.byKey(const Key('fake-walls-screen')),
             findsOneWidget,
