@@ -193,6 +193,40 @@ class _PhotoBytesFailedSyncService extends SyncService {
   }
 }
 
+/// A [SyncService] whose push lands COMPLETELY but reports a photo with no
+/// local bytes — the non-retryable, permanent condition (L6: pixels and
+/// metadata live in separate, non-transactional stores, so pixels can vanish
+/// under a surviving row).
+///
+/// Flip [missingBytes] to 0 to make the NEXT push clean.
+class _MissingPhotoBytesSyncService extends SyncService {
+  _MissingPhotoBytesSyncService({
+    required super.db,
+    required super.backupRepository,
+    required super.remote,
+    required super.authRepository,
+    required super.connectivity,
+  });
+
+  int missingBytes = 1;
+
+  @override
+  Future<bool> hasPendingLocalChanges() async => true;
+
+  @override
+  Future<PushSyncResult> pushOwn({PushScope scope = PushScope.full}) async {
+    return PushSyncResult.pushed(
+      rowsPushed: 5,
+      photosUploaded: 0,
+      photosMissingLocalBytes: missingBytes,
+      photoErrors: [
+        for (var i = 0; i < missingBytes; i++)
+          'photo photo-$i: no local bytes at "photos/photo-$i.jpg"',
+      ],
+    );
+  }
+}
+
 /// A [SyncRetrySchedule] that returns a FIXED delay and records the attempt
 /// number it was asked for.
 ///
@@ -1216,6 +1250,103 @@ void main() {
           reason:
               'the message must be built from errors + photoErrors, not from '
               'errors alone',
+        );
+      },
+    );
+  });
+
+  group('L6: a photo with no local bytes is TOLD to the user, never retried', () {
+    ({ProviderContainer container, _MissingPhotoBytesSyncService service})
+    makeMissingBytesContainer(AppDatabase db) {
+      final serviceConnectivity = _FakeConnectivityService(NetworkStatus.wifi);
+      addTearDown(serviceConnectivity.dispose);
+      final service = _MissingPhotoBytesSyncService(
+        db: db,
+        backupRepository: BackupRepository(db),
+        remote: _CountingSyncRemote(),
+        authRepository: _FakeAuthRepository(
+          const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+        ),
+        connectivity: serviceConnectivity,
+      );
+      final container = makeContainer(
+        db: db,
+        remote: _CountingSyncRemote(),
+        syncServiceAuth: _FakeAuthRepository(
+          const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+        ),
+        debounce: const Duration(milliseconds: 15),
+        nowMs: () => 123456,
+        syncService: service,
+      );
+      return (container: container, service: service);
+    }
+
+    test(
+      'the push still reports idle + a fresh lastSyncedAt (it IS fully landed '
+      '— nothing is retryable) but records a lastPushWarning naming the '
+      'photo count, so the user learns the photo is not backed up instead of '
+      'reading "Synced • just now" and believing everything is safe',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final m = makeMissingBytesContainer(db);
+
+        primeOrchestrator(m.container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        final state = m.container.read(syncOrchestratorProvider);
+        expect(
+          state.status,
+          SyncStatus.idle,
+          reason:
+              'nothing is retryable, so the app must NOT be pinned outside '
+              'idle — that would stop the retry loop ever terminating',
+        );
+        expect(state.lastSyncedAt, isNotNull);
+        expect(
+          state.lastPushError,
+          isNull,
+          reason: 'this is not a failure and must not read as one',
+        );
+        expect(
+          state.lastPushWarning,
+          allOf(
+            contains('1 photo has'),
+            contains('could not be backed up'),
+          ),
+          reason:
+              'counted-but-unsurfaced is the hole: photoErrors is only read on '
+              'the NOT-fully-landed branch, so this push would say nothing',
+        );
+      },
+    );
+
+    test(
+      'the advisory self-clears on the next push once the condition stops '
+      'holding — it is re-derived every push, never latched',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final m = makeMissingBytesContainer(db);
+
+        primeOrchestrator(m.container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(
+          m.container.read(syncOrchestratorProvider).lastPushWarning,
+          isNotNull,
+        );
+
+        m.service.missingBytes = 0;
+        await m.container.read(syncOrchestratorProvider.notifier).pushNow();
+
+        expect(
+          m.container.read(syncOrchestratorProvider).lastPushWarning,
+          isNull,
         );
       },
     );

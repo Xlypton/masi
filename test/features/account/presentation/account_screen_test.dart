@@ -824,6 +824,46 @@ void main() {
 
         expect(find.textContaining('Synced'), findsOneWidget);
         expect(find.text('Sync error'), findsNothing);
+        expect(find.byKey(const Key('sync-warning')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'L6: a lastPushWarning renders as its own line ALONGSIDE "Synced • …" — '
+      'the push genuinely landed everything retryable, so the status must '
+      'stay "Synced", but a photo whose pixels are gone from this device is '
+      'permanently not backed up and the user has to be told',
+      (tester) async {
+        final container = makeContainer(
+          SyncOrchestratorState(
+            status: SyncStatus.idle,
+            lastSyncedAt: DateTime.now(),
+            lastPushWarning:
+                '1 photo has no image data left on this device, so it could '
+                'not be backed up. The topo details were saved.',
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('Synced'),
+          findsOneWidget,
+          reason: 'nothing retryable failed — this is not an error state',
+        );
+        expect(find.text('Sync error'), findsNothing);
+        expect(
+          find.byKey(const Key('sync-warning')),
+          findsOneWidget,
+          reason:
+              'and yet the user must still learn the photo is not in the '
+              'cloud and is not going to be',
+        );
+        expect(
+          find.textContaining('could not be backed up'),
+          findsOneWidget,
+        );
       },
     );
   });

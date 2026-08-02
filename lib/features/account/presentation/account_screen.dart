@@ -651,10 +651,37 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
               Consumer(
                 builder: (context, ref, _) {
                   final syncState = ref.watch(syncOrchestratorProvider);
-                  return Text(
-                    _syncStatusLabel(syncState),
-                    key: const Key('sync-status'),
-                    style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+                  // The advisory is a SECOND line rather than folded into
+                  // `_syncStatusLabel`, because it is orthogonal to the
+                  // status: "Synced" is still true (every retryable thing
+                  // landed) AND some photo's pixels are permanently gone
+                  // from this device. Collapsing the two would force a
+                  // choice between lying and crying wolf. Rendered in the
+                  // same muted style — nothing is broken and no retry is
+                  // coming; the user is simply being told.
+                  final warning = syncState.lastPushWarning;
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _syncStatusLabel(syncState),
+                        key: const Key('sync-status'),
+                        style: textTheme.bodySmall?.copyWith(
+                          color: colors.ink2,
+                        ),
+                      ),
+                      if (warning != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          warning,
+                          key: const Key('sync-warning'),
+                          style: textTheme.bodySmall?.copyWith(
+                            color: colors.ink2,
+                          ),
+                        ),
+                      ],
+                    ],
                   );
                 },
               ),

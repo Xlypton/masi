@@ -147,11 +147,13 @@ class PushSyncResult {
   /// well already hold the object — but it is reported in [photoErrors] rather
   /// than vanishing silently.
   ///
-  /// It is not silent to the USER either: `SyncOrchestrator` surfaces a
-  /// non-blocking `lastPushWarning` for it, so the Account screen can say the
-  /// photo is not in the cloud and is not going to be, WITHOUT the app
-  /// entering an error state or retrying forever. See
-  /// `SyncOrchestratorState.lastPushWarning`.
+  /// It is not silent to the USER either: `SyncOrchestrator` derives
+  /// `SyncOrchestratorState.lastPushWarning` from this count on every push,
+  /// so the Account screen says the photo is not in the cloud and is not
+  /// going to be — WITHOUT the app entering an error state, withholding
+  /// `lastSyncedAt`, or retrying forever. Counting it without surfacing it
+  /// would leave the push reporting "Synced • just now" while a photo
+  /// silently went nowhere.
   final int photosMissingLocalBytes;
 
   /// One human-readable message per photo counted in [photosFailed] OR

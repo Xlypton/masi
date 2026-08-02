@@ -49,6 +49,7 @@ class SyncOrchestratorState {
     this.lastSyncedAt,
     this.lastPullError,
     this.lastPushError,
+    this.lastPushWarning,
   });
 
   final SyncStatus status;
@@ -73,8 +74,8 @@ class SyncOrchestratorState {
   /// `_SyncErrorEmptyState`) key their "Couldn't sync — retry" affordance
   /// directly off this being non-null, so it must never linger past a pull
   /// that actually succeeded cleanly. A PUSH failure never touches this
-  /// field ([_runPush] writes only [status]/[lastSyncedAt]/[lastPushError])
-  /// — it is pull-specific by design.
+  /// field ([_runPush] writes only [status]/[lastSyncedAt]/[lastPushError]/
+  /// [lastPushWarning]) — it is pull-specific by design.
   final String? lastPullError;
 
   /// Human-readable description of why the MOST RECENT push did not fully
@@ -90,12 +91,49 @@ class SyncOrchestratorState {
   /// the S1 lie. `account_screen.dart`'s `_syncStatusLabel` keys off this.
   final String? lastPushError;
 
+  /// A push-side ADVISORY: something is permanently not in the cloud, but
+  /// nothing is wrong and nothing will be retried.
+  ///
+  /// Today this means exactly [PushSyncResult.photosMissingLocalBytes] — a
+  /// photo whose pixels are gone from THIS device (evicted from the byte
+  /// store, or a row predating the L3 fix), so `readPhotoBytes` returns null
+  /// and there is nothing to upload. The metadata row still pushes: it is the
+  /// only surviving record of the photo, and another device may well already
+  /// hold the object.
+  ///
+  /// WHY THIS IS A SEPARATE FIELD from [lastPushError], rather than reusing
+  /// it: the two need opposite handling, and conflating them breaks one of
+  /// them.
+  ///  - [lastPushError] means "retryable failure". It gates
+  ///    [PushSyncResult.fullyLanded], keeps [status] off [SyncStatus.idle],
+  ///    withholds a fresh [lastSyncedAt], and arms the backoff loop.
+  ///  - This means "permanent, already-settled fact". It must NOT do any of
+  ///    those things: `photosMissingLocalBytes` is deliberately excluded from
+  ///    `fullyLanded` precisely because nothing will ever make those bytes
+  ///    appear, so gating on it would pin the app outside `idle` forever and
+  ///    stop the retry loop from ever terminating.
+  ///
+  /// But "not an error" must not collapse into "not mentioned". Before this
+  /// field the condition was counted in [PushSyncResult.photoErrors] and then
+  /// dropped on the floor: `_runPush` reads `photoErrors` only on the
+  /// NOT-fully-landed branch, so a push that was otherwise clean stamped
+  /// "Synced • just now" while a photo silently went nowhere. The user would
+  /// never learn their photo is not backed up.
+  ///
+  /// Re-derived on EVERY push, so it self-clears the moment the condition
+  /// stops holding (e.g. the photo is deleted, or a pull restores the bytes
+  /// from another device's copy). Rendered by `account_screen.dart` as a
+  /// plain line under the sync-status line — deliberately not an error style,
+  /// not a SnackBar, and not a blocker.
+  final String? lastPushWarning;
+
   SyncOrchestratorState copyWith({SyncStatus? status, DateTime? lastSyncedAt}) =>
       SyncOrchestratorState(
         status: status ?? this.status,
         lastSyncedAt: lastSyncedAt ?? this.lastSyncedAt,
         lastPullError: lastPullError,
         lastPushError: lastPushError,
+        lastPushWarning: lastPushWarning,
       );
 
   @override
@@ -105,16 +143,23 @@ class SyncOrchestratorState {
           other.status == status &&
           other.lastSyncedAt == lastSyncedAt &&
           other.lastPullError == lastPullError &&
-          other.lastPushError == lastPushError);
+          other.lastPushError == lastPushError &&
+          other.lastPushWarning == lastPushWarning);
 
   @override
-  int get hashCode =>
-      Object.hash(status, lastSyncedAt, lastPullError, lastPushError);
+  int get hashCode => Object.hash(
+    status,
+    lastSyncedAt,
+    lastPullError,
+    lastPushError,
+    lastPushWarning,
+  );
 
   @override
   String toString() =>
       'SyncOrchestratorState(status: $status, lastSyncedAt: $lastSyncedAt, '
-      'lastPullError: $lastPullError, lastPushError: $lastPushError)';
+      'lastPullError: $lastPullError, lastPushError: $lastPushError, '
+      'lastPushWarning: $lastPushWarning)';
 }
 
 /// Debounce window [SyncOrchestrator] waits after the LAST local table write
@@ -374,6 +419,10 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       final result = await service.pushOwn(scope: scope);
       switch (result.outcome) {
         case SyncPushOutcome.pushed:
+          // Re-derived on EVERY push so it self-clears the moment the
+          // condition stops holding. Carried on BOTH branches: it describes
+          // the photos, not the push's success.
+          final pushWarning = _missingPhotoBytesWarning(result);
           if (result.fullyLanded) {
             // Only a CONFIRMED full push retires the safety net.
             if (scope == PushScope.full) _fullResyncDue = false;
@@ -383,12 +432,14 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
               status: SyncStatus.idle,
               lastSyncedAt: _now(),
               lastPullError: state.lastPullError,
+              lastPushWarning: pushWarning,
             );
           } else {
             state = SyncOrchestratorState(
               status: await _failedPushStatus(),
               lastSyncedAt: state.lastSyncedAt,
               lastPullError: state.lastPullError,
+              lastPushWarning: pushWarning,
               // D-2, second half: a push can fail ENTIRELY in the photo
               // channel, with `rowsFailed == 0` and `errors` empty, because
               // the failed photo's row was withheld from `tablesToRows` and
@@ -420,9 +471,28 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         lastSyncedAt: state.lastSyncedAt,
         lastPullError: state.lastPullError,
         lastPushError: 'Sync failed: $e',
+        lastPushWarning: state.lastPushWarning,
       );
       _scheduleRetry();
     }
+  }
+
+  /// The user-facing sentence for [SyncOrchestratorState.lastPushWarning], or
+  /// `null` when there is nothing to say.
+  ///
+  /// Names a COUNT and a consequence, not an error code: the climber's
+  /// question is "is my stuff backed up?", and the honest answer for these
+  /// photos is "no, and it won't be". It stays plain and non-alarming because
+  /// nothing is broken and no retry is coming — the pixels are simply not on
+  /// this device any more. The route/wall/topo metadata DID reach the cloud.
+  String? _missingPhotoBytesWarning(PushSyncResult result) {
+    final count = result.photosMissingLocalBytes;
+    if (count == 0) return null;
+    final subject = count == 1 ? '1 photo has' : '$count photos have';
+    return
+        '$subject no image data left on this device, so '
+        '${count == 1 ? 'it' : 'they'} could not be backed up. The topo '
+        'details were saved.';
   }
 
   /// Arms the next retry, [SyncRetrySchedule.delayFor] from now.
@@ -588,9 +658,11 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             lastSyncedAt: _now(),
             lastPullError: pullError,
             // A pull says nothing about whether local changes reached the
-            // cloud — carrying this through is what stops a successful pull
-            // from relabelling an unpushed library as "Synced" (S1).
+            // cloud — carrying these through is what stops a successful pull
+            // from relabelling an unpushed library as "Synced" (S1). The
+            // advisory is push-derived for the same reason.
             lastPushError: state.lastPushError,
+            lastPushWarning: state.lastPushWarning,
           );
         case SyncPullOutcome.skippedSignedOut:
           state = SyncOrchestratorState(
@@ -598,6 +670,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             lastSyncedAt: state.lastSyncedAt,
             lastPullError: pullError,
             lastPushError: state.lastPushError,
+            lastPushWarning: state.lastPushWarning,
           );
       }
     } catch (e, st) {
@@ -607,6 +680,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         lastSyncedAt: state.lastSyncedAt,
         lastPullError: 'Sync failed: $e',
         lastPushError: state.lastPushError,
+        lastPushWarning: state.lastPushWarning,
       );
     }
   }
