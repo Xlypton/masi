@@ -561,4 +561,155 @@ void main() {
       },
     );
   });
+
+  /// The restore-path half of the schema-downgrade hazard already closed for
+  /// the local database by `SchemaDowngradeException`
+  /// (`lib/core/db/schema_downgrade.dart`): there, an older shell opened a
+  /// newer database; here, an older shell imports a snapshot exported by a
+  /// newer one. [importSnapshot] is the choke point every restore funnels
+  /// through, so the guard lives here and covers any caller — present or
+  /// future — that hands it a version-stamped snapshot.
+  group('schema downgrade: importSnapshot refuses a too-new snapshot', () {
+    /// One Area row, in whatever shape the test's snapshot claims. Its
+    /// presence (or absence) in the DB afterwards is the real assertion:
+    /// a refusal that still wrote rows would make the exception message's
+    /// "Nothing has been changed or deleted" a lie.
+    Map<String, dynamic> areaRow(String id) => {
+      'id': id,
+      'createdAt': 100,
+      'updatedAt': 100,
+      'name': 'Area $id',
+      'ownerId': 'u1',
+    };
+
+    test(
+      'a snapshot stamped NEWER than AppDatabase.schemaVersion throws '
+      'SnapshotSchemaDowngradeException and imports no rows at all',
+      () async {
+        final tooNew = db.schemaVersion + 1;
+
+        await expectLater(
+          repo.importSnapshot({
+            'schemaVersion': tooNew,
+            'tables': {
+              'areas': [areaRow('area-from-the-future')],
+            },
+          }, mode: ConflictMode.replace),
+          throwsA(isA<SnapshotSchemaDowngradeException>()),
+        );
+
+        // Total refusal: the guard must run BEFORE the first transaction,
+        // not table-by-table. Without it this row imports cleanly (drift's
+        // generated fromJson ignores keys it does not know), which is
+        // exactly the silent lossy restore being prevented.
+        expect(
+          await db.select(db.areas).get(),
+          isEmpty,
+          reason: 'a refused restore must leave the local database untouched',
+        );
+      },
+    );
+
+    test(
+      'the exception reports both versions and keeps the local-database '
+      "guard's wording, so one hazard has one explanation",
+      () async {
+        final tooNew = db.schemaVersion + 3;
+
+        Object? thrown;
+        try {
+          await repo.importSnapshot({
+            'schemaVersion': tooNew,
+            'tables': <String, dynamic>{},
+          });
+        } catch (e) {
+          thrown = e;
+        }
+
+        expect(thrown, isA<SnapshotSchemaDowngradeException>());
+        final e = thrown! as SnapshotSchemaDowngradeException;
+        expect(e.snapshotVersion, tooNew);
+        expect(e.appVersion, db.schemaVersion);
+
+        final message = e.toString();
+        expect(
+          message,
+          contains('older than'),
+          reason: 'same framing as SchemaDowngradeException: the APP is '
+              'behind the DATA, not the other way round',
+        );
+        expect(
+          message,
+          contains('Nothing has been changed or deleted'),
+          reason: 'the refusal is non-destructive and must say so, in the '
+              'same words the local-database guard uses',
+        );
+        expect(message, contains('$tooNew'));
+        expect(message, contains('${db.schemaVersion}'));
+      },
+    );
+
+    test(
+      'a snapshot stamped OLDER than this build imports normally -- forward '
+      'migration is the safe, ordinary case and must not be blocked',
+      () async {
+        await repo.importSnapshot({
+          'schemaVersion': 1,
+          'tables': {
+            'areas': [areaRow('area-legacy')],
+          },
+        }, mode: ConflictMode.replace);
+
+        final row = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals('area-legacy'))).getSingle();
+        expect(row.name, 'Area area-legacy');
+      },
+    );
+
+    test(
+      'a snapshot stamped at EXACTLY this build\'s version imports normally',
+      () async {
+        await repo.importSnapshot({
+          'schemaVersion': db.schemaVersion,
+          'tables': {
+            'areas': [areaRow('area-current')],
+          },
+        }, mode: ConflictMode.replace);
+
+        expect(await db.select(db.areas).get(), hasLength(1));
+      },
+    );
+
+    test(
+      'a snapshot with NO schemaVersion key imports normally -- absent is '
+      'not incompatible, and SyncService hands importSnapshot exactly this '
+      "shape ({'tables': ...}) on every pull",
+      () async {
+        await repo.importSnapshot({
+          'tables': {
+            'areas': [areaRow('area-unversioned')],
+          },
+        }, mode: ConflictMode.replace);
+
+        expect(await db.select(db.areas).get(), hasLength(1));
+      },
+    );
+
+    test(
+      'a snapshot whose schemaVersion is not an int is treated as absent, '
+      'not as fatal -- an unreadable stamp must not lock a user out of an '
+      'otherwise importable backup',
+      () async {
+        await repo.importSnapshot({
+          'schemaVersion': 'nine',
+          'tables': {
+            'areas': [areaRow('area-garbled-stamp')],
+          },
+        }, mode: ConflictMode.replace);
+
+        expect(await db.select(db.areas).get(), hasLength(1));
+      },
+    );
+  });
 }
