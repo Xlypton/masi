@@ -37,6 +37,12 @@ class FakeSyncRemote implements SyncRemote {
   /// end state. Entries are `'upload:<objectPath>'` and `'upsert:<table>'`.
   final List<String> callLog = [];
 
+  /// Every object path [downloadPhoto]/[downloadSharedPhoto] was asked for,
+  /// in order — so a test can prove a pull does NOT re-fetch bytes this
+  /// device already holds. Metered cellular data and (on web) the same
+  /// origin quota the user's own topos live in are both spent per entry.
+  final List<String> downloadRequests = [];
+
   @override
   Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
@@ -228,7 +234,10 @@ class FakeSyncRemote implements SyncRemote {
   Future<List<int>?> downloadPhoto({
     required String uid,
     required String objectPath,
-  }) async => privateStorage[objectPath];
+  }) async {
+    downloadRequests.add(objectPath);
+    return privateStorage[objectPath];
+  }
 
   @override
   Future<Set<String>> listPhotoObjectPaths(String uid) async {
@@ -249,7 +258,10 @@ class FakeSyncRemote implements SyncRemote {
   }
 
   @override
-  Future<List<int>?> downloadSharedPhoto(String objectPath) async => sharedStorage[objectPath];
+  Future<List<int>?> downloadSharedPhoto(String objectPath) async {
+    downloadRequests.add(objectPath);
+    return sharedStorage[objectPath];
+  }
 
   @override
   Future<Set<String>> listSharedPhotoObjectPaths() async => sharedStorage.keys.toSet();
@@ -1916,6 +1928,111 @@ void main() {
         final absolutePath = p.join(containerB.docsDir.path, photo.localPath);
         expect(File(absolutePath).existsSync(), isTrue);
         expect(File(absolutePath).readAsBytesSync(), List<int>.filled(16, 42));
+      },
+    );
+  });
+
+  group('pull photo bytes are not re-downloaded once this device holds them', () {
+    /// Seeds a shared topo owned by u2 into [remote] and returns a fresh u1
+    /// bundle pointed at the same remote.
+    Future<
+      ({AppDatabase db, Directory docsDir, Directory srcDir, SyncService service})
+    >
+    seedSharedTopoAndMakeU1(FakeSyncRemote remote) async {
+      final containerU2 = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU2),
+      );
+      addTearDown(() => containerU2.db.close());
+      final sharedFile = writeFile(containerU2.srcDir, 'shared.jpg', 7);
+      await seedWallHierarchy(
+        containerU2.db,
+        ownerId: _uidU2,
+        visibility: 'shared',
+        areaId: 'area-shared',
+        sectorId: 'sector-shared',
+        wallId: 'wall-shared',
+        photoId: 'photo-shared',
+        routeId: 'route-shared',
+        localPath: sharedFile.path,
+      );
+      await containerU2.service.pushOwn();
+
+      final containerU1 = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU1),
+      );
+      addTearDown(() => containerU1.db.close());
+      return containerU1;
+    }
+
+    test(
+      'the SECOND pull re-downloads nothing: the public photo library is '
+      'fetched at FULL RESOLUTION with no bound, and every pull trigger '
+      '(sign-in, app resume, and every connectivity regain — which at a crag '
+      'with flaky signal fires repeatedly) used to re-download and re-write '
+      'every public photo, spending metered cellular data and, on web, the '
+      'same origin quota the user\'s OWN topos live in',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await seedSharedTopoAndMakeU1(remote);
+
+        final first = await c.service.pullOwnAndShared();
+        expect(
+          first.photosDownloaded,
+          1,
+          reason: 'the first pull genuinely has to fetch the bytes',
+        );
+        expect(remote.downloadRequests, hasLength(1));
+
+        remote.downloadRequests.clear();
+        final second = await c.service.pullOwnAndShared();
+
+        expect(
+          remote.downloadRequests,
+          isEmpty,
+          reason:
+              'this device already holds those exact bytes — re-fetching them '
+              'is pure waste on every axis: cellular data, memory, and the '
+              'local storage write that competes for quota with the user\'s '
+              'own topos',
+        );
+        expect(second.photosDownloaded, 0);
+      },
+    );
+
+    test(
+      'the skip is a real presence check, not a "row exists" shortcut: if the '
+      'local bytes are gone, the next pull DOES re-download and heals the row '
+      '— the self-heal this pass exists for must survive the optimisation',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await seedSharedTopoAndMakeU1(remote);
+
+        await c.service.pullOwnAndShared();
+        final healedPath = (await (c.db.select(
+          c.db.photos,
+        )..where((t) => t.id.equals('photo-shared'))).getSingle()).localPath;
+
+        // Evict the bytes, leaving the row pointing at an absent file — the
+        // L6 shape (metadata and pixels are separate, non-transactional
+        // stores, so pixels can vanish under a surviving row).
+        File(p.join(c.docsDir.path, healedPath)).deleteSync();
+
+        remote.downloadRequests.clear();
+        final result = await c.service.pullOwnAndShared();
+
+        expect(
+          remote.downloadRequests,
+          hasLength(1),
+          reason: 'bytes are genuinely missing, so they must be re-fetched',
+        );
+        expect(result.photosDownloaded, 1);
+        expect(
+          File(p.join(c.docsDir.path, healedPath)).existsSync(),
+          isTrue,
+          reason: 'and the file is back',
+        );
       },
     );
   });

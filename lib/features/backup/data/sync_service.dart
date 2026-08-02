@@ -1233,6 +1233,32 @@ class SyncService {
   /// is missing is left with whatever `localPath` it already had (skip
   /// that file, keep the row) rather than failing the whole pull.
   ///
+  /// A file this device ALREADY holds is not downloaded again. This is the
+  /// difference between a pull costing "every new photo" and a pull costing
+  /// "the entire public photo library, again". `fetchSharedTopos` selects
+  /// EVERY globally-shared wall with no bound (S7), originals are retained at
+  /// FULL resolution (decision D-5, ~2-5 MB each), and a pull fires on
+  /// sign-in, on app resume, and on EVERY connectivity regain — which at a
+  /// crag with flaky signal is repeatedly. Pre-fix, `downloadedPaths` deduped
+  /// only WITHIN one call, so each of those triggers re-fetched and re-wrote
+  /// the whole public library: hundreds of megabytes of metered cellular
+  /// traffic, and on web the same number of bytes rewritten into the origin
+  /// quota that the user's OWN topos live in — directly against "do not lose
+  /// topos recorded offline".
+  ///
+  /// The skip is a real PRESENCE check ([PhotoFiles.readPhotoBytes] on the
+  /// LOCAL row's path), never a "the row exists locally" shortcut: the L6
+  /// split between metadata (drift) and pixels (a separate byte store) means
+  /// pixels can vanish under a surviving row, and re-healing exactly that is
+  /// what this pass is FOR. A local read is orders of magnitude cheaper than
+  /// a metered network round trip, and — the part that matters most on web —
+  /// it avoids the redundant WRITE entirely.
+  ///
+  /// NOT fixed here, and deliberately: the FIRST pull still fetches the whole
+  /// public library unbounded. That is S7 (pull cost scales with library size,
+  /// not change count), which no Stage-1 workstream owns, and bounding it is a
+  /// product decision — a cap means some public topos render with no image.
+  ///
   /// Returns the number of distinct files actually downloaded.
   Future<int> _downloadAndRewritePhotos(
     Map<String, List<Map<String, dynamic>>> tables,
@@ -1241,8 +1267,10 @@ class SyncService {
     final photos = tables['photos'];
     if (photos == null || photos.isEmpty) return 0;
 
-    // canonicalId -> the new local path once downloaded, so a shared file
-    // (original + its slices) is only fetched once regardless of row order.
+    // canonicalId -> the local path to use, so a shared file (original + its
+    // slices) is only considered once regardless of row order. Seeded by
+    // [_localPhotoPathWithBytes] hits as well as by fresh downloads, so a
+    // slice never re-probes its original.
     final downloadedPaths = <String, String>{};
     var restoredCount = 0;
 
@@ -1253,11 +1281,19 @@ class SyncService {
 
       var newLocalPath = downloadedPaths[canonicalId];
       if (newLocalPath == null) {
-        final bytes = await download(canonicalId, ext);
-        if (bytes != null) {
-          newLocalPath = await _photoFiles.writePhotoBytes(canonicalId, ext, bytes);
-          downloadedPaths[canonicalId] = newLocalPath;
-          restoredCount++;
+        final alreadyHere = await _localPhotoPathWithBytes(canonicalId);
+        if (alreadyHere != null) {
+          // Already on this device — no download, no write, and NOT counted
+          // as "restored": nothing was restored.
+          newLocalPath = alreadyHere;
+          downloadedPaths[canonicalId] = alreadyHere;
+        } else {
+          final bytes = await download(canonicalId, ext);
+          if (bytes != null) {
+            newLocalPath = await _photoFiles.writePhotoBytes(canonicalId, ext, bytes);
+            downloadedPaths[canonicalId] = newLocalPath;
+            restoredCount++;
+          }
         }
       }
 
@@ -1267,6 +1303,33 @@ class SyncService {
     }
 
     return restoredCount;
+  }
+
+  /// The LOCAL `localPath` for [canonicalId] when this device genuinely holds
+  /// that photo's bytes right now, else `null`.
+  ///
+  /// Both halves are load-bearing. The row lookup alone would be a lie — L6:
+  /// metadata (drift) and pixels (a separate, non-transactional byte store)
+  /// can diverge, so a row can outlive its pixels. The byte read alone has no
+  /// path to read. Together they answer the only question the caller has:
+  /// "would downloading this actually give me anything I do not already have?"
+  Future<String?> _localPhotoPathWithBytes(String canonicalId) async {
+    final row =
+        await (_db.select(_db.photos)
+              ..where((t) => t.id.equals(canonicalId))
+              ..limit(1))
+            .getSingleOrNull();
+    final storedPath = row?.localPath;
+    if (storedPath == null || storedPath.isEmpty) return null;
+    try {
+      final bytes = await _photoFiles.readPhotoBytes(storedPath);
+      return bytes == null ? null : storedPath;
+    } catch (_) {
+      // An unreadable local store is indistinguishable from absent bytes for
+      // this decision, and must never abort the pull — fall through to the
+      // download, which is the safe direction.
+      return null;
+    }
   }
 
   /// Total row count across every table in [tables] (rows FETCHED, not
