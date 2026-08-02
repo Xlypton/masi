@@ -1,5 +1,6 @@
 import 'package:drift/drift.dart';
 
+import 'schema_downgrade.dart';
 import 'tables.dart';
 
 part 'app_database.g.dart';
@@ -35,6 +36,28 @@ class AppDatabase extends _$AppDatabase {
   MigrationStrategy get migration => MigrationStrategy(
     onCreate: (m) => m.createAll(),
     onUpgrade: (m, from, to) async {
+      // L7 GUARD — must stay the FIRST statement in this callback.
+      //
+      // drift calls `onUpgrade` for any version CHANGE, downgrades included
+      // (`OpeningDetails.hadUpgrade` is `!wasCreated && versionBefore !=
+      // versionNow`, drift 2.34.2 `query_builder/migration.dart:647`, branched
+      // on at `api/db_base.dart:131-137`). Every branch below is
+      // `if (from < N)`, so a downgrade runs NONE of them, returns normally,
+      // and lets `DelegatedDatabase._runMigrations` stamp the OLDER version
+      // into `PRAGMA user_version` (`executor/helpers/engines.dart:562`) —
+      // after which the next current-shell load re-runs the intervening
+      // branches against tables that already exist, with the user's library
+      // stranded behind a database that will not open.
+      //
+      // Throwing here happens BEFORE that `setSchemaVersion` (it is called on
+      // line 562 only after `beforeOpen` returns on line 557), so the on-disk
+      // version and every row are left exactly as they were. Refusing to open
+      // is recoverable — the user reloads and gets the current shell.
+      // Downgrading is not. See `schema_downgrade.dart` and
+      // `test/core/db/schema_downgrade_test.dart`.
+      if (from > to) {
+        throw SchemaDowngradeException(storedVersion: from, appVersion: to);
+      }
       // v1 -> v2: row-level cloud-sync pivot (Phase 1). Adds a nullable
       // `ownerId` to every SyncColumns table (ADD COLUMN is non-destructive;
       // pre-existing rows come back with `ownerId == null`, i.e.
