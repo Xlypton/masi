@@ -14,6 +14,7 @@ import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/backup/data/sync_remote.dart';
 import 'package:masi/features/backup/data/sync_service.dart';
 import 'package:masi/features/library/presentation/topos_screen.dart';
+import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show StringCodec;
@@ -559,6 +560,33 @@ void main() {
         );
         addTearDown(container.dispose);
 
+        // The offline edit this test is ABOUT ("a user who edited offline and
+        // then merely backgrounded/foregrounded the app"). Written BEFORE the
+        // widget mounts on purpose: the orchestrator subscribes to
+        // `tableUpdates()` in `build()`, so a pre-mount write arms no debounce
+        // at all and cannot confound the attribution below.
+        //
+        // This test used to seed nothing, relying on the app-start full-scope
+        // safety net to make a push reach the remote even with a CLEAN
+        // database. That behaviour was a defect, not a feature — with
+        // `_fullResyncDue` armed on every app start and every connectivity
+        // regain, a fully-synced device retried a failing push forever with
+        // nothing to send — so the nothing-pending early-out now applies in
+        // every scope. Seeding the edit tests the real scenario rather than
+        // the artefact.
+        await db
+            .into(db.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'offline-edit',
+                createdAt: 100,
+                updatedAt: 100,
+                dirty: const Value(true),
+                ownerId: const Value('u1'),
+                name: 'Edited offline',
+              ),
+            );
+
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
@@ -570,15 +598,9 @@ void main() {
         // Mounting pulls (the signed-in edge) but must not have pushed: the
         // debounce armed by that pull's writes is 30s away, and nothing else
         // triggers a push. So the resume below is the ONLY thing that can
-        // reach the remote on the push side.
-        //
-        // Deliberately NO local write anywhere in this test. A write would arm
-        // a second debounce and confound the attribution; the app-start
-        // full-scope safety net (`_fullResyncDue`) means the resume push
-        // reaches the remote even with a clean database, which is what makes a
-        // write-free assertion possible. The resume's throttled pull is
-        // skipped (fixed clock, so the mount pull is 0ms old), so the pull side
-        // cannot write either.
+        // reach the remote on the push side. The resume's throttled pull is
+        // skipped (fixed clock, so the mount pull is 0ms old), so the pull
+        // side cannot write either.
         expect(
           remote.pushCallCount,
           0,
@@ -594,6 +616,16 @@ void main() {
           greaterThan(pushesBeforeResume),
           reason: 'resume must flush a push, not only a throttled pull',
         );
+
+        // The resume push CONFIRMED the seeded edit, so clearing its `dirty`
+        // flag is a real row change and fires `tableUpdates()`, arming one
+        // last 30s debounce. Let it elapse rather than leaving a pending
+        // timer at teardown: the follow-up push finds nothing pending, takes
+        // the early-out, and arms nothing further — which is also a small
+        // proof that the clear-then-push cycle terminates instead of feeding
+        // itself.
+        await tester.pump(const Duration(seconds: 31));
+        await _drain(tester);
       },
     );
 
