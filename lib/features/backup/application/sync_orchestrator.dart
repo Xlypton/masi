@@ -273,6 +273,25 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   /// ([PushSyncResult.fullyLanded]).
   bool _fullResyncDue = true;
 
+  /// Minimum spacing between connectivity-REGAIN-triggered syncs.
+  ///
+  /// A flapping link emits none→wifi→none→wifi… and every rising edge is
+  /// technically a regain, but consecutive ones carry no new information —
+  /// while the backend is either reachable or not, and one attempt has
+  /// already been made. Long enough to swallow a burst of flapping, short
+  /// enough that a genuine "walked back into signal" still syncs promptly.
+  static const Duration _connectivityResyncThrottle = Duration(seconds: 10);
+
+  /// The most recent status [_onConnectivityChanged] observed, so it can tell
+  /// a REGAIN (none → usable) from a usable → usable hop. `null` until the
+  /// first transition of the app run.
+  NetworkStatus? _lastConnectivityStatus;
+
+  /// Wall-clock moment of the last regain-triggered sync, on the same
+  /// [nowMsProvider] seam every other clock read in this class uses, so tests
+  /// control it exactly the same way. `null` until the first regain.
+  int? _lastConnectivityResyncAtMs;
+
   /// The connectivity-transition subscription installed in [build], or `null`.
   StreamSubscription<NetworkStatus>? _connectivitySubscription;
 
@@ -517,33 +536,65 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
 
   /// A connectivity transition arrived.
   ///
-  /// Anything other than [NetworkStatus.none] means "the network may be usable
-  /// again", which is genuinely NEW information, so three things happen:
-  ///  - the backoff resets — the accumulated failures were about the OLD
-  ///    network state, and making the user wait out a 5-minute ceiling after
-  ///    reconnecting is the opposite of "sync as soon as possible";
+  /// A REGAIN — and only a regain — is new information: the network was gone
+  /// ([NetworkStatus.none]) and is now usable. When one happens:
   ///  - [_fullResyncDue] is re-armed, so the catch-up push re-sends EVERY own
   ///    row rather than trusting `dirty` flags that a swallowed per-table
   ///    failure during the outage may have cleared (D-4's loss-proofness);
-  ///  - BOTH a push and a pull fire immediately — the push flushes whatever
-  ///    was edited offline, the pull picks up what changed in the cloud
-  ///    meanwhile. §1e requires both; pushing only would leave another user's
-  ///    newly-published topo invisible until the next resume.
+  ///  - the armed retry timer is cancelled and BOTH a push and a pull fire
+  ///    IMMEDIATELY — the push flushes whatever was edited offline, the pull
+  ///    picks up what changed in the cloud meanwhile. §1e requires both;
+  ///    pushing only would leave another user's newly-published topo
+  ///    invisible until the next resume.
   ///
-  /// Losing the network ([NetworkStatus.none]) triggers nothing: there is
-  /// nothing to attempt, and attempting anyway would just burn a retry
-  /// attempt and flip the status to `error`.
+  /// THREE THINGS THIS DELIBERATELY DOES NOT DO, each of which it used to:
   ///
-  /// Both entry points self-guard against overlapping runs ([pushNow] /
-  /// [pullNow]), so a flapping connection cannot stack up concurrent syncs —
-  /// at most one push and one pull are ever in flight. [pullNow] is called
-  /// UNTHROTTLED on purpose: a genuine offline→online transition is precisely
-  /// when fresh data matters, and its in-flight guard already collapses a
-  /// burst of `online` events (browsers fire them liberally) into a single
-  /// pull.
+  /// 1. **It does not reset [_consecutivePushFailures].** That looks kind —
+  ///    "don't make the user wait out a 5-minute ceiling after reconnecting"
+  ///    — but it conflates two different mechanisms. Responsiveness comes
+  ///    from the IMMEDIATE push below, which runs regardless of the counter;
+  ///    the counter exists solely to stop hammering a backend that keeps
+  ///    failing. Zeroing it here meant a phone oscillating between weak cell
+  ///    and none held the backoff at attempt 1 indefinitely. And the premise
+  ///    is wrong anyway: a connectivity event is NOT evidence the backend
+  ///    recovered — that is exactly what [ConnectivityService.isBackendReachable]
+  ///    exists for, because `connectivity_plus` answers "connected" behind a
+  ///    captive portal. A push that genuinely succeeds still resets the
+  ///    counter, in [_runPush], which is the only place that has actual
+  ///    evidence of progress.
+  ///
+  /// 2. **It does not treat a usable→usable hop as a regain.** wifi→cellular
+  ///    fires liberally on a moving phone and means nothing was ever lost.
+  ///
+  /// 3. **It does not act on every regain.** [_connectivityResyncThrottle]
+  ///    coalesces a burst: a flapping link produces none→wifi→none→wifi… and
+  ///    each edge is technically a regain, but they carry no new information
+  ///    between them. Without this a flap cost a full-library push AND a full
+  ///    pull per oscillation. The in-flight guards in [pushNow]/[pullNow] do
+  ///    NOT cover this — they collapse only CONCURRENT runs, and sequential
+  ///    flaps are not concurrent.
+  ///
+  /// Losing the network triggers nothing: there is nothing to attempt, and
+  /// attempting anyway would just burn a retry attempt and flip the status to
+  /// `error`.
   void _onConnectivityChanged(NetworkStatus status) {
+    final previous = _lastConnectivityStatus;
+    _lastConnectivityStatus = status;
     if (status == NetworkStatus.none) return;
-    _consecutivePushFailures = 0;
+    // Only a genuine none -> usable EDGE. `previous == null` (the very first
+    // transition this run) counts, deliberately: we cannot know what came
+    // before it, and the conservative reading is "we may have missed an
+    // outage".
+    if (previous != null && previous != NetworkStatus.none) return;
+
+    final nowMs = ref.read(nowMsProvider)();
+    final last = _lastConnectivityResyncAtMs;
+    if (last != null &&
+        nowMs - last < _connectivityResyncThrottle.inMilliseconds) {
+      return;
+    }
+    _lastConnectivityResyncAtMs = nowMs;
+
     _retryTimer?.cancel();
     _fullResyncDue = true;
     unawaited(pushNow());

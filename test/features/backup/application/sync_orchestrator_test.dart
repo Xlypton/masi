@@ -1654,9 +1654,10 @@ void main() {
     );
 
     test(
-      'a regain RESETS the backoff and re-arms the full-scope safety net, so '
-      'a device that comes back after a long outage re-sends everything '
-      'rather than trusting flags a swallowed failure may have cleared',
+      'a regain pushes IMMEDIATELY rather than waiting out the armed backoff, '
+      'and re-arms the full-scope safety net — so a device that comes back '
+      'after a long outage re-sends everything rather than trusting flags a '
+      'swallowed failure may have cleared',
       () async {
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
@@ -1697,6 +1698,145 @@ void main() {
           schedule.attempts,
           isEmpty,
           reason: 'the regain push succeeded, so no retry was ever armed',
+        );
+      },
+    );
+  });
+
+  group('S3: a FLAPPING connection must not defeat the backoff', () {
+    ({
+      ProviderContainer container,
+      _FailingPushSyncRemote remote,
+      _RecordingRetrySchedule schedule,
+      _FakeConnectivityService connectivity,
+    })
+    makeFlapContainer(AppDatabase db, int Function() nowMs) {
+      final remote = _FailingPushSyncRemote();
+      // An hour, so no armed retry can ever fire on its own and be mistaken
+      // for a regain-triggered push.
+      final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+      final connectivity = _FakeConnectivityService(NetworkStatus.none);
+      final container = makeContainer(
+        db: db,
+        remote: remote,
+        syncServiceAuth: _FakeAuthRepository(
+          const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+        ),
+        debounce: const Duration(seconds: 30),
+        retrySchedule: schedule,
+        connectivityService: connectivity,
+        nowMs: nowMs,
+      );
+      return (
+        container: container,
+        remote: remote,
+        schedule: schedule,
+        connectivity: connectivity,
+      );
+    }
+
+    test(
+      'four none->wifi oscillations inside the throttle window cost ONE push '
+      'and ONE pull, not four of each — a phone oscillating between weak cell '
+      'and none is a phone at a crag, which is the exact scenario this whole '
+      'effort exists for, and it used to get a full-library push AND a full '
+      'pull per oscillation',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        var clockMs = 1000;
+        final f = makeFlapContainer(db, () => clockMs);
+
+        primeOrchestrator(f.container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await insertArea(db, 'a1', ownerId: 'u1');
+
+        for (var i = 0; i < 4; i++) {
+          f.connectivity.emit(NetworkStatus.none);
+          f.connectivity.emit(NetworkStatus.wifi);
+          clockMs += 20; // 80 ms total — far inside the throttle window
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+
+        expect(
+          f.remote.pushCallCount,
+          1,
+          reason: 'the oscillations after the first carry no new information',
+        );
+        expect(f.remote.pullCallCount, 1);
+      },
+    );
+
+    test(
+      'regains SPACED OUT past the throttle window each sync, but the attempt '
+      'counter keeps GROWING across them — a connectivity event is not '
+      'evidence the backend recovered (that is what the reachability probe is '
+      'for), so resetting the failure count on one let a flapping network '
+      'hold the backoff at attempt 1 forever',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        var clockMs = 1000;
+        final f = makeFlapContainer(db, () => clockMs);
+
+        primeOrchestrator(f.container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await insertArea(db, 'a1', ownerId: 'u1');
+
+        for (var i = 0; i < 3; i++) {
+          f.connectivity.emit(NetworkStatus.none);
+          f.connectivity.emit(NetworkStatus.wifi);
+          clockMs += 60000; // a minute apart: each is a genuine regain
+          await Future<void>.delayed(const Duration(milliseconds: 40));
+        }
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+
+        expect(
+          f.remote.pushCallCount,
+          3,
+          reason: 'each spaced-out regain really is new information',
+        );
+        expect(
+          f.schedule.attempts,
+          [1, 2, 3],
+          reason:
+              'the backoff must widen while the backend keeps failing; [1,1,1] '
+              'means a flapping network defeated it entirely',
+        );
+      },
+    );
+
+    test(
+      'a usable->usable transition (wifi to cellular) is NOT a regain: '
+      'nothing was ever lost, so there is nothing to catch up on',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        var clockMs = 1000;
+        final f = makeFlapContainer(db, () => clockMs);
+
+        primeOrchestrator(f.container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await insertArea(db, 'a1', ownerId: 'u1');
+
+        // Establish a known baseline: one genuine regain.
+        f.connectivity.emit(NetworkStatus.wifi);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+        final afterRegain = f.remote.pushCallCount;
+
+        clockMs += 60000;
+        f.connectivity.emit(NetworkStatus.cellular);
+        clockMs += 60000;
+        f.connectivity.emit(NetworkStatus.wifi);
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+
+        expect(
+          f.remote.pushCallCount,
+          afterRegain,
+          reason:
+              'the network never went away, so neither hop is a regain — '
+              'these fire liberally on a phone moving between cells',
         );
       },
     );
