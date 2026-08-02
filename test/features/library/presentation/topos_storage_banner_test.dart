@@ -209,6 +209,83 @@ void main() {
     });
   });
 
+  group('height is bounded', () {
+    // The banner used to size itself purely to its content. Measured at this
+    // surface it rendered 561px into a 364px body, took the whole `Expanded`
+    // beneath it to 0px, and overflowed `ToposScreen`'s outer Column by 421px
+    // — the entire topo list and its create affordance pushed off-screen by a
+    // warning. The situations where this banner shows are exactly the ones
+    // where the user most needs to reach the rest of the screen.
+    //
+    // 400x420 is the measured repro; a phone at a large accessibility text
+    // scale is the same shape.
+    const smallSurface = Size(400, 420);
+    const longReason = StorageDurability.unavailable(
+      'This version of the app is older than your saved data, so it refused '
+      'to open your library rather than damage it. Nothing has been changed '
+      'or deleted. Reload to pick up the current version of the app — if you '
+      'are offline, reconnect first, because the reload has to fetch it. '
+      '(SchemaDowngradeException: local database schema version 9, this '
+      'build understands version 8)',
+      cause: StorageUnavailableCause.schemaDowngrade,
+    );
+
+    Future<void> pumpAt(WidgetTester tester, Size size) async {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+      await tester.pumpWidget(_wrap(_makeContainer(longReason)));
+      await _drain(tester);
+    }
+
+    testWidgets('leaves most of a small viewport to the list', (tester) async {
+      await pumpAt(tester, smallSurface);
+
+      final height = tester
+          .getSize(find.byKey(const Key('topos-storage-warning')))
+          .height;
+      expect(
+        height,
+        lessThan(smallSurface.height * 0.5),
+        reason: 'a notice that eats the viewport hides the very thing the '
+            'user opened the app for',
+      );
+    });
+
+    testWidgets('does not overflow its parent', (tester) async {
+      await pumpAt(tester, smallSurface);
+
+      expect(
+        tester.takeException(),
+        isNull,
+        reason: 'the outer Column used to overflow by 421px here',
+      );
+    });
+
+    testWidgets('keeps the reassurance and the remedy visible when squeezed — '
+        'the exception detail is what gives', (tester) async {
+      await pumpAt(tester, smallSurface);
+
+      // Priority order: "nothing is lost" and "what to do" outrank the raw
+      // exception text, which survives in the `masi/storage:` log line either
+      // way. The title sits at the top of the scrollable region, so it is the
+      // last thing to leave the visible area rather than the first.
+      expect(_titleOf(tester), contains('safe'));
+      expect(_bodyOf(tester), contains('Reload'));
+    });
+
+    testWidgets('an ordinary phone-height viewport is unaffected', (
+      tester,
+    ) async {
+      // The cap must not shrink the banner in the normal case; at a real phone
+      // height the content still fits well inside it.
+      await pumpAt(tester, const Size(390, 844));
+
+      expect(_titleOf(tester), contains('safe'));
+      expect(_detailOf(tester), contains('SchemaDowngradeException'));
+    });
+  });
+
   group('non-durable backend (the pre-existing in-memory case)', () {
     const inMemory = StorageDurability(
       backend: StorageBackend.inMemory,

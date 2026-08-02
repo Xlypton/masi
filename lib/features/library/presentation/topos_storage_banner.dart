@@ -49,6 +49,27 @@ part of 'topos_screen.dart';
 class _StorageWarningBanner extends StatelessWidget {
   const _StorageWarningBanner({required this.durability});
 
+  /// The most of the viewport this banner may ever occupy.
+  ///
+  /// Expressed as a SHARE of the viewport rather than a pixel ceiling on
+  /// purpose: the invariant that matters is "the list and its create button
+  /// stay reachable", which is a statement about the screen, not about a
+  /// number of logical pixels. Any absolute cap would be right on one device
+  /// and wrong at the next text scale.
+  ///
+  /// Measured failure this exists to prevent: at a 400x420 surface the banner
+  /// sized itself to its content at 561px inside a 364px body, starved the
+  /// `Expanded` beneath it to 0px, and overflowed `ToposScreen`'s outer Column
+  /// by 421px — the whole library pushed off-screen by a warning about it. A
+  /// large accessibility text scale on a normal phone is the same shape.
+  ///
+  /// Content that does not fit SCROLLS inside the banner rather than being
+  /// truncated, so nothing is lost: the title and the remedy sit at the top
+  /// and stay put, and the exception detail — the least important line, and
+  /// the one that also survives verbatim in the `masi/storage:` log — is what
+  /// leaves the visible area first.
+  static const double _maxViewportShare = 0.4;
+
   final StorageDurability durability;
 
   @override
@@ -128,49 +149,56 @@ class _StorageWarningBanner extends StatelessWidget {
         borderRadius: BorderRadius.circular(MasiRadii.card),
         border: Border.all(color: tone),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          MasiIcon(glyph, size: 22, color: tone),
-          const SizedBox(width: MasiSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  title,
-                  key: const Key('topos-storage-warning-title'),
-                  style: textTheme.titleMedium?.copyWith(
-                    color: colors.ink,
-                    fontWeight: FontWeight.w600,
-                  ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * _maxViewportShare,
+        ),
+        child: SingleChildScrollView(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              MasiIcon(glyph, size: 22, color: tone),
+              const SizedBox(width: MasiSpacing.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      key: const Key('topos-storage-warning-title'),
+                      style: textTheme.titleMedium?.copyWith(
+                        color: colors.ink,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: MasiSpacing.xs),
+                    Text(
+                      body,
+                      key: const Key('topos-storage-warning-body'),
+                      style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
+                    ),
+                    const SizedBox(height: MasiSpacing.sm),
+                    Text(
+                      detail.toString(),
+                      key: const Key('topos-storage-warning-detail'),
+                      // An `unavailableReason` is an exception's `toString()` and
+                      // can be a paragraph (the L7 one is). Unbounded, it makes
+                      // this banner tall enough to squeeze whatever the list area
+                      // renders below it. Capped here rather than shortened at the
+                      // source: the release log line (`masi/storage: …`) still
+                      // carries the value in full, and for the downgrade case the
+                      // body copy above already says the same thing in plain
+                      // language.
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.labelSmall?.copyWith(color: colors.ink3),
+                    ),
+                  ],
                 ),
-                const SizedBox(height: MasiSpacing.xs),
-                Text(
-                  body,
-                  key: const Key('topos-storage-warning-body'),
-                  style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
-                ),
-                const SizedBox(height: MasiSpacing.sm),
-                Text(
-                  detail.toString(),
-                  key: const Key('topos-storage-warning-detail'),
-                  // An `unavailableReason` is an exception's `toString()` and
-                  // can be a paragraph (the L7 one is). Unbounded, it makes
-                  // this banner tall enough to squeeze whatever the list area
-                  // renders below it. Capped here rather than shortened at the
-                  // source: the release log line (`masi/storage: …`) still
-                  // carries the value in full, and for the downgrade case the
-                  // body copy above already says the same thing in plain
-                  // language.
-                  maxLines: 3,
-                  overflow: TextOverflow.ellipsis,
-                  style: textTheme.labelSmall?.copyWith(color: colors.ink3),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
