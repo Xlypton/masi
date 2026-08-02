@@ -69,7 +69,12 @@ List<T> _listenAndCollect<T>(
 Future<void> _waitUntil<T>(
   List<T> emissions,
   bool Function(List<T> emissions) predicate, {
-  Duration timeout = const Duration(seconds: 5),
+  // A safety valve, not a timing assumption. The loop exits the instant the
+  // predicate holds, so a generous deadline costs nothing on an idle machine
+  // and is the difference between "Drift was slow" and a spurious red on a
+  // loaded one. (5 s used to be the bound; at load 100+ a Drift watch
+  // stream's first emission can miss it.)
+  Duration timeout = const Duration(seconds: 20),
 }) async {
   final deadline = DateTime.now().add(timeout);
   while (!predicate(emissions)) {

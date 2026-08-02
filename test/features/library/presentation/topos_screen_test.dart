@@ -32,6 +32,7 @@ import 'package:image/image.dart' as img;
 import 'package:image/src/util/rational.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
+import '../../../support/async_drain.dart';
 
 /// A minimal-but-real 1x1 transparent PNG (base64), used to give
 /// `ui.instantiateImageCodec` real bytes to decode in the "New topo" flow
@@ -303,13 +304,18 @@ Widget _wrap(
 /// make progress under `testWidgets`' fake-async clock, then pumps to flush
 /// the resulting Riverpod-triggered rebuilds and any in-flight
 /// dialog/route transitions. Mirrors `areas_screen_test.dart`'s `_drain`.
-Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+///
+/// [until], when given, makes the wait DETERMINISTIC instead of merely
+/// generous: after the drain, it keeps handing the real event loop time until
+/// that finder matches (or `pumpUntilFound`'s deadline expires, at which point
+/// the caller's own `expect` fails exactly as it would have anyway). Pass it
+/// wherever the very next assertion is about something real async work has to
+/// produce -- the name dialog appearing after a real file read + image decode,
+/// say -- rather than betting that a fixed number of pumps was enough. See
+/// `test/support/async_drain.dart` for the full rationale.
+Future<void> _drain(WidgetTester tester, {Finder? until}) async {
+  await drainAsync(tester, rounds: 6, settle: false);
+  if (until != null) await pumpUntilFound(tester, until);
   await tester.pumpAndSettle();
 }
 
@@ -324,13 +330,15 @@ Future<void> _drain(WidgetTester tester) async {
 /// back-to-back [_drain] calls (the amount every other test in this file
 /// already relies on to let `_handleNewTopo`'s real Drift/file-IO work
 /// complete), just without ending in a settle.
-Future<void> _drainNoSettle(WidgetTester tester) async {
-  for (var i = 0; i < 12; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+///
+/// [until] behaves exactly as in [_drain] -- and matters MORE here, because
+/// the SnackBar these callers assert on is the very last thing
+/// `_handleNewTopo`'s long real-async chain emits. `pumpUntilFound` only ever
+/// pumps with a ZERO fake-time duration, so waiting longer for it cannot
+/// advance the SnackBar towards its 4 s fake-time expiry.
+Future<void> _drainNoSettle(WidgetTester tester, {Finder? until}) async {
+  await drainAsync(tester, rounds: 12, settle: false);
+  if (until != null) await pumpUntilFound(tester, until);
 }
 
 /// Advances past the `_NewTopoNameDialog` that now blocks `_handleNewTopo`
@@ -355,7 +363,7 @@ Future<void> _drainNoSettle(WidgetTester tester) async {
 /// flow starts making progress before the caller's own `_drain`/
 /// `_drainNoSettle` continues driving it.
 Future<void> _acceptTopoNameDialog(WidgetTester tester) async {
-  await _drain(tester);
+  await _drain(tester, until: find.byKey(const Key('topo-name-field')));
   expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
   await tester.tap(find.byKey(const Key('topo-name-submit')));
   await tester.pump();
@@ -370,6 +378,46 @@ Future<T> _dbWork<T>(WidgetTester tester, Future<T> Function() body) async {
   });
   return result;
 }
+
+/// Waits until the repo actually reports at least [count] topos.
+///
+/// `_handleNewTopo`'s tail (`createTopo` -> `importPhoto` ->
+/// `attachPhotoToWall` -> `setWallCoordinates` -> `context.push`) is a chain of
+/// REAL Drift/file-IO round trips. A fixed number of [_drain]s is a bet that
+/// the whole chain fits in their wall-clock budget; this waits for the thing
+/// the following `expect` is actually about. It never asserts anything itself:
+/// on timeout it just returns and the caller's own `expect(topos.length, N)`
+/// reports the shortfall exactly as before.
+Future<void> _awaitToposCount(
+  WidgetTester tester,
+  ProviderContainer container,
+  int count,
+) => pumpUntilAsync(tester, () async {
+  final topos = await container
+      .read(libraryCrudRepositoryProvider)
+      .watchTopos()
+      .first;
+  return topos.length >= count;
+});
+
+/// Waits until [wallId] has had its coordinates written.
+///
+/// `setWallCoordinates` is the LAST DB write in `_handleNewTopo` — strictly
+/// after the `createTopo` that [_awaitToposCount] waits for — so a test that
+/// asserts on the coordinates needs its own wait, not that one's. Only for the
+/// tests that expect a NON-null result; the "no EXIF GPS leaves them null"
+/// cases have nothing to wait for.
+Future<void> _awaitWallCoordinates(
+  WidgetTester tester,
+  ProviderContainer container,
+  String wallId,
+) => pumpUntilAsync(tester, () async {
+  final db = container.read(appDatabaseProvider);
+  final wall = await (db.select(
+    db.walls,
+  )..where((t) => t.id.equals(wallId))).getSingle();
+  return wall.latitude != null && wall.longitude != null;
+});
 
 /// A [LibraryCrudRepository] whose [setWallCoordinates] always throws,
 /// leaving every other method (including [createTopo]/[attachPhotoToWall])
@@ -542,6 +590,7 @@ void main() {
         await _drain(tester);
         await _drain(tester);
 
+        await _awaitToposCount(tester, container, 1);
         final topos = await _dbWork(
           tester,
           () => container.read(libraryCrudRepositoryProvider).watchTopos().first,
@@ -1212,6 +1261,7 @@ void main() {
       await _drain(tester);
       await _drain(tester);
 
+      await _awaitToposCount(tester, container, 1);
       final topos = await _dbWork(
         tester,
         () => container.read(libraryCrudRepositoryProvider).watchTopos().first,
@@ -1258,6 +1308,7 @@ void main() {
         await _drain(tester);
         await _drain(tester);
 
+        await _awaitToposCount(tester, container, 1);
         final topos = await _dbWork(
           tester,
           () =>
@@ -1265,6 +1316,7 @@ void main() {
         );
         expect(topos.length, 1);
 
+        await _awaitWallCoordinates(tester, container, topos.single.wallId);
         final wall = await _dbWork(
           tester,
           () => (container.read(appDatabaseProvider).select(
@@ -1313,6 +1365,7 @@ void main() {
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
+        await _awaitToposCount(tester, container, 1);
         final topos = await _dbWork(
           tester,
           () =>
@@ -1373,6 +1426,7 @@ void main() {
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
+        await _awaitToposCount(tester, container, 1);
         final topos = await _dbWork(
           tester,
           () =>
@@ -1380,6 +1434,7 @@ void main() {
         );
         expect(topos.length, 1);
 
+        await _awaitWallCoordinates(tester, container, topos.single.wallId);
         final wall = await _dbWork(
           tester,
           () => (container.read(appDatabaseProvider).select(
@@ -1431,6 +1486,7 @@ void main() {
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
+        await _awaitToposCount(tester, container, 1);
         final topos = await _dbWork(
           tester,
           () =>
@@ -1495,6 +1551,7 @@ void main() {
         await _drain(tester);
         await _drain(tester);
 
+        await _awaitToposCount(tester, container, 1);
         final topos = await _dbWork(
           tester,
           () =>
@@ -1502,6 +1559,7 @@ void main() {
         );
         expect(topos.length, 1);
 
+        await _awaitWallCoordinates(tester, container, topos.single.wallId);
         final wall = await _dbWork(
           tester,
           () => (container.read(appDatabaseProvider).select(
@@ -1638,6 +1696,7 @@ void main() {
       await _drain(tester);
       await _drain(tester);
 
+      await _awaitToposCount(tester, container, 1);
       final topos = await _dbWork(
         tester,
         () => container.read(libraryCrudRepositoryProvider).watchTopos().first,
@@ -1712,7 +1771,7 @@ void main() {
         await tester.tap(find.byKey(const Key('topos-new-topo')));
         await _acceptTopoNameDialog(tester);
         // No trailing settle: the SnackBar must still be on screen.
-        await _drainNoSettle(tester);
+        await _drainNoSettle(tester, until: find.textContaining('Out of storage space'));
 
         expect(
           find.textContaining('Out of storage space'),
@@ -1791,7 +1850,7 @@ void main() {
         // A SECOND attempt must actually run (the _creating guard released in
         // the finally block), reaching the name dialog again.
         await tester.tap(find.byKey(const Key('topos-new-topo')));
-        await _drain(tester);
+        await _drain(tester, until: find.byKey(const Key('topo-name-field')));
         expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
       },
     );
@@ -1844,7 +1903,7 @@ void main() {
         await tester.tap(find.byKey(const Key('topos-new-topo')));
         await _acceptTopoNameDialog(tester);
         // No trailing settle: the SnackBar must still be on screen.
-        await _drainNoSettle(tester);
+        await _drainNoSettle(tester, until: find.textContaining('Out of storage space'));
 
         expect(
           find.textContaining('Out of storage space'),
@@ -1917,7 +1976,7 @@ void main() {
         await tester.pumpAndSettle();
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
-        await _drain(tester);
+        await _drain(tester, until: find.byKey(const Key('topo-name-field')));
         expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
       },
     );
@@ -1969,7 +2028,7 @@ void main() {
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
         await _acceptTopoNameDialog(tester);
-        await _drainNoSettle(tester);
+        await _drainNoSettle(tester, until: find.textContaining("Couldn't create the topo"));
 
         expect(
           find.textContaining("Couldn't create the topo"),
@@ -2027,7 +2086,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
-        await _drainNoSettle(tester);
+        await _drainNoSettle(tester, until: find.textContaining("Couldn't create the topo"));
 
         expect(
           find.textContaining("Couldn't create the topo"),
@@ -2075,7 +2134,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
-        await _drain(tester);
+        await _drain(tester, until: find.byKey(const Key('topo-name-field')));
 
         // The dialog must be up, prefilled, and NOTHING created yet.
         expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
@@ -2100,6 +2159,7 @@ void main() {
         await _drain(tester);
         await _drain(tester);
 
+        await _awaitToposCount(tester, container, 1);
         final topos = await _dbWork(
           tester,
           () =>
@@ -2142,7 +2202,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
-        await _drain(tester);
+        await _drain(tester, until: find.byKey(const Key('topo-name-field')));
 
         expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
         await tester.enterText(
@@ -2154,6 +2214,7 @@ void main() {
         await _drain(tester);
         await _drain(tester);
 
+        await _awaitToposCount(tester, container, 1);
         final topos = await _dbWork(
           tester,
           () =>
@@ -2211,7 +2272,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
-        await _drain(tester);
+        await _drain(tester, until: find.byKey(const Key('topo-name-field')));
 
         await tester.enterText(
           find.byKey(const Key('topo-name-field')),
@@ -2268,7 +2329,7 @@ void main() {
         await _drain(tester);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
-        await _drain(tester);
+        await _drain(tester, until: find.byKey(const Key('topo-name-field')));
 
         expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
         await tester.tap(find.text('Cancel'));
@@ -2298,10 +2359,11 @@ void main() {
         expect(button.onPressed, isNotNull);
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));
-        await _drain(tester);
+        await _drain(tester, until: find.byKey(const Key('topo-name-submit')));
         await tester.tap(find.byKey(const Key('topo-name-submit')));
         await _drain(tester);
         await _drain(tester);
+        await _awaitToposCount(tester, container, 1);
 
         final afterTopos = await _dbWork(
           tester,
@@ -2352,7 +2414,7 @@ void main() {
 
           await tester.tap(find.byKey(const Key('topos-new-topo')));
           await _acceptTopoNameDialog(tester);
-          await _drainNoSettle(tester);
+          await _drainNoSettle(tester, until: find.text('Location found in photo'));
 
           expect(find.text('Location found in photo'), findsOneWidget);
         },
@@ -2396,7 +2458,7 @@ void main() {
 
           await tester.tap(find.byKey(const Key('topos-new-topo')));
           await _acceptTopoNameDialog(tester);
-          await _drainNoSettle(tester);
+          await _drainNoSettle(tester, until: find.text('Location set from your current position'));
 
           expect(
             find.text('Location set from your current position'),
@@ -2440,7 +2502,7 @@ void main() {
 
           await tester.tap(find.byKey(const Key('topos-new-topo')));
           await _acceptTopoNameDialog(tester);
-          await _drainNoSettle(tester);
+          await _drainNoSettle(tester, until: find.text('No location found in photo'));
 
           expect(find.text('No location found in photo'), findsOneWidget);
         },
@@ -2557,6 +2619,7 @@ void main() {
           // BEFORE setWallCoordinates ran, so they must exist regardless of
           // whether the throw is isolated -- this alone does not
           // distinguish pre-fix from post-fix behavior.
+          await _awaitToposCount(tester, container, 1);
           final topos = await _dbWork(tester, () => repo.watchTopos().first);
           expect(topos.length, 1);
           expect(topos.single.thumbnailPath, isNotNull);
@@ -2565,6 +2628,17 @@ void main() {
           // setWallCoordinates throw propagates out of the shared outer
           // try, skipping the `context.push` call below it entirely, so
           // this screen never appears and pushedWallId stays null.
+          //
+          // `context.push` is the LAST thing `_handleNewTopo` does — strictly
+          // after the createTopo that `_awaitToposCount` above waits for — so
+          // it needs its own wait rather than inheriting that one. Without it
+          // this is a wall-clock bet on the tail of the chain, and it loses
+          // under load (observed: "Found 0 widgets with key
+          // [<'fake-walls-screen'>]" at load ~66).
+          await pumpUntilFound(
+            tester,
+            find.byKey(const Key('fake-walls-screen')),
+          );
           expect(
             find.byKey(const Key('fake-walls-screen')),
             findsOneWidget,

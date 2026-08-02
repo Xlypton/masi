@@ -23,6 +23,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'support/async_drain.dart';
 
 /// FIX #6 (family-keyed `drawControllerProvider`/`legendExpandedProvider` —
 /// backlog #32, "multi-instance state bleed"): stand-in wallId, paired
@@ -46,12 +47,7 @@ const _testWallId = 'test-wall';
 /// mirrors the `_drain` helper in
 /// test/features/library/presentation/areas_screen_test.dart.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
   // The Drift-backed stream has now emitted (real data on screen), so no
   // unbounded spinner remains and pumpAndSettle is safe: it flushes any
   // remaining bounded route/transition motion deterministically.

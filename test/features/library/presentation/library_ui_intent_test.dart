@@ -26,6 +26,7 @@ import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import '../../../support/async_drain.dart';
 
 /// Builds a [ProviderContainer] wired to a fresh in-memory database and
 /// registers teardown of both the container and the database connection.
@@ -97,12 +98,7 @@ Widget _wrap(ProviderContainer container, Widget child) {
 /// resulting Riverpod-triggered rebuilds and any in-flight route/dialog
 /// transitions. Copied verbatim from `areas_screen_test.dart`.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
   await tester.pumpAndSettle();
 }
 

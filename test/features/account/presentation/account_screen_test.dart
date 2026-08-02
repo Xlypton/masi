@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
+import '../../../support/async_drain.dart';
 
 /// A [SyncOrchestrator] whose `build()` short-circuits to a fixed
 /// [SyncOrchestratorState] — never watches `appDatabaseProvider`/subscribes
@@ -156,12 +157,7 @@ Widget _wrap(ProviderContainer container, Widget child) {
 /// default fake clock. Mirrors `community_screen_test.dart`'s/
 /// `topos_screen_test.dart`'s identically-named helper.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
   await tester.pumpAndSettle();
 }
 

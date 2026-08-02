@@ -39,7 +39,9 @@ List<T> _listenAndCollect<T>(
 Future<void> _waitUntil<T>(
   List<T> emissions,
   bool Function(List<T> emissions) predicate, {
-  Duration timeout = const Duration(seconds: 5),
+  // A safety valve, not a timing assumption — see the identical note in
+  // `test/features/library/application/library_providers_test.dart`.
+  Duration timeout = const Duration(seconds: 20),
 }) async {
   final deadline = DateTime.now().add(timeout);
   while (!predicate(emissions)) {

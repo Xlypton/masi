@@ -25,6 +25,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import '../../../support/async_drain.dart';
 
 /// A minimal-but-real 1x1 transparent PNG, so `Image.file`/`FileImage` have
 /// genuine bytes to decode rather than a mocked-out step — same fixture
@@ -38,14 +39,26 @@ final _tinyPngBytes = base64Decode(
 /// (in small increments) so genuinely-async dart:io/decode work started by
 /// the widget under test actually gets a chance to complete, then pumps to
 /// flush the resulting rebuild.
+///
+/// Every assertion in this file that depends on a real `dart:io` read +
+/// `ui.instantiateImageCodec` decode having FINISHED pairs this with an
+/// explicit [pumpUntilFound]/[pumpUntilGone] on the very widget it is about —
+/// a drain alone is a wall-clock bet, and this file's decodes are the slowest
+/// real work in the suite. The one thing deliberately NOT waited on is the
+/// "still loading right after a single `pump()`" half of the #56 tests: that
+/// asserts the decode has NOT finished, which is guaranteed by construction
+/// (without a `tester.runAsync` the real event loop never turns at all, so a
+/// real file read cannot possibly have completed) and, unlike everything
+/// else here, becomes MORE true under load rather than less.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
 }
+
+/// Real-time deadline for the two `PhotoImageProvider` probe tests below,
+/// which drive an `ImageStream` directly (no widget tree, so no pump). A
+/// safety valve, not a timing assumption: both loops exit the instant the
+/// stream reports, and both leave their assertions untouched.
+const _probeTimeout = Duration(seconds: 20);
 
 Widget _wrap(Widget child) =>
     ProviderScope(child: MaterialApp(home: Scaffold(body: child)));
@@ -116,6 +129,7 @@ void main() {
           ),
         );
         await _drain(tester);
+        await pumpUntilFound(tester, find.byKey(const Key('ph')));
 
         expect(find.byKey(const Key('ph')), findsOneWidget);
         expect(tester.takeException(), isNull);
@@ -212,6 +226,7 @@ void main() {
         );
 
         await _drain(tester);
+        await pumpUntilGone(tester, find.byKey(const Key('loading')));
 
         expect(tester.takeException(), isNull);
         expect(
@@ -255,6 +270,7 @@ void main() {
         expect(find.byKey(const Key('missing')), findsNothing);
 
         await _drain(tester);
+        await pumpUntilFound(tester, find.byKey(const Key('missing')));
 
         expect(tester.takeException(), isNull);
         expect(
@@ -302,11 +318,19 @@ void main() {
             },
           );
           stream.addListener(listener);
-          // Give the real decode a chance to complete under the real event
-          // loop (mirrors `_drain`'s reasoning, just without a widget pump
-          // to flush — this test has no widget tree).
-          for (var i = 0; i < 20 && result == null && error == null; i++) {
-            await Future<void>.delayed(const Duration(milliseconds: 10));
+          // Wait for the real decode under the real event loop (mirrors
+          // `_drain`'s reasoning, just without a widget pump to flush — this
+          // test has no widget tree). Bounded by a DEADLINE rather than a
+          // fixed iteration count: the old `i < 20` capped the decode at
+          // 200 ms of wall clock, which is plenty on an idle machine and not
+          // remotely enough on a loaded one — the loop would give up and
+          // `expect(result, isNotNull)` would fail for scheduling reasons
+          // alone. It still exits the instant the stream reports.
+          final deadline = DateTime.now().add(_probeTimeout);
+          while (result == null &&
+              error == null &&
+              DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 5));
           }
         });
 
@@ -341,8 +365,11 @@ void main() {
             },
           );
           stream.addListener(listener);
-          for (var i = 0; i < 20 && error == null; i++) {
-            await Future<void>.delayed(const Duration(milliseconds: 10));
+          // Deadline-bounded for the same reason as the sibling probe test
+          // above: the old fixed 20x10 ms cap was a wall-clock bet.
+          final deadline = DateTime.now().add(_probeTimeout);
+          while (error == null && DateTime.now().isBefore(deadline)) {
+            await Future<void>.delayed(const Duration(milliseconds: 5));
           }
         });
 

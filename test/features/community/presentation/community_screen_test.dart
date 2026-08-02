@@ -21,6 +21,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' show BaseClient, BaseRequest, StreamedResponse;
 import 'package:latlong2/latlong.dart';
+import '../../../support/async_drain.dart';
 
 /// A minimal-but-real 1x1 transparent PNG (base64) — same known-valid bytes
 /// `topos_screen_test.dart` decodes for its "New topo" flow — used as the
@@ -196,12 +197,7 @@ Widget _wrapWithDetailRoute(ProviderContainer container, Widget screen) {
 /// `TileLayer`'s fade-in `AnimationController` is fine to leave mid-flight
 /// for these assertions, which never depend on tile pixels).
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
 }
 
 Future<void> _seedArea(

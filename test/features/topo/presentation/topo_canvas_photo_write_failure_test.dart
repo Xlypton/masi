@@ -34,6 +34,7 @@ import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
+import '../../../support/async_drain.dart';
 
 /// A 1x1 PNG — a REAL decodable image, because `_attachPickedPhoto` runs the
 /// genuine `decodeImageSize` (`dart:ui`'s `instantiateImageCodec`) before it
@@ -71,14 +72,15 @@ class _QuotaFailingPhotoFiles extends PhotoFiles {
 /// clock, then pumps to flush the resulting rebuilds. Deliberately WITHOUT a
 /// trailing `pumpAndSettle()` so the SnackBar is still on screen when asserted
 /// (settling would run its 4s duration and exit animation to completion).
-/// Mirrors `topos_screen_test.dart`'s `_drainNoSettle`.
-Future<void> _drainNoSettle(WidgetTester tester) async {
-  for (var i = 0; i < 12; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+/// Mirrors `topos_screen_test.dart`'s `_drainNoSettle`, including its
+/// [until] escape hatch: the SnackBar this test asserts on is the last thing
+/// a long chain of real Drift/file-IO work emits, so waiting for the bar
+/// itself is the only way to stop the assertion from being a bet on how many
+/// pumps were enough. `pumpUntilFound` pumps with a ZERO fake-time duration,
+/// so waiting longer cannot advance the bar towards its 4 s expiry.
+Future<void> _drainNoSettle(WidgetTester tester, {Finder? until}) async {
+  await drainAsync(tester, rounds: 12, settle: false);
+  if (until != null) await pumpUntilFound(tester, until);
 }
 
 void main() {
@@ -132,7 +134,10 @@ void main() {
       // The wall has no photo yet, so the canvas shows its empty state.
       expect(find.byKey(const Key('topo-empty-state-add-photo')), findsOneWidget);
       await tester.tap(find.byKey(const Key('topo-empty-state-add-photo')));
-      await _drainNoSettle(tester);
+      await _drainNoSettle(
+        tester,
+        until: find.textContaining('Out of storage space'),
+      );
 
       expect(
         find.textContaining('Out of storage space'),

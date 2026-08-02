@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import '../../../support/async_drain.dart';
 
 /// #12 Wave 3, ST5: the Community Feed is now a UNION of shared topos
 /// ([TopoFeedItem]) + shared ascent-log entries ([AscentFeedItem]), merged
@@ -84,12 +85,7 @@ Widget _wrap(ProviderContainer container, Widget screen) {
 /// clock, then pumps to flush the resulting Riverpod-triggered rebuilds.
 /// Mirrors `community_screen_test.dart`'s `_drain`.
 Future<void> _drain(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.runAsync(
-      () => Future<void>.delayed(const Duration(milliseconds: 20)),
-    );
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+  await drainAsync(tester, rounds: 6, settle: false);
 }
 
 Future<void> _seedArea(AppDatabase db, {required String id}) {
