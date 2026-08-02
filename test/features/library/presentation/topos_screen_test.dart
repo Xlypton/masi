@@ -21,6 +21,7 @@ import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/library/presentation/topos_screen.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_shimmer.dart';
 import 'package:masi/shared/presentation/sync_banner.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -1297,6 +1298,81 @@ void main() {
           findsOneWidget,
         );
         expect(find.text('Ghost Topo'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a topo whose cached photo bytes are ABSENT renders the amethyst '
+      'gradient placeholder — pinned because offline reads (and the '
+      'public-photo pruner) make a present row with absent bytes a NORMAL '
+      'state, not an error one',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final tempDir = Directory.systemTemp.createTempSync(
+          'topos_screen_pruned_thumb_test_',
+        );
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+        // A thumb key that resolves fine but whose bytes are simply not
+        // there — exactly what a pruned/never-downloaded public photo looks
+        // like. Never created, so nothing is ever handed to an image codec.
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            connectivityServiceProvider.overrideWithValue(
+              _ScriptedConnectivity(reachable: true),
+            ),
+            syncOrchestratorProvider.overrideWith(_FakeSyncOrchestrator.new),
+            toposProvider.overrideWith(
+              (ref) => Stream.value([
+                TopoRef(
+                  wallId: 'wall-pruned',
+                  name: 'Pruned Topo',
+                  thumbnailPath: '${tempDir.path}/thumbs/pruned.jpg',
+                  routeCount: 1,
+                  createdAt: 1000,
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        final row = find.byKey(const Key('topo-item-wall-pruned'));
+        expect(row, findsOneWidget);
+
+        final gradient = find.descendant(
+          of: row,
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is DecoratedBox &&
+                w.decoration is BoxDecoration &&
+                (w.decoration as BoxDecoration).gradient is LinearGradient,
+          ),
+        );
+        expect(
+          gradient,
+          findsOneWidget,
+          reason: 'absent bytes must resolve to the gradient placeholder, '
+              'never a broken-image glyph and never a shimmer stuck '
+              'loading forever',
+        );
+
+        final colors = MasiColors.of(tester.element(row));
+        final decoration =
+            tester.widget<DecoratedBox>(gradient).decoration as BoxDecoration;
+        expect((decoration.gradient! as LinearGradient).colors, [
+          colors.amethyst300,
+          colors.amethyst500,
+        ]);
+        expect(find.byType(MasiShimmer), findsNothing);
+        expect(tester.takeException(), isNull);
       },
     );
 
