@@ -642,6 +642,31 @@ class SyncService {
       ];
     }
 
+    // FAIL CLOSED. A table that was sent but came back with NO outcome at
+    // all — neither ok nor failed — is treated exactly like a failure: not
+    // confirmed, not cleared, reported, and retried.
+    //
+    // Not reachable through today's single `SupabaseSyncRemote`, which emits
+    // one outcome per non-empty table, so this is latent. It is fixed anyway
+    // because the DEFAULT was backwards: the clear below used to work by
+    // subtracting the FAILED tables, so anything unreported fell through into
+    // "confirmed" and had its `dirty` flag cleared. The cost of that default
+    // being wrong once is a climber's edit marked clean while it is not in
+    // the cloud — and since the retry loop is gated on `dirty`, never sent
+    // again. Silent, permanent loss. "Not reported" must mean "not
+    // confirmed".
+    final reportedTables = <String>{for (final outcome in outcomes) outcome.table};
+    for (final entry in tablesToRows.entries) {
+      if (entry.value.isEmpty) continue;
+      if (reportedTables.contains(entry.key)) continue;
+      rowsFailed += entry.value.length;
+      errors.add(
+        '${entry.key}: ${entry.value.length} row(s) went unreported by the '
+        'remote — neither confirmed nor rejected, so they are treated as NOT '
+        'in the cloud',
+      );
+    }
+
     var rowsPushed = 0;
     for (final outcome in outcomes) {
       if (outcome.ok) {
@@ -678,13 +703,16 @@ class SyncService {
     // `_uploadOwnPhotos` now runs ABOVE `upsertOwnRows`; this clear stays at
     // the bottom. Do not "restore" the old ordering, and do not un-narrow
     // this clear.
-    final failedTables = <String>{
+    // Built from the CONFIRMED tables, not by subtracting the failed ones —
+    // see the fail-closed block above the row accounting. Subtracting made
+    // "unreported" indistinguishable from "confirmed".
+    final confirmedTables = <String>{
       for (final outcome in outcomes)
-        if (!outcome.ok) outcome.table,
+        if (outcome.ok) outcome.table,
     };
     await _clearDirty({
       for (final entry in tablesToRows.entries)
-        if (!failedTables.contains(entry.key)) entry.key: entry.value,
+        if (confirmedTables.contains(entry.key)) entry.key: entry.value,
     });
 
     return PushSyncResult.pushed(
