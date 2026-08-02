@@ -330,6 +330,21 @@ class FailingUploadSyncRemote extends FakeSyncRemote {
   }
 }
 
+/// [FakeSyncRemote] variant whose "already uploaded" LISTING throws — the
+/// shape a Storage outage (or simply being offline) produces, since
+/// `SupabaseSyncRemote._listAllObjects` -> `collectPagedObjects` ->
+/// `storage.list()` has no try/catch of its own.
+///
+/// This matters specifically because §1f moved the photo phase ABOVE the row
+/// upsert: an unguarded throw there now aborts the WHOLE push before a single
+/// row is sent, where previously it could only affect the photo phase.
+class ThrowingListingSyncRemote extends FakeSyncRemote {
+  @override
+  Future<Set<String>> listPhotoObjectPaths(String uid) async {
+    throw Exception('listPhotoObjectPaths failed: simulated storage outage');
+  }
+}
+
 /// [FakeSyncRemote] variant whose [upsertOwnRows] reports EVERY attempted
 /// table as failed — exactly the shape `SupabaseSyncRemote.upsertOwnRows`
 /// returns when each table's round trip throws (offline, captive portal,
@@ -1240,6 +1255,74 @@ void main() {
           result.fullyLanded,
           isTrue,
           reason: 'reported, but not treated as a failure to retry',
+        );
+      },
+    );
+
+    test(
+      'a Storage LISTING outage does not abort the whole push: the photo rows '
+      'are withheld and reported, every OTHER table still lands, and pushOwn '
+      'returns a result instead of throwing — moving the photo phase above '
+      'the row upsert (S5) would otherwise have turned a photos-only outage '
+      'into a total push failure that lands nothing at all',
+      () async {
+        final remote = ThrowingListingSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+        // The shape a real local write leaves behind — without this the
+        // "stays dirty" assertion below would be vacuous, since
+        // seedWallHierarchy inserts rows already clean.
+        await (c.db.update(c.db.photos)..where((t) => t.id.equals('photo-1')))
+            .write(const PhotosCompanion(dirty: Value(true)));
+
+        final result = await c.service.pushOwn();
+
+        expect(
+          result.didPush,
+          isTrue,
+          reason: 'pushOwn must not propagate the listing throw',
+        );
+        expect(result.photosFailed, 1);
+        expect(result.fullyLanded, isFalse);
+        expect(result.photoErrors.join(' '), contains('simulated storage outage'));
+        expect(
+          result.rowsPushed,
+          4,
+          reason:
+              'area + sector + wall + route still land — a Storage outage has '
+              'nothing to do with them',
+        );
+
+        final ownRows = await remote.fetchOwnRows(_uidU1);
+        expect(ownRows['areas']!.map((r) => r['id']), ['area-1']);
+        expect(
+          ownRows['photos'],
+          isEmpty,
+          reason: 'no orphan row: the bytes did not land, so neither does it',
+        );
+
+        final photo = await (c.db.select(
+          c.db.photos,
+        )..where((t) => t.id.equals('photo-1'))).getSingle();
+        expect(
+          photo.dirty,
+          isTrue,
+          reason: 'the withheld row stays dirty, so the retry re-sends it',
         );
       },
     );

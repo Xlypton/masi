@@ -921,9 +921,22 @@ class SyncService {
   ///  - already present remotely, or tombstoned -> not a problem at all;
   ///    counted nowhere.
   ///
-  /// The two `list*ObjectPaths` calls are deliberately left UN-guarded: their
-  /// throw semantics (and the `photos.isEmpty` short-circuit above them) are
-  /// §1d's honesty fix, not this method's.
+  /// The two `list*ObjectPaths` calls ARE guarded, and that guard is a
+  /// consequence of the bytes-before-metadata reorder rather than a style
+  /// choice. §1f's own plan says to leave them un-guarded ("their throw
+  /// semantics are §1d's concern") — which was true while this method ran
+  /// AFTER `upsertOwnRows`, since a throw could then only cost the photo
+  /// phase. Once it runs BEFORE the upsert, the identical throw aborts the
+  /// WHOLE push before a single row is sent, so a Supabase STORAGE outage
+  /// would stop areas/sectors/walls/routes — which have nothing to do with
+  /// Storage — from reaching the cloud at all.
+  ///
+  /// A listing failure is therefore treated as "every candidate photo failed,
+  /// retryably": their rows are withheld (no orphan rows), every other table
+  /// still pushes, `fullyLanded` is false so nothing reports "Synced", and the
+  /// retry loop re-sends them. Deliberately NOT "assume nothing is uploaded
+  /// yet and re-upload everything" — that would resurrect S6's mass
+  /// re-upload of full-resolution bytes on a transient hiccup.
   Future<PhotoUploadOutcome> _uploadOwnPhotos(
     String uid,
     List<db.Photo> photos,
@@ -939,13 +952,40 @@ class SyncService {
       );
     }
 
-    final alreadyPrivate = await _remote.listPhotoObjectPaths(uid);
-    final alreadyShared = await _remote.listSharedPhotoObjectPaths();
     final seenCanonicalIds = <String>{};
     final failedCanonicalIds = <String>{};
     final errors = <String>[];
     var uploaded = 0;
     var missingLocalBytes = 0;
+
+    final Set<String> alreadyPrivate;
+    final Set<String> alreadyShared;
+    try {
+      alreadyPrivate = await _remote.listPhotoObjectPaths(uid);
+      alreadyShared = await _remote.listSharedPhotoObjectPaths();
+    } catch (e) {
+      // Without the skip-set there is no safe way to decide what still needs
+      // uploading, so every non-tombstoned photo is reported as a retryable
+      // failure and its row withheld. See this method's doc for why this is
+      // guarded at all now that it runs before the row upsert.
+      for (final photo in photos) {
+        if (photo.deletedAt != null) continue;
+        failedCanonicalIds.add(_canonicalPhotoId(photo));
+      }
+      for (final canonicalId in failedCanonicalIds) {
+        errors.add(
+          'photo $canonicalId: could not list already-uploaded objects, so '
+          'nothing was uploaded: $e',
+        );
+      }
+      return (
+        uploaded: 0,
+        failed: failedCanonicalIds.length,
+        missingLocalBytes: 0,
+        failedCanonicalIds: failedCanonicalIds,
+        errors: errors,
+      );
+    }
 
     for (final photo in photos) {
       final canonicalId = _canonicalPhotoId(photo);
