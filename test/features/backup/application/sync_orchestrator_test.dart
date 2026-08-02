@@ -156,6 +156,49 @@ class _FailingPushSyncRemote extends _CountingSyncRemote {
   }
 }
 
+/// A [_CountingSyncRemote] that PERMANENTLY rejects one table while every
+/// other table lands, and records how many rows each push handed it.
+///
+/// The shape of a row the server will never accept (a constraint the client
+/// does not know about, a column the deployed schema is missing). The point
+/// is that no amount of retrying fixes it, so anything gated on "retry until
+/// fully landed" never converges.
+class _OneTableRejectingSyncRemote extends _CountingSyncRemote {
+  _OneTableRejectingSyncRemote(this.rejectedTable);
+
+  final String rejectedTable;
+
+  /// Total rows handed to `upsertOwnRows` per call, in order.
+  final List<int> payloadSizes = [];
+
+  @override
+  Future<List<TablePushOutcome>> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {
+    pushCallCount++;
+    payloadSizes.add(
+      tablesToRows.values.fold<int>(0, (sum, rows) => sum + rows.length),
+    );
+    return [
+      for (final entry in tablesToRows.entries)
+        if (entry.value.isNotEmpty)
+          if (entry.key == rejectedTable)
+            TablePushOutcome.failed(
+              table: entry.key,
+              rowsFailed: entry.value.length,
+              error: Exception('$rejectedTable permanently rejected'),
+            )
+          else
+            TablePushOutcome.ok(
+              table: entry.key,
+              rowsUpserted: entry.value.length,
+              rowsSkippedNewerRemote: 0,
+            ),
+    ];
+  }
+}
+
 /// A [SyncService] that reports a push in which the ROW channel is entirely
 /// clean but a photo's BYTES failed — the exact shape §1f's row-withholding
 /// produces, and the one reconciliation D-2 is about.
@@ -1375,6 +1418,11 @@ void main() {
         primeOrchestrator(container);
         await Future<void>.delayed(const Duration(milliseconds: 5));
 
+        // Seed BEFORE the first push: the nothing-pending early-out applies
+        // in every scope now, so a push against a clean database never
+        // reaches the remote and there is no in-flight window to guard.
+        await insertArea(db, 'a1', ownerId: 'u1');
+
         final notifier = container.read(syncOrchestratorProvider.notifier);
         final first = notifier.pushNow();
         final second = notifier.pushNow();
@@ -1387,10 +1435,10 @@ void main() {
         await Future.wait([first, second]);
         expect(remote.pushCallCount, 1);
 
-        // The guard must release once the push settles. `_fullResyncDue` is
-        // retired by the first (confirmed, full-scope) push, so this second
-        // call is dirtyOnly — seed a dirty row so it has something to send.
-        await insertArea(db, 'a1', ownerId: 'u1');
+        // The guard must release once the push settles. The first push
+        // confirmed and cleared a1, so seed a second dirty row for this one
+        // to have something to send.
+        await insertArea(db, 'a2', ownerId: 'u1');
         await notifier.pushNow();
         expect(remote.pushCallCount, 2);
       },
@@ -1499,9 +1547,12 @@ void main() {
     );
 
     test(
-      'the retry loop TERMINATES once nothing is dirty -- a clean database '
-      'hits the nothing-pending early-out and never reaches the remote, so '
-      'this is a loop with unbounded attempts, not an unbounded loop',
+      'the retry loop TERMINATES once nothing is dirty, in DIRTY-ONLY scope -- '
+      'a clean database hits the nothing-pending early-out and never reaches '
+      'the remote, so this is a loop with unbounded attempts, not an '
+      'unbounded loop. The FULL-scope half of that guarantee is covered by '
+      '"the loop still TERMINATES when nothing is dirty even in FULL scope"; '
+      'this test alone never established it',
       () async {
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
@@ -1699,6 +1750,161 @@ void main() {
           isEmpty,
           reason: 'the regain push succeeded, so no retry was ever armed',
         );
+      },
+    );
+  });
+
+  group('S2: the retry loop CONVERGES — scope stops escalating', () {
+    Future<void> insertSector(
+      AppDatabase db,
+      String id, {
+      required String areaId,
+    }) {
+      return db
+          .into(db.sectors)
+          .insert(
+            SectorsCompanion.insert(
+              id: id,
+              createdAt: 100,
+              updatedAt: 100,
+              dirty: const Value(true),
+              ownerId: const Value('u1'),
+              areaId: areaId,
+              name: 'Sector $id',
+              sortOrder: 0,
+            ),
+          );
+    }
+
+    test(
+      'ONE permanently-rejected row must not make every future push re-send '
+      'the WHOLE library: the full-scope safety net retires once a full push '
+      'has RUN, not once one has fully landed — a row the server always '
+      'rejects means fullyLanded is never true, so the scope never came back '
+      'down and the payload never shrank',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _OneTableRejectingSyncRemote('sectors');
+        final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          retrySchedule: schedule,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await insertArea(db, 'a2', ownerId: 'u1');
+        await insertArea(db, 'a3', ownerId: 'u1');
+        await insertSector(db, 's1', areaId: 'a1');
+        await insertSector(db, 's2', areaId: 'a1');
+        await insertSector(db, 's3', areaId: 'a1');
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await notifier.pushNow();
+        await notifier.pushNow();
+        await notifier.pushNow();
+
+        expect(
+          remote.payloadSizes.first,
+          6,
+          reason: 'the first push is full scope by design (app start)',
+        );
+        expect(
+          remote.payloadSizes.sublist(1),
+          everyElement(3),
+          reason:
+              'the three areas LANDED and went clean, so only the three '
+              'permanently-rejected sectors should still be sent; [6,6,6] '
+              'means the whole library is re-sent forever',
+        );
+      },
+    );
+
+    test(
+      'the loop still TERMINATES when nothing is dirty even in FULL scope — '
+      'the nothing-pending early-out used to be gated on dirtyOnly, so a '
+      'fully-synced device with _fullResyncDue armed (true on every app start '
+      'and every connectivity regain) retried a failing push every 5 minutes '
+      'forever with nothing whatsoever to send',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _FailingPushSyncRemote();
+        final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          retrySchedule: schedule,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        // Nothing dirty at all, and _fullResyncDue is still armed from build.
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await notifier.pushNow();
+
+        expect(
+          remote.pushCallCount,
+          0,
+          reason: 'there is nothing to push, whatever the scope says',
+        );
+        expect(
+          schedule.attempts,
+          isEmpty,
+          reason: 'and therefore nothing to retry',
+        );
+      },
+    );
+  });
+
+  group('signing out clears the push-side error', () {
+    test(
+      'a failed push followed by a sign-out leaves lastPushError null — it '
+      'used to survive, so the Account screen read "Sync error" indefinitely '
+      'with no way to clear it (a signed-out push can never succeed)',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _FailingPushSyncRemote();
+        final auth = _FakeAuthRepository(
+          const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+        );
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: auth,
+          debounce: const Duration(milliseconds: 15),
+          retrySchedule: _RecordingRetrySchedule(const Duration(hours: 1)),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        expect(
+          container.read(syncOrchestratorProvider).lastPushError,
+          isNotNull,
+          reason: 'precondition: the push really did fail',
+        );
+
+        auth.currentSession = const AuthSessionState.signedOut();
+        await container.read(syncOrchestratorProvider.notifier).pushNow();
+
+        expect(container.read(syncOrchestratorProvider).lastPushError, isNull);
+        expect(container.read(syncOrchestratorProvider).status, SyncStatus.idle);
       },
     );
   });
