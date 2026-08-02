@@ -67,6 +67,30 @@ enum StorageMissingFeature {
   workerError,
 }
 
+/// Why [StorageDurability.unavailable] was reported.
+///
+/// Exists so the UI can tell two situations apart that share one verdict but
+/// mean opposite things to the user. Both block writes; only one of them is
+/// bad news about their data. Sniffing [StorageDurability.unavailableReason]
+/// for a substring would work today and rot the first time the message is
+/// reworded, so the distinction is carried as a type.
+enum StorageUnavailableCause {
+  /// The open, or the first query, failed for a reason we have not classified
+  /// — a dead worker, a browser that refuses storage outright, a corrupt file.
+  /// Nothing is deliberately deleted on this path either, but nothing is
+  /// promised about the data's state.
+  failed,
+
+  /// An OLDER app shell refused to open a NEWER local database (audit item L7
+  /// — see `core/db/schema_downgrade.dart`).
+  ///
+  /// The distinguishing fact: the database is provably untouched. The guard's
+  /// entire purpose is to throw BEFORE drift can renumber or migrate anything,
+  /// so "your topos are safe" is a statement of fact here, and the remedy is
+  /// an app update rather than anything about this browser.
+  schemaDowngrade,
+}
+
 /// The platform connection layer's verdict on local persistence.
 ///
 /// Comes in three shapes: not-yet-known ([probing]), a chosen backend (the
@@ -79,7 +103,8 @@ class StorageDurability {
     required this.backend,
     this.missingFeatures = const {},
   })  : unavailable = false,
-        unavailableReason = null;
+        unavailableReason = null,
+        unavailableCause = null;
 
   /// The state before any verdict has arrived.
   ///
@@ -98,7 +123,8 @@ class StorageDurability {
       : backend = null,
         missingFeatures = const {},
         unavailable = false,
-        unavailableReason = null;
+        unavailableReason = null,
+        unavailableCause = null;
 
   /// The connection layer's open call itself threw, so no [backend] was ever
   /// chosen. [unavailableReason] is a short description (typically the
@@ -111,10 +137,13 @@ class StorageDurability {
   /// opened cannot be trusted with new data either. This does not attempt to
   /// recover or fabricate a working database — see `connection_web.dart`'s
   /// `catch` around `WasmDatabase.open` for the only production caller.
-  const StorageDurability.unavailable(this.unavailableReason)
-      : backend = null,
+  const StorageDurability.unavailable(
+    this.unavailableReason, {
+    StorageUnavailableCause cause = StorageUnavailableCause.failed,
+  })  : backend = null,
         missingFeatures = const {},
-        unavailable = true;
+        unavailable = true,
+        unavailableCause = cause;
 
   /// `null` while [isProbing] or [unavailable] — nothing was ever chosen.
   final StorageBackend? backend;
@@ -129,6 +158,13 @@ class StorageDurability {
   /// Short description of why [unavailable] is true. `null` unless
   /// [unavailable].
   final String? unavailableReason;
+
+  /// Which KIND of unavailability this is. `null` unless [unavailable].
+  ///
+  /// Drives the storage banner's copy: a schema downgrade must not be
+  /// explained with the blocked-browser wording, which would tell a user their
+  /// intact library is unsaveable. See [StorageUnavailableCause].
+  final StorageUnavailableCause? unavailableCause;
 
   /// No verdict yet. False once ANY verdict has landed — [unavailable] is
   /// itself a (bad) verdict, not an absence of one.
@@ -151,7 +187,8 @@ class StorageDurability {
           other.backend == backend &&
           setEquals(other.missingFeatures, missingFeatures) &&
           other.unavailable == unavailable &&
-          other.unavailableReason == unavailableReason);
+          other.unavailableReason == unavailableReason &&
+          other.unavailableCause == unavailableCause);
 
   @override
   int get hashCode => Object.hash(
@@ -159,13 +196,15 @@ class StorageDurability {
         Object.hashAllUnordered(missingFeatures),
         unavailable,
         unavailableReason,
+        unavailableCause,
       );
 
   @override
   String toString() =>
       'StorageDurability(backend: $backend, durable: $isDurable, '
       'missingFeatures: $missingFeatures, unavailable: $unavailable'
-      '${unavailableReason == null ? '' : ', unavailableReason: $unavailableReason'})';
+      '${unavailableReason == null ? '' : ', unavailableReason: $unavailableReason'}'
+      '${unavailableCause == null ? '' : ', unavailableCause: ${unavailableCause!.name}'})';
 }
 
 /// Logs [durability] — deliberately NOT behind `kDebugMode`.
