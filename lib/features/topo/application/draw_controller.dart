@@ -199,6 +199,74 @@ class RouteWriteException implements Exception {
       'rolledBack: $rolledBack, cause: $cause)';
 }
 
+/// Why a route READ could not be completed, and the plain words to tell the
+/// climber — the load-side counterpart of [RouteWriteException].
+///
+/// UF-2 (an unreadable topo presenting as an empty one). [DrawController
+/// .loadForWall]'s repository read used to be unwrapped, so a drift/quota/
+/// database failure propagated out of it. The two harms that caused are
+/// documented on [DrawController.loadForWall] itself; this type is the record
+/// that makes the second one impossible to hide, because
+/// [DrawState.routes] being empty cannot on its own distinguish
+/// **"this topo has no routes"** from **"this topo's routes could not be
+/// read"**. Those two look identical on the canvas and mean opposite things:
+/// the first invites the climber to draw, the second means their work is
+/// sitting on disk unread and drawing over it produces duplicates.
+///
+/// Reuses [PhotoWriteFailure] and [classifyPhotoWriteFailure] for exactly the
+/// reason [RouteWriteException] does (see its doc): that classifier is
+/// deliberately string-based and engine-agnostic so every storage path shares
+/// one place to fix when a browser changes its wording. Only the nouns differ
+/// — and here so does the reassurance, which is the whole point of the
+/// message.
+class RouteLoadException implements Exception {
+  const RouteLoadException({
+    required this.failure,
+    required this.wallId,
+    required this.photoId,
+    this.cause,
+  });
+
+  /// What went wrong, classified for presentation.
+  final PhotoWriteFailure failure;
+
+  /// The wall whose routes could not be read. Diagnostics only.
+  final String wallId;
+
+  /// The photo whose routes could not be read. Diagnostics only.
+  final String photoId;
+
+  /// The underlying error, kept for logging only. Callers must present
+  /// [userMessage], never this.
+  final Object? cause;
+
+  /// A short, complete sentence safe to render straight into a `SnackBar`.
+  ///
+  /// Mirrors [PhotoWriteException.userMessage]/[RouteWriteException
+  /// .userMessage] conventions — no exception name, no identifier, one
+  /// actionable sentence, and the shared "Out of storage space — … Free up
+  /// space on this device and try again." frame for a quota failure.
+  ///
+  /// The clause that matters most is **"they are still saved"**. Every other
+  /// failure message in this app tells the climber something was NOT written;
+  /// this one has to tell them the opposite — the routes exist and were merely
+  /// unreadable — because the alternative reading ("my routes are gone") is
+  /// what makes a climber redraw work that is already on disk.
+  String get userMessage => switch (failure) {
+    PhotoWriteFailure.quotaExceeded =>
+      "Out of storage space — this topo's routes could not be loaded. They "
+          'are still saved. Free up space on this device and try again.',
+    PhotoWriteFailure.unknown =>
+      "This topo's routes could not be loaded. They are still saved — reopen "
+          'this topo to try again.',
+  };
+
+  @override
+  String toString() =>
+      'RouteLoadException(${failure.name}, wallId: $wallId, '
+      'photoId: $photoId, cause: $cause)';
+}
+
 /// Immutable state for the topo route drawing feature.
 ///
 /// [currentPoints] and the points inside [routes] are expressed in percent
@@ -222,6 +290,7 @@ class DrawState {
     this.switchGeneration = 0,
     this.switchTargetPhotoId,
     this.lastWriteFailure,
+    this.lastLoadFailure,
   });
 
   final DrawMode mode;
@@ -330,6 +399,27 @@ class DrawState {
   /// WHY their route just disappeared instead of leaving them guessing.
   final RouteWriteException? lastWriteFailure;
 
+  /// UF-2: the [DrawController.loadForWall] read that FAILED for the photo
+  /// currently on screen, or null when [routes] is a TRUSTWORTHY picture of
+  /// what is stored (the normal case — no load has failed, or a later one
+  /// succeeded).
+  ///
+  /// This is the field that distinguishes **empty** from **unknown**, and it
+  /// is deliberately NOT cleared by the presenter the way
+  /// [lastWriteFailure] is. That one is a notification: once the SnackBar has
+  /// been shown, the event is over. This one is a STANDING PROPERTY of what
+  /// the canvas is currently displaying — for as long as it is non-null,
+  /// [routes] is known to be incomplete and the canvas must not present
+  /// itself as an empty-but-correct topo. Clearing it on presentation would
+  /// throw away exactly the fact the canvas needs to keep rendering
+  /// honestly.
+  ///
+  /// Cleared only by the two events that actually restore knowledge: a
+  /// [DrawController.loadForWall] that succeeds (the routes are known again),
+  /// and [DrawController.beginPhotoSwitch] (a new attempt at a new photo —
+  /// the old photo's failure must not keep warning over it).
+  final RouteLoadException? lastLoadFailure;
+
   /// Operations applied so far, available to be inverted by [undo]. See
   /// [DrawOp].
   final List<DrawOp> undoStack;
@@ -376,6 +466,8 @@ class DrawState {
     bool switchTargetPhotoIdSet = false,
     RouteWriteException? lastWriteFailure,
     bool lastWriteFailureSet = false,
+    RouteLoadException? lastLoadFailure,
+    bool lastLoadFailureSet = false,
   }) {
     return DrawState(
       mode: mode ?? this.mode,
@@ -406,6 +498,9 @@ class DrawState {
       lastWriteFailure: lastWriteFailureSet
           ? lastWriteFailure
           : (lastWriteFailure ?? this.lastWriteFailure),
+      lastLoadFailure: lastLoadFailureSet
+          ? lastLoadFailure
+          : (lastLoadFailure ?? this.lastLoadFailure),
     );
   }
 }
@@ -1223,6 +1318,12 @@ class DrawController extends Notifier<DrawState> {
       // target". See DrawState.switchTargetPhotoId's doc.
       switchTargetPhotoIdSet: true,
       switchTargetPhotoId: null,
+      // UF-2: a new switch is a new attempt at a new photo. The PREVIOUS
+      // photo's load failure says nothing about this one and must not keep
+      // warning over it — the incoming loadForWall will set it again if this
+      // read fails too. See [DrawState.lastLoadFailure]'s doc.
+      lastLoadFailureSet: true,
+      lastLoadFailure: null,
     );
     return state.switchGeneration;
   }
@@ -1345,15 +1446,100 @@ class DrawController extends Notifier<DrawState> {
   /// already have been overwritten by a newer [beginPhotoSwitch]/
   /// [loadForWall] pair, and that newer state must not be clobbered by a
   /// stale call bailing out.
+  ///
+  /// UF-2 (CONFIRMED — "an unreadable topo presents as an empty one, so the
+  /// climber redraws it"): the repository read below is WRAPPED, and a failure
+  /// is reported through [DrawState.lastLoadFailure] rather than propagating.
+  /// It used to be unwrapped, and the two callers that catch at all
+  /// (`_loadInitialPhotoForWall`, `_switchToPhoto`) only `debugPrint` — the
+  /// third, `_attachPhotoAndLoad`, is the one that already settled correctly.
+  /// That cost two things:
+  ///
+  ///  1. **The switch was never settled.** [beginPhotoSwitch] had already set
+  ///     [DrawState.isSwitchingPhoto]; the throw skipped every line that could
+  ///     clear it. Stuck `true` is precisely the state [cancelPhotoSwitch]
+  ///     exists to prevent.
+  ///
+  ///  2. **It then corrupted a LATER, unrelated switch — with a database
+  ///     write.** This is the harm that matters. With the flag stuck, the next
+  ///     [beginPhotoSwitch] took its "a switch is still in flight" branch and
+  ///     CARRIED [DrawState.routes] FORWARD, and the next SUCCESSFUL
+  ///     [loadForWall] merged them in and persisted them via the preserved-
+  ///     routes loop below. So: photo 1's routes fail to load, the canvas
+  ///     renders a blank topo, the climber reasonably concludes their work is
+  ///     gone and redraws it, they open photo 2 — and the route they drew for
+  ///     photo 1 is written into photo 2's rows. A silent, delayed,
+  ///     wrong-photo write, reproduced in
+  ///     `test/features/topo/application/draw_controller_load_failure_test
+  ///     .dart`'s second-order group.
+  ///
+  /// The failure branch therefore settles the switch, records the failure, and
+  /// deliberately leaves [DrawState.activeWallId]/[DrawState.activePhotoId]
+  /// null so persistence stays OFF for a photo whose stored routes are
+  /// unknown. Settling alone already closes harm 2 (the next
+  /// [beginPhotoSwitch] now takes its ordinary clear-routes branch); the
+  /// record is what closes harm 2's *cause*, by letting the canvas stop
+  /// telling the climber the topo is empty when it merely could not be read.
   Future<void> loadForWall(String wallId, String photoId) async {
     final myGeneration = state.switchGeneration;
     state = state.copyWith(
       switchTargetPhotoIdSet: true,
       switchTargetPhotoId: photoId,
     );
-    final loaded = await ref
-        .read(routeRepositoryProvider)
-        .loadRoutes(wallId, photoId);
+
+    final List<TopoRoute> loaded;
+    try {
+      loaded = await ref
+          .read(routeRepositoryProvider)
+          .loadRoutes(wallId, photoId);
+    } catch (error, stackTrace) {
+      debugPrint(
+        'loadForWall($wallId, $photoId): route load failed: '
+        '$error\n$stackTrace',
+      );
+      // The controller is autoDispose: if its screen was popped during the
+      // await there is no state left to settle, and assigning would throw.
+      // Mirrors [_writeThrough]'s identical guard.
+      if (!ref.mounted) return;
+      // Superseded by a newer switch while this read was failing: that switch
+      // owns the flag now and its OWN loadForWall/cancelPhotoSwitch will
+      // settle it. Marking it settled from here would do exactly what
+      // [cancelPhotoSwitch]'s generation guard exists to prevent. Nothing is
+      // recorded either — this failure belongs to a photo the climber has
+      // already left.
+      if (state.switchGeneration != myGeneration) return;
+      state = state.copyWith(
+        // (1) SETTLE. A failed read is an exit path like any other, and this
+        // method is one of only two places that can close a switch. Leaving
+        // isSwitchingPhoto true is what let a LATER, unrelated
+        // beginPhotoSwitch carry stray routes forward into another photo's
+        // preserved-routes loop and persist them there — see this method's
+        // UF-2 doc above.
+        isSwitchingPhoto: false,
+        switchTargetPhotoIdSet: true,
+        switchTargetPhotoId: null,
+        // (2) RECORD. routes stays empty, and empty is ambiguous: it reads as
+        // "this topo has no routes" when the truth is "this topo's routes
+        // could not be read". This is the field that tells those apart so the
+        // canvas can stop implying the climber's work is gone.
+        lastLoadFailureSet: true,
+        lastLoadFailure: RouteLoadException(
+          failure: classifyPhotoWriteFailure(error),
+          wallId: wallId,
+          photoId: photoId,
+          cause: error,
+        ),
+      );
+      // (3) DO NOT set activeWallId/activePhotoId. They stay null, which
+      // keeps every write-through in this class switched off (see
+      // [commitRoute]'s null guard). That is deliberate and is the real
+      // data-integrity guarantee here: ids and numbers for new routes are
+      // derived from the LOADED set, so persisting anything against a photo
+      // whose stored routes were never read is how duplicates and id
+      // collisions get written. Unknown means read-only until it is known
+      // again.
+      return;
+    }
 
     if (state.switchGeneration != myGeneration) {
       return;
@@ -1403,6 +1589,12 @@ class DrawController extends Notifier<DrawState> {
       isSwitchingPhoto: false,
       switchTargetPhotoIdSet: true,
       switchTargetPhotoId: null,
+      // UF-2: the routes are known again, so the canvas must stop warning that
+      // they aren't. This is one of only two places that clears the marker
+      // (the other is [beginPhotoSwitch]) — deliberately NOT the presenter,
+      // see [DrawState.lastLoadFailure]'s doc.
+      lastLoadFailureSet: true,
+      lastLoadFailure: null,
     );
 
     for (final route in preserved) {

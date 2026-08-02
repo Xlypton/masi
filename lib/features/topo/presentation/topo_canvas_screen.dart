@@ -43,6 +43,32 @@ import 'package:masi/shared/presentation/masi_icon.dart';
 export 'topo_canvas_gps.dart';
 export 'topo_canvas_photo_ops.dart';
 
+/// A [SnackBar] presenting [error]'s [RouteLoadException.userMessage] behind a
+/// warning glyph — the READ-side sibling of `topo_canvas_photo_ops.dart`'s
+/// [photoWriteFailureSnackBar]/[routeWriteFailureSnackBar], deliberately the
+/// same shape for the same reason those two share theirs: one device problem
+/// must not read as three unrelated faults.
+///
+/// Lives HERE rather than beside its two siblings because it has exactly one
+/// consumer — [TopoCanvasScreen]'s `lastLoadFailure` listener. The other two
+/// were hoisted into `topo_canvas_photo_ops.dart` specifically because BOTH
+/// photo-attach entry points (this screen and `topos_screen.dart`'s
+/// `_handleNewTopo`) had to present identical words; no second screen loads
+/// routes, so hoisting this one would move it away from its only caller for
+/// no gain.
+SnackBar routeLoadFailureSnackBar(RouteLoadException error) {
+  return SnackBar(
+    content: Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        MasiIcon('warning', size: 18),
+        const SizedBox(width: 8),
+        Flexible(child: Text(error.userMessage)),
+      ],
+    ),
+  );
+}
+
 // Theme-follow fix: the canvas backdrop used to be a hardcoded near-black
 // (`_kCanvasBackdrop = Color(0xFF121316)`) regardless of the app's
 // light/dark theme. The Scaffold below now uses `colors.ground` — the same
@@ -1036,6 +1062,46 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       },
     );
 
+    // UF-2 (an unreadable topo presenting as an empty one), presentation half.
+    //
+    // [DrawController.loadForWall] now settles its switch and records
+    // [DrawState.lastLoadFailure] instead of propagating (see its UF-2 doc for
+    // the wrong-photo write that used to follow). That stops the CORRUPTION.
+    // It does not, on its own, stop the LIE: `routes` is still empty, and an
+    // empty canvas over a real photo says "this topo has no routes yet". A
+    // climber who believes that redraws work that is sitting on disk unread.
+    //
+    // Two responses, because they answer two different questions:
+    //  - the SnackBar answers "what just happened?" — same warning glyph and
+    //    same one-sentence frame as the photo/route WRITE failures, since a
+    //    climber can hit several in one session on one sick device;
+    //  - `topo-routes-unavailable` (built below) answers "what am I looking at
+    //    RIGHT NOW?", and unlike the SnackBar it stays for as long as the
+    //    answer is "an incomplete route set". That is why this listener does
+    //    NOT clear the record the way the write-failure listener above does —
+    //    see [DrawState.lastLoadFailure]'s doc for the notification-versus-
+    //    standing-property distinction.
+    //
+    // Also forces [DrawMode.view]. [DrawController.beginPhotoSwitch]
+    // deliberately preserves `mode` across a switch (it's a tool choice, not
+    // per-photo state), so a climber already drawing when the load failed
+    // would otherwise be left holding a live pen over a topo whose real routes
+    // nobody can see — the exact situation that produces duplicates. Writing
+    // provider state from a `ref.listen` callback is fine (the write-failure
+    // listener above does it); writing it during `build` would not be.
+    ref.listen<RouteLoadException?>(
+      drawControllerProvider(widget.wallId).select((s) => s.lastLoadFailure),
+      (previous, next) {
+        if (next == null) return;
+        ref
+            .read(drawControllerProvider(widget.wallId).notifier)
+            .setMode(DrawMode.view);
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(routeLoadFailureSnackBar(next));
+      },
+    );
+
     final imagePath = ref.watch(selectedImageProvider);
     // Web-perf fix (draw-gesture rebuild storm): `DrawState` has no
     // `operator==`, so watching the whole object made THIS screen (top
@@ -1065,6 +1131,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           activePhotoId: s.activePhotoId,
           selectedRouteId: s.selectedRouteId,
           switchTargetPhotoId: s.switchTargetPhotoId,
+          // UF-2: read below by both the `topo-routes-unavailable` banner and
+          // the mode-toggle gate, so it has to be part of what triggers a
+          // rebuild here — otherwise the canvas would keep presenting itself
+          // as a complete-but-empty topo until some unrelated field changed.
+          lastLoadFailure: s.lastLoadFailure,
         ),
       ),
     );
@@ -1299,11 +1370,80 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                   MasiSpacing.lg,
                   MasiSpacing.md,
                 ),
-                child: _buildBottomChrome(colors, drawNotifier, drawState.mode),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // UF-2: shares the bottom slot with the draw-mode chrome
+                    // rather than needing its own, because the two are
+                    // mutually exclusive by construction — a set load failure
+                    // is exactly what forces DrawMode.view and hides the mode
+                    // toggle, so `_buildBottomChrome` renders nothing whenever
+                    // this is showing.
+                    if (drawState.lastLoadFailure != null)
+                      _buildRoutesUnavailableNotice(
+                        context,
+                        colors,
+                        drawState.lastLoadFailure!,
+                      ),
+                    _buildBottomChrome(colors, drawNotifier, drawState.mode),
+                  ],
+                ),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  /// UF-2: the standing, non-dismissable counterpart to
+  /// [routeLoadFailureSnackBar] — shown for as long as
+  /// [DrawState.lastLoadFailure] is set, i.e. for as long as
+  /// [DrawState.routes] is an INCOMPLETE picture of what is stored.
+  ///
+  /// The SnackBar is gone in four seconds; the climber may be looking at this
+  /// canvas for the next twenty minutes. Everything else on screen — a real
+  /// photo, zero routes drawn on it — reads as "this topo has no routes yet",
+  /// which is the single most expensive thing this app could get wrong: acting
+  /// on it means redrawing routes that already exist. This notice is the only
+  /// thing standing between that reading and the truth, so it states the truth
+  /// in both directions: the routes could not be loaded, AND they are still
+  /// saved.
+  ///
+  /// Wired to no action on purpose. The honest remedy is to reopen the topo
+  /// (which re-runs the load from scratch through `_loadInitialPhotoForWall`);
+  /// a "Retry" button here would have to re-enter the switch machinery from a
+  /// screen state that never opened one, which is how the original bug was
+  /// built in the first place.
+  Widget _buildRoutesUnavailableNotice(
+    BuildContext context,
+    MasiColors colors,
+    RouteLoadException failure,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MasiSpacing.sm),
+      child: GlassChrome(
+        key: const Key('topo-routes-unavailable'),
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.md,
+          vertical: MasiSpacing.sm,
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            MasiIcon('warning', size: 18, color: colors.ink2),
+            const SizedBox(width: MasiSpacing.sm),
+            Flexible(
+              child: Text(
+                failure.userMessage,
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: colors.ink2),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1506,7 +1646,18 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // makes [TopoCanvasScreen.readOnly]'s "never enter Draw mode" guarantee
     // hold, since every mutating handler is otherwise unreachable once
     // draw mode itself is unreachable.
-    if (!widget.readOnly) {
+    //
+    // UF-2 gate, riding on exactly that property: while
+    // [DrawState.lastLoadFailure] is set, this photo's real route set was
+    // never read, so anything the climber draws would be numbered from an
+    // empty list and would duplicate routes that already exist on disk. The
+    // controller already refuses to PERSIST in that state (activeWallId stays
+    // null — see [DrawController.loadForWall]'s UF-2 doc); hiding the toggle
+    // is the honest front half of the same guarantee, so the climber is
+    // stopped before drawing rather than silently losing the work afterwards.
+    // The `topo-routes-unavailable` banner below is what explains the
+    // absence — a control that vanishes without a reason is its own bug.
+    if (!widget.readOnly && drawState.lastLoadFailure == null) {
       actions.add(
         IconButton(
           key: const Key('topo-mode-toggle'),
