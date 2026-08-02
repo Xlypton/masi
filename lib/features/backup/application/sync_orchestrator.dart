@@ -393,9 +393,13 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   /// S2 fix (§1e), layered on top: the scope is chosen from [_fullResyncDue],
   /// a push with nothing pending is a no-op that never touches `state`, and
   /// EVERY failure path arms a backoff retry. Note a failed push does NOT
-  /// throw — §1d converts a whole-call upsert throw into an
-  /// all-tables-failed RESULT — so the `!fullyLanded` branch, not the
-  /// `catch`, is the one that fires in practice.
+  /// throw for any NETWORK reason — §1d converts a whole-call upsert throw
+  /// into an all-tables-failed RESULT, and §1f does the same for a Storage
+  /// listing throw (which, once the photo phase moved ahead of the row
+  /// upsert, would otherwise have aborted the whole push before any row was
+  /// sent). So the `!fullyLanded` branch, not the `catch`, is the one that
+  /// fires in practice; the `catch` is left for genuinely unexpected local
+  /// failures such as the snapshot transaction itself.
   Future<void> _runPush() async {
     final service = ref.read(syncServiceProvider);
     final scope = _fullResyncDue ? PushScope.full : PushScope.dirtyOnly;

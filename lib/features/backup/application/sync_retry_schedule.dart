@@ -49,7 +49,7 @@ class SyncRetrySchedule {
   ///
   /// Computed by an early-returning loop rather than `pow`/`<<`: [attempt] is
   /// unbounded, and `base.inMilliseconds << 60` overflows. The loop can never
-  /// run more than ~ceil(log2(ceiling/base)) times (9 with the production
+  /// run more than ~ceil(log2(ceiling/base)) times (8 with the production
   /// defaults) because it returns the moment it reaches the ceiling.
   Duration envelopeFor(int attempt) {
     if (attempt <= 1) return base <= ceiling ? base : ceiling;

@@ -117,8 +117,7 @@ class TablePushOutcome {
 /// `List<Map<String, dynamic>>` (each map being one row's
 /// `<TableRow>.toJson()`/`<TableRow>.fromJson()` shape — camelCase keys,
 /// e.g. `ownerId`, `wallId`, per drift's default serializer), keyed by the
-/// table name (`areas`/`sectors`/`walls`/`photos`/`routes`, see
-/// [syncTableNames]).
+/// table name — all nine of [syncTableNames], not just the original five.
 ///
 /// Deliberately free of any Supabase type in its signatures (besides what
 /// [SupabaseSyncRemote] itself touches internally) so tests can supply a
@@ -391,11 +390,6 @@ const Map<String, List<String>> syncRequiredFields = {
   'likes': ['id', 'createdAt', 'updatedAt'],
 };
 
-/// Filters [rows] down to those satisfying [hasRequiredSyncFields] for
-/// [requiredFields] — every OTHER (valid) row in the same batch still
-/// passes through untouched. A dropped row is logged via [debugPrint]
-/// (tagged with [debugLabel], e.g. `'shared wall'`) rather than silently
-/// vanishing, to aid diagnosing a real backend data-quality issue.
 /// [filterValidSyncRows]'s reporting counterpart: splits [rows] into those
 /// satisfying [hasRequiredSyncFields] for [requiredFields] (`valid`) and
 /// those that don't (`invalid`), logging each dropped row exactly the same
@@ -428,6 +422,14 @@ partitionSyncRows(
   return (valid: valid, invalid: invalid);
 }
 
+/// Filters [rows] down to those satisfying [hasRequiredSyncFields] for
+/// [requiredFields] — every OTHER (valid) row in the same batch still
+/// passes through untouched. A dropped row is logged via [debugPrint]
+/// (tagged with [debugLabel], e.g. `'shared wall'`) rather than silently
+/// vanishing, to aid diagnosing a real backend data-quality issue.
+///
+/// Use [partitionSyncRows] instead when the caller must REPORT what it
+/// dropped rather than merely skip it (the push side must — see L5).
 List<Map<String, dynamic>> filterValidSyncRows(
   Iterable<Map<String, dynamic>> rows,
   List<String> requiredFields, {
@@ -466,7 +468,7 @@ Map<String, dynamic> stripLocalOnlySyncColumns(Map<String, dynamic> row) {
 
 /// Real [SyncRemote], backed by the Supabase client.
 ///
-/// LIVE: all eight tables (`areas`/`sectors`/`walls`/`photos`/`routes`/
+/// LIVE: all nine tables (`profiles`/`areas`/`sectors`/`walls`/`photos`/`routes`/
 /// `comments`/`likes`/`ascents`) exist on the real Supabase project (see
 /// `supabase/schema.sql`), with RLS (`"ownerId" = auth.uid()::text` for
 /// row-level own-data access, plus a `visibility = 'shared'`-scoped SELECT

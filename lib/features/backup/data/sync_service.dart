@@ -26,11 +26,14 @@ import 'sync_remote.dart';
 /// PRECONDITION for [dirtyOnly], and the reason [full] is retained: every
 /// push-worthy local write must set `dirty: true` alongside `updatedAt`. A
 /// writer that does not is invisible to a [dirtyOnly] push until the next
-/// [full] one. `LibraryCrudRepository` satisfies this as of §1e;
-/// `RouteRepository`'s three writes (`upsertRoute` insert/update,
-/// `softDeleteRoute`) do NOT yet — a route edit therefore only reaches the
-/// cloud via the app-start / connectivity-regain [full] push. That is a known
-/// gap, not a design choice; see `SyncService.hasPendingLocalChanges`.
+/// [full] one. Every push-worthy writer now satisfies this:
+/// `LibraryCrudRepository` as of §1e, and `RouteRepository`'s three writes
+/// (`upsertRoute` insert/update, `softDeleteRoute`) since the route-dirty
+/// fix — so a route-only edit schedules a push IMMEDIATELY rather than
+/// waiting for the next app-start / connectivity-regain [full] push, which
+/// is what it used to do. [full] is retained anyway: it is the safety net
+/// that makes the engine loss-proof even if some future writer forgets the
+/// flag. See `SyncService.hasPendingLocalChanges`.
 enum PushScope { full, dirtyOnly }
 
 /// Outcome of a [SyncService.pushOwn] call.
@@ -122,10 +125,12 @@ class PushSyncResult {
   /// Number of distinct photo files whose upload was REQUIRED this push and
   /// FAILED — the byte read threw, or `uploadPhoto`/`uploadSharedPhoto` threw.
   ///
-  /// RETRYABLE, and therefore the signal §1e's backoff loop keys off (see
-  /// [hasPhotoFailures]): a network blip / transient Storage error will
-  /// succeed on a later attempt, at which point the rows withheld below go up
-  /// too. Each of these photos' `Photos` rows was HELD BACK from this push's
+  /// RETRYABLE, which is why it is a term of [fullyLanded]: a network blip /
+  /// transient Storage error will succeed on a later attempt, at which point
+  /// the rows withheld below go up too. That `fullyLanded` term is what
+  /// actually drives the backoff loop — `SyncOrchestrator._runPush` keys the
+  /// retry off `fullyLanded`, never off [hasPhotoFailures], which is a
+  /// convenience predicate with no production caller. Each of these photos' `Photos` rows was HELD BACK from this push's
   /// metadata upsert (S5 — see [SyncService._uploadOwnPhotos]), which is what
   /// stops another device from ever pulling a row pointing at a Storage object
   /// that does not exist.
@@ -186,8 +191,12 @@ class PushSyncResult {
       didPush && rowsFailed == 0 && errors.isEmpty && photosFailed == 0;
 
   /// True when at least one photo's bytes failed to upload for a RETRYABLE
-  /// reason — the condition §1e's loop must schedule a retry on. Deliberately
-  /// does NOT include [photosMissingLocalBytes].
+  /// reason. Deliberately does NOT include [photosMissingLocalBytes].
+  ///
+  /// A readability helper only: nothing in `lib/` calls it, because the
+  /// retry is driven by [fullyLanded], which already embeds the identical
+  /// `photosFailed == 0` term. Kept because it names the concept at the call
+  /// sites that assert on it.
   bool get hasPhotoFailures => photosFailed > 0;
 
   @override
@@ -327,9 +336,9 @@ typedef PhotoUploadOutcome = ({
 ///    FK-ordered-import + last-write-wins machinery — [pullOwnAndShared]
 ///    hands it `{'tables': <fetched rows>}` maps, the exact shape
 ///    [BackupRepository.exportSnapshot] produces, so the existing
-///    Areas→Sectors→Walls→Photos(originals-before-slices)→Routes→Ascents→
-///    Comments→Likes ordering and per-row `updatedAt` comparison apply
-///    unchanged.
+///    Profiles→Areas→Sectors→Walls→Photos(originals-before-slices)→Routes→
+///    Ascents→Comments→Likes ordering and per-row `updatedAt` comparison
+///    apply unchanged.
 ///  - [AuthRepository]: gates push/pull on being signed in and supplies the
 ///    uid every own-row/private-photo path is scoped to.
 ///  - [ConnectivityService]: gates `wifiOnly` pushes on the current network
@@ -399,7 +408,7 @@ class SyncService {
   /// uses the default.
   final Map<String, List<String>> _pushRequiredFields;
 
-  /// Pushes every LOCAL row owned by the signed-in user (all eight tables,
+  /// Pushes every LOCAL row owned by the signed-in user (all nine tables,
   /// INCLUDING soft-deleted tombstones) up to [SyncRemote.upsertOwnRows],
   /// then uploads each distinct not-yet-uploaded photo file those rows
   /// reference — a private copy always, plus a SECOND shared copy for any
@@ -868,11 +877,13 @@ class SyncService {
   /// existence probe per table, short-circuiting on the first hit, rather
   /// than a count — the answer is a bool.
   ///
-  /// KNOWN GAP: this is only as truthful as its writers. `RouteRepository`'s
-  /// `upsertRoute`/`softDeleteRoute` do not set `dirty` yet, so a route-only
-  /// edit reads as "nothing pending" here and reaches the cloud on the next
-  /// [PushScope.full] push (app start / connectivity regain) rather than
-  /// immediately. See [PushScope].
+  /// This is only ever as truthful as its writers, and they all comply now:
+  /// `LibraryCrudRepository` as of §1e, `RouteRepository`'s
+  /// `upsertRoute`/`softDeleteRoute` since the route-dirty fix. A route-only
+  /// edit therefore reads as "pending" here and is pushed immediately,
+  /// instead of reading as "nothing pending" and waiting for the next
+  /// [PushScope.full] push. The retained [full] re-push is the backstop if a
+  /// future writer forgets the flag. See [PushScope].
   Future<bool> hasPendingLocalChanges() async {
     final uid = _authRepository.currentSession.uid;
     if (uid == null) return false;
@@ -1155,7 +1166,7 @@ class SyncService {
     }
 
     // ---- SHARED section(s) -----------------------------------------------
-    // Every currently-shared topo (any owner) — gathered from FOUR
+    // Every currently-shared topo (any owner) — gathered from THREE
     // independent sub-fetches (shared topos, shared ascents, profiles) plus
     // a photo-download pass, each isolated so one failing sub-fetch can't
     // lose rows another sub-fetch already gathered; the final shared
