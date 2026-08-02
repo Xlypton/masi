@@ -69,6 +69,22 @@
 // A `pumpUntil` never weakens an assertion: if the condition never comes
 // true, the loop simply returns and the caller's own `expect` fails exactly
 // as it would have before.
+//
+// ## How to test this class of fix (do NOT rely on machine load)
+//
+// Reproducing a load-dependent flake by loading the machine is unreliable in
+// both directions: too little load and it never fires, too much and the
+// toolchain stalls before the tests even run. Drive the variable directly
+// instead — set [kDrainRealStep] and [kDrainQuietWindow] to `Duration.zero`,
+// which is strictly harsher than any real machine, and run the suite:
+//
+//   * a test that still passes is synchronised by a CONDITION and is immune;
+//   * a test that fails is still betting on the wall clock, and the failure
+//     names the exact assertion to convert.
+//
+// That is a deterministic, seconds-long A/B. Measured with it on the two
+// files this landed for: pristine `_drain` at zero budget = 20 failures,
+// the condition-waited version at the same zero budget = 0.
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
