@@ -13,9 +13,12 @@ import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/location/geocoding_service.dart';
+import 'package:masi/features/backup/application/backup_providers.dart';
+import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// A tiny valid PNG's bytes (copied from `topos_screen_test.dart`'s
@@ -66,6 +69,40 @@ class _FakeGeocodingService implements GeocodingService {
   }
 }
 
+/// A [ConnectivityService] double whose reachability answer is scripted —
+/// mirrors `reachability_providers_test.dart`'s `_ScriptedConnectivity`
+/// (that one is private to its own file, so this is its own copy).
+/// [statusChanges] degrades to a never-emitting stream, exactly as
+/// `ConnectivityService.statusChanges`'s contract requires of an
+/// implementation with no real platform signal behind it.
+///
+/// [gate], when set, makes [isBackendReachable] wait on it instead of
+/// resolving immediately. An immediately-resolving fake would let the
+/// offline-hint tests below pass even if the production code never
+/// genuinely awaited the probe (a false pass for what is fundamentally
+/// async state) — gating it proves the hint only appears once the probe
+/// actually settles, not the instant a search comes back empty.
+class _FakeConnectivityService implements ConnectivityService {
+  _FakeConnectivityService(this.reachable);
+
+  bool reachable;
+  int probeCount = 0;
+  Completer<void>? gate;
+
+  @override
+  Future<bool> isBackendReachable() async {
+    probeCount++;
+    if (gate != null) await gate!.future;
+    return reachable;
+  }
+
+  @override
+  Future<NetworkStatus> currentStatus() async => NetworkStatus.wifi;
+
+  @override
+  Stream<NetworkStatus> statusChanges() => const Stream.empty();
+}
+
 const _railay = PlaceResult(
   displayName: 'Railay Beach, Krabi, Thailand',
   latitude: 8.0104,
@@ -88,16 +125,34 @@ const _railayEast = PlaceResult(
 /// `await`ed here -- only the harness's OWN `pumpWidget`/`pumpAndSettle`
 /// work is awaited by this helper, exactly like every other pattern in this
 /// codebase's widget tests.
-Future<BuildContext> _pumpHarness(WidgetTester tester) async {
+///
+/// [connectivity] backs `connectivityServiceProvider` — the picker's
+/// `initState` fires an unconditional, fire-and-forget reachability probe
+/// (see `set_location_picker.dart`'s doc), so every test needs a real
+/// `ProviderScope` ancestor for that `ref.read` to resolve against, even
+/// tests that never look at the offline hint themselves. Defaults to an
+/// always-reachable fake so pre-existing assertions (written before the
+/// offline hint existed) see no behavioral change.
+Future<BuildContext> _pumpHarness(
+  WidgetTester tester, {
+  ConnectivityService? connectivity,
+}) async {
   late BuildContext capturedContext;
   await tester.pumpWidget(
-    MaterialApp(
-      theme: MasiTheme.light,
-      home: Builder(
-        builder: (context) {
-          capturedContext = context;
-          return const SizedBox();
-        },
+    ProviderScope(
+      overrides: [
+        connectivityServiceProvider.overrideWithValue(
+          connectivity ?? _FakeConnectivityService(true),
+        ),
+      ],
+      child: MaterialApp(
+        theme: MasiTheme.light,
+        home: Builder(
+          builder: (context) {
+            capturedContext = context;
+            return const SizedBox();
+          },
+        ),
       ),
     ),
   );
@@ -197,13 +252,60 @@ void main() {
     );
 
     testWidgets(
-      'a query matching nothing shows no result rows and never crashes',
+      'a query matching nothing WHILE ONLINE shows no result rows, never '
+      'crashes, and does not show the offline hint -- a legitimately-empty '
+      'result is not the same state as "can\'t search"',
       (tester) async {
         final controller = MapController();
         addTearDown(controller.dispose);
         final geocoding = _FakeGeocodingService(const []);
+        final connectivity = _FakeConnectivityService(true);
 
-        final context = await _pumpHarness(tester);
+        final context = await _pumpHarness(tester, connectivity: connectivity);
+        final pickerFuture = showSetLocationPicker(
+          context,
+          tileProvider: _NoopTileProvider(),
+          controller: controller,
+          geocodingService: geocoding,
+        );
+        unawaited(pickerFuture);
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('set-location-search-field')),
+          'nowhere',
+        );
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump();
+        await tester.pump();
+
+        expect(geocoding.callCount, 1);
+        expect(
+          find.byKey(const Key('set-location-search-result-0')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('set-location-search-offline')),
+          findsNothing,
+          reason: 'the backend answered fine -- this is a genuine "no such '
+              'place", not an offline condition, so no hint must render',
+        );
+      },
+    );
+
+    testWidgets(
+      'a query matching nothing WHILE OFFLINE shows the "needs a '
+      'connection" hint instead of a silent empty dropdown -- and only '
+      'once the reachability probe genuinely settles, not the instant the '
+      'search comes back empty',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final geocoding = _FakeGeocodingService(const []);
+        final connectivity = _FakeConnectivityService(false)
+          ..gate = Completer<void>();
+
+        final context = await _pumpHarness(tester, connectivity: connectivity);
         final pickerFuture = showSetLocationPicker(
           context,
           tileProvider: _NoopTileProvider(),
@@ -222,7 +324,65 @@ void main() {
 
         expect(geocoding.callCount, 1);
         expect(
+          find.byKey(const Key('set-location-search-offline')),
+          findsNothing,
+          reason: 'the reachability probe this empty result triggered is '
+              'still in flight (gated) -- nothing has been decided yet, so '
+              'the hint must not render prematurely off an unresolved fake',
+        );
+
+        // Now let the gated probe actually resolve.
+        connectivity.gate!.complete();
+        await tester.pump();
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('set-location-search-offline')),
+          findsOneWidget,
+        );
+        expect(find.text('Search needs a connection.'), findsOneWidget);
+        expect(
           find.byKey(const Key('set-location-search-result-0')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'clearing the query hides the offline hint immediately, same as it '
+      'hides a normal results dropdown',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final geocoding = _FakeGeocodingService(const []);
+        final connectivity = _FakeConnectivityService(false);
+
+        final context = await _pumpHarness(tester, connectivity: connectivity);
+        final pickerFuture = showSetLocationPicker(
+          context,
+          tileProvider: _NoopTileProvider(),
+          controller: controller,
+          geocodingService: geocoding,
+        );
+        unawaited(pickerFuture);
+        await tester.pumpAndSettle();
+
+        final field = find.byKey(const Key('set-location-search-field'));
+        await tester.enterText(field, 'nowhere');
+        await tester.pump(const Duration(milliseconds: 400));
+        await tester.pump();
+        await tester.pump();
+        expect(
+          find.byKey(const Key('set-location-search-offline')),
+          findsOneWidget,
+          reason: 'sanity check: the hint is up before clearing',
+        );
+
+        await tester.enterText(field, '');
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('set-location-search-offline')),
           findsNothing,
         );
       },
@@ -510,23 +670,30 @@ void main() {
 
         late BuildContext capturedContext;
         await tester.pumpWidget(
-          MaterialApp(
-            theme: MasiTheme.light,
-            // The large-text-scale override itself, applied the same way
-            // as every other "layout overflow regression" test in this
-            // codebase (e.g. `topo_overflow_test.dart`): a `MediaQuery`
-            // wrapped around the whole app via `MaterialApp.builder`.
-            builder: (context, child) => MediaQuery(
-              data: MediaQuery.of(
-                context,
-              ).copyWith(textScaler: TextScaler.linear(3.0)),
-              child: child!,
-            ),
-            home: Builder(
-              builder: (context) {
-                capturedContext = context;
-                return const SizedBox();
-              },
+          ProviderScope(
+            overrides: [
+              connectivityServiceProvider.overrideWithValue(
+                _FakeConnectivityService(true),
+              ),
+            ],
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              // The large-text-scale override itself, applied the same way
+              // as every other "layout overflow regression" test in this
+              // codebase (e.g. `topo_overflow_test.dart`): a `MediaQuery`
+              // wrapped around the whole app via `MaterialApp.builder`.
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(3.0)),
+                child: child!,
+              ),
+              home: Builder(
+                builder: (context) {
+                  capturedContext = context;
+                  return const SizedBox();
+                },
+              ),
             ),
           ),
         );
