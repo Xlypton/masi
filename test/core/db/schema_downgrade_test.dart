@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:drift/drift.dart' show LazyDatabase;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -289,6 +290,37 @@ void main() {
       );
       expect(verdict.unavailableReason, contains('SchemaDowngradeException'));
       expect(verdict.unavailableReason, contains('Reload'));
+      // Typed, not sniffed from the reason string: the storage banner has to
+      // tell this case apart from "storage is broken" to avoid telling a user
+      // with an intact library that their topos cannot be saved. A substring
+      // check would rot the first time the message is reworded.
+      expect(
+        verdict.unavailableCause,
+        StorageUnavailableCause.schemaDowngrade,
+      );
+    },
+  );
+
+  test(
+    'an ordinary unusable database is NOT classified as a schema downgrade',
+    () async {
+      // Guards the discriminator against the lazy implementation that marks
+      // every failure a downgrade and shows "your topos are safe" over a
+      // genuinely broken storage backend.
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(
+            AppDatabase(LazyDatabase(() async => throw StateError('no disk'))),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await verifyDatabaseUsable(container);
+
+      final verdict = container.read(storageDurabilityProvider);
+      expect(verdict.unavailable, isTrue);
+      expect(verdict.unavailableCause, StorageUnavailableCause.failed);
     },
   );
 }

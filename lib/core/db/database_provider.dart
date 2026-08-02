@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app_database.dart';
 import 'connection/connection.dart';
+import 'schema_downgrade.dart';
 import 'settings_store.dart';
 import 'storage_durability_provider.dart';
 import '../../features/account/application/auth_providers.dart';
@@ -73,9 +74,19 @@ Future<void> verifyDatabaseUsable(ProviderContainer container) async {
   try {
     await container.read(appDatabaseProvider).customSelect('SELECT 1').get();
   } catch (error) {
-    container
-        .read(storageDurabilityProvider.notifier)
-        .report(StorageDurability.unavailable('$error'));
+    // The CAUSE is classified here rather than left for the UI to infer from
+    // the reason string: an L7 refusal and a dead storage backend both land on
+    // `unavailable`, but they are opposite news for the user — a downgrade
+    // means the library is provably intact and needs a newer app, a failure
+    // means storage itself is unusable. See `StorageUnavailableCause`.
+    container.read(storageDurabilityProvider.notifier).report(
+          StorageDurability.unavailable(
+            '$error',
+            cause: error is SchemaDowngradeException
+                ? StorageUnavailableCause.schemaDowngrade
+                : StorageUnavailableCause.failed,
+          ),
+        );
   }
 }
 
