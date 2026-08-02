@@ -207,6 +207,39 @@ class StorageDurability {
       '${unavailableCause == null ? '' : ', unavailableCause: ${unavailableCause!.name}'})';
 }
 
+/// One sentence explaining why creating things is turned off, or `null` when
+/// it is not.
+///
+/// The single source of truth for that wording. Three screens have to say it
+/// — the topos home's banner, the area/sector/wall lists, and the topo canvas
+/// — and each renders it in its own chrome (a bordered banner, an inline
+/// notice, a `GlassChrome` strip). Sharing a WIDGET across those would fight
+/// three different layouts; sharing the SENTENCE costs nothing and stops the
+/// app explaining the same condition three different ways.
+///
+/// Deliberately short and reason-first: it sits under a heading that has
+/// already said what is happening, and next to a control that has just
+/// visibly disappeared or greyed out. A control that vanishes without a reason
+/// is its own bug (see `topo_canvas_screen.dart`'s `topo-routes-unavailable`,
+/// whose doc makes the same point about the draw toggle).
+///
+/// Returns `null` for a healthy or still-[StorageDurability.isProbing] verdict,
+/// so a caller can use it directly as "should I show a notice at all".
+String? storageBlockedNotice(StorageDurability durability) {
+  if (!durability.isEphemeral) return null;
+  if (durability.unavailableCause == StorageUnavailableCause.schemaDowngrade) {
+    return 'This app is older than the data saved on this device, so it '
+        "won't open your library. Nothing has been lost — reload to get the "
+        'current version.';
+  }
+  if (durability.unavailable) {
+    return "This device's storage can't be opened, so nothing new can be "
+        'saved right now. Your saved topos have not been deleted.';
+  }
+  return 'Storage is blocked in this browser, so anything new would be lost '
+      'when the page reloads.';
+}
+
 /// Logs [durability] — deliberately NOT behind `kDebugMode`.
 ///
 /// This line is the only thing that can answer a "my data vanished" web

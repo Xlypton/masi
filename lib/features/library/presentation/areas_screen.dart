@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/db/storage_durability_provider.dart';
 import '../application/library_providers.dart';
 import '../data/library_crud_repository.dart';
 import 'crud_list_scaffold.dart';
@@ -20,6 +21,12 @@ class AreasScreen extends ConsumerWidget {
     return CrudListScaffold<AreaRef>(
       title: 'Areas',
       entityKey: 'area',
+      // Same interlock the topos home has had since §1a, reaching the other
+      // three create surfaces: nothing may be written into a store drift told
+      // us cannot keep it (or cannot be opened at all).
+      createBlockedReason: storageBlockedNotice(
+        ref.watch(storageDurabilityProvider),
+      ),
       asyncItems: asyncAreas,
       idOf: (area) => area.id,
       nameOf: (area) => area.name,

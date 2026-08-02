@@ -10,6 +10,7 @@ import 'package:latlong2/latlong.dart';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/db/storage_durability_provider.dart';
 import 'package:masi/core/platform/ar_support.dart';
 import 'package:masi/core/location/location_service.dart';
 import 'package:masi/features/library/application/library_providers.dart';
@@ -1102,6 +1103,36 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       },
     );
 
+    // Storage interlock, the canvas half of §1a. Non-null means the local
+    // database is either known non-durable (in-memory: every write succeeds
+    // and vanishes on reload) or could not be opened at all — so the editing
+    // affordances below must not be offered. Same three-part shape as UF-2
+    // directly above, for the same reason: forced back to view mode, the
+    // control that enters draw mode hidden, and a standing notice saying why,
+    // because a control that vanishes without a reason is its own bug.
+    //
+    // Deliberately NOT gating read-only interactions (pan/zoom, selecting a
+    // route, the legend, AR): a session that cannot save is still worth
+    // looking at, and blocking browsing buys no protection.
+    final storageBlocked = storageBlockedNotice(
+      ref.watch(storageDurabilityProvider),
+    );
+    // The verdict is normally final before this screen can mount — `bootApp`
+    // awaits `verifyDatabaseUsable` before `runApp`. It can still flip
+    // mid-session in one case: `main.dart`'s stalled-storage deadline
+    // publishes `unavailable` ~30s in. Forcing view mode then is what stops a
+    // climber being left holding a live pen over a database that has just
+    // been declared unusable.
+    ref.listen<String?>(
+      storageDurabilityProvider.select(storageBlockedNotice),
+      (previous, next) {
+        if (next == null || previous != null) return;
+        ref
+            .read(drawControllerProvider(widget.wallId).notifier)
+            .setMode(DrawMode.view);
+      },
+    );
+
     final imagePath = ref.watch(selectedImageProvider);
     // Web-perf fix (draw-gesture rebuild storm): `DrawState` has no
     // `operator==`, so watching the whole object made THIS screen (top
@@ -1380,10 +1411,21 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                     // toggle, so `_buildBottomChrome` renders nothing whenever
                     // this is showing.
                     if (drawState.lastLoadFailure != null)
-                      _buildRoutesUnavailableNotice(
+                      _buildStandingNotice(
                         context,
                         colors,
-                        drawState.lastLoadFailure!,
+                        noticeKey: const Key('topo-routes-unavailable'),
+                        message: drawState.lastLoadFailure!.userMessage,
+                      ),
+                    // Storage interlock. Same slot and same mutual exclusion
+                    // as UF-2 above: a blocked verdict hides the mode toggle,
+                    // so `_buildBottomChrome` renders nothing beneath this.
+                    if (storageBlocked != null)
+                      _buildStandingNotice(
+                        context,
+                        colors,
+                        noticeKey: const Key('topo-storage-blocked'),
+                        message: storageBlocked,
                       ),
                     _buildBottomChrome(colors, drawNotifier, drawState.mode),
                   ],
@@ -1415,15 +1457,20 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// a "Retry" button here would have to re-enter the switch machinery from a
   /// screen state that never opened one, which is how the original bug was
   /// built in the first place.
-  Widget _buildRoutesUnavailableNotice(
+  /// Generalised in place so the storage interlock below reuses this exact
+  /// chrome. Two different-looking "you can't do this right now" strips on one
+  /// screen would be worse than either alone, and a climber on a sick device
+  /// can plausibly hit both conditions in one session.
+  Widget _buildStandingNotice(
     BuildContext context,
-    MasiColors colors,
-    RouteLoadException failure,
-  ) {
+    MasiColors colors, {
+    required Key noticeKey,
+    required String message,
+  }) {
     return Padding(
       padding: const EdgeInsets.only(bottom: MasiSpacing.sm),
       child: GlassChrome(
-        key: const Key('topo-routes-unavailable'),
+        key: noticeKey,
         padding: const EdgeInsets.symmetric(
           horizontal: MasiSpacing.md,
           vertical: MasiSpacing.sm,
@@ -1436,7 +1483,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             const SizedBox(width: MasiSpacing.sm),
             Flexible(
               child: Text(
-                failure.userMessage,
+                message,
                 style: Theme.of(
                   context,
                 ).textTheme.bodySmall?.copyWith(color: colors.ink2),
@@ -1657,7 +1704,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // stopped before drawing rather than silently losing the work afterwards.
     // The `topo-routes-unavailable` banner below is what explains the
     // absence — a control that vanishes without a reason is its own bug.
-    if (!widget.readOnly && drawState.lastLoadFailure == null) {
+    //
+    // Storage gate, riding on the SAME property: when the local database
+    // cannot keep what we write (or cannot be opened), hiding this one control
+    // is what makes every mutating handler on this screen unreachable, exactly
+    // as `readOnly` and the UF-2 gate already do. `topo-storage-blocked`
+    // explains the absence.
+    if (!widget.readOnly &&
+        drawState.lastLoadFailure == null &&
+        storageBlockedNotice(ref.watch(storageDurabilityProvider)) == null) {
       actions.add(
         IconButton(
           key: const Key('topo-mode-toggle'),
@@ -1745,7 +1800,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // work with NO photo loaded yet (see `_buildEmptyState`) — the user's
     // only way to attach a wall's first photo. There is no bottom FAB for
     // this action; see `_buildBottomChrome`'s doc.
-    if (!widget.readOnly) {
+    // Storage gate: attaching a photo writes a row AND photo bytes, so it is
+    // creation in the fullest sense — the one editing control that is NOT
+    // reachable only through draw mode, hence gated explicitly here.
+    if (!widget.readOnly &&
+        storageBlockedNotice(ref.watch(storageDurabilityProvider)) == null) {
       actions.add(
         IconButton(
           key: const Key('topo-add-photo-button'),
@@ -1846,6 +1905,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
   Widget _buildEmptyState(BuildContext context) {
     final colors = MasiColors.of(context);
+    // Storage gate. Unlike the top-chrome glyphs, this button cannot simply be
+    // HIDDEN: it is the only thing on an otherwise empty screen, so removing
+    // it would leave "No photo yet — pick one to start" above nothing at all,
+    // which reads as a broken screen rather than a blocked one. Disabled in
+    // place, with the reason replacing the invitation.
+    final storageBlocked = storageBlockedNotice(
+      ref.watch(storageDurabilityProvider),
+    );
     return ColoredBox(
       color: colors.ground,
       child: Center(
@@ -1859,10 +1926,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               color: colors.ink3,
             ),
             const SizedBox(height: MasiSpacing.lg),
-            Text(
-              'No photo yet — pick one to start',
-              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                color: colors.ink2,
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.lg),
+              child: Text(
+                storageBlocked ?? 'No photo yet — pick one to start',
+                key: const Key('topo-empty-state-message'),
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                  color: colors.ink2,
+                ),
               ),
             ),
             // readOnly: no add affordance — there is no photo a read-only
@@ -1887,7 +1959,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                     borderRadius: BorderRadius.circular(MasiRadii.control),
                   ),
                 ),
-                onPressed: _pickImage,
+                onPressed: storageBlocked == null ? _pickImage : null,
                 child: const Text('Add a photo'),
               ),
             ],

@@ -62,6 +62,7 @@ class CrudListScaffold<T> extends StatelessWidget {
     required this.onDelete,
     this.subtitleOf,
     this.onMove,
+    this.createBlockedReason,
   });
 
   final String title;
@@ -84,10 +85,43 @@ class CrudListScaffold<T> extends StatelessWidget {
   /// `AreasScreen`/`WallsScreen` keep their existing row layout unchanged.
   final Future<void> Function(BuildContext context, T item)? onMove;
 
+  /// Why creating is unavailable right now, or `null` when it is available.
+  ///
+  /// Supplied by the caller rather than read from a provider here, because
+  /// this widget deliberately knows nothing about `ref` (see the class doc).
+  /// The three screens each pass
+  /// `storageBlockedNotice(ref.watch(storageDurabilityProvider))`, so the
+  /// wording is shared with the topos-home banner and the topo canvas instead
+  /// of being invented three times.
+  ///
+  /// Non-null disables the add button AND renders the sentence directly above
+  /// it. Both halves matter: a create button that is merely greyed out, with
+  /// nothing saying why, is the "dead tap" failure in a quieter costume.
+  final String? createBlockedReason;
+
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
+
+    // Two independent reasons creating cannot be offered, resolved to one
+    // sentence so the button has a single enabled/disabled rule.
+    //
+    // The error case is the one this widget could always see and never acted
+    // on: the add button lives OUTSIDE `asyncItems.when`, so when the list
+    // fails to load it renders "Something went wrong" over an empty body with
+    // a fully live "New area" button beside it. That button opens a name
+    // dialog and writes into the same database that just refused to be read.
+    //
+    // Order matters: a storage verdict explains the error rather than being
+    // explained by it (an unopenable database is WHY the list failed), so it
+    // wins when both are present.
+    final blockedReason =
+        createBlockedReason ??
+        (asyncItems.hasError
+            ? "This list couldn't be loaded, so nothing new can be added "
+                  'until it works. Try Retry above.'
+            : null);
 
     return Scaffold(
       appBar: AppBar(
@@ -151,21 +185,44 @@ class CrudListScaffold<T> extends StatelessWidget {
                 MasiSpacing.lg,
                 MasiSpacing.lg,
               ),
-              child: SizedBox(
-                width: double.infinity,
-                child: ElevatedButton(
-                  key: Key('$entityKey-add-fab'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: colors.accent,
-                    foregroundColor: colors.onAccent,
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(13),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  // A control that is unavailable without saying why is its
+                  // own bug — the same point `topo_canvas_screen.dart`'s
+                  // `topo-routes-unavailable` doc makes about the draw
+                  // toggle. Rendered above the button, not as a tooltip:
+                  // this is a touch UI, and a tooltip nobody can long-press
+                  // for is not an explanation.
+                  if (blockedReason != null) ...[
+                    Text(
+                      blockedReason,
+                      key: Key('$entityKey-add-blocked-reason'),
+                      style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: MasiSpacing.sm),
+                  ],
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      key: Key('$entityKey-add-fab'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: colors.accent,
+                        foregroundColor: colors.onAccent,
+                        padding: const EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(13),
+                        ),
+                      ),
+                      onPressed: blockedReason == null
+                          ? () => _handleCreate(context)
+                          : null,
+                      child: Text(addDialogTitle),
                     ),
                   ),
-                  onPressed: () => _handleCreate(context),
-                  child: Text(addDialogTitle),
-                ),
+                ],
               ),
             ),
           ],
