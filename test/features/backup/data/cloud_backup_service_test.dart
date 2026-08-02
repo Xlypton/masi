@@ -748,6 +748,186 @@ void main() {
       },
     );
   });
+
+  /// The cloud-restore half of the schema-downgrade hazard closed locally by
+  /// `SchemaDowngradeException` (`lib/core/db/schema_downgrade.dart`). The
+  /// cross-DEVICE shape is the reachable one: phone A updates, pushes a
+  /// snapshot at the new schema; phone B is still on the old build and pulls
+  /// it.
+  ///
+  /// [BackupRepository.importSnapshot] carries the choke-point guard, but
+  /// [CloudBackupService.pullBackup] must refuse EARLIER — before
+  /// `_downloadAndRewritePhotos` writes a single byte into this device's
+  /// photos directory. Hence every test below asserts the docs dir is still
+  /// empty: that assertion, not the throw, is what fails if the pullBackup
+  /// guard alone is removed.
+  group('schema downgrade: pullBackup refuses a too-new cloud snapshot', () {
+    /// Replaces [uid]'s backups row with one that CLAIMS the given versions,
+    /// leaving the snapshot payload (and the uploaded photo objects) exactly
+    /// as pushed.
+    void restampRemote(
+      FakeBackupRemote remote,
+      String uid, {
+      required int columnVersion,
+      required int blobVersion,
+    }) {
+      final existing = remote.backupsTable[uid]!;
+      remote.backupsTable[uid] = RemoteSnapshot(
+        snapshot: {...existing.snapshot, 'schemaVersion': blobVersion},
+        schemaVersion: columnVersion,
+        updatedAt: existing.updatedAt,
+      );
+    }
+
+    test(
+      'a snapshot pushed by a NEWER build is refused before anything is '
+      'downloaded: throws, writes no photo file, imports no row',
+      () async {
+        final remote = FakeBackupRemote();
+        final auth = FakeAuthRepository(_signedInA);
+
+        final containerA = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerA.db.close());
+        final originalFile = writeFile(containerA.srcDir, 'wall.jpg', 42);
+        await seedHierarchy(containerA.db, originalFile);
+        await containerA.service.pushBackup();
+
+        final tooNew = containerA.db.schemaVersion + 1;
+        restampRemote(
+          remote,
+          _uidA,
+          columnVersion: tooNew,
+          blobVersion: tooNew,
+        );
+
+        // A fresh device on the OLDER build.
+        final containerB = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerB.db.close());
+
+        await expectLater(
+          containerB.service.pullBackup(mode: ConflictMode.replace),
+          throwsA(isA<SnapshotSchemaDowngradeException>()),
+        );
+
+        expect(
+          containerB.docsDir.listSync(),
+          isEmpty,
+          reason: 'the refusal must precede _downloadAndRewritePhotos -- no '
+              'photo bytes may land on disk for a restore that is not going '
+              'to happen',
+        );
+        expect(await containerB.db.select(containerB.db.areas).get(), isEmpty);
+        expect(
+          await containerB.db.select(containerB.db.photos).get(),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      "the backups row's schema_version COLUMN alone is enough to refuse, "
+      'even when the snapshot blob understates it -- the two disagreeing is '
+      'itself a reason not to import',
+      () async {
+        final remote = FakeBackupRemote();
+        final auth = FakeAuthRepository(_signedInA);
+
+        final containerA = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerA.db.close());
+        final originalFile = writeFile(containerA.srcDir, 'wall.jpg', 42);
+        await seedHierarchy(containerA.db, originalFile);
+        await containerA.service.pushBackup();
+
+        // Column says "from the future", blob still claims the current
+        // version. Only pullBackup can see the column, so nothing downstream
+        // in importSnapshot can catch this one.
+        restampRemote(
+          remote,
+          _uidA,
+          columnVersion: containerA.db.schemaVersion + 1,
+          blobVersion: containerA.db.schemaVersion,
+        );
+
+        final containerB = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerB.db.close());
+
+        await expectLater(
+          containerB.service.pullBackup(mode: ConflictMode.replace),
+          throwsA(isA<SnapshotSchemaDowngradeException>()),
+        );
+        expect(containerB.docsDir.listSync(), isEmpty);
+        expect(await containerB.db.select(containerB.db.areas).get(), isEmpty);
+      },
+    );
+
+    test(
+      'a snapshot from an OLDER build restores normally -- the guard must '
+      'not break the ordinary forward-migration case',
+      () async {
+        final remote = FakeBackupRemote();
+        final auth = FakeAuthRepository(_signedInA);
+
+        final containerA = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerA.db.close());
+        final originalFile = writeFile(containerA.srcDir, 'wall.jpg', 42);
+        await seedHierarchy(containerA.db, originalFile);
+        await containerA.service.pushBackup();
+
+        restampRemote(remote, _uidA, columnVersion: 1, blobVersion: 1);
+
+        final containerB = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerB.db.close());
+
+        final result = await containerB.service.pullBackup(
+          mode: ConflictMode.replace,
+        );
+
+        expect(result.didRestore, isTrue);
+        expect(result.photosRestored, 1);
+        expect(
+          await containerB.db.select(containerB.db.areas).get(),
+          hasLength(1),
+        );
+      },
+    );
+
+    test(
+      'a snapshot blob with NO schemaVersion key restores normally when the '
+      'column is compatible -- a missing stamp is not an incompatible one',
+      () async {
+        final remote = FakeBackupRemote();
+        final auth = FakeAuthRepository(_signedInA);
+
+        final containerA = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerA.db.close());
+        final originalFile = writeFile(containerA.srcDir, 'wall.jpg', 42);
+        await seedHierarchy(containerA.db, originalFile);
+        await containerA.service.pushBackup();
+
+        final pushed = remote.backupsTable[_uidA]!;
+        final stripped = Map<String, dynamic>.from(pushed.snapshot)
+          ..remove('schemaVersion');
+        remote.backupsTable[_uidA] = RemoteSnapshot(
+          snapshot: stripped,
+          schemaVersion: pushed.schemaVersion,
+          updatedAt: pushed.updatedAt,
+        );
+
+        final containerB = makeContainer(remote: remote, auth: auth);
+        addTearDown(() => containerB.db.close());
+
+        final result = await containerB.service.pullBackup(
+          mode: ConflictMode.replace,
+        );
+
+        expect(result.didRestore, isTrue);
+        expect(
+          await containerB.db.select(containerB.db.areas).get(),
+          hasLength(1),
+        );
+      },
+    );
+  });
 }
 
 int _counter = 0;

@@ -16,6 +16,69 @@ enum ConflictMode {
   lww,
 }
 
+/// Thrown when a snapshot exported by a NEWER build is handed to an OLDER
+/// one to import.
+///
+/// This is `SchemaDowngradeException` (`lib/core/db/schema_downgrade.dart`)
+/// arriving through the restore door instead of the database-open door, and
+/// it is deliberately named, worded and framed to match: one hazard, one
+/// explanation. There, an older shell opened a newer local database; here,
+/// an older shell imports a snapshot whose rows were shaped by a newer
+/// schema. The local one is effectively unreachable on native (binary and
+/// schema ship together) and only bites on web via a stale cached shell.
+/// THIS one is reachable everywhere and needs no staleness at all: phone A
+/// updates and pushes, phone B is still on last week's build and pulls. Two
+/// devices on one account is the ordinary case, not the edge case.
+///
+/// Why refuse the whole restore rather than import what fits:
+///  - drift's generated `fromJson` reads only the columns it knows and
+///    silently ignores the rest, so a newer row imports "successfully" minus
+///    every field this build has never heard of, and a table added after
+///    this build simply vanishes. Nothing throws; the loss is invisible.
+///  - [exportSnapshot] then re-exports those truncated rows stamped with the
+///    OLDER `schemaVersion`, and the next push overwrites the cloud backup
+///    with the lossy copy. The newer data's only remaining copy is on the
+///    device that wrote it. A partial restore is therefore not "some data is
+///    better than none" — it is the mechanism that destroys the good copy.
+///  - Refusing costs the user one app update. Importing costs them fields
+///    they will not know are gone until they look for them.
+///
+/// The refusal is total and non-destructive, and the message says so because
+/// it is true: [importSnapshot] throws before its first transaction opens and
+/// [CloudBackupService.pullBackup] throws before it downloads a single photo
+/// byte, so neither the local database nor the cloud row nor the photos
+/// directory is touched on this path.
+///
+/// A missing or non-`int` `schemaVersion` is NOT this error. It means "no
+/// claim was made", which is the shape `SyncService` hands [importSnapshot]
+/// on every pull (`{'tables': ...}`, no version key) and the shape any
+/// snapshot predating the field would have. Treating absence as fatal would
+/// lock users out of their own backups and break sync outright, so absence
+/// falls through to the ordinary import path.
+class SnapshotSchemaDowngradeException implements Exception {
+  const SnapshotSchemaDowngradeException({
+    required this.snapshotVersion,
+    required this.appVersion,
+  });
+
+  /// The schema version the snapshot claims it was exported at.
+  final int snapshotVersion;
+
+  /// `AppDatabase.schemaVersion` of the build trying to import it.
+  final int appVersion;
+
+  @override
+  String toString() =>
+      'This version of the app is older than the backup you are restoring, '
+      'so it refused to import it rather than damage your library. Nothing '
+      'has been changed or deleted, and the backup is still in the cloud '
+      'exactly as it was. Update this device to the current version of the '
+      'app and restore again. On the web that means reloading the page; if '
+      'you are offline, reconnect first, because the reload has to fetch it. '
+      '(SnapshotSchemaDowngradeException: backup snapshot schema version '
+      '$snapshotVersion, this build understands version $appVersion)';
+}
+
 /// Exports/imports the entire local database as a plain JSON-serializable
 /// [Map], for cloud backup + restore.
 ///
@@ -24,7 +87,11 @@ enum ConflictMode {
 /// out for UI reads, but a backup must be a faithful mirror of local state
 /// so a restore doesn't resurrect a logically-deleted row as "not deleted".
 ///
-/// [importSnapshot] upserts every row by its `id` primary key, in FK
+/// [importSnapshot] first refuses outright — before any row is read or any
+/// transaction opens — a snapshot stamped with a `schemaVersion` NEWER than
+/// this build's, throwing [SnapshotSchemaDowngradeException]. An absent or
+/// unreadable stamp is not a refusal; see that class for both halves of the
+/// reasoning. Otherwise it upserts every row by its `id` primary key, in FK
 /// dependency order (Profiles → Areas → Sectors → Walls → Photos → Routes →
 /// Ascents → Comments → Likes), and writes every row `dirty: false` — see
 /// [_notDirty] for why that is a correctness requirement, not a detail.
@@ -43,6 +110,29 @@ class BackupRepository {
   BackupRepository(this._db);
 
   final db.AppDatabase _db;
+
+  /// The schema version this build understands — the number
+  /// [exportSnapshot] stamps into every snapshot and the ceiling
+  /// [importSnapshot] refuses to import above.
+  ///
+  /// Exposed so [CloudBackupService.pullBackup] can apply the same ceiling to
+  /// the `backups` row's `schema_version` COLUMN (which never reaches
+  /// [importSnapshot]) without reaching past this repository for the database.
+  int get appSchemaVersion => _db.schemaVersion;
+
+  /// Throws [SnapshotSchemaDowngradeException] when [declaredVersion] is a
+  /// version this build is too old to import.
+  ///
+  /// `null` and non-`int` values are "no claim was made", not "incompatible":
+  /// see the class doc for why absence must stay importable.
+  void assertRestorable(Object? declaredVersion) {
+    if (declaredVersion is int && declaredVersion > _db.schemaVersion) {
+      throw SnapshotSchemaDowngradeException(
+        snapshotVersion: declaredVersion,
+        appVersion: _db.schemaVersion,
+      );
+    }
+  }
 
   Future<Map<String, dynamic>> exportSnapshot() async {
     final profiles = await _db.select(_db.profiles).get();
@@ -75,6 +165,13 @@ class BackupRepository {
     Map<String, dynamic> snapshot, {
     ConflictMode mode = ConflictMode.replace,
   }) async {
+    // FIRST statement, before `tables` is even read and long before the
+    // first transaction opens: a snapshot from a newer build must not have
+    // one row of it reach this database. This is the choke point every
+    // restore funnels through, so the guard here covers callers that never
+    // saw a `schema_version` column — see [SnapshotSchemaDowngradeException].
+    assertRestorable(snapshot['schemaVersion']);
+
     final tables = (snapshot['tables'] as Map).cast<String, dynamic>();
     final failures = <String>[];
 

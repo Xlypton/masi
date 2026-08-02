@@ -209,6 +209,12 @@ class CloudBackupService {
   /// No-ops when signed out, or when the signed-in user has never pushed a
   /// backup (nothing to restore) — neither case throws.
   ///
+  /// Throws [SnapshotSchemaDowngradeException], having changed nothing at
+  /// all, when the remote snapshot was written by a build newer than this
+  /// one. That refusal happens before the first photo byte is downloaded;
+  /// see the guard's comment below and the exception's own doc for why a
+  /// partial restore is the worse outcome.
+  ///
   /// Restore is NOT all-or-nothing: [BackupRepository.importSnapshot] imports
   /// each table in its own transaction, so a partial-failure restore (e.g. one
   /// corrupt/incompatible table in an old backup) keeps the tables that
@@ -225,6 +231,24 @@ class CloudBackupService {
     if (remote == null) return const PullBackupResult.nothingToRestore();
 
     final snapshot = Map<String, dynamic>.from(remote.snapshot);
+
+    // Refuse a snapshot from a newer build HERE, before
+    // `_downloadAndRewritePhotos` writes a single byte into this device's
+    // photos directory. `BackupRepository.importSnapshot` carries the same
+    // guard, but it only runs after the photo download — and a refusal that
+    // has already littered the photos directory cannot honestly say
+    // "nothing has been changed".
+    //
+    // Both claims are checked: the `backups` row's `schema_version` COLUMN
+    // (the table's metadata contract, and the only one a server-side or
+    // listing query would ever see) and the `schemaVersion` INSIDE the
+    // snapshot blob. `pushBackup` derives the former from the latter, so
+    // they agree for anything this app wrote; if they ever disagree, the
+    // higher claim wins, because a snapshot whose two version stamps
+    // contradict each other is not one to import optimistically.
+    _backupRepository.assertRestorable(remote.schemaVersion);
+    _backupRepository.assertRestorable(snapshot['schemaVersion']);
+
     final tables = Map<String, dynamic>.from(snapshot['tables'] as Map);
 
     final photosRestored = await _downloadAndRewritePhotos(uid, tables);
