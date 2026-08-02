@@ -979,6 +979,79 @@ void main() {
     );
   });
 
+  group('T2: the empty states tolerate a tall banner above them', () {
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    /// Short viewport + the offline [SyncBanner] above the list. The banner
+    /// and filter bar fit; what does NOT fit is the empty state in the
+    /// leftover `Expanded`, which is precisely the fragility being pinned:
+    /// each empty state was a bare `Center` + `Column` that could not give
+    /// any height back and so overflowed the instant a sibling grew.
+    testWidgets(
+      'the sync-error empty state — the tallest of the four (glyph + wrapped '
+      'reason + Retry) — no longer overflows when a banner squeezes it',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 300));
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: own rows fetch failed: '
+                  'Exception: the server returned 503 for the third time',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.byKey(const Key('topos-sync-error-empty')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'a squeezed empty state SCROLLS rather than clipping its action off '
+      'the bottom — Retry has to stay reachable, or the user is stuck '
+      'looking at an error they cannot act on',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 300));
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: own rows fetch failed: '
+                  'Exception: the server returned 503 for the third time',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.dragUntilVisible(
+          find.byKey(const Key('topos-sync-error-retry')),
+          find.byKey(const Key('topos-sync-error-empty')),
+          const Offset(0, -40),
+        );
+        expect(
+          find.byKey(const Key('topos-sync-error-retry')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
   group('§1a: storage-backend interlock (L1)', () {
     testWidgets(
       'an inMemory storage backend shows the topos-storage-warning banner '
