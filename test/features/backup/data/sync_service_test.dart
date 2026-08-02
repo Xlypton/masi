@@ -6,6 +6,7 @@ import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/backup/application/sync_providers.dart';
 import 'package:masi/features/backup/data/backup_repository.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
+import 'package:masi/features/backup/data/storage_pagination.dart';
 import 'package:masi/features/backup/data/sync_remote.dart';
 import 'package:masi/features/backup/data/sync_service.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
@@ -239,10 +240,37 @@ class FakeSyncRemote implements SyncRemote {
     return privateStorage[objectPath];
   }
 
+  /// Every `(limit, offset)` either listing was asked for, so a test can
+  /// prove the CALLER paged rather than only that the fake returned
+  /// everything.
+  final List<({int limit, int offset})> listPageRequests = [];
+
+  /// The page size this fake truncates at — the storage client's own
+  /// `SearchOptions` default. Faithfulness here is what makes the 150-object
+  /// test meaningful: a fake that returned all 150 in one page could never
+  /// reproduce S6, and the test would be a false green.
+  int get listPageLimit => kStoragePageSize;
+
+  List<String> _listPage(Iterable<String> all, int limit, int offset) {
+    final sorted = all.toList()..sort();
+    if (offset >= sorted.length) return const [];
+    final capped = limit > listPageLimit ? listPageLimit : limit;
+    final end = offset + capped;
+    return sorted.sublist(offset, end > sorted.length ? sorted.length : end);
+  }
+
+  Future<Set<String>> _listAll(Iterable<String> all) async {
+    final collected = await collectPagedObjects<String>((limit, offset) async {
+      listPageRequests.add((limit: limit, offset: offset));
+      return _listPage(all, limit, offset);
+    });
+    return collected.toSet();
+  }
+
   @override
   Future<Set<String>> listPhotoObjectPaths(String uid) async {
     final prefix = '$uid/';
-    return {for (final path in privateStorage.keys) if (path.startsWith(prefix)) path};
+    return _listAll(privateStorage.keys.where((p) => p.startsWith(prefix)));
   }
 
   @override
@@ -264,7 +292,8 @@ class FakeSyncRemote implements SyncRemote {
   }
 
   @override
-  Future<Set<String>> listSharedPhotoObjectPaths() async => sharedStorage.keys.toSet();
+  Future<Set<String>> listSharedPhotoObjectPaths() async =>
+      _listAll(sharedStorage.keys);
 
   @override
   Future<void> removePhoto({
@@ -338,6 +367,22 @@ class FailingUploadSyncRemote extends FakeSyncRemote {
 /// This matters specifically because §1f moved the photo phase ABOVE the row
 /// upsert: an unguarded throw there now aborts the WHOLE push before a single
 /// row is sent, where previously it could only affect the photo phase.
+/// [FakeSyncRemote] whose listings return only the FIRST page and stop — the
+/// pre-S6 behaviour of an un-paged `list(path: …)`.
+///
+/// Exists purely to make the 150-object test non-vacuous: it proves that
+/// test can actually FAIL, and that it is the paging (not the fake's
+/// generosity) doing the work.
+class SinglePageListingSyncRemote extends FakeSyncRemote {
+  @override
+  Future<Set<String>> listPhotoObjectPaths(String uid) async {
+    final prefix = '$uid/';
+    final all = privateStorage.keys.where((p) => p.startsWith(prefix)).toList()
+      ..sort();
+    return all.take(kStoragePageSize).toSet();
+  }
+}
+
 class ThrowingListingSyncRemote extends FakeSyncRemote {
   @override
   Future<Set<String>> listPhotoObjectPaths(String uid) async {
@@ -2011,6 +2056,139 @@ void main() {
         final absolutePath = p.join(containerB.docsDir.path, photo.localPath);
         expect(File(absolutePath).existsSync(), isTrue);
         expect(File(absolutePath).readAsBytesSync(), List<int>.filled(16, 42));
+      },
+    );
+  });
+
+  group('S6: the "already uploaded" skip-set is not truncated at 100', () {
+    /// Seeds one wall carrying [count] photos, each with real bytes on disk —
+    /// essential, since a photo with no local bytes would fall into the
+    /// missing-bytes bucket and `photosUploaded` would stay 0, making the
+    /// whole test a false green.
+    Future<void> seedManyPhotos(
+      ({AppDatabase db, Directory docsDir, Directory srcDir, SyncService service}) c,
+      int count,
+    ) async {
+      await c.db
+          .into(c.db.areas)
+          .insert(
+            AreasCompanion.insert(
+              id: 'area-1',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value(_uidU1),
+              name: 'Area',
+            ),
+          );
+      await c.db
+          .into(c.db.sectors)
+          .insert(
+            SectorsCompanion.insert(
+              id: 'sector-1',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value(_uidU1),
+              areaId: 'area-1',
+              name: 'Sector',
+              sortOrder: 0,
+            ),
+          );
+      await c.db
+          .into(c.db.walls)
+          .insert(
+            WallsCompanion.insert(
+              id: 'wall-1',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value(_uidU1),
+              sectorId: 'sector-1',
+              name: 'Wall',
+              sortOrder: 0,
+            ),
+          );
+      for (var i = 0; i < count; i++) {
+        final id = 'photo-${i.toString().padLeft(3, '0')}';
+        final file = writeFile(c.srcDir, '$id.jpg');
+        await c.db
+            .into(c.db.photos)
+            .insert(
+              PhotosCompanion.insert(
+                id: id,
+                createdAt: 100,
+                updatedAt: 100,
+                ownerId: const Value(_uidU1),
+                wallId: 'wall-1',
+                localPath: file.path,
+                kind: 'original',
+                width: 800,
+                height: 600,
+              ),
+            );
+      }
+    }
+
+    test(
+      'with 150 objects already in the remote the skip-set contains all 150 '
+      'and the next push re-uploads ZERO — un-paged, list() returned only the '
+      'first 100, so every push past that cut re-read and re-uploaded the '
+      'FULL-RESOLUTION bytes of 50 photos already in the cloud',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedManyPhotos(c, 150);
+
+        final first = await c.service.pushOwn();
+        expect(first.photosUploaded, 150, reason: 'all of them are new');
+        expect(remote.privateStorage, hasLength(150));
+
+        remote.uploadedPrivatePaths.clear();
+        remote.listPageRequests.clear();
+        final second = await c.service.pushOwn();
+
+        expect(
+          second.photosUploaded,
+          0,
+          reason: 'every object is already in the cloud',
+        );
+        expect(remote.uploadedPrivatePaths, isEmpty);
+        expect(
+          remote.listPageRequests.where((r) => r.offset == 100),
+          isNotEmpty,
+          reason:
+              'the caller must actually have asked for the SECOND page — '
+              'without that request the skip-set stops at 100',
+        );
+      },
+    );
+
+    test(
+      'the 150-object test is not vacuous: against a listing that truncates '
+      'at one page (the pre-S6 behaviour) the second push re-uploads the 50 '
+      'objects past the cut',
+      () async {
+        final remote = SinglePageListingSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await seedManyPhotos(c, 150);
+
+        await c.service.pushOwn();
+        remote.uploadedPrivatePaths.clear();
+        final second = await c.service.pushOwn();
+
+        expect(
+          second.photosUploaded,
+          50,
+          reason: 'exactly the objects the truncated skip-set cannot see',
+        );
       },
     );
   });
