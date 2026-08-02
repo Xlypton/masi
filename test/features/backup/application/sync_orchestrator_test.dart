@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
@@ -7,6 +8,7 @@ import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/backup/application/backup_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/backup/application/sync_providers.dart';
+import 'package:masi/features/backup/application/sync_retry_schedule.dart';
 import 'package:masi/features/backup/data/backup_repository.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/backup/data/sync_remote.dart';
@@ -154,6 +156,90 @@ class _FailingPushSyncRemote extends _CountingSyncRemote {
   }
 }
 
+/// A [SyncRetrySchedule] that returns a FIXED delay and records the attempt
+/// number it was asked for.
+///
+/// This is what makes the backoff assertions deterministic without a clock:
+/// growth is asserted on [attempts] (`[1, 2, 3, ...]`, and back to `1` after a
+/// success), NOT by measuring elapsed time — the actual GROWTH LAW is covered
+/// clock-free in `sync_retry_schedule_test.dart`. No test in this file ever
+/// waits out a production interval, and the tests that need N cycles drive
+/// them with N explicit `await pushNow()` calls while [fixed] is set long
+/// enough that the armed timer can never fire on its own.
+class _RecordingRetrySchedule extends SyncRetrySchedule {
+  _RecordingRetrySchedule(this.fixed)
+    : super(base: fixed, ceiling: fixed, random: Random(1));
+
+  final Duration fixed;
+  final List<int> attempts = <int>[];
+
+  @override
+  Duration delayFor(int attempt) {
+    attempts.add(attempt);
+    return fixed;
+  }
+}
+
+/// A [_CountingSyncRemote] whose ROW push fails while [offline] is `true`,
+/// and records what actually landed once it isn't — the "remote unreachable,
+/// then reachable" half of §1e's end-to-end assertion.
+///
+/// [pushCallCount] is bumped on every ATTEMPT (before the throw), so a test
+/// can distinguish "tried and failed" from "never tried". The throw is NOT
+/// what the orchestrator observes: §1d's `pushOwn` converts a whole-call
+/// upsert throw into an all-tables-`failed` [PushSyncResult], so the
+/// orchestrator sees `fullyLanded == false` and arms the retry from there.
+class _OfflineToggleSyncRemote extends _CountingSyncRemote {
+  bool offline = true;
+  final Map<String, Map<String, dynamic>> pushedAreas = {};
+
+  @override
+  Future<List<TablePushOutcome>> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {
+    pushCallCount++;
+    if (offline) throw Exception('network unreachable');
+    for (final row in tablesToRows['areas'] ?? const <Map<String, dynamic>>[]) {
+      pushedAreas[row['id'] as String] = Map<String, dynamic>.from(row);
+    }
+    return [
+      for (final entry in tablesToRows.entries)
+        if (entry.value.isNotEmpty)
+          TablePushOutcome.ok(
+            table: entry.key,
+            rowsUpserted: entry.value.length,
+          ),
+    ];
+  }
+}
+
+/// A [_CountingSyncRemote] whose own-row fetch returns one real Area row, so
+/// `pullOwnAndShared()` actually WRITES to the local database (which is what
+/// used to trigger the spurious re-push). The row omits `dirty`/`remoteId`
+/// entirely — the shape a cloud row has now that the push strips them (see
+/// `stripLocalOnlySyncColumns`).
+class _SeededPullSyncRemote extends _CountingSyncRemote {
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchOwnRows(
+    String uid,
+  ) async {
+    pullCallCount++;
+    return {
+      for (final t in syncTableNames) t: <Map<String, dynamic>>[],
+      'areas': <Map<String, dynamic>>[
+        {
+          'id': 'area-cloud',
+          'createdAt': 100,
+          'updatedAt': 100,
+          'ownerId': uid,
+          'name': 'Cloud Area',
+        },
+      ],
+    };
+  }
+}
+
 /// Minimal [AuthRepository] test double standing in for the auth session
 /// [SyncService] itself reads (`currentSession.uid`) to gate push/pull —
 /// deliberately separate from `authStateProvider`'s stream, which is only
@@ -214,9 +300,7 @@ class _FakeConnectivityService implements ConnectivityService {
     return reachable;
   }
 
-  /// No `@override` yet: `ConnectivityService` does not declare
-  /// `statusChanges()` until §1e T7, and annotating a non-overriding member
-  /// is an analyzer error. §1e T7 adds the annotation and nothing else.
+  @override
   Stream<NetworkStatus> statusChanges() => _statusController.stream;
 
   /// Drives a connectivity transition from a test (§1e).
@@ -260,14 +344,18 @@ void main() {
     bool wifiOnly = false,
     NetworkStatus connectivity = NetworkStatus.wifi,
     _FakeConnectivityService? connectivityService,
+    SyncRetrySchedule? retrySchedule,
     int Function()? nowMs,
   }) {
     final connectivityFake =
         connectivityService ?? _FakeConnectivityService(connectivity);
+    addTearDown(connectivityFake.dispose);
     final container = ProviderContainer(
       overrides: [
         appDatabaseProvider.overrideWithValue(db),
         syncDebounceDurationProvider.overrideWithValue(debounce),
+        if (retrySchedule != null)
+          syncRetryScheduleProvider.overrideWithValue(retrySchedule),
         if (nowMs != null) nowMsProvider.overrideWithValue(nowMs),
         authStateProvider.overrideWith(
           (ref) => authStream ?? Stream.value(const AuthSessionState.signedOut()),
@@ -293,12 +381,18 @@ void main() {
     return container;
   }
 
+  /// Inserts one own-row Area, `dirty: true` — the shape EVERY repository
+  /// write actually produces (see `LibraryCrudRepository._insertArea`). The
+  /// flag matters now that the push is dirty-gated: a fixture row left clean
+  /// would be correctly ignored by the orchestrator and every
+  /// debounced-push assertion below would vacuously "pass".
   Future<void> insertArea(AppDatabase db, String id, {String? ownerId}) {
     return db.into(db.areas).insert(
       AreasCompanion.insert(
         id: id,
         createdAt: 100,
         updatedAt: 100,
+        dirty: const Value(true),
         ownerId: Value(ownerId),
         name: 'Area $id',
       ),
@@ -1009,6 +1103,525 @@ void main() {
         expect(result.state.status, SyncStatus.idle);
         expect(result.state.lastPushError, isNull);
         expect(result.connectivity.probeCallCount, 0);
+      },
+    );
+  });
+
+  group('S10: push in-flight guard', () {
+    test(
+      'two concurrent push triggers result in exactly ONE in-flight push '
+      '(the second returns the SAME Future) -- before this, onAppPaused() '
+      'firing mid-push ran a second concurrent full push, duplicating the '
+      'LWW pre-check, the upserts and the photo uploads',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          // Long window so the coalesced follow-up cannot fire mid-test.
+          debounce: const Duration(seconds: 30),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        final first = notifier.pushNow();
+        final second = notifier.pushNow();
+        expect(
+          identical(first, second),
+          isTrue,
+          reason: 'an overlapping call must return the SAME in-flight Future',
+        );
+
+        await Future.wait([first, second]);
+        expect(remote.pushCallCount, 1);
+
+        // The guard must release once the push settles. `_fullResyncDue` is
+        // retired by the first (confirmed, full-scope) push, so this second
+        // call is dirtyOnly — seed a dirty row so it has something to send.
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await notifier.pushNow();
+        expect(remote.pushCallCount, 2);
+      },
+    );
+  });
+
+  group('S2: retry with backoff until clean', () {
+    test(
+      'a push that fails is retried on the injected backoff, with NO '
+      'further user action and NO further local write, and the attempt '
+      'number handed to the schedule grows 1, 2, 3',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _OfflineToggleSyncRemote();
+        // An hour-long fixed delay: the armed retry timer can NEVER fire
+        // inside this test, so each cycle below is exactly one explicit,
+        // fully-awaited pushNow() and the recorded attempt numbers are exact
+        // rather than "however many happened to complete in N ms".
+        final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          // Far longer than the test: no debounced push can interleave.
+          debounce: const Duration(seconds: 30),
+          retrySchedule: schedule,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await insertArea(db, 'a1', ownerId: 'u1');
+
+        // Three consecutive FAILED pushes. pushNow() cancels the armed
+        // _retryTimer on entry, so an explicit call is one retry cycle.
+        for (var i = 0; i < 3; i++) {
+          await notifier.pushNow();
+        }
+
+        expect(
+          remote.pushCallCount,
+          3,
+          reason: 'each retry must re-attempt without another local write',
+        );
+        expect(
+          schedule.attempts,
+          [1, 2, 3],
+          reason: 'consecutive failures must escalate the attempt number',
+        );
+        expect(
+          container.read(syncOrchestratorProvider).status,
+          SyncStatus.error,
+          reason:
+              'the §1d probe reports reachable by default, so a failed '
+              'push classifies as error rather than offline',
+        );
+      },
+    );
+
+    test(
+      'the backoff RESETS after a success: a later failure starts again at '
+      'attempt 1',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _OfflineToggleSyncRemote();
+        final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          retrySchedule: schedule,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await insertArea(db, 'a1', ownerId: 'u1');
+
+        await notifier.pushNow();
+        expect(schedule.attempts, [1]);
+
+        remote.offline = false;
+        await notifier.pushNow();
+        expect(container.read(syncOrchestratorProvider).status, SyncStatus.idle);
+
+        schedule.attempts.clear();
+        remote.offline = true;
+        await insertArea(db, 'a2', ownerId: 'u1');
+        await notifier.pushNow();
+
+        expect(
+          schedule.attempts,
+          [1],
+          reason: 'a confirmed push must reset the failure counter',
+        );
+      },
+    );
+
+    test(
+      'the retry loop TERMINATES once nothing is dirty -- a clean database '
+      'hits the nothing-pending early-out and never reaches the remote, so '
+      'this is a loop with unbounded attempts, not an unbounded loop',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          retrySchedule: schedule,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await insertArea(db, 'a1', ownerId: 'u1');
+
+        await notifier.pushNow();
+        final settled = remote.pushCallCount;
+        expect(settled, 1, reason: 'the dirty row was pushed exactly once');
+
+        // The confirmed push cleared `dirty`, which itself fires
+        // tableUpdates(). A follow-up push must find nothing pending and
+        // never touch the network.
+        await notifier.pushNow();
+        expect(
+          remote.pushCallCount,
+          settled,
+          reason: 'a clean database must not keep re-pushing',
+        );
+        expect(schedule.attempts, isEmpty, reason: 'nothing ever failed');
+      },
+    );
+  });
+
+  group('S9: a pull does not trigger a re-push', () {
+    test(
+      'importing a pulled snapshot marks nothing dirty and reaches the '
+      'remote with no push -- before this, every pull that wrote anything '
+      "fired the same tableUpdates() the debounced push listens to",
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _SeededPullSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(milliseconds: 15),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        // Consume the app-start full-resync push so the assertion below is
+        // about the PULL, not about that one-off safety net.
+        await notifier.pushNow();
+        final pushesBefore = remote.pushCallCount;
+
+        await notifier.pullNow();
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        expect(
+          remote.pushCallCount,
+          pushesBefore,
+          reason: "a pull's own writes must not schedule a push",
+        );
+        final imported = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals('area-cloud'))).getSingle();
+        expect(imported.dirty, isFalse);
+      },
+    );
+  });
+
+  group('S3: connectivity regain', () {
+    test(
+      'a regain event triggers BOTH a push and a pull, well inside the '
+      'debounce window and with no further local write -- before this, '
+      'nothing in lib reacted to the network coming back at all',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final connectivity = _FakeConnectivityService(NetworkStatus.none);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          // Deliberately far longer than the test: only the regain event can
+          // possibly produce the push asserted below.
+          debounce: const Duration(seconds: 30),
+          connectivityService: connectivity,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(remote.pushCallCount, 0, reason: 'the 30s debounce is pending');
+        expect(remote.pullCallCount, 0);
+
+        connectivity.emit(NetworkStatus.wifi);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+
+        expect(remote.pushCallCount, 1);
+        expect(remote.pullCallCount, 1);
+        expect(container.read(syncOrchestratorProvider).status, SyncStatus.idle);
+      },
+    );
+
+    test(
+      'a transition to NetworkStatus.none triggers nothing -- losing the '
+      'network is not a reason to attempt a sync',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final connectivity = _FakeConnectivityService(NetworkStatus.wifi);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          connectivityService: connectivity,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await insertArea(db, 'a1', ownerId: 'u1');
+        connectivity.emit(NetworkStatus.none);
+        await Future<void>.delayed(const Duration(milliseconds: 40));
+
+        expect(remote.pushCallCount, 0);
+        expect(remote.pullCallCount, 0);
+      },
+    );
+
+    test(
+      'a regain RESETS the backoff and re-arms the full-scope safety net, so '
+      'a device that comes back after a long outage re-sends everything '
+      'rather than trusting flags a swallowed failure may have cleared',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _OfflineToggleSyncRemote();
+        // An hour, so an armed retry can never be mistaken for the
+        // regain-triggered push asserted below.
+        final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+        final connectivity = _FakeConnectivityService(NetworkStatus.none);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          retrySchedule: schedule,
+          connectivityService: connectivity,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await insertArea(db, 'a1', ownerId: 'u1');
+
+        // Establish "mid-backoff" DETERMINISTICALLY rather than by waiting.
+        await notifier.pushNow();
+        expect(schedule.attempts, [1]);
+        expect(remote.pushedAreas, isEmpty);
+
+        schedule.attempts.clear();
+        remote.offline = false;
+        connectivity.emit(NetworkStatus.wifi);
+        await Future<void>.delayed(const Duration(milliseconds: 60));
+
+        expect(remote.pushedAreas.keys, contains('a1'));
+        expect(
+          schedule.attempts,
+          isEmpty,
+          reason: 'the regain push succeeded, so no retry was ever armed',
+        );
+      },
+    );
+  });
+
+  group('§1e end-to-end: nothing recorded offline is ever stranded', () {
+    test(
+      'create a topo with the remote UNREACHABLE, then make the remote '
+      'reachable WITHOUT any further local write and WITHOUT any user '
+      'action -> the topo reaches the remote and the local row goes clean',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _OfflineToggleSyncRemote();
+        // The ONLY test in this fragment that depends on a timer firing —
+        // that is precisely its subject ("no user action"). A 10ms envelope
+        // against a 250ms recovery window leaves ~25x headroom for one cycle.
+        final schedule = _RecordingRetrySchedule(
+          const Duration(milliseconds: 10),
+        );
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(milliseconds: 15),
+          retrySchedule: schedule,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        // ---- 1. The user creates a topo while the network is down. --------
+        await insertArea(db, 'a-offline', ownerId: 'u1');
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+
+        expect(
+          remote.pushCallCount,
+          greaterThanOrEqualTo(1),
+          reason: 'the debounced push must at least have been ATTEMPTED',
+        );
+        expect(remote.pushedAreas, isEmpty, reason: 'nothing landed');
+        // `isNot(idle)`, NOT `== error`: this is the one test whose retry loop
+        // is genuinely running on a 10ms timer, so at any sampled instant the
+        // status legitimately alternates between `syncing` (a retry cycle in
+        // flight) and `error` (the cycle that just failed). Pinning `error`
+        // here is a race — it flaked ~1 run in 8. The claim that matters is
+        // stated in the reason and is race-free; `SyncStatus.error`
+        // specifically is asserted deterministically by the S2 backoff group,
+        // which drives its cycles with explicit awaited pushNow() calls.
+        expect(
+          container.read(syncOrchestratorProvider).status,
+          isNot(SyncStatus.idle),
+          reason: 'a push that did not land must not report success',
+        );
+        var row = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals('a-offline'))).getSingle();
+        expect(
+          row.dirty,
+          isTrue,
+          reason: 'a failed push must leave the row flagged for retry',
+        );
+
+        // ---- 2. The network comes back. No local write, no user action. ---
+        remote.offline = false;
+        await Future<void>.delayed(const Duration(milliseconds: 250));
+
+        // ---- 3. The topo is in the cloud and the row is clean. ------------
+        expect(remote.pushedAreas.keys, contains('a-offline'));
+        expect(
+          remote.pushedAreas['a-offline']!['name'],
+          'Area a-offline',
+          reason: 'the real row, not an empty placeholder, must have landed',
+        );
+        expect(
+          remote.pushedAreas['a-offline']!.keys,
+          isNot(contains('dirty')),
+          reason: 'the payload must not carry local-only bookkeeping (S8)',
+        );
+        row = await (db.select(
+          db.areas,
+        )..where((t) => t.id.equals('a-offline'))).getSingle();
+        expect(row.dirty, isFalse);
+        expect(container.read(syncOrchestratorProvider).status, SyncStatus.idle);
+        expect(
+          schedule.attempts,
+          isNotEmpty,
+          reason:
+              'the recovery must have come from the RETRY loop, not from a '
+              'fresh trigger',
+        );
+      },
+    );
+
+    test(
+      'the retry loop survives a long outage: many consecutive failures '
+      'never exhaust it, and the row still lands when the remote returns',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _OfflineToggleSyncRemote();
+        // An hour: the armed retry timer can never fire, so every cycle below
+        // is one explicit awaited pushNow() and the attempt numbers are
+        // EXACT. Asserting the requested attempt numbers is both stronger and
+        // deterministic, unlike counting completions in a wall-clock budget.
+        final schedule = _RecordingRetrySchedule(const Duration(hours: 1));
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          // Far longer than the test: no debounced push can interleave.
+          debounce: const Duration(seconds: 30),
+          retrySchedule: schedule,
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await insertArea(db, 'a-long-outage', ownerId: 'u1');
+
+        const cycles = 8;
+        for (var i = 0; i < cycles; i++) {
+          await notifier.pushNow();
+        }
+
+        expect(
+          schedule.attempts,
+          [for (var a = 1; a <= cycles; a++) a],
+          reason:
+              'unbounded attempts -- no cap, no terminal give-up state, and '
+              'the attempt number escalates by exactly one each time',
+        );
+        expect(remote.pushCallCount, cycles);
+        expect(remote.pushedAreas, isEmpty);
+        expect(
+          (await (db.select(
+            db.areas,
+          )..where((t) => t.id.equals('a-long-outage'))).getSingle()).dirty,
+          isTrue,
+          reason: 'every failed attempt must leave the row flagged',
+        );
+        expect(
+          container.read(syncOrchestratorProvider).status,
+          SyncStatus.error,
+        );
+
+        remote.offline = false;
+        await notifier.pushNow();
+
+        expect(remote.pushedAreas.keys, contains('a-long-outage'));
+        expect(
+          schedule.attempts,
+          hasLength(cycles),
+          reason: 'the successful push armed no further retry',
+        );
+        expect(
+          (await (db.select(
+            db.areas,
+          )..where((t) => t.id.equals('a-long-outage'))).getSingle()).dirty,
+          isFalse,
+        );
+        expect(
+          container.read(syncOrchestratorProvider).status,
+          SyncStatus.idle,
+        );
       },
     );
   });

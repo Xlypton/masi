@@ -6,9 +6,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/data/auth_repository.dart';
+import '../data/connectivity_service.dart';
 import '../data/sync_service.dart';
 import 'backup_providers.dart';
 import 'sync_providers.dart';
+import 'sync_retry_schedule.dart';
 
 /// Coarse status the opportunistic auto-sync engine can be in at any
 /// moment — surfaced by the Account screen's `sync-status` line.
@@ -122,7 +124,12 @@ class SyncOrchestratorState {
 final syncDebounceDurationProvider = Provider<Duration>((ref) => const Duration(seconds: 2));
 
 /// Opportunistic background-sync controller: debounced push-on-local-write,
-/// pull-once-on-sign-in, and immediate push-on-app-background.
+/// pull-once-on-sign-in, push-on-app-background/resume, and — when a push
+/// fails — an exponential-backoff retry that keeps going until nothing is
+/// locally `dirty` (§1e; S2/S10). Every push trigger funnels through
+/// [SyncOrchestrator.pushNow], every pull trigger through
+/// [SyncOrchestrator.pullNow], so at most one of each can be in flight at a
+/// time.
 ///
 /// Constructed at the app root (`MasiApp` `ref.watch`es
 /// [syncOrchestratorProvider] — NOT merely `ref.read`s it — for the widget's
@@ -183,10 +190,67 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   /// first pull of the app run.
   DateTime? _lastPullStartedAt;
 
+  /// The currently in-flight [pushNow] call's [Future], or `null` when no
+  /// push is running — the push-side twin of [_pullInFlight].
+  ///
+  /// S10: there was NO push guard at all. `onAppPaused()` cancelled the
+  /// debounce timer but not a running `_runPush`, so backgrounding the app
+  /// mid-push ran a SECOND concurrent full push — duplicating the per-table
+  /// LWW pre-check, the upserts and the photo uploads.
+  Future<void>? _pushInFlight;
+
+  /// Set when a push trigger arrives while [_pushInFlight] is non-null.
+  ///
+  /// The coalesced trigger is NOT simply dropped: it may be the only signal
+  /// that a local write landed DURING the in-flight push (whose snapshot
+  /// predates it). Instead it re-arms the debounce window once the push
+  /// settles, so a follow-up push sees the newer `dirty` rows. When the
+  /// trigger really was redundant the follow-up is free — [_runPush] finds
+  /// nothing dirty and never touches the network.
+  bool _pushRequestedWhileInFlight = false;
+
+  /// Consecutive FAILED pushes since the last confirmed one — the attempt
+  /// number handed to [SyncRetrySchedule.delayFor]. Deliberately uncapped
+  /// (D-2: bounded interval, unbounded attempts, never give up). Reset by a
+  /// confirmed push, by a push that found nothing pending, and by a
+  /// connectivity regain.
+  int _consecutivePushFailures = 0;
+
+  /// The pending backoff retry armed by [_scheduleRetry], or `null`.
+  Timer? _retryTimer;
+
+  /// True while a [PushScope.full] push is still owed.
+  ///
+  /// Starts `true` so the FIRST push of every app run re-sends every own row:
+  /// the D-4 loss-proof safety net that recovers any row whose `dirty` flag
+  /// was cleared without the row actually landing. Set again on every
+  /// connectivity regain; cleared only by a CONFIRMED full push
+  /// ([PushSyncResult.fullyLanded]).
+  bool _fullResyncDue = true;
+
+  /// The connectivity-transition subscription installed in [build], or `null`.
+  StreamSubscription<NetworkStatus>? _connectivitySubscription;
+
   @override
   SyncOrchestratorState build() {
     final db = ref.watch(appDatabaseProvider);
     _dbSubscription = db.tableUpdates().listen((_) => _scheduleDebouncedPush());
+
+    // S3: react to the network coming back. `statusChanges()` is
+    // contractually non-throwing and degrades to a never-emitting stream when
+    // the platform signal is unavailable (see its doc), which is exactly what
+    // makes this inert in every unit/widget test that doesn't override
+    // `connectivityServiceProvider`; `onError` below is belt-and-braces on top
+    // of that, never the primary defence.
+    final connectivity = ref.watch(connectivityServiceProvider);
+    _connectivitySubscription = connectivity.statusChanges().listen(
+      _onConnectivityChanged,
+      onError: (Object error) {
+        debugPrint(
+          'SyncOrchestrator: connectivity stream error (ignored): $error',
+        );
+      },
+    );
 
     // Pull-on-sign-in: fire exactly once on the signed-out (or unknown,
     // e.g. still-loading/erroring) -> signed-in edge of the live auth
@@ -207,28 +271,71 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
 
     ref.onDispose(() {
       _debounceTimer?.cancel();
+      _retryTimer?.cancel();
       _dbSubscription?.cancel();
+      _connectivitySubscription?.cancel();
     });
 
     return const SyncOrchestratorState();
   }
 
-  /// (Re)schedules a single `pushOwn()` [syncDebounceDurationProvider] from
-  /// NOW — every call before the window elapses cancels and restarts the
-  /// timer, so N rapid local writes coalesce into exactly one push.
+  /// (Re)schedules a single push [syncDebounceDurationProvider] from NOW —
+  /// every call before the window elapses cancels and restarts the timer, so
+  /// N rapid local writes coalesce into exactly one push.
   void _scheduleDebouncedPush() {
     _debounceTimer?.cancel();
     _debounceTimer = Timer(ref.read(syncDebounceDurationProvider), () {
-      unawaited(_runPush());
+      unawaited(pushNow());
     });
   }
 
   /// Pushes immediately, cancelling any still-pending debounced push —
   /// called when the app is about to leave the foreground and might get
-  /// killed before a debounced push would otherwise have fired.
+  /// killed before a debounced push would otherwise have fired. Funnels
+  /// through [pushNow], so it can no longer race a push already in flight
+  /// (S10).
   void onAppPaused() {
+    unawaited(pushNow());
+  }
+
+  /// Pushes NOW, cancelling any pending debounced push or armed retry — the
+  /// push-side twin of [pullNow], and the SINGLE funnel every push trigger in
+  /// this class goes through: the debounce timer, [onAppPaused], app-resume
+  /// (`app.dart`), connectivity regain, and the backoff retry. Exactly one
+  /// push can therefore be in flight at a time (S10).
+  ///
+  /// A call made while an earlier push is still in flight returns THAT SAME
+  /// [Future] instead of starting a second one, and re-arms the debounce
+  /// window once it settles so a write that landed mid-push is not dropped
+  /// (see [_pushRequestedWhileInFlight]). A call made once the in-flight push
+  /// has completed starts a fresh one.
+  ///
+  /// Never throws, and is a safe no-op when signed out, when nothing is
+  /// locally dirty, or when Supabase is unavailable — [_runPush] catches
+  /// everything and translates it into a [SyncStatus] plus, on failure, a
+  /// scheduled retry.
+  Future<void> pushNow() {
+    final inFlight = _pushInFlight;
+    if (inFlight != null) {
+      _pushRequestedWhileInFlight = true;
+      return inFlight;
+    }
     _debounceTimer?.cancel();
-    unawaited(_runPush());
+    _retryTimer?.cancel();
+    final future = _runPush();
+    _pushInFlight = future;
+    unawaited(
+      future.whenComplete(() {
+        if (identical(_pushInFlight, future)) {
+          _pushInFlight = null;
+        }
+        if (_pushRequestedWhileInFlight) {
+          _pushRequestedWhileInFlight = false;
+          _scheduleDebouncedPush();
+        }
+      }),
+    );
+    return future;
   }
 
   /// S1 fix (§1d): only a push where EVERYTHING landed
@@ -237,13 +344,41 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   /// timestamp and records [SyncOrchestratorState.lastPushError] — before
   /// this, `upsertOwnRows` swallowed every per-table error, so a totally
   /// failed offline push reported "Synced • just now".
+  ///
+  /// S2 fix (§1e), layered on top: the scope is chosen from [_fullResyncDue],
+  /// a push with nothing pending is a no-op that never touches `state`, and
+  /// EVERY failure path arms a backoff retry. Note a failed push does NOT
+  /// throw — §1d converts a whole-call upsert throw into an
+  /// all-tables-failed RESULT — so the `!fullyLanded` branch, not the
+  /// `catch`, is the one that fires in practice.
   Future<void> _runPush() async {
+    final service = ref.read(syncServiceProvider);
+    final scope = _fullResyncDue ? PushScope.full : PushScope.dirtyOnly;
+
+    // S9: `BackupRepository.importSnapshot`'s writes fire the same
+    // `tableUpdates()` this class debounces on, so before the `dirty` gate
+    // every pull that wrote anything scheduled a full re-push ~2s later.
+    // Imported rows are written `dirty: false`, so "nothing pending" is now a
+    // cheap, correct no-op. It returns WITHOUT touching `state`, deliberately:
+    // flipping to `syncing`/`idle` here would clobber a real `error` status or
+    // a live `lastPullError`/`lastPushError` with the outcome of a push that
+    // never happened.
+    if (scope == PushScope.dirtyOnly &&
+        !await service.hasPendingLocalChanges()) {
+      _consecutivePushFailures = 0;
+      return;
+    }
+
     state = state.copyWith(status: SyncStatus.syncing);
     try {
-      final result = await ref.read(syncServiceProvider).pushOwn();
+      final result = await service.pushOwn(scope: scope);
       switch (result.outcome) {
         case SyncPushOutcome.pushed:
           if (result.fullyLanded) {
+            // Only a CONFIRMED full push retires the safety net.
+            if (scope == PushScope.full) _fullResyncDue = false;
+            _consecutivePushFailures = 0;
+            _retryTimer?.cancel();
             state = SyncOrchestratorState(
               status: SyncStatus.idle,
               lastSyncedAt: _now(),
@@ -258,10 +393,17 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
                   'Sync failed: ${result.rowsFailed} change(s) not uploaded — '
                   '${result.errors.join('; ')}',
             );
+            _scheduleRetry();
           }
         case SyncPushOutcome.skippedSignedOut:
+          _consecutivePushFailures = 0;
+          _retryTimer?.cancel();
           state = state.copyWith(status: SyncStatus.idle);
         case SyncPushOutcome.skippedNotWifi:
+          // Not a failure, and deliberately NOT retried on a timer: this
+          // condition only changes when the network changes, and
+          // [_onConnectivityChanged] already pushes on every regain. Arming a
+          // backoff here would spin a timer that can never succeed.
           state = state.copyWith(status: SyncStatus.offline);
       }
     } catch (e, st) {
@@ -272,7 +414,59 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         lastPullError: state.lastPullError,
         lastPushError: 'Sync failed: $e',
       );
+      _scheduleRetry();
     }
+  }
+
+  /// Arms the next retry, [SyncRetrySchedule.delayFor] from now.
+  ///
+  /// Bounded interval (~2s doubling to a 5min ceiling, jittered), unbounded
+  /// attempts: this NEVER gives up while anything is still `dirty` (D-2). The
+  /// loop terminates by SUCCESS, not by exhaustion — a retry that finds a
+  /// clean database hits [_runPush]'s nothing-pending early-out and simply
+  /// returns without re-arming.
+  void _scheduleRetry() {
+    _consecutivePushFailures++;
+    _retryTimer?.cancel();
+    final delay = ref
+        .read(syncRetryScheduleProvider)
+        .delayFor(_consecutivePushFailures);
+    _retryTimer = Timer(delay, () => unawaited(pushNow()));
+  }
+
+  /// A connectivity transition arrived.
+  ///
+  /// Anything other than [NetworkStatus.none] means "the network may be usable
+  /// again", which is genuinely NEW information, so three things happen:
+  ///  - the backoff resets — the accumulated failures were about the OLD
+  ///    network state, and making the user wait out a 5-minute ceiling after
+  ///    reconnecting is the opposite of "sync as soon as possible";
+  ///  - [_fullResyncDue] is re-armed, so the catch-up push re-sends EVERY own
+  ///    row rather than trusting `dirty` flags that a swallowed per-table
+  ///    failure during the outage may have cleared (D-4's loss-proofness);
+  ///  - BOTH a push and a pull fire immediately — the push flushes whatever
+  ///    was edited offline, the pull picks up what changed in the cloud
+  ///    meanwhile. §1e requires both; pushing only would leave another user's
+  ///    newly-published topo invisible until the next resume.
+  ///
+  /// Losing the network ([NetworkStatus.none]) triggers nothing: there is
+  /// nothing to attempt, and attempting anyway would just burn a retry
+  /// attempt and flip the status to `error`.
+  ///
+  /// Both entry points self-guard against overlapping runs ([pushNow] /
+  /// [pullNow]), so a flapping connection cannot stack up concurrent syncs —
+  /// at most one push and one pull are ever in flight. [pullNow] is called
+  /// UNTHROTTLED on purpose: a genuine offline→online transition is precisely
+  /// when fresh data matters, and its in-flight guard already collapses a
+  /// burst of `online` events (browsers fire them liberally) into a single
+  /// pull.
+  void _onConnectivityChanged(NetworkStatus status) {
+    if (status == NetworkStatus.none) return;
+    _consecutivePushFailures = 0;
+    _retryTimer?.cancel();
+    _fullResyncDue = true;
+    unawaited(pushNow());
+    unawaited(pullNow());
   }
 
   /// Whether a push that failed did so because THE BACKEND IS UNREACHABLE

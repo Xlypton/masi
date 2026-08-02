@@ -84,9 +84,9 @@ class FakeConnectivityService implements ConnectivityService {
   @override
   Future<bool> isBackendReachable() async => true;
 
-  /// §1e's second seam member, written here as part of the ONE merged
-  /// rewrite (reconciliation decision #5). No `@override` until §1e T7
-  /// declares the abstract member.
+  /// §1e's second seam member. Unused by [CloudBackupService]; exists only
+  /// to satisfy the seam.
+  @override
   Stream<NetworkStatus> statusChanges() => const Stream<NetworkStatus>.empty();
 }
 

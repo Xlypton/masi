@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:http/http.dart' as http;
 
 import '../../../core/config/supabase_config.dart';
+import 'online_events.dart';
 
 /// Coarse network status the backup engine cares about — collapses
 /// `connectivity_plus`'s finer-grained [ConnectivityResult] list into just
@@ -43,6 +44,22 @@ abstract class ConnectivityService {
   /// `false`, mirroring `NominatimGeocodingService.search`'s best-effort
   /// never-throws contract.
   Future<bool> isBackendReachable();
+
+  /// Emits the NEW [NetworkStatus] every time the platform reports a
+  /// connectivity transition — the signal `SyncOrchestrator` listens on to
+  /// push AND pull the moment the network comes back.
+  ///
+  /// S3: nothing reacted to connectivity returning at all before this
+  /// (`grep -rn "onConnectivityChanged" lib` returned zero hits), so a user
+  /// who edited offline and then neither wrote again nor backgrounded the app
+  /// stayed unsynced indefinitely.
+  ///
+  /// CONTRACT — implementations MUST NOT throw, and MUST degrade to a stream
+  /// that simply never emits when the underlying platform signal is
+  /// unavailable (an unsupported platform, or a unit/widget test with no
+  /// registered plugin). Subscribers read "no events" as "no transitions",
+  /// never as an error.
+  Stream<NetworkStatus> statusChanges();
 }
 
 /// Collapses `connectivity_plus`'s finer-grained [ConnectivityResult] list
@@ -151,5 +168,49 @@ class SystemConnectivityService implements ConnectivityService {
     // would silently strand backups in [SyncStatus.offline] forever.
     if (_isWeb) return NetworkStatus.wifi;
     return classifyConnectivityResults(await _connectivity.checkConnectivity());
+  }
+
+  @override
+  Stream<NetworkStatus> statusChanges() {
+    // Web: `connectivity_plus`'s browser implementation can only distinguish
+    // online from offline, and [currentStatus] deliberately reports `wifi`
+    // unconditionally there (see its comment), so use the browser's own
+    // `online`/`offline` window events — behind the conditional-import seam
+    // in `online_events.dart` — and map them onto the only two values a
+    // browser can actually tell apart.
+    if (_isWeb) {
+      return onlineEvents().map(
+        (online) => online ? NetworkStatus.wifi : NetworkStatus.none,
+      );
+    }
+    return _nativeStatusChanges();
+  }
+
+  /// Native transitions, gated behind a CATCHABLE plugin-availability probe.
+  ///
+  /// `Connectivity.onConnectivityChanged` is an `EventChannel`, and an
+  /// EventChannel whose plugin isn't registered reports its failure through
+  /// `FlutterError.reportError` — which `testWidgets` turns into a HARD test
+  /// failure that no caller-side `try`/`catch` or `Stream.onError` can
+  /// intercept. `checkConnectivity()` is a plain `MethodChannel` call on the
+  /// same plugin, so it throws a catchable `MissingPluginException` instead:
+  /// probe with that FIRST and only subscribe to the event channel once the
+  /// plugin has proven itself present.
+  ///
+  /// This is what makes the contract on [ConnectivityService.statusChanges]
+  /// hold for free in every unit/widget test that mounts `MasiApp` without
+  /// overriding `connectivityServiceProvider` (`test/widget_test.dart` has two
+  /// such mounts and is owned by no workstream) — the stream silently never
+  /// emits instead of failing the test. On a real device the probe succeeds
+  /// and costs one extra platform call on first listen. DO NOT remove it.
+  Stream<NetworkStatus> _nativeStatusChanges() async* {
+    try {
+      await _connectivity.checkConnectivity();
+    } catch (_) {
+      return;
+    }
+    yield* _connectivity.onConnectivityChanged.map(
+      classifyConnectivityResults,
+    );
   }
 }

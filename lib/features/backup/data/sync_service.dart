@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:path/path.dart' as p;
 
 import '../../../core/db/app_database.dart' as db;
@@ -6,6 +7,31 @@ import '../../topo/data/photo_files.dart';
 import 'backup_repository.dart';
 import 'connectivity_service.dart';
 import 'sync_remote.dart';
+
+/// How much of the signed-in user's own data one [SyncService.pushOwn] call
+/// sends.
+///
+/// D-4 keeps the full-state re-push engine and fixes the SCHEDULER; this enum
+/// is that split made explicit rather than an outbox:
+///  - [full] re-reads and re-sends EVERY own row, exactly as `pushOwn` always
+///    did. Idempotent and loss-proof: it cannot be defeated by a `dirty` flag
+///    that was cleared without the row actually landing. `SyncOrchestrator`
+///    runs one of these on app start and on every connectivity regain.
+///  - [dirtyOnly] sends just the rows whose `dirty` flag is still set — the
+///    fast path, and the fix for push cost scaling with library size instead
+///    of change count (S7).
+///
+/// Defaults to [full] everywhere, so no existing caller changes behaviour.
+///
+/// PRECONDITION for [dirtyOnly], and the reason [full] is retained: every
+/// push-worthy local write must set `dirty: true` alongside `updatedAt`. A
+/// writer that does not is invisible to a [dirtyOnly] push until the next
+/// [full] one. `LibraryCrudRepository` satisfies this as of §1e;
+/// `RouteRepository`'s three writes (`upsertRoute` insert/update,
+/// `softDeleteRoute`) do NOT yet — a route edit therefore only reaches the
+/// cloud via the app-start / connectivity-regain [full] push. That is a known
+/// gap, not a design choice; see `SyncService.hasPendingLocalChanges`.
+enum PushScope { full, dirtyOnly }
 
 /// Outcome of a [SyncService.pushOwn] call.
 enum SyncPushOutcome {
@@ -306,12 +332,24 @@ class SyncService {
   /// photo whose wall has `visibility == 'shared'` (see
   /// [SyncRemote.uploadSharedPhoto]).
   ///
+  /// [scope] selects how much is sent: [PushScope.full] (the default, and
+  /// what every pre-existing caller gets) re-sends everything;
+  /// [PushScope.dirtyOnly] sends only rows still flagged `dirty`. See
+  /// [PushScope] for why BOTH exist.
+  ///
+  /// Every row in a table the remote CONFIRMED ([TablePushOutcome.ok]) has
+  /// its `dirty` flag cleared — by an (`id`, `updatedAt`) compare-and-swap
+  /// that cannot clobber a local write made mid-push. Rows in a table that
+  /// came back `failed` keep their flag, which is what makes the
+  /// orchestrator's retry-until-clean loop both correct and terminating. See
+  /// [_clearDirty].
+  ///
   /// No-ops (never throws) when signed out, or when `wifiOnly` is on and the
   /// current connection isn't wifi — both report a `skipped*` outcome
   /// rather than pushing partial data. Idempotent: pushing again with
   /// nothing changed re-sends the same rows (upsert, so harmless) and
   /// re-uploads no photo files (already-present objects are skipped).
-  Future<PushSyncResult> pushOwn() async {
+  Future<PushSyncResult> pushOwn({PushScope scope = PushScope.full}) async {
     final uid = _authRepository.currentSession.uid;
     if (uid == null) return const PushSyncResult.skippedSignedOut();
 
@@ -321,6 +359,8 @@ class SyncService {
         return const PushSyncResult.skippedNotWifi();
       }
     }
+
+    final dirtyOnly = scope == PushScope.dirtyOnly;
 
     // Read every own-table snapshot inside a single transaction so a
     // concurrent pull's transactional importSnapshot() write can't be
@@ -338,16 +378,32 @@ class SyncService {
     late List<db.Comment> comments;
     late List<db.Like> likes;
     late List<db.Ascent> ascents;
+    // wallId -> visibility for EVERY own wall, dirty or not. Read separately
+    // (and as a projection, not whole rows) because [_uploadOwnPhotos] needs a
+    // photo's wall visibility to decide whether a SHARED copy is owed — and
+    // under [PushScope.dirtyOnly] `walls` above may not contain that wall at
+    // all. Deriving the map from `walls` (as this used to) would silently stop
+    // uploading the shared copy of a newly-added photo on an already-pushed,
+    // therefore clean, shared wall.
+    late Map<String, String> wallVisibility;
     await _db.transaction(() async {
-      profiles = await (_db.select(_db.profiles)..where((t) => t.ownerId.equals(uid))).get();
-      areas = await (_db.select(_db.areas)..where((t) => t.ownerId.equals(uid))).get();
-      sectors = await (_db.select(_db.sectors)..where((t) => t.ownerId.equals(uid))).get();
-      walls = await (_db.select(_db.walls)..where((t) => t.ownerId.equals(uid))).get();
-      photos = await (_db.select(_db.photos)..where((t) => t.ownerId.equals(uid))).get();
-      routes = await (_db.select(_db.routes)..where((t) => t.ownerId.equals(uid))).get();
-      comments = await (_db.select(_db.comments)..where((t) => t.ownerId.equals(uid))).get();
-      likes = await (_db.select(_db.likes)..where((t) => t.ownerId.equals(uid))).get();
-      ascents = await (_db.select(_db.ascents)..where((t) => t.ownerId.equals(uid))).get();
+      profiles = await (_db.select(_db.profiles)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      areas = await (_db.select(_db.areas)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      sectors = await (_db.select(_db.sectors)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      walls = await (_db.select(_db.walls)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      photos = await (_db.select(_db.photos)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      routes = await (_db.select(_db.routes)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      comments = await (_db.select(_db.comments)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      likes = await (_db.select(_db.likes)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+      ascents = await (_db.select(_db.ascents)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
+
+      final visibilityQuery = _db.selectOnly(_db.walls)
+        ..addColumns([_db.walls.id, _db.walls.visibility])
+        ..where(_db.walls.ownerId.equals(uid));
+      wallVisibility = {
+        for (final row in await visibilityQuery.get())
+          row.read(_db.walls.id)!: row.read(_db.walls.visibility)!,
+      };
     });
 
     // S1/L5 fix (§1d): the two accumulators EVERY push-failure channel
@@ -465,8 +521,36 @@ class SyncService {
       }
     }
 
-    final wallVisibility = {for (final wall in walls) wall.id: wall.visibility};
     final photosUploaded = await _uploadOwnPhotos(uid, photos, wallVisibility);
+
+    // Dirty flags are cleared HERE, LAST, and ONLY for the tables this push
+    // CONFIRMED.
+    //
+    // WHY ONLY THE CONFIRMED TABLES (§1d interaction, load-bearing):
+    // `upsertOwnRows` reports per-table outcomes and `pushOwn` converts even
+    // a whole-call throw into an all-tables-`failed` result rather than
+    // propagating it — so "pushOwn returned" is NOT "everything landed".
+    // Clearing `dirty` for a table that came back `TablePushOutcome.failed`
+    // would mark rows clean that are not in the cloud, and since the retry
+    // loop is gated on `dirty` those rows would never be sent again. That is
+    // strictly worse than the pre-fix behaviour, which at least never
+    // claimed they were clean.
+    //
+    // WHY LAST, after the photo phase: it needs `outcomes`, which only exist
+    // after the row push. Note this is NOT the original §1e reasoning ("a row
+    // must not go clean while its pixels are missing") — once §1f flips the
+    // order to bytes-then-metadata, a failed byte upload keeps that photo's
+    // row out of `tablesToRows` altogether and it stays dirty by
+    // construction. §1f moves `_uploadOwnPhotos` ABOVE `upsertOwnRows`; this
+    // clear stays at the bottom. Do not "restore" the old ordering.
+    final failedTables = <String>{
+      for (final outcome in outcomes)
+        if (!outcome.ok) outcome.table,
+    };
+    await _clearDirty({
+      for (final entry in tablesToRows.entries)
+        if (!failedTables.contains(entry.key)) entry.key: entry.value,
+    });
 
     return PushSyncResult.pushed(
       rowsPushed: rowsPushed,
@@ -474,6 +558,210 @@ class SyncService {
       rowsFailed: rowsFailed,
       errors: errors,
     );
+  }
+
+  /// Clears `dirty` for exactly the rows this push CONFIRMED, matched by the
+  /// (`id`, `updatedAt`) PAIR — never by `id` alone.
+  ///
+  /// THE RACE THIS PREVENTS (the single most dangerous bug in this area): a
+  /// local write can land while the push above is awaiting the network. Every
+  /// repository write bumps that row's `updatedAt` to a fresh `nowMs()` AND
+  /// re-sets `dirty: true` in the SAME companion. [tablesToRows] was
+  /// snapshotted BEFORE the push and therefore carries the OLD `updatedAt`, so
+  /// requiring `updatedAt` to still equal the pushed value turns this into a
+  /// compare-and-swap: a row rewritten mid-push matches 0 rows, keeps
+  /// `dirty: true`, and is picked up by the next push. A clear keyed on `id`
+  /// alone would mark that newer edit as pushed and silently lose it.
+  ///
+  /// The CALLER is responsible for passing only the tables whose
+  /// [TablePushOutcome] came back ok — see [pushOwn]'s `failedTables`.
+  ///
+  /// Rows are grouped by `updatedAt` so ONE statement covers every row a
+  /// single user operation touched (a cascade delete stamps one `now` across
+  /// area+sector+wall+photos+routes) instead of one statement per row.
+  ///
+  /// The `& dirty.equals(true)` term is NOT redundant with "these are the rows
+  /// we just pushed": under [PushScope.full] most of them are already clean.
+  /// Drift only fires `tableUpdates()` when a statement actually changes rows
+  /// (`update.dart`'s `if (rows > 0)`), so restricting the WHERE to rows that
+  /// are genuinely dirty makes a no-op clear silent — otherwise every
+  /// confirmed push would notify, `SyncOrchestrator` would debounce another
+  /// push off its own bookkeeping write, and that push would clear again, ad
+  /// infinitum. `_runPush`'s nothing-pending early-out also breaks that cycle,
+  /// but relying on a caller to stop a self-sustaining write loop is the wrong
+  /// place for the guard.
+  ///
+  /// KNOWN, ACCEPTED, NARROW HOLE: two writes to the SAME row inside one
+  /// millisecond share an `updatedAt`, so the second would be cleared by this
+  /// push. That is the same resolution [shouldPushLww] already relies on, it
+  /// needs two distinct user operations on one row within 1 ms, and the
+  /// retained [PushScope.full] re-push (app start + every connectivity
+  /// regain) re-sends the row regardless of its flag. Closing it properly
+  /// needs a monotonic local revision column, i.e. a schema migration — out
+  /// of scope here.
+  Future<void> _clearDirty(
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {
+    await _db.transaction(() async {
+      await _clearDirtyRows(
+        tablesToRows['profiles'],
+        (ids, updatedAt) => (_db.update(_db.profiles)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.ProfilesCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['areas'],
+        (ids, updatedAt) => (_db.update(_db.areas)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.AreasCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['sectors'],
+        (ids, updatedAt) => (_db.update(_db.sectors)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.SectorsCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['walls'],
+        (ids, updatedAt) => (_db.update(_db.walls)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.WallsCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['photos'],
+        (ids, updatedAt) => (_db.update(_db.photos)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.PhotosCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['routes'],
+        (ids, updatedAt) => (_db.update(_db.routes)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.RoutesCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['ascents'],
+        (ids, updatedAt) => (_db.update(_db.ascents)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.AscentsCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['comments'],
+        (ids, updatedAt) => (_db.update(_db.comments)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.CommentsCompanion(dirty: Value(false))),
+      );
+      await _clearDirtyRows(
+        tablesToRows['likes'],
+        (ids, updatedAt) => (_db.update(_db.likes)
+              ..where(
+                (t) =>
+                    t.id.isIn(ids) &
+                    t.updatedAt.equals(updatedAt) &
+                    t.dirty.equals(true),
+              ))
+            .write(const db.LikesCompanion(dirty: Value(false))),
+      );
+    });
+  }
+
+  /// Groups [rows] by `updatedAt` and hands each `(ids, updatedAt)` batch to
+  /// [clearBatch] — the shared body of [_clearDirty]'s nine per-table clears
+  /// (each table needs its own statically-typed companion, so only the
+  /// grouping can be factored out).
+  Future<void> _clearDirtyRows(
+    List<Map<String, dynamic>>? rows,
+    Future<void> Function(List<String> ids, int updatedAt) clearBatch,
+  ) async {
+    if (rows == null || rows.isEmpty) return;
+    final byUpdatedAt = <int, List<String>>{};
+    for (final row in rows) {
+      (byUpdatedAt[row['updatedAt'] as int] ??= <String>[])
+          .add(row['id'] as String);
+    }
+    for (final entry in byUpdatedAt.entries) {
+      await clearBatch(entry.value, entry.key);
+    }
+  }
+
+  /// True when at least one row owned by the signed-in user is still `dirty`
+  /// — i.e. carries a local change no push has ever CONFIRMED.
+  ///
+  /// This is the definition of "anything pending" that makes
+  /// `SyncOrchestrator`'s retry loop well-defined and terminating (S2: retry
+  /// until clean, never give up), and it is what stops a pull's own writes
+  /// from triggering a pointless full re-push ~2s later (S9 —
+  /// [BackupRepository.importSnapshot] writes every imported row
+  /// `dirty: false`).
+  ///
+  /// `false` when signed out: there is nothing to push, which is not an error
+  /// (mirrors [pushOwn]'s `skippedSignedOut`). Deliberately a LIMIT-1
+  /// existence probe per table, short-circuiting on the first hit, rather
+  /// than a count — the answer is a bool.
+  ///
+  /// KNOWN GAP: this is only as truthful as its writers. `RouteRepository`'s
+  /// `upsertRoute`/`softDeleteRoute` do not set `dirty` yet, so a route-only
+  /// edit reads as "nothing pending" here and reaches the cloud on the next
+  /// [PushScope.full] push (app start / connectivity regain) rather than
+  /// immediately. See [PushScope].
+  Future<bool> hasPendingLocalChanges() async {
+    final uid = _authRepository.currentSession.uid;
+    if (uid == null) return false;
+    final probes = <Future<Object?> Function()>[
+      () => (_db.select(_db.profiles)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+      () => (_db.select(_db.areas)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+      () => (_db.select(_db.sectors)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+      () => (_db.select(_db.walls)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+      () => (_db.select(_db.photos)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+      () => (_db.select(_db.routes)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+      () => (_db.select(_db.ascents)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+      () => (_db.select(_db.comments)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+      () => (_db.select(_db.likes)..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))..limit(1)).getSingleOrNull(),
+    ];
+    for (final probe in probes) {
+      if (await probe() != null) return true;
+    }
+    return false;
   }
 
   /// Uploads every DISTINCT on-disk photo file referenced by [photos],

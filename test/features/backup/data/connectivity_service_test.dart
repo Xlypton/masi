@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:masi/core/config/supabase_config.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart'
     show BaseClient, BaseRequest, ClientException, StreamedResponse;
@@ -158,5 +160,75 @@ void main() {
     test('the probe is bounded by a 5s timeout', () {
       expect(SystemConnectivityService.probeTimeout, const Duration(seconds: 5));
     });
+  });
+
+  group('classifyConnectivityResults', () {
+    test(
+      'wifi/ethernet -> wifi, mobile -> cellular, none/empty -> none, '
+      'anything else -> other',
+      () {
+        expect(
+          classifyConnectivityResults([ConnectivityResult.wifi]),
+          NetworkStatus.wifi,
+        );
+        expect(
+          classifyConnectivityResults([ConnectivityResult.ethernet]),
+          NetworkStatus.wifi,
+        );
+        expect(
+          classifyConnectivityResults([
+            ConnectivityResult.mobile,
+            ConnectivityResult.wifi,
+          ]),
+          NetworkStatus.wifi,
+          reason: 'wifi wins when both are reported',
+        );
+        expect(
+          classifyConnectivityResults([ConnectivityResult.mobile]),
+          NetworkStatus.cellular,
+        );
+        expect(
+          classifyConnectivityResults([ConnectivityResult.none]),
+          NetworkStatus.none,
+        );
+        expect(classifyConnectivityResults([]), NetworkStatus.none);
+        expect(
+          classifyConnectivityResults([ConnectivityResult.vpn]),
+          NetworkStatus.other,
+        );
+      },
+    );
+  });
+
+  group('SystemConnectivityService.statusChanges', () {
+    test(
+      'with no registered plugin the stream is INERT: it completes without '
+      'emitting and without reporting a FlutterError. This is the contract '
+      'every widget test that mounts MasiApp without overriding '
+      'connectivityServiceProvider depends on -- an EventChannel whose '
+      'plugin is missing reports through FlutterError.reportError, which no '
+      'caller-side try/catch or Stream.onError can intercept.',
+      () async {
+        final errors = <FlutterErrorDetails>[];
+        final previousOnError = FlutterError.onError;
+        FlutterError.onError = errors.add;
+        addTearDown(() => FlutterError.onError = previousOnError);
+
+        final service = SystemConnectivityService(null, false);
+        final emitted = await service.statusChanges().toList();
+
+        expect(emitted, isEmpty);
+        expect(errors, isEmpty);
+      },
+    );
+
+    test(
+      'on web the stream maps browser online/offline onto wifi/none '
+      '(inert under the VM target, where the native seam half is picked)',
+      () async {
+        final service = SystemConnectivityService(null, true);
+        expect(await service.statusChanges().toList(), isEmpty);
+      },
+    );
   });
 }
