@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'storage_pagination.dart';
+
 /// A cloud-stored backup row for one user: the full snapshot JSON
 /// ([BackupRepository.exportSnapshot]'s shape) plus the metadata columns
 /// from the `backups` table contract (`schema_version`, `updated_at`).
@@ -154,9 +156,24 @@ class SupabaseBackupRemote implements BackupRemote {
     }
   }
 
+  /// S6: paged, for the identical reason `SupabaseSyncRemote`'s two listings
+  /// are — `list()` returns at most 100 objects per request with no signal
+  /// that more exist, so an un-paged call truncates the skip-set and makes
+  /// [CloudBackupService] re-upload full-resolution bytes already in the
+  /// cloud. Fixed here too even though `CloudBackupService` currently has no
+  /// caller outside `lib/features/backup/` (decision D-2), because leaving
+  /// one of two identical listings unfixed is exactly the divergence risk this
+  /// duplication is known for.
   @override
   Future<Set<String>> listPhotoObjectPaths(String uid) async {
-    final files = await _client.storage.from(_bucket).list(path: uid);
+    final files = await collectPagedObjects<FileObject>(
+      (limit, offset) => _client.storage
+          .from(_bucket)
+          .list(
+            path: uid,
+            searchOptions: SearchOptions(limit: limit, offset: offset),
+          ),
+    );
     return {for (final file in files) '$uid/${file.name}'};
   }
 }

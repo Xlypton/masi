@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'storage_pagination.dart';
+
 /// The nine row-level tables this app syncs, in FK dependency order
 /// (Profiles → Areas → Sectors → Walls → Photos → Routes → Ascents →
 /// Comments → Likes) — the same order [BackupRepository.importSnapshot]
@@ -797,9 +799,24 @@ class SupabaseSyncRemote implements SyncRemote {
     }
   }
 
+  /// Lists EVERY object under [prefix], paging past the storage client's
+  /// 100-object `SearchOptions` default (S6 — see `storage_pagination.dart`
+  /// for why a single un-paged `list()` silently truncated the skip-set and
+  /// what that cost at full resolution).
+  Future<List<FileObject>> _listAllObjects(String prefix) {
+    return collectPagedObjects<FileObject>(
+      (limit, offset) => _client.storage
+          .from(_bucket)
+          .list(
+            path: prefix,
+            searchOptions: SearchOptions(limit: limit, offset: offset),
+          ),
+    );
+  }
+
   @override
   Future<Set<String>> listPhotoObjectPaths(String uid) async {
-    final files = await _client.storage.from(_bucket).list(path: uid);
+    final files = await _listAllObjects(uid);
     return {for (final file in files) '$uid/${file.name}'};
   }
 
@@ -829,7 +846,7 @@ class SupabaseSyncRemote implements SyncRemote {
 
   @override
   Future<Set<String>> listSharedPhotoObjectPaths() async {
-    final files = await _client.storage.from(_bucket).list(path: 'shared');
+    final files = await _listAllObjects('shared');
     return {for (final file in files) 'shared/${file.name}'};
   }
 
