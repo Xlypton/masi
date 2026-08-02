@@ -3,6 +3,56 @@ import 'package:drift/wasm.dart';
 
 import 'storage_durability.dart';
 
+/// On the web, a drift `COMMIT` does NOT reach browser storage. Something
+/// else has to make it, and [AppDatabase.transaction] does — see its override
+/// for the workaround. This flag is the platform half of that seam.
+///
+/// MEASURED, then traced to source. `tool/drive_web_write_order.sh` wrote
+/// `wall -> photo -> 10 routes -> one more topo` into a real headless Chrome
+/// with the network severed, killed the browser, and reopened the same
+/// profile in a new process. Everything came back EXCEPT the last topo. Ten
+/// route rows written seconds earlier survived; the topo written after them
+/// did not. The difference is not recency and not the table — it is that
+/// `RouteRepository.upsertRoute` is a bare auto-commit `INSERT` while
+/// `LibraryCrudRepository.createTopo` is a `transaction(...)`.
+///
+/// Why, in drift 2.34.2 + sqlite3 3.5.0:
+///
+///  1. `sharedIndexedDb` is backed by sqlite3's `IndexedDbFileSystem`, opened
+///     by drift with `writeAutomatically: false`
+///     (`drift/src/web/wasm_setup/shared.dart:341-345`, comment: "We call
+///     flush() in _WasmDelegate"). The authoritative database image is an
+///     `InMemoryFileSystem`; IndexedDB is a write-behind mirror.
+///  2. Because `writeAutomatically` is false, `_startWorkingIfNeeded`
+///     (`sqlite3/src/wasm/vfs/indexed_db.dart:533-534`) returns immediately
+///     for every implicit trigger. There is NO timer, NO debounce and NO
+///     size threshold. The mirror is updated ONLY by an explicit `flush()`
+///     or `close()`. Waiting does not help — measured at 15s and at 60s.
+///  3. sqlite's own durability points are wired to nothing: `xSync` is "a
+///     noop" (`indexed_db.dart:685-688`), `xClose` is empty, `xWrite`
+///     queues a work item whose completion future is discarded
+///     (`indexed_db.dart:712-737`).
+///  4. Drift calls that `flush()` in `_WasmDelegate._runWithArgs` — but only
+///     `if (!isInTransaction)` (`drift/lib/wasm.dart:362-368`).
+///  5. And `isInTransaction` is still `true` while `COMMIT` runs:
+///     `_StatementBasedTransactionExecutor.send()` is
+///     `await runCustom(_commitCommand); _release();`
+///     (`drift/src/runtime/executor/helpers/engines.dart:274-281`), and
+///     `_release()` is what clears the flag (`:300-307`).
+///
+/// So a committed transaction is flushed only by whatever write happens to
+/// come NEXT — including the `BEGIN` of the next transaction, which runs
+/// before `isInTransaction` is set (`engines.dart:239-240`). That is exactly
+/// why the original photo measurement looked photo-specific: the `Wall` row
+/// survived because `attachPhotoToWall`'s own `BEGIN` flushed it, and the
+/// `Photos` row died because nothing came after it.
+///
+/// The last transaction a user performs is therefore ALWAYS at risk, forever,
+/// with no time limit — which for this app means the topo they just made, the
+/// photo they just attached, or the delete they just performed, whenever it is
+/// the last thing they do before the tab goes away.
+const bool commitNeedsExplicitFlush = true;
+
 /// Web connection — drift on WASM (OPFS-via-worker where available, IndexedDB
 /// fallback). Assets `sqlite3.wasm` + `drift_worker.js` are pinned in web/.
 ///

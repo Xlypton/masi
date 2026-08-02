@@ -1,5 +1,9 @@
 import 'package:drift/drift.dart';
+// For `@visibleForTesting`. `package:meta` itself is not a direct
+// dependency of this package; foundation re-exports the annotation.
+import 'package:flutter/foundation.dart';
 
+import 'connection/connection.dart' show commitNeedsExplicitFlush;
 import 'schema_downgrade.dart';
 import 'tables.dart';
 
@@ -27,7 +31,19 @@ part 'app_database.g.dart';
   ],
 )
 class AppDatabase extends _$AppDatabase {
-  AppDatabase(super.e);
+  /// [flushAfterCommit] overrides the platform default
+  /// ([commitNeedsExplicitFlush]) for the post-commit durability flush that
+  /// [transaction] performs.
+  ///
+  /// It exists ONLY so `flutter test` — which always runs the `dart:io` seam,
+  /// where the flag is `false` — can still exercise the real depth-counting,
+  /// rollback and ordering behaviour of that override against an in-memory
+  /// `NativeDatabase`. Production code must never pass it; the platform seam
+  /// is the answer everywhere else.
+  AppDatabase(super.e, {@visibleForTesting bool? flushAfterCommit})
+    : _flushAfterCommit = flushAfterCommit ?? commitNeedsExplicitFlush;
+
+  final bool _flushAfterCommit;
 
   @override
   int get schemaVersion => 9;
@@ -232,4 +248,88 @@ class AppDatabase extends _$AppDatabase {
       await customStatement('PRAGMA foreign_keys = ON');
     },
   );
+
+  /// Nesting depth of [transaction] calls made through this database.
+  ///
+  /// Only the OUTERMOST one may flush. A nested transaction is a `SAVEPOINT`;
+  /// drift keeps `isInTransaction` set for it
+  /// (`executor/helpers/engines.dart:300-302` clears the flag only at
+  /// `depth == 0`), so a statement issued after a nested release would still
+  /// be inside the outer transaction and would not flush anything.
+  int _openTransactions = 0;
+
+  /// The statement issued after a top-level commit purely for its SIDE
+  /// EFFECT on drift's web delegate.
+  ///
+  /// Nothing about `SELECT 1` matters except that it is a statement, that it
+  /// is dispatched outside a transaction, and that it is free. Drift's
+  /// `_WasmDelegate._runWithArgs` awaits `_flush()` after ANY statement it is
+  /// handed while `isInTransaction` is false (`drift/lib/wasm.dart:362-368`),
+  /// and that `flush()` drains sqlite3's ENTIRE pending write queue
+  /// (`sqlite3/src/wasm/vfs/indexed_db.dart:606-608` ->
+  /// `_startWorkingIfNeeded(isImplicit: false)` -> `_performWrites`), waiting
+  /// on the IndexedDB transaction's own `oncomplete`
+  /// (`indexed_db.dart:100-103`, `:118-139`). So one cheap statement after the
+  /// commit persists everything the commit left behind.
+  ///
+  /// `customStatement` is deliberate: it routes to `runCustom` and does NOT
+  /// notify drift's stream queries, so this cannot make a `watch()` re-emit.
+  static const String _postCommitFlushStatement = 'SELECT 1';
+
+  /// Wraps drift's [transaction] so that a top-level commit is DURABLE by the
+  /// time the returned future completes, on platforms where drift's own
+  /// commit path does not persist ([commitNeedsExplicitFlush] — web only; see
+  /// that declaration in `connection/connection_web.dart` for the full
+  /// mechanism, the measurement and the drift/sqlite3 line references).
+  ///
+  /// Without this, every write made inside a transaction sits in the drift
+  /// worker's memory until some LATER unrelated statement happens to flush
+  /// it, so the last transaction before the tab closes is lost — silently,
+  /// permanently, and invisibly to the sync engine (the row never reaches the
+  /// database, so `dirty` is never set and "nothing pending" is the truthful
+  /// answer).
+  ///
+  /// Three deliberate choices:
+  ///
+  ///  * AFTER `super.transaction` returns, not inside a `QueryInterceptor`'s
+  ///    `commitTransaction`. Drift releases the executor lock via
+  ///    `_release()`'s `_done.complete()` (`engines.dart:300-307`) which the
+  ///    parent's `_synchronized` block awaits — issuing a root-level
+  ///    statement before that resumes risks deadlocking against the lock the
+  ///    committing transaction still holds.
+  ///  * Only at depth 0, for the reason on [_openTransactions].
+  ///  * The flush is AWAITED and its failure PROPAGATES. A flush that fails
+  ///    means the data is not on disk, and returning normally would be the
+  ///    same silent-loss bug in a new place. This is also consistent with
+  ///    what already happens for writes OUTSIDE a transaction: drift awaits
+  ///    the identical `_flush()` inside `runInsert`/`runUpdate`, so a bare
+  ///    `INSERT` already throws when the mirror cannot be written. Callers
+  ///    saw that behaviour before this change; they now see it for
+  ///    transactions too.
+  ///
+  /// A rolled-back transaction flushes nothing: the exception propagates out
+  /// of the `finally` before the flush, which is correct — there is no
+  /// committed state to persist.
+  @override
+  Future<T> transaction<T>(
+    Future<T> Function() action, {
+    bool requireNew = false,
+  }) async {
+    _openTransactions++;
+    final T result;
+    try {
+      result = await super.transaction(action, requireNew: requireNew);
+    } finally {
+      _openTransactions--;
+    }
+    // No `await` between the decrement and this check, so no other
+    // transaction can interleave and hide the flush. Even if one could, the
+    // gate is conservative rather than lossy: `flush()` drains the whole
+    // queue, so whichever transaction finishes last persists the work of
+    // every transaction that overlapped it.
+    if (_flushAfterCommit && _openTransactions == 0) {
+      await customStatement(_postCommitFlushStatement);
+    }
+    return result;
+  }
 }

@@ -7,6 +7,12 @@ import 'package:path_provider/path_provider.dart';
 
 import 'storage_durability.dart';
 
+/// Native needs no post-commit flush: `NativeDatabase` writes through sqlite's
+/// own VFS to a real file, so `COMMIT` means fsync and durability is sqlite's
+/// problem, exactly as it has always been. See `connection_web.dart`'s
+/// declaration of the same name for the web story, which is not this one.
+const bool commitNeedsExplicitFlush = false;
+
 /// Native (iOS/Android/desktop) connection — opens climbtopo.sqlite in the
 /// app documents directory. Byte-identical to the pre-split implementation.
 ///
