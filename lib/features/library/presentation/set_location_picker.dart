@@ -196,8 +196,36 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     // [_runSearch]'s own `refresh()` call (below) can usually resolve
     // against an already-in-flight or already-known probe rather than
     // starting cold the first time a search comes back empty. Never
-    // awaited here -- the picker must never block on this.
-    Future.microtask(() => ref.read(reachabilityProvider.notifier).refresh());
+    // awaited here -- the picker must never block on this. Routed through
+    // [_safeRefreshReachability] (see its doc) rather than a bare
+    // `ref.read`, so a handful of pre-existing tests that mount this
+    // picker with NO `ProviderScope` at all (this widget only started
+    // needing `ref` for anything beyond an already-injected
+    // `geocodingService`/`locationService` once this probe was added --
+    // see `topos_screen_test.dart`'s S-L5/S-L6/S-L7) don't crash over it.
+    Future.microtask(_safeRefreshReachability);
+  }
+
+  /// Refreshes [reachabilityProvider], returning the verdict it recorded --
+  /// or [Reachability.unknown] if the READ ITSELF throws because no
+  /// `ProviderScope` container is reachable ([ReachabilityController.refresh]'s
+  /// underlying probe already never throws on its own; this guards the
+  /// `ref.read` call, not the probe). Production always has a real
+  /// container (`main.dart`'s `UncontrolledProviderScope`), so this only
+  /// ever degrades in a bare-`MaterialApp` test harness that predates this
+  /// probe (`topos_screen_test.dart`'s S-L5/S-L6/S-L7 mount this picker
+  /// directly via a captured `BuildContext`, no Riverpod container at all --
+  /// they never needed one before, since `geocodingService`/
+  /// `locationService` are injected directly). [Reachability.unknown] is
+  /// the safe degrade: [ReachabilityVerdict.isKnownOffline] is `false` for
+  /// it, so a container-less mount never falsely claims to be offline --
+  /// it just never shows the hint, the same as before this probe existed.
+  Future<Reachability> _safeRefreshReachability() async {
+    try {
+      return await ref.read(reachabilityProvider.notifier).refresh();
+    } catch (_) {
+      return Reachability.unknown;
+    }
   }
 
   @override
@@ -291,7 +319,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     final results = await service.search(query);
     if (!mounted || seq != _searchSeq) return;
     if (results.isEmpty) {
-      final verdict = await ref.read(reachabilityProvider.notifier).refresh();
+      final verdict = await _safeRefreshReachability();
       if (!mounted || seq != _searchSeq) return;
       setState(() {
         _searchResults = const [];
