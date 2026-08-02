@@ -16,6 +16,7 @@ import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/email_initials.dart';
+import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../community/data/community_repository.dart' show SharedTopo;
 import '../../topo/presentation/photo_image.dart';
@@ -31,6 +32,7 @@ import '../application/proximity_topos_provider.dart';
 import '../data/library_crud_repository.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_shimmer.dart';
+import '../../../shared/presentation/sync_banner.dart';
 import 'move_target_picker.dart';
 import 'set_location_picker.dart';
 
@@ -134,6 +136,13 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
+    // Seed the reachability verdict this screen renders (see `build`'s
+    // `bannerKind`). `reachabilityProvider` is probe-on-demand — nothing
+    // schedules it — so a screen that wants an answer has to ask at mount.
+    // Deferred by a microtask because `ref.read(...)` on a notifier during
+    // `initState` runs before the first frame, and `refresh()` never throws,
+    // so this is safe to fire and forget.
+    Future.microtask(() => ref.read(reachabilityProvider.notifier).refresh());
   }
 
   void _onSearchChanged() {
@@ -176,6 +185,33 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     final loadedTopos = asyncTopos.asData?.value;
     final canCreate =
         loadedTopos != null && !_creating && !storage.isEphemeral;
+
+    // Stage 3 (T2). Before this, EVERY sync/offline signal on this screen
+    // lived inside the `proximityEntries.isEmpty` branch below, so the user
+    // who had the most to lose — the one who HAS topos — was told nothing at
+    // all. Offline at a crag they watch a list quietly fail to refresh and
+    // conclude the app ate their work. The banner therefore renders here,
+    // above the list, irrespective of how much is in it.
+    //
+    // `isKnownOffline`, never `!= online`: `Reachability.unknown` is the
+    // pre-probe state, and treating it as offline flashes this banner for a
+    // frame on every cold start (see `reachability_providers.dart`).
+    final reachability = ref.watch(reachabilityProvider);
+    final pullError = ref.watch(syncOrchestratorProvider).lastPullError;
+    // The full-screen `_SyncErrorEmptyState` below already reports a pull
+    // error — larger, and with its own Retry — whenever the library is
+    // genuinely empty. Rendering the banner too would print the same
+    // sentence twice on one screen, so the banner yields in exactly that
+    // case. The OFFLINE banner never yields: no empty state says anything
+    // about reachability, and "No topos yet" on its own is precisely what
+    // reads as "your topos are gone".
+    final emptyStateOwnsTheError =
+        loadedTopos != null && proximityEntries.isEmpty && pullError != null;
+    final SyncBannerKind? bannerKind = reachability.isKnownOffline
+        ? SyncBannerKind.offline
+        : (pullError != null && !emptyStateOwnsTheError)
+        ? SyncBannerKind.syncFailed
+        : null;
 
     // The account button shows initials once actually signed in with a
     // real (non-empty) email; any other state of the auth stream —
@@ -256,6 +292,18 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
               children: [
                 if (storage.isEphemeral)
                   _StorageWarningBanner(durability: storage),
+                if (bannerKind != null)
+                  SyncBanner(
+                    kind: bannerKind,
+                    detail: pullError,
+                    // Nothing useful to press while genuinely offline; the
+                    // honest advice is to wait for signal.
+                    onRetry: bannerKind == SyncBannerKind.syncFailed
+                        ? () => ref
+                              .read(syncOrchestratorProvider.notifier)
+                              .pullNow()
+                        : null,
+                  ),
                 _ToposFilterBar(
                   searchController: _searchController,
                   isActive: filter.isActive,

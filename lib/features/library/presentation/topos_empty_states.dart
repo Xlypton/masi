@@ -1,5 +1,57 @@
 part of 'topos_screen.dart';
 
+/// Shared frame for all four empty states below.
+///
+/// Every one of them renders into the `Expanded` in [ToposScreen.build], i.e.
+/// into whatever vertical space the banners above happen to leave — and each
+/// was a bare `Center` + `Column`, which cannot give any of it back. That is
+/// a hard `RenderFlex overflowed by N pixels` the moment a sibling grows:
+/// with the [SyncBanner] above it, `_SyncErrorEmptyState` overflowed by 196px
+/// on a 400x300 surface (pinned in `topos_screen_test.dart`'s "T2: the empty
+/// states tolerate a tall banner above them").
+///
+/// The fix is to stop assuming the leftover height is enough. [minHeight] =
+/// the available height keeps the content centered in the usual case where it
+/// fits (visually identical to the old bare `Center`), and the enclosing
+/// scroll view means the overflow case degrades into a short scroll instead
+/// of a clipped, unreachable Retry / "New topo" button.
+///
+/// NOTE — this makes the empty states tolerant of a squeeze; it does not and
+/// cannot fix a banner that is taller than the whole viewport. That overflows
+/// [ToposScreen]'s OUTER `Column` before any height reaches here at all
+/// (measured: `_StorageWarningBanner` renders 561px of copy into a 364px body
+/// at 400x420, with the empty state then allotted 0px). Pre-existing and
+/// independent of the banners added in T2.
+///
+/// [stateKey] rides on the outermost widget so every pre-existing
+/// `find.byKey(const Key('topos-empty-state'))`-style lookup still resolves.
+class _EmptyStateShell extends StatelessWidget {
+  const _EmptyStateShell({required this.stateKey, required this.child});
+
+  final Key stateKey;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      key: stateKey,
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          // An unbounded parent would make `minHeight: infinity` an assertion
+          // failure. Never happens from `ToposScreen` (the `Expanded` bounds
+          // it), but this widget should not be a trap for the next caller.
+          constraints: BoxConstraints(
+            minHeight: constraints.maxHeight.isFinite
+                ? constraints.maxHeight
+                : 0,
+          ),
+          child: Center(child: child),
+        ),
+      ),
+    );
+  }
+}
+
 class _EmptyState extends StatelessWidget {
   const _EmptyState({this.onNewTopo});
 
@@ -14,8 +66,8 @@ class _EmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    return Center(
-      key: const Key('topos-empty-state'),
+    return _EmptyStateShell(
+      stateKey: const Key('topos-empty-state'),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -66,8 +118,8 @@ class _SyncErrorEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    return Center(
-      key: const Key('topos-sync-error-empty'),
+    return _EmptyStateShell(
+      stateKey: const Key('topos-sync-error-empty'),
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -105,8 +157,8 @@ class _FilteredEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    return Center(
-      key: const Key('topos-filtered-empty-state'),
+    return _EmptyStateShell(
+      stateKey: const Key('topos-filtered-empty-state'),
       child: Text(
         'No topos match your filters',
         style: Theme.of(
@@ -130,8 +182,8 @@ class _SearchEmptyState extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    return Center(
-      key: const Key('topos-search-empty-state'),
+    return _EmptyStateShell(
+      stateKey: const Key('topos-search-empty-state'),
       child: Text(
         'No topos match your search',
         style: Theme.of(

@@ -10,10 +10,12 @@ import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/filtering/style_tag_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
+import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
 import '../../../shared/presentation/masi_shimmer.dart';
+import '../../../shared/presentation/sync_banner.dart';
 import '../../topo/presentation/photo_image.dart';
 import '../application/community_providers.dart';
 import '../application/community_topo_detail_providers.dart';
@@ -41,6 +43,12 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
   void initState() {
     super.initState();
     _searchController.addListener(_onSearchChanged);
+    // Seed the reachability verdict `_FeedView` renders. The provider is
+    // probe-on-demand — nothing schedules it — so a screen that wants an
+    // answer has to ask at mount. `refresh()` never throws, and concurrent
+    // callers (this screen and `ToposScreen` mounting in the same frame)
+    // collapse onto one probe, so this is safe to fire and forget.
+    Future.microtask(() => ref.read(reachabilityProvider.notifier).refresh());
   }
 
   void _onSearchChanged() {
@@ -201,8 +209,43 @@ class _FeedView extends ConsumerWidget {
     final syncError = ref.watch(syncOrchestratorProvider).lastPullError;
     final showSyncError = items.isEmpty && syncError != null;
 
+    // Stage 3 (T2). The `showSyncError` gate above is empty-feed-only, so a
+    // user with cached rows was told nothing at all when the feed silently
+    // stopped refreshing. [SyncBanner] renders above the list irrespective of
+    // how much is in it.
+    //
+    // `isKnownOffline`, never `!= online`: `Reachability.unknown` is the
+    // pre-probe state, and treating it as offline flashes this banner for a
+    // frame on every cold start (see `reachability_providers.dart`).
+    //
+    // It yields the sync-failure case to `_SyncErrorEmptyState` (that is
+    // exactly `showSyncError`), which says the same sentence larger and with
+    // its own Retry — printing both would repeat one sentence twice on one
+    // screen. The OFFLINE banner never yields: no empty state mentions
+    // reachability at all.
+    //
+    // Lives here rather than in `CommunityFeedScreen.build` deliberately:
+    // `feedItemsProvider` is a local Drift stream, so its loading/error
+    // branches are local-database states that losing signal does not cause
+    // and an offline banner would not explain.
+    final reachability = ref.watch(reachabilityProvider);
+    final SyncBannerKind? bannerKind = reachability.isKnownOffline
+        ? SyncBannerKind.offline
+        : (syncError != null && !showSyncError)
+        ? SyncBannerKind.syncFailed
+        : null;
+
     return Column(
       children: [
+        if (bannerKind != null)
+          SyncBanner(
+            kind: bannerKind,
+            detail: syncError,
+            // Nothing useful to press while genuinely offline.
+            onRetry: bannerKind == SyncBannerKind.syncFailed
+                ? () => ref.read(syncOrchestratorProvider.notifier).pullNow()
+                : null,
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
             MasiSpacing.lg,

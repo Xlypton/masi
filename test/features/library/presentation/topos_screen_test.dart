@@ -10,7 +10,9 @@ import 'package:masi/core/grades/grade_system.dart';
 import 'package:masi/core/location/location_service.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
+import 'package:masi/features/backup/application/backup_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
+import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/community/application/community_providers.dart';
 import 'package:masi/features/community/data/community_repository.dart';
 import 'package:masi/features/library/application/library_providers.dart';
@@ -19,6 +21,8 @@ import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/library/presentation/topos_screen.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_shimmer.dart';
+import 'package:masi/shared/presentation/sync_banner.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -143,11 +147,22 @@ void _setDms(
 /// Reconciled union signature, in this exact parameter order (reconciliation
 /// decision #7): `{LocationService?, SyncOrchestrator?, StorageDurability
 /// storageDurability, PhotoFiles? photoFiles}`.
+/// [connectivity] backs `reachabilityProvider`, which `ToposScreen` now
+/// probes once at mount (see its `initState`) and watches to decide whether
+/// to render the offline [SyncBanner]. The override is UNCONDITIONAL and
+/// defaults to a fake that answers "reachable", for two reasons: the real
+/// `SystemConnectivityService` would otherwise issue a genuine
+/// `http.get` + `.timeout(...)` from every single widget test in this file
+/// (a pending-Timer teardown hazard and a real network attempt), and an
+/// online verdict is the state in which NO banner renders — so every
+/// pre-existing test in this file sees exactly the tree it saw before T2.
 ProviderContainer _makeContainer({
   LocationService? locationService,
   SyncOrchestrator? syncOrchestrator,
   StorageDurability storageDurability = const StorageDurability.probing(),
   PhotoFiles? photoFiles,
+  ConnectivityService? connectivity,
+  List<TopoRef>? topos,
 }) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
@@ -158,6 +173,10 @@ ProviderContainer _makeContainer({
         locationServiceProvider.overrideWithValue(locationService),
       if (photoFiles != null)
         photoFilesProvider.overrideWithValue(photoFiles),
+      connectivityServiceProvider.overrideWithValue(
+        connectivity ?? _ScriptedConnectivity(reachable: true),
+      ),
+      if (topos != null) toposProvider.overrideWith((ref) => Stream.value(topos)),
       syncOrchestratorProvider.overrideWith(
         () => syncOrchestrator ?? _FakeSyncOrchestrator(),
       ),
@@ -169,6 +188,41 @@ ProviderContainer _makeContainer({
   addTearDown(db.close);
   addTearDown(container.dispose);
   return container;
+}
+
+/// A [ConnectivityService] whose backend-reachability answer is scripted.
+/// Mirrors `reachability_providers_test.dart`'s double of the same name.
+///
+/// THREE members, not two: the interface gained [statusChanges] (the signal
+/// `SyncOrchestrator` listens on to resync the moment the network returns),
+/// and it degrades here to a never-emitting stream exactly as that method's
+/// abstract contract requires of an implementation with no platform signal
+/// behind it.
+///
+/// [gate], when set, holds [isBackendReachable] open until it is completed —
+/// without it the probe resolves in the same microtask as the mount and a
+/// test can never observe `Reachability.unknown`, which makes the
+/// "don't flash a banner before the first probe answers" assertion pass even
+/// with the guard under test deleted.
+class _ScriptedConnectivity implements ConnectivityService {
+  _ScriptedConnectivity({required this.reachable, this.gate});
+
+  final bool reachable;
+  final Completer<void>? gate;
+  int probeCount = 0;
+
+  @override
+  Future<bool> isBackendReachable() async {
+    probeCount++;
+    if (gate != null) await gate!.future;
+    return reachable;
+  }
+
+  @override
+  Future<NetworkStatus> currentStatus() async => NetworkStatus.wifi;
+
+  @override
+  Stream<NetworkStatus> statusChanges() => const Stream.empty();
 }
 
 /// A [LocationService] double that resolves to whatever fixed [result] it
@@ -721,6 +775,284 @@ void main() {
     );
   });
 
+  group('T2: offline / sync banner', () {
+    /// A library that is NOT empty — the exact case both feeds used to give
+    /// the user no signal in at all, because every sync affordance lived
+    /// inside the `isEmpty` branch.
+    const populated = [
+      TopoRef(
+        wallId: 'wall-1',
+        name: 'Topo One',
+        thumbnailPath: null,
+        routeCount: 2,
+        createdAt: 1000,
+      ),
+    ];
+
+    testWidgets(
+      'THE BUG: a populated library that is known-offline shows the offline '
+      'banner — a user with topos used to get no signal whatsoever and had '
+      'to guess whether the app had lost their work',
+      (tester) async {
+        final container = _makeContainer(
+          topos: populated,
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.text("You're offline — showing your saved topos."),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('topo-item-wall-1')),
+          findsOneWidget,
+          reason: 'the banner must sit ABOVE the list, not replace it — the '
+              'saved topos are the whole point of staying usable offline',
+        );
+      },
+    );
+
+    testWidgets(
+      'a populated library with a lastPullError shows the sync-failure '
+      'banner, reason and all, and its Retry calls pullNow()',
+      (tester) async {
+        final fakeOrchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastPullError: 'Sync failed: shared rows fetch failed',
+          ),
+        );
+        final container = _makeContainer(
+          topos: populated,
+          syncOrchestrator: fakeOrchestrator,
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.text("Couldn't sync — Sync failed: shared rows fetch failed."),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('topo-item-wall-1')), findsOneWidget);
+
+        expect(fakeOrchestrator.pullNowCallCount, 0);
+        await tester.tap(find.byKey(const Key('sync-banner-retry')));
+        await tester.pump();
+
+        expect(fakeOrchestrator.pullNowCallCount, 1);
+      },
+    );
+
+    testWidgets(
+      'NOTHING is claimed while the first probe is still in flight — '
+      'Reachability.unknown must not flash an offline banner on cold start',
+      (tester) async {
+        final gate = Completer<void>();
+        final connectivity = _ScriptedConnectivity(
+          reachable: false,
+          gate: gate,
+        );
+        final container = _makeContainer(
+          topos: populated,
+          connectivity: connectivity,
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        // The probe is genuinely still open here (the gate is uncompleted),
+        // so this is `unknown` and not merely "answered online" — without
+        // the gate this assertion would pass even with the guard deleted.
+        expect(connectivity.probeCount, 1);
+        expect(gate.isCompleted, isFalse);
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsNothing,
+          reason: 'unknown is not a verdict — a banner here would appear for '
+              'a frame on every single cold start',
+        );
+
+        // ...and once the probe actually answers, the banner appears. This
+        // half proves the test is watching a live wire, not a dead one.
+        await tester.runAsync(() async {
+          gate.complete();
+          await gate.future;
+        });
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+      },
+    );
+
+    testWidgets('mounting the screen probes reachability exactly once', (
+      tester,
+    ) async {
+      final connectivity = _ScriptedConnectivity(reachable: true);
+      final container = _makeContainer(
+        topos: populated,
+        connectivity: connectivity,
+      );
+
+      await tester.pumpWidget(_wrap(container, const ToposScreen()));
+      await _drain(tester);
+
+      expect(connectivity.probeCount, 1);
+    });
+
+    testWidgets(
+      'offline outranks a stale pull error: the user reads why, not a raw '
+      'SocketException left over from before the signal dropped',
+      (tester) async {
+        final container = _makeContainer(
+          topos: populated,
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: Failed host lookup',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+        expect(find.textContaining('Failed host lookup'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'an online library with nothing wrong shows no banner at all',
+      (tester) async {
+        final container = _makeContainer(topos: populated);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'an EMPTY library with a pull error does not print the same sentence '
+      'twice — the full-screen #72 empty state already says it, larger and '
+      'with its own Retry',
+      (tester) async {
+        final container = _makeContainer(
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: boom',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topos-sync-error-empty')), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+        expect(find.textContaining("Couldn't sync"), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'an EMPTY library that is offline DOES get the offline banner — the '
+      'empty states say nothing about reachability, so "No topos yet" alone '
+      'reads as "your topos are gone"',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+        expect(find.byKey(const Key('topos-empty-state')), findsOneWidget);
+      },
+    );
+  });
+
+  group('T2: the empty states tolerate a tall banner above them', () {
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    /// Short viewport + the offline [SyncBanner] above the list. The banner
+    /// and filter bar fit; what does NOT fit is the empty state in the
+    /// leftover `Expanded`, which is precisely the fragility being pinned:
+    /// each empty state was a bare `Center` + `Column` that could not give
+    /// any height back and so overflowed the instant a sibling grew.
+    testWidgets(
+      'the sync-error empty state — the tallest of the four (glyph + wrapped '
+      'reason + Retry) — no longer overflows when a banner squeezes it',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 300));
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: own rows fetch failed: '
+                  'Exception: the server returned 503 for the third time',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.byKey(const Key('topos-sync-error-empty')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'a squeezed empty state SCROLLS rather than clipping its action off '
+      'the bottom — Retry has to stay reachable, or the user is stuck '
+      'looking at an error they cannot act on',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 300));
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: own rows fetch failed: '
+                  'Exception: the server returned 503 for the third time',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.dragUntilVisible(
+          find.byKey(const Key('topos-sync-error-retry')),
+          find.byKey(const Key('topos-sync-error-empty')),
+          const Offset(0, -40),
+        );
+        expect(
+          find.byKey(const Key('topos-sync-error-retry')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+  });
+
   group('§1a: storage-backend interlock (L1)', () {
     testWidgets(
       'an inMemory storage backend shows the topos-storage-warning banner '
@@ -966,6 +1298,81 @@ void main() {
           findsOneWidget,
         );
         expect(find.text('Ghost Topo'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a topo whose cached photo bytes are ABSENT renders the amethyst '
+      'gradient placeholder — pinned because offline reads (and the '
+      'public-photo pruner) make a present row with absent bytes a NORMAL '
+      'state, not an error one',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final tempDir = Directory.systemTemp.createTempSync(
+          'topos_screen_pruned_thumb_test_',
+        );
+        addTearDown(() {
+          if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+        });
+        // A thumb key that resolves fine but whose bytes are simply not
+        // there — exactly what a pruned/never-downloaded public photo looks
+        // like. Never created, so nothing is ever handed to an image codec.
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            connectivityServiceProvider.overrideWithValue(
+              _ScriptedConnectivity(reachable: true),
+            ),
+            syncOrchestratorProvider.overrideWith(_FakeSyncOrchestrator.new),
+            toposProvider.overrideWith(
+              (ref) => Stream.value([
+                TopoRef(
+                  wallId: 'wall-pruned',
+                  name: 'Pruned Topo',
+                  thumbnailPath: '${tempDir.path}/thumbs/pruned.jpg',
+                  routeCount: 1,
+                  createdAt: 1000,
+                ),
+              ]),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        final row = find.byKey(const Key('topo-item-wall-pruned'));
+        expect(row, findsOneWidget);
+
+        final gradient = find.descendant(
+          of: row,
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is DecoratedBox &&
+                w.decoration is BoxDecoration &&
+                (w.decoration as BoxDecoration).gradient is LinearGradient,
+          ),
+        );
+        expect(
+          gradient,
+          findsOneWidget,
+          reason: 'absent bytes must resolve to the gradient placeholder, '
+              'never a broken-image glyph and never a shimmer stuck '
+              'loading forever',
+        );
+
+        final colors = MasiColors.of(tester.element(row));
+        final decoration =
+            tester.widget<DecoratedBox>(gradient).decoration as BoxDecoration;
+        expect((decoration.gradient! as LinearGradient).colors, [
+          colors.amethyst300,
+          colors.amethyst500,
+        ]);
+        expect(find.byType(MasiShimmer), findsNothing);
+        expect(tester.takeException(), isNull);
       },
     );
 

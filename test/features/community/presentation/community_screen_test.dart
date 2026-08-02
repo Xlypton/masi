@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
@@ -9,8 +10,12 @@ import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/community/application/community_providers.dart';
 import 'package:masi/features/community/data/community_repository.dart';
+import 'package:masi/features/backup/application/backup_providers.dart';
+import 'package:masi/features/backup/application/sync_orchestrator.dart';
+import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/community/presentation/community_screen.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/sync_banner.dart';
 import 'package:masi/shared/filtering/grade_range.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
@@ -98,7 +103,23 @@ class _FakeLocationService implements LocationService {
 /// under `flutter_test` (no platform channel is registered, so its internal
 /// try/catch resolves to `null`), so every pre-existing map test is
 /// unaffected.
-ProviderContainer _makeContainer({LocationService? locationService}) {
+///
+/// [connectivity] backs `reachabilityProvider`, which `CommunityFeedScreen`
+/// now probes once at mount and watches to decide whether to render the
+/// offline [SyncBanner]. The override is UNCONDITIONAL and defaults to a fake
+/// that answers "reachable", for two reasons: the real
+/// `SystemConnectivityService` would otherwise issue a genuine `http.get` +
+/// `.timeout(...)` from every feed test in this file (a pending-Timer
+/// teardown hazard), and an online verdict is the state in which NO banner
+/// renders — so every pre-existing test here sees the tree it saw before T2.
+///
+/// [syncOrchestrator], when given, replaces the real orchestrator `_FeedView`
+/// already watches for `lastPullError`, so a test can start it carrying one.
+ProviderContainer _makeContainer({
+  LocationService? locationService,
+  ConnectivityService? connectivity,
+  SyncOrchestrator? syncOrchestrator,
+}) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
@@ -106,11 +127,68 @@ ProviderContainer _makeContainer({LocationService? locationService}) {
       nowMsProvider.overrideWithValue(() => 1000),
       if (locationService != null)
         locationServiceProvider.overrideWithValue(locationService),
+      connectivityServiceProvider.overrideWithValue(
+        connectivity ?? _ScriptedConnectivity(reachable: true),
+      ),
+      if (syncOrchestrator != null)
+        syncOrchestratorProvider.overrideWith(() => syncOrchestrator),
     ],
   );
   addTearDown(db.close);
   addTearDown(container.dispose);
   return container;
+}
+
+/// A [ConnectivityService] whose backend-reachability answer is scripted.
+/// Mirrors `reachability_providers_test.dart`'s double of the same name.
+///
+/// THREE members, not two: the interface gained [statusChanges], which
+/// degrades here to a never-emitting stream exactly as that method's abstract
+/// contract requires of an implementation with no platform signal behind it.
+///
+/// [gate], when set, holds [isBackendReachable] open until it is completed —
+/// without it the probe resolves in the same microtask as the mount and a
+/// test can never observe `Reachability.unknown`, which makes the "don't
+/// flash a banner before the first probe answers" assertion pass even with
+/// the guard under test deleted.
+class _ScriptedConnectivity implements ConnectivityService {
+  _ScriptedConnectivity({required this.reachable, this.gate});
+
+  final bool reachable;
+  final Completer<void>? gate;
+  int probeCount = 0;
+
+  @override
+  Future<bool> isBackendReachable() async {
+    probeCount++;
+    if (gate != null) await gate!.future;
+    return reachable;
+  }
+
+  @override
+  Future<NetworkStatus> currentStatus() async => NetworkStatus.wifi;
+
+  @override
+  Stream<NetworkStatus> statusChanges() => const Stream.empty();
+}
+
+/// A [SyncOrchestrator] double that skips ALL of the real class's wiring and
+/// just counts [pullNow] calls — mirrors `community_pull_refresh_test.dart`'s
+/// identical class (duplicated locally since that one is file-private).
+class _FakeSyncOrchestrator extends SyncOrchestrator {
+  _FakeSyncOrchestrator({SyncOrchestratorState? initialState})
+    : _initialState = initialState ?? const SyncOrchestratorState();
+
+  final SyncOrchestratorState _initialState;
+  int pullNowCallCount = 0;
+
+  @override
+  SyncOrchestratorState build() => _initialState;
+
+  @override
+  Future<void> pullNow({bool throttled = false}) async {
+    pullNowCallCount++;
+  }
 }
 
 /// Wraps [screen] in a real (minimal) [GoRouter] so `context.push` calls to
@@ -817,6 +895,178 @@ void main() {
         expect(find.byKey(const Key('community-empty')), findsOneWidget);
         expect(find.text('No shared topos yet'), findsOneWidget);
         expect(_feedRowFinder(), findsNothing);
+      },
+    );
+  });
+
+  group('T2: offline / sync banner on the Feed', () {
+    testWidgets(
+      'THE BUG: a populated feed that is known-offline shows the offline '
+      'banner — a user with cached rows used to get no signal whatsoever',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-topo-row-wall-shared-1')),
+          findsOneWidget,
+          reason: 'the banner must sit above the cached rows, not replace '
+              'them',
+        );
+      },
+    );
+
+    testWidgets(
+      'a populated feed with a lastPullError shows the sync-failure banner '
+      'and its Retry calls pullNow()',
+      (tester) async {
+        final fakeOrchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastPullError: 'Sync failed: shared rows fetch failed',
+          ),
+        );
+        final container = _makeContainer(syncOrchestrator: fakeOrchestrator);
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.text("Couldn't sync — Sync failed: shared rows fetch failed."),
+          findsOneWidget,
+        );
+
+        expect(fakeOrchestrator.pullNowCallCount, 0);
+        await tester.tap(find.byKey(const Key('sync-banner-retry')));
+        await tester.pump();
+
+        expect(fakeOrchestrator.pullNowCallCount, 1);
+      },
+    );
+
+    testWidgets(
+      'NOTHING is claimed while the first probe is still in flight — '
+      'Reachability.unknown must not flash an offline banner on cold start',
+      (tester) async {
+        final gate = Completer<void>();
+        final connectivity = _ScriptedConnectivity(
+          reachable: false,
+          gate: gate,
+        );
+        final container = _makeContainer(connectivity: connectivity);
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        // Genuinely still open — without the gate this would pass even with
+        // the `isKnownOffline` guard deleted.
+        expect(connectivity.probeCount, 1);
+        expect(gate.isCompleted, isFalse);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        await tester.runAsync(() async {
+          gate.complete();
+          await gate.future;
+        });
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+      },
+    );
+
+    testWidgets('mounting the Feed probes reachability exactly once', (
+      tester,
+    ) async {
+      final connectivity = _ScriptedConnectivity(reachable: true);
+      final container = _makeContainer(connectivity: connectivity);
+
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+      await _drain(tester);
+
+      expect(connectivity.probeCount, 1);
+    });
+
+    testWidgets('offline outranks a stale pull error', (tester) async {
+      final container = _makeContainer(
+        connectivity: _ScriptedConnectivity(reachable: false),
+        syncOrchestrator: _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastPullError: 'Sync failed: Failed host lookup',
+          ),
+        ),
+      );
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedStandardScenario(db));
+
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+      await _drain(tester);
+
+      expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+      expect(find.textContaining('Failed host lookup'), findsNothing);
+    });
+
+    testWidgets('an online feed with nothing wrong shows no banner at all', (
+      tester,
+    ) async {
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedStandardScenario(db));
+
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+      await _drain(tester);
+
+      expect(find.byKey(const Key('sync-banner')), findsNothing);
+    });
+
+    testWidgets(
+      'an EMPTY feed with a pull error does not print the same sentence '
+      'twice — the full-screen #72 empty state already says it',
+      (tester) async {
+        final container = _makeContainer(
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: boom',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-sync-error-empty')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'an EMPTY feed that is offline DOES get the offline banner — the empty '
+      'state says nothing about reachability',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+        expect(find.byKey(const Key('community-empty')), findsOneWidget);
       },
     );
   });
