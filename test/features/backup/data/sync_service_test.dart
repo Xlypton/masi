@@ -383,6 +383,31 @@ class SinglePageListingSyncRemote extends FakeSyncRemote {
   }
 }
 
+/// [FakeSyncRemote] whose `upsertOwnRows` silently returns NO outcome for
+/// [silentTable] — it neither confirms nor rejects it, and stores nothing.
+///
+/// Not reachable through today's `SupabaseSyncRemote`, which reports every
+/// non-empty table. It exists to pin the DEFAULT, because the cost of the
+/// default being wrong is silently discarding a climber's edit: an
+/// unreported table must count as NOT CONFIRMED, never as confirmed.
+class SilentTableSyncRemote extends FakeSyncRemote {
+  SilentTableSyncRemote(this.silentTable);
+
+  final String silentTable;
+
+  @override
+  Future<List<TablePushOutcome>> upsertOwnRows(
+    String uid,
+    Map<String, List<Map<String, dynamic>>> tablesToRows,
+  ) async {
+    final withoutSilent = {
+      for (final entry in tablesToRows.entries)
+        if (entry.key != silentTable) entry.key: entry.value,
+    };
+    return super.upsertOwnRows(uid, withoutSilent);
+  }
+}
+
 class ThrowingListingSyncRemote extends FakeSyncRemote {
   @override
   Future<Set<String>> listPhotoObjectPaths(String uid) async {
@@ -1301,6 +1326,59 @@ void main() {
           isTrue,
           reason: 'reported, but not treated as a failure to retry',
         );
+      },
+    );
+
+    test(
+      'a table the remote neither confirms NOR rejects is treated as NOT '
+      'confirmed: its rows stay dirty, it is reported, and the push is not '
+      'fullyLanded — the clear used to be fail-OPEN (everything not named in '
+      'a failure outcome was cleared), so an unreported table meant '
+      'fullyLanded true, nothing in the cloud, and dirty false: a silently '
+      'discarded edit',
+      () async {
+        final remote = SilentTableSyncRemote('areas');
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await c.db
+            .into(c.db.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-1',
+                createdAt: 100,
+                updatedAt: 100,
+                dirty: const Value(true),
+                ownerId: const Value(_uidU1),
+                name: 'Area',
+              ),
+            );
+
+        final result = await c.service.pushOwn();
+
+        final ownRows = await remote.fetchOwnRows(_uidU1);
+        expect(
+          ownRows['areas'],
+          isEmpty,
+          reason: 'precondition: the silent table really did not land',
+        );
+        final area = await c.db.select(c.db.areas).getSingle();
+        expect(
+          area.dirty,
+          isTrue,
+          reason:
+              'NOT CONFIRMED must mean NOT CLEARED — clearing it here strands '
+              'the row forever, since the retry loop is gated on dirty',
+        );
+        expect(
+          result.fullyLanded,
+          isFalse,
+          reason: 'and the push must not claim it landed everything',
+        );
+        expect(result.errors.join(' '), contains('areas'));
       },
     );
 
