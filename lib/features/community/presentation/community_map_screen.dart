@@ -15,6 +15,7 @@ import '../../../shared/presentation/masi_icon.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../account/application/auth_providers.dart';
+import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../library/application/library_providers.dart';
 import '../../../core/net/retryable_error.dart';
@@ -366,6 +367,21 @@ class _MapViewState extends ConsumerState<_MapView> {
   /// held as plain state and applied by [_runPlaceSearch] once resolved.
   List<PlaceResult> _placeResults = const [];
 
+  /// True when the MOST RECENT settled query's places lookup ([_runPlaceSearch])
+  /// resolved with zero results AND a reachability probe taken at that same
+  /// moment confirmed the device is offline — i.e. "the places half of this
+  /// search can't work right now", never "it worked and genuinely found no
+  /// matching place" (see [_runPlaceSearch]'s doc). Local content search
+  /// (Drift/SQLite) is unaffected either way — it works fully offline, so
+  /// this never gates it. Drives the `community-map-search-offline` hint in
+  /// [build], shown only when BOTH halves of the combined dropdown are
+  /// empty; local results alone are left to speak for themselves. Reset to
+  /// `false` whenever the query is cleared or a selection is made (see
+  /// [_onSearchChanged], [_selectLocalResult], [_selectPlaceResult]), so the
+  /// hint never outlives the exact empty-and-offline moment that produced
+  /// it.
+  bool _placesOffline = false;
+
   /// Monotonically increasing "which search is current" generation counter —
   /// see `set_location_picker.dart`'s identically-named field for the full
   /// rationale (a slow lookup for an earlier query must never clobber a
@@ -401,6 +417,13 @@ class _MapViewState extends ConsumerState<_MapView> {
         setState(() => _rotationDegrees = rotation);
       }
     });
+    // Seeds a fresh reachability verdict at mount, fire-and-forget, so
+    // [_runPlaceSearch]'s own `refresh()` call (below) can usually resolve
+    // against an already-in-flight or already-known probe rather than
+    // starting cold the first time a places lookup comes back empty.
+    // Mirrors `set_location_picker.dart`'s identical seed exactly (see that
+    // file's doc) — never awaited here, this map must never block on it.
+    Future.microtask(() => ref.read(reachabilityProvider.notifier).refresh());
   }
 
   @override
@@ -445,6 +468,7 @@ class _MapViewState extends ConsumerState<_MapView> {
       setState(() {
         _committedQuery = '';
         _placeResults = const [];
+        _placesOffline = false;
         _selectedSearchResult = null;
       });
       return;
@@ -467,15 +491,41 @@ class _MapViewState extends ConsumerState<_MapView> {
 
   /// The places half of a settled search: [GeocodingService.search] never
   /// throws (see its doc), so no try/catch is needed here. Discards the
-  /// result when [seq] no longer matches [_searchSeq] by the time the
+  /// result when [seq] no longer matches [_searchSeq] by the time an
   /// `await` returns — i.e. a newer query (or a clear, or a selection) has
   /// superseded this one — so a slow lookup for an old query can never
   /// clobber a faster, more recent query's results.
+  ///
+  /// A ZERO-result response is genuinely ambiguous on its own: offline,
+  /// [GeocodingService.search] resolves to an empty list exactly the same
+  /// way a real "no such place" does (see its doc), so nothing about the
+  /// result itself tells them apart. Only on that empty branch, this asks
+  /// [reachabilityProvider] for a fresh verdict (`refresh()`, not the
+  /// possibly-stale cached `state`, since this IS the moment the answer
+  /// matters) and sets [_placesOffline] from
+  /// [ReachabilityVerdict.isKnownOffline] — true only for a PROVEN offline
+  /// probe, never for [Reachability.unknown], so a probe that hasn't
+  /// resolved yet never flashes the hint prematurely. The [seq] guard is
+  /// re-checked after this second `await` too, since a newer query (or a
+  /// clear, or a selection) can supersede this one while the probe is still
+  /// in flight.
   Future<void> _runPlaceSearch(String query, int seq) async {
     final service = ref.read(geocodingServiceProvider);
     final results = await service.search(query);
     if (!mounted || seq != _searchSeq) return;
-    setState(() => _placeResults = results);
+    if (results.isEmpty) {
+      final verdict = await ref.read(reachabilityProvider.notifier).refresh();
+      if (!mounted || seq != _searchSeq) return;
+      setState(() {
+        _placeResults = const [];
+        _placesOffline = verdict.isKnownOffline;
+      });
+      return;
+    }
+    setState(() {
+      _placeResults = results;
+      _placesOffline = false;
+    });
   }
 
   /// A local-content search result row's `onTap`: flies the map to it and
@@ -493,6 +543,7 @@ class _MapViewState extends ConsumerState<_MapView> {
       _selectedSearchResult = result.location;
       _committedQuery = '';
       _placeResults = const [];
+      _placesOffline = false;
     });
     _searchFocusNode.unfocus();
   }
@@ -523,6 +574,7 @@ class _MapViewState extends ConsumerState<_MapView> {
       _selectedSearchResult = location;
       _committedQuery = '';
       _placeResults = const [];
+      _placesOffline = false;
     });
     _searchFocusNode.unfocus();
   }
@@ -635,8 +687,15 @@ class _MapViewState extends ConsumerState<_MapView> {
     final localSearchResults = _committedQuery.isEmpty
         ? const <MapSearchResult>[]
         : ref.watch(mapContentSearchProvider(_committedQuery));
+    // The offline hint is folded into this same gate (rather than a
+    // separate `Positioned` of its own) so it occupies the exact slot the
+    // results dropdown would have — only when BOTH halves are empty is it
+    // even a candidate for rendering; local results alone are left to speak
+    // for themselves (see `_placesOffline`'s doc).
     final showSearchDropdown =
-        localSearchResults.isNotEmpty || _placeResults.isNotEmpty;
+        localSearchResults.isNotEmpty ||
+        _placeResults.isNotEmpty ||
+        _placesOffline;
 
     // "Own" located topos: every local wall (regardless of visibility) that
     // has coordinates AND isn't actually someone else's shared topo pulled
@@ -1073,67 +1132,102 @@ class _MapViewState extends ConsumerState<_MapView> {
                     // or many combined local+place rows must scroll rather
                     // than push the dropdown off the bottom of small
                     // screens or overflow its `RenderFlex`.
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 280),
-                      child: ListView.separated(
-                        shrinkWrap: true,
-                        padding: EdgeInsets.zero,
-                        itemCount:
-                            localSearchResults.length + _placeResults.length,
-                        separatorBuilder: (_, _) =>
-                            Divider(height: 1, color: colors.separator),
-                        itemBuilder: (context, i) {
-                          if (i < localSearchResults.length) {
-                            final result = localSearchResults[i];
-                            return ListTile(
-                              key: Key('community-map-search-result-$i'),
-                              dense: true,
-                              leading: MasiIcon(
-                                _iconForSearchKind(result.kind),
-                                size: 18,
-                                color: colors.ink3,
-                              ),
-                              title: Text(
-                                result.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              subtitle: Text(
-                                result.subtitle != null
-                                    ? '${_labelForSearchKind(result.kind)} · '
-                                          '${result.subtitle}'
-                                    : _labelForSearchKind(result.kind),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                              onTap: () => _selectLocalResult(result),
-                            );
-                          }
-                          final place =
-                              _placeResults[i - localSearchResults.length];
-                          return ListTile(
-                            key: Key('community-map-search-result-$i'),
-                            dense: true,
-                            leading: MasiIcon(
-                              'pin',
-                              size: 18,
-                              color: colors.ink3,
+                    //
+                    // When BOTH halves came back empty, this container is
+                    // only showing at all because `_placesOffline` is true
+                    // (see `showSearchDropdown`'s doc) — render the "needs a
+                    // connection" hint INSTEAD of an empty `ListView` (which
+                    // would otherwise render as a zero-height, visually
+                    // empty pill), exactly mirroring
+                    // `set_location_picker.dart`'s identical hint.
+                    child: (localSearchResults.isEmpty && _placeResults.isEmpty)
+                        ? Padding(
+                            key: const Key('community-map-search-offline'),
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: MasiSpacing.md,
+                              vertical: MasiSpacing.sm,
                             ),
-                            title: Text(
-                              place.displayName,
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                MasiIcon(
+                                  'warning',
+                                  size: 16,
+                                  color: colors.ink2,
+                                ),
+                                const SizedBox(width: MasiSpacing.xs),
+                                Flexible(
+                                  child: Text(
+                                    'Search needs a connection.',
+                                    style: Theme.of(context).textTheme.bodySmall
+                                        ?.copyWith(color: colors.ink2),
+                                  ),
+                                ),
+                              ],
                             ),
-                            subtitle: const Text(
-                              'Place',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                          )
+                        : ConstrainedBox(
+                            constraints: const BoxConstraints(maxHeight: 280),
+                            child: ListView.separated(
+                              shrinkWrap: true,
+                              padding: EdgeInsets.zero,
+                              itemCount:
+                                  localSearchResults.length +
+                                  _placeResults.length,
+                              separatorBuilder: (_, _) =>
+                                  Divider(height: 1, color: colors.separator),
+                              itemBuilder: (context, i) {
+                                if (i < localSearchResults.length) {
+                                  final result = localSearchResults[i];
+                                  return ListTile(
+                                    key: Key('community-map-search-result-$i'),
+                                    dense: true,
+                                    leading: MasiIcon(
+                                      _iconForSearchKind(result.kind),
+                                      size: 18,
+                                      color: colors.ink3,
+                                    ),
+                                    title: Text(
+                                      result.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    subtitle: Text(
+                                      result.subtitle != null
+                                          ? '${_labelForSearchKind(result.kind)} · '
+                                                '${result.subtitle}'
+                                          : _labelForSearchKind(result.kind),
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                    onTap: () => _selectLocalResult(result),
+                                  );
+                                }
+                                final place =
+                                    _placeResults[i - localSearchResults.length];
+                                return ListTile(
+                                  key: Key('community-map-search-result-$i'),
+                                  dense: true,
+                                  leading: MasiIcon(
+                                    'pin',
+                                    size: 18,
+                                    color: colors.ink3,
+                                  ),
+                                  title: Text(
+                                    place.displayName,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  subtitle: const Text(
+                                    'Place',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  onTap: () => _selectPlaceResult(place),
+                                );
+                              },
                             ),
-                            onTap: () => _selectPlaceResult(place),
-                          );
-                        },
-                      ),
-                    ),
+                          ),
                   ),
                 ),
             ],
