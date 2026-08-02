@@ -3,8 +3,11 @@
 Flutter climbing-route documentation app (visual-first topo editor). Full spec: **`MASI.md`**.
 iOS-primary. Local-first (Drift/SQLite). Riverpod **v3** (use `Notifier`, never `StateProvider`).
 v1 (M0–M6) + v2 AR are code-complete on `main`. Supabase sync is implemented and live —
-outbox push/pull + tombstoned soft-delete sync in `lib/features/backup/` (`sync_service.dart`,
-`sync_orchestrator.dart`, `backup_repository.dart`), verified end-to-end.
+a debounced, dirty-scoped **full-state re-push** + pull, with tombstoned soft-delete, in
+`lib/features/backup/` (`sync_service.dart`, `sync_orchestrator.dart`, `backup_repository.dart`),
+verified end-to-end. **There is no outbox** — `grep -rin outbox lib` returns zero hits, and building
+one is explicitly out of scope (decision D-4): the engine re-reads and re-sends own rows, which is
+what makes it idempotent and loss-proof.
 
 ## Toolchain quirks (read first)
 
@@ -61,7 +64,9 @@ ls build/screenshots/ && # then Read each PNG to inspect
 - Requires `chromedriver` on PATH matching Chrome major version (installed: ChromeDriver 150, Chrome for
   Testing). `flutter drive -d web-server --browser-name=chrome` is headless by default.
 - `integration_test/web_harness_check_test.dart` = trivial-widget pipeline check; `web_smoke_test.dart` =
-  real app boot → Area→Sector→Wall (drift-on-WASM persistence through real IndexedDB) — **both green**.
+  real app boot → Area→Sector→Wall against drift-on-WASM/IndexedDB — **both green**. Note what that
+  proves: the app boots and the flow does not throw. It contains **zero `expect()` calls**, so it does
+  NOT prove persistence — a write→reload→assert test is still owed.
 - Same native-picker gap as iOS: photo pick/camera is a native chooser `integration_test` can't drive →
   override the picker provider / seed state to reach photo flows (seam pending, post-2C).
 
@@ -69,7 +74,7 @@ ls build/screenshots/ && # then Read each PNG to inspect
 
 ```bash
 export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutter analyze   # must be 0 issues
-export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutter test        # ~377 tests, must be green
+export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutter test        # 1930+ tests, must be green
 ```
 **Never drive a real image-codec decode in widget tests** — it hangs under fake-async. Use the injected
 `imageSize` / `TopoCanvasBody` harness (see existing tests).
