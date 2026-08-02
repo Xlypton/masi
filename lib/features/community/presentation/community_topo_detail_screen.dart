@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/routes/route_styles.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
@@ -218,6 +219,18 @@ class _CommunityTopoDetailScreenState
     // even for a signed-in user.
     ref.watch(currentAuthorNameProvider);
 
+    // Storage interlock. A comment is a real row in the local database that
+    // the outbox later pushes; written into a store that cannot keep it, it is
+    // lost silently and never syncs.
+    //
+    // The LIKE button is deliberately NOT gated. It is reversible view state,
+    // not authored content — blocking it makes browsing hostile for no
+    // protective gain, and an un-synced like is not something a climber loses
+    // work over. Same reasoning as the route-visibility toggle.
+    final storageBlocked = storageBlockedNotice(
+      ref.watch(storageDurabilityProvider),
+    );
+
     final expandedHeight = MediaQuery.sizeOf(context).height * 0.48;
     // Captured for `_onScroll` (see that method's doc) — an ordinary field
     // write, not a `setState`, since it's just stashing a layout value for a
@@ -423,6 +436,18 @@ class _CommunityTopoDetailScreenState
                     for (final comment in comments)
                       _CommentRow(comment: comment),
                   const SizedBox(height: MasiSpacing.md),
+                  if (storageBlocked != null)
+                    // The composer is replaced rather than merely disabled: an
+                    // inert text field with a greyed send glyph and nothing
+                    // saying why is the dead-tap failure in a quieter costume.
+                    Text(
+                      storageBlocked,
+                      key: const Key('community-comment-blocked'),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: colors.ink2),
+                    )
+                  else
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.center,
                     children: [

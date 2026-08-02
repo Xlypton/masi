@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/db/storage_durability_provider.dart';
 import '../application/library_providers.dart';
 import '../data/library_crud_repository.dart';
 import 'crud_list_scaffold.dart';
@@ -29,6 +30,10 @@ class WallsScreen extends ConsumerWidget {
     return CrudListScaffold<WallRef>(
       title: sectorName ?? 'Walls',
       entityKey: 'wall',
+      // See `areas_screen.dart`'s identical line.
+      createBlockedReason: storageBlockedNotice(
+        ref.watch(storageDurabilityProvider),
+      ),
       asyncItems: asyncWalls,
       idOf: (wall) => wall.id,
       nameOf: (wall) => wall.name,
