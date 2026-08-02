@@ -16,12 +16,15 @@
 //   [GeocodingService] double that never touches the real network) and its
 //   debounce-driving `tester.pump(const Duration(milliseconds: 400))`
 //   pattern.
+import 'dart:async' show Completer;
 import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/location/geocoding_service.dart';
+import 'package:masi/features/backup/application/backup_providers.dart';
+import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/community/presentation/community_screen.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:drift/native.dart';
@@ -70,16 +73,64 @@ class _FakeGeocodingService implements GeocodingService {
   }
 }
 
+/// A [ConnectivityService] double whose reachability answer is scripted —
+/// mirrors `set_location_search_test.dart`'s identically-named private class
+/// (that one is private to its own file, so this is its own copy), which in
+/// turn mirrors `reachability_providers_test.dart`'s `_ScriptedConnectivity`.
+/// [statusChanges] degrades to a never-emitting stream, exactly as
+/// `ConnectivityService.statusChanges`'s contract requires of an
+/// implementation with no real platform signal behind it.
+///
+/// [gate], when set, makes [isBackendReachable] wait on it instead of
+/// resolving immediately. An immediately-resolving fake would let the
+/// offline-hint tests below pass even if the production code never
+/// genuinely awaited the probe (a false pass for what is fundamentally
+/// async state) — gating it proves the hint only appears once the probe
+/// actually settles, not the instant a places lookup comes back empty.
+class _FakeConnectivityService implements ConnectivityService {
+  _FakeConnectivityService(this.reachable);
+
+  bool reachable;
+  int probeCount = 0;
+  Completer<void>? gate;
+
+  @override
+  Future<bool> isBackendReachable() async {
+    probeCount++;
+    if (gate != null) await gate!.future;
+    return reachable;
+  }
+
+  @override
+  Future<NetworkStatus> currentStatus() async => NetworkStatus.wifi;
+
+  @override
+  Stream<NetworkStatus> statusChanges() => const Stream.empty();
+}
+
 /// Builds a [ProviderContainer] wired to a fresh in-memory database, with
 /// [geocodingServiceProvider] overridden to [geocoding] so no test ever
 /// touches a real Nominatim endpoint.
-ProviderContainer _makeContainer({required GeocodingService geocoding}) {
+///
+/// [connectivity] backs `connectivityServiceProvider` — `_MapView`'s
+/// `initState` fires an unconditional, fire-and-forget reachability probe
+/// (see `community_map_screen.dart`'s doc), so every test needs this
+/// overridden, even tests that never look at the offline hint themselves.
+/// Defaults to an always-reachable fake so pre-existing assertions (written
+/// before the offline hint existed) see no behavioral change.
+ProviderContainer _makeContainer({
+  required GeocodingService geocoding,
+  ConnectivityService? connectivity,
+}) {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
       geocodingServiceProvider.overrideWithValue(geocoding),
+      connectivityServiceProvider.overrideWithValue(
+        connectivity ?? _FakeConnectivityService(true),
+      ),
     ],
   );
   addTearDown(db.close);
@@ -274,6 +325,212 @@ void main() {
       },
     );
   });
+
+  group(
+    'offline hint: "search can\'t work" vs "search found nothing" (Stage 3 '
+    'T8) — the places half of a settled search is ambiguous on a zero-'
+    'result response (offline behaves identically to "no such place"), so '
+    'a reachability probe is what tells the two apart',
+    () {
+      testWidgets(
+        'a settled query matching NOTHING at all (no local content, no '
+        'places) WHILE OFFLINE shows the "needs a connection" hint instead '
+        'of a silently empty dropdown -- and only once the reachability '
+        'probe genuinely settles, not the instant the places lookup comes '
+        'back empty',
+        (tester) async {
+          final geocoding = _FakeGeocodingService(const []);
+          final connectivity = _FakeConnectivityService(false)
+            ..gate = Completer<void>();
+          final container = _makeContainer(
+            geocoding: geocoding,
+            connectivity: connectivity,
+          );
+          // No local content seeded -- this query can't match anything
+          // local either, so the dropdown's fate rests entirely on the
+          // places half.
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.enterText(
+            find.byKey(const Key('community-map-search-field')),
+            'nowhere',
+          );
+          await tester.pump(const Duration(milliseconds: 400));
+          await _drain(tester);
+
+          expect(geocoding.callCount, 1);
+          expect(
+            find.byKey(const Key('community-map-search-offline')),
+            findsNothing,
+            reason: 'the reachability probe this empty result triggered is '
+                'still in flight (gated) -- nothing has been decided yet, '
+                'so the hint must not render prematurely off an unresolved '
+                'fake',
+          );
+          expect(
+            find.byKey(const Key('community-map-search-result-0')),
+            findsNothing,
+          );
+
+          // Now let the gated probe actually resolve.
+          connectivity.gate!.complete();
+          await _drain(tester);
+
+          expect(
+            find.byKey(const Key('community-map-search-offline')),
+            findsOneWidget,
+          );
+          expect(find.text('Search needs a connection.'), findsOneWidget);
+          expect(
+            find.byKey(const Key('community-map-search-result-0')),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
+        'a settled query matching NOTHING at all (no local content, no '
+        'places) WHILE ONLINE shows no dropdown at all -- a legitimate '
+        '"no such place", not an offline condition',
+        (tester) async {
+          final geocoding = _FakeGeocodingService(const []);
+          final connectivity = _FakeConnectivityService(true);
+          final container = _makeContainer(
+            geocoding: geocoding,
+            connectivity: connectivity,
+          );
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.enterText(
+            find.byKey(const Key('community-map-search-field')),
+            'nowhere',
+          );
+          await tester.pump(const Duration(milliseconds: 400));
+          await _drain(tester);
+
+          expect(geocoding.callCount, 1);
+          expect(
+            find.byKey(const Key('community-map-search-offline')),
+            findsNothing,
+            reason: 'the backend answered fine -- this is a genuine "no '
+                'such place", not an offline condition, so no hint must '
+                'render',
+          );
+          expect(
+            find.byKey(const Key('community-map-search-result-0')),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
+        'a query WITH local matches still shows those results normally '
+        'even when the places half is offline -- only a FULLY empty result '
+        '(nothing local AND nothing remote) triggers the offline hint',
+        (tester) async {
+          final geocoding = _FakeGeocodingService(const []);
+          final connectivity = _FakeConnectivityService(false);
+          final container = _makeContainer(
+            geocoding: geocoding,
+            connectivity: connectivity,
+          );
+          await tester.runAsync(
+            () => _seedLocatedChain(
+              container,
+              areaName: 'Sunny Crag',
+              sectorName: 'Sunny Slabs',
+              wallName: 'Sunny Boulder',
+              latitude: 45.0,
+              longitude: 7.0,
+            ),
+          );
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          await tester.enterText(
+            find.byKey(const Key('community-map-search-field')),
+            'sunny boulder',
+          );
+          await tester.pump(const Duration(milliseconds: 400));
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+          expect(
+            _titleTextOf(tester, const Key('community-map-search-result-0')),
+            'Sunny Boulder',
+            reason: 'the local result must still show -- it never depended '
+                'on network reachability',
+          );
+          expect(
+            find.byKey(const Key('community-map-search-offline')),
+            findsNothing,
+            reason: 'local content answered the search -- the offline '
+                "places half doesn't get its own separate hint stacked "
+                'into an already-non-empty dropdown',
+          );
+        },
+      );
+
+      testWidgets(
+        'clearing the query hides the offline hint immediately, same as it '
+        'hides a normal results dropdown',
+        (tester) async {
+          final geocoding = _FakeGeocodingService(const []);
+          final connectivity = _FakeConnectivityService(false);
+          final container = _makeContainer(
+            geocoding: geocoding,
+            connectivity: connectivity,
+          );
+
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          final field = find.byKey(const Key('community-map-search-field'));
+          await tester.enterText(field, 'nowhere');
+          await tester.pump(const Duration(milliseconds: 400));
+          await _drain(tester);
+          expect(
+            find.byKey(const Key('community-map-search-offline')),
+            findsOneWidget,
+            reason: 'sanity check: the hint is up before clearing',
+          );
+
+          await tester.enterText(field, '');
+          await tester.pump();
+
+          expect(
+            find.byKey(const Key('community-map-search-offline')),
+            findsNothing,
+          );
+        },
+      );
+    },
+  );
 
   group(
     'B4: selecting a result flies the map + drops the transient marker',

@@ -12,6 +12,7 @@ import '../../../app/theme.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../backup/application/reachability_providers.dart';
 import '../../community/presentation/community_screen.dart'
     show buildResilientTileHttpClient, buildResilientTileProvider;
 
@@ -140,6 +141,17 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
   Timer? _debounce;
   List<PlaceResult> _searchResults = const [];
 
+  /// True when the MOST RECENT settled search resolved with zero results
+  /// AND a reachability probe taken at that same moment confirmed the
+  /// device is offline — i.e. "search can't work right now", never "search
+  /// worked and genuinely found nothing" (see [_runSearch]'s doc for how
+  /// those two are told apart). Drives the `set-location-search-offline`
+  /// hint in `build()` in place of a silently-empty dropdown. Reset to
+  /// `false` the instant the query is cleared ([_onSearchChanged]) or a
+  /// later search settles with real results, so the hint never outlives
+  /// the exact empty-and-offline moment that produced it.
+  bool _searchOffline = false;
+
   /// Monotonically increasing "which search is current" generation counter
   /// — the fix for the out-of-order-results race: a slow lookup for an
   /// earlier query must never clobber a faster, more recent one's results
@@ -179,6 +191,40 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     // to be right now.
     if (widget.initial == null) {
       unawaited(_trySilentInitialRecenter());
+    }
+    // Seeds a fresh reachability verdict at mount, fire-and-forget, so
+    // [_runSearch]'s own `refresh()` call (below) can usually resolve
+    // against an already-in-flight or already-known probe rather than
+    // starting cold the first time a search comes back empty. Never
+    // awaited here -- the picker must never block on this. Routed through
+    // [_safeRefreshReachability] (see its doc) rather than a bare
+    // `ref.read`, so a handful of pre-existing tests that mount this
+    // picker with NO `ProviderScope` at all (this widget only started
+    // needing `ref` for anything beyond an already-injected
+    // `geocodingService`/`locationService` once this probe was added --
+    // see `topos_screen_test.dart`'s S-L5/S-L6/S-L7) don't crash over it.
+    Future.microtask(_safeRefreshReachability);
+  }
+
+  /// Refreshes [reachabilityProvider], returning the verdict it recorded --
+  /// or [Reachability.unknown] if the READ ITSELF throws because no
+  /// `ProviderScope` container is reachable ([ReachabilityController.refresh]'s
+  /// underlying probe already never throws on its own; this guards the
+  /// `ref.read` call, not the probe). Production always has a real
+  /// container (`main.dart`'s `UncontrolledProviderScope`), so this only
+  /// ever degrades in a bare-`MaterialApp` test harness that predates this
+  /// probe (`topos_screen_test.dart`'s S-L5/S-L6/S-L7 mount this picker
+  /// directly via a captured `BuildContext`, no Riverpod container at all --
+  /// they never needed one before, since `geocodingService`/
+  /// `locationService` are injected directly). [Reachability.unknown] is
+  /// the safe degrade: [ReachabilityVerdict.isKnownOffline] is `false` for
+  /// it, so a container-less mount never falsely claims to be offline --
+  /// it just never shows the hint, the same as before this probe existed.
+  Future<Reachability> _safeRefreshReachability() async {
+    try {
+      return await ref.read(reachabilityProvider.notifier).refresh();
+    } catch (_) {
+      return Reachability.unknown;
     }
   }
 
@@ -230,7 +276,10 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     _searchSeq++;
     final seq = _searchSeq;
     if (query.isEmpty) {
-      setState(() => _searchResults = const []);
+      setState(() {
+        _searchResults = const [];
+        _searchOffline = false;
+      });
       return;
     }
     _debounce = Timer(
@@ -251,12 +300,37 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
   /// overwrite a faster, more recent query's results. Caps the rendered
   /// list at 5 defensively, mirroring the real service's own `limit=5`
   /// query param.
+  ///
+  /// A ZERO-result response is genuinely ambiguous on its own: offline,
+  /// [GeocodingService.search] resolves to an empty list exactly the same
+  /// way a real "no such place" does (see its doc), so nothing about the
+  /// result itself tells them apart. Only on that empty branch, this asks
+  /// [reachabilityProvider] for a fresh verdict (`refresh()`, not the
+  /// possibly-stale cached `state`, since this IS the moment the answer
+  /// matters) and sets [_searchOffline] from
+  /// [ReachabilityVerdict.isKnownOffline] -- true only for a PROVEN offline
+  /// probe, never for [Reachability.unknown], so a probe that hasn't
+  /// resolved yet never flashes the hint prematurely. The [seq] guard is
+  /// re-checked after this second `await` too, since a newer query (or a
+  /// clear) can supersede this one while the probe is still in flight.
   Future<void> _runSearch(String query, int seq) async {
     final GeocodingService service =
         widget.geocodingService ?? ref.read(geocodingServiceProvider);
     final results = await service.search(query);
     if (!mounted || seq != _searchSeq) return;
-    setState(() => _searchResults = results.take(5).toList());
+    if (results.isEmpty) {
+      final verdict = await _safeRefreshReachability();
+      if (!mounted || seq != _searchSeq) return;
+      setState(() {
+        _searchResults = const [];
+        _searchOffline = verdict.isKnownOffline;
+      });
+      return;
+    }
+    setState(() {
+      _searchResults = results.take(5).toList();
+      _searchOffline = false;
+    });
   }
 
   /// A search-result row's `onTap`: moves the map to the chosen place
@@ -635,6 +709,42 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                           },
                         ),
                       ),
+                    ),
+                  )
+                // Shown INSTEAD of a silent empty dropdown when the most
+                // recent settled search resolved with zero results AND a
+                // reachability probe proved the device is offline (see
+                // [_runSearch]'s doc) -- distinguishing "search can't work
+                // right now" from "search worked and genuinely found
+                // nothing" (the latter renders neither this nor the
+                // dropdown above, exactly as before this hint existed).
+                else if (_searchOffline)
+                  Container(
+                    key: const Key('set-location-search-offline'),
+                    margin: const EdgeInsets.only(top: MasiSpacing.xs),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: MasiSpacing.md,
+                      vertical: MasiSpacing.sm,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colors.surface,
+                      borderRadius: BorderRadius.circular(
+                        MasiRadii.control,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        MasiIcon('warning', size: 16, color: colors.ink2),
+                        const SizedBox(width: MasiSpacing.xs),
+                        Flexible(
+                          child: Text(
+                            'Search needs a connection.',
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: colors.ink2),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 // Subtle affordance explaining WHY Save is greyed out (see
