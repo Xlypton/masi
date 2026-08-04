@@ -222,6 +222,74 @@ abstract final class MasiRadii {
   static const double icon = 33;
 }
 
+/// Motion scale — the app's single source of animation durations and curves.
+///
+/// Before this existed every duration in the app was a file-local
+/// `const Duration(...)`, so nothing was consistent and nothing was tunable.
+/// Declared the same way as [MasiRadii]/[MasiSpacing] (a plain
+/// `abstract final class` of `static const`s, not a [ThemeExtension]): these
+/// are design constants, not theme-varying values, and a `const` is usable in
+/// a `const` constructor's default — which the loading widgets rely on.
+///
+/// The two `loading*` values are load-bearing behaviour, not decoration; see
+/// their docs.
+abstract final class MasiMotion {
+  /// A control changing state in place — a chip selecting, a button pressing,
+  /// an icon swapping.
+  static const Duration micro = Duration(milliseconds: 120);
+
+  /// A small element entering or leaving — an inline cue fading in, a banner
+  /// appearing above a list.
+  static const Duration short = Duration(milliseconds: 200);
+
+  /// A content-sized change — a cross-fade between two bodies, an
+  /// expand/collapse.
+  static const Duration medium = Duration(milliseconds: 320);
+
+  /// A full-surface change.
+  static const Duration long = Duration(milliseconds: 480);
+
+  /// ANTI-FLASH. How long an async operation is allowed to run before any
+  /// loading affordance may appear at all.
+  ///
+  /// A spinner or skeleton that shows for 80 ms is worse than none: the eye
+  /// registers the flicker, not the information, and the screen reads as
+  /// broken rather than busy. Anything that completes inside this window
+  /// should therefore render as an instant transition with no loading state
+  /// ever painted.
+  ///
+  /// 180 ms is chosen just under the ~200 ms at which a delay stops feeling
+  /// instantaneous: shorter and fast local reads (Drift queries, cached
+  /// images — the majority of this app's loads) would still flicker; longer
+  /// and a genuinely slow load would sit on unexplained blank space.
+  static const Duration loadingRevealDelay = Duration(milliseconds: 180);
+
+  /// ANTI-STROBE. Once a loading affordance IS on screen, the minimum time it
+  /// stays there even if the data has already arrived.
+  ///
+  /// Without this floor, a load that resolves at 190 ms — one millisecond
+  /// after [loadingRevealDelay] let the affordance in — paints a skeleton for
+  /// a single frame and rips it away, which is the exact strobe the reveal
+  /// delay exists to prevent, merely moved later.
+  ///
+  /// 450 ms is long enough to read as a deliberate state (roughly a third of
+  /// `MasiShimmer`'s 1400 ms sweep, so a shimmer visibly moves rather than
+  /// appearing frozen) and short enough that the worst case it can add —
+  /// 180 ms + 450 ms = 630 ms, and only for operations that finish in the
+  /// narrow window just past the reveal delay — stays under the ~1 s at which
+  /// a user starts wondering whether the app is stuck.
+  static const Duration loadingMinVisible = Duration(milliseconds: 450);
+
+  /// Default curve for something arriving or settling.
+  static const Curve standard = Curves.easeOutCubic;
+
+  /// Curve for something leaving.
+  static const Curve exit = Curves.easeInCubic;
+
+  /// Curve for a change that both begins and ends on screen.
+  static const Curve inOut = Curves.easeInOutCubic;
+}
+
 /// Spacing scale — 4 / 8 / 12 / 16 / 24 / 32 grid, see DESIGN.md.
 abstract final class MasiSpacing {
   static const double xs = 4;
