@@ -3,9 +3,16 @@ import 'package:drift/wasm.dart';
 
 import 'storage_durability.dart';
 
-/// On the web, a drift `COMMIT` does NOT reach browser storage. Something
-/// else has to make it, and [AppDatabase.transaction] does — see its override
-/// for the workaround. This flag is the platform half of that seam.
+/// On drift's **IndexedDB** backends, a drift `COMMIT` does NOT reach browser
+/// storage. Something else has to make it, and [AppDatabase.transaction] does
+/// — see its override for the workaround. This flag is the platform half of
+/// that seam.
+///
+/// Read the scope in that first sentence literally. It is NOT true of drift's
+/// OPFS backends, and this flag is deliberately `true` for both anyway; the
+/// measurements and the reasoning are in "PER-BACKEND, MEASURED" at the bottom
+/// of this comment. An earlier version of this sentence said "on the web" with
+/// no qualifier, which is how the harness gap below went unnoticed.
 ///
 /// MEASURED, then traced to source. `tool/drive_web_write_order.sh` wrote
 /// `wall -> photo -> 10 routes -> one more topo` into a real headless Chrome
@@ -51,6 +58,73 @@ import 'storage_durability.dart';
 /// with no time limit — which for this app means the topo they just made, the
 /// photo they just attached, or the delete they just performed, whenever it is
 /// the last thing they do before the tab goes away.
+///
+/// -------------------------------------------------------------------------
+/// PER-BACKEND, MEASURED — and why this flag is still unconditional
+/// -------------------------------------------------------------------------
+/// Everything above was measured on `sharedIndexedDb`, because
+/// `tool/drive_web_write_order.sh` drives `flutter drive -d web-server`, whose
+/// origin sent no COOP/COEP — so `crossOriginIsolated` was false and drift's
+/// probe never offered OPFS. PRODUCTION sets both headers (`web/_headers`) and
+/// runs OPFS. The fix was therefore validated on a backend production may not
+/// even use. Closing that gap needed no new harness: `flutter drive` DOES
+/// accept `--web-header` (hidden from its non-verbose help; `DriveCommand
+/// extends RunCommandBase`, which calls `usesWebOptions`), which is now
+/// `COI=1` on that script.
+///
+/// Three runs, 2026-08-04, same script, same headless Chrome 150, each
+/// reporting the backend it actually opened (`storage_backend` in its JSON):
+///
+///   COI  flush  backend            verdict
+///   off  OFF    sharedIndexedDb    ONLY_TRAILING_TRANSACTION_LOST
+///   on   OFF    opfsLocks          ALL_SURVIVED
+///   on   ON     opfsLocks          ALL_SURVIVED
+///
+/// Row 1 is the control: the SAME harness, with the fix disabled via
+/// `NO_FLUSH=1`, still reproduces the loss — so rows 2 and 3 are a real
+/// difference in the backend, not a harness that stopped measuring. The
+/// cross-origin-isolated runs reported `opfsLocks` with
+/// `missingFeatures: {dedicatedWorkersInSharedWorkers}`, which is exactly what
+/// the deployed site reports.
+///
+/// So on OPFS the trailing-transaction loss DOES NOT HAPPEN, and the flush is
+/// not what saves it. Both facts follow from source:
+///
+///  * drift's `_WasmDelegate._flush()` is `await _fileSystem?.flush()`
+///    (`drift/lib/wasm.dart:358-360`) and `_fileSystem` is an
+///    `IndexedDbFileSystem?` that `_openDatabase` populates ONLY on the
+///    `sharedIndexedDb`/`unsafeIndexedDb` branches
+///    (`wasm_setup/shared.dart:330-347`). On `opfsShared`/`opfsLocks` it is
+///    `null`, so the post-commit statement's flush is a no-op there.
+///  * OPFS does not need it. Its `xSync` really syncs —
+///    `syncHandle.flush()` (`sqlite3/src/wasm/vfs/simple_opfs.dart:340-342`,
+///    and via the worker for `WasmVfs`, `vfs/async_opfs/worker.dart:262-270`)
+///    — whereas the IndexedDB VFS's `xSync` is "a noop"
+///    (`vfs/indexed_db.dart:685-688`). sqlite calls `xSync` as part of
+///    `COMMIT`, so on OPFS the commit is already durable when it returns.
+///
+/// This flag stays `true` for the whole web platform regardless, on purpose:
+///
+///  * The cost on OPFS is one `SELECT 1` per top-level transaction, whose
+///    flush does nothing. Row 3 above is that configuration, measured green.
+///  * Both IndexedDB variants take the same `writeAutomatically: false`
+///    branch, so both need it — and BOTH remain live in production. Any
+///    install first served before the COOP/COEP headers shipped is pinned to
+///    IndexedDB forever by `_selectExistingDatabase` (the L8 lock-in
+///    documented in `openConnection` below), and a browser without
+///    `SharedWorker` (Safari) cannot be offered `sharedIndexedDb` at all —
+///    its only options are `opfsLocks` or `unsafeIndexedDb`
+///    (`wasm_setup.dart:114-137`, `:142+`).
+///  * The failure directions are not symmetric. Keying this on the runtime
+///    verdict would buy one skipped no-op statement per transaction, and risk
+///    silent permanent data loss if the verdict were ever wrong, late, or
+///    missing. Unconditionally-on is the safe default; the wasted statement is
+///    the price, and it is a rounding error next to what it insures against.
+///
+/// NOT measured: iOS Safari, which is the app's primary target and is neither
+/// of the two rows above. Which backend it picks is a real open question (see
+/// the `SharedWorker` note), and if it lands on `unsafeIndexedDb` then the
+/// original loss applies to it in full and this flag is what prevents it.
 const bool commitNeedsExplicitFlush = true;
 
 /// Web connection — drift on WASM (OPFS-via-worker where available, IndexedDB

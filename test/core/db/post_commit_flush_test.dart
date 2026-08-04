@@ -30,6 +30,26 @@
 // shown. What IS covered here is every way the override could be wrong
 // without a browser noticing: firing on nested transactions, not firing at
 // all, firing before the COMMIT, or firing after a rollback.
+//
+// -------------------------------------------------------------------------
+// WHICH BACKEND THIS GUARDS (and which it does not)
+// -------------------------------------------------------------------------
+// The loss above is an IndexedDB-VFS property, not a "web" property. Measured
+// 2026-08-04 with `tool/drive_web_write_order.sh`, three runs, each reporting
+// the backend it opened: `sharedIndexedDb` + fix disabled lost the trailing
+// transaction (`ONLY_TRAILING_TRANSACTION_LOST`), while a cross-origin-isolated
+// origin (`COI=1`, backend `opfsLocks` — what production runs) lost NOTHING
+// either with the fix or without it. OPFS's `xSync` really syncs; IndexedDB's
+// is a documented noop. The full table and the drift/sqlite3 line references
+// are on `commitNeedsExplicitFlush`.
+//
+// So this override is insurance for the IndexedDB backends — which are still
+// live in production (pre-COOP/COEP installs are pinned to IndexedDB, and a
+// Safari without `SharedWorker` can only be offered `opfsLocks` or
+// `unsafeIndexedDb`) — and an inert extra statement on OPFS. That is why the
+// flag it reads is platform-wide rather than per-backend, and why these
+// assertions are about the override's MECHANICS: on the backend that needs it,
+// getting the depth counting or the ordering wrong is silent data loss.
 import 'dart:io';
 
 import 'package:drift/drift.dart';
