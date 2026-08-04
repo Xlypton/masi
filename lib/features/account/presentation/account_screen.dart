@@ -4,6 +4,10 @@ import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_loading_gate.dart';
+import '../../../shared/presentation/masi_loading_indicator.dart';
+import '../../../shared/presentation/masi_pending_button.dart';
+import '../../../shared/presentation/masi_skeleton.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../topo/presentation/canvas_chrome.dart';
 import '../application/auth_providers.dart';
@@ -196,13 +200,25 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
     }
   }
 
+  /// Signs out. Awaited by the `account-sign-out` [MasiPendingButton], which
+  /// is what makes this single-shot and gives it a spinner — before that this
+  /// was wired straight to a `VoidCallback` with no guard, no disable and no
+  /// cue, so it was freely double-tappable while the network call was in
+  /// flight.
   Future<void> _handleSignOut() async {
     try {
       await ref.read(authRepositoryProvider).signOut();
     } catch (e, st) {
       // Defensive, matching `topos_screen.dart`'s style for repo-call
       // failures: a network hiccup on sign-out must never crash the screen.
+      // Caught here rather than left to the button's `onError` so the
+      // debugPrint diagnosis survives — but no longer SILENT: a sign-out that
+      // didn't happen leaves the user signed in, which they need to be told.
       debugPrint('Sign out failed: $e\n$st');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't sign out — please try again")),
+      );
     }
   }
 
@@ -247,48 +263,105 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
         ),
         centerTitle: false,
       ),
+      // Deliberately a bare [MasiLoadingGate] and NOT a `MasiAsyncView`. This
+      // screen has only TWO outcomes, not four: signed in, or "offer the
+      // sign-in form". A permanent, value-less AsyncError here (e.g. main()'s
+      // documented Supabase.initialize()-failed catch-and-continue fallback —
+      // see `_webAuthGateRedirect`'s doc in `lib/app/router.dart`) is treated
+      // as UNAUTHENTICATED rather than a dead-end "Couldn't load" screen with
+      // a Retry and no way to even attempt sign-in: this is the view the web
+      // auth wall's fail-CLOSED redirect lands an errored visitor on, so it
+      // must actually offer the sign-in form. `MasiAsyncView`'s error state
+      // would (correctly, for every other screen) replace it. The gate gives
+      // us the part we do want — the anti-flash reveal delay and the
+      // minimum-visible hold around the first-resolve skeleton.
       body: SafeArea(
-        child: asyncAuth.when(
-          data: (session) => session.isSignedIn
-              ? _SignedInBody(
-                  email: session.email!,
-                  onSignOut: _handleSignOut,
-                )
-              : _SignedOutBody(
-                  controller: _emailController,
-                  otpController: _otpController,
-                  sending: _sending,
-                  linkSent: _linkSent,
-                  notApproved: _notApproved,
-                  error: _error,
-                  otpError: _otpError,
-                  iosWeb: iosWeb,
-                  onSend: _handleSendLink,
-                  onVerifyOtp: _handleVerifyOtp,
-                  onGoogle: _handleGoogle,
-                ),
-          loading: () => const Center(child: CircularProgressIndicator()),
-          // A permanent, value-less AsyncError here (e.g. main()'s
-          // documented Supabase.initialize()-failed catch-and-continue
-          // fallback — see `_webAuthGateRedirect`'s doc in
-          // `lib/app/router.dart`) is treated as UNAUTHENTICATED, exactly
-          // like the `data`-signed-out branch above, rather than a dead-end
-          // "Something went wrong" screen with no way to even attempt
-          // sign-in: this is the sign-in view the web auth wall's fail
-          // -CLOSED redirect lands an errored visitor on, so it must
-          // actually offer the sign-in form.
-          error: (error, stackTrace) => _SignedOutBody(
-            controller: _emailController,
-            otpController: _otpController,
-            sending: _sending,
-            linkSent: _linkSent,
-            notApproved: _notApproved,
-            error: _error,
-            otpError: _otpError,
-            iosWeb: iosWeb,
-            onSend: _handleSendLink,
-            onVerifyOtp: _handleVerifyOtp,
-            onGoogle: _handleGoogle,
+        child: MasiLoadingGate(
+          isLoading:
+              asyncAuth.isLoading && !asyncAuth.hasValue && !asyncAuth.hasError,
+          builder: (context, showSkeleton) {
+            if (showSkeleton) return const _AuthCardSkeleton();
+            // `hasValue`/`requireValue`, NOT `asData?.value`: in Riverpod v3 a
+            // REFRESHING provider is an `AsyncLoading` that still carries its
+            // previous value, and `asData` is null for it — reading through
+            // `asData` would bounce a signed-in user back to the sign-in form
+            // on every token refresh. (This is also what the `.when` this
+            // replaced did, via `skipLoadingOnRefresh: true`.)
+            final session = asyncAuth.hasValue ? asyncAuth.requireValue : null;
+            if (session != null && session.isSignedIn) {
+              return _SignedInBody(
+                email: session.email!,
+                onSignOut: _handleSignOut,
+              );
+            }
+            return _SignedOutBody(
+              controller: _emailController,
+              otpController: _otpController,
+              sending: _sending,
+              linkSent: _linkSent,
+              notApproved: _notApproved,
+              error: _error,
+              otpError: _otpError,
+              iosWeb: iosWeb,
+              onSend: _handleSendLink,
+              onVerifyOtp: _handleVerifyOtp,
+              onGoogle: _handleGoogle,
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+/// First-resolve placeholder for whichever body [authStateProvider] is about
+/// to pick.
+///
+/// It cannot know which one that will be, so it draws only what BOTH bodies
+/// share: the same centred card (identical padding, radius, surface and
+/// shadow) holding a heading line, two body lines and two full-width
+/// controls. That is deliberately the common denominator rather than a
+/// faithful copy of either — the card itself is the part that would visibly
+/// jump if the placeholder got it wrong, and the card is exact.
+///
+/// In practice this is rarely seen at all: a restored local session resolves
+/// well inside `MasiLoadingGate`'s reveal delay, so the gate paints nothing.
+/// It earns its keep on a cold web load, where the session comes back over
+/// the network.
+class _AuthCardSkeleton extends StatelessWidget {
+  const _AuthCardSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Center(
+      key: const Key('account-skeleton'),
+      child: SingleChildScrollView(
+        padding: const EdgeInsets.all(MasiSpacing.xl),
+        child: Container(
+          padding: const EdgeInsets.all(MasiSpacing.xl),
+          decoration: BoxDecoration(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(MasiRadii.large),
+            boxShadow: kMasiAmbientShadow,
+          ),
+          child: const Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              MasiSkeleton.line(width: 96, height: 16, radius: 8),
+              SizedBox(height: MasiSpacing.md),
+              MasiSkeleton.line(),
+              SizedBox(height: MasiSpacing.sm),
+              MasiSkeleton.line(width: 180),
+              SizedBox(height: MasiSpacing.lg),
+              // Both bodies put two stacked, full-width, 48 px controls here
+              // (field + button when signed out, name row + sign-out when
+              // signed in).
+              MasiSkeleton.box(height: 48),
+              SizedBox(height: MasiSpacing.md),
+              MasiSkeleton.box(height: 48),
+            ],
           ),
         ),
       ),
@@ -341,16 +414,19 @@ class _SignedOutBody extends StatelessWidget {
   /// other platform keeps the magic-link button + "check your email for a
   /// link" confirmation untouched.
   final bool iosWeb;
-  final VoidCallback onSend;
+
+  /// Async, not a [VoidCallback], so the button below can be a
+  /// [MasiPendingButton] and show the send actually being in flight.
+  final Future<void> Function() onSend;
 
   /// Submits the emailed sign-in code (`account-otp-submit`) via
   /// [_AccountScreenState._handleVerifyOtp]. iOS-web only.
-  final VoidCallback onVerifyOtp;
+  final Future<void> Function() onVerifyOtp;
 
   /// Starts a Google OAuth sign-in (`account-google-signin`), an alternative
   /// to the magic-link flow. Disabled while [sending] is true so it can't
   /// race a magic-link send already in flight.
-  final VoidCallback onGoogle;
+  final Future<void> Function() onGoogle;
 
   @override
   Widget build(BuildContext context) {
@@ -400,7 +476,15 @@ class _SignedOutBody extends StatelessWidget {
                   onSubmitted: (_) => onSend(),
                 ),
                 const SizedBox(height: MasiSpacing.lg),
-                ElevatedButton(
+                // `sending` stays as the CROSS-button interlock (one send in
+                // flight must disable the other sign-in path too — see
+                // `_handleGoogle`'s doc); the pending button contributes the
+                // per-button part it can't know about: the spinner and the
+                // double-tap swallow. Note the in-flight button keeps showing
+                // its own spinner even though `sending` has just nulled its
+                // `onPressed` — MasiPendingButton captures the callback at tap
+                // time and drives its cue off its own in-flight flag.
+                MasiPendingButton.filled(
                   key: const Key('account-send-link'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: colors.accent,
@@ -408,10 +492,6 @@ class _SignedOutBody extends StatelessWidget {
                     disabledBackgroundColor: colors.accent,
                     disabledForegroundColor: colors.onAccent.withValues(
                       alpha: 0.7,
-                    ),
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(13),
                     ),
                   ),
                   onPressed: sending ? null : onSend,
@@ -421,9 +501,15 @@ class _SignedOutBody extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: MasiSpacing.md),
-              ElevatedButton(
+              // `.text` rather than `.filled` even though this reads as a
+              // filled button: `.filled`'s spinner is painted in `onAccent`,
+              // which on a `surface2` fill is white-on-near-white in light
+              // mode and near-black-on-dark in dark mode — i.e. invisible.
+              // `.text`'s spinner is `accent`, which reads on `surface2` in
+              // both themes; the fill is restored via `style`.
+              MasiPendingButton.text(
                 key: const Key('account-google-signin'),
-                style: ElevatedButton.styleFrom(
+                style: TextButton.styleFrom(
                   backgroundColor: colors.surface2,
                   foregroundColor: colors.ink,
                   padding: const EdgeInsets.symmetric(vertical: 14),
@@ -463,7 +549,7 @@ class _SignedOutBody extends StatelessWidget {
                     onSubmitted: (_) => onVerifyOtp(),
                   ),
                   const SizedBox(height: MasiSpacing.md),
-                  ElevatedButton(
+                  MasiPendingButton.filled(
                     key: const Key('account-otp-submit'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: colors.accent,
@@ -471,10 +557,6 @@ class _SignedOutBody extends StatelessWidget {
                       disabledBackgroundColor: colors.accent,
                       disabledForegroundColor: colors.onAccent.withValues(
                         alpha: 0.7,
-                      ),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(13),
                       ),
                     ),
                     onPressed: sending ? null : onVerifyOtp,
@@ -545,7 +627,10 @@ class _SignedInBody extends ConsumerStatefulWidget {
   const _SignedInBody({required this.email, required this.onSignOut});
 
   final String email;
-  final VoidCallback onSignOut;
+
+  /// Async so the `account-sign-out` button can be a [MasiPendingButton] —
+  /// see [_AccountScreenState._handleSignOut].
+  final Future<void> Function() onSignOut;
 
   @override
   ConsumerState<_SignedInBody> createState() => _SignedInBodyState();
@@ -664,12 +749,36 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text(
-                        _syncStatusLabel(syncState),
-                        key: const Key('sync-status'),
-                        style: textTheme.bodySmall?.copyWith(
-                          color: colors.ink2,
-                        ),
+                      // The cue sits AFTER the label, in a shrink-wrapped Row
+                      // with nothing to its right, so revealing it moves no
+                      // text — the whole reason it isn't a leading icon.
+                      //
+                      // Deliberately narrow: it appears ONLY for
+                      // `SyncStatus.syncing`, never for `error` or `offline`.
+                      // Those two already say so in words and are not
+                      // in-flight; spinning at someone over a failed sync
+                      // reads as "still trying" when nothing is. And a sync
+                      // that finishes inside the gate's reveal delay paints
+                      // nothing at all, so a routine debounced push stays
+                      // invisible rather than flashing an alarm.
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _syncStatusLabel(syncState),
+                            key: const Key('sync-status'),
+                            style: textTheme.bodySmall?.copyWith(
+                              color: colors.ink2,
+                            ),
+                          ),
+                          const SizedBox(width: MasiSpacing.sm),
+                          MasiLoadingIndicator.inline(
+                            key: const Key('sync-activity'),
+                            isLoading: syncState.status == SyncStatus.syncing,
+                            semanticLabel: 'Syncing',
+                            child: const SizedBox.shrink(),
+                          ),
+                        ],
                       ),
                       if (warning != null) ...[
                         const SizedBox(height: 2),
@@ -710,7 +819,12 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                     ),
                   ),
                   const SizedBox(width: MasiSpacing.sm),
-                  ElevatedButton(
+                  // `_saving` is kept (rather than handed wholesale to the
+                  // button) because the field's `onSubmitted` can start the
+                  // same save without going through the button — so the flag
+                  // is still the shared re-entrancy guard. The button adds the
+                  // progress cue for the tap path, which is the common one.
+                  MasiPendingButton.filled(
                     key: const Key('account-display-name-save'),
                     style: ElevatedButton.styleFrom(
                       backgroundColor: colors.accent,
@@ -723,9 +837,6 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                         horizontal: MasiSpacing.lg,
                         vertical: 14,
                       ),
-                      shape: RoundedRectangleBorder(
-                        borderRadius: BorderRadius.circular(13),
-                      ),
                     ),
                     onPressed: _saving ? null : _handleSaveDisplayName,
                     child: const Text('Save'),
@@ -733,9 +844,12 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                 ],
               ),
               const SizedBox(height: MasiSpacing.lg),
-              ElevatedButton(
+              // `.text` for the same contrast reason as the Google button —
+              // `.filled`'s `onAccent` spinner is invisible on a `surface2`
+              // fill in both themes.
+              MasiPendingButton.text(
                 key: const Key('account-sign-out'),
-                style: ElevatedButton.styleFrom(
+                style: TextButton.styleFrom(
                   backgroundColor: colors.surface2,
                   foregroundColor: colors.gradeHard,
                   padding: const EdgeInsets.symmetric(vertical: 14),

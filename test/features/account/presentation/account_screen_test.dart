@@ -12,6 +12,8 @@ import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/library/presentation/topos_screen.dart';
+import 'package:masi/shared/presentation/masi_async_view.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -49,8 +51,13 @@ class _FixedSyncOrchestrator extends SyncOrchestrator {
 /// only ever listened to once (which `authStateProvider` — a `StreamProvider`
 /// that subscribes exactly once and stays subscribed — guarantees here).
 class FakeAuthRepository implements AuthRepository {
-  FakeAuthRepository(AuthSessionState initial) : _current = initial {
-    _controller.add(initial);
+  /// [seedImmediately] `false` withholds the initial emission, leaving
+  /// `authStateProvider` in its first-load state indefinitely — the only way
+  /// to observe `AccountScreen`'s loading placeholder, since a seeded
+  /// controller resolves it on the first pump. Call [emit] to release it.
+  FakeAuthRepository(AuthSessionState initial, {bool seedImmediately = true})
+    : _current = initial {
+    if (seedImmediately) _controller.add(initial);
   }
 
   final _controller = StreamController<AuthSessionState>();
@@ -103,9 +110,15 @@ class FakeAuthRepository implements AuthRepository {
     }
   }
 
+  /// When non-null, [signOut] blocks on it — lets a test hold the screen in
+  /// its "signing out" state long enough to assert on the pending cue.
+  Completer<void>? signOutGate;
+
   @override
   Future<void> signOut() async {
     signOutCalls++;
+    final gate = signOutGate;
+    if (gate != null) await gate.future;
   }
 
   @override
@@ -131,6 +144,11 @@ class FakeAuthRepository implements AuthRepository {
     _current = state;
     _controller.add(state);
   }
+
+  /// Pushes an error onto [authStateChanges], driving `authStateProvider` into
+  /// a value-less `AsyncError` — the shape `main()`'s
+  /// Supabase.initialize-failed fallback produces.
+  void failStream(Object error) => _controller.addError(error);
 
   Future<void> dispose() => _controller.close();
 }
@@ -718,6 +736,64 @@ void main() {
 
       expect(find.byKey(const Key('sync-status')), findsOneWidget);
       expect(find.text('Syncing…'), findsOneWidget);
+    });
+
+    testWidgets(
+      'a sync in flight gets an activity cue next to the label — but only '
+      'after the reveal delay, so a fast debounced push stays silent',
+      (tester) async {
+        final container = makeContainer(
+          const SyncOrchestratorState(status: SyncStatus.syncing),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pump();
+
+        expect(
+          find.byKey(MasiLoadingIndicator.spinnerKey),
+          findsNothing,
+          reason: 'a sync that finishes inside the reveal delay shows nothing',
+        );
+
+        // `pump`, not `pumpAndSettle`: the revealed arc spins forever.
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsOneWidget);
+        expect(find.text('Syncing…'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a FAILED sync gets no activity cue — "Sync error" is not in flight, '
+      'and spinning at a failure reads as "still trying"',
+      (tester) async {
+        final container = makeContainer(
+          const SyncOrchestratorState(status: SyncStatus.error),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        // Bare pump FIRST to deliver the auth state (otherwise the clock
+        // advance is spent on the loading gate and the signed-in body has not
+        // been built yet), then advance past the reveal delay.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.text('Sync error'), findsOneWidget);
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+      },
+    );
+
+    testWidgets('being OFFLINE gets no activity cue either', (tester) async {
+      final container = makeContainer(
+        const SyncOrchestratorState(status: SyncStatus.offline),
+      );
+
+      await tester.pumpWidget(_wrap(container, const AccountScreen()));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(find.text('Offline'), findsOneWidget);
+      expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
     });
 
     testWidgets('renders "Offline" when the wifiOnly gate skipped a push', (
@@ -1411,6 +1487,121 @@ void main() {
 
         expect(find.byKey(const Key('account-otp-field')), findsNothing);
         expect(find.byKey(const Key('account-link-sent')), findsNothing);
+      },
+    );
+  });
+
+  group('shared loading system', () {
+    testWidgets(
+      'while the auth state is still resolving the screen paints nothing, '
+      'then the card skeleton — never a bare spinner',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+          seedImmediately: false,
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('account-skeleton')),
+          findsNothing,
+          reason: 'the anti-flash window',
+        );
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(find.byKey(const Key('account-skeleton')), findsOneWidget);
+        expect(find.byKey(const Key('account-send-link')), findsNothing);
+
+        // Resolving swaps in the real body.
+        fakeRepo.emit(const AuthSessionState.signedOut());
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(find.byKey(const Key('account-skeleton')), findsNothing);
+        expect(find.byKey(const Key('account-send-link')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'the errored auth state still shows the sign-in FORM, not an error '
+      'state with a Retry — the web auth wall redirects errored visitors '
+      'here and they must be able to sign in',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedOut(),
+          seedImmediately: false,
+        );
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        fakeRepo.failStream(Exception('Supabase.initialize failed'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+
+        expect(find.byKey(const Key('account-send-link')), findsOneWidget);
+        expect(find.byKey(const Key('account-skeleton')), findsNothing);
+        expect(find.byKey(MasiAsyncView.retryKey), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'sign-out is single-shot and shows a pending cue: a second tap while '
+      'the first is in flight does not call signOut again',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(
+          const AuthSessionState.signedIn('climber@example.com'),
+        );
+        addTearDown(fakeRepo.dispose);
+        fakeRepo.signOutGate = Completer<void>();
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            authRepositoryProvider.overrideWithValue(fakeRepo),
+            appDatabaseProvider.overrideWithValue(db),
+            syncOrchestratorProvider.overrideWith(
+              () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('account-sign-out')));
+        await tester.pump();
+        expect(fakeRepo.signOutCalls, 1);
+
+        // Past the reveal delay the button carries the cue.
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('account-sign-out')));
+        await tester.pump();
+        expect(
+          fakeRepo.signOutCalls,
+          1,
+          reason:
+              'the sign-out button used to be a bare VoidCallback with no '
+              'guard, so it was freely double-tappable',
+        );
+
+        fakeRepo.signOutGate!.complete();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
       },
     );
   });
