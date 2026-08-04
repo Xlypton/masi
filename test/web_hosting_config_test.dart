@@ -95,11 +95,34 @@ const _buildPaths = <String>[
 
 void main() {
   group('web/_headers', () {
+    // Asserted as a PROPERTY of what every actual build path resolves to, not
+    // as bare presence of the three header lines anywhere in the file — a
+    // literal-substring check stays green even if the lines are scoped to a
+    // single narrow block (e.g. `/index.html` only) while every other path
+    // loses them. That regression is silent: `crossOriginIsolated` goes false
+    // for those responses and drift picks a weaker storage backend, then is
+    // PINNED to it.
     test('keeps cross-origin isolation on every response', () {
-      final headers = _read('web/_headers');
-      expect(headers, contains('Cross-Origin-Opener-Policy: same-origin'));
-      expect(headers, contains('Cross-Origin-Embedder-Policy: require-corp'));
-      expect(headers, contains('Cross-Origin-Resource-Policy: same-origin'));
+      final rules = _parseRules(_read('web/_headers'));
+      const required = {
+        'Cross-Origin-Opener-Policy': 'same-origin',
+        'Cross-Origin-Embedder-Policy': 'require-corp',
+        'Cross-Origin-Resource-Policy': 'same-origin',
+      };
+      for (final path in _buildPaths) {
+        final headers = _effectiveHeaders(rules, path);
+        required.forEach((name, value) {
+          expect(
+            headers[name],
+            equals(<String>[value]),
+            reason: '$path must resolve $name to exactly [$value] — got '
+                '${headers[name]}. Losing any of these on any path makes '
+                '`crossOriginIsolated` false for that response, and drift '
+                'silently downgrades off OPFS and is then pinned to the '
+                'weaker backend.',
+          );
+        });
+      }
     });
 
     // THE REGRESSION GUARD. Cloudflare Pages appends the values of every
