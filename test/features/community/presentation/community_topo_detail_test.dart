@@ -1,9 +1,12 @@
 import 'package:masi/app/theme.dart';
-import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/app_database.dart' hide Comment;
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/community/application/comments_providers.dart';
+import 'package:masi/features/community/application/community_topo_detail_providers.dart';
+import 'package:masi/features/community/data/comments_repository.dart'
+    show Comment;
 import 'package:masi/features/community/presentation/community_topo_detail_screen.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/logbook/application/ascents_providers.dart';
@@ -314,51 +317,48 @@ void main() {
     },
   );
 
-  testWidgets(
-    'comment empty state: renders a placeholder when the wall has no '
-    'comments yet, and it disappears once one is posted',
-    (tester) async {
-      final seeded = await seedWallWithRoute(tester);
-      addTearDown(seeded.db.close);
-      addTearDown(seeded.container.dispose);
+  testWidgets('comment empty state: renders a placeholder when the wall has no '
+      'comments yet, and it disappears once one is posted', (tester) async {
+    final seeded = await seedWallWithRoute(tester);
+    addTearDown(seeded.db.close);
+    addTearDown(seeded.container.dispose);
 
-      await tester.pumpWidget(
-        wrap(
-          seeded.container,
-          CommunityTopoDetailScreen(
-            wallId: seeded.wallId,
-            debugInitialImageSize: const Size(1000, 2000),
-          ),
+    await tester.pumpWidget(
+      wrap(
+        seeded.container,
+        CommunityTopoDetailScreen(
+          wallId: seeded.wallId,
+          debugInitialImageSize: const Size(1000, 2000),
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const Key('community-comments-empty'), skipOffstage: false),
-        findsOneWidget,
-      );
+    expect(
+      find.byKey(const Key('community-comments-empty'), skipOffstage: false),
+      findsOneWidget,
+    );
 
-      await tester.enterText(
-        find.byKey(const Key('community-comment-field')),
-        'First!',
-      );
-      // The submit IconButton is disabled/enabled off a ValueListenableBuilder
-      // watching `_commentController` directly (see the "comment submit
-      // button" group above) — `enterText` fires that listener synchronously
-      // but the rebuilt (now-enabled) IconButton instance isn't in the
-      // element tree until a frame is pumped. Skipping this `pump()` taps
-      // the still-disabled button from the PREVIOUS build (a no-op), so the
-      // comment is silently never submitted.
-      await tester.pump();
-      await tester.tap(find.byKey(const Key('community-comment-submit')));
-      await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const Key('community-comment-field')),
+      'First!',
+    );
+    // The submit IconButton is disabled/enabled off a ValueListenableBuilder
+    // watching `_commentController` directly (see the "comment submit
+    // button" group above) — `enterText` fires that listener synchronously
+    // but the rebuilt (now-enabled) IconButton instance isn't in the
+    // element tree until a frame is pumped. Skipping this `pump()` taps
+    // the still-disabled button from the PREVIOUS build (a no-op), so the
+    // comment is silently never submitted.
+    await tester.pump();
+    await tester.tap(find.byKey(const Key('community-comment-submit')));
+    await tester.pumpAndSettle();
 
-      expect(
-        find.byKey(const Key('community-comments-empty'), skipOffstage: false),
-        findsNothing,
-      );
-    },
-  );
+    expect(
+      find.byKey(const Key('community-comments-empty'), skipOffstage: false),
+      findsNothing,
+    );
+  });
 
   testWidgets(
     'comment submit button: disabled for an empty/whitespace-only draft, '
@@ -380,10 +380,7 @@ void main() {
       await tester.pumpAndSettle();
 
       IconButton submitButton() => tester.widget<IconButton>(
-        find.byKey(
-          const Key('community-comment-submit'),
-          skipOffstage: false,
-        ),
+        find.byKey(const Key('community-comment-submit'), skipOffstage: false),
       );
 
       // Empty draft: disabled.
@@ -674,44 +671,43 @@ void main() {
     },
   );
 
-  testWidgets(
-    'D4 (redesign): the comment submit button renders '
-    "MasiIcon('send_fill') — masi_send_fill.svg now exists in "
-    'assets/icons/masi/, added alongside the comment-input redesign',
-    (tester) async {
-      final seeded = await seedWallWithTwoRoutesAndComments(tester);
-      addTearDown(seeded.db.close);
-      addTearDown(seeded.container.dispose);
+  testWidgets('D4 (redesign): the comment submit button renders '
+      "MasiIcon('send_fill') — masi_send_fill.svg now exists in "
+      'assets/icons/masi/, added alongside the comment-input redesign', (
+    tester,
+  ) async {
+    final seeded = await seedWallWithTwoRoutesAndComments(tester);
+    addTearDown(seeded.db.close);
+    addTearDown(seeded.container.dispose);
 
-      await tester.pumpWidget(
-        wrap(
-          seeded.container,
-          CommunityTopoDetailScreen(
-            wallId: seeded.wallId,
-            debugInitialImageSize: const Size(1000, 2000),
-          ),
+    await tester.pumpWidget(
+      wrap(
+        seeded.container,
+        CommunityTopoDetailScreen(
+          wallId: seeded.wallId,
+          debugInitialImageSize: const Size(1000, 2000),
         ),
-      );
-      await tester.pumpAndSettle();
+      ),
+    );
+    await tester.pumpAndSettle();
 
-      // `skipOffstage: false` on both finders: the comment submit button
-      // sits inside the scrollable body below the collapsing header and can
-      // be at/near the initial viewport fold (see the D5 test's comment) —
-      // this is a pure existence/type check (no tap), so it doesn't need
-      // scrolling, just to not be filtered out by the default onstage-only
-      // traversal.
-      final submitIcon = tester.widget<MasiIcon>(
-        find.descendant(
-          of: find.byKey(
-            const Key('community-comment-submit'),
-            skipOffstage: false,
-          ),
-          matching: find.byType(MasiIcon, skipOffstage: false),
+    // `skipOffstage: false` on both finders: the comment submit button
+    // sits inside the scrollable body below the collapsing header and can
+    // be at/near the initial viewport fold (see the D5 test's comment) —
+    // this is a pure existence/type check (no tap), so it doesn't need
+    // scrolling, just to not be filtered out by the default onstage-only
+    // traversal.
+    final submitIcon = tester.widget<MasiIcon>(
+      find.descendant(
+        of: find.byKey(
+          const Key('community-comment-submit'),
+          skipOffstage: false,
         ),
-      );
-      expect(submitIcon.name, 'send_fill');
-    },
-  );
+        matching: find.byType(MasiIcon, skipOffstage: false),
+      ),
+    );
+    expect(submitIcon.name, 'send_fill');
+  });
 
   testWidgets(
     'D3: the Routes section is expanded by default and its header toggles '
@@ -1035,6 +1031,200 @@ void main() {
       );
       expect(
         find.byKey(Key('route-stars-$withoutMetaDbId'), skipOffstage: false),
+        findsNothing,
+      );
+    });
+  });
+
+  // The failure mode this screen shipped with: both section gates read a bare
+  // `!asyncThing.hasValue`. On an AsyncError `hasValue` is false and
+  // `isLoading` is false, and neither of these providers re-emits on its own —
+  // so the gate revealed its skeleton at 180 ms and was never handed a
+  // `false` again. The shimmer then repeated for the life of the screen and the
+  // failure had no rendering at all.
+  group('a section whose read FAILED', () {
+    /// Seeds the same real DB as [seedWallWithRoute], with the routes and
+    /// comments providers overridden to fail. Both failures are realistic: the
+    /// routes future does three awaits against drift, and the comments stream is
+    /// a drift `watch()`.
+    Future<({AppDatabase db, ProviderContainer container, String wallId})>
+    seedWithFailingSections(WidgetTester tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      final container = ProviderContainer(
+        // Riverpod v3 retries a failed provider on a backoff by default, which
+        // would re-run these throwing bodies mid-assertion and leave pending
+        // timers behind.
+        retry: (_, _) => null,
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          authRepositoryProvider.overrideWithValue(
+            _FakeAuthRepository(
+              const AuthSessionState.signedIn('climber@example.com'),
+            ),
+          ),
+          routeEntriesForWallProvider.overrideWith(
+            (ref, wallId) async =>
+                throw StateError('SqliteException: no such column: photo_id'),
+          ),
+          commentsForWallProvider.overrideWith(
+            (ref, wallId) => Stream<List<Comment>>.error(
+              StateError('SqliteException: database is locked'),
+            ),
+          ),
+        ],
+      );
+      final crud = container.read(libraryCrudRepositoryProvider);
+      final area = await crud.createArea('Area');
+      final sector = await crud.createSector(area.id, 'Sector');
+      final wall = await crud.createWall(sector.id, 'Wall');
+      await tester.runAsync(() async {
+        await crud.attachPhotoToWall(
+          wall.id,
+          XFile('/tmp/community-detail-failing-photo.jpg'),
+          1000,
+          2000,
+        );
+      });
+      return (db: db, container: container, wallId: wall.id);
+    }
+
+    Future<void> pumpFailing(
+      WidgetTester tester,
+      String wallId,
+      ProviderContainer container,
+    ) async {
+      await tester.pumpWidget(
+        wrap(
+          container,
+          CommunityTopoDetailScreen(
+            wallId: wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      // Deliver the errors, then cross the reveal delay AND the
+      // minimum-visible hold: if the gate is still holding a skeleton after
+      // this, it is holding it forever.
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 700));
+    }
+
+    testWidgets('stops the routes shimmer and offers a retry instead of '
+        'shimmering forever', (tester) async {
+      final seeded = await seedWithFailingSections(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+      await pumpFailing(tester, seeded.wallId, seeded.container);
+
+      expect(
+        find.byKey(const Key('community-routes-skeleton'), skipOffstage: false),
+        findsNothing,
+        reason:
+            'the skeleton was never handed a false and shimmered for the '
+            'life of the screen',
+      );
+      expect(
+        find.byKey(const Key('community-routes-error'), skipOffstage: false),
+        findsOneWidget,
+        reason: 'a failed read had no rendering on this screen at all',
+      );
+      expect(
+        find.byKey(const Key('community-routes-retry'), skipOffstage: false),
+        findsOneWidget,
+      );
+      // Developer text stays out of the user's face, same rule as
+      // MasiAsyncView's showErrorDetail default.
+      expect(find.textContaining('SqliteException'), findsNothing);
+    });
+
+    testWidgets('stops the comments shimmer and offers a retry', (
+      tester,
+    ) async {
+      final seeded = await seedWithFailingSections(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+      await pumpFailing(tester, seeded.wallId, seeded.container);
+
+      expect(
+        find.byKey(
+          const Key('community-comments-skeleton'),
+          skipOffstage: false,
+        ),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('community-comments-error'), skipOffstage: false),
+        findsOneWidget,
+      );
+      // NOT the empty state: "no comments yet" about a thread that failed to
+      // load is a false statement about somebody's topo.
+      expect(
+        find.byKey(const Key('community-comments-empty'), skipOffstage: false),
+        findsNothing,
+      );
+    });
+
+    testWidgets('the routes retry re-runs the read, and a success clears the '
+        'failure notice', (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      var attempts = 0;
+      final container = ProviderContainer(
+        retry: (_, _) => null,
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          authRepositoryProvider.overrideWithValue(
+            _FakeAuthRepository(
+              const AuthSessionState.signedIn('climber@example.com'),
+            ),
+          ),
+          routeEntriesForWallProvider.overrideWith((ref, wallId) async {
+            if (attempts++ == 0) throw StateError('transient');
+            return const <RouteEntry>[];
+          }),
+        ],
+      );
+      addTearDown(container.dispose);
+      final crud = container.read(libraryCrudRepositoryProvider);
+      final area = await crud.createArea('Area');
+      final sector = await crud.createSector(area.id, 'Sector');
+      final wall = await crud.createWall(sector.id, 'Wall');
+      await tester.runAsync(() async {
+        await crud.attachPhotoToWall(
+          wall.id,
+          XFile('/tmp/community-detail-retry-photo.jpg'),
+          1000,
+          2000,
+        );
+      });
+
+      await pumpFailing(tester, wall.id, container);
+      expect(
+        find.byKey(const Key('community-routes-error'), skipOffstage: false),
+        findsOneWidget,
+      );
+
+      // `Scrollable.ensureVisible` + explicit pumps rather than
+      // `scrollKeyIntoView`, whose `pumpAndSettle` would hang on the embedded
+      // canvas's own shimmer.
+      await Scrollable.ensureVisible(
+        tester.element(
+          find.byKey(const Key('community-routes-retry'), skipOffstage: false),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 400));
+      await tester.tap(find.byKey(const Key('community-routes-retry')));
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 700));
+
+      expect(attempts, 2);
+      expect(
+        find.byKey(const Key('community-routes-error'), skipOffstage: false),
         findsNothing,
       );
     });

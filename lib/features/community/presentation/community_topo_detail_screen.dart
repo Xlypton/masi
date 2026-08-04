@@ -7,6 +7,7 @@ import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/routes/route_styles.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
+import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../account/application/auth_providers.dart';
@@ -142,7 +143,9 @@ class _CommunityTopoDetailScreenState
       if (!mounted) return;
       setState(() => _likeOverride = null);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't save your like — please try again")),
+        const SnackBar(
+          content: Text("Couldn't save your like — please try again"),
+        ),
       );
       return;
     }
@@ -289,7 +292,6 @@ class _CommunityTopoDetailScreenState
     final asyncComments = ref.watch(commentsForWallProvider(wallId));
     final comments = asyncComments.value ?? const <Comment>[];
     final asyncRoutes = ref.watch(routeEntriesForWallProvider(wallId));
-    final routeEntries = asyncRoutes.value ?? const <RouteEntry>[];
     // Chrome-title fix: the collapsing header used to show no title at all
     // (just a back button), leaving the viewer with no way to tell which
     // topo they're looking at once they'd scrolled past its photo.
@@ -534,14 +536,31 @@ class _CommunityTopoDetailScreenState
                     ),
                   ),
                   const SizedBox(height: MasiSpacing.sm),
-                  // Gated so the three states stay distinct: nothing at all
-                  // for a read that resolves inside the reveal delay (the
-                  // normal local case), a shaped placeholder for a slower one,
-                  // and "no comments yet" ONLY once that is actually known.
+                  // Gated so the FOUR states stay distinct: nothing at all for
+                  // a read that resolves inside the reveal delay (the normal
+                  // local case), a shaped placeholder for a slower one, a
+                  // failure notice with a retry when the watch throws, and "no
+                  // comments yet" ONLY once that is actually known.
+                  //
+                  // `isLoading && !hasValue`, never a bare `!hasValue` — see
+                  // the routes gate below for what that costs: on error
+                  // `hasValue` stays false, so the bare form leaves the
+                  // skeleton's shimmer repeating for the life of the screen.
                   MasiLoadingGate(
-                    isLoading: !asyncComments.hasValue,
+                    isLoading:
+                        asyncComments.isLoading && !asyncComments.hasValue,
                     builder: (context, showSkeleton) {
                       if (showSkeleton) return const _CommentsSkeleton();
+                      if (!asyncComments.hasValue && asyncComments.hasError) {
+                        return _SectionError(
+                          key: const Key('community-comments-error'),
+                          retryKey: const Key('community-comments-retry'),
+                          message: "Couldn't load the comments",
+                          onRetry: () => ref.refresh(
+                            commentsForWallProvider(wallId).future,
+                          ),
+                        );
+                      }
                       if (comments.isEmpty) {
                         return Text(
                           'No comments yet — be the first',
@@ -576,92 +595,87 @@ class _CommunityTopoDetailScreenState
                       ).textTheme.bodySmall?.copyWith(color: colors.ink2),
                     )
                   else
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          key: const Key('community-comment-field'),
-                          controller: _commentController,
-                          // Redesign: filled, rounded input matching the
-                          // Community Feed's own search field style
-                          // (`community_feed_screen.dart`) — a soft
-                          // `surface2` fill with no harsh underline, rather
-                          // than the bare default `InputDecoration`.
-                          decoration: InputDecoration(
-                            hintText: 'Add a comment',
-                            filled: true,
-                            fillColor: colors.surface2,
-                            contentPadding: const EdgeInsets.symmetric(
-                              horizontal: MasiSpacing.lg,
-                              vertical: MasiSpacing.md,
-                            ),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                MasiRadii.control,
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            key: const Key('community-comment-field'),
+                            controller: _commentController,
+                            // Redesign: filled, rounded input matching the
+                            // Community Feed's own search field style
+                            // (`community_feed_screen.dart`) — a soft
+                            // `surface2` fill with no harsh underline, rather
+                            // than the bare default `InputDecoration`.
+                            decoration: InputDecoration(
+                              hintText: 'Add a comment',
+                              filled: true,
+                              fillColor: colors.surface2,
+                              contentPadding: const EdgeInsets.symmetric(
+                                horizontal: MasiSpacing.lg,
+                                vertical: MasiSpacing.md,
                               ),
-                              borderSide: BorderSide.none,
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                MasiRadii.control,
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(
+                                  MasiRadii.control,
+                                ),
+                                borderSide: BorderSide.none,
                               ),
-                              borderSide: BorderSide.none,
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(
-                                MasiRadii.control,
+                              enabledBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(
+                                  MasiRadii.control,
+                                ),
+                                borderSide: BorderSide.none,
                               ),
-                              borderSide: BorderSide(
-                                color: colors.accent,
-                                width: 1.5,
+                              focusedBorder: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(
+                                  MasiRadii.control,
+                                ),
+                                borderSide: BorderSide(
+                                  color: colors.accent,
+                                  width: 1.5,
+                                ),
                               ),
                             ),
                           ),
                         ),
-                      ),
-                      const SizedBox(width: MasiSpacing.sm),
-                      // Disabled/inert state for an empty/whitespace-only
-                      // draft: rebuilt straight off the controller (rather
-                      // than gated on comments-list state) so it reacts to
-                      // every keystroke, not just a comment actually posting.
-                      ValueListenableBuilder<TextEditingValue>(
-                        valueListenable: _commentController,
-                        builder: (context, value, _) {
-                          final canSubmit = value.text.trim().isNotEmpty;
-                          // Pending, not plain: posting awaits an author-name
-                          // resolution and a Drift write, and an unguarded
-                          // double tap posted the comment twice.
-                          return PendingIconButton(
-                            buttonKey: const Key('community-comment-submit'),
-                            tooltip: 'Post comment',
-                            icon: MasiIcon(
-                              'send_fill',
-                              color: canSubmit ? colors.accent : colors.ink2,
-                            ),
-                            onPressed: canSubmit ? _submitComment : null,
-                            onError: (error, stackTrace) =>
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                      "Couldn't post your comment — please try again",
+                        const SizedBox(width: MasiSpacing.sm),
+                        // Disabled/inert state for an empty/whitespace-only
+                        // draft: rebuilt straight off the controller (rather
+                        // than gated on comments-list state) so it reacts to
+                        // every keystroke, not just a comment actually posting.
+                        ValueListenableBuilder<TextEditingValue>(
+                          valueListenable: _commentController,
+                          builder: (context, value, _) {
+                            final canSubmit = value.text.trim().isNotEmpty;
+                            // Pending, not plain: posting awaits an author-name
+                            // resolution and a Drift write, and an unguarded
+                            // double tap posted the comment twice.
+                            return PendingIconButton(
+                              buttonKey: const Key('community-comment-submit'),
+                              tooltip: 'Post comment',
+                              icon: MasiIcon(
+                                'send_fill',
+                                color: canSubmit ? colors.accent : colors.ink2,
+                              ),
+                              onPressed: canSubmit ? _submitComment : null,
+                              onError: (error, stackTrace) =>
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                        "Couldn't post your comment — please try again",
+                                      ),
                                     ),
                                   ),
-                                ),
-                          );
-                        },
-                      ),
-                    ],
-                  ),
+                            );
+                          },
+                        ),
+                      ],
+                    ),
                   const SizedBox(height: MasiSpacing.lg),
                   const Divider(),
                   const SizedBox(height: MasiSpacing.sm),
-                  _buildRoutesSection(
-                    context,
-                    colors,
-                    routeEntries,
-                    loading: !asyncRoutes.hasValue,
-                  ),
+                  _buildRoutesSection(context, colors, asyncRoutes),
                 ]),
               ),
             ),
@@ -679,9 +693,9 @@ class _CommunityTopoDetailScreenState
   Widget _buildRoutesSection(
     BuildContext context,
     MasiColors colors,
-    List<RouteEntry> routeEntries, {
-    required bool loading,
-  }) {
+    AsyncValue<List<RouteEntry>> asyncRoutes,
+  ) {
+    final routeEntries = asyncRoutes.value ?? const <RouteEntry>[];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -726,26 +740,50 @@ class _CommunityTopoDetailScreenState
               borderRadius: BorderRadius.circular(MasiRadii.card),
               boxShadow: kMasiAmbientShadow,
             ),
-            // Same three-state gate as the comments above: an empty card is
+            // Same FOUR-state gate as the comments above: an empty card is
             // "this topo has no routes", which must not be what a read still
-            // in flight looks like.
+            // in flight looks like — nor what a read that FAILED looks like.
+            //
+            // `isLoading && !hasValue`, never a bare `!hasValue`: this is a
+            // FutureProvider, so a throw inside it settles on AsyncError with
+            // `hasValue` false and `isLoading` false, and it never re-emits on
+            // its own. A bare `!hasValue` is therefore true FOREVER — the gate
+            // reveals at 180 ms and is never handed a `false`, so the skeleton's
+            // shimmer repeats for the life of the screen. `isLoading` is false
+            // on error, which is what makes this form terminate.
             child: MasiLoadingGate(
-              isLoading: loading,
-              builder: (context, showSkeleton) => showSkeleton
-                  ? _RouteRowsSkeleton(colors: colors)
-                  : Column(
-                      children: [
-                        for (var i = 0; i < routeEntries.length; i++) ...[
-                          _buildRouteRow(context, colors, routeEntries[i]),
-                          if (i != routeEntries.length - 1)
-                            Divider(
-                              height: 1,
-                              thickness: 1,
-                              color: colors.separator,
-                            ),
-                        ],
-                      ],
+              isLoading: asyncRoutes.isLoading && !asyncRoutes.hasValue,
+              builder: (context, showSkeleton) {
+                if (showSkeleton) return _RouteRowsSkeleton(colors: colors);
+                if (!asyncRoutes.hasValue && asyncRoutes.hasError) {
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(
+                      vertical: MasiSpacing.md,
                     ),
+                    child: _SectionError(
+                      key: const Key('community-routes-error'),
+                      retryKey: const Key('community-routes-retry'),
+                      message: "Couldn't load this topo's routes",
+                      onRetry: () => ref.refresh(
+                        routeEntriesForWallProvider(widget.wallId).future,
+                      ),
+                    ),
+                  );
+                }
+                return Column(
+                  children: [
+                    for (var i = 0; i < routeEntries.length; i++) ...[
+                      _buildRouteRow(context, colors, routeEntries[i]),
+                      if (i != routeEntries.length - 1)
+                        Divider(
+                          height: 1,
+                          thickness: 1,
+                          color: colors.separator,
+                        ),
+                    ],
+                  ],
+                );
+              },
             ),
           ),
       ],
@@ -856,6 +894,84 @@ class _CommunityTopoDetailScreenState
           ),
         ],
       ),
+    );
+  }
+}
+
+/// A section-sized failure notice: what could not be loaded, and a retry.
+///
+/// **Why not `MasiAsyncView`'s error state, and why not a sliver variant of
+/// it.** Each of this screen's async sections is a box child of one
+/// `SliverList`, so it has an unbounded height and no `Expanded` to fill;
+/// `MasiAsyncView` is a screen-BODY widget that lays its states out in a Column
+/// with the content Expanded and must be given a bounded height. Beyond the
+/// layout, a screen-sized centred block with a 40 px glyph would claim the whole
+/// screen had failed when the photo, the title, the likes and the other section
+/// are all perfectly fine. Failure here is per section, so the notice is too.
+///
+/// Shaped like `SyncBanner`/`MasiAsyncView`'s stale-error bar — glyph, sentence,
+/// one text action — so a screen showing more than one reads as one design.
+class _SectionError extends StatelessWidget {
+  const _SectionError({
+    super.key,
+    required this.retryKey,
+    required this.message,
+    required this.onRetry,
+  });
+
+  /// Key for the retry button itself (the widget's own `key` lands on the
+  /// outermost wrapper — see [MasiPendingButton]'s doc).
+  final Key retryKey;
+
+  /// Says what could not be loaded, never "Error". The raw exception is
+  /// deliberately absent: this feature's rule is that developer text does not
+  /// go in front of a user (`showErrorDetail` is off by default for the same
+  /// reason).
+  final String message;
+
+  /// Re-runs the read. A `ref.refresh(p.future)` rather than a bare
+  /// `ref.invalidate`, so the button can actually cue the re-read.
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        MasiIcon('warning', size: 20, color: colors.gradeHard),
+        const SizedBox(width: MasiSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Semantics(
+                liveRegion: true,
+                child: Text(
+                  message,
+                  style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
+                ),
+              ),
+              MasiPendingButton.text(
+                buttonKey: retryKey,
+                style: TextButton.styleFrom(
+                  padding: EdgeInsets.zero,
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+                onPressed: onRetry,
+                // A retry that fails again is already fully reported by this
+                // very widget rebuilding, so it must not also be raised to
+                // FlutterError.reportError.
+                onError: (_, _) {},
+                child: const Text('Try again'),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
@@ -1020,7 +1136,11 @@ class _RouteStyleTagChip extends StatelessWidget {
       ),
       child: Text(
         resolved.displayLabel,
-        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: colors.ink2),
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+          color: colors.ink2,
+        ),
       ),
     );
   }
