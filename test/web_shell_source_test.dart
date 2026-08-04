@@ -80,8 +80,30 @@ void main() {
       expect(source, contains("'flutter_service_worker.js'"));
     });
 
+    // Asserted as TWO structural facts, not bare presence of the string
+    // `masi-runtime-` — that string also appears in the header comment
+    // describing Stage 3, so a substring check stays green even if the
+    // constant AND the activate-handler guard that reads it are both deleted.
+    // That regression is silent and severe: `activate` would then delete
+    // every cache it doesn't own by exact name, including Stage 3's map-tile
+    // cache, wiping offline map tiles on every single deploy.
     test('preserves Stage 3\'s runtime cache namespace when pruning', () {
-      expect(_read('web/sw.js'), contains('masi-runtime-'));
+      final source = _read('web/sw.js');
+      expect(
+        source,
+        contains("const KEEP_CACHE_PREFIX = 'masi-runtime-';"),
+        reason: 'the prefix must stay a declared constant, not merely a '
+            'string mentioned somewhere in the file',
+      );
+      expect(
+        RegExp(
+          r'if\s*\(name\.startsWith\(KEEP_CACHE_PREFIX\)\)\s*return undefined;',
+        ).hasMatch(source),
+        isTrue,
+        reason: 'activate must actually consult KEEP_CACHE_PREFIX before '
+            'deleting a cache, or the constant is declared but unused and '
+            "Stage 3's runtime tile cache is swept on every deploy",
+      );
     });
 
     test('force-revalidates the two immutable drift assets when precaching',
