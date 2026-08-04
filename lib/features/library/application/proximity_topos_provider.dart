@@ -226,17 +226,37 @@ List<ProximityTopoEntry> _sortedByDistanceStable(
 /// entries carry a distance and sort nearest-first, otherwise distances are
 /// `null` and order falls back to each source's original order.
 ///
-/// Reads all three source providers via `.asData?.value` (loading/error
-/// reads as "no data yet" — `const []`/`null` — never a crash), the same
-/// pattern `mapContentSearchProvider` uses. A `null` [myLocationProvider]
-/// result (no fix, still resolving, or a denied permission —
-/// [LocationService.currentLocation] never throws) is handled the same as
-/// any other `null` fix by [mergeAndSortByProximity].
+/// Reads all three source providers via `.value` — the RETAINED value, which
+/// is null only when there has never been one — so a source that is merely
+/// re-resolving cannot empty this list.
+///
+/// **Not `.asData?.value`, which is what this used to be and is a bug here.**
+/// `asData` is non-null only for an actual `AsyncData`: in Riverpod 3 a
+/// dependency-change rebuild is `isReloading`, i.e. an `AsyncLoading` INSTANCE
+/// that retains its previous value, and an `AsyncError` can retain one too —
+/// `asData` is null for both. [toposProvider] watches `effectiveUidProvider`,
+/// so every auth emission (gotrue's offline refresh ticker emits every 10 s)
+/// puts it through exactly that state. This provider therefore reported an
+/// EMPTY library while the library was on screen and non-empty, and
+/// `topos_screen.dart` rendered "No topos yet" — or, whenever
+/// `lastPullError` was set, "Couldn't sync", which is the common state right
+/// after a sign-in pull.
+///
+/// That is the same failure `library_providers.dart` documents one layer down
+/// on [toposProvider] itself (an `asData`-based uid read collapsing the owner
+/// filter and rendering a successful empty stream); it was reintroduced here.
+/// `asData` is the wrong reader for "what should be on screen" in every case:
+/// the states it excludes are precisely the ones where existing content must be
+/// kept.
+///
+/// A `null` [myLocationProvider] result (no fix, still resolving, or a denied
+/// permission — [LocationService.currentLocation] never throws) is handled the
+/// same as any other `null` fix by [mergeAndSortByProximity].
 final sortedByProximityToposProvider = Provider<List<ProximityTopoEntry>>((
   ref,
 ) {
-  final own = ref.watch(toposProvider).asData?.value ?? const [];
-  final community = ref.watch(sharedToposProvider).asData?.value ?? const [];
-  final fix = ref.watch(myLocationProvider).asData?.value;
+  final own = ref.watch(toposProvider).value ?? const [];
+  final community = ref.watch(sharedToposProvider).value ?? const [];
+  final fix = ref.watch(myLocationProvider).value;
   return mergeAndSortByProximity(own: own, community: community, fix: fix);
 });
