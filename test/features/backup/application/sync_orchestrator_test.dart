@@ -12,7 +12,10 @@ import 'package:masi/features/backup/application/sync_retry_schedule.dart';
 import 'package:masi/features/backup/data/backup_repository.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/backup/data/sync_remote.dart';
+import 'package:masi/core/storage/storage_persistence_service.dart';
 import 'package:masi/features/backup/data/sync_service.dart';
+import 'package:masi/features/topo/data/photo_files.dart';
+import 'package:masi/features/topo/data/public_photo_prune_service.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -210,6 +213,68 @@ class _OneTableRejectingSyncRemote extends _CountingSyncRemote {
 /// `lastSyncedAt`, and must build `lastPushError` from the PHOTO channel — a
 /// message assembled only from `errors` would render the useless
 /// "Sync failed: 0 change(s) not uploaded — ".
+/// A [PublicPhotoPruneService] that records its calls instead of touching
+/// storage. Extends the real class so it can stand in for the provider without
+/// widening the production type.
+class _RecordingPruneService extends PublicPhotoPruneService {
+  _RecordingPruneService({
+    required super.db,
+    this.reason = PublicPhotoPruneReason.belowHighWatermark,
+    this.gate,
+    this.throws = false,
+  }) : super(
+         photoFiles: PhotoFiles(),
+         storage: const PlatformStoragePersistenceService(),
+         currentUid: _noUid,
+       );
+
+  static String? _noUid() => null;
+
+  int calls = 0;
+  final PublicPhotoPruneReason reason;
+  final bool throws;
+
+  /// When set, the pass blocks on this before answering — so a test can prove
+  /// the pull does NOT wait for it.
+  final Future<void>? gate;
+
+  @override
+  Future<PublicPhotoPruneOutcome> pruneIfUnderPressure() async {
+    calls++;
+    if (gate != null) await gate;
+    // `pruneIfUnderPressure` never throws by contract; this models a future
+    // regression that breaks that contract, which must still not fail a pull.
+    if (throws) throw Exception('prune-boom');
+    return PublicPhotoPruneOutcome(reason: reason);
+  }
+}
+
+/// A [SyncService] whose pull succeeds having downloaded ZERO photo bytes
+/// because the origin is already over the prune high watermark — the exact
+/// state in which a `photosDownloaded > 0` prune gate would be inverted and
+/// leave the device wedged over the watermark forever.
+class _PressuredPullSyncService extends SyncService {
+  _PressuredPullSyncService({
+    required super.db,
+    required super.backupRepository,
+    required super.remote,
+    required super.authRepository,
+    required super.connectivity,
+  });
+
+  @override
+  Future<PullResult> pullOwnAndShared() async => const PullResult.pulled(
+    ownRowsPulled: 4,
+    sharedRowsPulled: 9,
+    photosDownloaded: 0,
+    ownImported: true,
+    sharedImported: true,
+    errors: [],
+    sharedPhotoBytesSkipped: 3,
+    sharedPhotoBudgetReason: SharedPhotoBudgetReason.storagePressure,
+  );
+}
+
 class _PhotoBytesFailedSyncService extends SyncService {
   _PhotoBytesFailedSyncService({
     required super.db,
@@ -464,6 +529,7 @@ void main() {
     // where the contract under test belongs to the ORCHESTRATOR and the push
     // RESULT has to be dictated exactly (see `_PhotoBytesFailedSyncService`).
     SyncService? syncService,
+    PublicPhotoPruneService? pruneService,
   }) {
     final connectivityFake =
         connectivityService ?? _FakeConnectivityService(connectivity);
@@ -483,6 +549,8 @@ void main() {
         // override the REAL SystemConnectivityService would be constructed
         // and would issue a live HTTP request from a unit test.
         connectivityServiceProvider.overrideWithValue(connectivityFake),
+        if (pruneService != null)
+          publicPhotoPruneServiceProvider.overrideWithValue(pruneService),
         syncServiceProvider.overrideWithValue(
           syncService ??
               SyncService(
@@ -2213,6 +2281,156 @@ void main() {
           container.read(syncOrchestratorProvider).status,
           SyncStatus.idle,
         );
+      },
+    );
+  });
+
+  group('public-photo pruning is wired to a successful pull', () {
+    test(
+      'a successful pull runs exactly ONE prune pass — before this the service '
+      'and its policy were fully built and tested but had NO production call '
+      'site, so nothing ever evicted other climbers\' cached photo bytes under '
+      'storage pressure',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final prune = _RecordingPruneService(db: db);
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          pruneService: prune,
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        await pumpEventQueue();
+
+        expect(prune.calls, 1);
+        expect(container.read(syncOrchestratorProvider).status, SyncStatus.idle);
+      },
+    );
+
+    test(
+      'a pull that downloaded ZERO photo bytes BECAUSE of storage pressure '
+      'still prunes: gating on photosDownloaded > 0 would invert against the '
+      'byte budget and leave a device that is over the watermark wedged there '
+      'forever',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final prune = _RecordingPruneService(
+          db: db,
+          reason: PublicPhotoPruneReason.relieved,
+        );
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          pruneService: prune,
+          syncService: _PressuredPullSyncService(
+            db: db,
+            backupRepository: BackupRepository(db),
+            remote: _CountingSyncRemote(),
+            authRepository: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+            connectivity: _FakeConnectivityService(NetworkStatus.wifi),
+          ),
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        await pumpEventQueue();
+
+        expect(prune.calls, 1);
+      },
+    );
+
+    test(
+      'the prune does NOT delay the pull: pullNow completes, the state is '
+      'already idle with a fresh lastSyncedAt, and the in-flight guard is '
+      'released while the sweep is still running',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final gate = Completer<void>();
+        addTearDown(() {
+          if (!gate.isCompleted) gate.complete();
+        });
+        final prune = _RecordingPruneService(db: db, gate: gate.future);
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          pruneService: prune,
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+
+        expect(prune.calls, 1, reason: 'the sweep started');
+        expect(gate.isCompleted, isFalse, reason: 'and has NOT finished');
+        final state = container.read(syncOrchestratorProvider);
+        expect(state.status, SyncStatus.idle);
+        expect(state.lastSyncedAt, isNotNull);
+        expect(state.lastPullError, isNull);
+      },
+    );
+
+    test(
+      'a prune that THROWS cannot fail the pull — it is fire-and-forget, so an '
+      'escaping error would be an unhandled async error, not a sync failure',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final prune = _RecordingPruneService(db: db, throws: true);
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          pruneService: prune,
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        await pumpEventQueue();
+
+        expect(prune.calls, 1);
+        final state = container.read(syncOrchestratorProvider);
+        expect(state.status, SyncStatus.idle);
+        expect(state.lastPullError, isNull);
+      },
+    );
+
+    test(
+      'a SIGNED-OUT pull does not prune: with no identity nothing can be '
+      'proven foreign, so there is nothing to sweep and no reason to read the '
+      'storage estimate',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final prune = _RecordingPruneService(db: db);
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(const AuthSessionState.signedOut()),
+          pruneService: prune,
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        await pumpEventQueue();
+
+        expect(prune.calls, 0);
       },
     );
   });

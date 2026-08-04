@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/data/auth_repository.dart';
+import '../../topo/data/public_photo_prune_service.dart';
 import '../data/connectivity_service.dart';
 import '../data/sync_service.dart';
 import 'backup_providers.dart';
@@ -781,6 +782,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             lastPushError: state.lastPushError,
             lastPushWarning: state.lastPushWarning,
           );
+          // AFTER the state write, and deliberately NOT awaited — see
+          // [_prunePublicPhotosBestEffort].
+          unawaited(_prunePublicPhotosBestEffort());
         case SyncPullOutcome.skippedSignedOut:
           state = SyncOrchestratorState(
             status: SyncStatus.idle,
@@ -799,6 +803,70 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         lastPushError: state.lastPushError,
         lastPushWarning: state.lastPushWarning,
       );
+    }
+  }
+
+  /// Gives `PublicPhotoPruneService` its one and only production trigger.
+  ///
+  /// The service and its policy were fully built and tested but never called,
+  /// so nothing evicted other climbers' cached photo bytes under storage
+  /// pressure — which is what eventually makes the user's OWN photo imports
+  /// fail (`photo_files_web.dart`'s L3 write now throws rather than silently
+  /// producing a pixel-less row).
+  ///
+  /// WHY AFTER A PULL. A pull is the only moment bytes are ADDED to the origin
+  /// without the user doing anything, so it is the moment pressure can newly
+  /// appear. It is also the moment a prune is cheapest to justify: whatever it
+  /// evicts, the very next pull (or `MissingPhotoByteResolver`) can bring back.
+  ///
+  /// WHY ON *EVERY* SUCCESSFUL PULL, rather than only on a pull that downloaded
+  /// something. The obvious gate — `result.photosDownloaded > 0` — is actively
+  /// wrong now, because it inverts against the byte budget: a pull that is
+  /// ALREADY over the high watermark deliberately downloads ZERO shared photo
+  /// bytes ([SharedPhotoBudgetReason.storagePressure]), so gating on "bytes
+  /// arrived" would skip the prune in precisely the state that needs it, and
+  /// the device would stay wedged over the watermark forever. Running
+  /// unconditionally is also genuinely cheap: in the overwhelmingly common case
+  /// the pass is ONE `navigator.storage.estimate()` read that returns
+  /// [PublicPhotoPruneReason.belowHighWatermark] before touching the database
+  /// at all, and on native `estimate()` is always `null`, so the pass is a
+  /// permanent no-op ([PublicPhotoPruneReason.noEstimate]) — never an iOS
+  /// documents-directory eviction. The pull triggers are themselves already
+  /// bounded (sign-in, explicit refresh, and a 30s-throttled resume), so this
+  /// cannot become a hot loop. `pullNow`'s in-flight guard means at most one
+  /// pull, and therefore at most one of these, is ever outstanding.
+  ///
+  /// NOT AWAITED, on purpose: the pull's state write has already happened by
+  /// the time this starts, so the UI updates on the pull's own timing and a
+  /// housekeeping sweep can never delay a refresh spinner or hold
+  /// `_pullInFlight` open. `pruneIfUnderPressure` never throws by contract; the
+  /// try/catch is belt-and-braces for a fire-and-forget future, where an
+  /// escaping error would be unhandled.
+  ///
+  /// Observability: anything that actually deleted (or failed to delete) bytes
+  /// is logged with its full [PublicPhotoPruneOutcome] — reason, count, and the
+  /// used-fraction before/after. The two boring reasons (no pressure signal,
+  /// below the watermark) are silent, because they are what every single pull
+  /// reports and logging them would drown the console.
+  Future<void> _prunePublicPhotosBestEffort() async {
+    try {
+      final outcome = await ref
+          .read(publicPhotoPruneServiceProvider)
+          .pruneIfUnderPressure();
+      switch (outcome.reason) {
+        case PublicPhotoPruneReason.noEstimate:
+        case PublicPhotoPruneReason.belowHighWatermark:
+          break;
+        case PublicPhotoPruneReason.unknownSession:
+        case PublicPhotoPruneReason.nothingPrunable:
+        case PublicPhotoPruneReason.relieved:
+        case PublicPhotoPruneReason.estimateLost:
+        case PublicPhotoPruneReason.capReached:
+        case PublicPhotoPruneReason.poolExhausted:
+          debugPrint('SyncOrchestrator: public-photo prune: $outcome');
+      }
+    } catch (e, st) {
+      debugPrint('SyncOrchestrator: public-photo prune threw: $e\n$st');
     }
   }
 
