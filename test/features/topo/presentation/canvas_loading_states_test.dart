@@ -29,6 +29,7 @@ import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/data/photo_files.dart' show PhotoWriteFailure;
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
@@ -50,6 +51,17 @@ class _GatedLoadPhotoRepository extends PhotoRepository {
     await gate.future;
     return super.loadOriginal(wallId);
   }
+}
+
+/// Fails [loadOriginal] outright — the terminal case for the photo-pending
+/// placeholder, which is handed a hardcoded `isLoading: true` and can therefore
+/// only ever be resolved by its parent condition going false.
+class _FailingLoadPhotoRepository extends PhotoRepository {
+  _FailingLoadPhotoRepository(super.db, {required super.nowMs});
+
+  @override
+  Future<PhotoRef?> loadOriginal(String wallId) async =>
+      throw StateError('the photo row could not be read');
 }
 
 /// Holds route WRITES open, so the commit button's pending state is observable.
@@ -183,6 +195,55 @@ void main() {
       await tester.pump(const Duration(milliseconds: 50));
       expect(find.byKey(const Key('topo-photo-pending')), findsNothing);
       expect(find.byKey(const Key('topo-empty-state')), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'a photo restore that FAILS still resolves the placeholder: the gate is '
+    'hardcoded to isLoading:true, so a shimmer nothing can end would be worse '
+    'than the empty state it replaced',
+    (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      final container = ProviderContainer(
+        retry: (_, _) => null,
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          photoRepositoryProvider.overrideWithValue(
+            _FailingLoadPhotoRepository(db, nowMs: () => 1000),
+          ),
+        ],
+      );
+      addTearDown(db.close);
+      addTearDown(container.dispose);
+
+      final crud = container.read(libraryCrudRepositoryProvider);
+      final area = await crud.createArea('Area');
+      final sector = await crud.createSector(area.id, 'Sector');
+      final wall = await crud.createWall(sector.id, 'Wall');
+      await tester.runAsync(() async {
+        await crud.attachPhotoToWall(
+          wall.id,
+          XFile('/tmp/canvas-loading-states-failed-restore.jpg'),
+          1000,
+          2000,
+        );
+      });
+
+      await tester.pumpWidget(wrap(container, TopoCanvasScreen(wallId: wall.id)));
+      // Well past MasiMotion.loadingRevealDelay: whatever is on screen now is
+      // the settled state, not the anti-flash window.
+      await tester.pump(const Duration(milliseconds: 600));
+
+      expect(
+        find.byKey(const Key('topo-photo-pending')),
+        findsNothing,
+        reason:
+            'the restore is over — it failed — so the placeholder must be gone; '
+            'a skeleton only its parent can end must not outlive that parent',
+      );
+      expect(find.byType(MasiSkeleton), findsNothing);
+      expect(find.byKey(const Key('topo-empty-state')), findsOneWidget);
     },
   );
 
@@ -406,6 +467,69 @@ void main() {
       await tester.pump(const Duration(milliseconds: 150));
       expect(find.byKey(const Key('topo-routes-loading')), findsOneWidget);
       expect(find.text('Loading routes…'), findsOneWidget);
+    },
+  );
+
+  testWidgets(
+    'and it clears on EVERY way a switch can end — including the failed read, '
+    'the exit path that used to leave isSwitchingPhoto stuck true. The cue is '
+    'handed a hardcoded isLoading:true, so this condition is the only thing '
+    'that can ever end it',
+    (tester) async {
+      final seeded = await seedWallWithPhoto(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      final transformationController = TransformationController();
+      addTearDown(transformationController.dispose);
+
+      Future<void> pumpWith(DrawState drawState) async {
+        await tester.pumpWidget(
+          wrap(
+            seeded.container,
+            Scaffold(
+              body: TopoCanvasBody(
+                wallId: seeded.wallId,
+                imagePath: '/tmp/canvas-loading-states-test.jpg',
+                imageSize: const Size(1000, 2000),
+                drawState: drawState,
+                transformationController: transformationController,
+              ),
+            ),
+          ),
+        );
+      }
+
+      await pumpWith(const DrawState(isSwitchingPhoto: true));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byKey(const Key('topo-routes-loading')), findsOneWidget);
+
+      // (1) The read SUCCEEDED and found nothing — still zero routes, but the
+      // switch is settled, so the cue must go rather than sit over an empty
+      // topo forever.
+      await pumpWith(const DrawState());
+      await tester.pump();
+      expect(find.byKey(const Key('topo-routes-loading')), findsNothing);
+
+      // (2) The read FAILED. `loadForWall`'s catch settles the switch exactly
+      // like this — isSwitchingPhoto false, routes still empty, the failure
+      // recorded — and that must clear the cue too: a "Loading routes…" pill
+      // that never resolves is precisely the lie this cue exists to prevent.
+      await pumpWith(const DrawState(isSwitchingPhoto: true));
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byKey(const Key('topo-routes-loading')), findsOneWidget);
+      await pumpWith(
+        const DrawState(
+          lastLoadFailure: RouteLoadException(
+            failure: PhotoWriteFailure.unknown,
+            wallId: 'w',
+            photoId: 'p',
+            cause: 'boom',
+          ),
+        ),
+      );
+      await tester.pump();
+      expect(find.byKey(const Key('topo-routes-loading')), findsNothing);
     },
   );
 

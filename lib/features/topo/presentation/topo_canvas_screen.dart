@@ -2206,6 +2206,20 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// fills this whole area) rather than a spinner, and behind
   /// [MasiLoadingGate]'s reveal delay so the overwhelmingly common fast restore
   /// still paints nothing but the canvas backdrop.
+  ///
+  /// The `isLoading: true` below is HARDCODED on purpose, and that is safe here
+  /// for one specific reason worth stating because it reads like a stuck
+  /// skeleton: this widget only exists while `photoPending` is true, so the
+  /// resolution mechanism is the CALLER's condition going false, not the gate's
+  /// flag. What makes that terminal is that `photoPending` requires
+  /// `!_initialPhotoLoadSettled`, and [_loadInitialPhotoForWall] sets that flag
+  /// in a `finally` — so the restore FAILING settles it just as surely as the
+  /// restore succeeding, and the placeholder always gives way (to the real
+  /// canvas, or to the empty state). Pinned by
+  /// `canvas_loading_states_test.dart`'s "a photo restore that FAILS still
+  /// resolves the placeholder". If you ever make that flag conditional, this gate
+  /// becomes a shimmer nothing can end — which is worse than the premature empty
+  /// state this whole state exists to replace.
   Widget _buildPhotoPendingState(BuildContext context, MasiColors colors) {
     return ColoredBox(
       key: const Key('topo-photo-pending'),
@@ -2523,6 +2537,21 @@ class TopoCanvasBody extends ConsumerWidget {
                   // switch is already over, or is a mid-switch commit carrying
                   // forward) and never in the embedded preview, which paints no
                   // floating chrome by contract.
+                  //
+                  // The `isLoading: true` below is HARDCODED on purpose, and
+                  // reads like a stuck skeleton, so: the flag it is gated on is
+                  // the resolution mechanism, not the gate's own argument. What
+                  // makes that terminal is that DrawController settles
+                  // `isSwitchingPhoto` on EVERY exit path — `loadForWall`'s
+                  // success, `loadForWall`'s catch (see its UF-2 doc: a stuck
+                  // `true` there once carried stray routes into an unrelated
+                  // photo and PERSISTED them), and `cancelPhotoSwitch` when a
+                  // switch turns out to have nothing to load. Pinned by
+                  // `canvas_loading_states_test.dart`'s "and it clears on EVERY
+                  // way a switch can end". Widen this condition to something a
+                  // settle does not clear (a recorded failure, say) and the pill
+                  // becomes a "Loading routes…" that never resolves — the exact
+                  // lie it was added to prevent.
                   if (drawState.isSwitchingPhoto && !hasRoutes && !embedded)
                     Positioned(
                       left: MasiSpacing.md,
