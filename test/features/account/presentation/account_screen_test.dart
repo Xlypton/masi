@@ -121,10 +121,15 @@ class FakeAuthRepository implements AuthRepository {
     if (gate != null) await gate.future;
   }
 
+  /// Holds `signInWithGoogle` open so its pending cue can be inspected.
+  Completer<void>? googleSignInGate;
+
   @override
   Future<void> signInWithGoogle() async {
     googleSignInCalls++;
     if (googleSignInError != null) throw googleSignInError!;
+    final gate = googleSignInGate;
+    if (gate != null) await gate.future;
   }
 
   @override
@@ -177,6 +182,55 @@ Widget _wrap(ProviderContainer container, Widget child) {
 Future<void> _drain(WidgetTester tester) async {
   await drainAsync(tester, rounds: 6, settle: false);
   await tester.pumpAndSettle();
+}
+
+/// Taps "Continue with Google" under [theme], holds the sign-in open, and
+/// returns the colour its pending cue is actually painted in.
+///
+/// The button wears `MasiPendingButton.filled` over a `surface2` fill, which is
+/// exactly the combination the old hardcoded `onAccent` spinner made invisible
+/// (white on #FBFAFE in light, #1A1226 on #251F34 in dark).
+Future<Color?> _googleCueColor(WidgetTester tester, ThemeData theme) async {
+  final fakeRepo = FakeAuthRepository(const AuthSessionState.signedOut());
+  addTearDown(fakeRepo.dispose);
+  final gate = Completer<void>();
+  fakeRepo.googleSignInGate = gate;
+  final container = ProviderContainer(
+    overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+  );
+  addTearDown(container.dispose);
+
+  await tester.pumpWidget(
+    UncontrolledProviderScope(
+      container: container,
+      child: MaterialApp(theme: theme, home: const AccountScreen()),
+    ),
+  );
+  await tester.pumpAndSettle();
+
+  // `.filled`, i.e. an ElevatedButton: the M3 elevation the `.text` workaround
+  // gave up to get a visible spinner.
+  expect(
+    find.descendant(
+      of: find.byKey(const Key('account-google-signin')),
+      matching: find.byType(ElevatedButton),
+    ),
+    findsOneWidget,
+  );
+
+  await tester.tap(find.byKey(const Key('account-google-signin')));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 250));
+  final arc = tester.widget<CircularProgressIndicator>(
+    find.descendant(
+      of: find.byKey(MasiLoadingIndicator.spinnerKey),
+      matching: find.byType(CircularProgressIndicator),
+    ),
+  );
+  gate.complete();
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 600));
+  return arc.color;
 }
 
 void main() {
@@ -322,6 +376,22 @@ void main() {
   });
 
   group('#google sign-in', () {
+    testWidgets('its pending cue is painted in the LIGHT ink, not in the '
+        'invisible onAccent white', (tester) async {
+      expect(
+        await _googleCueColor(tester, MasiTheme.light),
+        MasiColors.light.ink,
+      );
+    });
+
+    testWidgets('its pending cue is painted in the DARK ink, not in the '
+        'invisible near-black onAccent', (tester) async {
+      expect(
+        await _googleCueColor(tester, MasiTheme.dark),
+        MasiColors.dark.ink,
+      );
+    });
+
     testWidgets(
       'the Continue with Google button is shown when signed out',
       (tester) async {
