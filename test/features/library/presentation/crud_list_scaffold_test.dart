@@ -1,5 +1,8 @@
+import 'dart:async';
+
 import 'package:masi/app/theme.dart';
 import 'package:masi/features/library/presentation/crud_list_scaffold.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -11,8 +14,14 @@ import 'package:flutter_test/flutter_test.dart';
 /// scaffold only ever calls [idOf]/[nameOf] on it.
 Widget _harness({
   required Future<void> Function(String item) onDelete,
-  Future<void> Function(BuildContext context, String item)? onMove,
+  Future<void> Function(
+    BuildContext context,
+    String item,
+    CrudBusyReporter reportBusy,
+  )?
+  onMove,
   Future<void> Function(String item, String newName)? onRename,
+  Future<void> Function(String name)? onCreate,
 }) {
   return MaterialApp(
     theme: MasiTheme.light,
@@ -27,7 +36,7 @@ Widget _harness({
       renameDialogTitle: 'Rename Area',
       onRetry: () {},
       onTap: (_) {},
-      onCreate: (_) async {},
+      onCreate: onCreate ?? (_) async {},
       onRename: onRename ?? (item, name) async {},
       onDelete: onDelete,
       onMove: onMove,
@@ -188,7 +197,7 @@ void main() {
         await tester.pumpWidget(
           _harness(
             onDelete: (_) async {},
-            onMove: (context, item) async {
+            onMove: (context, item, reportBusy) async {
               capturedContext = context;
               moved.add(item);
             },
@@ -253,5 +262,175 @@ void main() {
         );
       },
     );
+  });
+
+  // The state this screen simply did not have: between "the confirm sheet
+  // closed" and "the row disappeared" there was nothing on screen at all, and
+  // nothing stopping a second tap from firing a second write at the same row.
+  group('a row write in flight', () {
+    testWidgets(
+      'puts a cue on the button that was pressed, leaves the other two inert, '
+      'and swallows a second tap',
+      (tester) async {
+        final deletes = Completer<void>();
+        var deleteCalls = 0;
+        await tester.pumpWidget(
+          _harness(
+            onDelete: (_) {
+              deleteCalls++;
+              return deletes.future;
+            },
+          ),
+        );
+
+        await tester.tap(find.byKey(const Key('area-delete-Test Area')));
+        await tester.pumpAndSettle();
+
+        // While the SHEET is up the row is idle: the user is the one working,
+        // and a spinner behind a modal they are still reading is noise. (It
+        // would also make the pumpAndSettle above hang forever.)
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+
+        await tester.tap(
+          find.byKey(const Key('area-delete-confirm-Test Area')),
+        );
+        // Deliver the confirm, then cross the reveal delay: the cue is not
+        // allowed on screen for the first 180 ms, so a fast delete paints
+        // nothing at all.
+        await tester.pump();
+        expect(deleteCalls, 1);
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('area-delete-Test Area')),
+            matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+          ),
+          findsOneWidget,
+          reason: 'the cue belongs on the control the user actually pressed',
+        );
+
+        final rename = tester.widget<IconButton>(
+          find.byKey(const Key('area-rename-Test Area')),
+        );
+        expect(
+          rename.onPressed,
+          isNull,
+          reason: 'a rename racing a delete on one row is exactly the '
+              'concurrent write this guard exists to stop',
+        );
+
+        // A second delete tap while the first is still in flight must do
+        // nothing — including during the 180 ms window where the button still
+        // LOOKS idle (asserted above).
+        await tester.tap(
+          find.byKey(const Key('area-delete-Test Area')),
+          warnIfMissed: false,
+        );
+        await tester.pump();
+        expect(deleteCalls, 1);
+
+        deletes.complete();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 600));
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+        expect(
+          tester
+              .widget<IconButton>(find.byKey(const Key('area-rename-Test Area')))
+              .onPressed,
+          isNotNull,
+        );
+      },
+    );
+
+    testWidgets('a move reports its own pre-sheet read, so the tap is never '
+        'silent', (tester) async {
+      final areasRead = Completer<void>();
+      await tester.pumpWidget(
+        _harness(
+          onDelete: (_) async {},
+          // Mirrors `sectors_screen.dart`'s `_handleMove`: resolve the
+          // candidate destinations from the database FIRST (the sheet cannot
+          // be built without them), and only then hand control back.
+          onMove: (context, item, reportBusy) async {
+            reportBusy(true);
+            await areasRead.future;
+            reportBusy(false);
+          },
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('area-move-Test Area')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('area-move-Test Area')),
+          matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+        ),
+        findsOneWidget,
+        reason: 'tapping Move used to do nothing observable until the read '
+            'finished and the sheet appeared',
+      );
+
+      areasRead.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+    });
+
+    testWidgets('the create button waits on its own write, not on its own '
+        'name dialog', (tester) async {
+      final write = Completer<void>();
+      await tester.pumpWidget(
+        _harness(onDelete: (_) async {}, onCreate: (_) => write.future),
+      );
+
+      await tester.tap(find.byKey(const Key('area-add-fab')));
+      await tester.pumpAndSettle();
+
+      // The dialog is the user's turn. A cue here would sit on the one control
+      // still visible under the barrier for as long as they type — and would
+      // have hung the pumpAndSettle above.
+      expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+
+      await tester.enterText(
+        find.byKey(const Key('crud-name-field')),
+        'Squamish',
+      );
+      // The dialog's Save enables itself via setState, so it is only tappable
+      // on the following frame.
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('crud-name-submit')));
+      // `showDialog`'s future resolves only once the route has finished its
+      // EXIT transition, so the write — and therefore the cue — starts a
+      // couple of hundred ms after the tap. Pump past both that and the
+      // reveal delay.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('area-add-fab')),
+          matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+        ),
+        findsOneWidget,
+      );
+      expect(
+        tester.widget<ElevatedButton>(find.byKey(const Key('area-add-fab'))).onPressed,
+        isNull,
+        reason: 'a second insert from a second tap is the bug this closes',
+      );
+      // The label keeps its box while the cue is over it, so the button cannot
+      // change width mid-write.
+      expect(find.text('New Area'), findsOneWidget);
+
+      write.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+    });
   });
 }

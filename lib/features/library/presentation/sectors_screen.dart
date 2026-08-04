@@ -52,7 +52,8 @@ class SectorsScreen extends ConsumerWidget {
       onDelete: (sector) async {
         await repo.softDeleteSector(sector.id);
       },
-      onMove: (context, sector) => _handleMove(context, ref, sector),
+      onMove: (context, sector, reportBusy) =>
+          _handleMove(context, ref, sector, reportBusy),
     );
   }
 
@@ -63,16 +64,34 @@ class SectorsScreen extends ConsumerWidget {
   /// [showMoveTargetPicker], and on a selection calls [LibraryCrudRepository
   /// .moveSector] followed by a confirmation [SnackBar]. A no-op if the
   /// sheet is dismissed without a selection.
+  ///
+  /// [reportBusy] is what makes the tap feel like anything at all (see
+  /// [CrudBusyReporter]). The candidate list is a database read that has to
+  /// finish BEFORE the sheet can be built, so until this reported it, tapping
+  /// "Move" did nothing observable for however long that read took — the
+  /// classic "is this button broken?" gap. It is reported twice: once around
+  /// the read, and again around the write once a destination is picked. In
+  /// between, while the sheet is up, the row goes deliberately quiet again:
+  /// nothing is loading while the user chooses.
   Future<void> _handleMove(
     BuildContext context,
     WidgetRef ref,
     SectorRef sector,
+    CrudBusyReporter reportBusy,
   ) async {
     final repo = ref.read(libraryCrudRepositoryProvider);
     // §1c: the single local-data uid door — never `authStateProvider.asData`,
     // which reads null on AsyncError too.
     final myUid = ref.read(effectiveUidProvider);
-    final ownAreas = await repo.listOwnAreas(myUid);
+    reportBusy(true);
+    final List<AreaRef> ownAreas;
+    try {
+      ownAreas = await repo.listOwnAreas(myUid);
+    } finally {
+      // Handed back to the user (or, on a throw, back to the caller's guard —
+      // `CrudListScaffold` wraps this whole method in `_runGuarded`).
+      reportBusy(false);
+    }
     final candidates = ownAreas
         .where((area) => area.id != sector.areaId)
         .toList();
@@ -90,6 +109,7 @@ class SectorsScreen extends ConsumerWidget {
     );
     if (targetAreaId == null) return;
 
+    reportBusy(true);
     try {
       await repo.moveSector(sector.id, targetAreaId);
     } catch (e, st) {

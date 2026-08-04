@@ -8,6 +8,8 @@ import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/library/presentation/areas_screen.dart';
 import 'package:masi/features/library/presentation/sectors_screen.dart';
+import 'package:masi/shared/presentation/masi_async_view.dart';
+import 'package:masi/shared/presentation/masi_skeleton.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -51,13 +53,20 @@ Widget _wrap(ProviderContainer container, Widget child) {
 /// resulting Riverpod-triggered rebuilds and any in-flight route/dialog
 /// transitions.
 ///
-/// A bare `pumpAndSettle` can't be used up front: the library screens show a
-/// [CircularProgressIndicator] until the watch stream's first emission lands,
-/// and pumpAndSettle would spin forever on that unbounded animation because
-/// the fake clock never lets Drift's background isolate emit (see the M3 NOTE
-/// in test/widget_test.dart). So this first interleaves `runAsync` (real
-/// clock, lets Drift emit) with a fixed-duration `pump` (fake clock, advances
-/// rebuilds) to get past the spinner, and only THEN settles.
+/// A bare `pumpAndSettle` can't be used up front: until the watch stream's
+/// first emission lands the library screens render a shimmering
+/// [MasiSkeletonList], and pumpAndSettle would spin forever on that unbounded
+/// animation because the fake clock never lets Drift's background isolate emit
+/// (see the M3 NOTE in test/widget_test.dart). So this first interleaves
+/// `runAsync` (real clock, lets Drift emit) with a fixed-duration `pump` (fake
+/// clock, advances rebuilds) to get past the loading state, and only THEN
+/// settles.
+///
+/// Note the interaction with `MasiMotion.loadingRevealDelay`: phase 1 advances
+/// 180 ms of FAKE time in total, i.e. right up to the skeleton's reveal, so a
+/// stream that does emit gets its data on screen before any shimmer starts and
+/// the trailing settle stays safe. A provider that never emits at all must not
+/// use this helper.
 Future<void> _drain(WidgetTester tester) async {
   await drainAsync(tester, rounds: 6, settle: false);
   // The Drift-backed stream has now emitted (real data on screen), so no
@@ -265,7 +274,8 @@ void main() {
   });
 
   group('A5: loading and error AsyncValue states', () {
-    testWidgets('loading shows a spinner', (tester) async {
+    testWidgets('loading shows a shaped skeleton, and only after the '
+        'anti-flash window', (tester) async {
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       final container = ProviderContainer(
@@ -273,7 +283,8 @@ void main() {
           appDatabaseProvider.overrideWithValue(db),
           nowMsProvider.overrideWithValue(() => 1000),
           // A stream backed by a never-completing future stays in
-          // AsyncLoading indefinitely, so the spinner is always on screen.
+          // AsyncLoading indefinitely, so the loading state is always on
+          // screen.
           areasProvider.overrideWith(
             (ref) => Completer<List<AreaRef>>().future.asStream(),
           ),
@@ -284,7 +295,26 @@ void main() {
       await tester.pumpWidget(_wrap(container, const AreasScreen()));
       await tester.pump();
 
-      expect(find.byType(CircularProgressIndicator), findsOneWidget);
+      // Inside `MasiMotion.loadingRevealDelay` nothing loading-ish may be
+      // painted at all — a skeleton that flashes for 80 ms reads as a bug.
+      expect(
+        find.byKey(MasiSkeletonList.listKey),
+        findsNothing,
+        reason: 'a load that resolves inside the reveal delay must paint no '
+            'loading state whatsoever',
+      );
+
+      // Past it: the shape of the list that is coming, not a bare spinner.
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byKey(MasiSkeletonList.listKey), findsOneWidget);
+      expect(find.byType(MasiSkeletonListRow), findsWidgets);
+      expect(
+        find.text('No areas yet — tap + to add one'),
+        findsNothing,
+        reason: 'the empty state must never stand in for "still loading" — '
+            'that is the confusion the skeleton exists to end',
+      );
+      // The shimmer never settles, so this test must not pumpAndSettle.
     });
 
     testWidgets(
@@ -295,6 +325,14 @@ void main() {
         addTearDown(db.close);
         var callCount = 0;
         final container = ProviderContainer(
+          // Riverpod v3 re-runs a failed provider on its own, with exponential
+          // backoff. That is not what this test is about, and leaving it on
+          // makes it lie in both directions: `callCount` climbs without anyone
+          // pressing anything, and whichever backoff timer is pending when the
+          // body ends trips flutter_test's "a Timer is still pending" invariant
+          // (the container outlives the tree — `addTearDown` runs LIFO). Off,
+          // so every re-invocation counted below is the MANUAL retry.
+          retry: (retryCount, error) => null,
           overrides: [
             appDatabaseProvider.overrideWithValue(db),
             nowMsProvider.overrideWithValue(() => 1000),
@@ -309,18 +347,21 @@ void main() {
         await tester.pumpWidget(_wrap(container, const AreasScreen()));
         await _drain(tester);
 
-        expect(find.textContaining('Something went wrong'), findsOneWidget);
-        expect(find.byKey(const Key('area-retry')), findsOneWidget);
+        // The failure sentence names what could not be loaded — "Something
+        // went wrong: <exception>" told the user nothing they could act on.
+        expect(find.text("Couldn't load your areas"), findsOneWidget);
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+        expect(find.byKey(MasiAsyncView.retryKey), findsOneWidget);
         final callsAfterFirstBuild = callCount;
 
-        await tester.tap(find.byKey(const Key('area-retry')));
+        await tester.tap(find.byKey(MasiAsyncView.retryKey));
         await _drain(tester);
 
         // Invalidation re-creates the provider (re-invoking its create
         // callback), and the screen keeps rendering the error state without
         // crashing.
         expect(callCount, greaterThan(callsAfterFirstBuild));
-        expect(find.textContaining('Something went wrong'), findsOneWidget);
+        expect(find.text("Couldn't load your areas"), findsOneWidget);
       },
     );
   });

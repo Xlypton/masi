@@ -22,6 +22,7 @@ import 'package:masi/features/library/presentation/sectors_screen.dart';
 import 'package:masi/features/library/presentation/topos_screen.dart';
 import 'package:masi/features/library/presentation/walls_screen.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -432,6 +433,11 @@ void main() {
           addTearDown(db.close);
           var callCount = 0;
           final container = ProviderContainer(
+            // See `areas_screen_test.dart`'s twin: Riverpod v3's own backoff
+            // retries would both inflate `callCount` and leave a pending timer
+            // behind, so the only re-invocation this test can observe is the
+            // manual one it performs.
+            retry: (retryCount, error) => null,
             overrides: [
               appDatabaseProvider.overrideWithValue(db),
               nowMsProvider.overrideWithValue(() => 1000),
@@ -446,11 +452,16 @@ void main() {
           await tester.pumpWidget(_wrap(container, const AreasScreen()));
           await _drain(tester);
 
-          expect(find.textContaining('Something went wrong'), findsOneWidget);
-          expect(find.byKey(const Key('area-retry')), findsOneWidget);
+          // Same intent as before, restated against the shared failure state
+          // the screen now delegates to (`MasiAsyncView`): a sentence naming
+          // what could not be loaded, plus something to press. The generic
+          // "Something went wrong: <exception>" line and the per-entity
+          // `area-retry` key are gone, not the requirement.
+          expect(find.text("Couldn't load your areas"), findsOneWidget);
+          expect(find.byKey(MasiAsyncView.retryKey), findsOneWidget);
           final callsAfterFirstBuild = callCount;
 
-          await tester.tap(find.byKey(const Key('area-retry')));
+          await tester.tap(find.byKey(MasiAsyncView.retryKey));
           await _drain(tester);
 
           expect(callCount, greaterThan(callsAfterFirstBuild));
