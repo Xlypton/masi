@@ -378,11 +378,12 @@ CREATE POLICY "profiles_any_select" ON public.profiles FOR SELECT TO authenticat
 -- Full-snapshot cloud backup: public.backups
 -- ============================================================================
 --
--- This table ALREADY EXISTS in the live project but was missing from this
--- file, which is the schema-drift bug class behind #64/#65/#72 — a fresh
--- project provisioned from this file alone would come up without it, and
--- `CloudBackupService`'s push/pull would fail on every call. The delta script
--- for existing projects is `migrations/20260804_backups_table.sql`.
+-- This table was ABSENT from the live project until it was created by hand
+-- on 2026-08-04 (Management API DDL against project ref
+-- mnaipcqbkqzffgvxpato) and verified against information_schema +
+-- pg_policies. It is now APPLIED and LIVE in this exact shape. The delta
+-- script for existing projects is `migrations/20260804_backups_table.sql`,
+-- kept byte-equivalent in effect to what was applied.
 --
 -- ONE ROW PER USER, keyed by the auth uid: `SupabaseBackupRemote.fetchSnapshot`
 -- (`lib/features/backup/data/backup_remote.dart`) reads it with
@@ -397,24 +398,26 @@ CREATE POLICY "profiles_any_select" ON public.profiles FOR SELECT TO authenticat
 -- client. The whole Drift snapshot (including its own camelCase
 -- `schemaVersion` stamp) lives inside the `snapshot` JSONB blob.
 CREATE TABLE IF NOT EXISTS public.backups (
-  -- Compared against `auth.uid()` (a uuid) directly by the policy below, so
-  -- this is UUID rather than the TEXT used for the sync tables' "ownerId"
-  -- (which are compared against `auth.uid()::text`).
-  user_id UUID PRIMARY KEY NOT NULL,
+  -- TEXT, compared via `(auth.uid())::text` by the policy below — matching
+  -- the convention every OTHER policy in this database uses (e.g.
+  -- `areas."ownerId" = (auth.uid())::text`), not the UUID-vs-uid() direct
+  -- comparison this table used before the live shape was verified.
+  user_id text PRIMARY KEY NOT NULL,
   -- `BackupRepository.exportSnapshot()`'s map, verbatim:
   -- `{schemaVersion: <int>, tables: {profiles: [...], areas: [...], ...}}`.
-  snapshot JSONB NOT NULL,
+  snapshot jsonb NOT NULL,
   -- Duplicates the blob's own `schemaVersion` so the ceiling check can be
-  -- applied without parsing megabytes of JSON. NOT NULL because the client
-  -- always writes it — but the CLIENT no longer requires it: a missing or
-  -- non-int value reads back as "no claim was made" and stays importable
-  -- (see `RemoteSnapshot.schemaVersion`), matching
-  -- `BackupRepository.assertRestorable`.
-  schema_version INTEGER NOT NULL,
+  -- applied without parsing megabytes of JSON. Intentionally NULLABLE: a
+  -- missing or non-int value reads back as "no claim was made" and stays
+  -- importable (see `RemoteSnapshot.schemaVersion`), matching
+  -- `BackupRepository.assertRestorable` exactly — making this NOT NULL would
+  -- reintroduce the hard-cast failure mode that nullability exists to avoid.
+  schema_version integer,
   -- ISO-8601 UTC, written by the client on every upsert
   -- (`DateTime.now().toUtc().toIso8601String()`) and parsed back with
-  -- `DateTime.parse`.
-  updated_at TIMESTAMPTZ NOT NULL
+  -- `DateTime.parse`. DEFAULT now() only backstops rows inserted without an
+  -- explicit value; the client always supplies one.
+  updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 -- ---------- PRIVILEGES (RLS still restricts WHICH rows) ----------
@@ -433,4 +436,4 @@ ALTER TABLE public.backups ENABLE ROW LEVEL SECURITY;
 -- a published wall grants SELECT to others.
 DROP POLICY IF EXISTS "backups_owner_all" ON public.backups;
 CREATE POLICY "backups_owner_all" ON public.backups FOR ALL TO authenticated
-  USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
+  USING (user_id = (auth.uid())::text) WITH CHECK (user_id = (auth.uid())::text);

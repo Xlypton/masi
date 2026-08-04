@@ -135,7 +135,10 @@ void main() {
       );
       expect(
         schemaSql,
-        contains('USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid())'),
+        contains(
+          'USING (user_id = (auth.uid())::text) '
+          'WITH CHECK (user_id = (auth.uid())::text)',
+        ),
       );
     });
 
