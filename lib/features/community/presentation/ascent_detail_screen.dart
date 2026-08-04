@@ -2,8 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_skeleton.dart';
 import '../../account/application/profile_providers.dart';
+import '../../logbook/application/ascents_providers.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
 import '../application/ascent_detail_providers.dart';
@@ -11,6 +14,7 @@ import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
 import '../data/comments_repository.dart';
+import 'community_shared.dart';
 
 /// Read-only detail view for a single shared ("community") ascent log
 /// (Feature #12, public opt-in ascent logs): the climber's resolved display
@@ -36,6 +40,28 @@ class AscentDetailScreen extends ConsumerStatefulWidget {
 class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
   final _commentController = TextEditingController();
 
+  /// How long [_resolveAuthorName] is willing to wait for a display name that
+  /// has not resolved yet. A bound, not a timing assumption: the provider
+  /// normally answers in a microtask, and if it never does the comment still
+  /// posts (see that method).
+  static const Duration _authorNameTimeout = Duration(seconds: 3);
+
+  /// The OPTIMISTIC liked state: what this device just did, shown immediately,
+  /// until [hasLikedAscentProvider] has caught up with it. `null` means "no
+  /// pending toggle — trust the provider".
+  ///
+  /// A like is the one action on this screen that must not show a spinner. It
+  /// is a single reversible bit whose whole value is that it feels instant;
+  /// a heart that greys out and spins for a round trip reads as broken, and
+  /// the modern behaviour — flip now, roll back and say so if the write fails
+  /// — is also the honest one here, because the write is a local Drift row that
+  /// essentially always succeeds (sync pushes it later, on its own schedule).
+  bool? _likeOverride;
+
+  /// In-flight guard for [_toggleLike]. The like button had none, so two quick
+  /// taps ran two toggles at one row.
+  bool _likeInFlight = false;
+
   @override
   void dispose() {
     _commentController.dispose();
@@ -43,27 +69,93 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
   }
 
   Future<void> _toggleLike() async {
-    await ref.read(likesRepositoryProvider).toggleAscentLike(widget.ascentId);
-    if (!mounted) return;
+    if (_likeInFlight) return;
+    final ascentId = widget.ascentId;
+    final current =
+        _likeOverride ?? ref.read(hasLikedAscentProvider(ascentId)).value ?? false;
+    _likeInFlight = true;
+    // Instant feedback, before any await.
+    setState(() => _likeOverride = !current);
+
+    try {
+      await ref.read(likesRepositoryProvider).toggleAscentLike(ascentId);
+    } catch (error) {
+      _likeInFlight = false;
+      if (!mounted) return;
+      // Roll the glyph back to whatever the provider says, and say so — an
+      // optimistic update that silently reverts is worse than no update.
+      setState(() => _likeOverride = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't save your like — please try again")),
+      );
+      return;
+    }
+
+    if (!mounted) {
+      _likeInFlight = false;
+      return;
+    }
     // hasLikedAscentProvider is a one-shot FutureProvider (mirrors
     // hasLikedWallProvider — see CommunityTopoDetailScreen._toggleLike's
-    // identical comment) — invalidate it so the heart glyph flips right
-    // away. likeCountForAscentProvider needs no such nudge: it's a live
-    // StreamProvider that re-emits on its own once the write above lands.
-    ref.invalidate(hasLikedAscentProvider(widget.ascentId));
+    // identical comment), so it has to be refreshed by hand. `refresh(.future)`
+    // rather than `invalidate`: the override is only safe to drop once the
+    // REFRESHED answer is in, and an invalidated provider still reports its
+    // stale value until then — dropping the override any earlier flickers the
+    // heart back through the pre-tap state.
+    //
+    // likeCountForAscentProvider needs no nudge at all: it's a live
+    // StreamProvider that re-emits on its own once the write above lands. The
+    // count is deliberately NOT part of the optimistic update — the glyph is
+    // what the tap was about, and hand-incrementing a number that a stream is
+    // about to correct is how a wrong count gets on screen.
+    try {
+      // The refreshed value itself is not needed here — what matters is that
+      // the provider has caught up before the override is dropped.
+      // ignore: unused_result
+      await ref.refresh(hasLikedAscentProvider(ascentId).future);
+    } catch (_) {
+      // The write DID land; a failed re-read is not worth a message. Falling
+      // through drops the override, so the provider's own state governs.
+    }
+    _likeInFlight = false;
+    if (mounted) setState(() => _likeOverride = null);
+  }
+
+  /// The `authorName` to stamp on a new comment, waiting out a display name
+  /// that has not resolved YET rather than treating it as absent.
+  ///
+  /// Per this ticket's spec, an ascent comment's authorship comes from the
+  /// signed-in user's own PROFILE display name ([myDisplayNameProvider]) rather
+  /// than `CommunityTopoDetailScreen`'s email-derived
+  /// `currentAuthorNameProvider` — matching `LogAscentSheet._save`'s identical
+  /// resolution for the same `Ascents.authorName` column. `null` is a legitimate
+  /// answer (signed out, or no name set) and posts an unattributed comment.
+  ///
+  /// What was NOT legitimate was reading `.asData?.value` unconditionally: that
+  /// is null for "hasn't answered yet" just as much as for "no name", and the
+  /// provider resolves asynchronously (its uid comes from `authStateChanges()`),
+  /// so a comment posted in the first instants of this screen was stored
+  /// unattributed forever for a user who has a perfectly good name. The post
+  /// button is a pending control now, so waiting costs a brief spinner instead.
+  /// Every failure mode degrades to the old behaviour: on timeout or error, the
+  /// comment posts with whatever is known by then.
+  Future<String?> _resolveAuthorName() async {
+    final resolved = ref.read(myDisplayNameProvider);
+    if (resolved.hasValue) return resolved.value;
+    try {
+      return await ref
+          .read(myDisplayNameProvider.future)
+          .timeout(_authorNameTimeout);
+    } catch (_) {
+      return ref.read(myDisplayNameProvider).asData?.value;
+    }
   }
 
   Future<void> _submitComment() async {
     final body = _commentController.text.trim();
     if (body.isEmpty) return;
-    // Per this ticket's spec: an ascent comment's authorship is stamped from
-    // the signed-in user's own PROFILE display name (`myDisplayNameProvider`)
-    // rather than `CommunityTopoDetailScreen`'s email-derived
-    // `currentAuthorNameProvider` — matches `LogAscentSheet._save`'s
-    // identical `authorName` resolution for the same `Ascents.authorName`
-    // column. `null` while signed out / no name set — the comment posts with
-    // no author name rather than falling back to a stale "Anonymous" here.
-    final authorName = ref.read(myDisplayNameProvider).asData?.value;
+    final authorName = await _resolveAuthorName();
+    if (!mounted) return;
     await ref
         .read(commentsRepositoryProvider)
         .addAscentComment(
@@ -103,28 +195,26 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
         title: const Text('Ascent'),
       ),
       body: SafeArea(
-        child: asyncEntry.when(
-          data: (entry) {
+        child: MasiAsyncView<SharedAscentEntry?>(
+          value: asyncEntry,
+          errorMessage: "Couldn't load this ascent",
+          // Same call as the Feed/Map make: `sharedAscentsProvider` is a local
+          // Drift stream, so its raw error object is not a sentence.
+          showErrorDetail: false,
+          onRetry: () => ref.invalidate(sharedAscentsProvider),
+          skeleton: (context) => const _AscentDetailSkeleton(),
+          data: (context, entry) {
             if (entry == null) {
               return _NotFoundState(colors: colors);
             }
             return _AscentDetailBody(
               entry: entry,
               commentController: _commentController,
+              likedOverride: _likeOverride,
               onToggleLike: _toggleLike,
               onSubmitComment: _submitComment,
             );
           },
-          loading: () => const Center(
-            key: Key('ascent-detail-loading'),
-            child: CircularProgressIndicator(),
-          ),
-          error: (error, stackTrace) => Center(
-            child: Text(
-              'Something went wrong: $error',
-              key: const Key('ascent-detail-error'),
-            ),
-          ),
         ),
       ),
     );
@@ -140,12 +230,19 @@ class _AscentDetailBody extends ConsumerWidget {
   const _AscentDetailBody({
     required this.entry,
     required this.commentController,
+    required this.likedOverride,
     required this.onToggleLike,
     required this.onSubmitComment,
   });
 
   final SharedAscentEntry entry;
   final TextEditingController commentController;
+
+  /// The parent's optimistic liked state, winning over
+  /// [hasLikedAscentProvider] while a toggle is in flight — see
+  /// `_AscentDetailScreenState._likeOverride`.
+  final bool? likedOverride;
+
   final Future<void> Function() onToggleLike;
   final Future<void> Function() onSubmitComment;
 
@@ -157,7 +254,8 @@ class _AscentDetailBody extends ConsumerWidget {
 
     final likeCount =
         ref.watch(likeCountForAscentProvider(ascentId)).value ?? 0;
-    final hasLiked = ref.watch(hasLikedAscentProvider(ascentId)).value ?? false;
+    final hasLiked =
+        likedOverride ?? ref.watch(hasLikedAscentProvider(ascentId)).value ?? false;
     final comments =
         ref.watch(commentsForAscentProvider(ascentId)).value ?? const [];
 
@@ -290,20 +388,90 @@ class _AscentDetailBody extends ConsumerWidget {
               valueListenable: commentController,
               builder: (context, value, _) {
                 final canSubmit = value.text.trim().isNotEmpty;
-                return IconButton(
-                  key: const Key('ascent-detail-comment-submit'),
+                // Pending, not plain: posting awaits a display-name resolution
+                // and a Drift write, and an unguarded double tap wrote the
+                // comment twice.
+                return PendingIconButton(
+                  buttonKey: const Key('ascent-detail-comment-submit'),
                   tooltip: 'Post comment',
                   icon: MasiIcon(
                     'send_check',
                     color: canSubmit ? colors.accent : colors.ink2,
                   ),
                   onPressed: canSubmit ? onSubmitComment : null,
+                  onError: (error, stackTrace) =>
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Couldn't post your comment — please try again"),
+                        ),
+                      ),
                 );
               },
             ),
           ],
         ),
       ],
+    );
+  }
+}
+
+/// The first-load placeholder for [_AscentDetailBody], shaped from that
+/// widget's own geometry: the same `MasiSpacing.lg` padding, then its four
+/// header lines at their real font sizes (climber 17 → route 24 → wall 17 →
+/// style/date 15), the 48 px like row, the divider and the "Comments" heading.
+///
+/// Text slots are scaled by [MediaQuery.textScalerOf] for the same reason the
+/// shared composites do it: an unscaled skeleton matches at the default text
+/// size and lands short of the real content at every larger one, bringing back
+/// the jump for exactly the users least able to absorb it.
+///
+/// Non-scrollable and inert (a placeholder must not be draggable or tappable),
+/// but laid out in a [ListView] so it CLIPS rather than overflowing if a very
+/// large text scale makes it taller than the screen.
+class _AscentDetailSkeleton extends StatelessWidget {
+  const _AscentDetailSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    return IgnorePointer(
+      child: ListView(
+        key: const Key('ascent-detail-skeleton'),
+        physics: const NeverScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(MasiSpacing.lg),
+        children: [
+          // The climber's name (titleMedium 17).
+          MasiSkeleton.textLine(fontSize: scaler.scale(17), widthFactor: 0.4),
+          const SizedBox(height: MasiSpacing.sm),
+          // The route title (headlineSmall 24) + its grade.
+          MasiSkeleton.textLine(fontSize: scaler.scale(24), widthFactor: 0.65),
+          const SizedBox(height: 2),
+          // The wall name (bodyMedium 17).
+          MasiSkeleton.textLine(fontSize: scaler.scale(17), widthFactor: 0.35),
+          const SizedBox(height: 2),
+          // "<style> · <date>" (titleSmall 15).
+          MasiSkeleton.textLine(fontSize: scaler.scale(15), widthFactor: 0.5),
+          const SizedBox(height: MasiSpacing.md),
+          // The like row: the heart's glyph and its count, in the 48 px slot
+          // the real row's IconButton gives it. The button's hit box is not
+          // drawn — a shimmering control invites a tap that does nothing.
+          const SizedBox(
+            height: 48,
+            child: Row(
+              children: [
+                SizedBox(
+                  width: 48,
+                  child: Center(child: MasiSkeleton.circle(diameter: 22)),
+                ),
+                MasiSkeleton.box(width: 14, height: 11, radius: 5.5),
+              ],
+            ),
+          ),
+          const Divider(),
+          // The "Comments" heading (titleMedium 17).
+          MasiSkeleton.textLine(fontSize: scaler.scale(17), widthFactor: 0.3),
+        ],
+      ),
     );
   }
 }
