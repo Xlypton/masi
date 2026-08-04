@@ -172,8 +172,8 @@ void main() {
         final value =
             (_effectiveHeaders(rules, path)['Cache-Control'] ?? const [])
                 .join(',');
-        expect(value, isNot(contains('immutable')), reason: '$path');
-        expect(value, isNot(contains('max-age=31536000')), reason: '$path');
+        expect(value, isNot(contains('immutable')), reason: path);
+        expect(value, isNot(contains('max-age=31536000')), reason: path);
       }
     });
   });
