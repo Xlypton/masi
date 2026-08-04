@@ -2,11 +2,67 @@ import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:path/path.dart' as p;
 
 import '../../../core/db/app_database.dart' as db;
+import '../../../core/storage/storage_persistence_service.dart';
 import '../../account/data/auth_repository.dart';
 import '../../topo/data/photo_files.dart';
+import '../../topo/data/public_photo_prune_service.dart'
+    show kPruneKeepNewestForeign, kPrunePressureHighWatermark;
 import 'backup_repository.dart';
 import 'connectivity_service.dart';
 import 'sync_remote.dart';
+
+/// How many OTHER climbers' photos' BYTES one [SyncService.pullOwnAndShared]
+/// will download.
+///
+/// Deliberately defined AS [kPruneKeepNewestForeign] rather than as a separate
+/// literal that happens to be the same number. The two are the two ends of one
+/// policy, and they must move together:
+///
+///  * `kPruneKeepNewestForeign` is the floor `PublicPhotoPruneService` refuses
+///    to evict at ANY storage pressure — the newest N foreign photos, i.e. the
+///    part of the community feed the user is actually browsing.
+///  * Everything beyond that floor is, by that same policy's own definition,
+///    the FIRST thing eviction throws away. Downloading more than N foreign
+///    photos in one pull is therefore work whose result the eviction policy is
+///    explicitly designed to discard first: megabytes of metered cellular
+///    traffic and origin quota spent to produce eviction candidates.
+///
+/// So the bound is not "20 feels safe", it is "never fetch more than the
+/// retention policy is willing to keep". Raise `kPruneKeepNewestForeign` and
+/// this rises with it; a future edit cannot desynchronise them without
+/// deleting this line.
+const int kSharedPhotoByteBudgetPerPull = kPruneKeepNewestForeign;
+
+/// Why a pull downloaded fewer OTHER climbers' photo bytes than it found
+/// references for.
+///
+/// This is an ADVISORY, never an error — see
+/// [PullResult.sharedPhotoBytesSkipped].
+enum SharedPhotoBudgetReason {
+  /// Nothing was withheld: every foreign photo whose bytes were missing got
+  /// fetched. The overwhelmingly common outcome once the cache is warm.
+  withinBudget,
+
+  /// [SyncService.sharedPhotoByteBudget] was reached. The remaining photos
+  /// keep their metadata and are healed on demand when actually looked at
+  /// (`MissingPhotoByteResolver`), or by a later pull.
+  budgetSpent,
+
+  /// The origin is already above [kPrunePressureHighWatermark], so this pull
+  /// downloaded ZERO foreign photo bytes rather than its usual budget —
+  /// adding megabytes to a store that is about to be pruned is pure churn.
+  storagePressure,
+}
+
+/// What one `_downloadAndRewritePhotos` pass did.
+typedef PhotoDownloadPassOutcome = ({
+  /// Distinct files actually fetched and written locally.
+  int downloaded,
+
+  /// Distinct foreign files whose bytes were NOT fetched because the pass ran
+  /// out of budget (or had none to begin with, under storage pressure).
+  int skippedForBudget,
+});
 
 /// How much of the signed-in user's own data one [SyncService.pushOwn] call
 /// sends.
@@ -237,6 +293,8 @@ class PullResult {
     required this.ownImported,
     required this.sharedImported,
     required this.errors,
+    this.sharedPhotoBytesSkipped = 0,
+    this.sharedPhotoBudgetReason = SharedPhotoBudgetReason.withinBudget,
   }) : outcome = SyncPullOutcome.pulled;
 
   const PullResult.skippedSignedOut()
@@ -246,7 +304,9 @@ class PullResult {
       photosDownloaded = 0,
       ownImported = false,
       sharedImported = false,
-      errors = const [];
+      errors = const [],
+      sharedPhotoBytesSkipped = 0,
+      sharedPhotoBudgetReason = SharedPhotoBudgetReason.withinBudget;
 
   final SyncPullOutcome outcome;
 
@@ -294,6 +354,36 @@ class PullResult {
   /// when every section succeeded (the common case).
   final List<String> errors;
 
+  /// Number of distinct OTHER climbers' photo files this pull deliberately did
+  /// NOT download, because [SyncService.sharedPhotoByteBudget] was spent or
+  /// because the origin is already under storage pressure (see
+  /// [sharedPhotoBudgetReason]).
+  ///
+  /// DELIBERATELY NOT AN ERROR, and deliberately not in [errors]. This is the
+  /// pull-side twin of [PushSyncResult.photosMissingLocalBytes] /
+  /// `SyncOrchestratorState.lastPushWarning`: a settled, intended fact about a
+  /// successful sync, not a retryable failure. `SyncOrchestrator._runPull`
+  /// derives `lastPullError` exclusively from [errors], so keeping this out of
+  /// that list is what stops the bound from flipping [SyncStatus.error],
+  /// withholding a fresh `lastSyncedAt`, arming the backoff loop, or lighting
+  /// up the Feed/Library "Couldn't sync — retry" empty states. The pull DID
+  /// succeed; there is simply less of other people's cache on this device than
+  /// the cloud could have supplied.
+  ///
+  /// Nothing is lost by it either: every withheld photo's metadata row imported
+  /// normally, so the topo, its routes, grades and comments all read offline —
+  /// only the picture is absent, and `MissingPhotoByteResolver` fetches that one
+  /// photo's bytes on demand the moment it is actually looked at.
+  final int sharedPhotoBytesSkipped;
+
+  /// Why [sharedPhotoBytesSkipped] is what it is — enough to tell "the pull hit
+  /// its normal budget" apart from "this device is nearly out of storage", which
+  /// are very different things to see in a bug report.
+  ///
+  /// [SharedPhotoBudgetReason.withinBudget] whenever
+  /// [sharedPhotoBytesSkipped] is 0.
+  final SharedPhotoBudgetReason sharedPhotoBudgetReason;
+
   bool get didPull => outcome == SyncPullOutcome.pulled;
 
   @override
@@ -301,7 +391,9 @@ class PullResult {
       'PullResult(outcome: $outcome, ownRowsPulled: $ownRowsPulled, '
       'sharedRowsPulled: $sharedRowsPulled, '
       'photosDownloaded: $photosDownloaded, ownImported: $ownImported, '
-      'sharedImported: $sharedImported, errors: $errors)';
+      'sharedImported: $sharedImported, errors: $errors, '
+      'sharedPhotoBytesSkipped: $sharedPhotoBytesSkipped, '
+      'sharedPhotoBudgetReason: ${sharedPhotoBudgetReason.name})';
 }
 
 /// Outcome of one [SyncService._uploadOwnPhotos] pass.
@@ -378,6 +470,8 @@ class SyncService {
     PhotoFiles? photoFiles,
     bool Function()? wifiOnly,
     Map<String, List<String>>? pushRequiredFields,
+    StoragePersistenceService? storage,
+    int? sharedPhotoByteBudget,
   }) : _db = db, // ignore: prefer_initializing_formals
        _backupRepository = backupRepository, // ignore: prefer_initializing_formals
        _remote = remote, // ignore: prefer_initializing_formals
@@ -385,7 +479,10 @@ class SyncService {
        _connectivity = connectivity, // ignore: prefer_initializing_formals
        _photoFiles = photoFiles ?? PhotoFiles(),
        _wifiOnly = wifiOnly ?? (() => false),
-       _pushRequiredFields = pushRequiredFields ?? syncRequiredFields;
+       _pushRequiredFields = pushRequiredFields ?? syncRequiredFields,
+       _storage = storage ?? const PlatformStoragePersistenceService(),
+       sharedPhotoByteBudget =
+           sharedPhotoByteBudget ?? kSharedPhotoByteBudgetPerPull;
 
   final db.AppDatabase _db;
   final BackupRepository _backupRepository;
@@ -394,6 +491,22 @@ class SyncService {
   final ConnectivityService _connectivity;
   final PhotoFiles _photoFiles;
   final bool Function() _wifiOnly;
+
+  /// The origin's usage/quota reading, used ONLY to decide whether this pull
+  /// should fetch OTHER climbers' photo bytes at all (see
+  /// [pullOwnAndShared]). Defaults to the real platform delegate, which on
+  /// native and under `flutter test` is the inert stub whose `estimate()` is
+  /// always `null` — i.e. "no pressure signal", which degrades to the plain
+  /// count budget, never to zero.
+  final StoragePersistenceService _storage;
+
+  /// How many OTHER climbers' photo files one [pullOwnAndShared] may download.
+  /// Defaults to [kSharedPhotoByteBudgetPerPull]; injectable so a test can
+  /// assert the cap with two photos instead of twenty-one.
+  ///
+  /// NEVER applies to the signed-in user's OWN photos, on either side of the
+  /// pull — see [pullOwnAndShared].
+  final int sharedPhotoByteBudget;
 
   /// The per-table required-NOT-NULL-field map [pushOwn]'s push-side guard
   /// validates each local row against, defaulting to [syncRequiredFields].
@@ -1149,6 +1262,7 @@ class SyncService {
     var sharedPhotosDownloaded = 0;
     var ownImported = false;
     var sharedImported = false;
+    var sharedPhotoBytesSkipped = 0;
     final errors = <String>[];
 
     // ---- OWN section ----------------------------------------------------
@@ -1170,11 +1284,17 @@ class SyncService {
 
     if (ownFetchOk) {
       try {
-        ownPhotosDownloaded = await _downloadAndRewritePhotos(
+        // NO BUDGET, on purpose and permanently. The signed-in user's own
+        // photos are the one thing this device must always be able to get
+        // back — a fresh install after a lost phone is exactly this call —
+        // and decision D-5 keeps them at full resolution. `foreignByteBudget`
+        // is left null, which is the "unbounded" contract of the pass below.
+        final ownPass = await _downloadAndRewritePhotos(
           ownTables,
           (canonicalId, ext) =>
               _remote.downloadPhoto(uid: uid, objectPath: '$uid/$canonicalId$ext'),
         );
+        ownPhotosDownloaded = ownPass.downloaded;
       } catch (e) {
         ownHadError = true;
         errors.add('own photo downloads failed: $e');
@@ -1275,11 +1395,44 @@ class SyncService {
 
     sharedRowsPulled = _countRows(sharedTables);
 
+    // S7, the bytes half: a first pull used to download EVERY shared photo at
+    // full resolution — ~300 MB for a 100-photo community library, into a
+    // phone browser's origin quota, before the user has looked at a single
+    // one of them. The METADATA stays unbounded (it is kilobytes, and dropping
+    // it would make public topos vanish from the feed outright, which is
+    // strictly worse); only the megabyte-scale byte fetches are capped.
+    //
+    // Pressure-awareness: if the origin is ALREADY past the prune high
+    // watermark, this pull takes zero foreign bytes rather than its usual
+    // budget — piling more of other people's cache onto a store that is about
+    // to be pruned is churn, and the prune pass that runs after a successful
+    // pull would only throw it away again.
+    //
+    // A `null` estimate means "no pressure signal", NOT "under pressure":
+    // native, `flutter test`, and any browser that refuses or throws from
+    // `navigator.storage.estimate()` all land there, and off-web behaviour
+    // must not silently become "never pull public photos".
+    var budget = sharedPhotoByteBudget;
+    var pressured = false;
     try {
-      sharedPhotosDownloaded = await _downloadAndRewritePhotos(
+      final fraction = (await _storage.estimate())?.usedFraction;
+      if (fraction != null && fraction > kPrunePressureHighWatermark) {
+        pressured = true;
+        budget = 0;
+      }
+    } catch (_) {
+      // Unreadable estimate == no signal == plain count budget.
+    }
+
+    try {
+      final sharedPass = await _downloadAndRewritePhotos(
         sharedTables,
         (canonicalId, ext) => _remote.downloadSharedPhoto(sharedPhotoPath(canonicalId, ext)),
+        foreignByteBudget: budget,
+        ownUid: uid,
       );
+      sharedPhotosDownloaded = sharedPass.downloaded;
+      sharedPhotoBytesSkipped = sharedPass.skippedForBudget;
     } catch (e) {
       sharedHadError = true;
       errors.add('shared photo downloads failed: $e');
@@ -1302,6 +1455,12 @@ class SyncService {
       ownImported: ownImported,
       sharedImported: sharedImported,
       errors: errors,
+      sharedPhotoBytesSkipped: sharedPhotoBytesSkipped,
+      sharedPhotoBudgetReason: sharedPhotoBytesSkipped == 0
+          ? SharedPhotoBudgetReason.withinBudget
+          : pressured
+          ? SharedPhotoBudgetReason.storagePressure
+          : SharedPhotoBudgetReason.budgetSpent,
     );
   }
 
@@ -1335,18 +1494,118 @@ class SyncService {
   /// a metered network round trip, and — the part that matters most on web —
   /// it avoids the redundant WRITE entirely.
   ///
-  /// NOT fixed here, and deliberately: the FIRST pull still fetches the whole
-  /// public library unbounded. That is S7 (pull cost scales with library size,
-  /// not change count), which no Stage-1 workstream owns, and bounding it is a
-  /// product decision — a cap means some public topos render with no image.
+  /// S7's remaining half is now fixed too, but only for BYTES: pass
+  /// [foreignByteBudget] and this pass will download at most that many
+  /// DEFINITELY-FOREIGN photo files, newest-wall-first. `null` (the default,
+  /// and what the own-photo pass always passes) means unbounded — the
+  /// signed-in user's own photos are never rationed. See
+  /// [kSharedPhotoByteBudgetPerPull] for why the number is what it is, and
+  /// [pullOwnAndShared] for why the row/metadata fetch stays unbounded.
   ///
-  /// Returns the number of distinct files actually downloaded.
-  Future<int> _downloadAndRewritePhotos(
+  /// TWO ORDERING/OWNERSHIP RULES, both of which mirror
+  /// `PublicPhotoPruneService` and must keep mirroring it:
+  ///
+  ///  1. ORDER IS THE EXACT DUAL OF EVICTION ORDER. Eviction deletes
+  ///     oldest-`wallUpdatedAt` first; this downloads newest-`wallUpdatedAt`
+  ///     first. That pairing is the whole reason a bounded pull converges
+  ///     instead of thrashing: the N photos this pass chooses to fetch are
+  ///     precisely the N photos eviction's `kPruneKeepNewestForeign` floor
+  ///     refuses to delete. Reverse either one and the two policies start
+  ///     fighting — a pull downloads exactly what the next prune throws away,
+  ///     forever, over cell data. If you change the sort here, change
+  ///     `PublicPhotoPruner`'s with it.
+  ///  2. AMBIGUOUS OWNERSHIP LEANS THE OPPOSITE WAY FROM EVICTION, for the
+  ///     same underlying reason. Eviction's ambiguous case is KEEP (never
+  ///     delete what might be the user's own); a bound's ambiguous case must
+  ///     therefore be PULL (never starve what might be the user's own). So a
+  ///     photo only counts against the budget when its wall is DEFINITELY
+  ///     foreign — `ownerId != null && ownerId != ownUid`, the pruner's exact
+  ///     predicate, read off the WALL row exactly as the pruner reads it. A
+  ///     null `ownerId` ("created while signed out", or predating the column),
+  ///     an absent wall row, an unparseable timestamp, or a missing [ownUid]
+  ///     all mean "could be the user's own", and all of them fetch.
+  ///     `fetchSharedTopos` really does return the signed-in user's OWN shared
+  ///     walls alongside everyone else's, so this is not a theoretical case:
+  ///     it is how a second device gets its owner's own published topos back.
+  ///
+  /// A photo whose bytes this device ALREADY holds costs no budget — it never
+  /// reaches the download at all (see the [_localPhotoPathWithBytes] branch),
+  /// so a warm cache does not spend the allowance on no-ops.
+  ///
+  /// A photo skipped for budget keeps whatever `localPath` its cloud row
+  /// carried — exactly as a photo whose remote object is missing does — so its
+  /// row still imports and still names the key its bytes WILL live under. That
+  /// makes the skip self-healing: `MissingPhotoByteResolver` fetches that one
+  /// photo on demand when it is actually looked at, and a later pull picks it
+  /// up in the ordinary way.
+  Future<PhotoDownloadPassOutcome> _downloadAndRewritePhotos(
     Map<String, List<Map<String, dynamic>>> tables,
-    Future<List<int>?> Function(String canonicalId, String ext) download,
-  ) async {
+    Future<List<int>?> Function(String canonicalId, String ext) download, {
+    int? foreignByteBudget,
+    String? ownUid,
+  }) async {
     final photos = tables['photos'];
-    if (photos == null || photos.isEmpty) return 0;
+    if (photos == null || photos.isEmpty) {
+      return (downloaded: 0, skippedForBudget: 0);
+    }
+
+    final bounded = foreignByteBudget != null && ownUid != null;
+
+    // wallId -> (ownerId, updatedAt) for every wall in THIS batch, read from
+    // the same fetched rows the photos came from. The wall is the ownership
+    // source of truth here because it is the one `PublicPhotoPruneService`
+    // uses (`_candidateSql`), and the two must agree or the download/eviction
+    // pairing above is not actually a pairing.
+    final wallOwner = <String, String?>{};
+    final wallStamp = <String, int?>{};
+    if (bounded) {
+      for (final wall in tables['walls'] ?? const <Map<String, dynamic>>[]) {
+        final id = wall['id'] as String?;
+        if (id == null) continue;
+        wallOwner[id] = wall['ownerId'] as String?;
+        final updatedAt = wall['updatedAt'];
+        wallStamp[id] = updatedAt is int ? updatedAt : null;
+      }
+    }
+
+    /// Whether [photo]'s bytes count against (and can be withheld by) the
+    /// budget. Only a provably foreign wall does; see rule 2 above.
+    bool countsAgainstBudget(Map<String, dynamic> photo) {
+      if (!bounded) return false;
+      final wallId = photo['wallId'] as String?;
+      if (wallId == null || !wallOwner.containsKey(wallId)) return false;
+      final owner = wallOwner[wallId];
+      return owner != null && owner != ownUid;
+    }
+
+    /// [photo]'s wall's `updatedAt`, or `null` when unknowable — which sorts
+    /// FIRST (treated as the newest possible), matching rule 2's lean.
+    int? stampOf(Map<String, dynamic> photo) {
+      final wallId = photo['wallId'] as String?;
+      return wallId == null ? null : wallStamp[wallId];
+    }
+
+    // Unbounded passes keep the original row order byte-for-byte: nothing
+    // about the own pull changes.
+    final Iterable<Map<String, dynamic>> ordered;
+    if (!bounded) {
+      ordered = photos;
+    } else {
+      final indexed = [
+        for (var i = 0; i < photos.length; i++) (index: i, row: photos[i]),
+      ];
+      indexed.sort((a, b) {
+        final sa = stampOf(a.row);
+        final sb = stampOf(b.row);
+        if (sa != sb) {
+          if (sa == null) return -1;
+          if (sb == null) return 1;
+          return sb.compareTo(sa); // newest wall first
+        }
+        return a.index.compareTo(b.index); // stable within one timestamp
+      });
+      ordered = [for (final entry in indexed) entry.row];
+    }
 
     // canonicalId -> the local path to use, so a shared file (original + its
     // slices) is only considered once regardless of row order. Seeded by
@@ -1354,8 +1613,10 @@ class SyncService {
     // slice never re-probes its original.
     final downloadedPaths = <String, String>{};
     var restoredCount = 0;
+    var budgetedDownloads = 0;
+    final skippedCanonicalIds = <String>{};
 
-    for (final photo in photos) {
+    for (final photo in ordered) {
       final canonicalId = (photo['parentPhotoId'] as String?) ?? photo['id'] as String;
       final localPath = photo['localPath'] as String? ?? '';
       final ext = p.extension(localPath);
@@ -1364,16 +1625,22 @@ class SyncService {
       if (newLocalPath == null) {
         final alreadyHere = await _localPhotoPathWithBytes(canonicalId);
         if (alreadyHere != null) {
-          // Already on this device — no download, no write, and NOT counted
-          // as "restored": nothing was restored.
+          // Already on this device — no download, no write, no budget spent,
+          // and NOT counted as "restored": nothing was restored.
           newLocalPath = alreadyHere;
           downloadedPaths[canonicalId] = alreadyHere;
         } else {
-          final bytes = await download(canonicalId, ext);
-          if (bytes != null) {
-            newLocalPath = await _photoFiles.writePhotoBytes(canonicalId, ext, bytes);
-            downloadedPaths[canonicalId] = newLocalPath;
-            restoredCount++;
+          final budgeted = countsAgainstBudget(photo);
+          if (budgeted && budgetedDownloads >= foreignByteBudget!) {
+            skippedCanonicalIds.add(canonicalId);
+          } else {
+            final bytes = await download(canonicalId, ext);
+            if (bytes != null) {
+              newLocalPath = await _photoFiles.writePhotoBytes(canonicalId, ext, bytes);
+              downloadedPaths[canonicalId] = newLocalPath;
+              restoredCount++;
+              if (budgeted) budgetedDownloads++;
+            }
           }
         }
       }
@@ -1383,7 +1650,10 @@ class SyncService {
       }
     }
 
-    return restoredCount;
+    return (
+      downloaded: restoredCount,
+      skippedForBudget: skippedCanonicalIds.length,
+    );
   }
 
   /// The LOCAL `localPath` for [canonicalId] when this device genuinely holds

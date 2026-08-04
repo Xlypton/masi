@@ -9,7 +9,10 @@ import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/backup/data/storage_pagination.dart';
 import 'package:masi/features/backup/data/sync_remote.dart';
 import 'package:masi/features/backup/data/sync_service.dart';
+import 'package:masi/core/storage/storage_persistence_service.dart';
+import 'package:masi/core/storage/storage_persistence_types.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
+import 'package:masi/features/topo/data/public_photo_prune_service.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -337,6 +340,24 @@ class ThrowingFetchSharedToposRemote extends FakeSyncRemote {
   }
 }
 
+/// [FakeSyncRemote] variant that reports NO own rows while still reporting
+/// every shared one.
+///
+/// Test-only isolation device for the shared-photo byte budget: the signed-in
+/// user's own published walls come back from BOTH `fetchOwnRows` and
+/// `fetchSharedTopos`, and the (unbudgeted) own pass runs first — so against
+/// the ordinary fake their bytes are already local by the time the shared pass
+/// classifies them, and "an own wall in the shared batch is exempt from the
+/// budget" would be vacuously green. Blinding `fetchOwnRows` makes the shared
+/// pass the only thing that can fetch them, so the classifier is genuinely
+/// exercised.
+class OwnRowsBlindRemote extends FakeSyncRemote {
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchOwnRows(String uid) async => {
+    for (final table in syncTableNames) table: <Map<String, dynamic>>[],
+  };
+}
+
 /// [FakeSyncRemote] variant whose PRIVATE byte upload throws while
 /// [failUploads] is set — used to prove §1f-3 (a byte-upload failure is
 /// COUNTED and reported, never a silent `continue`) and §1f-2 (its `Photos`
@@ -559,6 +580,37 @@ class FakeAuthRepository implements AuthRepository {
   Future<void> signOut() async {}
 }
 
+/// [StoragePersistenceService] test double whose `estimate()` the test dictates.
+///
+/// `null` is the important default: it is what the real platform delegate
+/// answers on native and under `flutter test` (the inert stub), i.e. "no
+/// pressure signal", which the shared-photo byte budget must read as "apply the
+/// plain count budget" — never as "download nothing".
+class FakeStoragePersistenceService implements StoragePersistenceService {
+  FakeStoragePersistenceService({this.snapshot, this.throwOnEstimate = false});
+
+  StorageEstimateSnapshot? snapshot;
+  bool throwOnEstimate;
+
+  /// Number of `estimate()` calls, so a test can prove the pull consults the
+  /// pressure signal exactly once rather than per photo.
+  int estimateCalls = 0;
+
+  @override
+  Future<StorageEstimateSnapshot?> estimate() async {
+    estimateCalls++;
+    if (throwOnEstimate) throw StateError('estimate() unavailable');
+    return snapshot;
+  }
+
+  @override
+  Future<bool> isPersisted() async => false;
+
+  @override
+  Future<StoragePersistOutcome> requestPersist() async =>
+      StoragePersistOutcome.notApplicable;
+}
+
 const _signedOut = AuthSessionState.signedOut();
 const _uidU1 = 'user-u1';
 const _uidU2 = 'user-u2';
@@ -589,6 +641,8 @@ void main() {
     ConnectivityService? connectivity,
     bool Function()? wifiOnly,
     Map<String, List<String>>? pushRequiredFields,
+    StoragePersistenceService? storage,
+    int? sharedPhotoByteBudget,
   }) {
     final db = AppDatabase(NativeDatabase.memory());
     final docsDir = Directory(p.join(tmp.path, 'docs_${_counter++}'))..createSync();
@@ -602,6 +656,8 @@ void main() {
       photoFiles: PhotoFiles(docsDir: () async => docsDir),
       wifiOnly: wifiOnly,
       pushRequiredFields: pushRequiredFields,
+      storage: storage,
+      sharedPhotoByteBudget: sharedPhotoByteBudget,
     );
     return (db: db, docsDir: docsDir, srcDir: srcDir, service: service);
   }
@@ -2306,8 +2362,9 @@ void main() {
     }
 
     test(
-      'the SECOND pull re-downloads nothing: the public photo library is '
-      'fetched at FULL RESOLUTION with no bound, and every pull trigger '
+      'the SECOND pull re-downloads nothing: public photos are fetched at FULL '
+      'RESOLUTION and, per pull, up to kSharedPhotoByteBudgetPerPull of them '
+      '(the metadata fetch itself is still unbounded) — and every pull trigger '
       '(sign-in, app resume, and every connectivity regain — which at a crag '
       'with flaky signal fires repeatedly) used to re-download and re-write '
       'every public photo, spending metered cellular data and, on web, the '
@@ -2371,6 +2428,475 @@ void main() {
           File(p.join(c.docsDir.path, healedPath)).existsSync(),
           isTrue,
           reason: 'and the file is back',
+        );
+      },
+    );
+  });
+
+  group('S7: the first public-photo pull is BOUNDED (bytes only)', () {
+    /// Seeds [count] independent shared wall hierarchies owned by [ownerId],
+    /// each with its own photo file and its own wall `updatedAt` (ascending
+    /// from [baseUpdatedAt], so `$prefix${count - 1}` is the NEWEST wall).
+    ///
+    /// Each photo's bytes are written where a real import would put them —
+    /// `<docs>/photos/<photoId><ext>`, with the row's `localPath` holding the
+    /// RELATIVE `photos/<photoId><ext>` form `PhotoFiles.writePhotoBytes`
+    /// returns. That detail is load-bearing for the budget tests: the pushed
+    /// cloud row carries that same relative path, so on the RECEIVING device it
+    /// resolves against that device's own docs dir (and is genuinely absent
+    /// until downloaded), instead of accidentally naming a file that still
+    /// exists inside the publishing device's temp directory.
+    Future<void> seedLibrary(
+      ({AppDatabase db, Directory docsDir, Directory srcDir, SyncService service}) c, {
+      required String ownerId,
+      required int count,
+      String prefix = 's',
+      String visibility = 'shared',
+      int baseUpdatedAt = 1000,
+    }) async {
+      final photosDir = Directory(p.join(c.docsDir.path, 'photos'))
+        ..createSync(recursive: true);
+      for (var i = 0; i < count; i++) {
+        final photoId = 'photo-$prefix$i';
+        writeFile(photosDir, '$photoId.jpg', i + 1);
+        await seedWallHierarchy(
+          c.db,
+          ownerId: ownerId,
+          visibility: visibility,
+          areaId: 'area-$prefix$i',
+          sectorId: 'sector-$prefix$i',
+          wallId: 'wall-$prefix$i',
+          photoId: photoId,
+          routeId: 'route-$prefix$i',
+          localPath: p.join('photos', '$photoId.jpg'),
+          updatedAt: baseUpdatedAt + i,
+        );
+      }
+    }
+
+    /// Pushes [count] shared walls owned by u2 into [remote] (as if another
+    /// climber had published them), then returns a FRESH u1 bundle — an empty
+    /// device about to do its very first pull.
+    Future<
+      ({AppDatabase db, Directory docsDir, Directory srcDir, SyncService service})
+    >
+    publishAsU2AndMakeFreshU1(
+      FakeSyncRemote remote, {
+      required int count,
+      StoragePersistenceService? storage,
+      int? sharedPhotoByteBudget,
+    }) async {
+      final u2 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU2));
+      addTearDown(() => u2.db.close());
+      await seedLibrary(u2, ownerId: _uidU2, count: count);
+      await u2.service.pushOwn();
+
+      final u1 = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU1),
+        storage: storage,
+        sharedPhotoByteBudget: sharedPhotoByteBudget,
+      );
+      addTearDown(() => u1.db.close());
+      return u1;
+    }
+
+    List<String> sharedRequests(FakeSyncRemote remote) =>
+        [for (final r in remote.downloadRequests) if (r.startsWith('shared/')) r];
+
+    test(
+      'the per-pull budget IS kPruneKeepNewestForeign, not a coincidentally '
+      'equal literal: the eviction policy floors the newest N foreign photos, '
+      'so fetching more than N is work eviction is designed to discard first',
+      () {
+        expect(kSharedPhotoByteBudgetPerPull, kPruneKeepNewestForeign);
+        expect(
+          kSharedPhotoByteBudgetPerPull,
+          20,
+          reason:
+              'if this changes, it must be because kPruneKeepNewestForeign did',
+        );
+      },
+    );
+
+    test(
+      'ASSERTION (a): the budget actually caps — a 5-photo public library '
+      'pulled with a budget of 2 downloads exactly 2 photo files, and the '
+      'other 3 are reported as skipped-for-budget, not as errors',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 5,
+          sharedPhotoByteBudget: 2,
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(sharedRequests(remote), hasLength(2));
+        expect(result.photosDownloaded, 2);
+        expect(result.sharedPhotoBytesSkipped, 3);
+        expect(
+          result.sharedPhotoBudgetReason,
+          SharedPhotoBudgetReason.budgetSpent,
+        );
+      },
+    );
+
+    test(
+      'the METADATA is NOT bounded: all 5 public walls, their routes and their '
+      'photo ROWS import even though only 2 photos\' bytes were fetched — '
+      'dropping metadata would make public topos vanish from the feed, which '
+      'is strictly worse than a topo that reads fine but shows a placeholder',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 5,
+          sharedPhotoByteBudget: 2,
+        );
+
+        await c.service.pullOwnAndShared();
+
+        expect(await c.db.select(c.db.walls).get(), hasLength(5));
+        expect(await c.db.select(c.db.photos).get(), hasLength(5));
+        expect(await c.db.select(c.db.routes).get(), hasLength(5));
+      },
+    );
+
+    test(
+      'ordering is the exact DUAL of eviction order: the budget is spent on '
+      'the NEWEST walls first, which are precisely the ones eviction\'s '
+      'keepNewest floor refuses to delete — reverse either and a pull '
+      'downloads exactly what the next prune throws away, forever',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 5,
+          sharedPhotoByteBudget: 2,
+        );
+
+        await c.service.pullOwnAndShared();
+
+        expect(
+          sharedRequests(remote),
+          ['shared/photo-s4.jpg', 'shared/photo-s3.jpg'],
+          reason: 'walls s0..s4 ascend in updatedAt, so s4 is the newest',
+        );
+      },
+    );
+
+    test(
+      'ASSERTION (e): a budget-capped pull is a SUCCESSFUL pull — errors stay '
+      'empty and both sides report imported, so the orchestrator cannot turn '
+      'the bound into SyncStatus.error, a withheld lastSyncedAt, a backoff '
+      'retry, or a "Couldn\'t sync" empty state',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 5,
+          sharedPhotoByteBudget: 1,
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(result.sharedPhotoBytesSkipped, greaterThan(0));
+        expect(result.errors, isEmpty);
+        expect(result.didPull, isTrue);
+        expect(result.ownImported, isTrue);
+        expect(result.sharedImported, isTrue);
+      },
+    );
+
+    test(
+      'ASSERTION (b): the signed-in user\'s OWN photos are never bounded — a '
+      'budget of ZERO still restores every one of u1\'s own photos, because '
+      'the own-photo pass is unbudgeted by construction (a fresh install after '
+      'a lost phone is exactly this call)',
+      () async {
+        final remote = FakeSyncRemote();
+
+        final deviceA = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => deviceA.db.close());
+        await seedLibrary(
+          deviceA,
+          ownerId: _uidU1,
+          count: 5,
+          prefix: 'own',
+          visibility: 'private',
+        );
+        await deviceA.service.pushOwn();
+
+        final deviceB = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+          sharedPhotoByteBudget: 0,
+        );
+        addTearDown(() => deviceB.db.close());
+
+        final result = await deviceB.service.pullOwnAndShared();
+
+        expect(result.photosDownloaded, 5);
+        expect(result.sharedPhotoBytesSkipped, 0);
+        for (var i = 0; i < 5; i++) {
+          expect(
+            File(p.join(deviceB.docsDir.path, 'photos', 'photo-own$i.jpg')).existsSync(),
+            isTrue,
+            reason: 'own photo $i must come back regardless of the budget',
+          );
+        }
+      },
+    );
+
+    test(
+      'ASSERTION (b, shared batch): a wall in the SHARED batch that the '
+      'signed-in user OWNS is exempt from the budget too — fetchSharedTopos '
+      'returns the user\'s own published walls alongside everyone else\'s, and '
+      'those are own data, not community cache',
+      () async {
+        // fetchOwnRows is emptied so the shared pass is the ONLY thing that
+        // could fetch these bytes — otherwise the own pass would download them
+        // first and the budget classifier would never be consulted.
+        final remote = OwnRowsBlindRemote();
+
+        final u1DeviceA = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => u1DeviceA.db.close());
+        await seedLibrary(u1DeviceA, ownerId: _uidU1, count: 3, prefix: 'mine');
+        await u1DeviceA.service.pushOwn();
+
+        final u1DeviceB = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+          sharedPhotoByteBudget: 0,
+        );
+        addTearDown(() => u1DeviceB.db.close());
+
+        final result = await u1DeviceB.service.pullOwnAndShared();
+
+        expect(
+          result.photosDownloaded,
+          3,
+          reason: 'u1 owns these walls, so a zero foreign budget cannot ration them',
+        );
+        expect(result.sharedPhotoBytesSkipped, 0);
+      },
+    );
+
+    test(
+      'ambiguous ownership leans the OPPOSITE way from eviction: a shared wall '
+      'with a NULL ownerId ("created while signed out", or predating the '
+      'column) is PULLED even at a zero budget — eviction\'s ambiguous case is '
+      'KEEP, so a bound\'s ambiguous case must be FETCH',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 2,
+          sharedPhotoByteBudget: 0,
+        );
+        // The WALL is the ownership source of truth (matching
+        // PublicPhotoPruneService._candidateSql); blank one out in the cloud.
+        remote._rows['walls']!['wall-s0']!['ownerId'] = null;
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(
+          sharedRequests(remote),
+          ['shared/photo-s0.jpg'],
+          reason: 'only the unprovable-ownership wall escapes the zero budget',
+        );
+        expect(result.photosDownloaded, 1);
+        expect(
+          result.sharedPhotoBytesSkipped,
+          1,
+          reason: 'the definitely-foreign wall-s1 is the one that is withheld',
+        );
+      },
+    );
+
+    test(
+      'ASSERTION (c): estimate() == null means "no pressure signal", NOT '
+      '"under pressure" — native, flutter test, and any browser that refuses '
+      'the Storage API all land there, and off-web behaviour must not silently '
+      'become "never pull public photos"',
+      () async {
+        final remote = FakeSyncRemote();
+        final storage = FakeStoragePersistenceService();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 3,
+          storage: storage,
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(storage.estimateCalls, 1);
+        expect(
+          result.photosDownloaded,
+          3,
+          reason: 'the plain count budget (default 20) applies, not zero',
+        );
+        expect(result.sharedPhotoBytesSkipped, 0);
+        expect(
+          result.sharedPhotoBudgetReason,
+          SharedPhotoBudgetReason.withinBudget,
+        );
+      },
+    );
+
+    test(
+      'ASSERTION (c, default wiring): the DEFAULT storage delegate — the inert '
+      'native/flutter-test stub, i.e. what production gets off-web — also '
+      'pulls the public photos rather than zero of them',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(remote, count: 3);
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(result.photosDownloaded, 3);
+        expect(result.sharedPhotoBytesSkipped, 0);
+      },
+    );
+
+    test(
+      'ASSERTION (c, throwing estimate): an estimate() that THROWS is also '
+      '"no signal" and still applies the plain budget',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 3,
+          storage: FakeStoragePersistenceService(throwOnEstimate: true),
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(result.photosDownloaded, 3);
+        expect(result.sharedPhotoBytesSkipped, 0);
+      },
+    );
+
+    test(
+      'ASSERTION (d): already ABOVE the prune high watermark, a pull takes '
+      'ZERO foreign photo bytes rather than its usual budget — adding '
+      'megabytes to a store the prune pass is about to sweep is pure churn — '
+      'and reports storagePressure so a bug report can tell that apart from an '
+      'ordinary budget cap',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 3,
+          storage: FakeStoragePersistenceService(
+            // 0.90 > kPrunePressureHighWatermark (0.75).
+            snapshot: const StorageEstimateSnapshot(
+              usageBytes: 900,
+              quotaBytes: 1000,
+            ),
+          ),
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(sharedRequests(remote), isEmpty);
+        expect(result.photosDownloaded, 0);
+        expect(result.sharedPhotoBytesSkipped, 3);
+        expect(
+          result.sharedPhotoBudgetReason,
+          SharedPhotoBudgetReason.storagePressure,
+        );
+        expect(
+          result.errors,
+          isEmpty,
+          reason: 'storage pressure is a settled fact, not a sync failure',
+        );
+      },
+    );
+
+    test(
+      'exactly ON the high watermark is NOT pressure (strictly-above, matching '
+      'PublicPhotoPruneService), so the plain budget still applies',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 2,
+          storage: FakeStoragePersistenceService(
+            snapshot: const StorageEstimateSnapshot(
+              usageBytes: 75,
+              quotaBytes: 100,
+            ),
+          ),
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(result.photosDownloaded, 2);
+        expect(result.sharedPhotoBytesSkipped, 0);
+      },
+    );
+
+    test(
+      'photos this device ALREADY holds do not consume budget: after a first '
+      'pull warms 2 of 4 public photos, a second pull with a budget of 2 '
+      'fetches the OTHER 2 rather than spending the allowance on no-ops',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 4,
+          sharedPhotoByteBudget: 2,
+        );
+
+        final first = await c.service.pullOwnAndShared();
+        expect(first.photosDownloaded, 2);
+
+        remote.downloadRequests.clear();
+        final second = await c.service.pullOwnAndShared();
+
+        expect(
+          sharedRequests(remote),
+          ['shared/photo-s1.jpg', 'shared/photo-s0.jpg'],
+          reason:
+              'the two warm ones cost nothing, so the full budget goes to the '
+              'two still-missing (and now newest-missing) photos',
+        );
+        expect(second.photosDownloaded, 2);
+        expect(second.sharedPhotoBytesSkipped, 0);
+      },
+    );
+
+    test(
+      'a budget-skipped photo keeps the localPath its cloud row carried, so '
+      'the row still names the key its bytes WILL live under — that is what '
+      'makes on-demand healing (MissingPhotoByteResolver) and a later pull '
+      'both able to fill it in',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 2,
+          sharedPhotoByteBudget: 1,
+        );
+
+        await c.service.pullOwnAndShared();
+
+        final skipped = await (c.db.select(
+          c.db.photos,
+        )..where((t) => t.id.equals('photo-s0'))).getSingle();
+        expect(
+          p.basename(skipped.localPath),
+          'photo-s0.jpg',
+          reason: 'the canonical id + ext survive, which is all healing needs',
         );
       },
     );
