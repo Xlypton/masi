@@ -501,17 +501,28 @@ class _SignedOutBody extends StatelessWidget {
                 ),
               ],
               const SizedBox(height: MasiSpacing.md),
-              // `.text` rather than `.filled` even though this reads as a
-              // filled button: `.filled`'s spinner is painted in `onAccent`,
-              // which on a `surface2` fill is white-on-near-white in light
-              // mode and near-black-on-dark in dark mode — i.e. invisible.
-              // `.text`'s spinner is `accent`, which reads on `surface2` in
-              // both themes; the fill is restored via `style`.
-              MasiPendingButton.text(
+              // `.filled` with a surface fill, which is what this button
+              // actually is — a secondary primary-action, elevated like the
+              // one above it rather than a borderless label.
+              //
+              // This used to be `.text` with the fill painted back on via
+              // `style`, purely because `.filled`'s pending spinner was
+              // hardcoded to `onAccent`: white on `surface2` (#FBFAFE) in
+              // light, #1A1226 on #251F34 in dark — an invisible cue. The
+              // spinner now follows the button's RESOLVED foreground, so
+              // `foregroundColor: colors.ink` colours the label and the cue
+              // together and the M3 elevation comes back for free.
+              MasiPendingButton.filled(
                 key: const Key('account-google-signin'),
-                style: TextButton.styleFrom(
+                style: ElevatedButton.styleFrom(
                   backgroundColor: colors.surface2,
                   foregroundColor: colors.ink,
+                  // Explicit, because the disabled slots do not fall back to
+                  // the enabled ones: without these the cross-button interlock
+                  // (`sending`) would drop this button to Material's default
+                  // grey-on-grey mid-flight.
+                  disabledBackgroundColor: colors.surface2,
+                  disabledForegroundColor: colors.ink.withValues(alpha: 0.7),
                   padding: const EdgeInsets.symmetric(vertical: 14),
                   shape: RoundedRectangleBorder(
                     borderRadius: BorderRadius.circular(13),
