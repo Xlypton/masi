@@ -22,6 +22,8 @@ import 'package:masi/features/library/presentation/topos_screen.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:masi/shared/presentation/masi_shimmer.dart';
+import 'package:masi/shared/presentation/masi_async_view.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:masi/shared/presentation/sync_banner.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -2016,7 +2018,19 @@ void main() {
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 50));
 
-        expect(find.byType(CircularProgressIndicator), findsOneWidget);
+        // 50 ms in, still inside `MasiMotion.loadingRevealDelay`: a load this
+        // short must paint no loading state at all.
+        expect(find.byKey(const Key('topos-skeleton')), findsNothing);
+        expect(
+          find.byKey(const Key('topos-empty-state')),
+          findsNothing,
+          reason: '"No topos yet" must never be what a still-loading library '
+              'looks like — that is a fresh install reporting data loss',
+        );
+
+        // Past the reveal delay: the shape of the list that is coming.
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(find.byKey(const Key('topos-skeleton')), findsOneWidget);
 
         final button = tester.widget<ElevatedButton>(
           find.byKey(const Key('topos-new-topo')),
@@ -5754,4 +5768,138 @@ void main() {
       },
     );
   });
+
+  group('the Topos home reports its own waits', () {
+    testWidgets('a load failure names what failed and offers a retry that '
+        're-runs the provider', (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      var callCount = 0;
+      final container = ProviderContainer(
+        // Riverpod v3's own backoff retries would both inflate `callCount` and
+        // leave a pending timer behind (see `areas_screen_test.dart`'s twin),
+        // so the only re-run this test can observe is the manual one.
+        retry: (retryCount, error) => null,
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          connectivityServiceProvider.overrideWithValue(
+            _ScriptedConnectivity(reachable: true),
+          ),
+          syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
+          storageDurabilityProvider.overrideWith(
+            () => _FakeStorageDurability(const StorageDurability.probing()),
+          ),
+          toposProvider.overrideWith((ref) {
+            callCount++;
+            return Stream<List<TopoRef>>.error(
+              Exception('watchTopos boom (test)'),
+            );
+          }),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await tester.pumpWidget(_wrap(container, const ToposScreen()));
+      await _drain(tester);
+
+      // Before this the screen printed "Something went wrong: <exception>",
+      // which names nothing the user can act on.
+      expect(find.text("Couldn't load your topos"), findsOneWidget);
+      final callsAfterFirstBuild = callCount;
+
+      await tester.tap(find.byKey(MasiAsyncView.retryKey));
+      await _drain(tester);
+
+      expect(callCount, greaterThan(callsAfterFirstBuild));
+      expect(tester.takeException(), isNull);
+    });
+
+    testWidgets('the create button shows a cue for the WRITE, and only for the '
+        'write — not while the picker or name dialog is up', (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final createTopoLanded = Completer<String>();
+      final repo = _HangingCreateTopoRepository(
+        db,
+        nowMs: () => 1000,
+        gate: createTopoLanded,
+      );
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          libraryCrudRepositoryProvider.overrideWithValue(repo),
+          connectivityServiceProvider.overrideWithValue(
+            _ScriptedConnectivity(reachable: true),
+          ),
+          syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
+          storageDurabilityProvider.overrideWith(
+            () => _FakeStorageDurability(const StorageDurability.probing()),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      late Directory tempDir;
+      late File pngFile;
+      await tester.runAsync(() async {
+        tempDir = await Directory.systemTemp.createTemp('topos_write_cue');
+        pngFile = File('${tempDir.path}/photo.png');
+        await pngFile.writeAsBytes(_tinyPngBytes);
+      });
+      addTearDown(() {
+        if (tempDir.existsSync()) tempDir.deleteSync(recursive: true);
+      });
+
+      await tester.pumpWidget(
+        _wrap(
+          container,
+          ToposScreen(
+            photoSourcePicker: (context) async => ImageSource.gallery,
+            photoPicker: (source) async => XFile(pngFile.path),
+          ),
+        ),
+      );
+      await _drain(tester);
+
+      await tester.tap(find.byKey(const Key('topos-new-topo')));
+      // `_acceptTopoNameDialog` runs a full `_drain` — pumpAndSettle included —
+      // with the name dialog open and `_handleNewTopo` suspended on it. That
+      // only stays safe because the cue is armed AFTER the dialog resolves; a
+      // cue covering the whole flow would spin behind that dialog and hang
+      // here forever.
+      await _acceptTopoNameDialog(tester);
+      await _drainNoSettle(tester);
+
+      expect(
+        find.descendant(
+          of: find.byKey(const Key('topos-new-topo')),
+          matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+        ),
+        findsOneWidget,
+        reason: 'the photo write + GPS fix is seconds of work that used to be '
+            'completely unannounced',
+      );
+
+      createTopoLanded.complete('never-mind');
+      await _drainNoSettle(tester);
+    });
+  });
+}
+
+/// A repository whose [createTopo] never answers, so a test can observe the
+/// state of the Topos home DURING the create write rather than after it. Every
+/// other method stays backed by the real implementation against the test db.
+class _HangingCreateTopoRepository extends LibraryCrudRepository {
+  _HangingCreateTopoRepository(
+    super.db, {
+    required super.nowMs,
+    required this.gate,
+  });
+
+  final Completer<String> gate;
+
+  @override
+  Future<String> createTopo(String name) => gate.future;
 }

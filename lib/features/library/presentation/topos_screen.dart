@@ -30,8 +30,13 @@ import '../../topo/presentation/topo_canvas_screen.dart'
 import '../application/library_providers.dart';
 import '../application/proximity_topos_provider.dart';
 import '../data/library_crud_repository.dart';
+import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_loading_gate.dart';
+import '../../../shared/presentation/masi_loading_indicator.dart';
+import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_shimmer.dart';
+import '../../../shared/presentation/masi_skeleton.dart';
 import '../../../shared/presentation/sync_banner.dart';
 import 'move_target_picker.dart';
 import 'set_location_picker.dart';
@@ -123,6 +128,19 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   /// -> createTopo -> attachPhotoToWall -> navigate). While true, the
   /// button is disabled and a second tap is a no-op.
   bool _creating = false;
+
+  /// True only for the part of [_handleNewTopo] that the APP is doing — from
+  /// `createTopo` through the photo write, the GPS capture and the navigation.
+  ///
+  /// Not the same thing as [_creating], and the difference is the whole point.
+  /// Most of that flow is spent waiting on the USER (the photo-source sheet,
+  /// the OS photo picker, the name dialog), and a spinner running on the create
+  /// button through all of that would be wrong twice over: it says "the app is
+  /// busy" while the app is idle, and it says it from behind whichever modal
+  /// the user is currently looking at. The tail is the real wait — a
+  /// full-resolution photo write plus a GPS fix, seconds on a big image — and
+  /// it used to be completely unannounced.
+  bool _writing = false;
 
   /// Keyword search over the Topos home, mirroring
   /// `community_screen.dart`'s `_CommunityScreenState` search field: the
@@ -310,8 +328,18 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   onTap: () => _showToposFiltersSheet(context),
                 ),
                 Expanded(
-                  child: asyncTopos.when(
-                    data: (topos) {
+                  child: MasiAsyncView<List<TopoRef>>(
+                    value: asyncTopos,
+                    onRetry: () => ref.invalidate(toposProvider),
+                    errorMessage: "Couldn't load your topos",
+                    // Row-shaped, not a spinner: this list's rows are a fixed
+                    // 52 px thumbnail beside two text lines, and a skeleton
+                    // that does not match that makes the whole list jump when
+                    // the first frame of real data lands. See `_ToposSkeleton`
+                    // for where the numbers come from.
+                    skeleton: (context) =>
+                        _ToposSkeleton(bottomInset: bottomChromeInset + 64),
+                    data: (context, topos) {
                       // The proximity-sorted list (own + nearby community,
                       // nearest-first — see `sortedByProximityToposProvider`'s
                       // doc) is what actually renders; `topos` itself is only
@@ -393,26 +421,6 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                             widget.setLocationLocationService,
                       );
                     },
-                    loading: () =>
-                        const Center(child: CircularProgressIndicator()),
-                    error: (error, stackTrace) => Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text('Something went wrong: $error'),
-                          const SizedBox(height: 8),
-                          ElevatedButton(
-                            key: const Key('topos-retry'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: colors.accent,
-                              foregroundColor: colors.onAccent,
-                            ),
-                            onPressed: () => ref.invalidate(toposProvider),
-                            child: const Text('Retry'),
-                          ),
-                        ],
-                      ),
-                    ),
                   ),
                 ),
               ],
@@ -465,10 +473,27 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                 // `Semantics` since the icon alone carries no accessible
                 // label for VoiceOver/TalkBack -- the button's own `key`
                 // is not a substitute.
-                child: Semantics(
-                  label: 'New topo',
-                  button: true,
-                  child: const MasiIcon('add', size: 22),
+                // While the create's TAIL is running (see `_writing`) the glyph
+                // becomes the cue, in place: the button is a fixed 48×48, and
+                // the inline indicator is 20 px, so nothing can reflow. Timing
+                // is the shared gate's, so a create that somehow finishes
+                // instantly still paints no spinner.
+                child: MasiLoadingGate(
+                  isLoading: _writing,
+                  builder: (context, showSpinner) => showSpinner
+                      ? MasiLoadingIndicator.inline(
+                          // The gate already applied the delay and owns the
+                          // hold — nesting a second one would stack to ~360 ms.
+                          revealDelay: Duration.zero,
+                          minVisible: Duration.zero,
+                          color: colors.onAccent,
+                          semanticLabel: 'Creating your topo',
+                        )
+                      : Semantics(
+                          label: 'New topo',
+                          button: true,
+                          child: const MasiIcon('add', size: 22),
+                        ),
                 ),
               ),
             ),
@@ -596,6 +621,10 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       // a blank-named topo if that invariant is somehow violated.
       final name = trimmedName.isEmpty ? defaultName : trimmedName;
 
+      // Everything the user had to supply is in hand; from here on the wait is
+      // ours, so say so (see [_writing]).
+      if (mounted) setState(() => _writing = true);
+
       final repo = ref.read(libraryCrudRepositoryProvider);
       final wallId = await repo.createTopo(name);
       // `createTopo` has ALREADY committed a wall by this point, so ANY attach
@@ -707,7 +736,10 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       }
     } finally {
       if (mounted) {
-        setState(() => _creating = false);
+        setState(() {
+          _creating = false;
+          _writing = false;
+        });
       }
     }
   }

@@ -59,6 +59,121 @@ class _ToposList extends StatelessWidget {
   }
 }
 
+/// The Topos-home first-load placeholder: [_ToposList]'s geometry, in shimmer.
+///
+/// `MasiSkeletonList.listRows()` is deliberately NOT reused here. That
+/// composite stands in for `crud_list_scaffold.dart`'s text-only rows and comes
+/// out 64 px tall; a topo row is driven by its 52 px thumbnail plus 2 ×
+/// [MasiSpacing.sm] of padding, i.e. 68 px, and leads with that thumbnail. Six
+/// rows of the wrong composite would be ~24 px of cumulative drift plus a
+/// missing image slot — visible as a jolt the moment real rows arrive, which is
+/// exactly what a skeleton is supposed to prevent. `.feedCards()` is closer in
+/// shape but 86 px tall (it carries a third text line this row does not have).
+///
+/// So the numbers below are copied from [_TopoRow], one for one: [Material] at
+/// [MasiRadii.card], padding `horizontal: md / vertical: sm`, a 52 px thumbnail
+/// at radius 10, [MasiSpacing.md], then the name (titleMedium 17) over the
+/// grade/route-count line (titleSmall 15). Text slots are text-scaled for the
+/// same reason [MasiSkeletonListRow]'s are: the real row grows at large
+/// accessibility scales, so this has to grow with it or the jump comes back for
+/// the users least able to absorb it.
+///
+/// Like every skeleton it is inert — no scrolling (nothing to reveal) and no
+/// taps.
+class _ToposSkeleton extends StatelessWidget {
+  const _ToposSkeleton({this.bottomInset = 0});
+
+  /// On the outermost widget, so a test (or a driver flow) can tell "still
+  /// loading" from "empty" on this screen.
+  static const Key skeletonKey = Key('topos-skeleton');
+
+  /// [_TopoRow]'s height at the default text scale: the 52 px thumbnail plus
+  /// 2 × [MasiSpacing.sm]. A floor, not a cap.
+  static const double rowHeight = 68;
+
+  /// How many placeholder rows. A couple past the fold is enough to read as "a
+  /// list", and every shape here is its own ticker.
+  static const int count = 6;
+
+  /// Matched to [_ToposList.bottomInset] so the placeholder occupies the same
+  /// scroll area the real list will.
+  final double bottomInset;
+
+  /// Deterministic width variation (no `Random` — a skeleton must not reshuffle
+  /// on every rebuild), so it reads as a list of different topos rather than a
+  /// table.
+  static const List<double> _widthFactors = [0.52, 0.38, 0.61, 0.44, 0.55, 0.34];
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
+
+    return Semantics(
+      key: skeletonKey,
+      container: true,
+      label: 'Loading',
+      child: IgnorePointer(
+        child: ListView.separated(
+          physics: const NeverScrollableScrollPhysics(),
+          padding: EdgeInsets.fromLTRB(
+            MasiSpacing.lg,
+            MasiSpacing.md,
+            MasiSpacing.lg,
+            MasiSpacing.md + bottomInset,
+          ),
+          itemCount: count,
+          separatorBuilder: (context, index) =>
+              const SizedBox(height: MasiSpacing.sm),
+          itemBuilder: (context, index) => Material(
+            color: colors.surface,
+            borderRadius: BorderRadius.circular(MasiRadii.card),
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(minHeight: rowHeight),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: MasiSpacing.md,
+                  vertical: MasiSpacing.sm,
+                ),
+                child: Row(
+                  children: [
+                    const MasiSkeleton.box(width: 52, height: 52, radius: 10),
+                    const SizedBox(width: MasiSpacing.md),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          MasiSkeleton.textLine(
+                            fontSize: scaler.scale(17),
+                            widthFactor:
+                                _widthFactors[index % _widthFactors.length],
+                          ),
+                          const SizedBox(height: 2),
+                          MasiSkeleton.textLine(
+                            fontSize: scaler.scale(15),
+                            widthFactor: 0.3,
+                          ),
+                        ],
+                      ),
+                    ),
+                    // The trailing chevron only. The row's "More" button is
+                    // deliberately not drawn: shimmering a fake control invites
+                    // a tap on something that cannot be tapped.
+                    const SizedBox(width: MasiSpacing.md),
+                    const MasiSkeleton.box(width: 8, height: 14, radius: 4),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _TopoRow extends ConsumerWidget {
   const _TopoRow({
     super.key,

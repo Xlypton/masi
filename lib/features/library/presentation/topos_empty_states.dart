@@ -113,7 +113,13 @@ class _SyncErrorEmptyState extends StatelessWidget {
   const _SyncErrorEmptyState({required this.message, required this.onRetry});
 
   final String message;
-  final VoidCallback onRetry;
+
+  /// A network round-trip (`SyncOrchestrator.pullNow`), so it is a `Future` and
+  /// the button is a [MasiPendingButton]: this is the one retry on this screen
+  /// with nothing modal in front of it, so its whole future IS the app's wait
+  /// and the pending state can cover all of it. Before this, a retry over a
+  /// bad connection looked identical to a retry that had not registered.
+  final Future<void> Function() onRetry;
 
   @override
   Widget build(BuildContext context) {
@@ -136,7 +142,7 @@ class _SyncErrorEmptyState extends StatelessWidget {
             ),
           ),
           const SizedBox(height: MasiSpacing.md),
-          TextButton(
+          MasiPendingButton.text(
             key: const Key('topos-sync-error-retry'),
             onPressed: onRetry,
             child: const Text('Retry'),
