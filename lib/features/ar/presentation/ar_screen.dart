@@ -25,6 +25,7 @@ import 'package:masi/features/topo/presentation/canvas_chrome.dart';
 import 'package:masi/features/topo/presentation/grade_colors.dart';
 import 'package:masi/features/topo/presentation/route_palette.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 
 /// The `PlatformView` type used for the native camera/AR surface on iOS.
 /// Kept as a top-level constant string (rather than sprinkled as a literal)
@@ -227,6 +228,16 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   /// (including running on a platform/session where segmentation isn't
   /// supported) just leaves the mask `null`, so `ArOverlayPainter` falls back
   /// to the route-hull `rockBoxFromRoutes` rectangle crop instead.
+  ///
+  /// Intentionally has NO progress affordance, despite being an unawaited
+  /// async native call. There is no waiting state to report: the camera feed
+  /// and the route overlay are already on screen, the rock highlight already
+  /// works off the rectangle crop, and this only ever sharpens that crop into
+  /// a per-pixel mask. So the "before" state isn't blank-and-pending, it's
+  /// complete-but-coarser — and a spinner over a working overlay would point
+  /// at a difference the user can neither see clearly nor act on. (A blocking
+  /// overlay would be strictly worse: it would hide the very feed this is
+  /// refining.)
   Future<void> _segmentRock(PhotoRef photo, List<TopoRoute> routes) async {
     if (!isArSupported()) return; // web/unsupported → no Core ML; box-crop fallback covers it
     try {
@@ -459,11 +470,28 @@ class _ArScreenState extends ConsumerState<ArScreen> {
   @override
   Widget build(BuildContext context) {
     if (_loading) {
+      // The one place in this app where a spinner is the RIGHT answer rather
+      // than a lazy one: what comes next is a live camera surface, so there is
+      // no content shape to draw a skeleton of. The label says what is being
+      // waited on — strictly this window is `_load`'s photo+routes read, but
+      // the camera cannot start until it finishes, so "Starting camera…" is
+      // what the user is actually waiting through.
+      //
+      // Deliberately the conditional-MOUNT shape (usage 1 in
+      // MasiLoadingIndicator's doc) rather than the preferred
+      // `isLoading:`/`child:` shape. The child shape would gate the whole
+      // loaded subtree — including the `UiKitView` whose mount is what
+      // triggers `_maybeStartSession` — behind the gate's 450 ms
+      // minimum-visible hold, i.e. it would hold the ARKit session start back
+      // by up to 450 ms after the data was already in hand, on the one screen
+      // whose timing cannot be verified anywhere but a physical device. The
+      // 180 ms reveal delay (the anti-flash half, and the half that matters
+      // here: this read normally resolves well inside it) applies either way.
       return Scaffold(
         appBar: AppBar(title: const Text('AR view')),
         body: const Center(
           key: Key('ar-loading'),
-          child: CircularProgressIndicator(),
+          child: MasiLoadingIndicator.standalone(label: 'Starting camera…'),
         ),
       );
     }
@@ -1199,6 +1227,20 @@ class _ArControls extends ConsumerWidget {
   /// channel handler is silently dropped (`MissingPluginException`) — so
   /// every `onPressed` below is gated to `null` (Flutter's standard
   /// disabled-button look) until [active] flips true. See #7.
+  ///
+  /// That gate is also why none of these FABs is a `MasiPendingButton`, even
+  /// though two of them ([onToggleLock] and re-scan) do await. Three reasons,
+  /// in order: (1) what they await is a single `masi/ar` `invokeMethod`
+  /// acknowledgement, which resolves far inside the 180 ms reveal delay, so a
+  /// gated cue would never actually paint; (2) for re-scan in particular the
+  /// ack is not the interesting event anyway — re-finding the wall takes
+  /// seconds and is already reported continuously by `_ArStatus`'s
+  /// tracking-confidence readout, so a cue tied to the ack would vanish while
+  /// the user was still waiting, which is worse than none; (3) the shared
+  /// system has no FAB variant, so adopting it here would mean hand-rolling
+  /// in-flight state into the one screen that cannot be verified anywhere but
+  /// a physical device. The remaining FABs (highlight, reset, mode) are
+  /// synchronous provider flips with nothing to wait for.
   final bool active;
 
   /// Invoked by the `ar-lock` FAB's `onPressed`. Built by
