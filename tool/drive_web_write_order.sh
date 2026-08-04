@@ -27,6 +27,18 @@
 #                                  tab does (pagehide + unload fire), with the
 #                                  browser still alive and idle afterwards.
 #                                  THE GRACEFUL CLOSE.
+#   COI=1               serve the app origin with COOP/COEP/CORP, i.e. make it
+#                       CROSS-ORIGIN ISOLATED, which is what PRODUCTION does
+#                       (`web/_headers`) and what this harness did NOT do.
+#                       This is not cosmetic: `crossOriginIsolated` is the
+#                       input drift's feature probe uses to choose a storage
+#                       implementation. Without it the measurement lands on
+#                       `sharedIndexedDb`; with it, on `opfsLocks`/`opfsShared`
+#                       — a VFS with entirely different write semantics
+#                       (synchronous access handles, not a write-behind
+#                       IndexedDB mirror). Every finding here is scoped to
+#                       whichever backend actually ran, and both runs' reports
+#                       carry `storage_backend` so that is never inferred.
 #   NO_FLUSH=1          run 1 boots with `AppDatabase(..., flushAfterCommit:
 #                       false)`, i.e. WITHOUT the post-commit durability fix.
 #                       Required to measure the original loss (and therefore
@@ -59,6 +71,16 @@ SETTLE_SECONDS="${SETTLE_SECONDS:-15}"
 ROUTE_COUNT="${ROUTE_COUNT:-10}"
 TEARDOWN="${TEARDOWN:-kill}"
 NO_FLUSH="${NO_FLUSH:-0}"
+COI="${COI:-0}"
+# Passed to `tool/drive_web.sh` as `--web-header` values, i.e. added by the
+# `-d web-server` dev server to every response. Same three headers as
+# `web/_headers` ships to Cloudflare Pages.
+COI_HEADERS=""
+if [[ "$COI" == "1" ]]; then
+  COI_HEADERS="Cross-Origin-Opener-Policy=same-origin
+Cross-Origin-Embedder-Policy=require-corp
+Cross-Origin-Resource-Policy=same-origin"
+fi
 if [[ "$TEARDOWN" != "kill" && "$TEARDOWN" != "unload" ]]; then
   echo "FAIL: TEARDOWN must be 'kill' or 'unload', got '$TEARDOWN'." >&2
   exit 2
@@ -82,6 +104,53 @@ if [[ "$AVAIL_MB" -lt 2048 ]]; then
   exit 2
 fi
 
+IDB_DIR="$PROFILE_DIR/Default/IndexedDB"
+
+# The origin's IndexedDB directory, if Chrome wrote one.
+origin_idb() {
+  find "$IDB_DIR" -maxdepth 1 -name "http_localhost_${APP_PORT}*" -print \
+    2>/dev/null | head -1
+}
+
+# The Origin Private File System database file, which is where drift's `opfs*`
+# backends live — NOT in IndexedDB.
+#
+# Chrome puts it under `Default/File System/<bucket>/t/<dir>/<n>` (measured:
+# `Default/File System/000/t/00/00000001`, 192 KB, after a seed run on
+# `opfsLocks`). The size floor is the point of this guard: that directory tree
+# ALSO holds leveldb bookkeeping (`Paths/*.log`, `MANIFEST-*`, `.usage`) which
+# exists whether or not any origin ever stored a byte, so matching "any file"
+# would make this a rubber stamp. A sqlite database with our schema in it
+# cannot be under 16 KB, and the bookkeeping files measured under 10 KB.
+origin_opfs() {
+  find "$PROFILE_DIR/Default/File System" -type f -size +16k -print \
+    2>/dev/null | head -1
+}
+
+# The whole point of run 2 is to read what run 1 left on disk, so "run 1 wrote
+# no storage at all" must fail loudly rather than be reported as data loss.
+# Which storage counts depends on the backend the run actually used: without
+# COOP/COEP drift lands on `sharedIndexedDb` (IndexedDB), with it on
+# `opfs*` (OPFS) — where the only IndexedDB left is the app's separate photo
+# blob store, and even that only if a photo was attached.
+assert_storage_present() {
+  local idb opfs
+  idb="$(origin_idb)"
+  opfs="$(origin_opfs)"
+  echo "    origin IndexedDB  ${idb:-<none>}"
+  echo "    OPFS files        ${opfs:-<none>}"
+  if [[ "$COI" == "1" ]]; then
+    if [[ -z "$idb" && -z "$opfs" ]]; then
+      echo "FAIL: $1" >&2
+      return 1
+    fi
+  elif [[ -z "$idb" ]]; then
+    echo "FAIL: $1" >&2
+    return 1
+  fi
+  return 0
+}
+
 cleanup() {
   if [[ "${KEEP_PROFILE:-0}" == "1" ]]; then
     echo "==> keeping chrome profile at $PROFILE_DIR (KEEP_PROFILE=1)"
@@ -104,8 +173,10 @@ echo
 echo "==> RUN 1/2: writing wall -> photo -> $ROUTE_COUNT routes -> tail topo, offline"
 echo "    teardown     $TEARDOWN"
 echo "    commit flush $([[ "$NO_FLUSH" == "1" ]] && echo DISABLED || echo enabled)"
+echo "    isolation    $([[ "$COI" == "1" ]] && echo "COOP/COEP (expect opfs*)" || echo "none (expect sharedIndexedDb)")"
 WEB_PORT="$APP_PORT" \
 WEB_BROWSER_FLAGS="$BROWSER_FLAGS" \
+WEB_HEADERS="$COI_HEADERS" \
 DART_DEFINES="MASI_ORDER_RUN=$STAMP
 MASI_ORDER_SETTLE=$SETTLE_SECONDS
 MASI_ORDER_ROUTES=$ROUTE_COUNT
@@ -153,10 +224,7 @@ print(value)
   echo "    photo        $PHOTO_ID"
 fi
 
-IDB_DIR="$PROFILE_DIR/Default/IndexedDB"
-if [[ -z "$(find "$IDB_DIR" -maxdepth 1 -name "http_localhost_${APP_PORT}*" -print 2>/dev/null)" ]]; then
-  echo "FAIL: no IndexedDB storage for origin http://localhost:$APP_PORT — run 2" >&2
-  echo "      would prove nothing." >&2
+if ! assert_storage_present "no browser storage for origin http://localhost:$APP_PORT — run 2 would prove nothing."; then
   exit 1
 fi
 
@@ -180,16 +248,28 @@ rm -rf "$PROFILE_DIR/Default/Service Worker" \
        "$PROFILE_DIR/Default/GPUCache" \
        "$PROFILE_DIR/GrShaderCache" \
        "$PROFILE_DIR/ShaderCache"
-if [[ -z "$(find "$IDB_DIR" -maxdepth 1 -name "http_localhost_${APP_PORT}*" -print 2>/dev/null)" ]]; then
-  echo "FAIL: dropping the caches also removed the origin's IndexedDB." >&2
+if ! assert_storage_present "dropping the caches also removed the origin's database storage."; then
   exit 1
 fi
-echo "    ok: browser exited, code caches dropped, IndexedDB intact"
+echo "    ok: browser exited, code caches dropped, database storage intact"
 
 echo
 echo "==> RUN 2/2: cold browser, same origin + profile, network still severed"
+# Drop run 1's report BEFORE run 2 starts.
+#
+# `flutter drive` writes $RESULTS only when the test PASSES, and run 2 failing
+# is the normal shape of a positive finding (a lost row fails an assertion).
+# Without this line the stale run-1 file was still on disk, got copied to
+# $VERIFY_RESULTS, and THE MATRIX below printed run 1's fields as though they
+# were run 2's — measured: a real `ONLY_TRAILING_TRANSACTION_LOST` run printed
+# `verdict None` next to `backend sharedIndexedDb`, i.e. run 1's backend
+# beside a missing verdict, which reads like "the harness measured nothing"
+# when in fact it had measured the loss. The verdict was only in the inline
+# `result {...}` line. A missing file makes the printer say so honestly.
+rm -f "$RESULTS"
 WEB_PORT="$APP_PORT" \
 WEB_BROWSER_FLAGS="$BROWSER_FLAGS" \
+WEB_HEADERS="$COI_HEADERS" \
 DART_DEFINES="MASI_ORDER_RUN=$STAMP
 MASI_ORDER_ROUTES=$ROUTE_COUNT
 MASI_ORDER_WALL=$WALL_ID
@@ -216,6 +296,11 @@ except Exception as error:
     sys.exit(0)
 final = data.get('final_sample', {})
 print(f"    verdict         {data.get('verdict')}")
+# Which storage implementation run 2 actually opened. Printed BEFORE the
+# survivor lists because it scopes them: an `ALL_SURVIVED` on
+# `sharedIndexedDb` says nothing about the `opfs*` backend production uses,
+# and vice versa. Never read the matrix without reading this line.
+print(f"    backend         {data.get('storage_backend')} (durable={data.get('storage_is_durable')})")
 print(f"    wall on home    {final.get('wall_on_home')}")
 print(f"    TAIL wall       {final.get('tail_wall_on_home')}  (transaction-wrapped, written last)")
 print(f"    photo row       {final.get('photo_row')}")

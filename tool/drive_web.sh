@@ -35,6 +35,18 @@
 #                         contain spaces — --host-resolver-rules does.
 #   DART_DEFINES          extra `--dart-define` values, newline-separated
 #                         `KEY=VALUE` pairs.
+#   WEB_HEADERS           extra `--web-header` values, newline-separated
+#                         `Header-Name=value` pairs, added by the dev server to
+#                         EVERY response. This is the only way to make the
+#                         `-d web-server` origin CROSS-ORIGIN ISOLATED, which
+#                         is what decides whether drift picks OPFS or
+#                         IndexedDB: without COOP/COEP the harness measures
+#                         `sharedIndexedDb` while PRODUCTION (which sets both
+#                         headers in `web/_headers`) runs `opfsLocks`. Commas
+#                         are safe here — flutter declares `--web-header` with
+#                         `splitCommas: false` (flutter_command.dart:274-283),
+#                         unlike `--web-browser-flag` below.
+#                         See `tool/drive_web_write_order.sh`'s `COI=1`.
 #   DRIVE_TIMEOUT_SECS    `flutter drive --timeout` (default 300).
 #   DRIVE_WEB_PREFLIGHT_ONLY=1
 #                         run the chromedriver port hygiene + readiness check,
@@ -253,6 +265,12 @@ if [[ -n "${DART_DEFINES:-}" ]]; then
     [[ -z "$define" ]] && continue
     EXTRA_ARGS+=("--dart-define=$define")
   done <<<"$DART_DEFINES"
+fi
+if [[ -n "${WEB_HEADERS:-}" ]]; then
+  while IFS= read -r header; do
+    [[ -z "$header" ]] && continue
+    EXTRA_ARGS+=("--web-header=$header")
+  done <<<"$WEB_HEADERS"
 fi
 
 echo "==> flutter drive --target=$TARGET -d web-server (headless chrome)"
