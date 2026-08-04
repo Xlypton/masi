@@ -14,6 +14,7 @@ import '../../../core/map/masi_tile_caching_provider.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
+import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../account/application/auth_providers.dart';
@@ -25,7 +26,6 @@ import '../application/community_providers.dart';
 import '../application/map_search_providers.dart';
 import '../data/community_repository.dart';
 import '../data/map_search.dart';
-import 'community_shared.dart';
 
 /// Builds the `RetryClient`-wrapped [http.Client] used by
 /// [buildResilientTileProvider] — split out into its own top-level function

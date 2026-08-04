@@ -4,8 +4,10 @@
 // `community_map_screen.dart` (the Map tab + `_MapView`/marker/legend
 // widgets + the resilient-tile-provider helpers) and
 // `community_feed_screen.dart` (the Feed tab + `_FeedView`/row/badge
-// widgets), with the small bit shared by both (`CommunityErrorState`) in
-// `community_shared.dart`.
+// widgets). The one widget both tabs shared, `PendingIconButton`, has since
+// been promoted to `lib/shared/presentation/masi_pending_icon_button.dart`
+// (three other features wanted it), so there is no `community_shared.dart`
+// any more.
 //
 // This file stays in place and re-exports both screens (plus the
 // `@visibleForTesting` tile-provider seams `community_screen_test.dart`

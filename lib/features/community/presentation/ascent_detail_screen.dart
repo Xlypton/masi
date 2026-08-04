@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../account/application/profile_providers.dart';
 import '../../logbook/application/ascents_providers.dart';
@@ -14,7 +15,6 @@ import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
 import '../data/comments_repository.dart';
-import 'community_shared.dart';
 
 /// Read-only detail view for a single shared ("community") ascent log
 /// (Feature #12, public opt-in ascent logs): the climber's resolved display

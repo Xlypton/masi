@@ -1,16 +1,18 @@
 import 'package:flutter/material.dart';
 
-import '../../../app/theme.dart';
-import '../../../shared/presentation/masi_loading_indicator.dart';
+import '../../app/theme.dart';
+import 'masi_loading_indicator.dart';
+import 'masi_pending_button.dart';
 
 /// An [IconButton] whose action is a [Future] — the icon-shaped sibling of
-/// `MasiPendingButton`.
+/// [MasiPendingButton].
 ///
 /// That widget is the app's answer to "a button whose `onPressed` awaits", but
-/// it only comes in filled/text chrome: wearing it would turn this feature's
-/// 48 px round glyph controls (post-a-comment, the map's refresh/find-me) into
-/// labelled buttons. This keeps the glyph and copies the three guarantees that
-/// actually matter, for the same reasons — see `MasiPendingButton`'s doc:
+/// it only comes in filled/text chrome: wearing it would turn a 48 px round
+/// glyph control (post-a-comment, the map's refresh/find-me, a list row's
+/// rename/delete) into a labelled button. This keeps the glyph and copies the
+/// three guarantees that actually matter, for the same reasons — see
+/// [MasiPendingButton]'s doc:
 ///
 ///  - **One tap.** A synchronous in-flight flag drops taps arriving while the
 ///    future runs. That is the whole point here: before this, a double-tapped
@@ -120,4 +122,3 @@ class _PendingIconButtonState extends State<PendingIconButton> {
     );
   }
 }
-
