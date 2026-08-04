@@ -154,6 +154,111 @@ class _Recorder extends QueryInterceptor {
   }
 }
 
+/// Wraps [_Recorder] so the post-commit flush statement itself can be made
+/// to fail on demand, without disturbing the ordering/counting mechanics
+/// [_Recorder] already covers for every other test in this file.
+///
+/// Exists for the "flush failure propagates" test below — a residual-risk
+/// guard from a 2026-08-04 durability audit of the IndexedDB VFS
+/// (`docs/superpowers/specs/2026-07-30-web-offline-reliability-design.md`'s
+/// follow-up, task #35). That audit found two things inside
+/// `sqlite3`'s/`drift`'s pub sources that this repo cannot patch:
+///
+///  * `_IndexedDbTransaction`'s constructor wires `onabort` to the exact same
+///    handler as `oncomplete`
+///    (`sqlite3-3.5.0/lib/src/wasm/vfs/indexed_db.dart:128-133`) — an
+///    out-of-band transaction abort (unrelated to any request throwing) is
+///    reported as a plain successful completion. This is UNFIXABLE from this
+///    layer: every observation point we have (a SQL read, this very flush's
+///    `SELECT 1`) is serviced by the same conflated signal and the same
+///    in-memory mirror (`IndexedDbFileSystem._memory`) that made the false
+///    promise in the first place, so there is no independent channel here to
+///    check against. `navigator.storage.estimate()` was considered as an
+///    out-of-band signal and rejected — browsers document its usage figures
+///    as non-real-time, so it would trade a real bug for a guard that only
+///    looks like one. Opening a second, independent connection to the same
+///    IndexedDB-backed database to force a genuine re-read was also
+///    considered and rejected: sqlite3's WASM VFS assumes single-writer
+///    ownership per database name, so a concurrent second connection risks
+///    corrupting the one connection this app actually depends on — a worse
+///    outcome than the bug it would be checking for.
+///  * `_IndexedDbFile.xWrite` submits a work item and discards the `Future`
+///    `_submitWork` returns (`indexed_db.dart:711-737`) — true as written,
+///    but that specific per-item `Completer` is unconditionally resolved
+///    with `.complete()` inside `_startWorkingIfNeeded`'s `whenComplete`
+///    callback regardless of whether the batch actually succeeded
+///    (`indexed_db.dart:541-547`), so it can never carry a real failure even
+///    if awaited. The channel that DOES carry a real failure is the
+///    *outer* per-batch future from `_performWrites`/`_startWorkingIfNeeded`,
+///    which is exactly what drift's own `_WasmDelegate._flush()`
+///    (`drift-2.34.2/lib/wasm.dart:358-368`) and this repo's
+///    `AppDatabase.transaction` override both already await and propagate.
+///
+/// So the one guard that belongs at this layer isn't a new detector — it's
+/// making sure the existing propagation never regresses into a silent
+/// swallow (e.g. a future "robustness" try/catch around the flush). This
+/// interceptor simulates that outer-channel failure so the test below can
+/// pin the correct behaviour.
+class _ThrowOnFlushInterceptor extends QueryInterceptor {
+  _ThrowOnFlushInterceptor(this._inner);
+
+  final _Recorder _inner;
+
+  @override
+  TransactionExecutor beginTransaction(QueryExecutor parent) =>
+      _inner.beginTransaction(parent);
+
+  @override
+  Future<void> commitTransaction(TransactionExecutor inner) =>
+      _inner.commitTransaction(inner);
+
+  @override
+  Future<void> rollbackTransaction(TransactionExecutor inner) =>
+      _inner.rollbackTransaction(inner);
+
+  @override
+  Future<void> runCustom(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) {
+    // Matches `_Recorder.flushes`' own literal below — see
+    // `AppDatabase._postCommitFlushStatement` in `app_database.dart`.
+    if (statement.trim() == 'SELECT 1') {
+      throw StateError('simulated flush failure');
+    }
+    return _inner.runCustom(executor, statement, args);
+  }
+
+  @override
+  Future<int> runInsert(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) => _inner.runInsert(executor, statement, args);
+
+  @override
+  Future<int> runUpdate(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) => _inner.runUpdate(executor, statement, args);
+
+  @override
+  Future<int> runDelete(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) => _inner.runDelete(executor, statement, args);
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) => _inner.runSelect(executor, statement, args);
+}
+
 void main() {
   // Every test opens its own AppDatabase over its own in-memory executor;
   // drift's "multiple databases" warning is about SHARING one executor, which
@@ -399,4 +504,52 @@ void main() {
 
     await db.close();
   });
+
+  test(
+    'a flush failure propagates out of transaction() rather than being '
+    'swallowed as success',
+    () async {
+      // Task #35 (IndexedDB VFS durability audit) residual-risk guard — see
+      // `_ThrowOnFlushInterceptor`'s doc for what this stands in for and why
+      // the underlying bugs it represents can't be fixed from this layer.
+      // What CAN be guarded from here is that this override never itself
+      // becomes the silent-loss bug: if the post-commit statement throws for
+      // any reason, `transaction()` must propagate that, not report the
+      // transaction as done. This is already `AppDatabase.transaction`'s
+      // documented behaviour ("the flush is AWAITED and its failure
+      // PROPAGATES") — this test pins it down so a later change (e.g. a
+      // well-meaning `try/catch` around the flush "to be safe") gets caught
+      // instead of quietly reopening the exact hole the flush exists to
+      // close.
+      final recorder = _Recorder();
+      final failing = _ThrowOnFlushInterceptor(recorder);
+      final db = AppDatabase(
+        NativeDatabase.memory().interceptWith(failing),
+        flushAfterCommit: true,
+      );
+      await db.customSelect('SELECT 1 AS ok').get();
+      recorder.events.clear();
+
+      await expectLater(
+        db.transaction(() async {
+          await db.into(db.appSettings).insert(
+                AppSettingsCompanion.insert(settingKey: 'k', updatedAt: 1),
+              );
+        }),
+        throwsA(
+          isA<StateError>().having(
+            (e) => e.message,
+            'message',
+            'simulated flush failure',
+          ),
+        ),
+        reason: 'a flush error must propagate out of transaction(), exactly '
+            'like a failed INSERT already does — reporting success here '
+            'would be the same silent-loss bug the flush exists to prevent, '
+            'just moved one level up',
+      );
+
+      await db.close();
+    },
+  );
 }
