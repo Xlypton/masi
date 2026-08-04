@@ -208,14 +208,14 @@ class _TopoRow extends ConsumerStatefulWidget {
 ///
 /// [_locked] is the invisible re-entrancy lock and spans the whole flow,
 /// modal included. [_working] is the visible cue and spans only what the APP is
-/// doing (see [CrudBusyReporter]) — never the part where the user is reading a
+/// doing (see [MasiBusyReporter]) — never the part where the user is reading a
 /// confirm sheet, which is both wrong and unbounded.
 class _TopoRowState extends ConsumerState<_TopoRow> {
   bool _locked = false;
   bool _working = false;
 
   Future<void> _run(
-    Future<void> Function(CrudBusyReporter reportBusy) body,
+    Future<void> Function(MasiBusyReporter reportBusy) body,
   ) async {
     if (_locked) return;
     _locked = true;
@@ -350,7 +350,7 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
@@ -481,7 +481,7 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final newName = await showDialog<String>(
       context: context,
@@ -514,7 +514,7 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final repo = ref.read(libraryCrudRepositoryProvider);
     // §1c: the single local-data uid door — never `authStateProvider.asData`,
@@ -588,7 +588,7 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final confirmed = await showCupertinoModalPopup<bool>(
       context: context,
@@ -627,7 +627,7 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) {
     // The only action here with nothing to confirm, so the wait is ours from
     // the instant the menu closes.
@@ -661,7 +661,7 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final initial = (topo.latitude != null && topo.longitude != null)
         ? LatLng(topo.latitude!, topo.longitude!)
@@ -706,7 +706,7 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final colors = MasiColors.of(context);
     final confirmed = await showCupertinoModalPopup<bool>(

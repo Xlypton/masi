@@ -38,7 +38,6 @@ import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_shimmer.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../../shared/presentation/sync_banner.dart';
-import 'crud_list_scaffold.dart' show CrudBusyReporter;
 import 'move_target_picker.dart';
 import 'set_location_picker.dart';
 
@@ -333,6 +332,10 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                     value: asyncTopos,
                     onRetry: () => ref.invalidate(toposProvider),
                     errorMessage: "Couldn't load your topos",
+                    // Opted in: this is the local-first library, where the
+                    // raw drift/IO text is frequently the only diagnosis a
+                    // release build on a phone can offer (#72).
+                    showErrorDetail: true,
                     // Row-shaped, not a spinner: this list's rows are a fixed
                     // 52 px thumbnail beside two text lines, and a skeleton
                     // that does not match that makes the whole list jump when

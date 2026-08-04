@@ -5,34 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
-import '../../../shared/presentation/masi_loading_indicator.dart';
-import '../../../shared/presentation/masi_loading_gate.dart';
+import '../../../shared/presentation/masi_pending_button.dart';
+import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
-
-/// How a row action tells its row that the APP is working now — as opposed to
-/// the USER, who is the one working for as long as a dialog or confirm sheet
-/// that action opened is on screen.
-///
-/// That distinction is the whole reason this exists. Every row action here is
-/// shaped `ask the user → write`, so a cue covering the whole future spins
-/// behind the user's own name dialog for however long they take to type, and
-/// only incidentally covers the 30 ms write that is the actual wait.
-/// [MasiLoadingGate]'s anti-flash cannot rescue that: it debounces waits that
-/// turn out to be short, and "however long somebody reads a confirm sheet" is
-/// not short. So the flow reports its own boundaries instead:
-///
-/// ```dart
-/// final target = await showMoveTargetPicker(...);   // the user's turn
-/// if (target == null) return;
-/// reportBusy(true);                                 // ours from here
-/// await repo.moveSector(sector.id, target);
-/// ```
-///
-/// Reporting `false` again is only needed to hand a flow BACK to the user
-/// (`CrudListScaffold.onMove` reads the candidate list from the database
-/// before it can open its sheet, so it does exactly that); the row always
-/// clears the cue itself when the action returns.
-typedef CrudBusyReporter = void Function(bool isBusy);
 
 /// Generic AppBar + body scaffold for a "list of named entities" CRUD screen
 /// (Areas / Sectors / Walls), driven by an [AsyncValue] the caller already
@@ -115,7 +90,7 @@ class CrudListScaffold<T> extends StatelessWidget {
   /// `null` (the default) omits the move button entirely, which is how
   /// `AreasScreen`/`WallsScreen` keep their existing row layout unchanged.
   ///
-  /// The third argument is [CrudBusyReporter] — see its doc. A move
+  /// The third argument is [MasiBusyReporter] — see its doc. A move
   /// implementation has to resolve its candidate destinations from the
   /// database before it can open a sheet, and that read is a wait the user is
   /// sitting through with the row still looking idle, so it is the one action
@@ -124,7 +99,7 @@ class CrudListScaffold<T> extends StatelessWidget {
   final Future<void> Function(
     BuildContext context,
     T item,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   )?
   onMove;
 
@@ -191,6 +166,10 @@ class CrudListScaffold<T> extends StatelessWidget {
                 value: asyncItems,
                 onRetry: onRetry,
                 errorMessage: _loadFailedMessage,
+                // Opted in for the same reason as the Topos home: these
+                // lists come out of the local database, and the raw failure
+                // text is the only diagnosis available on a phone (#72).
+                showErrorDetail: true,
                 // The row shape this list is about to render, so nothing
                 // jumps when the data lands. `showSubtitle` tracks the caller
                 // rather than being hardcoded: Areas pass a `subtitleOf`
@@ -249,12 +228,21 @@ class CrudListScaffold<T> extends StatelessWidget {
                   // with no busy state anywhere, so a slow write looked like a
                   // tap that did nothing — and a second tap ran a second
                   // insert.
-                  _CreateButton(
+                  //
+                  // `onPressedArmed`, not `onPressed`: this action is `open a
+                  // name dialog → write`, so a whole-future cue would spin on
+                  // the one control still visible under the dialog's barrier
+                  // for as long as the user types (see [MasiBusyReporter]).
+                  // `buttonKey` keeps `<entityKey>-add-fab` resolving to the
+                  // ElevatedButton itself for the several tests that read its
+                  // `onPressed`/`ButtonStyle` off that key.
+                  MasiPendingButton.filled(
                     buttonKey: Key('$entityKey-add-fab'),
-                    label: addDialogTitle,
-                    onPressed: blockedReason == null
+                    expand: true,
+                    onPressedArmed: blockedReason == null
                         ? (reportBusy) => _handleCreate(context, reportBusy)
                         : null,
+                    child: Text(addDialogTitle),
                   ),
                 ],
               ),
@@ -329,7 +317,7 @@ class CrudListScaffold<T> extends StatelessWidget {
 
   Future<void> _handleCreate(
     BuildContext context,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final name = await _showNameDialog(context, title: addDialogTitle);
     if (name == null) return;
@@ -346,7 +334,7 @@ class CrudListScaffold<T> extends StatelessWidget {
   Future<void> _handleRename(
     BuildContext context,
     T item,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final name = await _showNameDialog(
       context,
@@ -372,7 +360,7 @@ class CrudListScaffold<T> extends StatelessWidget {
   Future<void> _handleDelete(
     BuildContext context,
     T item,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final id = idOf(item);
     final colors = MasiColors.of(context);
@@ -431,122 +419,6 @@ class CrudListScaffold<T> extends StatelessWidget {
   }
 }
 
-/// The bottom-pinned "New &lt;entity&gt;" button.
-///
-/// Deliberately NOT a [MasiPendingButton], and this is the one place in this
-/// feature that needed the exception. That widget's pending state necessarily
-/// spans its whole future, and this action is `open a name dialog → write`:
-/// it would therefore spin on the one control still visible under the dialog's
-/// barrier for as long as the user takes to type a name, and only incidentally
-/// cover the write afterwards. (It also hangs `pumpAndSettle` in every test
-/// that opens the dialog, since a revealed spinner never settles — measured,
-/// not predicted.)
-///
-/// So this borrows every mechanic from that widget rather than inventing one:
-/// the identical accent/13 px/14 px-padding recipe, [MasiLoadingGate] for the
-/// reveal-delay and minimum-visible timing, [MasiLoadingIndicator.inline] for
-/// the cue itself, a `maintainSize` label so the button cannot change width
-/// while it waits, and a synchronous in-flight flag (not the visual gate) as
-/// the tap-swallow. It adds the one thing that widget has no seam for: a flow
-/// that reports WHEN its wait becomes the app's (see [CrudBusyReporter]).
-class _CreateButton extends StatefulWidget {
-  const _CreateButton({
-    required this.buttonKey,
-    required this.label,
-    required this.onPressed,
-  });
-
-  /// Rides on the [ElevatedButton] itself, not on this wrapper, so
-  /// `<entityKey>-add-fab` keeps resolving to a Material button for the
-  /// several tests that read its resolved `onPressed`/`ButtonStyle`.
-  final Key buttonKey;
-  final String label;
-
-  /// `null` disables the button (the storage/load interlock). Receives the
-  /// reporter to arm the cue with once its dialog is out of the way.
-  final Future<void> Function(CrudBusyReporter reportBusy)? onPressed;
-
-  @override
-  State<_CreateButton> createState() => _CreateButtonState();
-}
-
-class _CreateButtonState extends State<_CreateButton> {
-  /// Whole-flow re-entrancy lock, dialog included. Invisible.
-  bool _locked = false;
-
-  /// The write is running. Visible (via the gate).
-  bool _working = false;
-
-  Future<void> _handleTap() async {
-    if (_locked) return;
-    final action = widget.onPressed;
-    if (action == null) return;
-    _locked = true;
-    try {
-      await action((isBusy) {
-        if (!mounted) return;
-        if (isBusy != _working) setState(() => _working = isBusy);
-      });
-    } finally {
-      _locked = false;
-      if (mounted && _working) setState(() => _working = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    final enabled = widget.onPressed != null && !_working;
-
-    return SizedBox(
-      width: double.infinity,
-      child: MasiLoadingGate(
-        isLoading: _working,
-        builder: (context, showSpinner) => ElevatedButton(
-          key: widget.buttonKey,
-          onPressed: enabled ? _handleTap : null,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: colors.accent,
-            foregroundColor: colors.onAccent,
-            // The two ways this button can be disabled must not look alike:
-            // interlocked ("you cannot do this") keeps Material's grey;
-            // working ("this is happening") keeps the accent fill, dimmed.
-            disabledBackgroundColor: _working
-                ? colors.accent.withValues(alpha: 0.6)
-                : null,
-            disabledForegroundColor: _working ? colors.onAccent : null,
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(13),
-            ),
-          ),
-          child: Stack(
-            alignment: Alignment.center,
-            children: [
-              Visibility(
-                visible: !showSpinner,
-                maintainSize: true,
-                maintainAnimation: true,
-                maintainState: true,
-                child: Text(widget.label),
-              ),
-              if (showSpinner)
-                MasiLoadingIndicator.inline(
-                  // The gate above already applied the delay and owns the
-                  // hold; re-applying either here would stack to ~360 ms.
-                  revealDelay: Duration.zero,
-                  minVisible: Duration.zero,
-                  color: colors.onAccent,
-                  semanticLabel: 'Working',
-                ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// Which of a row's three writes is in flight. Also supplies the middle
 /// segment of each button's existing widget key, so the enum and the keys
 /// cannot drift apart.
@@ -573,7 +445,7 @@ enum _CrudRowAction {
 /// [_CrudRowState._locked] is the re-entrancy lock and covers the whole flow
 /// including the modal the user is still reading; [_CrudRowState._working] is
 /// the visible cue and covers only the part the app is doing (see
-/// [CrudBusyReporter]).
+/// [MasiBusyReporter]).
 class _CrudRow extends StatefulWidget {
   const _CrudRow({
     super.key,
@@ -595,16 +467,16 @@ class _CrudRow extends StatefulWidget {
 
   /// The three actions. Each takes the ROW's own [BuildContext] — the dialogs,
   /// sheets and SnackBars they open belong to this row, not to a context
-  /// captured further up — plus the [CrudBusyReporter] it uses to say when the
+  /// captured further up — plus the [MasiBusyReporter] it uses to say when the
   /// waiting stops being the user's and starts being ours. Each is already
   /// failure-guarded by [CrudListScaffold._runGuarded], so none of them throws.
-  final Future<void> Function(BuildContext context, CrudBusyReporter reportBusy)
+  final Future<void> Function(BuildContext context, MasiBusyReporter reportBusy)
   onRename;
-  final Future<void> Function(BuildContext context, CrudBusyReporter reportBusy)
+  final Future<void> Function(BuildContext context, MasiBusyReporter reportBusy)
   onDelete;
   final Future<void> Function(
     BuildContext context,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   )?
   onMove;
 
@@ -620,18 +492,27 @@ class _CrudRowState extends State<_CrudRow> {
 
   /// Which action's own work is in flight RIGHT NOW: where the cue goes, and
   /// why the rest of the row is inert. `null` whenever the flow is merely
-  /// waiting on the user (see [CrudBusyReporter]).
+  /// waiting on the user (see [MasiBusyReporter]).
   _CrudRowAction? _working;
 
+  /// Runs one action, forwarding every busy report to BOTH the button that was
+  /// pressed (which paints the cue) and this row (which makes the other two
+  /// actions inert).
+  ///
+  /// [reportButton] comes from [PendingIconButton.onPressedArmed]. Reporting to
+  /// the button rather than rendering the cue here is what let the hand-rolled
+  /// glyph/spinner swap this row used to carry go away.
   Future<void> _run(
     _CrudRowAction action,
-    Future<void> Function(BuildContext context, CrudBusyReporter reportBusy)
+    Future<void> Function(BuildContext context, MasiBusyReporter reportBusy)
     body,
+    MasiBusyReporter reportButton,
   ) async {
     if (_locked) return;
     _locked = true;
     try {
       await body(context, (isBusy) {
+        reportButton(isBusy);
         // The row is routinely gone before its own delete settles, so every
         // report has to tolerate being late.
         if (!mounted) return;
@@ -640,38 +521,42 @@ class _CrudRowState extends State<_CrudRow> {
       });
     } finally {
       _locked = false;
+      // The button clears its own cue in its own `finally`; this only has to
+      // put the row's other two actions back.
       if (mounted && _working != null) setState(() => _working = null);
     }
   }
 
-  /// One row action's [IconButton]. Keeps its pre-existing
-  /// `<entityKey>-<action>-<id>` key and its 48×48 slot in every state — the
-  /// spinner replaces the GLYPH, not the button, so the row cannot change
-  /// height and `find.byKey` still resolves mid-write.
+  /// One row action's button. Keeps its pre-existing
+  /// `<entityKey>-<action>-<id>` key on the [IconButton] itself (via
+  /// [PendingIconButton.buttonKey]) and its 48×48 slot in every state — the cue
+  /// replaces the GLYPH, not the button, so the row cannot change height and
+  /// `find.byKey` still resolves mid-write.
+  ///
+  /// `onPressedArmed`, not `onPressed`: all three actions are `open a dialog or
+  /// confirm sheet → write`, and a cue spanning the whole future would sit
+  /// behind the modal the user is still reading (see [MasiBusyReporter]).
   Widget _actionButton({
     required _CrudRowAction action,
     required String icon,
     required String tooltip,
-    required Future<void> Function(BuildContext context, CrudBusyReporter)
+    required Future<void> Function(BuildContext context, MasiBusyReporter)
     body,
   }) {
     final colors = MasiColors.of(context);
     final busy = _working != null;
-    return IconButton(
-      key: Key('${widget.entityKey}-${action.keyPart}-${widget.id}'),
+    return PendingIconButton(
+      buttonKey: Key('${widget.entityKey}-${action.keyPart}-${widget.id}'),
       tooltip: tooltip,
-      icon: _working == action
-          // `MasiIcon`'s own size, so the glyph→cue swap is not a reflow.
-          ? const SizedBox(
-              width: 24,
-              height: 24,
-              child: Center(child: MasiLoadingIndicator.inline()),
-            )
-          // The two actions that are NOT running go visibly inert rather than
-          // merely unresponsive: `MasiIcon` is handed an explicit colour, so
-          // `IconButton`'s own disabled tint would never reach it.
-          : MasiIcon(icon, color: busy ? colors.ink3 : colors.ink2),
-      onPressed: busy ? null : () => _run(action, body),
+      // The two actions that are NOT running go visibly inert rather than
+      // merely unresponsive: `MasiIcon` is handed an explicit colour, so
+      // `IconButton`'s own disabled tint would never reach it.
+      icon: MasiIcon(icon, color: busy ? colors.ink3 : colors.ink2),
+      // Nulled for the running action too — the cue is driven by the button's
+      // own armed state, not by this callback, so it stays on screen.
+      onPressedArmed: busy
+          ? null
+          : (reportBusy) => _run(action, body, reportBusy),
     );
   }
 

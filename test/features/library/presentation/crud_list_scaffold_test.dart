@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:masi/app/theme.dart';
 import 'package:masi/features/library/presentation/crud_list_scaffold.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
+import 'package:masi/shared/presentation/masi_pending_button.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -17,7 +18,7 @@ Widget _harness({
   Future<void> Function(
     BuildContext context,
     String item,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   )?
   onMove,
   Future<void> Function(String item, String newName)? onRename,

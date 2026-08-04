@@ -6,6 +6,7 @@ import '../../../core/db/storage_durability_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../application/library_providers.dart';
 import '../data/library_crud_repository.dart';
+import '../../../shared/presentation/masi_pending_button.dart' show MasiBusyReporter;
 import 'crud_list_scaffold.dart';
 import 'move_target_picker.dart';
 
@@ -66,7 +67,7 @@ class SectorsScreen extends ConsumerWidget {
   /// sheet is dismissed without a selection.
   ///
   /// [reportBusy] is what makes the tap feel like anything at all (see
-  /// [CrudBusyReporter]). The candidate list is a database read that has to
+  /// [MasiBusyReporter]). The candidate list is a database read that has to
   /// finish BEFORE the sheet can be built, so until this reported it, tapping
   /// "Move" did nothing observable for however long that read took — the
   /// classic "is this button broken?" gap. It is reported twice: once around
@@ -77,7 +78,7 @@ class SectorsScreen extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     SectorRef sector,
-    CrudBusyReporter reportBusy,
+    MasiBusyReporter reportBusy,
   ) async {
     final repo = ref.read(libraryCrudRepositoryProvider);
     // §1c: the single local-data uid door — never `authStateProvider.asData`,
