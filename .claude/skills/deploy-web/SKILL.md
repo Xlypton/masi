@@ -102,7 +102,13 @@ curl -sSI https://climb-masi.pages.dev/ | grep -iE "cross-origin|cache-control|H
 Pass conditions:
 
 - `SHELL_VERSION` **equals the value `build_web.sh` printed in step 2.** A different value means
-  production is still serving an older shell.
+  production is still serving an older shell — **but allow for edge propagation first.** Immediately
+  after `wrangler` reports success, `climb-masi.pages.dev` can still answer with the previous
+  deployment's `sw.js` for a few tens of seconds. This has been mistaken for a failed deploy. Before
+  concluding anything, re-curl after ~30-60s and cross-check with
+  `npx wrangler pages deployment list --project-name=climb-masi` — the top row must read
+  `Production`, the expected branch, and the SHA you just gated. If the list says Production and the
+  SHA is right, it deployed; you are looking at cache lag, not a no-op.
 - `cross-origin-opener-policy: same-origin` **and** `cross-origin-embedder-policy: require-corp`
   are present. These are a **hard hosting requirement**, not hardening — wasm and drift's OPFS
   worker need the document cross-origin isolated. If they are missing, `crossOriginIsolated` is
@@ -128,8 +134,29 @@ rm -rf /tmp/masi-boot-check && "/Applications/Google Chrome.app/Contents/MacOS/G
 
 Then **read `/tmp/masi-boot-check.png` as an image.** Pass = real app UI. Fail = the purple splash
 with the boulder logo (that is `index.html`, meaning Flutter never took over), or a blank page.
-Use a **fresh `--user-data-dir` every time**, or a warm service worker will serve the previous build
-and mask exactly the failure you are checking for.
+
+Two things about this check, both learned the hard way:
+
+- **A fresh profile is structurally blind to the service-worker path.** Nothing controls the very
+  first navigation, so a first-visit screenshot cannot exercise the worker at all — and the Safari
+  redirect bug lived *only* on the worker-controlled path. So run it **twice against the same
+  `--user-data-dir`**: load 1 installs the worker, load 2 is the one that proves the controlled
+  navigation renders. (Still use a fresh dir per *deploy* — a stale profile carries the previous
+  build's worker and masks the failure you are checking for.)
+- **`--window-size` below 500px is silently ignored — this makes headless screenshots useless for
+  phone-width layout checks.** Chrome `--headless=new` floors the window width at exactly 500 CSS px:
+  requesting 200/300/390/430/499 all render at **500**, while 501 and up are honored exactly. It
+  happens with the launch flag *and* with WebDriver `window/rect`. The trap is that the screenshot is
+  then *cropped* to the width you asked for, so content looks clipped at the right edge and the
+  layout appears not to respond to width — two different "widths" produce an identical render with
+  different crops. This was misread here as a real horizontal overflow in the sign-in card. To
+  measure a genuine phone viewport, use CDP emulation instead:
+  `Emulation.setDeviceMetricsOverride({width:390, height:844, deviceScaleFactor:2, mobile:true})`
+  (via chromedriver's `chromium/send_command_and_get_result`), then confirm `window.innerWidth` really
+  reads 390 before trusting the screenshot.
+  Also note the render surface lives in a **shadow root**: `document.querySelectorAll('canvas')` finds
+  nothing, and `flt-glass-pane`'s own light-DOM rect is `0x0`. Pierce `flt-glass-pane.shadowRoot` to
+  find the real `<canvas>` and its size.
 
 Kill any Chrome you start (`pkill -f masi-boot-check`); headless Chrome with a virtual time budget
 does not always exit on its own.
@@ -196,18 +223,36 @@ Two limits worth stating explicitly every time:
 
 ## Caching model (why the headers are the way they are)
 
-`web/_headers` is the source of truth; Cloudflare Pages resolves same-named headers by **path
-specificity, not file order**.
+`web/_headers` is the source of truth. **Cloudflare Pages APPENDS the value of every matching rule
+into one comma-joined header — it does NOT resolve by path specificity, and it does not let the most
+specific rule win.** `*` also spans path separators, so `/*.wasm` already matches
+`/canvaskit/skwasm.wasm`.
+
+This caused a total outage: a `/*.wasm` block and a `/canvaskit/*.wasm` block both matched, so
+canvaskit was served `Content-Type: application/wasm, application/wasm` — not a valid MIME type, and
+Pages sets `nosniff`, so the browser could not recover. `WebAssembly.compile` threw inside
+`flutter_bootstrap.js` **before Dart's `main()` ran**, so the app's own boot deadlines could never
+fire and the page sat on the splash forever. Each individual block read perfectly well on its own.
+
+**The rule: for any given header name, exactly one block in this file may set it for a given path.**
+Do not add a narrower block to "override" a broader one — that appends instead. `test/web_hosting_config_test.dart`
+models the append semantics over the real build paths and fails if any header is set twice.
 
 - `/*` → COOP/COEP/CORP + `Cache-Control: no-cache`. Deliberately **not** `immutable`: Flutter does
   not content-hash `main.dart.wasm` / `flutter_bootstrap.js` / `index.html` per build, so
   `immutable` would pin stale code forever. Deliberately not `no-store` either — cheap 304s are
   wanted.
-- `/sqlite3.wasm`, `/drift_worker.js` → `immutable`, one year. Safe *only* because these two are
-  hand-copied and version-pinned in `web/.drift_asset_versions`, so a content change always comes
-  with a version bump.
-- `/sw.js` → `no-cache`, non-negotiable. `sw.js` is the mechanism by which a new build reaches an
-  existing installation; a long-cached one freezes a user on a stale shell.
+- `/*.wasm` → `Content-Type: application/wasm`, and **nothing else sets Content-Type anywhere**.
+- **There are no `immutable` blocks any more, and no dedicated `/sw.js` block.** Both were removed
+  when the append semantics above were understood. The old `immutable` rules for `/sqlite3.wasm` and
+  `/drift_worker.js` appended onto the blanket rule and produced the self-contradictory
+  `Cache-Control: no-cache, public, max-age=31536000, immutable`. A `/sw.js` block saying `no-cache`
+  is equally wrong — it appends to give `no-cache, no-cache`. The blanket `/*` rule already delivers
+  `no-cache` to `sw.js`, which is what matters: `sw.js` is the mechanism by which a new build reaches
+  an existing installation, so a long-cached one would freeze a user on a stale shell forever.
+
+So the whole file is two blocks. Adding a third to say something more specific is almost always the
+bug, not the fix.
 
 ## Rules
 
