@@ -213,15 +213,33 @@ void main() {
       );
     });
 
+    // Asserted against the two SPECIFIC anchors the doc must name, not the
+    // bare word 'schema' — that word is common enough that the check stayed
+    // green even with the actual mechanism and the actual alternative snippet
+    // deleted, as long as some unrelated sentence used the word. The property
+    // this exists to guard is that a future maintainer who needs to flip the
+    // trade-off can find (a) WHY it's risky, named down to the drift call
+    // that stamps the wrong version, and (b) the literal code to paste to
+    // switch strategy — not just a label for it.
     test('documents the trade-off and names the alternative', () {
       final source = _read('web/sw.js');
       expect(
         source,
-        contains('schema'),
-        reason: 'the mixed-shell risk interacts with the local database '
-            'schema version — that must be stated, not implied',
+        contains('PRAGMA user_version'),
+        reason: 'the mixed-shell risk must be tied to the actual mechanism — '
+            "drift stamping the OLDER shell's version into PRAGMA "
+            'user_version — not just gestured at with the word "schema"',
       );
-      expect(source, contains('one-load-behind'));
+      expect(
+        source,
+        contains(
+          '{ takeOverImmediately: false, networkFirstPaths: new Set() }',
+        ),
+        reason: 'the alternative must be named as the literal object '
+            'shellStrategy() would return to switch to it, so reversing the '
+            'trade-off stays the one-function edit the group above requires — '
+            'a prose label alone is not actionable',
+      );
     });
   });
 
