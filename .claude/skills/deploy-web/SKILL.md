@@ -140,6 +140,42 @@ chromedriver's WebDriver API with `"goog:loggingPrefs": {"browser": "ALL", "perf
 and pull `/session/<id>/log`, or drive CDP directly. Start chromedriver on a port other than **4444**,
 which `tool/drive_web.sh` uses.
 
+### 5b. "It paints" is not "it works" — exercise sign-in
+
+A deploy verified only as far as first paint shipped a **total sign-in lockout**: the app rendered
+its sign-in screen perfectly and "Continue with Google" did nothing at all. Google is the only
+working sign-in path on iOS (email OTP is blocked on the Supabase free tier), so painting correctly
+and being completely unusable looked identical.
+
+After the boot check, drive the sign-in button and confirm a navigation is actually attempted. It is
+a Flutter canvas app, so there is no real DOM button — click by coordinates taken from the
+screenshot, or use CDP `Input.dispatchMouseEvent`. Then assert that a request toward
+`*.supabase.co/auth/v1/authorize` or `accounts.google.com` appears in the network log.
+
+The decisive question is binary: **does the click produce any network attempt at all?** If yes, any
+failure is downstream and diagnosable. If nothing leaves the browser, the failure is in Dart before
+the network — and the likeliest shape is a swallowed error, because `url_launcher_web`'s
+`openNewWindow` **hardcodes `return true`** (it cannot detect success when `noopener` is set), so a
+refused navigation is indistinguishable from a successful one all the way up the stack.
+
+### 5c. What automation here CANNOT cover — say so, every time
+
+**No automation available on this machine can drive an iOS home-screen (standalone) PWA.** Not
+headless Chrome, not Playwright WebKit, not the simulator. That is not a gap to work around; it is a
+permanent limit to disclose.
+
+It matters because standalone mode has genuinely different behaviour: it silently refuses
+`window.open(url, '_self', 'noopener,noreferrer')`, which is exactly how the sign-in lockout above
+happened, and it can hand out-of-scope navigations to Safari — whose storage does not hold the PKCE
+verifier the PWA just wrote. Both failures are invisible to every browser this machine can drive,
+and both were measured working in headless Chrome and real headless WebKit while broken on the
+phone.
+
+So when a change touches auth, storage, navigation, or the service worker, the report must say which
+claims are proven and which need a manual check on the device — and the device check must be run in
+the **installed home-screen app**, not a Safari tab, because a tab can pass while the installed app
+fails.
+
 ### 6. Report honestly
 
 Say the production URL, and say what was verified versus what was not. Distinguish "the server
