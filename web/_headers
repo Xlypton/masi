@@ -9,9 +9,32 @@
 # `require-corp` is stricter than `credentialless` but this app has no
 # cross-origin embeds that need the relaxed mode, so pick the safer default.
 #
-# Cloudflare Pages also needs an explicit content-type for *.wasm — without
-# it some edge configs serve wasm as application/octet-stream, which some
-# browsers refuse to `instantiateStreaming()`.
+# ---------------------------------------------------------------------------
+# HOW CLOUDFLARE PAGES COMBINES RULES — read this before adding a block.
+#
+# Cloudflare Pages does NOT resolve a repeated header name by path specificity.
+# When more than one rule matches a request, it **appends** every matching
+# rule's value into a single comma-joined header. An earlier version of this
+# file asserted the opposite ("resolves by path specificity, not file order"),
+# and that false assumption shipped two live bugs:
+#
+#   1. `/*.wasm` and `/canvaskit/*.wasm` BOTH matched /canvaskit/skwasm.wasm,
+#      so it was served `Content-Type: application/wasm, application/wasm` —
+#      not a valid MIME type. With `X-Content-Type-Options: nosniff` set (as
+#      Pages does), a browser cannot recover from that by sniffing, and
+#      `WebAssembly.instantiateStreaming()` MIME-checks its response.
+#   2. `/*` and `/sqlite3.wasm` both matched, so that asset was served
+#      `Cache-Control: no-cache, public, max-age=31536000, immutable` —
+#      directly self-contradictory directives.
+#
+# Note that `*` spans path separators: `/*.wasm` already matches
+# `/canvaskit/skwasm.wasm`. A second, "more specific" block for a subdirectory
+# is therefore not an override — it is a duplicate.
+#
+# THE RULE: for any given header name, exactly one block in this file may set
+# it for a given path. If you need a different value for a subpath, you cannot
+# also set that header on `/*` — restructure instead of layering.
+# ---------------------------------------------------------------------------
 #
 # Anti-stale-shell reload fix (#55): Flutter's default cleanup service worker
 # (`flutter_service_worker.js`) calls `client.navigate(client.url)` on
@@ -24,11 +47,27 @@
 # Flutter does not content-hash these filenames per build, so `immutable`
 # would pin stale code forever) means "cache it, but always revalidate via
 # ETag first": a cheap 304 when nothing changed, always-fresh the moment a
-# new build lands. Applied via the blanket `/*` block below (same block that
-# sets COOP/COEP) rather than enumerating every shell/asset path individually
-# — it's simpler, and everything under this build EXCEPT the two
-# hand-versioned drift/sqlite assets called out further down is unversioned,
-# so this blanket rule is still the right default for everything else.
+# new build lands.
+#
+# Cache-Control is set ONCE, on the blanket `/*` block, and nowhere else. Per
+# the rule above, a second block could only append to it, never replace it.
+# There is deliberately no long-cache exception for the two hand-versioned
+# drift/sqlite assets: an exception is not expressible here without dropping
+# Cache-Control from `/*`, and dropping it would leave every path this file
+# forgot to enumerate on Cloudflare's default heuristic caching — which is
+# exactly the #55 stale-shell failure. Revalidating those two costs a
+# conditional request that answers 304, and offline reads come from the
+# service worker's precache (they are in sw.js's manifest), not from the HTTP
+# cache, so the long-cache was buying very little to begin with.
+#
+# This also means /sw.js needs no block of its own: `/*` already gives it
+# `no-cache`, which is mandatory — sw.js is how a new build reaches an
+# existing installation. `tool/gen_sw_manifest.dart` stamps a content-derived
+# SHELL_VERSION into it at build time, that byte change is what makes the
+# browser treat the worker as updated, and its install then precaches the new
+# shell. A long-cached sw.js would strand a user on one shell version. Do not
+# add a /sw.js block to "make that explicit" — under append semantics it would
+# produce `no-cache, no-cache`.
 
 /*
   Cross-Origin-Opener-Policy: same-origin
@@ -36,41 +75,9 @@
   Cross-Origin-Resource-Policy: same-origin
   Cache-Control: no-cache
 
+# Cloudflare Pages needs an explicit content-type for *.wasm — without it some
+# edge configs serve wasm as application/octet-stream, which browsers refuse to
+# `instantiateStreaming()`. This single block covers every .wasm in the build,
+# including everything under /canvaskit/, because `*` spans path separators.
 /*.wasm
   Content-Type: application/wasm
-
-/canvaskit/*.wasm
-  Content-Type: application/wasm
-
-# Long-cache the drift/sqlite web-worker assets. Unlike the shell files
-# above, these two are NOT emitted per Flutter build -- they're hand-copied
-# into web/ and version-pinned against the locked `drift` package version in
-# `web/.drift_asset_versions` (checked by `tool/build_web.sh`'s asset-drift
-# gate), so a content change always comes with a version bump + redeploy
-# rather than a same-URL silent swap. That makes them safe to mark
-# `immutable`, unlike `main.dart.wasm`/`main.dart.js` (deliberately NOT
-# covered here -- those filenames are unversioned per build, so caching them
-# immutably would reintroduce the #55 stale-shell bug the `/*` block above
-# fixes). Cloudflare Pages resolves same-named headers by path specificity,
-# not file order, so these override the `/*` block's `no-cache` for exactly
-# these two paths while every other header from `/*` (COOP/COEP/CORP) still
-# applies.
-/sqlite3.wasm
-  Cache-Control: public, max-age=31536000, immutable
-
-/drift_worker.js
-  Cache-Control: public, max-age=31536000, immutable
-
-# The service worker itself must ALWAYS be revalidated. `sw.js` is how a new
-# build reaches an existing installation: `tool/gen_sw_manifest.dart` stamps a
-# content-derived SHELL_VERSION into it at build time, the byte change is what
-# makes the browser treat the worker as updated, and its install then
-# precaches the new shell. A long-cached sw.js would freeze a user on one
-# shell version indefinitely — the exact "stranded on a half-updated shell"
-# failure the offline work exists to prevent. The blanket `/*` block above
-# already sets `no-cache`; this restates it explicitly and non-negotiably so a
-# future caching sweep cannot fold sw.js in with the `immutable` assets above
-# by accident. Browsers additionally cap service-worker script caching at 24h
-# regardless, but 24h of staleness is still 24h too many for a rollover path.
-/sw.js
-  Cache-Control: no-cache

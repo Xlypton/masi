@@ -110,11 +110,53 @@ Pass conditions:
 - `cache-control: no-cache` on the shell. This means "cache but always revalidate", which is what
   keeps a returning visitor from booting a stale shell against new app code.
 
-### 5. Report honestly
+### 5. Prove it BOOTS — headers are not evidence of function
 
-Say the production URL, and say what was verified versus what was not. In particular: headless
-Chrome passing is **not** evidence about iOS Safari, which is where the PWA actually gets used and
-where tab reclaim and WebKit quirks bite. If a change has only been proven in Chrome, say so.
+**Steps 1-4 can all pass on a site that is completely broken.** This has happened: a deploy was
+verified by shell version + headers, declared live and ready to test, and the app was in fact stuck
+on the splash screen forever. Correct bytes and correct headers say the *server* is right; they say
+nothing about whether the app runs.
+
+Load the production URL in a real browser and confirm the app actually paints:
+
+```bash
+rm -rf /tmp/masi-boot-check && "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --disable-gpu --no-first-run --user-data-dir=/tmp/masi-boot-check \
+  --virtual-time-budget=30000 --screenshot=/tmp/masi-boot-check.png --window-size=430,900 \
+  https://climb-masi.pages.dev/
+```
+
+Then **read `/tmp/masi-boot-check.png` as an image.** Pass = real app UI. Fail = the purple splash
+with the boulder logo (that is `index.html`, meaning Flutter never took over), or a blank page.
+Use a **fresh `--user-data-dir` every time**, or a warm service worker will serve the previous build
+and mask exactly the failure you are checking for.
+
+Kill any Chrome you start (`pkill -f masi-boot-check`); headless Chrome with a virtual time budget
+does not always exit on its own.
+
+If it fails, get the real console error — do not guess. `--enable-logging`/`--v=1` do **not** surface
+page-level console messages in `headless=new`; they emit only Chrome's own GCM/GPU noise. Use
+chromedriver's WebDriver API with `"goog:loggingPrefs": {"browser": "ALL", "performance": "ALL"}`
+and pull `/session/<id>/log`, or drive CDP directly. Start chromedriver on a port other than **4444**,
+which `tool/drive_web.sh` uses.
+
+### 6. Report honestly
+
+Say the production URL, and say what was verified versus what was not. Distinguish "the server
+serves the right build" from "the app works" — they are separate claims needing separate evidence,
+and conflating them is how a broken deploy gets announced as ready.
+
+Two limits worth stating explicitly every time:
+
+- **Headless Chrome passing is not evidence about iOS Safari**, which is where this PWA actually
+  gets used, and where tab reclaim and WebKit quirks bite. If a change is proven only in Chrome,
+  say so.
+- **The local harness is not cross-origin isolated; production is.** `tool/drive_web.sh` serves via
+  `-d web-server` with no COOP/COEP, so `crossOriginIsolated === false` and drift selects an
+  IndexedDB backend. The deployed site sets COOP/COEP, so `crossOriginIsolated === true` and the
+  OPFS / threaded paths come into play. **A green local suite therefore cannot speak for the code
+  path the live site runs.** To test that path locally, serve `build/web` from a static server that
+  sets the COOP/COEP headers itself and load that.
 
 ## Caching model (why the headers are the way they are)
 
