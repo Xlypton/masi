@@ -135,6 +135,27 @@ class PhotoFiles {
     } catch (_) {}
   }
 
+  /// Whether the logical key [stored] currently holds bytes on this device.
+  ///
+  /// A PRESENCE probe, not a read: [PhotoByteStore.exists] looks the key up
+  /// without loading the (potentially multi-megabyte) blob, which is what makes
+  /// it affordable to ask about many keys in a row — `PublicPhotoPruneService`
+  /// asks it about every key it is considering evicting, because a `Photos` row
+  /// naming a key is NOT evidence that the key holds anything (a pruned or
+  /// budget-skipped public photo is defined as exactly that: a row whose bytes
+  /// are absent).
+  ///
+  /// NEVER throws, and answers `false` when it cannot tell — mirroring
+  /// [deletePhotoBytes]'s best-effort stance, and erring the safe way for its
+  /// caller: "we don't know" must mean "don't spend a deletion on it".
+  Future<bool> hasPhotoBytes(String stored) async {
+    try {
+      return await _store.exists(stored);
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Synchronous counterpart to [resolvePhotoPath] — identical passthrough,
   /// since resolution here never needs to await anything.
   PhotoPathResolution resolvePhotoPathSync(String stored) =>

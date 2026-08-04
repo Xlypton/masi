@@ -257,6 +257,45 @@ void main() {
     );
   });
 
+  group('hasPhotoBytes', () {
+    // The presence probe `PublicPhotoPruneService` decides deletions off. It
+    // must agree with deletePhotoBytes above by construction — same memoized
+    // docs path, same sync resolution — because a `true` it cannot back up is
+    // what makes a prune pass spend its whole budget freeing nothing.
+    test('true for a file that is really there, false for one that is not, '
+        'once the docs path is warmed', () async {
+      await photoFiles.warmDocsPath();
+      File(p.join(photosDirPath(), 'abc123.jpg'))
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(List<int>.filled(8, 1));
+
+      expect(await photoFiles.hasPhotoBytes('photos/abc123.jpg'), isTrue);
+      expect(await photoFiles.hasPhotoBytes('photos/nope.jpg'), isFalse);
+    });
+
+    test('goes false again after deletePhotoBytes — the pruned state a public '
+        'photo row is left in', () async {
+      await photoFiles.warmDocsPath();
+      File(p.join(photosDirPath(), 'abc123.jpg'))
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(List<int>.filled(8, 1));
+
+      await photoFiles.deletePhotoBytes('photos/abc123.jpg');
+
+      expect(await photoFiles.hasPhotoBytes('photos/abc123.jpg'), isFalse);
+    });
+
+    test('a COLD docs path answers false, exactly where deletePhotoBytes '
+        'no-ops — the two must never disagree about whether there is '
+        'something to delete', () async {
+      final throwingDocsDir = PhotoFiles(
+        docsDir: () async => throw StateError('no path_provider here'),
+      );
+
+      expect(await throwingDocsDir.hasPhotoBytes('photos/abc123.jpg'), isFalse);
+    });
+  });
+
   group('resolvePhotoPath', () {
     // resolvePhotoPath resolves off PhotoFiles' MEMOIZED docs path and never
     // awaits path_provider on its hot path (so it can't hang a widget pump —

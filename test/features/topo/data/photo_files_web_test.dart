@@ -177,4 +177,52 @@ void main() {
       expect(await store.exists('thumbs/abc123.jpg'), isTrue);
     });
   });
+
+  // `PublicPhotoPruneService` decides what to delete off this answer, and a
+  // wrong `true` is what made a whole prune pass "delete" 50 keys and free
+  // nothing (see that service's "A ROW is not BYTES").
+  group('hasPhotoBytes tells a stored key from a merely-named one', () {
+    test('true only while the bytes are actually there — a written key becomes '
+        'false again the moment it is deleted, which is the state a pruned or '
+        'budget-skipped public photo is permanently in', () async {
+      final store = IdbPhotoByteStore(factory: newIdbFactoryMemory());
+      final files = PhotoFiles(byteStore: store);
+
+      expect(
+        await files.hasPhotoBytes('photos/abc123.jpg'),
+        isFalse,
+        reason: 'a key nothing ever wrote holds nothing',
+      );
+
+      await files.writePhotoBytes('abc123', '.jpg', const [1, 2]);
+      expect(await files.hasPhotoBytes('photos/abc123.jpg'), isTrue);
+
+      await files.deletePhotoBytes('photos/abc123.jpg');
+      expect(await files.hasPhotoBytes('photos/abc123.jpg'), isFalse);
+    });
+
+    test('a store that cannot answer reports FALSE rather than throwing — '
+        '"cannot tell" must never authorise a deletion', () async {
+      final files = PhotoFiles(byteStore: _UnansweringStore());
+
+      expect(await files.hasPhotoBytes('photos/abc123.jpg'), isFalse);
+    });
+  });
+}
+
+/// [PhotoByteStore] whose presence probe always throws — a closed connection,
+/// a blocked upgrade, private-browsing limits.
+class _UnansweringStore implements PhotoByteStore {
+  @override
+  Future<bool> exists(String key) async =>
+      throw DatabaseError('InvalidStateError: database is closed');
+
+  @override
+  Future<void> writeBytes(String key, Uint8List bytes) async {}
+
+  @override
+  Future<Uint8List?> readBytes(String key) async => null;
+
+  @override
+  Future<void> delete(String key) async {}
 }

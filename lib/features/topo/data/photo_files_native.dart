@@ -354,6 +354,29 @@ class PhotoFiles {
     }
   }
 
+  /// Whether the original at [stored] currently exists on disk.
+  ///
+  /// Resolved through exactly the same path [deletePhotoBytes] uses — the
+  /// memoized [_cachedDocsPath] plus [resolvePhotoPathSync], never awaiting
+  /// `path_provider` — so the two agree by construction, which is the property
+  /// its caller depends on: `true` here means a following [deletePhotoBytes]
+  /// really does have a file to delete, and a cold docs path answers `false`
+  /// for precisely the reason that method no-ops there. NEVER throws; an
+  /// unanswerable probe is `false`.
+  ///
+  /// (`PublicPhotoPruneService` is the only caller and is a permanent no-op on
+  /// native — `navigator.storage` does not exist, so nothing ever evicts an
+  /// iOS/Android documents directory. This exists so the shared service, and
+  /// its `flutter test` runs, have one honest answer on every backend.)
+  Future<bool> hasPhotoBytes(String stored) async {
+    if (_cachedDocsPath == null) return false;
+    try {
+      return await File(resolvePhotoPathSync(stored).path).exists();
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// Resolves and memoizes the app-documents directory path, so a later
   /// synchronous [resolvePhotoPathSync] can join relative photo paths
   /// without awaiting. One-shot: concurrent/repeat calls share a single
