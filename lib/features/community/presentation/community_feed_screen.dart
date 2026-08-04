@@ -161,12 +161,14 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
 class _FeedSkeleton extends StatelessWidget {
   const _FeedSkeleton();
 
-  /// The measured height of [_FeedView]'s real search row — its `TextField`
-  /// (17 px text, `MasiSpacing.md` vertical content padding) is taller than the
-  /// 48 px filter [IconButton] beside it, so the field is what sets the row's
-  /// height. Asserted against the real screen in `community_loading_test.dart`
-  /// so this cannot silently drift out of match.
-  static const double searchRowHeight = 56;
+  /// The MEASURED height of [_FeedView]'s real search row: its `TextField`
+  /// (17 px text in Material's default outline content padding) is taller than
+  /// the 48 px filter [IconButton] beside it, so the field is what sets the
+  /// row's height. Not a guess and not a round number on purpose — it is
+  /// asserted against the real screen in `community_loading_test.dart`, so a
+  /// change to the field's decoration fails that test instead of silently
+  /// reintroducing the jump this skeleton exists to prevent.
+  static const double searchRowHeight = 58;
 
   @override
   Widget build(BuildContext context) {
@@ -182,7 +184,11 @@ class _FeedSkeleton extends StatelessWidget {
           child: Row(
             children: const [
               Expanded(
-                child: MasiSkeleton.box(height: searchRowHeight, radius: 24),
+                child: MasiSkeleton.box(
+                  key: Key('community-feed-skeleton-search'),
+                  height: searchRowHeight,
+                  radius: 24,
+                ),
               ),
               SizedBox(width: MasiSpacing.sm),
               // The filter button's glyph, not its 48 px hit box: an empty

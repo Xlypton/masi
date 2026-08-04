@@ -6,6 +6,9 @@ import '../../../app/theme.dart';
 import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/routes/route_styles.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_loading_gate.dart';
+import '../../../shared/presentation/masi_skeleton.dart';
+import '../../account/application/auth_providers.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../topo/domain/topo_route.dart';
 import '../../topo/presentation/canvas_chrome.dart';
@@ -15,6 +18,7 @@ import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
 import '../data/comments_repository.dart';
+import 'community_shared.dart';
 
 /// Read-only detail view for a single shared ("community") topo: a
 /// collapsing header showing the wall's photo + route overlays (tap it to
@@ -105,21 +109,102 @@ class _CommunityTopoDetailScreenState
     super.dispose();
   }
 
+  /// The OPTIMISTIC liked state — what this device just did, shown
+  /// immediately, until [hasLikedWallProvider] catches up. `null` means "no
+  /// pending toggle; trust the provider".
+  ///
+  /// A like is deliberately the one action here that shows no spinner: it is a
+  /// single reversible bit whose entire value is feeling instant, and a heart
+  /// that greys out mid-tap reads as broken. Instant flip, rollback with a
+  /// message if the write fails. See `AscentDetailScreen`'s identical field.
+  bool? _likeOverride;
+
+  /// In-flight guard for [_toggleLike] — without one, two quick taps ran two
+  /// toggles against the same row.
+  bool _likeInFlight = false;
+
+  /// Bound on [_resolveAuthorName]'s wait. See that method.
+  static const Duration _authorNameTimeout = Duration(seconds: 3);
+
   Future<void> _toggleLike() async {
-    await ref.read(likesRepositoryProvider).toggleLike(widget.wallId);
-    if (!mounted) return;
+    if (_likeInFlight) return;
+    final wallId = widget.wallId;
+    final current =
+        _likeOverride ?? ref.read(hasLikedWallProvider(wallId)).value ?? false;
+    _likeInFlight = true;
+    // Instant feedback, before any await.
+    setState(() => _likeOverride = !current);
+
+    try {
+      await ref.read(likesRepositoryProvider).toggleLike(wallId);
+    } catch (error) {
+      _likeInFlight = false;
+      if (!mounted) return;
+      setState(() => _likeOverride = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't save your like — please try again")),
+      );
+      return;
+    }
+
+    if (!mounted) {
+      _likeInFlight = false;
+      return;
+    }
     // hasLikedWallProvider is a one-shot FutureProvider (LikesRepository
-    // exposes no watchHasLiked) — invalidate it so the heart glyph reflects
-    // the toggle immediately. likeCountForWallProvider needs no such nudge:
-    // it's a live StreamProvider that re-emits on its own once the write
-    // above lands.
-    ref.invalidate(hasLikedWallProvider(widget.wallId));
+    // exposes no watchHasLiked), so it has to be refreshed by hand.
+    // `refresh(.future)` rather than `invalidate`: the override may only be
+    // dropped once the REFRESHED answer is in — an invalidated provider still
+    // reports its stale value until then, which would flicker the heart back
+    // through the pre-tap state.
+    //
+    // likeCountForWallProvider needs no nudge: it's a live StreamProvider that
+    // re-emits once the write lands. The count is deliberately left to it
+    // rather than hand-incremented — that is how a wrong number gets on screen.
+    try {
+      // ignore: unused_result
+      await ref.refresh(hasLikedWallProvider(wallId).future);
+    } catch (_) {
+      // The write landed; a failed re-read is not worth telling anyone about.
+    }
+    _likeInFlight = false;
+    if (mounted) setState(() => _likeOverride = null);
+  }
+
+  /// The `authorName` to stamp on a new comment, waiting out an auth state that
+  /// has not resolved YET rather than stamping the fallback.
+  ///
+  /// [currentAuthorNameProvider] derives the name from [authStateProvider] and
+  /// returns `'Anonymous'` whenever there is no email — which is correct for a
+  /// signed-OUT user and wrong for a signed-in one whose auth stream simply has
+  /// not emitted yet (it emits asynchronously, a microtask at best). The
+  /// pre-existing `ref.watch` in [build] warms the provider, but warming is not
+  /// waiting: a comment posted in this screen's first instants was still
+  /// attributed to 'Anonymous', permanently, for a named user. Now the post
+  /// button is a pending control, so this can simply wait.
+  ///
+  /// Bounded and total: a stream that errors (an uninitialized Supabase makes
+  /// [authStateProvider] a permanent `AsyncError` — see `router.dart`'s doc) or
+  /// never emits inside [_authorNameTimeout] falls through to exactly the old
+  /// behaviour rather than blocking the post.
+  Future<String> _resolveAuthorName() async {
+    final auth = ref.read(authStateProvider);
+    if (!auth.hasValue && !auth.hasError) {
+      try {
+        await ref.read(authStateProvider.future).timeout(_authorNameTimeout);
+      } catch (_) {
+        // Fall through: read whatever the provider says now.
+      }
+      if (!mounted) return 'Anonymous';
+    }
+    return ref.read(currentAuthorNameProvider);
   }
 
   Future<void> _submitComment() async {
     final body = _commentController.text.trim();
     if (body.isEmpty) return;
-    final authorName = ref.read(currentAuthorNameProvider);
+    final authorName = await _resolveAuthorName();
+    if (!mounted) return;
     await ref
         .read(commentsRepositoryProvider)
         .addComment(wallId: widget.wallId, body: body, authorName: authorName);
@@ -194,17 +279,29 @@ class _CommunityTopoDetailScreenState
     final wallId = widget.wallId;
     final colors = MasiColors.of(context);
     final likeCount = ref.watch(likeCountForWallProvider(wallId)).value ?? 0;
-    final hasLiked = ref.watch(hasLikedWallProvider(wallId)).value ?? false;
-    final comments =
-        ref.watch(commentsForWallProvider(wallId)).value ?? const [];
-    final routeEntries =
-        ref.watch(routeEntriesForWallProvider(wallId)).value ?? const [];
+    final hasLiked =
+        _likeOverride ?? ref.watch(hasLikedWallProvider(wallId)).value ?? false;
+    // `hasValue` is tracked, not just the value: an empty list means "no
+    // comments/routes" and a first load means "not known yet", and rendering
+    // the former for the latter is what made this screen state, in writing,
+    // that a topo had no comments before it had read them (see the gates in
+    // `_buildComments`/`_buildRoutesSection`).
+    final asyncComments = ref.watch(commentsForWallProvider(wallId));
+    final comments = asyncComments.value ?? const <Comment>[];
+    final asyncRoutes = ref.watch(routeEntriesForWallProvider(wallId));
+    final routeEntries = asyncRoutes.value ?? const <RouteEntry>[];
     // Chrome-title fix: the collapsing header used to show no title at all
     // (just a back button), leaving the viewer with no way to tell which
-    // topo they're looking at once they'd scrolled past its photo. Mirrors
-    // topo_canvas_screen.dart's own `wallNameProvider` fallback: 'Topo'
-    // both while still loading and if the wall genuinely has no name.
+    // topo they're looking at once they'd scrolled past its photo.
+    //
+    // 'Topo' is the fallback for a wall with no name AND for a failed read —
+    // mirroring topo_canvas_screen.dart's own `wallNameProvider` fallback — but
+    // NOT for a read still in flight. Loading is not the same as unknown: the
+    // old `maybeWhen(orElse:)` collapsed the two, so a real topo's name landed
+    // as a visible flash of the placeholder. A first load gets a title-shaped
+    // skeleton instead (see the header's `title:` below).
     final wallName = ref.watch(wallNameProvider(wallId));
+    final titleLoading = !wallName.hasValue && !wallName.hasError;
     final title = wallName.maybeWhen(
       data: (name) => (name == null || name.isEmpty) ? 'Topo' : name,
       orElse: () => 'Topo',
@@ -310,15 +407,28 @@ class _CommunityTopoDetailScreenState
                     // expanded and switching to `colors.ink` once
                     // collapsed onto the now-solid `colors.surface`
                     // app-bar background (see `_headerCollapsed`).
-                    title: Text(
-                      title,
-                      key: const Key('community-detail-title'),
-                      overflow: TextOverflow.ellipsis,
-                      style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w700,
-                        color: _headerCollapsed ? colors.ink : Colors.white,
-                      ),
-                    ),
+                    title: titleLoading
+                        // Reserved at the real title's line height (titleLarge
+                        // 22) and roughly a name's width, so the resolved name
+                        // lands in the same place rather than shoving the
+                        // header's layout around when it arrives.
+                        ? const SizedBox(
+                            key: Key('community-detail-title-skeleton'),
+                            width: 160,
+                            child: MasiSkeleton.line(width: 160),
+                          )
+                        : Text(
+                            title,
+                            key: const Key('community-detail-title'),
+                            overflow: TextOverflow.ellipsis,
+                            style: Theme.of(context).textTheme.titleLarge
+                                ?.copyWith(
+                                  fontWeight: FontWeight.w700,
+                                  color: _headerCollapsed
+                                      ? colors.ink
+                                      : Colors.white,
+                                ),
+                          ),
                     background: IgnorePointer(
                       // NON-interactive: the embedded TopoCanvasScreen's own
                       // pan/zoom (InteractiveViewer) and tap-to-select would
@@ -424,17 +534,35 @@ class _CommunityTopoDetailScreenState
                     ),
                   ),
                   const SizedBox(height: MasiSpacing.sm),
-                  if (comments.isEmpty)
-                    Text(
-                      'No comments yet — be the first',
-                      key: const Key('community-comments-empty'),
-                      style: Theme.of(
-                        context,
-                      ).textTheme.bodyMedium?.copyWith(color: colors.ink2),
-                    )
-                  else
-                    for (final comment in comments)
-                      _CommentRow(comment: comment),
+                  // Gated so the three states stay distinct: nothing at all
+                  // for a read that resolves inside the reveal delay (the
+                  // normal local case), a shaped placeholder for a slower one,
+                  // and "no comments yet" ONLY once that is actually known.
+                  MasiLoadingGate(
+                    isLoading: !asyncComments.hasValue,
+                    builder: (context, showSkeleton) {
+                      if (showSkeleton) return const _CommentsSkeleton();
+                      if (comments.isEmpty) {
+                        return Text(
+                          'No comments yet — be the first',
+                          key: const Key('community-comments-empty'),
+                          style: Theme.of(
+                            context,
+                          ).textTheme.bodyMedium?.copyWith(color: colors.ink2),
+                        );
+                      }
+                      return Column(
+                        // Stretch: these rows were direct children of the
+                        // sliver list before, i.e. full width.
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          for (final comment in comments)
+                            _CommentRow(comment: comment),
+                        ],
+                      );
+                    },
+                  ),
                   const SizedBox(height: MasiSpacing.md),
                   if (storageBlocked != null)
                     // The composer is replaced rather than merely disabled: an
@@ -501,14 +629,25 @@ class _CommunityTopoDetailScreenState
                         valueListenable: _commentController,
                         builder: (context, value, _) {
                           final canSubmit = value.text.trim().isNotEmpty;
-                          return IconButton(
-                            key: const Key('community-comment-submit'),
+                          // Pending, not plain: posting awaits an author-name
+                          // resolution and a Drift write, and an unguarded
+                          // double tap posted the comment twice.
+                          return PendingIconButton(
+                            buttonKey: const Key('community-comment-submit'),
                             tooltip: 'Post comment',
                             icon: MasiIcon(
                               'send_fill',
                               color: canSubmit ? colors.accent : colors.ink2,
                             ),
                             onPressed: canSubmit ? _submitComment : null,
+                            onError: (error, stackTrace) =>
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                      "Couldn't post your comment — please try again",
+                                    ),
+                                  ),
+                                ),
                           );
                         },
                       ),
@@ -517,7 +656,12 @@ class _CommunityTopoDetailScreenState
                   const SizedBox(height: MasiSpacing.lg),
                   const Divider(),
                   const SizedBox(height: MasiSpacing.sm),
-                  _buildRoutesSection(context, colors, routeEntries),
+                  _buildRoutesSection(
+                    context,
+                    colors,
+                    routeEntries,
+                    loading: !asyncRoutes.hasValue,
+                  ),
                 ]),
               ),
             ),
@@ -535,8 +679,9 @@ class _CommunityTopoDetailScreenState
   Widget _buildRoutesSection(
     BuildContext context,
     MasiColors colors,
-    List<RouteEntry> routeEntries,
-  ) {
+    List<RouteEntry> routeEntries, {
+    required bool loading,
+  }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -581,14 +726,26 @@ class _CommunityTopoDetailScreenState
               borderRadius: BorderRadius.circular(MasiRadii.card),
               boxShadow: kMasiAmbientShadow,
             ),
-            child: Column(
-              children: [
-                for (var i = 0; i < routeEntries.length; i++) ...[
-                  _buildRouteRow(context, colors, routeEntries[i]),
-                  if (i != routeEntries.length - 1)
-                    Divider(height: 1, thickness: 1, color: colors.separator),
-                ],
-              ],
+            // Same three-state gate as the comments above: an empty card is
+            // "this topo has no routes", which must not be what a read still
+            // in flight looks like.
+            child: MasiLoadingGate(
+              isLoading: loading,
+              builder: (context, showSkeleton) => showSkeleton
+                  ? _RouteRowsSkeleton(colors: colors)
+                  : Column(
+                      children: [
+                        for (var i = 0; i < routeEntries.length; i++) ...[
+                          _buildRouteRow(context, colors, routeEntries[i]),
+                          if (i != routeEntries.length - 1)
+                            Divider(
+                              height: 1,
+                              thickness: 1,
+                              color: colors.separator,
+                            ),
+                        ],
+                      ],
+                    ),
             ),
           ),
       ],
@@ -671,8 +828,11 @@ class _CommunityTopoDetailScreenState
           ),
           const SizedBox(width: MasiSpacing.sm),
           if (route.betaVideoUrl != null)
-            IconButton(
-              key: Key('route-beta-${entry.dbId}'),
+            // Pending: handing off to an external app is a platform round trip
+            // that can take a beat, and a second tap while it ran launched the
+            // URL twice.
+            PendingIconButton(
+              buttonKey: Key('route-beta-${entry.dbId}'),
               tooltip: 'Watch beta video',
               visualDensity: VisualDensity.compact,
               icon: MasiIcon('globe'),
@@ -696,6 +856,95 @@ class _CommunityTopoDetailScreenState
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Placeholder for the comment thread's first load: two comments' worth of
+/// author + body lines, at [_CommentRow]'s own geometry (its `vertical: xs`
+/// padding, an author line at labelLarge 14 over a body line at bodyMedium 17).
+///
+/// Text slots are scaled by [MediaQuery.textScalerOf] for the same reason the
+/// shared composites scale theirs — an unscaled skeleton only matches at the
+/// default text size.
+class _CommentsSkeleton extends StatelessWidget {
+  const _CommentsSkeleton();
+
+  @override
+  Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    return Column(
+      key: const Key('community-comments-skeleton'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < 2; i++)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: MasiSpacing.xs),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MasiSkeleton.textLine(
+                  fontSize: scaler.scale(14),
+                  widthFactor: 0.25,
+                ),
+                MasiSkeleton.textLine(
+                  fontSize: scaler.scale(17),
+                  widthFactor: i == 0 ? 0.8 : 0.55,
+                ),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// Placeholder for the Routes card's first load: two rows' worth of grade pill
+/// + route-name line, inside the card the real rows fill, with the same
+/// hairline separator between them.
+///
+/// The trailing "Log ascent" button and the beta-video control are deliberately
+/// NOT drawn — a shimmering control invites a tap on something that cannot be
+/// tapped (the same rule [MasiSkeletonListRow] follows for its own trailing
+/// icon buttons).
+class _RouteRowsSkeleton extends StatelessWidget {
+  const _RouteRowsSkeleton({required this.colors});
+
+  final MasiColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final scaler = MediaQuery.textScalerOf(context);
+    return Column(
+      key: const Key('community-routes-skeleton'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        for (var i = 0; i < 2; i++) ...[
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: MasiSpacing.md),
+            child: Row(
+              children: [
+                // The leading `_GradeBadge` pill.
+                const MasiSkeleton.box(
+                  width: 34,
+                  height: 22,
+                  radius: MasiRadii.control,
+                ),
+                const SizedBox(width: MasiSpacing.sm),
+                Expanded(
+                  child: MasiSkeleton.textLine(
+                    fontSize: scaler.scale(15),
+                    widthFactor: i == 0 ? 0.55 : 0.4,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (i == 0) Divider(height: 1, thickness: 1, color: colors.separator),
+        ],
+      ],
     );
   }
 }
