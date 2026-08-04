@@ -15,7 +15,9 @@ import 'package:masi/app/theme.dart';
 import 'package:masi/core/location/geocoding_service.dart';
 import 'package:masi/features/backup/application/backup_providers.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
+import 'package:masi/core/location/location_service.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -157,6 +159,22 @@ Future<BuildContext> _pumpHarness(
     ),
   );
   return capturedContext;
+}
+
+/// A [LocationService] double whose fix only lands when [gate] is completed,
+/// so a test can observe the "use my location" button DURING the fix rather
+/// than only after it. [calls] proves a second tap mid-fix starts nothing.
+class _GatedLocationService implements LocationService {
+  _GatedLocationService(this.gate);
+
+  final Completer<DeviceLocation?> gate;
+  int calls = 0;
+
+  @override
+  Future<DeviceLocation?> currentLocation() {
+    calls++;
+    return gate.future;
+  }
 }
 
 void main() {
@@ -787,5 +805,124 @@ void main() {
         expect(InteractiveFlag.hasScrollWheelZoom(flags), isTrue);
       },
     );
+  });
+
+  // Both waits on this screen were completely unannounced: a debounced network
+  // place lookup, and a cold GPS fix that can take seconds.
+  group('the picker reports its own waits', () {
+    testWidgets('the search field shows a cue while the lookup is in flight, '
+        'never during the debounce', (tester) async {
+      final controller = MapController();
+      addTearDown(controller.dispose);
+      final geocoding = _FakeGeocodingService([_railay]);
+      final slow = Completer<List<PlaceResult>>();
+      geocoding.pending['railay'] = slow;
+
+      final context = await _pumpHarness(tester);
+      unawaited(
+        showSetLocationPicker(
+          context,
+          tileProvider: _NoopTileProvider(),
+          controller: controller,
+          geocodingService: geocoding,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final cue = find.descendant(
+        of: find.byKey(const Key('set-location-search-progress')),
+        matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('set-location-search-field')),
+        'railay',
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(
+        cue,
+        findsNothing,
+        reason: '350ms of "searching…" on every keystroke pause is noise — the '
+            'cue belongs to the lookup, not to the debounce',
+      );
+
+      // Past the debounce: the lookup is now genuinely in flight, but still
+      // inside the reveal delay.
+      await tester.pump(const Duration(milliseconds: 400));
+      expect(geocoding.callCount, 1);
+      expect(
+        cue,
+        findsNothing,
+        reason: 'a lookup that answers inside the anti-flash window must paint '
+            'no cue at all',
+      );
+
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(cue, findsOneWidget);
+
+      slow.complete([_railay]);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(cue, findsNothing);
+      expect(
+        find.byKey(const Key('set-location-search-result-0')),
+        findsOneWidget,
+      );
+    });
+
+    testWidgets('"use my location" reports the fix it is waiting on and takes '
+        'exactly one tap', (tester) async {
+      final controller = MapController();
+      addTearDown(controller.dispose);
+      final gate = Completer<DeviceLocation?>();
+      final location = _GatedLocationService(gate);
+
+      final context = await _pumpHarness(tester);
+      unawaited(
+        showSetLocationPicker(
+          context,
+          tileProvider: _NoopTileProvider(),
+          controller: controller,
+          locationService: location,
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final fab = find.byKey(const Key('set-location-my-location'));
+      final cue = find.descendant(
+        of: find.byKey(const Key('set-location-locating')),
+        matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+      );
+
+      await tester.tap(fab);
+      await tester.pump();
+      expect(location.calls, 1);
+      expect(cue, findsNothing, reason: 'anti-flash window');
+
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(cue, findsOneWidget);
+      expect(
+        tester.widget<FloatingActionButton>(fab).onPressed,
+        isNull,
+        reason: 'every impatient re-tap used to start another concurrent fix, '
+            'whose late answer could yank the camera off a position the user '
+            'had since panned to by hand',
+      );
+
+      await tester.tap(fab, warnIfMissed: false);
+      await tester.pump();
+      expect(location.calls, 1);
+
+      gate.complete((latitude: 8.0104, longitude: 98.8375));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(cue, findsNothing);
+      expect(
+        tester.widget<FloatingActionButton>(fab).onPressed,
+        isNotNull,
+      );
+      expect(controller.camera.center.latitude, closeTo(8.0104, 1e-4));
+    });
   });
 }

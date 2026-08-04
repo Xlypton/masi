@@ -12,6 +12,7 @@ import '../../../app/theme.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../community/presentation/community_screen.dart'
     show buildResilientTileHttpClient, buildResilientTileProvider;
@@ -179,6 +180,22 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
   /// it was set up for.
   String? _lastProgrammaticQuery;
 
+  /// A settled query's lookup is actually in flight right now — i.e. the
+  /// 350 ms debounce has already elapsed and [GeocodingService.search] (a
+  /// network call) has not answered yet.
+  ///
+  /// Drives the cue in the search field's suffix slot. Without it the field
+  /// simply sat there: you stopped typing, nothing whatsoever happened for as
+  /// long as the lookup took, and then a dropdown either appeared or did not.
+  /// Deliberately NOT set during the debounce itself — 350 ms of "searching…"
+  /// on every keystroke pause is noise, and the app has a single anti-flash
+  /// rule ([MasiLoadingGate]) for exactly this judgement.
+  bool _searching = false;
+
+  /// A device fix requested from the "use my location" button is in flight.
+  /// Both the re-entrancy guard and the cue — see [_useMyLocation].
+  bool _locating = false;
+
   @override
   void initState() {
     super.initState();
@@ -279,6 +296,10 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
       setState(() {
         _searchResults = const [];
         _searchOffline = false;
+        // Emptying the field abandons whatever was in flight, so the cue goes
+        // with it. (A superseded search deliberately does NOT clear this — see
+        // [_runSearch] — so the clear has to happen here.)
+        _searching = false;
       });
       return;
     }
@@ -316,18 +337,34 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
   Future<void> _runSearch(String query, int seq) async {
     final GeocodingService service =
         widget.geocodingService ?? ref.read(geocodingServiceProvider);
+    // The cue is armed here rather than when the debounce was scheduled: this
+    // is the instant the network call starts, and it is the only part of the
+    // typing→dropdown journey the user is waiting on the app for. It has to be
+    // cleared on EVERY exit below, including the superseded-generation ones,
+    // or a fast typist leaves a cue spinning over a search nobody wants.
+    setState(() => _searching = true);
     final results = await service.search(query);
-    if (!mounted || seq != _searchSeq) return;
+    if (!mounted) return;
+    if (seq != _searchSeq) {
+      // A newer query (or a clear) already owns the field; that search's own
+      // `_searching = true` is the state that must stand, so this stale one
+      // must not clear it.
+      return;
+    }
     if (results.isEmpty) {
+      // Still working: the empty answer is ambiguous, and the reachability
+      // probe that disambiguates it is a second round-trip.
       final verdict = await _safeRefreshReachability();
       if (!mounted || seq != _searchSeq) return;
       setState(() {
+        _searching = false;
         _searchResults = const [];
         _searchOffline = verdict.isKnownOffline;
       });
       return;
     }
     setState(() {
+      _searching = false;
       _searchResults = results.take(5).toList();
       _searchOffline = false;
     });
@@ -363,6 +400,9 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     setState(() {
       _locationChosen = true;
       _searchResults = const [];
+      // The pick supersedes any lookup still in flight (the seq bump above), so
+      // nothing is going to clear the cue for us.
+      _searching = false;
     });
     _searchFocusNode.unfocus();
   }
@@ -389,9 +429,20 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
   /// never throws — a `null` result (denied/disabled/unavailable) surfaces
   /// as a brief SnackBar instead of moving the map.
   Future<void> _useMyLocation() async {
+    // A cold GPS fix is seconds, not milliseconds, and this button had neither
+    // a cue nor a guard: the map sat still, and every impatient re-tap started
+    // another concurrent fix whose late answer could yank the camera off a
+    // position the user had since panned to by hand.
+    if (_locating) return;
+    setState(() => _locating = true);
     final LocationService service =
         widget.locationService ?? ref.read(locationServiceProvider);
-    final location = await service.currentLocation();
+    final DeviceLocation? location;
+    try {
+      location = await service.currentLocation();
+    } finally {
+      if (mounted) setState(() => _locating = false);
+    }
     if (!mounted) return;
     if (location == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -623,6 +674,29 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                         minWidth: 0,
                         minHeight: 0,
                       ),
+                      // Always mounted, flag-driven, so the suffix slot is the
+                      // same size whether or not a lookup is running — the
+                      // field cannot resize under the user's cursor mid-type.
+                      // Being mounted through the transition is also the only
+                      // way the minimum-visible hold can apply (see
+                      // `MasiLoadingIndicator`'s "usage 2").
+                      suffixIcon: Padding(
+                        padding: const EdgeInsets.only(left: 8, right: 12),
+                        child: MasiLoadingIndicator.inline(
+                          key: const Key('set-location-search-progress'),
+                          isLoading: _searching,
+                          color: colors.ink3,
+                          semanticLabel: 'Searching for places',
+                          child: const SizedBox(
+                            width: MasiLoadingIndicator.inlineSize,
+                            height: MasiLoadingIndicator.inlineSize,
+                          ),
+                        ),
+                      ),
+                      suffixIconConstraints: const BoxConstraints(
+                        minWidth: 0,
+                        minHeight: 0,
+                      ),
                       filled: true,
                       fillColor: colors.surface2,
                       border: OutlineInputBorder(
@@ -795,10 +869,27 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
           ),
         ],
       ),
+      // Not a `MasiPendingButton`: that widget paints the app's filled/text
+      // button recipes, and this is a Material extended FAB. It gets the same
+      // treatment by hand instead — a synchronous in-flight guard in
+      // [_useMyLocation], `onPressed: null` while it runs, and the icon slot
+      // swapped for the shared gated cue at its exact 24 px size so the label
+      // beside it cannot shift.
       floatingActionButton: FloatingActionButton.extended(
         key: const Key('set-location-my-location'),
-        onPressed: _useMyLocation,
-        icon: MasiIcon('my_location'),
+        onPressed: _locating ? null : _useMyLocation,
+        icon: SizedBox(
+          width: 24,
+          height: 24,
+          child: Center(
+            child: MasiLoadingIndicator.inline(
+              key: const Key('set-location-locating'),
+              isLoading: _locating,
+              semanticLabel: 'Finding your location',
+              child: MasiIcon('my_location'),
+            ),
+          ),
+        ),
         label: const Text('Use my location'),
       ),
     );
