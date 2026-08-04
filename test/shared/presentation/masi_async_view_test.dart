@@ -41,7 +41,6 @@ ProviderContainer _container() {
 Widget _wrap(
   ProviderContainer container,
   FutureProvider<List<String>> provider, {
-  int? retryCounter,
   void Function()? onRetryHook,
 }) {
   return UncontrolledProviderScope(
