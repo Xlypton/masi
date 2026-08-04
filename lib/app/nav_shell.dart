@@ -2,10 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../core/db/storage_durability_provider.dart';
 import '../features/account/application/pwa_install_providers.dart';
 import '../features/topo/presentation/canvas_chrome.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'install_banner.dart';
+import 'storage_retry_banner.dart';
 import 'theme.dart';
 
 /// The app's persistent bottom-navigation shell, wrapping the three primary
@@ -59,14 +61,13 @@ class NavShell extends ConsumerWidget {
     // native iOS/Android, tests) this stays false and behavior is unchanged.
     final isStandalone = ref.watch(pwaInstallStatusProvider).isStandalone;
     return Scaffold(
-      // The dismissible "Add to Home Screen" banner (#59) sits ABOVE the
-      // branch content, never covering the floating bottom bar. It collapses
-      // to zero height off-web / once installed / after dismissal (see
-      // [InstallBanner]), so on those (the overwhelmingly common) paths this
-      // is just `navigationShell` in an `Expanded` — no visual change.
+      // At most ONE shell notice sits ABOVE the branch content, never covering
+      // the floating bottom bar — see [ShellNotices]. On the overwhelmingly
+      // common path it collapses to zero height and this is just
+      // `navigationShell` in an `Expanded`, exactly as before.
       body: Column(
         children: [
-          const InstallBanner(),
+          const ShellNotices(),
           Expanded(child: navigationShell),
         ],
       ),
@@ -178,5 +179,38 @@ class _NavTab extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+/// The shell's notice slot: at most ONE banner above the branch content.
+///
+/// Why a single slot rather than a stack of banners. Each notice owns clearing
+/// the status-bar/notch inset itself (there is no AppBar), which it does with
+/// its own `SafeArea(top: true)`. Two SIBLING `SafeArea`s each add the full
+/// inset — `MediaQuery.removePadding` only affects a widget's own subtree — so
+/// stacking two notices would open a status-bar-height gap between them. And
+/// when a notice has nothing to say it must collapse to TRULY zero height, so
+/// wrapping the pair in one shared `SafeArea` is not an option either: it would
+/// leave a stray gap above the content on the normal path.
+///
+/// The priority is not arbitrary. [StorageRetryBanner] wins because storage
+/// being unopenable is the only condition here that can lose the user's work,
+/// and because "add this app to your home screen" is absurd advice while the
+/// app cannot open its own storage — suppressing the install prompt on that
+/// path is the right call regardless of the layout constraint above.
+class ShellNotices extends ConsumerWidget {
+  const ShellNotices({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    // Deliberately keyed off `storageRetryNotice` rather than
+    // `StorageDurability.isEphemeral`: a merely-slow open (`isProbing`) and the
+    // two failures no re-open can fix (an L7 schema downgrade, a blocked
+    // in-memory browser backend) all return null, so this never turns a slow
+    // boot into an alarm and never offers a button that cannot work. See that
+    // function's doc.
+    final notice = storageRetryNotice(ref.watch(storageDurabilityProvider));
+    if (notice != null) return StorageRetryBanner(notice: notice);
+    return const InstallBanner();
   }
 }

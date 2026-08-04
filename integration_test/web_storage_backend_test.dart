@@ -28,22 +28,36 @@
 //     test now pins is the behaviour we actually ship: pin-to-existing-
 //     storage, which costs us the L8 lock-in and cannot cost us the library.
 //
-// HARNESS NOTE: `flutter drive` has no `--web-header` flag, so the
-// `-d web-server` device cannot send COOP/COEP. Without cross-origin
-// isolation there is no SharedArrayBuffer, so drift's probe never offers
-// `opfsLocks` (drift wasm_setup.dart:124-131 requires
-// `supportsSharedArrayBuffers`), and `opfsShared` needs nested workers which
-// only Firefox implements. That limit no longer weakens assertion 2: with the
-// move disabled, staying on IndexedDB is the required outcome whether or not
-// OPFS is on offer, so the assertion is now unconditional.
+// HARNESS NOTE — CORRECTED. An earlier version of this comment claimed
+// "`flutter drive` has no `--web-header` flag, so the `-d web-server` device
+// cannot send COOP/COEP", and every web durability measurement taken before
+// 2026-08-04 inherited that belief: they all ran on a NON-isolated origin, so
+// drift chose `sharedIndexedDb` while production (COOP/COEP via `web/_headers`)
+// runs `opfsLocks`. The claim was false. `DriveCommand extends RunCommandBase`
+// (flutter_tools `commands/drive.dart:56`), and `RunCommandBase` calls
+// `usesWebOptions` (`commands/run.dart:228`), which registers `web-header`
+// (`runner/flutter_command.dart:274-283`) — hidden from the non-verbose help,
+// which is how it stayed unnoticed. `flutter drive --help -v | grep web-header`
+// shows it.
+//
+// So COOP/COEP IS reachable from this harness: `WEB_HEADERS` in
+// `tool/drive_web.sh`, or `COI=1` in `tool/drive_web_write_order.sh`. Which
+// backend a run used is therefore never something to assume — this test
+// reports it into `reportData` (`build/integration_response_data.json`)
+// alongside `crossOriginIsolated`, so any measurement can be scoped to the
+// storage that actually ran.
+//
+// Assertion 2 holds either way: with the IndexedDB->OPFS move disabled,
+// staying on IndexedDB is the required outcome whether or not OPFS is on offer.
 import 'package:drift/wasm.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/connection/connection.dart';
+import 'package:web/web.dart' as web;
 
 void main() {
-  IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   testWidgets(
     'the real openConnection() resolves to a DURABLE backend, never inMemory',
@@ -60,6 +74,17 @@ void main() {
 
       expect(verdicts, hasLength(1));
       final verdict = verdicts.single;
+      // Reported, not merely asserted: which backend a browser run landed on
+      // is the scope of every durability finding taken in that run, and
+      // `crossOriginIsolated` is the input that decides it.
+      binding.reportData = <String, Object?>{
+        'cross_origin_isolated': web.window.crossOriginIsolated,
+        'storage_backend': verdict.backend?.name,
+        'storage_is_durable': verdict.isDurable,
+        'missing_features': [
+          for (final feature in verdict.missingFeatures) feature.name,
+        ],
+      };
       expect(
         verdict.backend,
         isNot(StorageBackend.inMemory),

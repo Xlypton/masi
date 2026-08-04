@@ -240,6 +240,45 @@ String? storageBlockedNotice(StorageDurability durability) {
       'when the page reloads.';
 }
 
+/// One sentence for a storage failure that is worth RE-ATTEMPTING, or `null`
+/// when there is nothing to re-attempt.
+///
+/// UF-4 follow-up. `main.dart`'s boot deadlines already stop a database that
+/// never opens from hanging the app forever — at `kBootStorageDeadline` the
+/// verdict is published as [StorageDurability.unavailable] and the app renders
+/// anyway. What was missing is a way OUT: the storage banner's advice is
+/// "reload to try again", and on an installed PWA there is no visible reload
+/// control at all, so the only remedy was force-quitting. This drives the
+/// in-app retry affordance (`app/storage_retry_banner.dart`).
+///
+/// THREE STATES DELIBERATELY RETURN `null`:
+///  - [StorageDurability.isProbing] — a merely SLOW open. The deadlines exist
+///    precisely so a slow open still paints; turning that into an alarming
+///    "storage isn't responding" would be a bug, not a feature. Note the
+///    boot-stall verdict is itself REVERSIBLE (see
+///    `_reportStalledStorageAtBoot` in `main.dart`): a database that answers
+///    after 40s clears this notice on its own;
+///  - a healthy or merely non-durable backend (in practice
+///    [StorageBackend.inMemory]) — nothing failed, so nothing can be
+///    re-attempted. Re-opening a private-browsing session's storage yields the
+///    same in-memory backend every time; the honest advice stays
+///    [storageBlockedNotice]'s;
+///  - [StorageUnavailableCause.schemaDowngrade] — the open was REFUSED on
+///    purpose by an older app shell (L7). Re-attempting it would be refused
+///    again, identically and forever; the remedy is a newer app.
+///
+/// Deliberately shorter than [storageBlockedNotice]'s equivalents: this sits on
+/// a compact banner whose point is the button next to it, and on the Library
+/// screen the full explanation is already on-screen underneath.
+String? storageRetryNotice(StorageDurability durability) {
+  if (!durability.unavailable) return null;
+  if (durability.unavailableCause == StorageUnavailableCause.schemaDowngrade) {
+    return null;
+  }
+  return "Your topos couldn't be opened — this device's storage isn't "
+      'responding. Nothing has been deleted.';
+}
+
 /// Logs [durability] — deliberately NOT behind `kDebugMode`.
 ///
 /// This line is the only thing that can answer a "my data vanished" web

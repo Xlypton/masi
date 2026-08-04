@@ -70,23 +70,46 @@ final appDatabaseProvider = Provider<AppDatabase>((ref) {
 /// `hydrate()`'s `ensureOpen` (so it costs one trivial statement, not a
 /// second open) and is bounded by the same `awaitBootWork` deadlines. Never
 /// throws: boot must not be taken down by its own probe.
-Future<void> verifyDatabaseUsable(ProviderContainer container) async {
+Future<void> verifyDatabaseUsable(ProviderContainer container) =>
+    probeDatabaseUsable(
+      openDatabase: () => container.read(appDatabaseProvider),
+      report: container.read(storageDurabilityProvider.notifier).report,
+    );
+
+/// [verifyDatabaseUsable]'s body, with the two provider reads lifted into
+/// parameters.
+///
+/// Exists because the probe now has TWO callers that reach it through
+/// different Riverpod handles: boot holds a [ProviderContainer], while
+/// `StorageRetryController` (`storage_retry_provider.dart`) holds a `Ref`, and
+/// the two share no common `read` interface. Keeping one probe rather than two
+/// matters for correctness, not tidiness: the retry must publish its verdict
+/// through exactly the same statement and the same classification as boot, or
+/// "retry" would come to mean something subtly different from "boot".
+///
+/// [openDatabase] is a CALLBACK, not an [AppDatabase], so that a synchronously
+/// throwing `openConnection` (native's shape) is caught here too — this
+/// function's contract is that it never throws.
+Future<void> probeDatabaseUsable({
+  required AppDatabase Function() openDatabase,
+  required void Function(StorageDurability) report,
+}) async {
   try {
-    await container.read(appDatabaseProvider).customSelect('SELECT 1').get();
+    await openDatabase().customSelect('SELECT 1').get();
   } catch (error) {
     // The CAUSE is classified here rather than left for the UI to infer from
     // the reason string: an L7 refusal and a dead storage backend both land on
     // `unavailable`, but they are opposite news for the user — a downgrade
     // means the library is provably intact and needs a newer app, a failure
     // means storage itself is unusable. See `StorageUnavailableCause`.
-    container.read(storageDurabilityProvider.notifier).report(
-          StorageDurability.unavailable(
-            '$error',
-            cause: error is SchemaDowngradeException
-                ? StorageUnavailableCause.schemaDowngrade
-                : StorageUnavailableCause.failed,
-          ),
-        );
+    report(
+      StorageDurability.unavailable(
+        '$error',
+        cause: error is SchemaDowngradeException
+            ? StorageUnavailableCause.schemaDowngrade
+            : StorageUnavailableCause.failed,
+      ),
+    );
   }
 }
 
