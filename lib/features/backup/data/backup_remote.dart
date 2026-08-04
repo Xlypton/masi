@@ -15,7 +15,28 @@ class RemoteSnapshot {
   });
 
   final Map<String, dynamic> snapshot;
-  final int schemaVersion;
+
+  /// The `schema_version` COLUMN's value, or `null` when the row made no
+  /// readable claim (the column is absent, SQL `NULL`, or holds something
+  /// that is not a Dart `int`).
+  ///
+  /// Nullable ON PURPOSE, and the policy matches
+  /// [BackupRepository.assertRestorable] exactly — the one place in the app
+  /// that decides what a version stamp means:
+  ///  - a stamp NEWER than this build is refused
+  ///    ([SnapshotSchemaDowngradeException]);
+  ///  - a MISSING or non-`int` stamp is "no claim was made", which is
+  ///    importable.
+  ///
+  /// This used to be a non-nullable `int` filled by a hard
+  /// `row['schema_version'] as int` cast, which threw on exactly the values
+  /// the policy says to allow — turning a row that predates the column, or a
+  /// column PostgREST decoded as anything but an `int`, into a restore that
+  /// fails with a `TypeError` instead of one that simply proceeds. Deciding
+  /// the same question two different ways in two files is the drift this
+  /// nullability exists to prevent.
+  final int? schemaVersion;
+
   final DateTime updatedAt;
 }
 
@@ -73,6 +94,32 @@ abstract class BackupRemote {
   Future<Set<String>> listPhotoObjectPaths(String uid);
 }
 
+/// Maps one `public.backups` row, as PostgREST decoded it, onto a
+/// [RemoteSnapshot].
+///
+/// A top-level function rather than an inline expression inside
+/// [SupabaseBackupRemote.fetchSnapshot] for one reason: it is the only place
+/// the app decodes that row's metadata contract, and it is unit-testable here
+/// without a `SupabaseClient` (see `test/features/backup/data/
+/// backup_remote_test.dart`) — whereas inside `fetchSnapshot` the only way to
+/// exercise it is a real network round trip, which is why the hard
+/// `row['schema_version'] as int` cast it replaces was never covered.
+RemoteSnapshot remoteSnapshotFromRow(Map<String, dynamic> row) {
+  // `is int` rather than `as int`. The test is deliberately IDENTICAL to
+  // `BackupRepository.assertRestorable`'s (`declaredVersion is int`), so the
+  // two cannot disagree about which values count as a version claim —
+  // anything else becomes `null`, i.e. "this row did not say", which
+  // `CloudBackupService.pullBackup` then treats as importable rather than
+  // fatal. See [RemoteSnapshot.schemaVersion] for why absence must stay
+  // importable.
+  final declaredVersion = row['schema_version'];
+  return RemoteSnapshot(
+    snapshot: (row['snapshot'] as Map).cast<String, dynamic>(),
+    schemaVersion: declaredVersion is int ? declaredVersion : null,
+    updatedAt: DateTime.parse(row['updated_at'] as String),
+  );
+}
+
 /// Real [BackupRemote], backed by the Supabase client.
 ///
 /// SECURITY: like every other client-side Supabase usage in this app, this
@@ -112,12 +159,7 @@ class SupabaseBackupRemote implements BackupRemote {
         .eq('user_id', uid)
         .maybeSingle();
     if (row == null) return null;
-
-    return RemoteSnapshot(
-      snapshot: (row['snapshot'] as Map).cast<String, dynamic>(),
-      schemaVersion: row['schema_version'] as int,
-      updatedAt: DateTime.parse(row['updated_at'] as String),
-    );
+    return remoteSnapshotFromRow(row);
   }
 
   @override

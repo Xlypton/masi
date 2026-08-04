@@ -373,3 +373,64 @@ CREATE POLICY "profiles_owner_write" ON public.profiles FOR ALL TO authenticated
 -- whatever is currently on screen.
 CREATE POLICY "profiles_any_select" ON public.profiles FOR SELECT TO authenticated
   USING (true);
+
+-- ============================================================================
+-- Full-snapshot cloud backup: public.backups
+-- ============================================================================
+--
+-- This table ALREADY EXISTS in the live project but was missing from this
+-- file, which is the schema-drift bug class behind #64/#65/#72 — a fresh
+-- project provisioned from this file alone would come up without it, and
+-- `CloudBackupService`'s push/pull would fail on every call. The delta script
+-- for existing projects is `migrations/20260804_backups_table.sql`.
+--
+-- ONE ROW PER USER, keyed by the auth uid: `SupabaseBackupRemote.fetchSnapshot`
+-- (`lib/features/backup/data/backup_remote.dart`) reads it with
+-- `.eq('user_id', uid).maybeSingle()`, and `upsertSnapshot` overwrites in
+-- place by primary key.
+--
+-- Column names are snake_case here, UNLIKE every camelCase table above. That
+-- is not an inconsistency to "fix": those tables' columns must match Drift's
+-- `toJson()` keys 1:1 because the row-level sync engine pushes rows
+-- unfiltered, whereas these four keys are written by hand in
+-- `SupabaseBackupRemote.upsertSnapshot` and renaming one would break the
+-- client. The whole Drift snapshot (including its own camelCase
+-- `schemaVersion` stamp) lives inside the `snapshot` JSONB blob.
+CREATE TABLE IF NOT EXISTS public.backups (
+  -- Compared against `auth.uid()` (a uuid) directly by the policy below, so
+  -- this is UUID rather than the TEXT used for the sync tables' "ownerId"
+  -- (which are compared against `auth.uid()::text`).
+  user_id UUID PRIMARY KEY NOT NULL,
+  -- `BackupRepository.exportSnapshot()`'s map, verbatim:
+  -- `{schemaVersion: <int>, tables: {profiles: [...], areas: [...], ...}}`.
+  snapshot JSONB NOT NULL,
+  -- Duplicates the blob's own `schemaVersion` so the ceiling check can be
+  -- applied without parsing megabytes of JSON. NOT NULL because the client
+  -- always writes it — but the CLIENT no longer requires it: a missing or
+  -- non-int value reads back as "no claim was made" and stays importable
+  -- (see `RemoteSnapshot.schemaVersion`), matching
+  -- `BackupRepository.assertRestorable`.
+  schema_version INTEGER NOT NULL,
+  -- ISO-8601 UTC, written by the client on every upsert
+  -- (`DateTime.now().toUtc().toIso8601String()`) and parsed back with
+  -- `DateTime.parse`.
+  updated_at TIMESTAMPTZ NOT NULL
+);
+
+-- ---------- PRIVILEGES (RLS still restricts WHICH rows) ----------
+GRANT SELECT, INSERT, UPDATE, DELETE
+  ON public.backups
+  TO authenticated;
+
+-- ---------- ENABLE ROW LEVEL SECURITY ----------
+-- Without this the snapshot blob — every topo, route and ascent the user
+-- owns, private ones included — is readable by any authenticated user.
+ALTER TABLE public.backups ENABLE ROW LEVEL SECURITY;
+
+-- ---------- ROW POLICIES ----------
+-- Owner-only, in BOTH directions and for every verb: there is no shared or
+-- public read path for a full-library snapshot, unlike the sync tables where
+-- a published wall grants SELECT to others.
+DROP POLICY IF EXISTS "backups_owner_all" ON public.backups;
+CREATE POLICY "backups_owner_all" ON public.backups FOR ALL TO authenticated
+  USING (user_id = auth.uid()) WITH CHECK (user_id = auth.uid());
