@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/masi_pending_button.dart';
 import '../../account/application/profile_providers.dart';
 import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
@@ -63,42 +64,33 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
   /// `false` ('private') — sharing is opt-in, never on by default.
   bool _shared = false;
 
-  /// Re-entrancy guard for [_save] — without it, a double-tap on the Save
-  /// button (e.g. a slow repo write) fires `logAscent` twice and logs a
-  /// duplicate ascent.
-  bool _saving = false;
-
   @override
   void dispose() {
     _notesController.dispose();
     super.dispose();
   }
 
+  /// The re-entrancy guard that used to live here as a `_saving` bool — without
+  /// which a double-tap on Save logged a duplicate ascent — is now
+  /// [MasiPendingButton]'s: it swallows a second tap in the same frame and
+  /// stays disabled for the whole flight.
   Future<void> _save() async {
-    if (_saving) return;
-    setState(() => _saving = true);
-    try {
-      final notes = _notesController.text.trim();
-      final authorName = ref.read(myDisplayNameProvider).asData?.value;
-      await ref
-          .read(ascentsRepositoryProvider)
-          .logAscent(
-            routeId: widget.routeId,
-            wallId: widget.wallId,
-            climbedAt: DateTime.now(),
-            style: _style,
-            notes: notes.isEmpty ? null : notes,
-            shared: _shared,
-            authorName: authorName,
-          );
-      if (mounted) {
-        FocusManager.instance.primaryFocus?.unfocus();
-        Navigator.of(context).pop();
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _saving = false);
-      }
+    final notes = _notesController.text.trim();
+    final authorName = ref.read(myDisplayNameProvider).asData?.value;
+    await ref
+        .read(ascentsRepositoryProvider)
+        .logAscent(
+          routeId: widget.routeId,
+          wallId: widget.wallId,
+          climbedAt: DateTime.now(),
+          style: _style,
+          notes: notes.isEmpty ? null : notes,
+          shared: _shared,
+          authorName: authorName,
+        );
+    if (mounted) {
+      FocusManager.instance.primaryFocus?.unfocus();
+      Navigator.of(context).pop();
     }
   }
 
@@ -148,19 +140,18 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
             ),
           ),
           const SizedBox(height: MasiSpacing.md),
-          SizedBox(
-            width: double.infinity,
-            child: ElevatedButton(
-              key: Key('${widget.keyPrefix}-ascent-save'),
-              onPressed: _saving ? null : _save,
-              child: _saving
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Text('Save'),
+          MasiPendingButton.filled(
+            key: Key('${widget.keyPrefix}-ascent-save'),
+            expand: true,
+            onPressed: _save,
+            onError: (error, stackTrace) => ScaffoldMessenger.of(
+              context,
+            ).showSnackBar(
+              const SnackBar(
+                content: Text("Couldn't log this ascent — please try again"),
+              ),
             ),
+            child: const Text('Save'),
           ),
         ],
       ),

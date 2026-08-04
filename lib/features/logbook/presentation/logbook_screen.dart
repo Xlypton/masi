@@ -7,7 +7,10 @@ import '../../../core/grades/grade_system.dart';
 import '../../../shared/filtering/ascent_type_filter_chips.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
+import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_loading_indicator.dart';
+import '../../../shared/presentation/masi_skeleton.dart';
 import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
 import 'logbook_providers.dart';
@@ -46,8 +49,21 @@ class LogbookScreen extends ConsumerWidget {
         ],
       ),
       body: SafeArea(
-        child: asyncEntries.when(
-          data: (entries) {
+        child: MasiAsyncView<List<LogbookEntry>>(
+          value: asyncEntries,
+          onRetry: () => ref.invalidate(logbookEntriesProvider),
+          errorMessage: "Couldn't load your logbook",
+          // The real rows are `_LogbookRow`s — a 40 px grade swatch, a
+          // title/wall/style stack and a trailing icon — which is exactly
+          // `MasiSkeletonListRow`'s shape, inset with the same padding
+          // `_LogbookList` uses so nothing shifts when the data lands.
+          skeleton: (context) => const MasiSkeletonList.listRows(
+            padding: EdgeInsets.symmetric(
+              horizontal: MasiSpacing.lg,
+              vertical: MasiSpacing.md,
+            ),
+          ),
+          data: (context, entries) {
             if (entries.isEmpty) {
               return const _EmptyState();
             }
@@ -60,21 +76,6 @@ class LogbookScreen extends ConsumerWidget {
             }
             return _LogbookList(entries: filtered);
           },
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, stackTrace) => Center(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Something went wrong: $error'),
-                const SizedBox(height: 8),
-                ElevatedButton(
-                  key: const Key('logbook-retry'),
-                  onPressed: () => ref.invalidate(logbookEntriesProvider),
-                  child: const Text('Retry'),
-                ),
-              ],
-            ),
-          ),
         ),
       ),
     );
@@ -294,13 +295,30 @@ class _LogbookList extends StatelessWidget {
   }
 }
 
-class _LogbookRow extends ConsumerWidget {
+/// One Logbook row.
+///
+/// Stateful only because of [_deleting]: the delete action awaits a repo write
+/// (and, once sync catches up, a network round-trip), and before this the row
+/// gave no sign it was working — the trailing bin stayed tappable and the row
+/// just silently vanished whenever the write happened to land.
+class _LogbookRow extends ConsumerStatefulWidget {
   const _LogbookRow({required this.entry});
 
   final LogbookEntry entry;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_LogbookRow> createState() => _LogbookRowState();
+}
+
+class _LogbookRowState extends ConsumerState<_LogbookRow> {
+  /// True from the confirmed delete until the soft-delete write settles. Also
+  /// the re-entrancy guard: while it is up the bin is disabled, so a second
+  /// tap can't fire `softDeleteAscent` twice.
+  bool _deleting = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final entry = widget.entry;
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final routeName = entry.routeName;
@@ -370,9 +388,15 @@ class _LogbookRow extends ConsumerWidget {
             ),
             IconButton(
               key: Key('logbook-entry-delete-${entry.ascentId}'),
-              icon: MasiIcon('delete', color: colors.ink3),
+              // The cue replaces the bin in the SAME slot. The 20 px inline
+              // arc is 4 px smaller than the 24 px glyph, but IconButton's
+              // fixed 48×48 box absorbs that, so the row does not reflow.
+              icon: MasiLoadingIndicator.inline(
+                isLoading: _deleting,
+                child: MasiIcon('delete', color: colors.ink3),
+              ),
               tooltip: 'Delete',
-              onPressed: () => _handleDelete(context, ref, entry),
+              onPressed: _deleting ? null : () => _handleDelete(entry),
             ),
           ],
         ),
@@ -380,11 +404,11 @@ class _LogbookRow extends ConsumerWidget {
     );
   }
 
-  Future<void> _handleDelete(
-    BuildContext context,
-    WidgetRef ref,
-    LogbookEntry entry,
-  ) async {
+  /// Uses `State.context` rather than taking one — the confirm dialog and the
+  /// failure snackbar both straddle awaits, and only a `State.context` can be
+  /// guarded by this class's own `mounted`.
+  Future<void> _handleDelete(LogbookEntry entry) async {
+    if (_deleting) return;
     final colors = MasiColors.of(context);
     final confirmed = await showCupertinoDialog<bool>(
       context: context,
@@ -406,10 +430,27 @@ class _LogbookRow extends ConsumerWidget {
         ],
       ),
     );
-    if (confirmed == true) {
+    if (confirmed != true) return;
+    // `mounted` and not `context.mounted`: the row itself can be gone by the
+    // time the dialog closes (the list rebuilds on any ascent change).
+    if (!mounted) return;
+    setState(() => _deleting = true);
+    try {
       await ref.read(ascentsRepositoryProvider).softDeleteAscent(
         entry.ascentId,
       );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text("Couldn't delete this ascent — please try again"),
+          ),
+        );
+      }
+    } finally {
+      // The successful path usually disposes this row (the provider drops the
+      // entry), so this only ever runs on failure or on a no-op write.
+      if (mounted) setState(() => _deleting = false);
     }
   }
 }

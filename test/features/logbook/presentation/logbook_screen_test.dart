@@ -6,6 +6,10 @@ import 'package:masi/features/logbook/application/ascents_providers.dart';
 import 'package:masi/features/logbook/data/ascents_repository.dart';
 import 'package:masi/features/logbook/presentation/logbook_screen.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
+import 'package:masi/shared/presentation/masi_skeleton.dart';
+import 'dart:async';
+
 import 'package:drift/drift.dart' hide isNotNull, isNull;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -159,6 +163,21 @@ Future<T> _dbWork<T>(WidgetTester tester, Future<T> Function() body) async {
     result = await body();
   });
   return result;
+}
+
+/// A real [AscentsRepository] (same DB, so `logAscent`/`logbook()` behave
+/// normally) whose `softDeleteAscent` never completes — the only way to hold
+/// the screen in its "delete in flight" state long enough to assert on it.
+class _HangingDeleteAscentsRepository extends AscentsRepository {
+  _HangingDeleteAscentsRepository(super.database, {required super.nowMs});
+
+  final List<String> softDeleteCalls = [];
+
+  @override
+  Future<void> softDeleteAscent(String id) {
+    softDeleteCalls.add(id);
+    return Completer<void>().future;
+  }
 }
 
 void main() {
@@ -414,6 +433,109 @@ void main() {
         expect(
           find.byKey(Key('logbook-entry-${ascent.id}')),
           findsOneWidget,
+        );
+      },
+    );
+  });
+
+  group('shared loading system', () {
+    testWidgets(
+      'first load paints NOTHING inside the reveal delay, then the shaped '
+      'row skeleton — never a bare spinner',
+      (tester) async {
+        final container = _makeContainer();
+
+        // No `_drain`: under the fake clock Drift's watch stream never
+        // emits, so `logbookEntriesProvider` stays in its first-load state
+        // for as long as we like.
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+
+        expect(
+          find.byKey(MasiSkeletonList.listKey),
+          findsNothing,
+          reason:
+              'the anti-flash window: a load that resolves inside '
+              'MasiMotion.loadingRevealDelay must paint no loading state',
+        );
+        expect(find.byType(CircularProgressIndicator), findsNothing);
+
+        // Past the reveal delay. `pump`, never `pumpAndSettle` — a revealed
+        // skeleton shimmers forever and would hang it.
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.byKey(MasiSkeletonList.listKey), findsOneWidget);
+        expect(
+          find.byType(CircularProgressIndicator),
+          findsNothing,
+          reason: 'the shape of a logbook row is known, so it gets a skeleton',
+        );
+      },
+    );
+
+    testWidgets(
+      'a confirmed delete shows an inline cue in the bin\'s slot and '
+      'disables it while the soft-delete write is in flight',
+      (tester) async {
+        final database = db.AppDatabase(NativeDatabase.memory());
+        final slowRepo = _HangingDeleteAscentsRepository(
+          database,
+          nowMs: () => 1000,
+        );
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(database),
+            nowMsProvider.overrideWithValue(() => 1000),
+            ascentsRepositoryProvider.overrideWithValue(slowRepo),
+          ],
+        );
+        addTearDown(database.close);
+        addTearDown(container.dispose);
+
+        final s = await _dbWork(tester, () => _seed(database, '1'));
+        final ascent = await _dbWork(
+          tester,
+          () => slowRepo.logAscent(
+            routeId: s.routeId,
+            wallId: s.wallId,
+            climbedAt: DateTime.utc(2026, 1, 1),
+            style: AscentStyle.redpoint,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const LogbookScreen()));
+        await _drain(tester);
+
+        final binKey = Key('logbook-entry-delete-${ascent.id}');
+        expect(
+          tester.widget<IconButton>(find.byKey(binKey)).onPressed,
+          isNotNull,
+        );
+
+        await tester.tap(find.byKey(binKey));
+        await tester.pumpAndSettle();
+        await tester.tap(
+          find.byKey(Key('logbook-entry-delete-confirm-${ascent.id}')),
+        );
+
+        // Two separate advances, and the order matters. The first has to run
+        // the dialog's pop transition to completion, because only then does
+        // `showCupertinoDialog`'s future resolve and the delete actually
+        // start — the reveal delay is counted from THAT instant, not from the
+        // tap. Timing them as one pump credits the gate with the ~300 ms the
+        // dialog spent animating and the cue never appears.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 500));
+        expect(slowRepo.softDeleteCalls, [ascent.id]);
+
+        // The write hangs, so the row stays. Past the reveal delay the cue is
+        // painted in the bin's slot.
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsOneWidget);
+        expect(
+          tester.widget<IconButton>(find.byKey(binKey)).onPressed,
+          isNull,
+          reason: 'a second tap must not fire softDeleteAscent again',
         );
       },
     );
