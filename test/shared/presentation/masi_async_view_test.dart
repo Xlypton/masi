@@ -95,6 +95,39 @@ void main() {
       },
     );
 
+    testWidgets(
+      'a skeleton that has only just been revealed is HELD past the arrival '
+      'of data (anti-strobe), then swaps',
+      (tester) async {
+        final completer = Completer<List<String>>();
+        final provider = FutureProvider<List<String>>(
+          (ref) => completer.future,
+        );
+        await tester.pumpWidget(_wrap(_container(), provider));
+
+        await tester.pump(const Duration(milliseconds: 190));
+        expect(find.byType(MasiSkeletonListRow), findsNWidgets(3));
+
+        // Data lands ~10ms after the reveal: the worst case.
+        completer.complete(const ['Alpha']);
+        await tester.pump();
+        await tester.pump();
+        expect(
+          find.byType(MasiSkeletonListRow),
+          findsNWidgets(3),
+          reason: 'skeleton ripped away one frame after appearing — a strobe',
+        );
+
+        await tester.pump(const Duration(milliseconds: 200));
+        expect(find.byType(MasiSkeletonListRow), findsNWidgets(3));
+
+        // Hold elapsed.
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(find.byType(MasiSkeletonListRow), findsNothing);
+        expect(find.byKey(const Key('row-Alpha')), findsOneWidget);
+      },
+    );
+
     testWidgets('a slow first load reveals the skeleton, then swaps in data', (
       tester,
     ) async {

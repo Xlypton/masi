@@ -119,45 +119,58 @@ class MasiAsyncView<T> extends StatelessWidget {
     final isLoading = value.isLoading;
     final hasError = value.hasError;
 
-    if (!hasValue) {
-      // Nothing to protect: this is a first load, or a failure with no
-      // previous content. Error wins over loading — a retrying provider still
-      // has a failure worth reporting.
-      if (hasError) return _errorState(context);
-      return MasiLoadingGate(
-        isLoading: isLoading,
-        builder: (context, showLoading) => showLoading
-            ? skeleton(context)
-            // Deliberately blank, not a spinner: this is the anti-flash
-            // window, and the whole point is that a load which resolves
-            // inside it paints no loading state at all.
-            : const SizedBox.shrink(),
-      );
-    }
-
-    // From here on there IS content, so it stays on screen no matter what.
-    final content = data(context, value.value as T);
-    if (hasError) {
-      return Column(
-        children: [
-          _staleErrorBar(context),
-          Expanded(child: content),
-        ],
-      );
-    }
-
+    // ONE gate wraps every state, and the branch choice happens INSIDE its
+    // builder. That structure is load-bearing, not stylistic: the gate's
+    // minimum-visible hold has to survive the exact transition it exists to
+    // smooth — data arriving. An earlier version chose the branch outside the
+    // gate, so `hasValue` flipping to true switched away from the skeleton
+    // immediately and the hold held nothing: a skeleton revealed at 180 ms
+    // whose data landed at 190 ms still strobed.
     return MasiLoadingGate(
-      isLoading: isLoading,
-      builder: (context, showLoading) => Column(
-        children: [
-          // A 2 px hairline above the content, not over it: an overlay on top
-          // of a list intercepts nothing but does cover a row, and a
-          // full-screen scrim during a refresh is exactly the "blank the data
-          // you already have" mistake in a different costume.
-          _RefreshCue(visible: showLoading),
-          Expanded(child: content),
-        ],
-      ),
+      // First load only. A refresh has content to keep, so it must never put a
+      // skeleton up; it gets the hairline cue from the inner gate below.
+      isLoading: isLoading && !hasValue && !hasError,
+      builder: (context, showSkeleton) {
+        // True for the whole hold, including after the value has arrived —
+        // which is the point.
+        if (showSkeleton) return skeleton(context);
+
+        if (!hasValue) {
+          // No content to protect: a failure with nothing behind it, or the
+          // anti-flash window before a skeleton is allowed on screen. Error
+          // wins over loading — a retrying provider still has a failure worth
+          // reporting.
+          if (hasError) return _errorState(context);
+          // Deliberately blank, not a spinner: a load that resolves inside the
+          // reveal delay must paint no loading state at all.
+          return const SizedBox.shrink();
+        }
+
+        // From here on there IS content, so it stays on screen no matter what.
+        final content = data(context, value.value as T);
+        if (hasError) {
+          return Column(
+            children: [
+              _staleErrorBar(context),
+              Expanded(child: content),
+            ],
+          );
+        }
+
+        return MasiLoadingGate(
+          isLoading: isLoading,
+          builder: (context, showCue) => Column(
+            children: [
+              // A 2 px hairline above the content, not over it: an overlay on
+              // top of a list intercepts nothing but does cover a row, and a
+              // full-screen scrim during a refresh is exactly the "blank the
+              // data you already have" mistake in a different costume.
+              _RefreshCue(visible: showCue),
+              Expanded(child: content),
+            ],
+          ),
+        );
+      },
     );
   }
 
