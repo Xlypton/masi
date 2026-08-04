@@ -32,7 +32,12 @@ import 'package:masi/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:masi/features/topo/presentation/topo_canvas.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_gps.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_photo_ops.dart';
+import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_loading_gate.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
+import 'package:masi/shared/presentation/masi_pending_button.dart';
+import 'package:masi/shared/presentation/masi_skeleton.dart';
 
 // Split out of this god-file (pure refactor, zero behavior change): GPS
 // capture helpers moved to `topo_canvas_gps.dart`, and the selected-image
@@ -245,6 +250,31 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// lands) retries instead of getting stuck with a stale null forever.
   String? _resolvedForPath;
 
+  /// True from the instant a picked photo starts being attached
+  /// ([_attachPickedPhoto]: decode + `attachPhotoToWall` + GPS capture +
+  /// `loadForWall`) until that whole chain settles — the longest wait in the
+  /// app, and until this existed the most invisible: [_pickImage] fired it
+  /// fire-and-forget, so both "Add a photo" affordances stayed idle and
+  /// re-tappable for the entire time.
+  ///
+  /// Deliberately NOT `MasiPendingButton` at those two call sites (which is the
+  /// house pattern for an awaiting button): the tap does not start the wait. It
+  /// opens the OS photo-source sheet and then the system picker, which stay up
+  /// for as long as the user browses — a button that disabled itself and span a
+  /// spinner from the tap would be reporting "loading" while it is in fact the
+  /// app that is waiting for a human. This flag brackets exactly the machine
+  /// part, and drives the same two effects (disabled + a gated inline cue) on
+  /// both controls.
+  bool _attachInFlight = false;
+
+  /// Whether [_loadInitialPhotoForWall] has finished (successfully or not).
+  ///
+  /// Read by [build] to tell "this wall has no photo" from "this wall's photo
+  /// has not arrived yet" — the empty state must only ever claim the former.
+  /// Set on the failure path too, on purpose: a load that threw is not a photo
+  /// still coming, and a placeholder that shimmers forever is its own lie.
+  bool _initialPhotoLoadSettled = false;
+
   /// The wallId [_loadInitialPhotoForWall] has already run (or is running)
   /// for, so a rebuild never re-triggers the initial load for the same wall.
   /// [TopoCanvasScreen.wallId] is effectively fixed for the lifetime of a
@@ -368,6 +398,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// [RouteLegend], even though the user was done editing. The ✓ button is
   /// the natural "I'm finished with this route" action, so committing now
   /// also returns the canvas to view mode.
+  /// Pending-state note: this method IS the future `topo-commit-button`'s
+  /// [MasiPendingButton] waits on, so it must resolve when the WRITE resolves.
+  /// [DrawController.commitRoute] awaits a real repository upsert (see its
+  /// write-through doc), which is the thing worth showing progress for and the
+  /// thing a double-tap would otherwise run twice. The metadata sheet that
+  /// follows is deliberately NOT awaited here: it is a modal the climber drives,
+  /// and folding it into the pending future would keep the button disabled and
+  /// spinning for as long as they were typing a route name.
   Future<void> _handleCommitRoute() async {
     if (widget.readOnly) return;
     final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
@@ -379,7 +417,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     if (routes.length <= countBefore) return;
 
     notifier.setMode(DrawMode.view);
-    await _openMetadataSheet(routes.last);
+    unawaited(_openMetadataSheet(routes.last));
   }
 
   /// Opens [RouteMetadataSheet] as a modal bottom sheet for [route],
@@ -557,14 +595,29 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// previous `ImagePicker().pickImage(source: ImageSource.gallery)`-only
   /// call so the canvas's "replace/add photo" FAB offers the same
   /// Camera/Library choice as the Topos-home "New topo" flow.
+  ///
+  /// The attach is now AWAITED (it was `unawaited`) and bracketed by
+  /// [_attachInFlight], so both add-photo controls disable themselves and show a
+  /// gated progress cue for the whole decode + copy + insert + GPS + load chain
+  /// instead of looking idle through it. Awaiting changes no ordering: the path
+  /// is still selected first (so the canvas switches over immediately), and the
+  /// attach still runs after.
   Future<void> _pickImage() async {
     if (widget.readOnly) return;
+    // Re-entrancy guard, independent of the visual gate below: during the
+    // reveal delay the controls look idle but an attach is very much running.
+    if (_attachInFlight) return;
     final source = await widget.photoSourcePicker(context);
     if (source == null || !mounted) return;
     final xfile = await widget.photoPicker(source);
     if (xfile == null || !mounted) return;
     ref.read(selectedImageProvider.notifier).select(xfile.path);
-    unawaited(_attachPickedPhoto(xfile));
+    setState(() => _attachInFlight = true);
+    try {
+      await _attachPickedPhoto(xfile);
+    } finally {
+      if (mounted) setState(() => _attachInFlight = false);
+    }
   }
 
   /// Restores [wallId]'s already-attached original photo (if any) so the
@@ -606,6 +659,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
     } catch (e, st) {
       debugPrint('Failed to load initial photo for wall $wallId: $e\n$st');
+    } finally {
+      // Records that the question "does this wall have a photo?" has been
+      // answered — see [_initialPhotoLoadSettled]. setState, not a bare
+      // assignment: [build] reads it to choose between the empty state and the
+      // still-loading placeholder, and nothing else necessarily rebuilds here
+      // (a photo-less wall's providers emit no further values).
+      if (mounted) setState(() => _initialPhotoLoadSettled = true);
     }
   }
 
@@ -1162,6 +1222,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           activePhotoId: s.activePhotoId,
           selectedRouteId: s.selectedRouteId,
           switchTargetPhotoId: s.switchTargetPhotoId,
+          // Read below (via `TopoCanvasBody`, which receives the whole
+          // `DrawState`) to show the photo-switch cue. Until it was part of
+          // this record NOTHING in the widget tree read this flag at all, so
+          // tapping a strip thumbnail flipped the image instantly and then sat
+          // on an empty topo while `loadForWall` resolved — routes just popped
+          // in, with no sign anything had been pending.
+          isSwitchingPhoto: s.isSwitchingPhoto,
           // UF-2: read below by both the `topo-routes-unavailable` banner and
           // the mode-toggle gate, so it has to be part of what triggers a
           // rebuild here — otherwise the canvas would keep presenting itself
@@ -1179,16 +1246,20 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // method runs.
     final drawState = ref.read(drawControllerProvider(widget.wallId));
     final drawNotifier = ref.read(drawControllerProvider(widget.wallId).notifier);
-    // The topo/wall name backs the canvas title (DESIGN.md "Topo canvas"):
-    // AsyncValue.maybeWhen falls back to "Topo" both while this is still
-    // loading and if the wall genuinely has no name (or doesn't exist —
-    // see router_test.dart's nonexistent-wall-id smoke test), so the title
-    // is never blank and never shows the literal app name "Masi".
-    final wallName = ref.watch(wallNameProvider(widget.wallId));
-    final title = wallName.maybeWhen(
-      data: (name) => (name == null || name.isEmpty) ? 'Topo' : name,
-      orElse: () => 'Topo',
-    );
+    // The topo/wall name backs the canvas title (DESIGN.md "Topo canvas").
+    // "Topo" is the fallback for a wall that genuinely has no name (or doesn't
+    // exist — see router_test.dart's nonexistent-wall-id smoke test), so the
+    // title is never blank and never shows the literal app name "Masi".
+    //
+    // What it is NOT any more is the fallback for "still loading": the old
+    // `maybeWhen(..., orElse: 'Topo')` printed a wrong-but-plausible title for
+    // a wall whose real name was on its way, so an opened topo read "Topo" and
+    // then silently became "Kőbánya slab" — see `_buildTopChromeRow`, which
+    // renders a shaped placeholder for that window instead.
+    final wallNameAsync = ref.watch(wallNameProvider(widget.wallId));
+    final wallName = wallNameAsync.hasValue ? wallNameAsync.requireValue : null;
+    final title = (wallName == null || wallName.isEmpty) ? 'Topo' : wallName;
+    final titlePending = wallNameAsync.isLoading && !wallNameAsync.hasValue;
 
     // Backs the "Edit location"/"Set location" button (_topTrailingActions'
     // topo-edit-location-button) and _handleEditLocation's `initial` picker
@@ -1199,9 +1270,18 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // setWallCoordinates write re-emits this list on its own (see
     // _handleEditLocation's doc), so this always reflects the wall's
     // CURRENT coordinates, including right after a save.
-    final topos = ref
-        .watch(toposProvider)
-        .maybeWhen(data: (list) => list, orElse: () => const <TopoRef>[]);
+    //
+    // Loading is kept distinct from "no such wall in the list" (which is what
+    // the old `maybeWhen(..., orElse: const [])` collapsed it into): an absent
+    // `currentTopo` makes the view-mode glyph read "No location set" and go
+    // dead, which is a CLAIM — and it was being made before this list had
+    // arrived, about walls that do have coordinates. `locationUnknown` is that
+    // window, and `_topTrailingActions` reports it rather than asserting.
+    final toposAsync = ref.watch(toposProvider);
+    final topos = toposAsync.hasValue
+        ? toposAsync.requireValue
+        : const <TopoRef>[];
+    final locationUnknown = toposAsync.isLoading && !toposAsync.hasValue;
     TopoRef? currentTopo;
     for (final t in topos) {
       if (t.wallId == widget.wallId) {
@@ -1214,20 +1294,21 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // wall (see PhotoStrip's class doc). NOT gated on `widget.readOnly` — a
     // read-only community viewer can still switch between someone else's
     // photos (see PhotoStrip.readOnly's doc for what IS suppressed in that
-    // case: the add/manage affordances). PhotoStrip itself renders nothing
-    // once the wall's live-original list (`wallOriginalsProvider`) comes
-    // back empty, but the Divider ABOVE it (this call site's own wrapping)
-    // is not PhotoStrip's to skip — so this also watches the same live list
-    // to keep that divider from floating over an empty strip before the
-    // wall's first photo is attached.
+    // case: the add/manage affordances).
+    //
+    // PhotoStrip decides for itself whether the band appears at all, INCLUDING
+    // its own hairline separator (which used to be this call site's wrapping):
+    // it is the widget that knows whether the list is empty, still loading, or
+    // real, and the separator has to follow that same answer rather than a
+    // second, independently-derived one.
     //
     // Moved above the `_imageSize` derivation below (F-A1/F-A2 fix): this
     // is now the SAME live list `_imageSize` is read from — no separate
     // FileImage/codec decode probe — so it needs to be watched first.
-    final wallPhotos = ref
-        .watch(wallOriginalsProvider(widget.wallId))
-        .maybeWhen(data: (list) => list, orElse: () => const <PhotoRef>[]);
-    final showPhotoStrip = wallPhotos.isNotEmpty;
+    final wallPhotosAsync = ref.watch(wallOriginalsProvider(widget.wallId));
+    final wallPhotos = wallPhotosAsync.hasValue
+        ? wallPhotosAsync.requireValue
+        : const <PhotoRef>[];
 
     // Derives _imageSize straight from the displayed photo's own persisted
     // PhotoRef.width/height — the SAME source `imagePath` (PhotoRef.localPath)
@@ -1281,6 +1362,20 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
     final colors = MasiColors.of(context);
 
+    // "This wall has no photo yet" versus "this wall's photo hasn't arrived
+    // yet" — the single most expensive confusion on this screen. Both used to
+    // render `_buildEmptyState`: opening a topo showed "No photo yet — pick one
+    // to start" over an "Add a photo" button while the restore was still in
+    // flight, which tells a climber their work is GONE. It is a photo-pending
+    // state exactly while the initial restore is unfinished AND either the live
+    // photo list is still on its first load or already says this wall has
+    // photos.
+    final photoPending =
+        imagePath == null &&
+        !_initialPhotoLoadSettled &&
+        (wallPhotos.isNotEmpty ||
+            (wallPhotosAsync.isLoading && !wallPhotosAsync.hasValue));
+
     // Canvas look rework: the symbol palette only ever means anything with a
     // photo loaded AND while actually drawing.
     final showSymbolPalette =
@@ -1304,8 +1399,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         children: [
           Positioned.fill(
             child: imagePath == null
-                ? _buildEmptyState(context)
-                : _buildCanvasArea(imagePath, drawState),
+                ? (photoPending
+                      ? _buildPhotoPendingState(context, colors)
+                      : _buildEmptyState(context))
+                : _buildCanvasArea(imagePath, drawState, wallPhotosAsync),
           ),
           // `embedded` gate (ghost-back-chevron fix — see
           // TopoCanvasScreen.embedded's doc): this whole block is the top
@@ -1352,30 +1449,25 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                               context,
                               colors,
                               title,
+                              titlePending,
                               drawState,
                               drawNotifier,
                               currentTopo,
+                              locationUnknown,
                             ),
-                            if (showPhotoStrip) ...[
-                              Divider(
-                                height: MasiSpacing.sm,
-                                thickness: 1,
-                                color: colors.separator,
-                              ),
-                              PhotoStrip(
-                                wallId: widget.wallId,
-                                activePhotoId: drawState.activePhotoId,
-                                onSelect: _switchToPhoto,
-                                readOnly: widget.readOnly,
-                                onAdd: widget.readOnly ? null : _pickImage,
-                                onSetCover: widget.readOnly
-                                    ? null
-                                    : _handleSetCoverPhoto,
-                                onDelete: widget.readOnly
-                                    ? null
-                                    : _handleDeletePhoto,
-                              ),
-                            ],
+                            PhotoStrip(
+                              wallId: widget.wallId,
+                              activePhotoId: drawState.activePhotoId,
+                              onSelect: _switchToPhoto,
+                              readOnly: widget.readOnly,
+                              onAdd: widget.readOnly ? null : _pickImage,
+                              onSetCover: widget.readOnly
+                                  ? null
+                                  : _handleSetCoverPhoto,
+                              onDelete: widget.readOnly
+                                  ? null
+                                  : _handleDeletePhoto,
+                            ),
                           ],
                         ),
                       ),
@@ -1505,9 +1597,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     BuildContext context,
     MasiColors colors,
     String title,
+    bool titlePending,
     DrawState drawState,
     DrawController drawNotifier,
     TopoRef? currentTopo,
+    bool locationUnknown,
   ) {
     return Row(
       children: [
@@ -1531,18 +1625,63 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             padding: const EdgeInsets.symmetric(
               horizontal: MasiSpacing.xs,
             ),
-            child: Text(
-              title,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                color: colors.ink,
-              ),
-            ),
+            child: _buildTitle(context, colors, title, titlePending),
           ),
         ),
-        ..._topTrailingActions(context, drawState, drawNotifier, currentTopo),
+        ..._topTrailingActions(
+          context,
+          drawState,
+          drawNotifier,
+          currentTopo,
+          locationUnknown,
+        ),
       ],
+    );
+  }
+
+  /// The canvas title slot: the wall's real name, or — while that name is on
+  /// its first load — a placeholder bar in the same line box, never the "Topo"
+  /// fallback (see [build]'s `titlePending`).
+  ///
+  /// Three states rather than two, all the same height so the pill never
+  /// resizes:
+  ///  * not loading -> the name (or the genuine "Topo" fallback);
+  ///  * loading, inside [MasiLoadingGate]'s reveal delay -> an empty line box,
+  ///    because a name that arrives in 30 ms must produce no visible loading
+  ///    state at all — and NOT a wrong title for those 30 ms;
+  ///  * loading, past it -> a shimmering text-line skeleton.
+  Widget _buildTitle(
+    BuildContext context,
+    MasiColors colors,
+    String title,
+    bool titlePending,
+  ) {
+    final style = Theme.of(context).textTheme.titleMedium?.copyWith(
+      color: colors.ink,
+    );
+    final fontSize = style?.fontSize ?? 17;
+
+    return MasiLoadingGate(
+      isLoading: titlePending,
+      builder: (context, showSkeleton) {
+        if (titlePending) {
+          if (!showSkeleton) {
+            return SizedBox(
+              height: MediaQuery.textScalerOf(context).scale(fontSize) * 1.3,
+            );
+          }
+          return MasiSkeleton.textLine(
+            fontSize: MediaQuery.textScalerOf(context).scale(fontSize),
+            widthFactor: 0.55,
+          );
+        }
+        return Text(
+          title,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: style,
+        );
+      },
     );
   }
 
@@ -1606,6 +1745,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     DrawState drawState,
     DrawController drawNotifier,
     TopoRef? currentTopo,
+    bool locationUnknown,
   ) {
     final colors = MasiColors.of(context);
     final actions = <Widget>[];
@@ -1775,14 +1915,32 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // coordinates yet — there's nothing to locate — mirroring
     // `topos_screen.dart`'s own disabled "Show on map" menu item rather
     // than making the control disappear.
+    //
+    // `locationUnknown` (see [build]) is why this is not simply
+    // `hasCoords ? ... : 'No location set'` any more: while [toposProvider] is
+    // still on its first load, "No location set" is a statement about a wall
+    // nobody has looked up yet, and it read identically to the real answer.
+    // The glyph reports the wait instead — a gated inline spinner in place of
+    // the map icon, and a tooltip that says what is happening — and only claims
+    // "No location set" once the list has actually arrived.
     if (!widget.readOnly && drawState.mode == DrawMode.view) {
       final hasCoords =
           currentTopo?.latitude != null && currentTopo?.longitude != null;
       actions.add(
         IconButton(
           key: const Key('topo-locate-on-map-button'),
-          icon: MasiIcon('topo_map'),
-          tooltip: hasCoords ? 'Show on map' : 'No location set',
+          // isLoading + child rather than a conditional mount: only this form
+          // is still on screen when the wait ends, so only it can honour the
+          // minimum-visible hold instead of blinking the spinner out.
+          icon: MasiLoadingIndicator.inline(
+            isLoading: locationUnknown,
+            color: colors.accent,
+            semanticLabel: 'Checking this wall for a location',
+            child: MasiIcon('topo_map'),
+          ),
+          tooltip: locationUnknown
+              ? 'Checking for a location…'
+              : (hasCoords ? 'Show on map' : 'No location set'),
           onPressed: hasCoords
               ? () => context.push('/community?tab=map&focus=${widget.wallId}')
               : null,
@@ -1808,9 +1966,19 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       actions.add(
         IconButton(
           key: const Key('topo-add-photo-button'),
-          icon: MasiIcon('image_add'),
-          tooltip: 'Pick a photo',
-          onPressed: _pickImage,
+          // Progress for the attach chain, not for the OS picker — see
+          // [_attachInFlight]'s doc for why the cue starts after the sheet
+          // rather than at the tap.
+          icon: MasiLoadingIndicator.inline(
+            isLoading: _attachInFlight,
+            color: colors.accent,
+            semanticLabel: 'Adding the photo',
+            child: MasiIcon('image_add'),
+          ),
+          tooltip: _attachInFlight ? 'Adding photo…' : 'Pick a photo',
+          // Disabled for the duration: attaching twice in a row is the one
+          // double-tap on this screen that creates two rows and two files.
+          onPressed: _attachInFlight ? null : _pickImage,
           color: colors.accent,
           style: _topRowIconStyle(),
         ),
@@ -1887,15 +2055,40 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             color: colors.accent,
             style: IconButton.styleFrom(shape: const CircleBorder()),
           ),
-          IconButton(
-            key: const Key('topo-commit-button'),
-            icon: MasiIcon('check'),
-            tooltip: 'Commit route',
-            onPressed: _handleCommitRoute,
-            color: colors.accent,
-            style: IconButton.styleFrom(
-              backgroundColor: colors.accent.withValues(alpha: 0.16),
-              shape: const CircleBorder(),
+          // The drawing tool's primary action, and the only control in this
+          // cluster that awaits a database write ([DrawController.commitRoute]
+          // upserts the new route). It used to stay enabled throughout, so an
+          // impatient second tap on a slow write ran the whole commit again.
+          // [MasiPendingButton] swallows that second tap synchronously, dims the
+          // control immediately, and — only if the write outlasts the reveal
+          // delay — draws a spinner over the glyph without changing the
+          // cluster's geometry. Tooltip kept via a wrapper (the pending button
+          // has no tooltip slot of its own) with the Key still on the button
+          // itself, so `find.byKey`/`find.byTooltip` both keep working.
+          Tooltip(
+            message: 'Commit route',
+            child: MasiPendingButton.text(
+              key: const Key('topo-commit-button'),
+              onPressed: _handleCommitRoute,
+              style: TextButton.styleFrom(
+                backgroundColor: colors.accent.withValues(alpha: 0.16),
+                foregroundColor: colors.accent,
+                shape: const CircleBorder(),
+                // The 48x48 footprint an IconButton produced here (24 px glyph
+                // + 8 px padding, tap target padded to 48), so the glass
+                // cluster's height and spacing are unchanged.
+                minimumSize: const Size(48, 48),
+                padding: EdgeInsets.zero,
+              ),
+              onError: (error, stackTrace) {
+                // A refused write is already surfaced by the
+                // `lastWriteFailure` listener in [build] (that is the
+                // controller's contract — see UF-1 there), so this exists to
+                // keep an unexpected throw out of FlutterError.reportError,
+                // never to be the user's only notification.
+                debugPrint('Commit route failed: $error\n$stackTrace');
+              },
+              child: MasiIcon('check', color: colors.accent),
             ),
           ),
         ],
@@ -1946,21 +2139,57 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               // ElevatedButton.styleFrom shape used by
               // `crud_list_scaffold.dart`'s own add button. This is the
               // screen's ONLY action while empty, so it reads as primary.
-              ElevatedButton(
-                key: const Key('topo-empty-state-add-photo'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: colors.accent,
-                  foregroundColor: colors.onAccent,
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: MasiSpacing.lg,
-                    vertical: MasiSpacing.md,
+              // Pending state driven by [_attachInFlight] rather than by
+              // MasiPendingButton — see that field's doc: the tap opens an OS
+              // picker the user drives, and only what follows it is a wait.
+              // The label stays laid out under the spinner (the same
+              // `Visibility(maintainSize:)` trick MasiPendingButton uses) so
+              // this button cannot shrink to 20 px mid-attach.
+              MasiLoadingGate(
+                isLoading: _attachInFlight,
+                builder: (context, showLoading) => ElevatedButton(
+                  key: const Key('topo-empty-state-add-photo'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.accent,
+                    foregroundColor: colors.onAccent,
+                    disabledBackgroundColor: _attachInFlight
+                        ? colors.accent.withValues(alpha: 0.6)
+                        : null,
+                    disabledForegroundColor: _attachInFlight
+                        ? colors.onAccent
+                        : null,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: MasiSpacing.lg,
+                      vertical: MasiSpacing.md,
+                    ),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(MasiRadii.control),
+                    ),
                   ),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(MasiRadii.control),
+                  onPressed: (storageBlocked == null && !_attachInFlight)
+                      ? _pickImage
+                      : null,
+                  child: Stack(
+                    alignment: Alignment.center,
+                    children: [
+                      Visibility(
+                        visible: !showLoading,
+                        maintainSize: true,
+                        maintainAnimation: true,
+                        maintainState: true,
+                        child: const Text('Add a photo'),
+                      ),
+                      if (showLoading)
+                        MasiLoadingIndicator.inline(
+                          // The gate above owns both delays already.
+                          revealDelay: Duration.zero,
+                          minVisible: Duration.zero,
+                          color: colors.onAccent,
+                          semanticLabel: 'Adding the photo',
+                        ),
+                    ],
                   ),
                 ),
-                onPressed: storageBlocked == null ? _pickImage : null,
-                child: const Text('Add a photo'),
               ),
             ],
           ],
@@ -1969,24 +2198,77 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     );
   }
 
-  /// Builds the canvas body once a photo is selected: a `topo-image-loading`
-  /// spinner while [_imageSize] is still unresolved (see [build]'s doc for
-  /// how it's derived from the displayed photo's persisted [PhotoRef]),
-  /// otherwise the real [TopoCanvasBody]. There is no separate
-  /// permanent-error branch here (see the removed `_imageLoadError`/
-  /// `_buildImageErrorState` — F-A1/F-A2 fix): genuinely-missing photo
-  /// bytes are handled by [TopoCanvasBody]'s own `PhotoImage`, which
-  /// self-heals/placeholders per key rather than latching a screen-level
+  /// The wall's photo is on its way but nothing can be drawn yet: no path
+  /// selected, and [_initialPhotoLoadSettled] not yet true for a wall that has
+  /// (or may have) photos — see [build]'s `photoPending`.
+  ///
+  /// A shaped placeholder in the shape of the thing that is coming (the photo
+  /// fills this whole area) rather than a spinner, and behind
+  /// [MasiLoadingGate]'s reveal delay so the overwhelmingly common fast restore
+  /// still paints nothing but the canvas backdrop.
+  Widget _buildPhotoPendingState(BuildContext context, MasiColors colors) {
+    return ColoredBox(
+      key: const Key('topo-photo-pending'),
+      color: colors.ground,
+      child: MasiLoadingGate(
+        isLoading: true,
+        builder: (context, showLoading) {
+          if (!showLoading) return const SizedBox.expand();
+          return Semantics(
+            container: true,
+            label: 'Loading this topo',
+            // No radius: the canvas photo is full-bleed to the screen edges
+            // (see TopoCanvas.build), so a rounded placeholder would round
+            // corners the photo is about to fill square.
+            child: const MasiSkeleton.box(radius: 0),
+          );
+        },
+      ),
+    );
+  }
+
+  /// Builds the canvas body once a photo is selected: while [_imageSize] is
+  /// still unresolved (see [build]'s doc for how it's derived from the displayed
+  /// photo's persisted [PhotoRef]) this reports the state of the list that size
+  /// comes from, `topo-image-loading`; otherwise the real [TopoCanvasBody].
+  ///
+  /// The unresolved case is genuinely three states, which a bare
+  /// `CircularProgressIndicator` (what stood here) collapsed into one — and one
+  /// of them it could not represent at all: if [wallOriginalsProvider] FAILS,
+  /// no width/height can ever arrive, and that spinner span forever over a
+  /// photo that was never coming. Now:
+  ///  * list still loading -> a canvas-shaped skeleton;
+  ///  * list has data but no usable row for this path yet (the ordinary case: a
+  ///    freshly-picked photo whose `attachPhotoToWall` write is in flight) -> a
+  ///    labelled spinner, the one legitimate spinner case on this screen since
+  ///    an image whose aspect is unknown has no shape to reserve;
+  ///  * list failed -> what failed, plus Retry.
+  ///
+  /// There is still no permanent-error branch for the photo BYTES (see the
+  /// removed `_imageLoadError`/`_buildImageErrorState` — F-A1/F-A2 fix):
+  /// genuinely-missing bytes are handled by [TopoCanvasBody]'s own `PhotoImage`,
+  /// which self-heals/placeholders per key rather than latching a screen-level
   /// error that used to require leaving and re-entering to clear.
   Widget _buildCanvasArea(
     String imagePath,
     DrawState drawState,
+    AsyncValue<List<PhotoRef>> wallPhotosAsync,
   ) {
     final imageSize = _imageSize;
     if (imageSize == null) {
-      return const Center(
-        key: Key('topo-image-loading'),
-        child: CircularProgressIndicator(),
+      final colors = MasiColors.of(context);
+      return ColoredBox(
+        key: const Key('topo-image-loading'),
+        color: colors.ground,
+        child: MasiAsyncView<List<PhotoRef>>(
+          value: wallPhotosAsync,
+          onRetry: () => ref.invalidate(wallOriginalsProvider(widget.wallId)),
+          errorMessage: "Couldn't load this wall's photos",
+          skeleton: (context) => const MasiSkeleton.box(radius: 0),
+          data: (context, _) => const MasiLoadingIndicator.standalone(
+            label: 'Preparing photo…',
+          ),
+        ),
       );
     }
     return TopoCanvasBody(
@@ -2093,7 +2375,10 @@ class TopoCanvasBody extends ConsumerWidget {
     // breathing-room gap every OTHER floating element gets above the safe
     // area, letting it sit flush near the bottom instead of leaving a dead
     // gap where the draw-mode cluster would have been.
-    final legendBottomPadding = hasRoutes
+    // The switch cue (below) occupies the same floating slot as the legend, so
+    // it needs the same clearance — otherwise it would sit under the bottom
+    // chrome/safe area on exactly the walls where `routes` is empty.
+    final legendBottomPadding = (hasRoutes || drawState.isSwitchingPhoto)
         ? MediaQuery.paddingOf(context).bottom +
               MasiSpacing.md +
               (drawState.mode == DrawMode.draw
@@ -2226,12 +2511,87 @@ class TopoCanvasBody extends ConsumerWidget {
                               ),
                             ),
                     ),
+                  // The photo-switch cue. [DrawState.isSwitchingPhoto] is true
+                  // from the instant a new photo is selected until its routes
+                  // have been read (see DrawController.beginPhotoSwitch), and
+                  // for that whole window `routes` is deliberately empty — so
+                  // tapping a strip thumbnail swapped the image instantly and
+                  // then showed a topo with NO routes on it, indistinguishable
+                  // from a photo nobody has drawn on, until they popped in.
+                  // Nothing in the tree read the flag at all before this. Shown
+                  // only when the legend is not (an existing route set means the
+                  // switch is already over, or is a mid-switch commit carrying
+                  // forward) and never in the embedded preview, which paints no
+                  // floating chrome by contract.
+                  if (drawState.isSwitchingPhoto && !hasRoutes && !embedded)
+                    Positioned(
+                      left: MasiSpacing.md,
+                      right: MasiSpacing.md,
+                      bottom: effectiveLegendBottomPadding,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: MasiLoadingGate(
+                          isLoading: true,
+                          builder: (context, showLoading) => showLoading
+                              ? const _RoutesLoadingChip()
+                              : const SizedBox.shrink(),
+                        ),
+                      ),
+                    ),
                 ],
               );
             },
           ),
         ),
       ],
+    );
+  }
+}
+
+/// The photo-switch cue: a frosted pill in the collapsed legend's own position
+/// saying the routes for the photo now on screen are still being read.
+///
+/// Deliberately shaped like [_LegendChip] (same [GlassChrome], same padding,
+/// same slot) because it stands in for exactly that chip — so when the load
+/// lands, the chip or the legend card appears where this was rather than
+/// somewhere else.
+class _RoutesLoadingChip extends StatelessWidget {
+  const _RoutesLoadingChip();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return GlassChrome(
+      key: const Key('topo-routes-loading'),
+      strong: true,
+      blur: true,
+      padding: const EdgeInsets.symmetric(
+        horizontal: MasiSpacing.md,
+        vertical: MasiSpacing.sm,
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MasiLoadingIndicator.inline(
+            // The gate at the call site owns both delays.
+            revealDelay: Duration.zero,
+            minVisible: Duration.zero,
+            color: colors.accent,
+            semanticLabel: 'Loading this photo’s routes',
+          ),
+          const SizedBox(width: MasiSpacing.sm),
+          Flexible(
+            child: Text(
+              'Loading routes…',
+              style: Theme.of(
+                context,
+              ).textTheme.labelLarge?.copyWith(color: colors.ink),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
