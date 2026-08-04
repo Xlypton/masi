@@ -159,8 +159,17 @@ class MasiSkeletonListRow extends StatelessWidget {
   /// re-deriving it. A minimum, not a cap: see the class doc.
   static const double height = 64;
 
-  /// Draw the second, shorter line. Match the list you are standing in for:
-  /// Sectors/Walls rows carry a subtitle, Areas do not.
+  /// Draw the second, shorter line. Match the list you are standing in for.
+  ///
+  /// In `crud_list_scaffold.dart` that is decided by whether the screen passes
+  /// `subtitleOf`, so derive it — `showSubtitle: subtitleOf != null` — rather
+  /// than hardcoding per screen. Today only `areas_screen.dart` passes one (the
+  /// area description); Sectors and Walls do not.
+  ///
+  /// (An earlier version of this comment claimed the opposite — that
+  /// Sectors/Walls carry a subtitle and Areas do not. It was wrong, and it was
+  /// copied into adoption work before anyone checked it against the call sites.
+  /// Deriving from `subtitleOf` is what makes the question unaskable.)
   final bool showSubtitle;
 
   /// Fraction of the row's text column the title bar spans.
