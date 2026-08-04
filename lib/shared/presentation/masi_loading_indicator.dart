@@ -133,12 +133,12 @@ class MasiLoadingIndicator extends StatelessWidget {
       minVisible: minVisible,
       builder: (context, showLoading) {
         if (!showLoading) return child ?? const SizedBox.shrink();
-        return _standalone ? _standaloneBody(context) : _inlineBody(context);
+        return _standalone ? _standaloneBody(context) : _inlineBody();
       },
     );
   }
 
-  Widget _inlineBody(BuildContext context) => SizedBox(
+  Widget _inlineBody() => SizedBox(
     width: inlineSize,
     height: inlineSize,
     child: _Arc(

@@ -202,12 +202,12 @@ class _MasiPendingButtonState extends State<MasiPendingButton> {
         return switch (widget.variant) {
           MasiPendingButtonVariant.filled => ElevatedButton(
             onPressed: enabled ? _handleTap : null,
-            style: _filledStyle(colors, pending: _inFlight).merge(widget.style),
+            style: _withOverrides(_filledStyle(colors, pending: _inFlight)),
             child: label,
           ),
           MasiPendingButtonVariant.text => TextButton(
             onPressed: enabled ? _handleTap : null,
-            style: _textStyle(colors).merge(widget.style),
+            style: _withOverrides(_textStyle(colors)),
             child: label,
           ),
         };
@@ -218,6 +218,15 @@ class _MasiPendingButtonState extends State<MasiPendingButton> {
         ? SizedBox(width: double.infinity, child: button)
         : button;
   }
+
+  /// Lets [MasiPendingButton.style] win over the variant's own recipe.
+  ///
+  /// The argument order matters and is easy to get backwards: `a.merge(b)`
+  /// keeps `a`'s non-null fields and only lets `b` fill in `a`'s nulls. So the
+  /// CALLER's style has to be the receiver, or passing `style:` would silently
+  /// do nothing wherever the variant already sets that field.
+  ButtonStyle _withOverrides(ButtonStyle base) =>
+      widget.style?.merge(base) ?? base;
 
   /// Matches the app's existing primary-action recipe (`accent` fill,
   /// `onAccent` label, 14 px vertical padding, 13 px radius) — the same one
