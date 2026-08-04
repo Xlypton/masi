@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/shared/presentation/masi_async_view.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:masi/shared/presentation/masi_skeleton.dart';
 
 /// Tests for `MasiAsyncView` — the replacement for
@@ -42,6 +43,9 @@ Widget _wrap(
   ProviderContainer container,
   FutureProvider<List<String>> provider, {
   void Function()? onRetryHook,
+  // Matches the widget's own default (off), so a test that wants the raw
+  // exception text on screen has to say so — same as a real call site.
+  bool showErrorDetail = false,
 }) {
   return UncontrolledProviderScope(
     container: container,
@@ -52,6 +56,7 @@ Widget _wrap(
           builder: (context, ref, _) => MasiAsyncView<List<String>>(
             value: ref.watch(provider),
             errorMessage: "Couldn't load your areas",
+            showErrorDetail: showErrorDetail,
             onRetry: () {
               onRetryHook?.call();
               ref.invalidate(provider);
@@ -239,7 +244,12 @@ void main() {
         return const ['Alpha'];
       });
       await tester.pumpWidget(
-        _wrap(_container(), provider, onRetryHook: () => retries++),
+        _wrap(
+          _container(),
+          provider,
+          onRetryHook: () => retries++,
+          showErrorDetail: true,
+        ),
       );
       await tester.pump();
       await tester.pump();
@@ -289,7 +299,78 @@ void main() {
       },
     );
 
-    testWidgets('showErrorDetail: false hides the raw exception text', (
+    testWidgets('the raw exception text is hidden BY DEFAULT — a caller has to '
+        'opt in to putting developer text in front of a user', (tester) async {
+      final provider = FutureProvider<List<String>>(
+        (ref) async => throw StateError('SqliteException(1): no such column'),
+      );
+      // No showErrorDetail argument anywhere: this is the default.
+      await tester.pumpWidget(_wrap(_container(), provider));
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+      expect(find.text("Couldn't load your areas"), findsOneWidget);
+      expect(find.textContaining('SqliteException'), findsNothing);
+    });
+
+    testWidgets('the Try-again button shows a pending cue while an async retry '
+        'runs, and swallows a second tap', (tester) async {
+      final second = Completer<List<String>>();
+      var builds = 0;
+      final provider = FutureProvider<List<String>>((ref) {
+        if (builds++ == 0) throw StateError('boom');
+        return second.future;
+      });
+      var retries = 0;
+      final container = _container();
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Scaffold(
+              body: Consumer(
+                builder: (context, ref, _) => MasiAsyncView<List<String>>(
+                  value: ref.watch(provider),
+                  errorMessage: "Couldn't load your areas",
+                  // The async shape: the button can only cue what it can await.
+                  onRetry: () {
+                    retries++;
+                    return ref.refresh(provider.future);
+                  },
+                  skeleton: (context) => const MasiSkeletonList.listRows(),
+                  data: (context, items) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+
+      await tester.tap(find.byKey(MasiAsyncView.retryKey));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(
+        find.byKey(MasiLoadingIndicator.spinnerKey),
+        findsOneWidget,
+        reason: 'a retry is a network pull; a dead-looking button gets tapped '
+            'again',
+      );
+
+      await tester.tap(find.byKey(MasiAsyncView.retryKey), warnIfMissed: false);
+      await tester.pump();
+      expect(retries, 1, reason: 'the second tap must be swallowed');
+
+      second.complete(const ['Alpha']);
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    });
+
+    testWidgets('showErrorDetail: true prints the raw exception text', (
       tester,
     ) async {
       final provider = FutureProvider<List<String>>(
@@ -305,7 +386,7 @@ void main() {
                 builder: (context, ref, _) => MasiAsyncView<List<String>>(
                   value: ref.watch(provider),
                   errorMessage: 'Nope',
-                  showErrorDetail: false,
+                  showErrorDetail: true,
                   onRetry: () => ref.invalidate(provider),
                   skeleton: (context) => const MasiSkeletonList.listRows(),
                   data: (context, items) => const SizedBox.shrink(),
@@ -319,7 +400,7 @@ void main() {
       await tester.pump();
 
       expect(find.text('Nope'), findsOneWidget);
-      expect(find.textContaining('boom'), findsNothing);
+      expect(find.textContaining('boom'), findsOneWidget);
     });
   });
 

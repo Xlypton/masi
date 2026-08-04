@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
 import 'masi_icon.dart';
 import 'masi_loading_gate.dart';
+import 'masi_pending_button.dart';
 
 /// Renders an [AsyncValue] with the four states it actually has — first load,
 /// refresh, data, failure — instead of the three `.when()` invites.
@@ -68,7 +71,7 @@ class MasiAsyncView<T> extends StatelessWidget {
     required this.skeleton,
     required this.onRetry,
     this.errorMessage = "Couldn't load this",
-    this.showErrorDetail = true,
+    this.showErrorDetail = false,
   });
 
   /// Usually `ref.watch(someAsyncProvider)`.
@@ -86,16 +89,26 @@ class MasiAsyncView<T> extends StatelessWidget {
   /// Retry. Required and non-nullable on purpose: before this widget the app
   /// had no retry affordance anywhere, and for a Riverpod screen there is
   /// always a correct answer — `() => ref.invalidate(theProvider)`.
-  final VoidCallback onRetry;
+  ///
+  /// [FutureOr] so both shapes stay ergonomic. A synchronous
+  /// `() => ref.invalidate(p)` is still the common answer and needs no `async`;
+  /// return a future (`() => ref.refresh(p.future)`) and the Try-again button
+  /// shows a pending cue for as long as the re-fetch runs, which is what
+  /// essentially every retry here actually is — a network pull.
+  final FutureOr<void> Function() onRetry;
 
   /// The human sentence for the failure state. Say what could not be loaded
   /// ("Couldn't load your areas"), never "Error".
   final String errorMessage;
 
-  /// Whether to print the raw error under [errorMessage]. On by default: this
-  /// app is local-first and the raw text is frequently the only diagnosis
-  /// available on a release build on a phone (see #72). Turn it off where the
-  /// error object is known to be noise.
+  /// Whether to print the raw error under [errorMessage].
+  ///
+  /// **Off by default.** An exception's `toString()` is developer text: it names
+  /// types, tables and columns, and at least one feature has a deliberate,
+  /// test-asserted rule against putting any of it in front of a user. Opt in
+  /// (`showErrorDetail: true`) on the local-first surfaces where the raw text is
+  /// frequently the only diagnosis available on a release build on a phone
+  /// (see #72) — that is a decision per screen, not a default.
   final bool showErrorDetail;
 
   /// Key on the error state's container.
@@ -174,6 +187,11 @@ class MasiAsyncView<T> extends StatelessWidget {
     );
   }
 
+  /// Adapts [onRetry]'s [FutureOr] to what [MasiPendingButton] awaits. A
+  /// synchronous retry simply resolves inside the reveal delay, so it paints no
+  /// cue at all — the anti-flash rule doing its job rather than a special case.
+  Future<void> _runRetry() async => onRetry();
+
   Widget _errorState(BuildContext context) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
@@ -206,13 +224,12 @@ class MasiAsyncView<T> extends StatelessWidget {
               ),
             ],
             const SizedBox(height: MasiSpacing.md),
-            ElevatedButton(
-              key: retryKey,
-              onPressed: onRetry,
-              style: ElevatedButton.styleFrom(
-                backgroundColor: colors.accent,
-                foregroundColor: colors.onAccent,
-              ),
+            // A pending button, not a plain one: [onRetry] is almost always a
+            // network pull, and a Try-again that looks idle for three seconds
+            // gets tapped again.
+            MasiPendingButton.filled(
+              buttonKey: retryKey,
+              onPressed: _runRetry,
               child: const Text('Try again'),
             ),
           ],
@@ -265,9 +282,9 @@ class MasiAsyncView<T> extends StatelessWidget {
                 const SizedBox(height: MasiSpacing.xs),
                 Align(
                   alignment: Alignment.centerLeft,
-                  child: TextButton(
-                    key: retryKey,
-                    onPressed: onRetry,
+                  child: MasiPendingButton.text(
+                    buttonKey: retryKey,
+                    onPressed: _runRetry,
                     style: TextButton.styleFrom(
                       padding: EdgeInsets.zero,
                       minimumSize: Size.zero,
