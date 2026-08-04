@@ -3,6 +3,8 @@ import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/backup/application/sync_providers.dart';
 import 'package:masi/features/backup/data/sync_remote.dart';
 import 'package:masi/features/topo/data/missing_photo_byte_resolver.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
@@ -285,17 +287,74 @@ void main() {
     expect(await resolver.resolve(p.join('photos', 'photo-a.jpg')), isNull);
   });
 
-  test(
-    'missingPhotoByteResolverProvider degrades to the no-op when Supabase was '
-    'never initialised, rather than throwing inside a render path',
-    () {
-      final container = ProviderContainer();
-      addTearDown(container.dispose);
+  group('missingPhotoByteResolverProvider', () {
+    // These two are a PAIR, and the first one alone was worthless. A bare
+    // `ProviderContainer` in a VM test can never read `syncRemoteProvider`, so
+    // the degrade branch was the only reachable one and replacing the whole
+    // provider body with `return const NoopMissingPhotoByteResolver();` left the
+    // file green — the provider's actual job was untested. The second test is
+    // what kills that mutation: with a remote available it must build the REAL
+    // resolver, and that resolver must be the one talking to the remote the
+    // provider was given.
+    test(
+      'degrades to the no-op when Supabase was never initialised, rather than '
+      'throwing inside a render path',
+      () {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
 
-      expect(
-        container.read(missingPhotoByteResolverProvider),
-        isA<NoopMissingPhotoByteResolver>(),
-      );
-    },
-  );
+        expect(
+          container.read(missingPhotoByteResolverProvider),
+          isA<NoopMissingPhotoByteResolver>(),
+        );
+      },
+    );
+
+    test(
+      'builds the real Supabase-backed resolver when a remote IS available, and '
+      'wires it to that remote — a provider that always answered no-op would '
+      'leave every budget-skipped public photo a permanent placeholder',
+      () async {
+        final remote = _FakeRemote(bytes: List<int>.filled(8, 3));
+        final container = ProviderContainer(
+          overrides: [
+            syncRemoteProvider.overrideWithValue(remote),
+            photoFilesProvider.overrideWithValue(
+              PhotoFiles(docsDir: () async => tmp),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final resolver = container.read(missingPhotoByteResolverProvider);
+
+        expect(resolver, isA<SharedMissingPhotoByteResolver>());
+        expect(
+          await resolver.resolve(p.join('photos', 'photo-a.jpg')),
+          hasLength(8),
+        );
+        expect(
+          remote.requests,
+          ['shared/photo-a.jpg'],
+          reason: 'the resolver must fetch through the injected SyncRemote',
+        );
+      },
+    );
+
+    test(
+      'is a singleton across reads: the in-flight and negative maps ARE the '
+      'de-duplication, and a fresh instance per read would de-dup nothing',
+      () {
+        final container = ProviderContainer(
+          overrides: [syncRemoteProvider.overrideWithValue(_FakeRemote())],
+        );
+        addTearDown(container.dispose);
+
+        expect(
+          container.read(missingPhotoByteResolverProvider),
+          same(container.read(missingPhotoByteResolverProvider)),
+        );
+      },
+    );
+  });
 }

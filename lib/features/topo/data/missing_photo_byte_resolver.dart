@@ -199,10 +199,45 @@ class SharedMissingPhotoByteResolver implements MissingPhotoByteResolver {
 /// container without Supabase), mirroring `syncServiceProvider`'s guard rather
 /// than letting a render path throw at construction.
 ///
-/// NOT gated on `kIsWeb`: the byte budget applies on every platform (off-web it
-/// simply always uses the plain count budget), so native needs the same healing
-/// path or an iPhone would show permanent placeholders for the public photos a
-/// pull chose not to fetch.
+/// ## WEB-ONLY IN PRACTICE — and the native gap that leaves
+///
+/// This provider is not gated on `kIsWeb` and neither is anything in this file:
+/// it is plain data-layer code that would work anywhere. But the only thing that
+/// CALLS it is the web display path, `photo_image_source_web.dart`'s
+/// `_readOrFetchBytes`. `photo_image_source_native.dart` renders straight from
+/// `Image.file` and never asks for a resolve, so on native nothing heals a
+/// public photo on demand. That is deliberate, and this paragraph replaces an
+/// earlier one which claimed the opposite ("native needs the same healing path")
+/// while the wiring never existed — a doc that promised a behaviour the app did
+/// not have.
+///
+/// The gap is real, not hypothetical. The byte budget is NOT web-only: off-web
+/// `navigator.storage` does not exist, so `SyncService` reads no pressure and
+/// applies the plain count budget of `kSharedPhotoByteBudgetPerPull` foreign
+/// photos per pull. So on iOS, a public topo outside the newest budget's worth of
+/// foreign photos opens to a canvas with routes drawn over an empty placeholder,
+/// and tapping it fetches nothing; it fills in only across successive
+/// (30s-throttled, resume-triggered) pulls, a budget's worth at a time. A photo
+/// already on the device costs no budget, so it does converge — just slowly, and
+/// with no way to ask for the one photo being looked at.
+///
+/// Why that is accepted rather than fixed here:
+///
+///  * the app is now WEB-PRIMARY; the native build is deprioritised, and wiring
+///    this would mean turning the native display path — whose entire stated
+///    contract is "byte-for-byte the same `Image.file` as before this
+///    migration" — into a stateful fetch-and-retry widget, verifiable only on a
+///    physical device;
+///  * the budget is the wrong thing on native anyway. It exists to protect the
+///    ORIGIN QUOTA from breaking the user's own imports (`photo_files_web.dart`'s
+///    L3 write throws on quota); an iOS documents directory has no such quota and
+///    `PublicPhotoPruneService` is a permanent no-op there for exactly that
+///    reason. The proportionate native fix is therefore to stop rationing
+///    foreign photos on native at all — one condition in
+///    `SyncService.pullOwnAndShared`, not a second healing path here.
+///
+/// If native is ever re-prioritised, do one of those two, and correct this
+/// paragraph rather than leaving it describing the old state.
 ///
 /// A plain [Provider] with no `autoDispose`: the in-flight and negative maps ARE
 /// the de-duplication, and they only work if every caller shares one instance
