@@ -321,6 +321,10 @@ class MasiSkeletonFeedCard extends StatelessWidget {
 /// stands in for content that is not there yet, so a drag or a tap must do
 /// nothing rather than something surprising.
 ///
+/// It is a [ListView], so — like the real list it replaces — it needs a
+/// bounded height: a [Scaffold.body], an [Expanded], a sized box. That is
+/// already true wherever it is handed to `MasiAsyncView.skeleton`.
+///
 /// Cost note: every shape is its own [MasiShimmer], i.e. its own ticker and
 /// its own [RepaintBoundary]. The default counts are deliberately modest (and
 /// a couple of rows past the fold is enough to read as "a list"); do not raise
