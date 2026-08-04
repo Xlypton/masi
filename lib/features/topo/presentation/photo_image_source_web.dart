@@ -12,11 +12,13 @@
 // Wasm-clean: only `dart:js_interop`/`package:web` (via `PhotoImageCache`)
 // and plain Flutter APIs — no `dart:html`.
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/db/database_provider.dart';
+import '../data/missing_photo_byte_resolver.dart';
 import '../data/photo_files.dart';
 import '../data/photo_image_cache_web.dart';
 import 'photo_image_self_heal_guard.dart';
@@ -123,7 +125,7 @@ class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
     _url = null;
     unawaited(
       PhotoImageCache.instance
-          .resolveUrl(key, () => photoFiles.readPhotoBytes(key))
+          .resolveUrl(key, () => _readOrFetchBytes(photoFiles, key))
           .then((url) {
             if (!mounted || _key != key) return;
             setState(() {
@@ -132,6 +134,34 @@ class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
             });
           }),
     );
+  }
+
+  /// The byte source both [PhotoImageCache.resolveUrl] calls in this class read
+  /// through: this device's own copy first, and — only when it does not have
+  /// one — ONE on-demand fetch of the shared copy via
+  /// [missingPhotoByteResolverProvider].
+  ///
+  /// This is the render-path half of the bounded public-photo pull. A pull
+  /// downloads at most a byte budget of OTHER climbers' photos and
+  /// `PublicPhotoPruneService` evicts foreign bytes again under storage
+  /// pressure, so a public `Photos` row can legitimately exist locally as
+  /// metadata with NO bytes — which without this renders as a permanent
+  /// placeholder with no path back (see `missing_photo_byte_resolver.dart`).
+  /// Fetching from the widget build path is safe because the resolver
+  /// de-duplicates concurrent requests per photo id, keeps a one-minute
+  /// negative cache, and NEVER throws (offline answers `null`); and because
+  /// [PhotoImageCache.resolveUrl] itself caches and de-dups per key, so at most
+  /// one fetch is ever in flight for a key no matter how many widgets show it.
+  ///
+  /// A `null` result is unchanged from before: [PhotoImageCache.resolveUrl]
+  /// resolves to `null`, [_resolved] flips true, and [build] falls through to
+  /// the static `placeholder` — so a genuinely-absent photo still stops looking
+  /// like a loading one, while a fetch in progress keeps showing
+  /// `loadingPlaceholder` for as long as it runs.
+  Future<Uint8List?> _readOrFetchBytes(PhotoFiles photoFiles, String key) async {
+    final local = await photoFiles.readPhotoBytes(key);
+    if (local != null) return local;
+    return ref.read(missingPhotoByteResolverProvider).resolve(key);
   }
 
   /// Called from [Image.network]'s `errorBuilder` when [failedUrl] — the URL
@@ -164,7 +194,7 @@ class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
     final photoFiles = ref.read(photoFilesProvider);
     unawaited(
       PhotoImageCache.instance
-          .resolveUrl(key, () => photoFiles.readPhotoBytes(key))
+          .resolveUrl(key, () => _readOrFetchBytes(photoFiles, key))
           .then((url) {
             if (!mounted || _key != key) return;
             if (!isSuccessfulPhotoSelfHeal(
