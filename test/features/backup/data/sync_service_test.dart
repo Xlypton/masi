@@ -643,6 +643,7 @@ void main() {
     Map<String, List<String>>? pushRequiredFields,
     StoragePersistenceService? storage,
     int? sharedPhotoByteBudget,
+    bool? isWeb,
   }) {
     final db = AppDatabase(NativeDatabase.memory());
     final docsDir = Directory(p.join(tmp.path, 'docs_${_counter++}'))..createSync();
@@ -658,6 +659,7 @@ void main() {
       pushRequiredFields: pushRequiredFields,
       storage: storage,
       sharedPhotoByteBudget: sharedPhotoByteBudget,
+      isWeb: isWeb,
     );
     return (db: db, docsDir: docsDir, srcDir: srcDir, service: service);
   }
@@ -2477,6 +2479,12 @@ void main() {
     /// Pushes [count] shared walls owned by u2 into [remote] (as if another
     /// climber had published them), then returns a FRESH u1 bundle — an empty
     /// device about to do its very first pull.
+    ///
+    /// [isWeb] defaults to `true`: this whole group is pinning the BUDGETED
+    /// (web) behaviour — see [SyncService]'s `_isWeb` doc — so every test
+    /// below that doesn't override it is proof the budget still applies
+    /// unchanged on web. The native (unbounded) counterpart tests pass
+    /// `isWeb: false` explicitly (task #48).
     Future<
       ({AppDatabase db, Directory docsDir, Directory srcDir, SyncService service})
     >
@@ -2485,6 +2493,7 @@ void main() {
       required int count,
       StoragePersistenceService? storage,
       int? sharedPhotoByteBudget,
+      bool isWeb = true,
     }) async {
       final u2 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU2));
       addTearDown(() => u2.db.close());
@@ -2496,6 +2505,7 @@ void main() {
         auth: FakeAuthRepository(_signedInU1),
         storage: storage,
         sharedPhotoByteBudget: sharedPhotoByteBudget,
+        isWeb: isWeb,
       );
       addTearDown(() => u1.db.close());
       return u1;
@@ -2636,6 +2646,7 @@ void main() {
           remote: remote,
           auth: FakeAuthRepository(_signedInU1),
           sharedPhotoByteBudget: 0,
+          isWeb: true,
         );
         addTearDown(() => deviceB.db.close());
 
@@ -2676,6 +2687,7 @@ void main() {
           remote: remote,
           auth: FakeAuthRepository(_signedInU1),
           sharedPhotoByteBudget: 0,
+          isWeb: true,
         );
         addTearDown(() => u1DeviceB.db.close());
 
@@ -2898,6 +2910,116 @@ void main() {
           'photo-s0.jpg',
           reason: 'the canonical id + ext survive, which is all healing needs',
         );
+      },
+    );
+
+    // ---- task #48: no origin quota to protect on native --------------------
+    // Every test above pins the budget's BEHAVIOUR (proven with `isWeb: true`,
+    // now the default `publishAsU2AndMakeFreshU1` passes). These pin the
+    // opposite: with `isWeb: false` (native), `SyncService.pullOwnAndShared`
+    // must NOT apply `sharedPhotoByteBudget` at all — the budget exists only
+    // to protect a BROWSER origin's storage quota (`photo_files_web.dart`'s L3
+    // write throws on quota), and an iOS/Android documents directory has no
+    // such quota — the exact reason `PublicPhotoPruneService` is already a
+    // permanent no-op there.
+
+    test(
+      'task #48 (a): on native, a budget that would otherwise cap a 5-photo '
+      'public library instead downloads ALL 5 — the budget buys nothing off-web '
+      'and must not cost function',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 5,
+          sharedPhotoByteBudget: 2,
+          isWeb: false,
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(sharedRequests(remote), hasLength(5));
+        expect(result.photosDownloaded, 5);
+        expect(result.sharedPhotoBytesSkipped, 0);
+        expect(
+          result.sharedPhotoBudgetReason,
+          SharedPhotoBudgetReason.withinBudget,
+        );
+      },
+    );
+
+    test(
+      'task #48 (b): on native, even a ZERO budget downloads every foreign '
+      'photo — proves the gate is "does not apply", not "applies a looser '
+      'number"',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 3,
+          sharedPhotoByteBudget: 0,
+          isWeb: false,
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(result.photosDownloaded, 3);
+        expect(result.sharedPhotoBytesSkipped, 0);
+      },
+    );
+
+    test(
+      'task #48 (c): on native, storage pressure ALSO has no effect — even an '
+      'origin reading 90% usage (well past the prune high watermark) still '
+      'downloads every foreign photo, because native reads no pressure signal '
+      'from a real `navigator.storage` in the first place',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 3,
+          isWeb: false,
+          storage: FakeStoragePersistenceService(
+            // 0.90 > kPrunePressureHighWatermark (0.75) — would zero the web
+            // budget outright (ASSERTION (d) above); must not matter here.
+            snapshot: const StorageEstimateSnapshot(
+              usageBytes: 900,
+              quotaBytes: 1000,
+            ),
+          ),
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(result.photosDownloaded, 3);
+        expect(result.sharedPhotoBytesSkipped, 0);
+        expect(
+          result.sharedPhotoBudgetReason,
+          SharedPhotoBudgetReason.withinBudget,
+        );
+      },
+    );
+
+    test(
+      'task #48 (d): the METADATA/errors/imported contract is unchanged on '
+      'native — an unbounded pull is still a clean, successful one',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishAsU2AndMakeFreshU1(
+          remote,
+          count: 5,
+          sharedPhotoByteBudget: 2,
+          isWeb: false,
+        );
+
+        final result = await c.service.pullOwnAndShared();
+
+        expect(result.errors, isEmpty);
+        expect(result.didPull, isTrue);
+        expect(result.ownImported, isTrue);
+        expect(result.sharedImported, isTrue);
+        expect(await c.db.select(c.db.walls).get(), hasLength(5));
+        expect(await c.db.select(c.db.photos).get(), hasLength(5));
       },
     );
   });

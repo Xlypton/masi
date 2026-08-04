@@ -1,4 +1,5 @@
 import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
 
 import '../../../core/db/app_database.dart' as db;
@@ -472,6 +473,7 @@ class SyncService {
     Map<String, List<String>>? pushRequiredFields,
     StoragePersistenceService? storage,
     int? sharedPhotoByteBudget,
+    bool? isWeb,
   }) : _db = db, // ignore: prefer_initializing_formals
        _backupRepository = backupRepository, // ignore: prefer_initializing_formals
        _remote = remote, // ignore: prefer_initializing_formals
@@ -482,7 +484,8 @@ class SyncService {
        _pushRequiredFields = pushRequiredFields ?? syncRequiredFields,
        _storage = storage ?? const PlatformStoragePersistenceService(),
        sharedPhotoByteBudget =
-           sharedPhotoByteBudget ?? kSharedPhotoByteBudgetPerPull;
+           sharedPhotoByteBudget ?? kSharedPhotoByteBudgetPerPull,
+       _isWeb = isWeb ?? kIsWeb;
 
   final db.AppDatabase _db;
   final BackupRepository _backupRepository;
@@ -520,6 +523,19 @@ class SyncService {
   /// [PushSyncResult.rowsFailed]/[PushSyncResult.errors]. Production always
   /// uses the default.
   final Map<String, List<String>> _pushRequiredFields;
+
+  /// Whether this pull should treat itself as running in a browser origin.
+  /// Defaults to the real compile-time [kIsWeb] and only exists so a unit
+  /// test can exercise BOTH branches without a real browser test runner,
+  /// where the compile-time [kIsWeb] can't otherwise be flipped — mirrors
+  /// `photo_source_sheet.dart`'s `showCameraOption`/`AuthRepository`'s
+  /// `resolveMagicLinkRedirect` seam.
+  ///
+  /// Gates ONLY whether [pullOwnAndShared] applies [sharedPhotoByteBudget] to
+  /// OTHER climbers' photo downloads — see that method's "NATIVE HAS NO
+  /// ORIGIN QUOTA TO PROTECT" comment for why. Nothing else in this class
+  /// reads it.
+  final bool _isWeb;
 
   /// Pushes every LOCAL row owned by the signed-in user (all nine tables,
   /// INCLUDING soft-deleted tombstones) up to [SyncRemote.upsertOwnRows],
@@ -1424,11 +1440,29 @@ class SyncService {
       // Unreadable estimate == no signal == plain count budget.
     }
 
+    // NATIVE HAS NO ORIGIN QUOTA TO PROTECT. `kSharedPhotoByteBudgetPerPull`
+    // exists solely to keep this pull from busting a BROWSER origin's storage
+    // quota (`photo_files_web.dart`'s L3 write throws on quota) — the exact
+    // same reason `PublicPhotoPruneService` is a permanent no-op on native
+    // (`estimate()` is always null there, and nothing should silently evict an
+    // iOS/Android app's documents directory). So on native the budget buys
+    // nothing and only costs function: `photo_image_source_native.dart` has no
+    // on-demand healing path (`missingPhotoByteResolverProvider` is wired only
+    // from the web display path — see that provider's "WEB-ONLY IN PRACTICE"
+    // doc), so a foreign photo this budget withheld sits on a placeholder until
+    // a later 30s-throttled pull happens to fetch it. [_isWeb] (real value
+    // [kIsWeb], the documented seam for exactly this kind of platform
+    // behavioural gate — it is NOT `dart:io`, so no conditional-import split is
+    // warranted) — passing `null` here reuses `_downloadAndRewritePhotos`'s
+    // existing "unbounded" contract, the same one the OWN-photo pass above
+    // always uses, rather than adding a second code path. Web behaviour is
+    // unchanged: `budget` (and the storage-pressure early-out that computed it
+    // above) still applies exactly as before.
     try {
       final sharedPass = await _downloadAndRewritePhotos(
         sharedTables,
         (canonicalId, ext) => _remote.downloadSharedPhoto(sharedPhotoPath(canonicalId, ext)),
-        foreignByteBudget: budget,
+        foreignByteBudget: _isWeb ? budget : null,
         ownUid: uid,
       );
       sharedPhotosDownloaded = sharedPass.downloaded;
