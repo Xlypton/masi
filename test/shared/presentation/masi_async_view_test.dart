@@ -304,8 +304,28 @@ void main() {
       final provider = FutureProvider<List<String>>(
         (ref) async => throw StateError('SqliteException(1): no such column'),
       );
-      // No showErrorDetail argument anywhere: this is the default.
-      await tester.pumpWidget(_wrap(_container(), provider));
+      // Built by hand rather than via `_wrap`, because the point is the
+      // parameter being ABSENT: `_wrap` passes it through explicitly and would
+      // therefore prove nothing about the widget's own default.
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: _container(),
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Scaffold(
+              body: Consumer(
+                builder: (context, ref, _) => MasiAsyncView<List<String>>(
+                  value: ref.watch(provider),
+                  errorMessage: "Couldn't load your areas",
+                  onRetry: () => ref.invalidate(provider),
+                  skeleton: (context) => const MasiSkeletonList.listRows(),
+                  data: (context, items) => const SizedBox.shrink(),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
       await tester.pump();
       await tester.pump();
 
