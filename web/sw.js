@@ -179,10 +179,33 @@ self.addEventListener('install', (event) => {
       // `addAll` is all-or-nothing: if any request fails the install rejects,
       // this worker never activates, and the PREVIOUS one keeps serving. That
       // is the property that stops a half-updated shell existing at all.
-      await cache.addAll(PRECACHE.map((path) => new Request(
-        new URL(path, SCOPE),
-        RELOAD_ON_PRECACHE.has(path) ? { cache: 'reload' } : undefined
-      )));
+      //
+      // `index.html` is handled separately and NOT via `addAll`, because
+      // `addAll` derives the cache key from the URL it fetches and those must
+      // differ here: Cloudflare Pages 308s `/index.html` to `/`, so fetching
+      // the listed path would store a response carrying `redirected === true`,
+      // and serving that to a navigation is what WebKit refuses outright (see
+      // `navigationFirst`). Fetch the root, store it under the `index.html`
+      // key. Without this the OFFLINE navigation would fail in Safari even
+      // once the online path was fixed.
+      const shellPath = 'index.html';
+      await cache.addAll(
+        PRECACHE.filter((path) => path !== shellPath).map((path) => new Request(
+          new URL(path, SCOPE),
+          RELOAD_ON_PRECACHE.has(path) ? { cache: 'reload' } : undefined
+        ))
+      );
+      if (PRECACHE.includes(shellPath)) {
+        const shell = await fetch(new Request(SHELL_NETWORK_URL()));
+        // Rethrow-equivalent: keep install all-or-nothing, exactly as `addAll`
+        // would have, so a bad shell fetch never yields a half-populated cache.
+        if (!isCacheable(shell)) {
+          throw new Error(
+            `masi/sw: shell precache failed (status ${shell && shell.status})`
+          );
+        }
+        await cache.put(SHELL_CACHE_KEY(), shell);
+      }
     }
     if (SHELL_STRATEGY.takeOverImmediately) {
       await self.skipWaiting();
@@ -211,9 +234,7 @@ self.addEventListener('fetch', (event) => {
   if (NEVER_CACHE.has(path)) return;      // always straight to the network
 
   if (request.mode === 'navigate') {
-    event.respondWith(networkFirst(event, new Request(
-      new URL('index.html', SCOPE)
-    )));
+    event.respondWith(navigationFirst(event));
     return;
   }
   if (SHELL_STRATEGY.networkFirstPaths.has(path)) {
@@ -222,6 +243,77 @@ self.addEventListener('fetch', (event) => {
   }
   event.respondWith(cacheFirst(event, request));
 });
+
+/**
+ * The shell URLs, which are deliberately NOT the same URL.
+ *
+ * Cloudflare Pages answers `/index.html` with a **308 to `/`**. That single
+ * fact breaks Safari completely, and it is worth spelling out because nothing
+ * about the symptom points at it:
+ *
+ *   - `fetch('/index.html')` follows the 308, so the response it resolves to
+ *     has `redirected === true`.
+ *   - Returning a response with that flag set from a service worker, *for a
+ *     navigation request*, is forbidden. WebKit enforces it and fails the
+ *     entire load with `Response served by service worker has redirections`
+ *     (WebKitInternal:0) — a blank error page, no app at all.
+ *   - Chromium is lenient here, so this is invisible in headless Chrome. It is
+ *     also invisible on any FIRST visit in any browser, because no worker
+ *     controls that navigation yet. It appears only once the worker is
+ *     installed — i.e. exactly for returning users and installed PWAs.
+ *
+ * So: fetch the SCOPE ROOT (served 200 directly, no redirect), but keep
+ * reading and writing the cache under the `index.html` key, because that is
+ * the path `PRECACHE` lists and therefore the key the precache populates.
+ * Splitting the two is the whole fix; using one URL for both cannot work.
+ */
+const SHELL_CACHE_KEY = () => new Request(new URL('index.html', SCOPE));
+const SHELL_NETWORK_URL = () => new URL('./', SCOPE);
+
+/**
+ * A redirected response cannot be repaired here, only avoided.
+ *
+ * The obvious defence would be to strip the flag by rebuilding the response.
+ * That is deliberately NOT done: rebuilding risks dropping COOP/COEP, which
+ * kills `crossOriginIsolated` and silently downgrades drift off OPFS. Trading a
+ * loud, instantly-reported Safari error for a silent data-layer downgrade is a
+ * bad trade, so the invariant in `test/web_shell_source_test.dart` ("never
+ * rebuilds a Response") stands, and the redirect is prevented at its source by
+ * requesting a URL that does not redirect. That same test also pins that the
+ * navigation path never fetches `index.html`, which is the mistake that caused
+ * this outage.
+ */
+
+/**
+ * Network-first app shell for every in-scope navigation, so
+ * `/community/topo/<id>` resolves online and offline without a hosting rewrite
+ * reaching us.
+ *
+ * Identical in shape to `networkFirst`, and deliberately kept separate rather
+ * than parameterised: this is the one path where the fetched URL and the cache
+ * key differ, and collapsing them back into one argument is exactly the change
+ * that reintroduces the redirect bug.
+ */
+async function navigationFirst(event) {
+  const cache = await caches.open(CACHE_NAME);
+  const cacheKey = SHELL_CACHE_KEY();
+  try {
+    const response = await withTimeout(
+      fetch(new Request(SHELL_NETWORK_URL())),
+      NETWORK_TIMEOUT_MS
+    );
+    if (isCacheable(response)) {
+      event.waitUntil(cache.put(cacheKey, response.clone()));
+      return response;
+    }
+    const cached = await cache.match(cacheKey);
+    return cached || response;
+  } catch (error) {
+    const cached = await cache.match(cacheKey);
+    if (cached) return cached;
+    throw error;   // genuinely nothing to serve: let the browser say so
+  }
+}
 
 async function networkFirst(event, request) {
   const cache = await caches.open(CACHE_NAME);

@@ -106,6 +106,62 @@ void main() {
             'crossOriginIsolated and silently downgrades drift off OPFS',
       );
     });
+
+    // A real outage, and one this file could have prevented. Cloudflare Pages
+    // answers `/index.html` with a 308 to `/`. `fetch()` follows it, so the
+    // response carries `redirected === true`, and serving such a response to a
+    // NAVIGATION is forbidden: WebKit fails the whole load with "Response
+    // served by service worker has redirections" and Safari cannot open the app
+    // at all. Chromium is lenient, and no browser hits it on a first visit
+    // (nothing controls that navigation yet), so it is invisible to headless
+    // Chrome and to every fresh-profile smoke check — it strikes only returning
+    // users and installed PWAs. The fix is to fetch a URL that does not
+    // redirect, which is why the shell's fetch URL and its cache key are now
+    // deliberately different values.
+    test('the shell is never FETCHED from index.html, only cached under it', () {
+      final source = _read('web/sw.js');
+      expect(
+        source,
+        contains('const SHELL_NETWORK_URL'),
+        reason: 'the navigation fetch URL must stay a single named constant',
+      );
+      expect(
+        RegExp(r'SHELL_NETWORK_URL\s*=\s*\(\)\s*=>\s*new URL\('
+                r"\s*'\./'\s*,\s*SCOPE\s*\)")
+            .hasMatch(source),
+        isTrue,
+        reason: 'the navigation fetch must target the scope ROOT. Pointing it '
+            "at 'index.html' reintroduces Cloudflare's 308 and takes Safari "
+            'down completely',
+      );
+      expect(
+        RegExp(r"SHELL_CACHE_KEY\s*=\s*\(\)\s*=>\s*new Request\("
+                r"\s*new URL\(\s*'index\.html'\s*,\s*SCOPE\s*\)")
+            .hasMatch(source),
+        isTrue,
+        reason: "the cache key must stay 'index.html' — that is the path "
+            'PRECACHE lists, so changing it silently empties the offline shell',
+      );
+    });
+
+    test('the precache fetches the shell from the root, not index.html', () {
+      final source = _read('web/sw.js');
+      // `addAll` derives the cache key from the fetched URL, so it cannot
+      // express "fetch / but store under index.html". The shell therefore has
+      // to be excluded from addAll and put explicitly, or the CACHED copy
+      // carries the redirect and offline navigation breaks in Safari too.
+      expect(
+        source,
+        contains("PRECACHE.filter((path) => path !== shellPath)"),
+        reason: 'index.html must be excluded from addAll and stored explicitly',
+      );
+      expect(
+        RegExp(r'cache\.put\(\s*SHELL_CACHE_KEY\(\)\s*,\s*shell\s*\)')
+            .hasMatch(source),
+        isTrue,
+        reason: 'the precached shell must be stored under the index.html key',
+      );
+    });
   });
 
   group('web/sw.js strategy isolation', () {
