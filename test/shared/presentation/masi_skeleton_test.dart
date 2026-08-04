@@ -161,6 +161,51 @@ void main() {
     });
   });
 
+  group('accessibility text scale', () {
+    // The real rows grow with the user's text scale. If the skeleton did not,
+    // the jump-on-arrival this whole family exists to prevent would come back
+    // for exactly the users least able to absorb it.
+    testWidgets('a list row grows past its default height at 2x text scale', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const Scaffold(body: MasiSkeletonListRow()),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(
+        tester.getSize(find.byType(MasiSkeletonListRow)).height,
+        greaterThan(MasiSkeletonListRow.height),
+      );
+    });
+
+    testWidgets('a feed card grows past its default height at 2x text scale', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        MediaQuery(
+          data: const MediaQueryData(textScaler: TextScaler.linear(2)),
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: const Scaffold(body: MasiSkeletonFeedCard()),
+          ),
+        ),
+      );
+      await tester.pump(const Duration(milliseconds: 100));
+
+      expect(
+        tester.getSize(find.byType(MasiSkeletonFeedCard)).height,
+        greaterThan(MasiSkeletonFeedCard.height),
+      );
+    });
+  });
+
   group('MasiSkeletonList', () {
     testWidgets('listRows renders the asked-for number of rows', (
       tester,

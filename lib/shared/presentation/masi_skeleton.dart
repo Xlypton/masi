@@ -139,10 +139,13 @@ class _SkeletonFill extends StatelessWidget {
 /// Geometry is copied from that row, because a mismatch is what makes content
 /// jump on arrival: a [MasiColors.surface] [Material] at [MasiRadii.card],
 /// padded `horizontal: MasiSpacing.md, vertical: MasiSpacing.sm`, holding a
-/// title line and (by default) a subtitle line. Its total [height] is pinned
-/// to 64: the real row's height is set by its 48 px trailing [IconButton]s
-/// (rename/delete), not by its text, so a skeleton built from text bars alone
-/// would come out ~14 px short of it.
+/// title line and (by default) a subtitle line. [height] (64) is a MINIMUM,
+/// not a fixed size: the real row's height comes from its 48 px trailing
+/// [IconButton]s (rename/delete) rather than from its text, so a skeleton
+/// built out of text bars alone lands ~14 px short of it — but the real row
+/// DOES grow past 48 px at large accessibility text scales, and so must this,
+/// or the jump comes back for exactly the users least able to absorb it.
+/// Hence the bar slots are text-scaled and the height is a floor.
 class MasiSkeletonListRow extends StatelessWidget {
   const MasiSkeletonListRow({
     super.key,
@@ -150,9 +153,10 @@ class MasiSkeletonListRow extends StatelessWidget {
     this.titleWidthFactor = 0.55,
   });
 
-  /// The real row's height — 48 px `IconButton` + 2 × [MasiSpacing.sm]. Public
-  /// so a caller reserving space (a `SliverFixedExtentList`, a sized box) can
-  /// use the same number rather than re-deriving it.
+  /// The real row's height at the default text scale — 48 px `IconButton` +
+  /// 2 × [MasiSpacing.sm]. Public so a caller reserving space (a
+  /// `SliverFixedExtentList`, a sized box) can use the same number rather than
+  /// re-deriving it. A minimum, not a cap: see the class doc.
   static const double height = 64;
 
   /// Draw the second, shorter line. Match the list you are standing in for:
@@ -165,11 +169,12 @@ class MasiSkeletonListRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
     return Material(
       color: colors.surface,
       borderRadius: BorderRadius.circular(MasiRadii.card),
-      child: SizedBox(
-        height: height,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: height),
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: MasiSpacing.md,
@@ -185,13 +190,16 @@ class MasiSkeletonListRow extends StatelessWidget {
                   children: [
                     // titleMedium (17) — the row's name.
                     MasiSkeleton.textLine(
-                      fontSize: 17,
+                      fontSize: scaler.scale(17),
                       widthFactor: titleWidthFactor,
                     ),
                     if (showSubtitle) ...[
                       const SizedBox(height: 2),
                       // titleSmall (15) — the row's subtitle.
-                      MasiSkeleton.textLine(fontSize: 15, widthFactor: 0.3),
+                      MasiSkeleton.textLine(
+                        fontSize: scaler.scale(15),
+                        widthFactor: 0.3,
+                      ),
                     ],
                   ],
                 ),
@@ -216,13 +224,16 @@ class MasiSkeletonListRow extends StatelessWidget {
 /// Same [Material] / radius / padding as that row, then its three-part
 /// content: the 52×52 thumbnail at radius 10, and a text column of
 /// name (titleMedium 17) → grade pill + route count → likes/comments/owner
-/// (titleSmall 15). Comes out at [height] 86, matching the real card, so the
-/// feed does not jump when the first page lands.
+/// (titleSmall 15). Comes out at [height] 86 at the default text scale,
+/// matching the real card, so the feed does not jump when the first page
+/// lands; like [MasiSkeletonListRow] that height is a floor and the text slots
+/// scale, so it still matches at large accessibility text scales.
 class MasiSkeletonFeedCard extends StatelessWidget {
   const MasiSkeletonFeedCard({super.key, this.titleWidthFactor = 0.6});
 
-  /// The real card's height: 22 (title) + 2 + 24 (pill row) + 2 + 20 (meta
-  /// row) content, plus 2 × [MasiSpacing.sm] padding.
+  /// The real card's height at the default text scale: 22 (title) + 2 + 24
+  /// (pill row) + 2 + 20 (meta row) content, plus 2 × [MasiSpacing.sm]
+  /// padding. A minimum, not a cap.
   static const double height = 86;
 
   /// The real feed thumbnail: 52 px at radius 10 (`_Thumbnail`).
@@ -233,11 +244,12 @@ class MasiSkeletonFeedCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
+    final scaler = MediaQuery.textScalerOf(context);
     return Material(
       color: colors.surface,
       borderRadius: BorderRadius.circular(MasiRadii.card),
-      child: SizedBox(
-        height: height,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: height),
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: MasiSpacing.md,
@@ -258,7 +270,7 @@ class MasiSkeletonFeedCard extends StatelessWidget {
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     MasiSkeleton.textLine(
-                      fontSize: 17,
+                      fontSize: scaler.scale(17),
                       widthFactor: titleWidthFactor,
                     ),
                     const SizedBox(height: 2),
@@ -277,7 +289,10 @@ class MasiSkeletonFeedCard extends StatelessWidget {
                       ),
                     ),
                     const SizedBox(height: 2),
-                    MasiSkeleton.textLine(fontSize: 15, widthFactor: 0.75),
+                    MasiSkeleton.textLine(
+                      fontSize: scaler.scale(15),
+                      widthFactor: 0.75,
+                    ),
                   ],
                 ),
               ),
