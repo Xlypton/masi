@@ -44,7 +44,13 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 
-.claude/
+# Local Claude Code state (session dirs, worktrees, settings) is machine-specific
+# and stays out of the repo -- but `.claude/skills/` is project documentation we
+# want versioned and shared, so it is re-included below. Note the trailing `/*`:
+# with a plain `.claude/` git never descends into the directory and a negation
+# for a path inside it can never match.
+.claude/*
+!.claude/skills/
 .agents/
 skills-lock.json
 
@@ -52,3 +58,6 @@ skills-lock.json
 # of one integration-test run. It lives un-bundled in test_fixtures/ so it
 # never ships in a production build — never commit it back under assets/.
 /assets/test/
+# Symlink into the gitignored .agents/ skill cache -- tracking it would leave a
+# dangling link in a fresh clone. Real, self-contained skills stay versioned.
+.claude/skills/supabase-server
