@@ -210,15 +210,35 @@ class _TopoRow extends ConsumerStatefulWidget {
 /// modal included. [_working] is the visible cue and spans only what the APP is
 /// doing (see [MasiBusyReporter]) — never the part where the user is reading a
 /// confirm sheet, which is both wrong and unbounded.
-class _TopoRowState extends ConsumerState<_TopoRow> {
+/// [AutomaticKeepAliveClientMixin] is load-bearing here, not an optimisation —
+/// same reasoning as `crud_list_scaffold.dart`'s `_CrudRowState` (see its doc,
+/// where the failure was measured): both flags live in this State, and the
+/// proximity list is a lazy [ListView.separated]. A row scrolled past the cache
+/// extent mid-write is DISPOSED, so `reportBusy(false)` and `_run`'s `finally`
+/// no-op; scrolled back it is rebuilt with both flags clear — idle-looking
+/// glyph, navigable row, and a second tap that starts a second concurrent write
+/// on the same topo. The row therefore asks to stay alive for exactly as long as
+/// it is [_locked], and every write of that flag goes through [_setLocked]
+/// because [wantKeepAlive] is only re-read when [updateKeepAlive] is called.
+class _TopoRowState extends ConsumerState<_TopoRow>
+    with AutomaticKeepAliveClientMixin {
   bool _locked = false;
   bool _working = false;
+
+  @override
+  bool get wantKeepAlive => _locked;
+
+  void _setLocked(bool value) {
+    if (_locked == value) return;
+    _locked = value;
+    updateKeepAlive();
+  }
 
   Future<void> _run(
     Future<void> Function(MasiBusyReporter reportBusy) body,
   ) async {
     if (_locked) return;
-    _locked = true;
+    _setLocked(true);
     try {
       await body((isBusy) {
         // A deleted row is gone long before its own cascade settles.
@@ -226,13 +246,15 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
         if (isBusy != _working) setState(() => _working = isBusy);
       });
     } finally {
-      _locked = false;
+      _setLocked(false);
       if (mounted && _working) setState(() => _working = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    // Required by AutomaticKeepAliveClientMixin.
+    super.build(context);
     final ref = this.ref;
     final topo = widget.topo;
     final distanceKm = widget.distanceKm;
@@ -531,10 +553,24 @@ class _TopoRowState extends ConsumerState<_TopoRow> {
       currentSectorId = await repo.wallSectorId(topo.wallId);
       areas = await repo.listAreas();
       ownSectors = await repo.listOwnSectors(myUid);
-    } finally {
-      // Back to the user (the sheet), or out through `_runGuarded` on a throw.
+    } catch (e, st) {
+      // Guarded HERE rather than relying on an outer `_runGuarded`, because
+      // unlike every other action on this menu there isn't one: `_handleMove`
+      // is called raw from the menu switch, so a throw in these three reads
+      // escaped out of the unawaited `_run` future as an uncaught async error
+      // and the user saw the menu close, a brief cue, and then nothing at all.
+      debugPrint('Failed to read move targets: $e\n$st');
       reportBusy(false);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't load where to move this — please try again"),
+        ),
+      );
+      return;
     }
+    // Back to the user (the sheet).
+    reportBusy(false);
     final areaNames = {for (final area in areas) area.id: area.name};
     final candidates = ownSectors
         .where((sector) => sector.id != currentSectorId)

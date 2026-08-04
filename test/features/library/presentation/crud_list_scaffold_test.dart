@@ -15,6 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 /// scaffold only ever calls [idOf]/[nameOf] on it.
 Widget _harness({
   required Future<void> Function(String item) onDelete,
+  List<String> items = const ['Test Area'],
   Future<void> Function(
     BuildContext context,
     String item,
@@ -29,7 +30,7 @@ Widget _harness({
     home: CrudListScaffold<String>(
       title: 'Areas',
       entityKey: 'area',
-      asyncItems: const AsyncValue.data(['Test Area']),
+      asyncItems: AsyncValue.data(items),
       idOf: (item) => item,
       nameOf: (item) => item,
       emptyMessage: 'No areas yet',
@@ -97,29 +98,28 @@ void main() {
       },
     );
 
-    testWidgets(
-      'C-b: tapping Cancel is a no-op — onDelete never fires',
-      (tester) async {
-        final deleted = <String>[];
-        await tester.pumpWidget(
-          _harness(
-            onDelete: (item) async {
-              deleted.add(item);
-            },
-          ),
-        );
+    testWidgets('C-b: tapping Cancel is a no-op — onDelete never fires', (
+      tester,
+    ) async {
+      final deleted = <String>[];
+      await tester.pumpWidget(
+        _harness(
+          onDelete: (item) async {
+            deleted.add(item);
+          },
+        ),
+      );
 
-        await tester.tap(find.byKey(const Key('area-delete-Test Area')));
-        await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('area-delete-Test Area')));
+      await tester.pumpAndSettle();
 
-        await tester.tap(find.text('Cancel'));
-        await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
 
-        expect(deleted, isEmpty);
-        // The sheet is dismissed.
-        expect(find.byType(CupertinoActionSheet), findsNothing);
-      },
-    );
+      expect(deleted, isEmpty);
+      // The sheet is dismissed.
+      expect(find.byType(CupertinoActionSheet), findsNothing);
+    });
   });
 
   group('#20: name dialog keyboard dismissal', () {
@@ -217,34 +217,36 @@ void main() {
     );
   });
 
-  group('CrudListScaffold surfaces a failed write instead of swallowing it', () {
-    testWidgets(
-      'a throwing onDelete shows a "Couldn\'t delete" SnackBar (audit L4: a '
-      'guarded delete that matches 0 rows must never look like success)',
-      (tester) async {
-        await tester.pumpWidget(
-          _harness(
-            onDelete: (_) async => throw Exception('0 rows affected (test)'),
-          ),
-        );
+  group(
+    'CrudListScaffold surfaces a failed write instead of swallowing it',
+    () {
+      testWidgets(
+        'a throwing onDelete shows a "Couldn\'t delete" SnackBar (audit L4: a '
+        'guarded delete that matches 0 rows must never look like success)',
+        (tester) async {
+          await tester.pumpWidget(
+            _harness(
+              onDelete: (_) async => throw Exception('0 rows affected (test)'),
+            ),
+          );
 
-        await tester.tap(find.byKey(const Key('area-delete-Test Area')));
-        await tester.pumpAndSettle();
-        await tester.tap(
-          find.byKey(const Key('area-delete-confirm-Test Area')),
-        );
-        await tester.pumpAndSettle();
+          await tester.tap(find.byKey(const Key('area-delete-Test Area')));
+          await tester.pumpAndSettle();
+          await tester.tap(
+            find.byKey(const Key('area-delete-confirm-Test Area')),
+          );
+          await tester.pumpAndSettle();
 
-        expect(
-          find.text("Couldn't delete — please try again"),
-          findsOneWidget,
-        );
-      },
-    );
+          expect(
+            find.text("Couldn't delete — please try again"),
+            findsOneWidget,
+          );
+        },
+      );
 
-    testWidgets(
-      'a throwing onRename shows a "Couldn\'t rename" SnackBar',
-      (tester) async {
+      testWidgets('a throwing onRename shows a "Couldn\'t rename" SnackBar', (
+        tester,
+      ) async {
         await tester.pumpWidget(
           _harness(
             onDelete: (_) async {},
@@ -257,13 +259,10 @@ void main() {
         await tester.tap(find.byKey(const Key('crud-name-submit')));
         await tester.pumpAndSettle();
 
-        expect(
-          find.text("Couldn't rename — please try again"),
-          findsOneWidget,
-        );
-      },
-    );
-  });
+        expect(find.text("Couldn't rename — please try again"), findsOneWidget);
+      });
+    },
+  );
 
   // The state this screen simply did not have: between "the confirm sheet
   // closed" and "the row disappeared" there was nothing on screen at all, and
@@ -318,7 +317,8 @@ void main() {
         expect(
           rename.onPressed,
           isNull,
-          reason: 'a rename racing a delete on one row is exactly the '
+          reason:
+              'a rename racing a delete on one row is exactly the '
               'concurrent write this guard exists to stop',
         );
 
@@ -338,7 +338,9 @@ void main() {
         expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
         expect(
           tester
-              .widget<IconButton>(find.byKey(const Key('area-rename-Test Area')))
+              .widget<IconButton>(
+                find.byKey(const Key('area-rename-Test Area')),
+              )
               .onPressed,
           isNotNull,
         );
@@ -372,7 +374,8 @@ void main() {
           matching: find.byKey(MasiLoadingIndicator.spinnerKey),
         ),
         findsOneWidget,
-        reason: 'tapping Move used to do nothing observable until the read '
+        reason:
+            'tapping Move used to do nothing observable until the read '
             'finished and the sheet appeared',
       );
 
@@ -420,7 +423,9 @@ void main() {
         findsOneWidget,
       );
       expect(
-        tester.widget<ElevatedButton>(find.byKey(const Key('area-add-fab'))).onPressed,
+        tester
+            .widget<ElevatedButton>(find.byKey(const Key('area-add-fab')))
+            .onPressed,
         isNull,
         reason: 'a second insert from a second tap is the bug this closes',
       );
@@ -433,5 +438,97 @@ void main() {
       await tester.pump(const Duration(milliseconds: 600));
       expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
     });
+  });
+
+  // Defect confirmed by construction, not by reading: the lock and the cue live
+  // in the ROW's State, and this is a lazy `ListView.separated` with no
+  // keep-alive. Scroll the row past the cache extent while its delete cascade
+  // is still in flight and that State is disposed — so `reportBusy(false)` and
+  // the `finally` both no-op, and scrolling back rebuilds a FRESH State with
+  // both flags clear: an idle-looking glyph over a write that is still running,
+  // and a second tap that starts a second concurrent write on the same row.
+  group('a row scrolled out of the list mid-write', () {
+    final many = [for (var i = 0; i < 60; i++) 'Area $i'];
+
+    testWidgets(
+      'keeps its in-flight lock and its cue across being recycled — a second '
+      'delete on the same row must be impossible',
+      (tester) async {
+        // Small enough that row 0 is far outside the 250px default cache extent
+        // once we scroll.
+        tester.view.physicalSize = const Size(400, 600);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        final deletes = Completer<void>();
+        var deleteCalls = 0;
+        await tester.pumpWidget(
+          _harness(
+            items: many,
+            onDelete: (_) {
+              deleteCalls++;
+              return deletes.future;
+            },
+          ),
+        );
+
+        await tester.tap(find.byKey(const Key('area-delete-Area 0')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('area-delete-confirm-Area 0')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+        expect(deleteCalls, 1);
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('area-delete-Area 0')),
+            matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+          ),
+          findsOneWidget,
+        );
+
+        // Out of the cache extent and back.
+        await tester.drag(find.byType(ListView), const Offset(0, -4000));
+        await tester.pump();
+        await tester.drag(find.byType(ListView), const Offset(0, 4000));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('area-delete-Area 0')),
+            matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+          ),
+          findsOneWidget,
+          reason: 'the row came back looking idle over a live cascade',
+        );
+        expect(
+          tester
+              .widget<IconButton>(find.byKey(const Key('area-delete-Area 0')))
+              .onPressed,
+          isNull,
+          reason: 'a recycled row must not offer its own write a second time',
+        );
+
+        // And prove it at the behavioural level: a second delete attempt.
+        // Explicit pumps, not `pumpAndSettle` — the cue is live now, which is
+        // the whole point, and a revealed spinner never settles.
+        await tester.tap(
+          find.byKey(const Key('area-delete-Area 0')),
+          warnIfMissed: false,
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 400));
+        expect(
+          find.byKey(const Key('area-delete-confirm-Area 0')),
+          findsNothing,
+          reason: 'the confirm sheet reopened on a row already being deleted',
+        );
+        expect(deleteCalls, 1);
+
+        deletes.complete();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 600));
+      },
+    );
   });
 }

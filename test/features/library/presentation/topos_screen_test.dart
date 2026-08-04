@@ -592,6 +592,21 @@ class _ThrowingMoveWallRepository extends LibraryCrudRepository {
   }
 }
 
+/// A [LibraryCrudRepository] whose [listOwnSectors] always throws — the LAST of
+/// the three database reads `_handleMove` has to finish BEFORE it can build its
+/// picker. Those three ran outside any `_runGuarded` (unlike every other action
+/// on the row menu, and unlike `crud_list_scaffold.dart`'s move), so a throw
+/// there escaped out of the unawaited `_run` future as an uncaught async error
+/// and the user saw the menu close, a brief cue, and then nothing.
+class _ThrowingListOwnSectorsRepository extends LibraryCrudRepository {
+  _ThrowingListOwnSectorsRepository(super.db, {required super.nowMs});
+
+  @override
+  Future<List<SectorRef>> listOwnSectors(String? ownerUid) {
+    throw Exception('listOwnSectors boom (test)');
+  }
+}
+
 void main() {
   group('A1: empty state', () {
     testWidgets(
@@ -5310,6 +5325,57 @@ void main() {
           currentSector.id,
           reason: 'the throwing moveWall must not have actually moved it',
         );
+      },
+    );
+
+    testWidgets(
+      'E2: a repo whose PRE-SHEET reads throw (the picker cannot even be '
+      'built) also shows an error SnackBar and produces NO unhandled '
+      'exception — those three reads ran outside any guard',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final repo = _ThrowingListOwnSectorsRepository(db, nowMs: () => 1000);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            libraryCrudRepositoryProvider.overrideWithValue(repo),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final area = await _dbWork(tester, () => repo.createArea('Area'));
+        final sector = await _dbWork(
+          tester,
+          () => repo.createSector(area.id, 'Sector'),
+        );
+        final wall = await _dbWork(
+          tester,
+          () => repo.createWall(sector.id, 'My Topo'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-${wall.id}')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(Key('topo-move-${wall.id}')));
+        await _drainNoSettle(tester);
+
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'a failed pre-sheet read must never surface as an unhandled '
+              'async error',
+        );
+        expect(
+          find.text("Couldn't load where to move this — please try again"),
+          findsOneWidget,
+          reason: 'the menu closed, a cue flashed, and nothing was ever said',
+        );
+        // No picker, because it could not be built.
+        expect(find.text('Move "My Topo" to…'), findsNothing);
       },
     );
   });

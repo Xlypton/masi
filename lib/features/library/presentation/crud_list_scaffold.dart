@@ -484,11 +484,36 @@ class _CrudRow extends StatefulWidget {
   State<_CrudRow> createState() => _CrudRowState();
 }
 
-class _CrudRowState extends State<_CrudRow> {
+/// [AutomaticKeepAliveClientMixin] is load-bearing, not an optimisation.
+///
+/// Both flags live in this State, and the list around it is a lazy
+/// [ListView.separated] with no keep-alive of its own: scroll a row past the
+/// ~250 px cache extent while its delete cascade is in flight and this State is
+/// DISPOSED, so `reportBusy(false)` and `_run`'s `finally` both no-op. Scroll
+/// back and the row is rebuilt fresh with both flags clear — an idle-looking
+/// glyph over a write that is still running, a navigable row, and a second tap
+/// that starts a second concurrent write on the same row. (Measured: the cue was
+/// gone on the way back, before this mixin.)
+///
+/// So the row asks to be kept alive for exactly as long as it is [_locked] —
+/// which is precisely "I have work in flight", the condition this mixin exists
+/// for. Every write of [_locked] therefore goes through [_setLocked], because
+/// [wantKeepAlive] is only re-read when [updateKeepAlive] is called.
+class _CrudRowState extends State<_CrudRow>
+    with AutomaticKeepAliveClientMixin {
   /// True from the synchronous instant of a tap until that action returns —
   /// modal-and-all. Invisible on purpose: it exists to swallow a second tap,
   /// not to paint anything, so it must not be confused with [_working].
   bool _locked = false;
+
+  @override
+  bool get wantKeepAlive => _locked;
+
+  void _setLocked(bool value) {
+    if (_locked == value) return;
+    _locked = value;
+    updateKeepAlive();
+  }
 
   /// Which action's own work is in flight RIGHT NOW: where the cue goes, and
   /// why the rest of the row is inert. `null` whenever the flow is merely
@@ -509,7 +534,7 @@ class _CrudRowState extends State<_CrudRow> {
     MasiBusyReporter reportButton,
   ) async {
     if (_locked) return;
-    _locked = true;
+    _setLocked(true);
     try {
       await body(context, (isBusy) {
         reportButton(isBusy);
@@ -520,7 +545,7 @@ class _CrudRowState extends State<_CrudRow> {
         if (next != _working) setState(() => _working = next);
       });
     } finally {
-      _locked = false;
+      _setLocked(false);
       // The button clears its own cue in its own `finally`; this only has to
       // put the row's other two actions back.
       if (mounted && _working != null) setState(() => _working = null);
@@ -562,6 +587,8 @@ class _CrudRowState extends State<_CrudRow> {
 
   @override
   Widget build(BuildContext context) {
+    // Required by AutomaticKeepAliveClientMixin.
+    super.build(context);
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final subtitleText = widget.subtitle;
