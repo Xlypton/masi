@@ -28,7 +28,23 @@ import '../../app/theme.dart';
 /// times out. See `community_screen_test.dart`'s "Clear resets both
 /// sub-filters" test for a worked example of the fix.
 class MasiShimmer extends StatefulWidget {
-  const MasiShimmer({super.key});
+  const MasiShimmer({super.key, this.base, this.highlight});
+
+  /// Sweep base colour. `null` (every pre-existing call site) keeps
+  /// [MasiColors.surface2], the original hard-coded value.
+  ///
+  /// Overridable for `MasiSkeleton`, whose bars sit ON a
+  /// [MasiColors.surface] card: in light mode `surface2` (#FBFAFE) is all but
+  /// identical to that white card, so a `surface2` skeleton bar drawn on it is
+  /// invisible. Passing a base with actual contrast is cheaper than any
+  /// blend/opacity wrapper (no extra `saveLayer` per bar, and this widget is
+  /// instantiated once per skeleton shape).
+  final Color? base;
+
+  /// Sweep highlight colour. `null` keeps the theme-adaptive default — see
+  /// [_MasiShimmerState._highlightFor], which is why this is a nullable
+  /// override rather than a plain default value.
+  final Color? highlight;
 
   @override
   State<MasiShimmer> createState() => _MasiShimmerState();
@@ -73,7 +89,8 @@ class _MasiShimmerState extends State<MasiShimmer>
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    final highlight = _highlightFor(context, colors);
+    final base = widget.base ?? colors.surface2;
+    final highlight = widget.highlight ?? _highlightFor(context, colors);
     // RepaintBoundary around the AnimatedBuilder's output: this widget is
     // used per-thumbnail, so many instances can be ticking at once (e.g. a
     // grid/list of still-loading photos). Without a boundary here, each
@@ -96,7 +113,7 @@ class _MasiShimmerState extends State<MasiShimmer>
               gradient: LinearGradient(
                 begin: Alignment.topLeft,
                 end: Alignment.bottomRight,
-                colors: [colors.surface2, highlight, colors.surface2],
+                colors: [base, highlight, base],
                 stops: const [0.35, 0.5, 0.65],
                 transform: _SlidingGradientTransform(slide),
               ),
