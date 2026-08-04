@@ -14,6 +14,7 @@ import 'package:masi/features/backup/application/backup_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/community/presentation/community_screen.dart';
+import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:masi/shared/presentation/sync_banner.dart';
 import 'package:masi/shared/filtering/grade_range.dart';
@@ -3539,7 +3540,7 @@ void main() {
         await _drain(tester);
 
         expect(
-          find.byKey(const Key('community-map-error-state')),
+          find.byKey(MasiAsyncView.errorKey),
           findsOneWidget,
         );
         expect(find.text("Couldn't load the community map"), findsOneWidget);
@@ -3549,11 +3550,11 @@ void main() {
         // Tapping "Try again" invalidates sharedToposProvider without
         // throwing (the override still errors on re-fetch, so the friendly
         // error state simply re-renders rather than crashing).
-        await tester.tap(find.byKey(const Key('community-map-retry')));
+        await tester.tap(find.byKey(MasiAsyncView.retryKey));
         await _drain(tester);
         expect(tester.takeException(), isNull);
         expect(
-          find.byKey(const Key('community-map-error-state')),
+          find.byKey(MasiAsyncView.errorKey),
           findsOneWidget,
         );
       },
@@ -3591,14 +3592,14 @@ void main() {
         await _drain(tester);
 
         expect(
-          find.byKey(const Key('community-feed-error-state')),
+          find.byKey(MasiAsyncView.errorKey),
           findsOneWidget,
         );
         expect(find.text("Couldn't load the community feed"), findsOneWidget);
         expect(find.textContaining('boom-network'), findsNothing);
         expect(find.text('Try again'), findsOneWidget);
 
-        await tester.tap(find.byKey(const Key('community-feed-retry')));
+        await tester.tap(find.byKey(MasiAsyncView.retryKey));
         await _drain(tester);
         expect(tester.takeException(), isNull);
       },

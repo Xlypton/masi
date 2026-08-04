@@ -12,15 +12,18 @@ import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
+import '../../logbook/application/ascents_providers.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
+import '../../../shared/presentation/masi_async_view.dart';
+import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_shimmer.dart';
+import '../../../shared/presentation/masi_skeleton.dart';
 import '../../../shared/presentation/sync_banner.dart';
 import '../../topo/presentation/photo_image.dart';
 import '../application/community_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../data/community_repository.dart';
-import 'community_shared.dart';
 
 /// The Community Feed tab (bottom-nav branch `/feed`): a searchable list of
 /// every shared topo (thumbnail, name, grade pill, like/comment counts,
@@ -65,6 +68,22 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
     super.dispose();
   }
 
+  /// `MasiAsyncView`'s retry, carrying over exactly what the deleted
+  /// `CommunityErrorState` did (#57): re-run the REAL remote pull FIRST, then
+  /// invalidate both halves of `feedItemsProvider`'s union. A local-only
+  /// invalidate can never recover data that was simply never pulled — that was
+  /// the original bug — and invalidating `sharedAscentsProvider` too is what
+  /// makes this recover the whole union rather than only its topo half.
+  ///
+  /// `pullNow()` never throws (safe no-op when signed out / Supabase is
+  /// unavailable — see its doc), so no try/catch is needed.
+  Future<void> _retry() async {
+    await ref.read(syncOrchestratorProvider.notifier).pullNow();
+    if (!mounted) return;
+    ref.invalidate(sharedToposProvider);
+    ref.invalidate(sharedAscentsProvider);
+  }
+
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
@@ -101,20 +120,82 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
       // where it's actually applied.
       body: SafeArea(
         bottom: false,
-        child: asyncFeedItems.when(
-          data: (items) => _FeedView(
+        // The shared loading system, replacing this screen's own
+        // `.when(loading: spinner, error: CommunityErrorState)`: a shaped
+        // skeleton for the first load, the rows the user already has KEPT on
+        // screen (with a hairline cue) whenever `feedItemsProvider` re-emits,
+        // and one built-in retry for the failure case.
+        child: MasiAsyncView<List<FeedItem>>(
+          value: asyncFeedItems,
+          errorMessage: "Couldn't load the community feed",
+          // The raw exception stays off screen. `feedItemsProvider` is a local
+          // Drift stream, so its error object is a SQLite/serialization
+          // sentence that means nothing to a climber — and this screen already
+          // has a place where the real text DOES surface, because that's the
+          // one the user can act on: `_SyncErrorEmptyState`/`SyncBanner` print
+          // the actual pull failure verbatim (#72).
+          showErrorDetail: false,
+          onRetry: () => _retry(),
+          skeleton: (context) => const _FeedSkeleton(),
+          data: (context, items) => _FeedView(
             items: items,
             searchController: _searchController,
             query: _query,
           ),
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, stackTrace) => const CommunityErrorState(
-            stateKey: Key('community-feed-error-state'),
-            retryKey: Key('community-feed-retry'),
-            message: "Couldn't load the community feed",
-          ),
         ),
       ),
+    );
+  }
+}
+
+/// The Feed's first-load placeholder: the search row's box reserved at its
+/// real height, then [MasiSkeletonList.feedCards] for the rows it precedes.
+///
+/// The search row is part of the skeleton deliberately. [_FeedView] owns that
+/// row, so during the first load it is not mounted at all — a bare list of
+/// card skeletons would start [searchRowHeight] px higher than the real first
+/// card and the whole feed would jump downwards when the data landed, which is
+/// worse than a spinner (see [MasiSkeleton]'s doc). The two shapes drawn here
+/// are the field's pill and the filter glyph, nothing else: a skeleton must
+/// never look like a control that can be pressed.
+class _FeedSkeleton extends StatelessWidget {
+  const _FeedSkeleton();
+
+  /// The measured height of [_FeedView]'s real search row — its `TextField`
+  /// (17 px text, `MasiSpacing.md` vertical content padding) is taller than the
+  /// 48 px filter [IconButton] beside it, so the field is what sets the row's
+  /// height. Asserted against the real screen in `community_loading_test.dart`
+  /// so this cannot silently drift out of match.
+  static const double searchRowHeight = 56;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(
+            MasiSpacing.lg,
+            0,
+            MasiSpacing.lg,
+            MasiSpacing.sm,
+          ),
+          child: Row(
+            children: const [
+              Expanded(
+                child: MasiSkeleton.box(height: searchRowHeight, radius: 24),
+              ),
+              SizedBox(width: MasiSpacing.sm),
+              // The filter button's glyph, not its 48 px hit box: an empty
+              // 48 px circle would read as a tappable disc.
+              SizedBox(
+                width: 48,
+                child: Center(child: MasiSkeleton.circle(diameter: 24)),
+              ),
+            ],
+          ),
+        ),
+        const Expanded(child: MasiSkeletonList.feedCards()),
+      ],
     );
   }
 }
@@ -493,9 +574,10 @@ class _EmptyState extends StatelessWidget {
 /// `'Sync failed: <the actual PullResult.errors text>'` by
 /// `SyncOrchestrator._runPull`), so the real failure is readable on-device
 /// without a debugger (#72). "Retry" re-runs the SAME `pullNow()` the
-/// list's own pull-to-refresh and `CommunityErrorState`'s "Try again" call
-/// — no explicit provider invalidation needed here either, for the same
-/// reason documented on this file's `RefreshIndicator.onRefresh` above.
+/// list's own pull-to-refresh and `MasiAsyncView`'s "Try again"
+/// ([_CommunityFeedScreenState._retry]) call — no explicit provider
+/// invalidation needed here either, for the same reason documented on this
+/// file's `RefreshIndicator.onRefresh` above.
 class _SyncErrorEmptyState extends ConsumerWidget {
   const _SyncErrorEmptyState({required this.message});
 
@@ -522,7 +604,10 @@ class _SyncErrorEmptyState extends ConsumerWidget {
             ),
           ),
           const SizedBox(height: MasiSpacing.md),
-          TextButton(
+          // A pending button, not a plain one: `pullNow()` is a real network
+          // round trip, and a Retry that looked idle for two seconds invited a
+          // second tap and a second pull.
+          MasiPendingButton.text(
             key: const Key('community-sync-error-retry'),
             onPressed: () =>
                 ref.read(syncOrchestratorProvider.notifier).pullNow(),

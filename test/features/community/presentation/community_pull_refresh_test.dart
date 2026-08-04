@@ -7,6 +7,7 @@ import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/community/application/community_providers.dart';
 import 'package:masi/features/community/data/community_repository.dart';
 import 'package:masi/features/community/presentation/community_screen.dart';
+import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
@@ -18,7 +19,7 @@ import '../../../support/async_drain.dart';
 
 /// #57 fix: the Community Feed/Map's manual refresh affordances
 /// (`community-feed-refresh`'s `RefreshIndicator`, `community-map-refresh`'s
-/// button, and `CommunityErrorState`'s "Try again") must all re-run the
+/// button, and `MasiAsyncView`'s "Try again") must all re-run the
 /// REAL remote pull (`SyncOrchestrator.pullNow`) rather than just re-running
 /// a LOCAL Drift re-query — the original bug was that nothing besides
 /// sign-in ever called `pullOwnAndShared()` at all, so a local-only
@@ -247,7 +248,7 @@ void main() {
     );
   });
 
-  group('#57: CommunityErrorState "Try again" pulls before invalidating', () {
+  group('#57: MasiAsyncView\'s "Try again" pulls before invalidating', () {
     testWidgets(
       "CommunityFeedScreen's Try again calls pullNow() on the orchestrator "
       '(not just a local re-query)',
@@ -262,12 +263,12 @@ void main() {
         await _drain(tester);
 
         expect(
-          find.byKey(const Key('community-feed-error-state')),
+          find.byKey(MasiAsyncView.errorKey),
           findsOneWidget,
         );
         expect(fakeOrchestrator.pullNowCallCount, 0);
 
-        await tester.tap(find.byKey(const Key('community-feed-retry')));
+        await tester.tap(find.byKey(MasiAsyncView.retryKey));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
@@ -281,7 +282,7 @@ void main() {
         // state simply re-renders rather than crashing — mirrors
         // `community_screen_test.dart`'s identical assertion.
         expect(
-          find.byKey(const Key('community-feed-error-state')),
+          find.byKey(MasiAsyncView.errorKey),
           findsOneWidget,
         );
       },
@@ -306,11 +307,11 @@ void main() {
         await _drain(tester);
 
         expect(
-          find.byKey(const Key('community-map-error-state')),
+          find.byKey(MasiAsyncView.errorKey),
           findsOneWidget,
         );
 
-        await tester.tap(find.byKey(const Key('community-map-retry')));
+        await tester.tap(find.byKey(MasiAsyncView.retryKey));
         await _drain(tester);
 
         expect(tester.takeException(), isNull);

@@ -1,92 +1,123 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
-import '../../../shared/presentation/masi_icon.dart';
-import '../../backup/application/sync_orchestrator.dart';
-import '../../logbook/application/ascents_providers.dart';
-import '../application/community_providers.dart';
+import '../../../shared/presentation/masi_loading_indicator.dart';
 
-/// Friendly themed error state for [CommunityMapScreen]/[CommunityFeedScreen]
-/// when [sharedToposProvider] fails — replaces the earlier bare
-/// `Text('Something went wrong: $error')`, which leaked the raw exception
-/// string straight to the user, with a short screen-specific message plus a
-/// "Try again" affordance that invalidates [sharedToposProvider] to retry
-/// the fetch. Mirrors `topo_canvas_screen.dart`'s `_buildImageErrorState`
-/// (icon + message + "Tinted" button per DESIGN.md "Buttons").
-class CommunityErrorState extends ConsumerWidget {
-  const CommunityErrorState({
+/// An [IconButton] whose action is a [Future] — the icon-shaped sibling of
+/// `MasiPendingButton`.
+///
+/// That widget is the app's answer to "a button whose `onPressed` awaits", but
+/// it only comes in filled/text chrome: wearing it would turn this feature's
+/// 48 px round glyph controls (post-a-comment, the map's refresh/find-me) into
+/// labelled buttons. This keeps the glyph and copies the three guarantees that
+/// actually matter, for the same reasons — see `MasiPendingButton`'s doc:
+///
+///  - **One tap.** A synchronous in-flight flag drops taps arriving while the
+///    future runs. That is the whole point here: before this, a double-tapped
+///    Post wrote two comments and a double-tapped like double-toggled.
+///  - **Immediate disable.** `onPressed` goes null the instant work starts, so
+///    the disabled colour is feedback even before any spinner may appear.
+///  - **No flash, no reflow.** The cue is [MasiLoadingIndicator.inline], so it
+///    inherits the reveal delay (a fast local write shows no spinner at all)
+///    and the minimum-visible hold, and at 20 px it sits inside the same 48 px
+///    button box the glyph did.
+///
+/// [buttonKey] rather than this widget's own `key` lands on the inner
+/// [IconButton] — the widget a test taps and reads `onPressed` off — mirroring
+/// `community_map_screen.dart`'s existing `_MapControlButton.mapControlKey`
+/// convention.
+///
+/// Pass [onError] wherever a failure should be user-visible; without it the
+/// error goes to [FlutterError.reportError] (which fails a widget test by
+/// design) rather than being swallowed.
+class PendingIconButton extends StatefulWidget {
+  const PendingIconButton({
     super.key,
-    required this.stateKey,
-    required this.retryKey,
-    required this.message,
+    this.buttonKey,
+    required this.icon,
+    required this.tooltip,
+    required this.onPressed,
+    this.onError,
+    this.spinnerColor,
+    this.visualDensity,
   });
 
-  final Key stateKey;
-  final Key retryKey;
-  final String message;
+  /// Key for the inner [IconButton] — see the class doc. Omit it where the
+  /// tappable surface is already keyed by an ancestor (the map's controls key
+  /// their wrapping [Material]).
+  final Key? buttonKey;
+
+  /// The glyph. Kept as-is while idle; swapped for the 20 px cue while the
+  /// spinner is revealed.
+  final Widget icon;
+
+  final String tooltip;
+
+  /// The action. `null` disables the button, same contract as [IconButton].
+  final Future<void> Function()? onPressed;
+
+  /// Called if the action's future fails.
+  final void Function(Object error, StackTrace stackTrace)? onError;
+
+  /// Spinner colour; defaults to [MasiColors.accent] via
+  /// [MasiLoadingIndicator].
+  final Color? spinnerColor;
+
+  final VisualDensity? visualDensity;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colors = MasiColors.of(context);
-    return Center(
-      child: Column(
-        key: stateKey,
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          MasiIcon('warning', size: 56, color: colors.gradeHard),
-          const SizedBox(height: MasiSpacing.lg),
-          Text(
-            message,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyLarge?.copyWith(color: colors.gradeHard),
+  State<PendingIconButton> createState() => _PendingIconButtonState();
+}
+
+class _PendingIconButtonState extends State<PendingIconButton> {
+  /// True from the synchronous instant of the tap until the future settles —
+  /// this, never the indicator's visual gate, is what makes the control
+  /// single-shot (during the reveal delay it looks idle but is not).
+  bool _inFlight = false;
+
+  Future<void> _handleTap() async {
+    if (_inFlight) return;
+    final action = widget.onPressed;
+    if (action == null) return;
+    setState(() => _inFlight = true);
+    try {
+      await action();
+    } catch (error, stackTrace) {
+      final onError = widget.onError;
+      if (onError != null) {
+        onError(error, stackTrace);
+      } else {
+        FlutterError.reportError(
+          FlutterErrorDetails(
+            exception: error,
+            stack: stackTrace,
+            library: 'masi',
+            context: ErrorDescription('while running a PendingIconButton action'),
           ),
-          const SizedBox(height: MasiSpacing.lg),
-          // "Tinted" secondary button per DESIGN.md "Buttons": accent text
-          // on a faint accent wash, matching `_buildImageErrorState`'s
-          // "Choose another photo" button.
-          Material(
-            color: colors.accent.withValues(alpha: 0.16),
-            borderRadius: BorderRadius.circular(MasiRadii.control),
-            child: InkWell(
-              key: retryKey,
-              // #57: re-run the actual REMOTE pull first, not just a local
-              // Drift re-query — before this fix, "Try again" only ever
-              // invalidated the local providers below, so it could never
-              // recover from data that's missing locally because it was
-              // never pulled in the first place (the original bug: nothing
-              // besides sign-in ever called `pullOwnAndShared()`). `pullNow`
-              // never throws (safe no-op when signed out / Supabase is
-              // unavailable — see its doc), so no try/catch is needed here.
-              onTap: () async {
-                await ref.read(syncOrchestratorProvider.notifier).pullNow();
-                ref.invalidate(sharedToposProvider);
-                // Also invalidate the ascent half of the Feed's union (#12
-                // Wave 3, ST5) — harmless no-op for `CommunityMapScreen`
-                // (which never watches `sharedAscentsProvider` at all), and
-                // means the Feed's "Try again" recovers BOTH halves of
-                // `feedItemsProvider`, not just the topo one.
-                ref.invalidate(sharedAscentsProvider);
-              },
-              borderRadius: BorderRadius.circular(MasiRadii.control),
-              child: Padding(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: MasiSpacing.lg,
-                  vertical: MasiSpacing.md,
-                ),
-                child: Text(
-                  'Try again',
-                  style: TextStyle(
-                    color: colors.accent,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
+        );
+      }
+    } finally {
+      // The sheet/screen this button lives on can be gone by the time the
+      // future settles.
+      if (mounted) setState(() => _inFlight = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = widget.onPressed != null && !_inFlight;
+    return IconButton(
+      key: widget.buttonKey,
+      tooltip: widget.tooltip,
+      visualDensity: widget.visualDensity,
+      onPressed: enabled ? _handleTap : null,
+      icon: MasiLoadingIndicator.inline(
+        isLoading: _inFlight,
+        color: widget.spinnerColor,
+        semanticLabel: 'Working',
+        child: widget.icon,
       ),
     );
   }
 }
+

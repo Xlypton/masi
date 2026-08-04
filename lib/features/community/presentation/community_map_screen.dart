@@ -11,7 +11,9 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/map/masi_tile_caching_provider.dart';
+import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../account/application/auth_providers.dart';
@@ -186,6 +188,16 @@ class CommunityMapScreen extends ConsumerStatefulWidget {
 }
 
 class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
+  /// `MasiAsyncView`'s retry, carrying over exactly what the deleted
+  /// `CommunityErrorState` did (#57): the REAL remote pull first, then a local
+  /// re-query — a local-only invalidate can never recover data that was never
+  /// pulled. `pullNow()` never throws, so no try/catch is needed.
+  Future<void> _retry() async {
+    await ref.read(syncOrchestratorProvider.notifier).pullNow();
+    if (!mounted) return;
+    ref.invalidate(sharedToposProvider);
+  }
+
   @override
   Widget build(BuildContext context) {
     final asyncSharedTopos = ref.watch(sharedToposProvider);
@@ -212,19 +224,30 @@ class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
       // OWN bottom-anchored overlay controls floating above the bar instead.
       body: SafeArea(
         bottom: false,
-        child: asyncSharedTopos.when(
-          data: (topos) => _MapView(
+        child: MasiAsyncView<List<SharedTopo>>(
+          value: asyncSharedTopos,
+          errorMessage: "Couldn't load the community map",
+          // See `community_feed_screen.dart`'s identical decision: the raw
+          // Drift error object is not a sentence for a climber, and the
+          // actionable pull failure has its own surface.
+          showErrorDetail: false,
+          onRetry: () => _retry(),
+          // A SPINNER, not a skeleton — the one place in this feature where
+          // that is the honest answer. A skeleton works by matching the shape
+          // of what is coming; what is coming here is a photographic tile
+          // canvas with pins scattered over it, and the only placeholder that
+          // "matches" it is a full-screen shimmering rectangle, which reads as
+          // a broken image rather than as a map on its way. So: say what is
+          // being waited on and nothing more. The gate still means a fast local
+          // read paints no spinner at all.
+          skeleton: (context) =>
+              const MasiLoadingIndicator.standalone(label: 'Loading topos'),
+          data: (context, topos) => _MapView(
             topos: topos,
             tileProvider: widget.tileProvider,
             focusWallId: widget.focusWallId,
             controller: widget.mapController,
             tileHttpClientFactory: widget.tileHttpClientFactory,
-          ),
-          loading: () => const Center(child: CircularProgressIndicator()),
-          error: (error, stackTrace) => const CommunityErrorState(
-            stateKey: Key('community-map-error-state'),
-            retryKey: Key('community-map-retry'),
-            message: "Couldn't load the community map",
           ),
         ),
       ),
@@ -361,6 +384,18 @@ class _MapViewState extends ConsumerState<_MapView> {
   /// treats that as zero local results without even touching the provider.
   String _committedQuery = '';
 
+  /// True from the moment a settled query's places lookup starts until it
+  /// resolves (or is superseded) — drives the inline cue in the search field's
+  /// `suffixIcon`, see [build].
+  ///
+  /// Without it the field was silent for the whole 350 ms debounce PLUS a real
+  /// geocoding round trip, so a user who typed a place name and saw no
+  /// dropdown could not tell "still looking" from "nothing found" — and the
+  /// two have opposite responses (wait vs. retype). The local half needs no
+  /// such cue: it is a synchronous-ish Drift read whose results appear with the
+  /// keystroke.
+  bool _placeSearchInFlight = false;
+
   /// The current async place (geocoding) results for [_committedQuery] —
   /// unlike local results, these can't be a reactive `ref.watch` (a
   /// [GeocodingService] call is a one-shot Future, not a stream), so they're
@@ -469,6 +504,7 @@ class _MapViewState extends ConsumerState<_MapView> {
         _committedQuery = '';
         _placeResults = const [];
         _placesOffline = false;
+        _placeSearchInFlight = false;
         _selectedSearchResult = null;
       });
       return;
@@ -509,7 +545,12 @@ class _MapViewState extends ConsumerState<_MapView> {
   /// re-checked after this second `await` too, since a newer query (or a
   /// clear, or a selection) can supersede this one while the probe is still
   /// in flight.
+  /// [_placeSearchInFlight] is set for exactly this lookup's lifetime, and only
+  /// cleared on a branch that is still current ([seq] check) — a superseded
+  /// lookup must not switch the cue off while the query that replaced it is
+  /// still running.
   Future<void> _runPlaceSearch(String query, int seq) async {
+    setState(() => _placeSearchInFlight = true);
     final service = ref.read(geocodingServiceProvider);
     final results = await service.search(query);
     if (!mounted || seq != _searchSeq) return;
@@ -519,12 +560,14 @@ class _MapViewState extends ConsumerState<_MapView> {
       setState(() {
         _placeResults = const [];
         _placesOffline = verdict.isKnownOffline;
+        _placeSearchInFlight = false;
       });
       return;
     }
     setState(() {
       _placeResults = results;
       _placesOffline = false;
+      _placeSearchInFlight = false;
     });
   }
 
@@ -544,6 +587,7 @@ class _MapViewState extends ConsumerState<_MapView> {
       _committedQuery = '';
       _placeResults = const [];
       _placesOffline = false;
+      _placeSearchInFlight = false;
     });
     _searchFocusNode.unfocus();
   }
@@ -575,6 +619,7 @@ class _MapViewState extends ConsumerState<_MapView> {
       _committedQuery = '';
       _placeResults = const [];
       _placesOffline = false;
+      _placeSearchInFlight = false;
     });
     _searchFocusNode.unfocus();
   }
@@ -1093,6 +1138,25 @@ class _MapViewState extends ConsumerState<_MapView> {
                       minWidth: 0,
                       minHeight: 0,
                     ),
+                    // "Still looking" — see `_placeSearchInFlight`'s doc. The
+                    // slot is ALWAYS this wide, cue or no cue, so the field's
+                    // text does not reflow when a search starts; the cue itself
+                    // goes through `MasiLoadingIndicator`'s gate, so a fast
+                    // lookup never blinks it.
+                    suffixIcon: SizedBox(
+                      width: 36,
+                      child: Center(
+                        child: MasiLoadingIndicator.inline(
+                          key: const Key('community-map-search-busy'),
+                          isLoading: _placeSearchInFlight,
+                          semanticLabel: 'Searching',
+                        ),
+                      ),
+                    ),
+                    suffixIconConstraints: const BoxConstraints(
+                      minWidth: 36,
+                      minHeight: 36,
+                    ),
                     filled: true,
                     fillColor: colors.surface2,
                     border: OutlineInputBorder(
@@ -1266,10 +1330,17 @@ class _MapViewState extends ConsumerState<_MapView> {
   }
 }
 
-/// A compact, theme-aware circular icon button for the Map tab's find-me
-/// control (`community-map-find-me`) — styled with [MasiColors] rather than
-/// Material's default `FloatingActionButton` look, to sit consistently with
-/// the rest of the app's chrome.
+/// A compact, theme-aware circular icon button for the Map tab's find-me and
+/// refresh controls — styled with [MasiColors] rather than Material's default
+/// `FloatingActionButton` look, to sit consistently with the rest of the app's
+/// chrome.
+///
+/// Both of its actions are slow, invisible work: `currentLocation()` is a cold
+/// GPS fix (seconds on a real phone) and `pullNow()` is a network round trip.
+/// Before the pending cue below, both buttons looked idle throughout — so the
+/// map appeared to have ignored the tap, and the natural response was to tap
+/// again and start a second fix/pull. [PendingIconButton] both shows the cue
+/// ON the control that was touched and swallows that second tap.
 ///
 /// [mapControlKey] (rather than a bare `key` ctor param) so the wrapping
 /// [Material] — the actual hit-testable/keyed widget a test taps — carries
@@ -1289,7 +1360,9 @@ class _MapControlButton extends StatelessWidget {
   final String iconName;
   final String tooltip;
   final MasiColors colors;
-  final VoidCallback onPressed;
+
+  /// The action, awaited by [PendingIconButton] — see this class's doc.
+  final Future<void> Function() onPressed;
 
   @override
   Widget build(BuildContext context) {
@@ -1298,7 +1371,9 @@ class _MapControlButton extends StatelessWidget {
       color: colors.surface,
       shape: const CircleBorder(),
       elevation: 2,
-      child: IconButton(
+      child: PendingIconButton(
+        // No `buttonKey`: the wrapping Material above already carries the key
+        // callers/tests reach for (see this class's doc).
         tooltip: tooltip,
         onPressed: onPressed,
         icon: MasiIcon(iconName, color: colors.ink),
