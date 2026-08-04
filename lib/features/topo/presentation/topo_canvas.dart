@@ -14,6 +14,7 @@ import 'package:masi/features/topo/domain/route_hit_test.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/grade_colors.dart';
 import 'package:masi/features/topo/presentation/photo_image.dart';
+import 'package:masi/features/topo/presentation/photo_loading_fill.dart';
 import 'package:masi/features/topo/presentation/rock_mask_painter.dart';
 import 'package:masi/features/topo/presentation/route_palette.dart';
 import 'package:masi/features/topo/presentation/topo_painter.dart';
@@ -1027,6 +1028,27 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   // doc for why tests can pump this widget without a real
                   // image file.
                   placeholder: () => const SizedBox.shrink(),
+                  // #56's separate "still resolving" slot, which this call site
+                  // never filled: with only the `SizedBox.shrink()` above, a
+                  // photo that is being decoded (or, on web, read out of
+                  // IndexedDB — or fetched on demand for a public photo whose
+                  // bytes this device does not have, see
+                  // `missing_photo_byte_resolver.dart`) rendered the canvas as
+                  // nothing at all. That is invisible on the first paint, when
+                  // the screen's own placeholder is still up, but not on a
+                  // RE-decode: the image cache evicting this bitmap, or a
+                  // photo-switch back, blanked a canvas the climber was already
+                  // looking at, with the route overlay left floating over the
+                  // backdrop. A skeleton in the photo's exact box says "coming"
+                  // instead, and stops the moment a frame exists.
+                  // Square corners and the photo's exact box: this photo is
+                  // full-bleed (see build's doc), so a rounded or differently
+                  // sized placeholder would move the moment the real frame
+                  // arrived.
+                  loadingPlaceholder: () => PhotoLoadingFill(
+                    width: widget.imageSize.width,
+                    height: widget.imageSize.height,
+                  ),
                 ),
                 // Rock-highlight overlay: painted BETWEEN the photo and the
                 // route overlay so the route-derived rock box is washed with

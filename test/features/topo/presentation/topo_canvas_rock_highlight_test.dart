@@ -12,6 +12,7 @@
 //  - toggling back OFF removes it.
 //  - with the highlight ON but no routes/symbols on the photo at all
 //    (nothing to derive a box from), nothing is painted either.
+import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/ar/domain/rock_box.dart';
@@ -84,6 +85,11 @@ Future<TransformationController> _pumpCanvas(
     UncontrolledProviderScope(
       container: container,
       child: MaterialApp(
+        // MasiTheme, not a bare MaterialApp: TopoCanvas now renders a
+        // MasiShimmer-backed loading fill for its photo (see
+        // `photo_loading_fill.dart`), and every masi widget that paints brand
+        // colours reads them from this theme's MasiColors extension.
+        theme: MasiTheme.light,
         home: Scaffold(
           body: TopoCanvas(
             wallId: wallId,
