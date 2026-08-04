@@ -20,7 +20,18 @@ import 'package:masi/core/storage/storage_persistence_types.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/features/topo/data/public_photo_prune_service.dart';
 
-/// Fake [PhotoFiles] that records every byte-delete it is asked to perform.
+/// Fake [PhotoFiles] that models a real byte store closely enough to tell a
+/// deletion that FREES something from one that does not: it tracks which keys
+/// actually hold bytes, and records every delete it is asked to perform.
+///
+/// Modelling presence is not incidental — it is the gap that let the "the pass
+/// deletes 50 keys and frees zero bytes" bug ship. The old fake had no notion of
+/// byte presence, so every seeded `Photos` row implicitly held bytes, which is
+/// exactly the assumption the production code was wrong about (a pruned or
+/// budget-skipped public photo IS a row whose bytes are absent). Tests below
+/// therefore assert on [freed] — bytes that actually went away — wherever the
+/// point is that something was reclaimed, and use [absent] to seed the rows that
+/// name a key holding nothing.
 ///
 /// `implements PhotoFiles` on purpose: [PhotoFiles] is a CONCRETE,
 /// conditionally-exported class (native under `flutter test`), not an
@@ -31,9 +42,37 @@ class _RecordingPhotoFiles implements PhotoFiles {
   /// Every key `deletePhotoBytes` was called with, in call order.
   final List<String> deleted = <String>[];
 
+  /// Keys the store has NO bytes for — a pruned photo, one the pull's byte
+  /// budget skipped, or one whose remote object was missing. Any key seeded into
+  /// the database and not listed here is assumed to hold bytes.
+  final Set<String> absent = <String>{};
+
+  /// Keys whose bytes this fake genuinely removed, i.e. the ones a delete freed
+  /// something for. A delete of an [absent] key is a no-op and never appears
+  /// here, which is precisely the distinction the production code missed.
+  final List<String> freed = <String>[];
+
   /// Keys whose delete should throw, simulating a backend that is not as
   /// best-effort as the two real ones.
   final Set<String> throwOn = <String>{};
+
+  /// Keys whose presence probe should throw, simulating a backend that is not
+  /// as defensive as the two real ones.
+  final Set<String> throwOnProbe = <String>{};
+
+  /// Presence probes performed, in call order — a cheap key lookup in both real
+  /// backends, so a test can prove the pass never probes more than it could
+  /// possibly delete.
+  final List<String> probed = <String>[];
+
+  @override
+  Future<bool> hasPhotoBytes(String stored) async {
+    probed.add(stored);
+    if (throwOnProbe.contains(stored)) {
+      throw StateError('byte store could not answer for $stored');
+    }
+    return !absent.contains(stored);
+  }
 
   @override
   Future<void> deletePhotoBytes(String stored) async {
@@ -41,6 +80,7 @@ class _RecordingPhotoFiles implements PhotoFiles {
     if (throwOn.contains(stored)) {
       throw StateError('byte store refused to delete $stored');
     }
+    if (absent.add(stored)) freed.add(stored);
   }
 
   // ---- Everything below is unreachable from the prune path. ----
@@ -520,6 +560,37 @@ void main() {
     );
 
     test(
+      'when the ONLY bytes on the device are the user\'s own, the pass frees '
+      'nothing rather than reaching for the one thing that would move the '
+      'number — the never-evict-own guarantee does not bend under pressure',
+      () async {
+        await seedWall(
+          id: 'w-own',
+          ownerId: 'me',
+          updatedAt: 1,
+          keys: ['photos/own-a.jpg', 'photos/own-b.jpg'],
+        );
+        // Foreign rows exist, but their bytes were never fetched (the pull's
+        // byte budget) — so the only pixels here are irreplaceable.
+        await seedWall(
+          id: 'w-foreign',
+          ownerId: 'them',
+          updatedAt: 2,
+          keys: ['photos/f-a.jpg', 'photos/f-b.jpg'],
+        );
+        photoFiles.absent.addAll(['photos/f-a.jpg', 'photos/f-b.jpg']);
+
+        final outcome = await makeService(
+          storage: _ScriptedStorage(const [0.99]),
+        ).pruneIfUnderPressure();
+
+        expect(photoFiles.deleted, isEmpty);
+        expect(photoFiles.freed, isEmpty);
+        expect(outcome.reason, PublicPhotoPruneReason.nothingPrunable);
+      },
+    );
+
+    test(
       'the keepNewest floor protects the most-recently-touched foreign '
       'photos even at 99% — the feed the user is browsing does not go blank',
       () async {
@@ -713,6 +784,161 @@ void main() {
       expect(photoFiles.deleted, isEmpty);
       expect(outcome.reason, PublicPhotoPruneReason.nothingPrunable);
     });
+  });
+
+  group('a ROW is not BYTES — the cap is only spent on keys that hold pixels', () {
+    /// Seeds [count] foreign walls, one photo each, oldest first: `photos/f-000`
+    /// (wall `updatedAt: 1`) through `photos/f-<count-1>` (the newest). Every
+    /// key EXCEPT the newest [withBytes] of them is marked as holding no bytes —
+    /// which is exactly the shape a bounded, newest-first shared pull leaves
+    /// behind (a row for every public photo; bytes for only the newest few).
+    Future<void> seedForeignLibrary({
+      required int count,
+      required int withBytes,
+    }) async {
+      for (var i = 0; i < count; i++) {
+        final key = 'photos/f-${i.toString().padLeft(3, '0')}.jpg';
+        await seedWall(
+          id: 'w-${i.toString().padLeft(3, '0')}',
+          ownerId: 'them',
+          updatedAt: i + 1,
+          keys: [key],
+        );
+        if (i < count - withBytes) photoFiles.absent.add(key);
+      }
+    }
+
+    test(
+      'THE CONFIRMED DEFECT: 100 foreign rows of which only the newest 20 were '
+      'ever fetched — i.e. exactly the protected floor — frees nothing and says '
+      'so, instead of "deleting" 50 keys that hold nothing while the fraction '
+      'never moves and the user\'s next own import fails on quota',
+      () async {
+        await seedForeignLibrary(count: 100, withBytes: 20);
+
+        final outcome = await makeService(
+          storage: _ScriptedStorage(const [0.80]),
+          keepNewestForeign: 20,
+          maxDeletionsPerPass: 50,
+        ).pruneIfUnderPressure();
+
+        // The pass is honest about having had nothing to free...
+        expect(outcome.reason, PublicPhotoPruneReason.nothingPrunable);
+        expect(outcome.deletedKeys, isEmpty);
+        // ...and, the part that actually matters, it did not burn its whole
+        // deletion budget on no-ops.
+        expect(photoFiles.deleted, isEmpty);
+        expect(photoFiles.freed, isEmpty);
+        // The 20 keys that DO hold bytes are the floor, and the floor was never
+        // even offered — so they were never probed either.
+        expect(photoFiles.probed, isNot(contains('photos/f-099.jpg')));
+      },
+    );
+
+    test(
+      'the deletion cap is spent ONLY on keys that hold bytes: byte-less rows '
+      'interleaved through the eviction order are skipped free of charge, so a '
+      'pass still frees a full cap\'s worth of real pixels',
+      () async {
+        // 60 foreign rows, the oldest 40 byte-less. Oldest-first eviction walks
+        // straight through those 40 before reaching anything real.
+        await seedForeignLibrary(count: 60, withBytes: 20);
+
+        final outcome = await makeService(
+          storage: _ScriptedStorage(const [0.9]),
+          keepNewestForeign: 5,
+          maxDeletionsPerPass: 10,
+          batchSize: 10,
+        ).pruneIfUnderPressure();
+
+        expect(outcome.reason, PublicPhotoPruneReason.capReached);
+        // A full cap of REAL frees, not 10 no-ops.
+        expect(photoFiles.freed, hasLength(10));
+        expect(outcome.deletedKeys, hasLength(10));
+        // Oldest-first is preserved among the keys that hold bytes: rows 0..39
+        // hold nothing, rows 40..54 are offered and hold bytes (55..59 are the
+        // keepNewest floor), so the ten oldest of those are f-040..f-049.
+        expect(outcome.deletedKeys.first, 'photos/f-040.jpg');
+        expect(outcome.deletedKeys.last, 'photos/f-049.jpg');
+        // Not one byte-less key was handed to the store.
+        expect(
+          photoFiles.deleted.where((k) => k.compareTo('photos/f-040.jpg') < 0),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'freeing every cached key it was allowed to still reports poolExhausted, '
+      'even though 30 byte-less rows were also on offer — filtering must not '
+      'turn "nothing left to free" into "the cap stopped me"',
+      () async {
+        await seedForeignLibrary(count: 40, withBytes: 10);
+
+        final outcome = await makeService(
+          storage: _ScriptedStorage(const [0.9]),
+          keepNewestForeign: 0,
+          maxDeletionsPerPass: 10,
+        ).pruneIfUnderPressure();
+
+        expect(outcome.reason, PublicPhotoPruneReason.poolExhausted);
+        expect(photoFiles.freed, hasLength(10));
+      },
+    );
+
+    test(
+      'one cached key more than the cap allows still reports capReached — the '
+      'other stopping reason survives filtering too',
+      () async {
+        await seedForeignLibrary(count: 11, withBytes: 11);
+
+        final outcome = await makeService(
+          storage: _ScriptedStorage(const [0.9]),
+          keepNewestForeign: 0,
+          maxDeletionsPerPass: 10,
+        ).pruneIfUnderPressure();
+
+        expect(outcome.reason, PublicPhotoPruneReason.capReached);
+        expect(photoFiles.freed, hasLength(10));
+      },
+    );
+
+    test(
+      'probing stops as soon as it has more keys than the pass could possibly '
+      'delete — a 500-photo cache is not 500 lookups',
+      () async {
+        await seedForeignLibrary(count: 200, withBytes: 200);
+
+        await makeService(
+          storage: _ScriptedStorage(const [0.9]),
+          keepNewestForeign: 0,
+          maxDeletionsPerPass: 20,
+          batchSize: 10,
+        ).pruneIfUnderPressure();
+
+        // maxDeletionsPerPass + 1: the extra one is what lets the sweep tell
+        // capReached from poolExhausted.
+        expect(photoFiles.probed, hasLength(21));
+      },
+    );
+
+    test(
+      'a presence probe that THROWS counts as "no bytes" — cannot-tell must '
+      'never spend a deletion, and it must not abort the pass either',
+      () async {
+        await seedForeignLibrary(count: 5, withBytes: 5);
+        photoFiles.throwOnProbe.add('photos/f-000.jpg');
+
+        final outcome = await makeService(
+          storage: _ScriptedStorage(const [0.9]),
+          keepNewestForeign: 0,
+        ).pruneIfUnderPressure();
+
+        expect(photoFiles.deleted, isNot(contains('photos/f-000.jpg')));
+        expect(outcome.deletedKeys, hasLength(4));
+        expect(photoFiles.freed, hasLength(4));
+      },
+    );
   });
 
   group('shipped defaults', () {

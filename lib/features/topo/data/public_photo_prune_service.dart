@@ -67,6 +67,48 @@
 /// photos off-limits at any pressure, so the part of the community feed the
 /// user is actually browsing does not go blank underneath them.
 ///
+/// ## A ROW is not BYTES — why every candidate is probed before it is charged
+///
+/// The candidate query below is over `photos` ROWS, and a row naming a key is
+/// not evidence that the key holds anything: a pruned photo, a photo the pull's
+/// byte budget skipped, and a photo whose remote object was missing are ALL
+/// defined as "a row whose bytes are absent" (see the section above). So the
+/// eviction order has to be filtered against the byte store before it is spent,
+/// and that is not a micro-optimisation — it was a confirmed bug:
+///
+///  * the bounded shared pull fetches foreign photos NEWEST-wall-first and the
+///    pruner evicts OLDEST-wall-first, and those two orders are *exact duals*.
+///    That is deliberate and it does stop a download/evict ping-pong — but it
+///    also means the set the pruner offers is, on a cold device, precisely the
+///    set the pull has never fetched. The only foreign keys holding bytes after
+///    one pull are the newest `kSharedPhotoByteBudgetPerPull` of them, and that
+///    is the very floor [kPruneKeepNewestForeign] refuses to offer (they are
+///    the same constant);
+///  * `PhotoFiles.deletePhotoBytes` is best-effort and cannot report that it
+///    deleted nothing, so every byte-less key still landed in
+///    [PublicPhotoPruneOutcome.deletedKeys] and still consumed
+///    [kPruneMaxDeletionsPerPass].
+///
+/// Result before the fix: under real pressure a pass "deleted" 50 keys, freed
+/// zero bytes, reported `capReached` with an unmoved fraction, and did the exact
+/// same thing on every subsequent pull — while the user's next own-photo import
+/// failed on quota, which is the failure this service exists to prevent. Now
+/// [PhotoFiles.hasPhotoBytes] (a key lookup, never a blob read) filters the
+/// order first, so the cap is only ever spent on keys that hold something, and
+/// "nothing of ours is actually cached" reports honestly as
+/// [PublicPhotoPruneReason.nothingPrunable] instead of as 50 deletions.
+///
+/// What that fix does NOT do is invent bytes to free. Where the pressure is the
+/// user's OWN photos and no evictable foreign bytes exist, the honest outcome is
+/// that this service cannot help, and it must not: the floor and the
+/// never-evict-own rule are the two things here that do not bend. Foreign bytes
+/// do accumulate past the floor in ordinary use — a photo already on the device
+/// costs the pull no budget, so successive pulls reach steadily older photos,
+/// and `MissingPhotoByteResolver` writes bytes for whatever the user opens — so
+/// the evictable set is genuinely non-empty as soon as more than one pull's
+/// worth of foreign bytes is cached. It is only ever empty when there is
+/// nothing this service was allowed to free in the first place.
+///
 /// On native there is no `navigator.storage`, so `estimate()` is always `null`
 /// and this service is a permanent no-op — which is right: nothing silently
 /// evicts an iOS/Android app's documents directory.
@@ -123,8 +165,15 @@ enum PublicPhotoPruneReason {
   /// established for any photo and nothing is safe to delete.
   unknownSession,
 
-  /// Under pressure, but nothing was prunable: no definitely-foreign photos,
-  /// or all of them protected by the keepNewest floor or a shared key.
+  /// Under pressure, but nothing was prunable: no definitely-foreign photos;
+  /// or all of them protected by the keepNewest floor or a shared key; or none
+  /// of the ones it WAS allowed to offer actually holds bytes on this device.
+  ///
+  /// That last case is a normal, expected state, not a failure — a public
+  /// `Photos` row whose bytes are absent is what a budget-skipped or
+  /// already-pruned photo IS (see the library doc's "A ROW is not BYTES"). It
+  /// means this pass genuinely had nothing to free, which is very different from
+  /// the pre-fix behaviour of "freeing" 50 keys that held nothing.
   nothingPrunable,
 
   /// Pressure fell back under [kPrunePressureLowWatermark]. The success case.
@@ -267,7 +316,7 @@ class PublicPhotoPruneService {
       );
     }
 
-    final order = await _evictionOrder(ownUid);
+    final order = await _keysHoldingBytes(await _evictionOrder(ownUid));
     if (order.isEmpty) {
       return PublicPhotoPruneOutcome(
         reason: PublicPhotoPruneReason.nothingPrunable,
@@ -279,9 +328,47 @@ class PublicPhotoPruneService {
     return _sweep(order: order, before: before);
   }
 
-  /// Builds the ordered list of keys this pass may delete: the pruner's
-  /// oldest-first verdict, minus any key that is also referenced by a row the
-  /// pruner declined to offer, minus duplicates.
+  /// [order], narrowed to the keys that ACTUALLY hold bytes right now.
+  ///
+  /// Without this the pass spends [maxDeletionsPerPass] on keys whose bytes are
+  /// already gone, frees nothing, and reports the no-ops as deletions — see the
+  /// library doc's "A ROW is not BYTES" for the confirmed failure that is.
+  /// [PhotoFiles.hasPhotoBytes] is a key lookup rather than a blob read, so
+  /// probing is much cheaper than the delete it is deciding about, and the walk
+  /// stops as soon as it has more keys than this pass could possibly delete.
+  ///
+  /// It collects [maxDeletionsPerPass] + 1 rather than exactly the cap so
+  /// [_sweep] can still distinguish its two stopping reasons: a leftover key is
+  /// what tells "the cap stopped me" ([PublicPhotoPruneReason.capReached]) from
+  /// "I ran out of things I was allowed to delete"
+  /// ([PublicPhotoPruneReason.poolExhausted]).
+  ///
+  /// Order is preserved, so the sweep still deletes oldest-touched first.
+  Future<List<String>> _keysHoldingBytes(List<String> order) async {
+    final wanted = maxDeletionsPerPass + 1;
+    final present = <String>[];
+    for (final key in order) {
+      if (present.length >= wanted) break;
+      bool holdsBytes;
+      try {
+        holdsBytes = await _photoFiles.hasPhotoBytes(key);
+      } catch (_) {
+        // A probe that throws is "cannot tell", and cannot-tell must not spend
+        // a deletion — the real backends never throw here, this is for one that
+        // does.
+        holdsBytes = false;
+      }
+      if (holdsBytes) present.add(key);
+    }
+    return present;
+  }
+
+  /// Builds the ordered list of keys this pass is ALLOWED to delete: the
+  /// pruner's oldest-first verdict, minus any key that is also referenced by a
+  /// row the pruner declined to offer, minus duplicates.
+  ///
+  /// Permission only — this speaks about rows, so a key here may well hold no
+  /// bytes at all. [_keysHoldingBytes] is what turns permission into work.
   Future<List<String>> _evictionOrder(String ownUid) async {
     final rows = await _db.customSelect(_candidateSql).get();
 
