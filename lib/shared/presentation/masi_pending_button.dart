@@ -180,6 +180,13 @@ class MasiPendingButton extends StatefulWidget {
   final MasiPendingButtonVariant variant;
 
   /// Optional overrides merged over the variant's own style.
+  ///
+  /// **[ButtonStyle.merge] is FIELD-granular, and that surprises people.** Each
+  /// colour slot is one whole [WidgetStateProperty] field, resolved per state
+  /// inside. So a `style:` that sets `disabledForegroundColor` alone replaces
+  /// the variant's ENTIRE `foregroundColor` property — including its enabled
+  /// value, which then falls through to Material's theme default rather than to
+  /// the variant's. If you override one state of a colour, state the others too.
   final ButtonStyle? style;
 
   /// Stretch to the available width (`width: double.infinity`), which is how

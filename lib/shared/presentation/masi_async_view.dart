@@ -58,11 +58,33 @@ import 'masi_pending_button.dart';
 /// on the day a refresh failed would be a trap. It is not a sliver; inside a
 /// [CustomScrollView] use it above/around the scroll view, not in it.
 ///
+/// There is deliberately no sliver variant. The app's one [CustomScrollView]
+/// (`community_topo_detail_screen.dart`) has no single async value to render:
+/// it composes four independent ones — wall name, likes, comments, routes — each
+/// with its own skeleton, its own failure and a header that must render whatever
+/// they do. A sliver version of THIS widget would still want to own the whole
+/// scroll view's content, which is the wrong shape there; that screen uses
+/// [MasiLoadingGate] plus a per-section failure notice instead. Build the sliver
+/// variant when a screen turns up that a single [AsyncValue] genuinely drives.
+///
 /// **Testing.** The skeleton shimmers and the refresh cue animates, so
 /// `pumpAndSettle()` will hang on this widget in its loading states — use
 /// `tester.pump(duration)`. To reach the revealed skeleton, pump past
 /// [MasiMotion.loadingRevealDelay]; to prove the anti-flash, pump less than it
 /// and assert the skeleton is absent.
+///
+/// Two more test traps, both of which cost real time to diagnose:
+///
+///  - The error state mounts a [MasiIcon], i.e. an ASYNC SVG load, which
+///    schedules extra frames. `pumpAndSettle()` therefore advances more fake
+///    time than the assertions expect, and Riverpod v3's default backoff retry
+///    fires more often — re-running the throwing provider body mid-assertion and
+///    leaving pending timers at teardown. Build the container with
+///    `ProviderContainer(retry: (_, _) => null)` in any test that drives a
+///    failing provider through this widget. (Measured: without it, a test that
+///    deliberately errors two providers HANGS rather than fails.)
+///  - [onRetry]'s cue is a [MasiPendingButton], so once a retry is in flight the
+///    error state contains a live spinner and `pumpAndSettle()` hangs on it too.
 class MasiAsyncView<T> extends StatelessWidget {
   const MasiAsyncView({
     super.key,

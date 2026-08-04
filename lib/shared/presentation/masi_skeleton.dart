@@ -38,6 +38,21 @@ import 'masi_shimmer.dart';
 /// a skeleton hangs `pumpAndSettle()`. Drive it with explicit
 /// `tester.pump(duration)` calls (or `tester.pump()` a fixed number of times),
 /// and assert on `find.byType(MasiSkeleton)` / the composites' keys.
+///
+/// **A skeleton that can never resolve breaks whole test FILES, not just its
+/// own test.** Two ways that has actually happened here:
+///
+///  - An always-loading skeleton inside an embedded read-only canvas hung
+///    `pumpAndSettle()` for every test in the file that mounted that canvas —
+///    they were not testing loading at all.
+///  - An unbounded shimmer over a large bitmap slot turned 46 existing tests
+///    into timeouts. `Image.file` never resolves under fake async, so the gate
+///    driving that skeleton is never handed a `false`.
+///
+/// So: gate a skeleton on a condition that is reachable-false, never on a
+/// literal `true` or on a bare `!hasValue` (which stays true forever on an
+/// `AsyncError` — see `MasiAsyncView`'s four-state table), and bound a shimmer
+/// over anything whose load a test cannot complete.
 class MasiSkeleton extends StatelessWidget {
   /// A rounded rectangle — a thumbnail, an image slot, a chip, a pill.
   const MasiSkeleton.box({

@@ -39,6 +39,22 @@ import '../../app/theme.dart';
 /// `MasiPendingButton` does: it disables itself the instant it is tapped, and
 /// only the *spinner* waits on this gate).
 ///
+/// **[isLoading] must be reachable-false.** The gate has no way to time out: it
+/// reveals after the delay and then waits, forever if need be, for a `false`.
+/// Two expressions that never deliver one, both of which have shipped:
+///
+///  - a literal `isLoading: true`, which asks for a permanent affordance and
+///    gets one (plus a `pumpAndSettle()` that hangs in every test that mounts
+///    it);
+///  - a bare `!asyncValue.hasValue`. On an `AsyncError` `hasValue` is false and
+///    `isLoading` is false, and a `FutureProvider` does not re-emit on its own,
+///    so this is true for the life of the screen. Write
+///    `asyncValue.isLoading && !asyncValue.hasValue` and render the error state
+///    separately — or just use `MasiAsyncView`, which owns all four states.
+///
+/// If a permanent affordance really is what you want, say so with a widget that
+/// paints one; do not express it as a load that never finishes.
+///
 /// **Testing.** Timing is driven by [Timer], so it advances under
 /// `tester.pump(duration)` — no `pumpAndSettle()` needed for the gate itself
 /// (though whatever the builder renders may forbid `pumpAndSettle()` on its
