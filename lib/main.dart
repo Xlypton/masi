@@ -4,10 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart';
 import 'package:flutter_web_plugins/url_strategy.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 import 'app/app.dart';
-import 'core/config/supabase_config.dart';
+import 'core/config/supabase_init_provider.dart';
 import 'core/db/database_provider.dart';
 import 'core/db/storage_durability_provider.dart';
 import 'core/storage/storage_persistence_providers.dart';
@@ -112,7 +111,7 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
   await awaitBootWork(
     container,
     Future.wait([
-      _initSupabase(),
+      _initSupabase(container),
       container.read(photoFilesProvider).warmDocsPath(),
       container.read(lastKnownUidProvider.notifier).hydrate(),
       verifyDatabaseUsable(container),
@@ -329,18 +328,20 @@ void requestPersistentStorageAtBoot(ProviderContainer container) {
 /// Defensive hardening: a failed/unreachable Supabase init (bad config, no
 /// network on first launch, etc.) must never crash app boot — this app is
 /// local-first (Drift/SQLite) and fully usable with sync/backup/auth
-/// unavailable, so log and continue rather than letting the exception
-/// propagate out of [bootApp].
-Future<void> _initSupabase() async {
-  try {
-    await Supabase.initialize(
-      url: supabaseUrl,
-      publishableKey: supabaseAnonKey,
-      authOptions: const FlutterAuthClientOptions(
-        authFlowType: AuthFlowType.pkce,
-      ),
-    );
-  } catch (e, st) {
-    debugPrint('Supabase.initialize failed; continuing without it: $e\n$st');
-  }
-}
+/// unavailable, so record the failure and continue rather than letting the
+/// exception propagate out of [bootApp].
+///
+/// UF-6: this used to be a bare `try`/`catch` around `Supabase.initialize`
+/// whose entire response to a failure was one `debugPrint`. Continuing was
+/// right; forgetting was not. Every cloud provider then degraded to a
+/// signed-out no-op that reports SUCCESS — `SyncService` answers
+/// `skippedSignedOut`, `SyncOrchestrator` reads that as [SyncStatus.idle] —
+/// so the app told the user it was synced while their topos existed on
+/// exactly one device.
+///
+/// [CloudInitController.initialize] does the same call and the same
+/// swallowing, but RECORDS the outcome on [cloudInitProvider], which is what
+/// `SyncOrchestrator` reads to refuse to claim success, and what its retry
+/// re-attempts. Boot's contract is unchanged: this never throws.
+Future<void> _initSupabase(ProviderContainer container) =>
+    container.read(cloudInitProvider.notifier).initialize();

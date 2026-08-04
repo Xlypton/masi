@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/config/supabase_init_provider.dart';
 import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/data/auth_repository.dart';
@@ -301,6 +302,24 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
     final db = ref.watch(appDatabaseProvider);
     _dbSubscription = db.tableUpdates().listen((_) => _scheduleDebouncedPush());
 
+    // UF-6: seed from the cloud-init verdict, so a `Supabase.initialize` that
+    // failed at boot is VISIBLE from the very first frame instead of only
+    // when a sync happens to be attempted. That distinction matters because
+    // with no client there is no auth stream either, so the pull-on-sign-in
+    // edge below NEVER fires and a local write's debounced push finds nothing
+    // dirty to send: without this seed, neither [_runPush] nor [_runPull]
+    // would ever run, and the app would sit at `idle` — "everything is fine"
+    // — forever.
+    //
+    // `ref.read`, deliberately NOT `ref.watch`: watching would tear this
+    // notifier down and rebuild it (losing the debounce/retry timers) the
+    // moment a retry flips the verdict — and worse, the retry is triggered
+    // from INSIDE [_runPull]/[_runPush], which would then be left assigning
+    // `state` on a disposed notifier. Recovery needs no listener anyway: the
+    // retry lives in [_ensureCloudReady], and the push/pull that follows a
+    // successful one writes its own honest state over this one.
+    final cloudInit = ref.read(cloudInitProvider);
+
     // S3: react to the network coming back. `statusChanges()` is
     // contractually non-throwing and degrades to a never-emitting stream when
     // the platform signal is unavailable (see its doc), which is exactly what
@@ -341,7 +360,103 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       _connectivitySubscription?.cancel();
     });
 
+    if (cloudInit.isFailed) return _cloudUnavailableState(cloudInit);
     return const SyncOrchestratorState();
+  }
+
+  /// The state that says "the cloud is not there", built from [cloudInit].
+  ///
+  /// Three properties are the whole point, and each one is a lie the old code
+  /// told:
+  ///  - [SyncStatus] is never [SyncStatus.idle]. `idle` is what the Account
+  ///    screen renders as "Synced";
+  ///  - [SyncOrchestratorState.lastSyncedAt] is CARRIED, never stamped. No
+  ///    push or pull happened, so there is nothing to timestamp;
+  ///  - the reason lands in [SyncOrchestratorState.lastPullError], the field
+  ///    the Library and Feed already key their "Couldn't sync — retry"
+  ///    affordance off, so this reuses the #72 surface instead of inventing a
+  ///    second one. `lastPushError` carries the same sentence because the
+  ///    Account screen reads THAT one, and a cloud that cannot be reached has
+  ///    failed both directions at once.
+  ///
+  /// [SyncStatus.error] rather than [SyncStatus.offline]: `offline` is the
+  /// reassurance state ("your data is on the device, wait for signal") and the
+  /// Library banner deliberately drops the detail for it. A push/pull that has
+  /// actually been attempted refines this via [_failureStatus], which probes
+  /// reachability; at build time nothing has been attempted, and defaulting to
+  /// the louder of the two is correct for a fault we cannot yet classify.
+  /// [lastSyncedAt]/[lastPushWarning] are passed in rather than read off
+  /// `state`, because [build] calls this BEFORE returning the initial state,
+  /// and `state` cannot be read until a `Notifier`'s build completes.
+  static SyncOrchestratorState _cloudUnavailableState(
+    CloudInitState cloudInit, {
+    SyncStatus status = SyncStatus.error,
+    DateTime? lastSyncedAt,
+    String? lastPushWarning,
+  }) {
+    final message = cloudUnavailableMessage(cloudInit);
+    return SyncOrchestratorState(
+      status: status,
+      lastSyncedAt: lastSyncedAt,
+      lastPullError: message,
+      lastPushError: message,
+      lastPushWarning: lastPushWarning,
+    );
+  }
+
+  /// Whether the cloud client exists — RE-ATTEMPTING `Supabase.initialize`
+  /// first if a previous attempt failed, and writing the honest state either
+  /// way. Called at the top of both [_runPush] and [_runPull]; a `false`
+  /// return means "stop, the state has already been written".
+  ///
+  /// This IS the retry affordance for UF-6, and it deliberately lives on the
+  /// path every existing trigger already takes rather than behind new UI: the
+  /// Library/Feed "Couldn't sync — Retry" buttons, pull-to-refresh, the map
+  /// refresh button, app-resume and the backoff timer all funnel through
+  /// [pullNow]/[pushNow], so all of them now recover a boot-time outage.
+  /// Before this, a `Supabase.initialize` that failed once stayed failed for
+  /// the whole app run and the only way back was force-quitting the app —
+  /// which on an installed PWA is not an obvious move.
+  ///
+  /// A successful late init also invalidates the providers that cached
+  /// cloud-less fallbacks (see [CloudInitController.initialize]), which is why
+  /// callers must read [syncServiceProvider] AFTER this returns, never before.
+  ///
+  /// Deliberately does NOT arm the backoff retry ([_scheduleRetry]) on
+  /// failure, unlike a push that actually ran and did not land. That timer's
+  /// termination condition is "nothing is dirty any more", which a missing
+  /// cloud client can never satisfy — arming it here would recreate exactly
+  /// the bug [_runPush]'s nothing-pending early-out was widened to fix: a
+  /// device with nothing to send retrying forever. Automatic recovery instead
+  /// rides on the EVENTS that could plausibly change the answer —
+  /// [_onConnectivityChanged]'s regain push+pull and `app.dart`'s
+  /// resume push+pull — both of which funnel through here.
+  Future<bool> _prepareCloud() async {
+    if (!ref.read(cloudInitProvider).isFailed) return true;
+
+    if (await ref.read(cloudInitProvider.notifier).initialize()) {
+      // Recovered. The "couldn't connect" sentence now describes a condition
+      // that no longer holds, and it must be cleared HERE rather than left to
+      // the run that follows: [_runPull]'s success branch deliberately carries
+      // `lastPushError` through (a pull says nothing about whether local
+      // changes reached the cloud — the S1 fix), so a stale cloud message
+      // would survive an otherwise-perfect recovery and keep the Account
+      // screen reading "Sync error" indefinitely.
+      state = SyncOrchestratorState(
+        status: state.status,
+        lastSyncedAt: state.lastSyncedAt,
+        lastPushWarning: state.lastPushWarning,
+      );
+      return true;
+    }
+
+    state = _cloudUnavailableState(
+      ref.read(cloudInitProvider),
+      status: await _failureStatus(),
+      lastSyncedAt: state.lastSyncedAt,
+      lastPushWarning: state.lastPushWarning,
+    );
+    return false;
   }
 
   /// (Re)schedules a single push [syncDebounceDurationProvider] from NOW —
@@ -421,6 +536,19 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   /// fires in practice; the `catch` is left for genuinely unexpected local
   /// failures such as the snapshot transaction itself.
   Future<void> _runPush() async {
+    // FIRST, ahead of the nothing-pending early-out below (UF-6). That
+    // early-out is the branch a cloud-less push actually takes —
+    // `hasPendingLocalChanges()` reports false whenever `currentSession.uid`
+    // is null, and with no Supabase client `syncServiceProvider` falls back to
+    // `_SignedOutAuthRepository`, so the uid IS null — and it CLEARS
+    // `lastPushError` and moves the status to `idle` on the way out. Checking
+    // afterwards would therefore have the push quietly erase the very warning
+    // this fix exists to raise.
+    if (!await _prepareCloud()) return;
+
+    // Read AFTER `_prepareCloud`: a successful late init invalidates
+    // `syncServiceProvider`, and reading it first would hand this push the
+    // stale, cloud-less `_UnavailableSyncRemote` fallback.
     final service = ref.read(syncServiceProvider);
     final scope = _fullResyncDue ? PushScope.full : PushScope.dirtyOnly;
 
@@ -511,7 +639,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             );
           } else {
             state = SyncOrchestratorState(
-              status: await _failedPushStatus(),
+              status: await _failureStatus(),
               lastSyncedAt: state.lastSyncedAt,
               lastPullError: state.lastPullError,
               lastPushWarning: pushWarning,
@@ -553,7 +681,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
     } catch (e, st) {
       debugPrint('SyncOrchestrator: pushOwn failed: $e\n$st');
       state = SyncOrchestratorState(
-        status: await _failedPushStatus(),
+        status: await _failureStatus(),
         lastSyncedAt: state.lastSyncedAt,
         lastPullError: state.lastPullError,
         lastPushError: 'Sync failed: $e',
@@ -676,7 +804,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   ///
   /// A probe that itself throws is treated as REACHABLE: a broken probe must
   /// never let a genuine backend error masquerade as "you're offline".
-  Future<SyncStatus> _failedPushStatus() async {
+  Future<SyncStatus> _failureStatus() async {
     try {
       final reachable = await ref
           .read(connectivityServiceProvider)
@@ -760,6 +888,11 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   /// message.
   Future<void> _runPull() async {
     state = state.copyWith(status: SyncStatus.syncing);
+    // UF-6, and the retry the Library/Feed "Try again" buttons already reach:
+    // see [_prepareCloud]. A pull with no client would otherwise come back
+    // `skippedSignedOut` — indistinguishable from a genuinely signed-out user
+    // — and report `idle` with `lastPullError` CLEARED.
+    if (!await _prepareCloud()) return;
     try {
       final result = await ref.read(syncServiceProvider).pullOwnAndShared();
       // `PullResult.skippedSignedOut()` always carries an empty `errors`
