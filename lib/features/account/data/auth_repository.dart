@@ -1,6 +1,8 @@
 import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import 'oauth_redirect.dart' as oauth_redirect;
+
 /// Why a session ended, as this app's own narrow enum rather than gotrue's
 /// [SignOutReason].
 ///
@@ -122,10 +124,17 @@ abstract class AuthRepository {
   /// a fallback message rather than treating it as a hard failure.
   Future<void> sendMagicLink(String email);
 
-  /// Starts the Google OAuth sign-in flow (launches the provider consent
-  /// URL). Like [sendMagicLink], this only kicks off the flow — the eventual
-  /// session arrives via [authStateChanges] once the OAuth redirect
+  /// Starts the Google OAuth sign-in flow (hands control to the provider's
+  /// consent page). Like [sendMagicLink], this only kicks off the flow — the
+  /// eventual session arrives via [authStateChanges] once the OAuth redirect
   /// completes back into the app.
+  ///
+  /// THROWS (an [AuthException]) if control could not be handed over at all —
+  /// i.e. the consent page was never reached. That case used to resolve
+  /// normally, which made a total sign-in lockout look like a dead button with
+  /// no error to report; callers must be able to render a failure. On web the
+  /// page navigates away on success, so a normal return there is the
+  /// *un*observable outcome.
   Future<void> signInWithGoogle();
 
   /// Verifies an emailed numeric sign-in [code] for [email] — the PWA-safe
@@ -146,9 +155,34 @@ abstract class AuthRepository {
 /// never the privileged/service-role key, which must never appear here or
 /// anywhere else client-side (see `supabase_config.dart`'s doc comment).
 class SupabaseAuthRepository implements AuthRepository {
-  SupabaseAuthRepository(this._client);
+  /// [canRedirectTopLevel]/[redirectTopLevel] default to the real
+  /// `oauth_redirect.dart` conditional backend (web: a top-level
+  /// `location.assign`; native/tests: the inert stub) and exist ONLY so a unit
+  /// test can exercise both branches of [signInWithGoogle] — including the
+  /// refused-navigation branch — without a real browser, where the
+  /// compile-time import condition can't otherwise be flipped. Same rationale
+  /// as [resolveMagicLinkRedirect]'s `isWeb` seam. Production code must never
+  /// pass them.
+  SupabaseAuthRepository(
+    this._client, {
+    bool Function()? canRedirectTopLevel,
+    Future<bool> Function(String url)? redirectTopLevel,
+  }) : _canRedirectTopLevel =
+           canRedirectTopLevel ?? oauth_redirect.canRedirectTopLevel,
+       _redirectTopLevel = redirectTopLevel ?? oauth_redirect.redirectTopLevel;
 
   final SupabaseClient _client;
+
+  final bool Function() _canRedirectTopLevel;
+  final Future<bool> Function(String url) _redirectTopLevel;
+
+  /// Message for the "control was never handed to the provider" failure, on
+  /// either platform. Reported as an [AuthException] — the same type every
+  /// other auth failure in this class surfaces (they all bubble up from
+  /// gotrue) — so `account_screen.dart`'s existing `catch` renders its
+  /// "Google sign-in failed" message instead of the user seeing nothing.
+  static const String _oauthHandoffFailed =
+      'Could not open the Google sign-in page.';
 
   /// Must match the `CFBundleURLTypes` scheme registered in
   /// `ios/Runner/Info.plist` and the intent-filter scheme/host registered in
@@ -223,10 +257,39 @@ class SupabaseAuthRepository implements AuthRepository {
 
   @override
   Future<void> signInWithGoogle() async {
-    await _client.auth.signInWithOAuth(
+    // Identical on both platforms, and it must stay byte-identical to what the
+    // Supabase project's Auth "Redirect URLs" allowlist contains, or GoTrue
+    // rejects the /authorize call.
+    final redirectTo = resolveMagicLinkRedirect();
+
+    if (_canRedirectTopLevel()) {
+      // WEB. Split `signInWithOAuth` into its two halves and do the navigation
+      // ourselves: `getOAuthSignInUrl` is the exact same call
+      // `signInWithOAuth` makes first (it also mints the PKCE verifier and
+      // stores it, so `detectSessionInUri` can complete the session on the way
+      // back), but the handoff is then a plain top-level navigation instead of
+      // `url_launcher_web`'s `window.open(url, '_self', 'noopener,noreferrer')`
+      // — which an iOS standalone web app silently refuses while reporting
+      // success. See `oauth_redirect.dart`.
+      final response = await _client.auth.getOAuthSignInUrl(
+        provider: OAuthProvider.google,
+        redirectTo: redirectTo,
+      );
+      final redirected = await _redirectTopLevel(response.url);
+      if (!redirected) throw const AuthException(_oauthHandoffFailed);
+      return;
+    }
+
+    // NATIVE (iOS/Android) — mechanism unchanged: `signInWithOAuth` launches
+    // the system browser / `ASWebAuthenticationSession` via url_launcher and
+    // the `io.supabase.climbtopo://` deep link brings the session back. The
+    // only change is that its `bool` result is no longer discarded: `false`
+    // means url_launcher never opened anything, which the user has to be told.
+    final launched = await _client.auth.signInWithOAuth(
       OAuthProvider.google,
-      redirectTo: resolveMagicLinkRedirect(),
+      redirectTo: redirectTo,
     );
+    if (!launched) throw const AuthException(_oauthHandoffFailed);
   }
 
   @override
