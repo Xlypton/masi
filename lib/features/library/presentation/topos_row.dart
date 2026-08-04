@@ -174,7 +174,7 @@ class _ToposSkeleton extends StatelessWidget {
   }
 }
 
-class _TopoRow extends ConsumerWidget {
+class _TopoRow extends ConsumerStatefulWidget {
   const _TopoRow({
     super.key,
     required this.topo,
@@ -197,7 +197,45 @@ class _TopoRow extends ConsumerWidget {
   final LocationService? setLocationLocationService;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<_TopoRow> createState() => _TopoRowState();
+}
+
+/// Stateful for the same reason `crud_list_scaffold.dart`'s `_CrudRow` is, and
+/// with the same two-flag split: every action on this row's menu is a database
+/// write behind a sheet, a dialog or a full-screen picker, and the row had no
+/// in-flight state at all — the surface dismissed, the write ran unannounced,
+/// and a second menu tap could start a second one at the same topo.
+///
+/// [_locked] is the invisible re-entrancy lock and spans the whole flow,
+/// modal included. [_working] is the visible cue and spans only what the APP is
+/// doing (see [CrudBusyReporter]) — never the part where the user is reading a
+/// confirm sheet, which is both wrong and unbounded.
+class _TopoRowState extends ConsumerState<_TopoRow> {
+  bool _locked = false;
+  bool _working = false;
+
+  Future<void> _run(
+    Future<void> Function(CrudBusyReporter reportBusy) body,
+  ) async {
+    if (_locked) return;
+    _locked = true;
+    try {
+      await body((isBusy) {
+        // A deleted row is gone long before its own cascade settles.
+        if (!mounted) return;
+        if (isBusy != _working) setState(() => _working = isBusy);
+      });
+    } finally {
+      _locked = false;
+      if (mounted && _working) setState(() => _working = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ref = this.ref;
+    final topo = widget.topo;
+    final distanceKm = widget.distanceKm;
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final routeCount = topo.routeCount;
@@ -209,7 +247,9 @@ class _TopoRow extends ConsumerWidget {
       borderRadius: BorderRadius.circular(MasiRadii.card),
       child: InkWell(
         borderRadius: BorderRadius.circular(MasiRadii.card),
-        onTap: () => context.push('/walls/${topo.wallId}'),
+        // Not navigable mid-write: opening a canvas for a topo that is halfway
+        // through being deleted is a race with a guaranteed loser.
+        onTap: _working ? null : () => context.push('/walls/${topo.wallId}'),
         child: Padding(
           padding: const EdgeInsets.symmetric(
             horizontal: MasiSpacing.md,
@@ -252,7 +292,7 @@ class _TopoRow extends ConsumerWidget {
                         ),
                         if (distanceKm != null)
                           Text(
-                            '${distanceKm!.toStringAsFixed(1)} km',
+                            '${distanceKm.toStringAsFixed(1)} km',
                             key: Key('topo-distance-${topo.wallId}'),
                             style: textTheme.titleSmall?.copyWith(
                               color: colors.ink2,
@@ -267,9 +307,22 @@ class _TopoRow extends ConsumerWidget {
               ),
               IconButton(
                 key: Key('topo-menu-${topo.wallId}'),
-                icon: MasiIcon('more_horiz', color: colors.ink3),
+                // The cue lands on the control the user pressed to get here,
+                // at the glyph's own size so the row cannot change height.
+                icon: _working
+                    ? const SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: Center(child: MasiLoadingIndicator.inline()),
+                      )
+                    : MasiIcon('more_horiz', color: colors.ink3),
                 tooltip: 'More',
-                onPressed: () => _showMenu(context, ref, topo),
+                onPressed: _working
+                    ? null
+                    : () => _run(
+                        (reportBusy) =>
+                            _showMenu(context, ref, topo, reportBusy),
+                      ),
               ),
               MasiIcon('chevron_right', color: colors.ink3),
             ],
@@ -297,6 +350,7 @@ class _TopoRow extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
+    CrudBusyReporter reportBusy,
   ) async {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
@@ -388,19 +442,19 @@ class _TopoRow extends ConsumerWidget {
     if (!context.mounted || action == null) return;
     switch (action) {
       case 'rename':
-        await _handleRename(context, ref, topo);
+        await _handleRename(context, ref, topo, reportBusy);
       case 'move':
-        await _handleMove(context, ref, topo);
+        await _handleMove(context, ref, topo, reportBusy);
       case 'publish':
-        await _handlePublish(context, ref, topo);
+        await _handlePublish(context, ref, topo, reportBusy);
       case 'unpublish':
-        await _handleUnpublish(context, ref, topo);
+        await _handleUnpublish(context, ref, topo, reportBusy);
       case 'show-on-map':
         _handleShowOnMap(context, topo);
       case 'set-location':
-        await _handleSetLocation(context, ref, topo);
+        await _handleSetLocation(context, ref, topo, reportBusy);
       case 'delete':
-        await _handleDelete(context, ref, topo);
+        await _handleDelete(context, ref, topo, reportBusy);
     }
   }
 
@@ -427,6 +481,7 @@ class _TopoRow extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
+    CrudBusyReporter reportBusy,
   ) async {
     final newName = await showDialog<String>(
       context: context,
@@ -434,6 +489,7 @@ class _TopoRow extends ConsumerWidget {
     );
     if (newName == null) return;
     if (!context.mounted) return;
+    reportBusy(true);
     await _runGuarded(
       context,
       "Couldn't rename — please try again",
@@ -458,15 +514,28 @@ class _TopoRow extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
+    CrudBusyReporter reportBusy,
   ) async {
     final repo = ref.read(libraryCrudRepositoryProvider);
     // §1c: the single local-data uid door — never `authStateProvider.asData`,
     // which reads null on AsyncError too.
     final myUid = ref.read(effectiveUidProvider);
-    final currentSectorId = await repo.wallSectorId(topo.wallId);
-    final areas = await repo.listAreas();
+    // THREE database reads have to finish before the sheet can even be built,
+    // and until they did, choosing "Move to…" left the menu closing onto a row
+    // that showed nothing at all — the classic "did that work?" gap.
+    reportBusy(true);
+    final String? currentSectorId;
+    final List<AreaRef> areas;
+    final List<SectorRef> ownSectors;
+    try {
+      currentSectorId = await repo.wallSectorId(topo.wallId);
+      areas = await repo.listAreas();
+      ownSectors = await repo.listOwnSectors(myUid);
+    } finally {
+      // Back to the user (the sheet), or out through `_runGuarded` on a throw.
+      reportBusy(false);
+    }
     final areaNames = {for (final area in areas) area.id: area.name};
-    final ownSectors = await repo.listOwnSectors(myUid);
     final candidates = ownSectors
         .where((sector) => sector.id != currentSectorId)
         .toList();
@@ -487,6 +556,7 @@ class _TopoRow extends ConsumerWidget {
     );
     if (targetSectorId == null) return;
 
+    reportBusy(true);
     try {
       await repo.moveWall(topo.wallId, targetSectorId);
     } catch (e, st) {
@@ -518,6 +588,7 @@ class _TopoRow extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
+    CrudBusyReporter reportBusy,
   ) async {
     final confirmed = await showCupertinoModalPopup<bool>(
       context: context,
@@ -543,6 +614,7 @@ class _TopoRow extends ConsumerWidget {
     );
     if (confirmed == true) {
       if (!context.mounted) return;
+      reportBusy(true);
       await _runGuarded(
         context,
         "Couldn't publish — please try again",
@@ -555,7 +627,11 @@ class _TopoRow extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
+    CrudBusyReporter reportBusy,
   ) {
+    // The only action here with nothing to confirm, so the wait is ours from
+    // the instant the menu closes.
+    reportBusy(true);
     return _runGuarded(
       context,
       "Couldn't unpublish — please try again",
@@ -585,6 +661,7 @@ class _TopoRow extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
+    CrudBusyReporter reportBusy,
   ) async {
     final initial = (topo.latitude != null && topo.longitude != null)
         ? LatLng(topo.latitude!, topo.longitude!)
@@ -593,13 +670,14 @@ class _TopoRow extends ConsumerWidget {
     final picked = await showSetLocationPicker(
       context,
       initial: initial,
-      tileProvider: setLocationTileProvider,
-      controller: setLocationMapController,
-      locationService: setLocationLocationService,
+      tileProvider: widget.setLocationTileProvider,
+      controller: widget.setLocationMapController,
+      locationService: widget.setLocationLocationService,
     );
     if (picked == null) return;
     if (!context.mounted) return;
 
+    reportBusy(true);
     try {
       await ref
           .read(libraryCrudRepositoryProvider)
@@ -628,6 +706,7 @@ class _TopoRow extends ConsumerWidget {
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
+    CrudBusyReporter reportBusy,
   ) async {
     final colors = MasiColors.of(context);
     final confirmed = await showCupertinoModalPopup<bool>(
@@ -652,6 +731,7 @@ class _TopoRow extends ConsumerWidget {
     );
     if (confirmed == true) {
       if (!context.mounted) return;
+      reportBusy(true);
       await _runGuarded(
         context,
         "Couldn't delete — please try again",

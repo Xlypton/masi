@@ -5885,7 +5885,103 @@ void main() {
       createTopoLanded.complete('never-mind');
       await _drainNoSettle(tester);
     });
+
+    testWidgets('a topo row reports its own write, and only after its confirm '
+        'sheet is out of the way', (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final deleteLanded = Completer<void>();
+      final repo = _HangingSoftDeleteWallRepository(
+        db,
+        nowMs: () => 1000,
+        gate: deleteLanded,
+      );
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          libraryCrudRepositoryProvider.overrideWithValue(repo),
+          connectivityServiceProvider.overrideWithValue(
+            _ScriptedConnectivity(reachable: true),
+          ),
+          syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
+          storageDurabilityProvider.overrideWith(
+            () => _FakeStorageDurability(const StorageDurability.probing()),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final wallId = await _dbWork(
+        tester,
+        () => container.read(libraryCrudRepositoryProvider).createTopo('Slab'),
+      );
+
+      await tester.pumpWidget(_wrap(container, const ToposScreen()));
+      await _drain(tester);
+
+      final cue = find.descendant(
+        of: find.byKey(Key('topo-menu-$wallId')),
+        matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+      );
+
+      await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key('topo-delete-$wallId')));
+      await tester.pumpAndSettle();
+
+      // The confirm sheet is up: the user is the one working. A cue here would
+      // spin behind a sheet they are still reading, and would have hung both
+      // pumpAndSettles above.
+      expect(cue, findsNothing);
+
+      await tester.tap(find.byKey(Key('topo-delete-confirm-$wallId')));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+
+      expect(
+        cue,
+        findsOneWidget,
+        reason: 'the delete cascade used to run with the sheet already gone '
+            'and nothing on the row saying so',
+      );
+      expect(
+        tester.widget<InkWell>(
+          // `.first` — the row's own InkWell is the outermost of several (the
+          // grade-band dots and badges bring their own).
+          find
+              .descendant(
+                of: find.byKey(Key('topo-item-$wallId')),
+                matching: find.byType(InkWell),
+              )
+              .first,
+        ).onTap,
+        isNull,
+        reason: 'opening the canvas for a topo halfway through being deleted '
+            'is a race with a guaranteed loser',
+      );
+
+      deleteLanded.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(cue, findsNothing);
+    });
   });
+}
+
+/// A repository whose [softDeleteWall] never answers, so a test can observe a
+/// topo row DURING its own delete cascade rather than only after it.
+class _HangingSoftDeleteWallRepository extends LibraryCrudRepository {
+  _HangingSoftDeleteWallRepository(
+    super.db, {
+    required super.nowMs,
+    required this.gate,
+  });
+
+  final Completer<void> gate;
+
+  @override
+  Future<void> softDeleteWall(String id) => gate.future;
 }
 
 /// A repository whose [createTopo] never answers, so a test can observe the

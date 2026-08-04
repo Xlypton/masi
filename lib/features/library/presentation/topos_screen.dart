@@ -38,6 +38,7 @@ import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_shimmer.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../../shared/presentation/sync_banner.dart';
+import 'crud_list_scaffold.dart' show CrudBusyReporter;
 import 'move_target_picker.dart';
 import 'set_location_picker.dart';
 
