@@ -32,17 +32,25 @@ import 'masi_pending_button.dart';
 /// Pass [onError] wherever a failure should be user-visible; without it the
 /// error goes to [FlutterError.reportError] (which fails a widget test by
 /// design) rather than being swallowed.
+///
+/// If the action opens a dialog or confirm sheet BEFORE it writes — a row's
+/// rename/delete glyph, say — use [onPressedArmed] instead of [onPressed]; see
+/// [MasiBusyReporter].
 class PendingIconButton extends StatefulWidget {
   const PendingIconButton({
     super.key,
     this.buttonKey,
     required this.icon,
     required this.tooltip,
-    required this.onPressed,
+    this.onPressed,
+    this.onPressedArmed,
     this.onError,
     this.spinnerColor,
     this.visualDensity,
-  });
+  }) : assert(
+         onPressed == null || onPressedArmed == null,
+         'Supply either onPressed or onPressedArmed, not both.',
+       );
 
   /// Key for the inner [IconButton] — see the class doc. Omit it where the
   /// tappable surface is already keyed by an ancestor (the map's controls key
@@ -55,8 +63,14 @@ class PendingIconButton extends StatefulWidget {
 
   final String tooltip;
 
-  /// The action. `null` disables the button, same contract as [IconButton].
+  /// The action. `null` disables the button, same contract as [IconButton] —
+  /// unless [onPressedArmed] is supplied instead.
   final Future<void> Function()? onPressed;
+
+  /// The action, for the `ask the user → then write` shape: the cue stays OFF
+  /// until the action calls the [MasiBusyReporter] it is handed. Mutually
+  /// exclusive with [onPressed] (asserted).
+  final Future<void> Function(MasiBusyReporter reportBusy)? onPressedArmed;
 
   /// Called if the action's future fails.
   final void Function(Object error, StackTrace stackTrace)? onError;
@@ -72,18 +86,35 @@ class PendingIconButton extends StatefulWidget {
 }
 
 class _PendingIconButtonState extends State<PendingIconButton> {
-  /// True from the synchronous instant of the tap until the future settles —
-  /// this, never the indicator's visual gate, is what makes the control
-  /// single-shot (during the reveal delay it looks idle but is not).
-  bool _inFlight = false;
+  /// True from the synchronous instant of the tap until the future settles,
+  /// modal and all — this, never the indicator's visual gate and never
+  /// [_working], is what makes the control single-shot (during the reveal delay
+  /// it looks idle but is not).
+  bool _locked = false;
+
+  /// Whether the APP's own work is in flight: the visible half. Tracks [_locked]
+  /// for [PendingIconButton.onPressed]; armed by the action itself for
+  /// [PendingIconButton.onPressedArmed].
+  bool _working = false;
+
+  void _report(bool isBusy) {
+    if (!mounted) return;
+    if (isBusy != _working) setState(() => _working = isBusy);
+  }
 
   Future<void> _handleTap() async {
-    if (_inFlight) return;
+    if (_locked) return;
     final action = widget.onPressed;
-    if (action == null) return;
-    setState(() => _inFlight = true);
+    final armed = widget.onPressedArmed;
+    if (action == null && armed == null) return;
+    _locked = true;
+    if (action != null) setState(() => _working = true);
     try {
-      await action();
+      if (action != null) {
+        await action();
+      } else {
+        await armed!(_report);
+      }
     } catch (error, stackTrace) {
       final onError = widget.onError;
       if (onError != null) {
@@ -99,22 +130,24 @@ class _PendingIconButtonState extends State<PendingIconButton> {
         );
       }
     } finally {
+      _locked = false;
       // The sheet/screen this button lives on can be gone by the time the
       // future settles.
-      if (mounted) setState(() => _inFlight = false);
+      if (mounted && _working) setState(() => _working = false);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final enabled = widget.onPressed != null && !_inFlight;
+    final enabled =
+        (widget.onPressed ?? widget.onPressedArmed) != null && !_working;
     return IconButton(
       key: widget.buttonKey,
       tooltip: widget.tooltip,
       visualDensity: widget.visualDensity,
       onPressed: enabled ? _handleTap : null,
       icon: MasiLoadingIndicator.inline(
-        isLoading: _inFlight,
+        isLoading: _working,
         color: widget.spinnerColor,
         semanticLabel: 'Working',
         child: widget.icon,

@@ -12,11 +12,21 @@ import 'package:masi/shared/presentation/masi_pending_button.dart';
 /// While pending the button holds a live spinner, so `pumpAndSettle()` is
 /// banned here; every wait is an explicit `tester.pump(duration)`.
 const _buttonKey = Key('pending-button');
+const _innerKey = Key('pending-button-inner');
 
-Widget _wrap(Widget child) => MaterialApp(
-  theme: MasiTheme.light,
+Widget _wrap(Widget child, {ThemeData? theme}) => MaterialApp(
+  theme: theme ?? MasiTheme.light,
   home: Scaffold(body: Center(child: child)),
 );
+
+/// The arc the pending cue actually paints, so its colour can be asserted.
+CircularProgressIndicator _spinner(WidgetTester tester) =>
+    tester.widget<CircularProgressIndicator>(
+      find.descendant(
+        of: find.byKey(MasiLoadingIndicator.spinnerKey),
+        matching: find.byType(CircularProgressIndicator),
+      ),
+    );
 
 void main() {
   group('single-shot behaviour', () {
@@ -374,6 +384,35 @@ void main() {
       );
     });
 
+    testWidgets('an armed action that throws before it arms still clears its '
+        'lock', (tester) async {
+      Object? seen;
+      var calls = 0;
+      await tester.pumpWidget(
+        _wrap(
+          MasiPendingButton.filled(
+            key: _buttonKey,
+            onPressedArmed: (reportBusy) async {
+              calls++;
+              throw StateError('the read behind the sheet failed');
+            },
+            onError: (error, _) => seen = error,
+            child: const Text('New area'),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(_buttonKey));
+      await tester.pump();
+      expect(seen, isA<StateError>());
+
+      // The lock is invisible, so nothing on screen would reveal it stuck: the
+      // proof is that a second tap still runs the action.
+      await tester.tap(find.byKey(_buttonKey));
+      await tester.pump();
+      expect(calls, 2);
+    });
+
     testWidgets(
       'unmounted mid-flight (the sheet its action pops) must not setState on a '
       'dead State',
@@ -400,5 +439,346 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+  });
+
+  // The seam that lets the `ask the user → then write` family (a name dialog,
+  // a confirm sheet, an OS picker) use this widget at all. Without it the cue
+  // spans the whole future, so it spins on the one control still visible under
+  // the modal's barrier for as long as the user types — and hangs
+  // `pumpAndSettle()` in every test that opens the modal.
+  group('the armed seam (onPressedArmed)', () {
+    testWidgets(
+      'a modal-first action shows NO cue while its dialog is open, so '
+      'pumpAndSettle survives the modal',
+      (tester) async {
+        final write = Completer<void>();
+        await tester.pumpWidget(
+          _wrap(
+            Builder(
+              builder: (context) => MasiPendingButton.filled(
+                key: _buttonKey,
+                buttonKey: _innerKey,
+                onPressedArmed: (reportBusy) async {
+                  final name = await showDialog<String>(
+                    context: context,
+                    builder: (dialogContext) => AlertDialog(
+                      content: TextButton(
+                        key: const Key('dialog-save'),
+                        onPressed: () =>
+                            Navigator.of(dialogContext).pop('Squamish'),
+                        child: const Text('Save'),
+                      ),
+                    ),
+                  );
+                  if (name == null) return;
+                  reportBusy(true);
+                  await write.future;
+                },
+                child: const Text('New area'),
+              ),
+            ),
+          ),
+        );
+
+        await tester.tap(find.byKey(_buttonKey));
+        // This is the measured failure the seam exists for: with a whole-future
+        // cue there is a revealed spinner behind the barrier and this hangs
+        // forever.
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('dialog-save')), findsOneWidget);
+        expect(
+          find.byKey(MasiLoadingIndicator.spinnerKey),
+          findsNothing,
+          reason: 'the user is the one working while their own dialog is up',
+        );
+        // And the button under the barrier still reads as available, because it
+        // is: nothing of ours is in flight yet.
+        expect(
+          tester.widget<ElevatedButton>(find.byKey(_innerKey)).onPressed,
+          isNotNull,
+        );
+
+        await tester.tap(find.byKey(const Key('dialog-save')));
+        // `showDialog`'s future resolves only after the route's exit
+        // transition, so the write — and the cue — start a couple of hundred ms
+        // after the tap. Pump past that and the reveal delay.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 600));
+
+        expect(
+          find.descendant(
+            of: find.byKey(_innerKey),
+            matching: find.byKey(MasiLoadingIndicator.spinnerKey),
+          ),
+          findsOneWidget,
+          reason: 'once the dialog is gone the wait is ours to explain',
+        );
+        expect(
+          tester.widget<ElevatedButton>(find.byKey(_innerKey)).onPressed,
+          isNull,
+          reason: 'a second write from a second tap is the bug this closes',
+        );
+        // The label kept its box, so the button cannot change width mid-write.
+        expect(find.text('New area'), findsOneWidget);
+
+        write.complete();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 600));
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'the tap is single-shot from the instant it is pressed, BEFORE the '
+      'action arms anything — the lock is not the cue',
+      (tester) async {
+        final gate = Completer<void>();
+        var calls = 0;
+        await tester.pumpWidget(
+          _wrap(
+            MasiPendingButton.filled(
+              key: _buttonKey,
+              buttonKey: _innerKey,
+              onPressedArmed: (reportBusy) async {
+                calls++;
+                await gate.future; // standing in for a modal the user is in
+              },
+              child: const Text('New area'),
+            ),
+          ),
+        );
+
+        await tester.tap(find.byKey(_buttonKey));
+        await tester.pump(const Duration(milliseconds: 300));
+        expect(calls, 1);
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
+        // Deliberately still enabled — a disabled button under a barrier the
+        // user is about to dismiss would be a lie about a control they can use
+        // again in a moment.
+        expect(
+          tester.widget<ElevatedButton>(find.byKey(_innerKey)).onPressed,
+          isNotNull,
+        );
+
+        await tester.tap(find.byKey(_buttonKey));
+        await tester.pump();
+        expect(calls, 1, reason: 'the lock must hold while the cue is unarmed');
+
+        gate.complete();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 600));
+        await tester.tap(find.byKey(_buttonKey));
+        await tester.pump();
+        expect(calls, 2, reason: 'the lock must clear when the action returns');
+      },
+    );
+
+    testWidgets('reporting false hands the flow back to the user and puts the '
+        'cue away', (tester) async {
+      final read = Completer<void>();
+      final rest = Completer<void>();
+      await tester.pumpWidget(
+        _wrap(
+          MasiPendingButton.filled(
+            key: _buttonKey,
+            // Mirrors a "move" action: read the candidate destinations first
+            // (ours), then open the picker (theirs).
+            onPressedArmed: (reportBusy) async {
+              reportBusy(true);
+              await read.future;
+              reportBusy(false);
+              await rest.future;
+            },
+            child: const Text('Move'),
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(_buttonKey));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsOneWidget);
+
+      read.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+      expect(
+        find.byKey(MasiLoadingIndicator.spinnerKey),
+        findsNothing,
+        reason: 'the picker is up now; the user is working again',
+      );
+
+      rest.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    });
+  });
+
+  // `buttonKey` exists because ~12 sites key this widget for tapping, but a few
+  // also need to READ the Material button (its resolved onPressed/style) — and
+  // the widget's own `key` lands on the outermost wrapper, so that cast throws.
+  group('buttonKey', () {
+    testWidgets('lands on the Material button, not on the wrapper', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(
+          MasiPendingButton.filled(
+            key: _buttonKey,
+            buttonKey: _innerKey,
+            expand: true,
+            onPressed: () async {},
+            child: const Text('Save'),
+          ),
+        ),
+      );
+
+      expect(
+        tester.widget<ElevatedButton>(find.byKey(_innerKey)).onPressed,
+        isNotNull,
+      );
+      // The outer key is still the tappable/whole-widget handle.
+      expect(tester.getSize(find.byKey(_buttonKey)).width, 800);
+    });
+
+    testWidgets('the text variant keys its TextButton', (tester) async {
+      await tester.pumpWidget(
+        _wrap(
+          MasiPendingButton.text(
+            buttonKey: _innerKey,
+            onPressed: () async {},
+            child: const Text('Retry'),
+          ),
+        ),
+      );
+
+      expect(
+        tester.widget<TextButton>(find.byKey(_innerKey)).onPressed,
+        isNotNull,
+      );
+    });
+  });
+
+  // The cue was hardcoded per variant (`onAccent` filled / `accent` text),
+  // which made the widget unusable for any surface-filled button: white on
+  // #FBFAFE in light, #1A1226 on #251F34 in dark — an invisible spinner.
+  group('spinner colour', () {
+    Future<void> pumpToSpinner(WidgetTester tester, Widget button) async {
+      await tester.pumpWidget(_wrap(button));
+      await tester.tap(find.byKey(_buttonKey));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+      expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsOneWidget);
+    }
+
+    testWidgets('follows a style: override of the foreground, so a '
+        'surface-filled button paints a VISIBLE cue', (tester) async {
+      final completer = Completer<void>();
+      await pumpToSpinner(
+        tester,
+        MasiPendingButton.filled(
+          key: _buttonKey,
+          // The Google sign-in button: a filled button that is not accent.
+          style: ElevatedButton.styleFrom(
+            backgroundColor: MasiColors.light.surface2,
+            foregroundColor: MasiColors.light.ink,
+          ),
+          onPressed: () => completer.future,
+          child: const Text('Continue with Google'),
+        ),
+      );
+
+      expect(
+        _spinner(tester).color,
+        MasiColors.light.ink,
+        reason: 'onAccent (white) on surface2 (#FBFAFE) is invisible',
+      );
+
+      completer.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    });
+
+    testWidgets('defaults per variant are unchanged: onAccent filled, accent '
+        'text', (tester) async {
+      final filled = Completer<void>();
+      await pumpToSpinner(
+        tester,
+        MasiPendingButton.filled(
+          key: _buttonKey,
+          onPressed: () => filled.future,
+          child: const Text('Save'),
+        ),
+      );
+      expect(_spinner(tester).color, MasiColors.light.onAccent);
+      filled.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+
+      final text = Completer<void>();
+      await pumpToSpinner(
+        tester,
+        MasiPendingButton.text(
+          key: _buttonKey,
+          onPressed: () => text.future,
+          child: const Text('Retry'),
+        ),
+      );
+      expect(_spinner(tester).color, MasiColors.light.accent);
+      text.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    });
+
+    testWidgets('spinnerColor wins over the derivation', (tester) async {
+      final completer = Completer<void>();
+      await pumpToSpinner(
+        tester,
+        MasiPendingButton.filled(
+          key: _buttonKey,
+          spinnerColor: MasiColors.light.gradeHard,
+          onPressed: () => completer.future,
+          child: const Text('Delete'),
+        ),
+      );
+
+      expect(_spinner(tester).color, MasiColors.light.gradeHard);
+
+      completer.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    });
+
+    testWidgets('a surface-filled button in DARK mode paints its cue in the '
+        'dark ink, not in near-black onAccent', (tester) async {
+      final completer = Completer<void>();
+      await tester.pumpWidget(
+        _wrap(
+          MasiPendingButton.filled(
+            key: _buttonKey,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: MasiColors.dark.surface2,
+              foregroundColor: MasiColors.dark.ink,
+            ),
+            onPressed: () => completer.future,
+            child: const Text('Continue with Google'),
+          ),
+          theme: MasiTheme.dark,
+        ),
+      );
+      await tester.tap(find.byKey(_buttonKey));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 250));
+
+      expect(
+        _spinner(tester).color,
+        MasiColors.dark.ink,
+        reason: 'onAccent (#1A1226) on surface2 (#251F34) is invisible',
+      );
+
+      completer.complete();
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 600));
+    });
   });
 }
