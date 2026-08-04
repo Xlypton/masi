@@ -435,7 +435,33 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// [TopoCanvasScreen] handing this same, long-lived [_TopoCanvasState] a
   /// new photo would silently keep showing the PREVIOUS photo's fit
   /// transform forever.
+  ///
+  /// NOT sufficient on its own to identify the content, though — see
+  /// [_framedImagePath], which is the other half of that identity.
   Size? _framedImageSize;
+
+  /// The `widget.imagePath` this widget was last framed for — the OTHER half
+  /// of "is this the same content?", alongside [_framedImageSize].
+  ///
+  /// Size alone is not an identity: [TopoCanvasScreen] pins ONE
+  /// [_TopoCanvasState] (via its `_canvasKey` GlobalKey) and ONE
+  /// [TransformationController] across every photo it ever shows, and resets
+  /// that controller to [Matrix4.identity] on each photo switch (see its
+  /// `selectedImageProvider` listener). So switching to a DIFFERENT photo
+  /// that happens to have the SAME pixel dimensions — two shots from the same
+  /// camera in the same orientation, two equal slices of one photo, a wall
+  /// whose photos were all imported at one resolution — used to take
+  /// [_reframeIfNeeded]'s "truly unchanged" early return: no reframe ran, and
+  /// the controller stayed at that freshly-written identity, which with
+  /// `constrained: false` plus the natural-size (oversized) child paints the
+  /// photo's TOP-LEFT CORNER AT 1:1, permanently. Keying content identity on
+  /// the path too means a photo switch is ALWAYS a content reframe, whatever
+  /// the dimensions.
+  ///
+  /// This matches the owning screen's own notion of identity exactly: it is
+  /// a change of the selected image PATH that makes it call
+  /// `beginPhotoSwitch` and reset the shared controller.
+  String? _framedImagePath;
 
   /// The `viewportSize` this widget was last framed for (reframe-on-resize
   /// fix). A [LayoutBuilder] viewport can be transient/degenerate on its
@@ -486,6 +512,23 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
 
   double get _currentScale =>
       widget.transformationController.value.getMaxScaleOnAxis();
+
+  /// Whether [widget.imageSize] is a size this canvas can actually fit
+  /// against — i.e. strictly positive on both axes.
+  ///
+  /// A degenerate (zero/negative) image size is NOT a small image, it is an
+  /// ABSENT one: [TopoCanvas.computeFillWidthTransform] falls back to scale
+  /// 1.0 for it, so framing against it COMMITS a scale-1-at-the-origin
+  /// transform — precisely the "zoomed into the top-left corner, not fitted"
+  /// symptom. [_reframeIfNeeded] therefore refuses to frame at all while this
+  /// is false (mirroring its existing [_minFrameableViewportDimensionPx]
+  /// guard on the viewport), and [build] holds the photo/overlay layer at
+  /// opacity 0 for as long as it stays false — the canvas never paints
+  /// content transformed against a size it does not have. The moment a real
+  /// size arrives, that is the first REAL content frame and gets a proper
+  /// fit.
+  bool get _hasFrameableImageSize =>
+      widget.imageSize.width > 0 && widget.imageSize.height > 0;
 
   /// Computes the scale at which [widget.imageSize] fits entirely within a
   /// viewport of [viewportSize] (letterboxed on whichever axis has slack).
@@ -616,7 +659,24 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       return;
     }
 
-    final sameImage = _framedImageSize == widget.imageSize;
+    if (!_hasFrameableImageSize) {
+      // No usable image dimensions (zero/absent — see
+      // [_hasFrameableImageSize]): framing against them would commit a
+      // scale-1-at-the-origin transform, which is the top-left-at-1:1 bug
+      // itself. Skip entirely, touching NO framing bookkeeping, so whatever
+      // fit is already applied for real content stays applied and the next
+      // valid size is framed on its own merits. `build` keeps the photo
+      // layer hidden meanwhile.
+      return;
+    }
+
+    // Content identity is the PHOTO, not merely its dimensions — see
+    // [_framedImagePath] for why size alone let a same-dimensions photo
+    // switch slip through the "truly unchanged" early return below and
+    // strand the new photo at identity.
+    final sameImage =
+        _framedImageSize == widget.imageSize &&
+        _framedImagePath == widget.imagePath;
     final viewportChanged =
         _framedViewportSize == null ||
         (_framedViewportSize!.width - viewportSize.width).abs() >
@@ -653,6 +713,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // controller: leave it exactly as given.
       _hasFramed = true;
       _framedImageSize = widget.imageSize;
+      _framedImagePath = widget.imagePath;
       _framedViewportSize = viewportSize;
       _lastAutoFrameMatrix = null;
       // Pre-seeded controller already holds a valid transform — nothing to
@@ -663,6 +724,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
 
     _hasFramed = true;
     _framedImageSize = widget.imageSize;
+    _framedImagePath = widget.imagePath;
     _framedViewportSize = viewportSize;
 
     final matrix = _fitMatrix(viewportSize);
@@ -1148,8 +1210,15 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         // laid out and decoding (so the image is ready the instant the fit
         // lands and this flips to 1.0) and, unlike IgnorePointer/Offstage,
         // does NOT block InteractiveViewer's gestures.
+        //
+        // [_hasFrameableImageSize] is the second half of the same invariant:
+        // with no usable image dimensions there is no fit to apply at all
+        // (see that getter, and [_reframeIfNeeded]'s matching skip), so the
+        // layer stays hidden rather than painting the scale-1-at-the-origin
+        // fallback. Together: this canvas NEVER paints content through a
+        // transform that is not a real fit for the size it actually has.
         final viewer = Opacity(
-          opacity: _autoFrameApplied ? 1.0 : 0.0,
+          opacity: (_autoFrameApplied && _hasFrameableImageSize) ? 1.0 : 0.0,
           child: interactiveViewer,
         );
 
