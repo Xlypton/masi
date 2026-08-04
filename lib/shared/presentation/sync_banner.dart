@@ -54,12 +54,7 @@ enum SyncBannerKind {
 /// so a screen showing both reads as one stack of notices rather than two
 /// unrelated designs.
 class SyncBanner extends StatelessWidget {
-  const SyncBanner({
-    super.key,
-    required this.kind,
-    this.detail,
-    this.onRetry,
-  });
+  const SyncBanner({super.key, required this.kind, this.detail, this.onRetry});
 
   /// The single offline sentence used app-wide. Exposed as a constant so a
   /// consumer or a test can assert against the exact string instead of
@@ -87,13 +82,38 @@ class SyncBanner extends StatelessWidget {
   /// simply to wait for signal.
   final VoidCallback? onRetry;
 
+  /// The most of the viewport this banner may ever occupy.
+  ///
+  /// Expressed as a SHARE of the viewport rather than a pixel ceiling for the
+  /// same reason `topos_storage_banner.dart`'s `_StorageWarningBanner` is (see
+  /// its `_maxViewportShare` doc, which this mirrors deliberately): the
+  /// invariant that matters is "the list stays reachable", which is a statement
+  /// about the screen, not about a number of logical pixels. Any absolute cap
+  /// would be right on one device and wrong at the next text scale.
+  ///
+  /// [detail] is `SyncOrchestratorState.lastPullError` — an exception's
+  /// `toString()`, which can be a paragraph. The `maxLines` cap below bounds it
+  /// in LINES, and a line is not a fixed height: MEASURED, a real host-lookup
+  /// failure at a 3.0x accessibility text scale on a 400x420 surface made this
+  /// banner 407 px tall, leaving the list 13 px — and at 4.0x it overflowed the
+  /// column outright. That is the same shape as the failure the storage banner
+  /// already fixed. A share of the viewport is the only cap that holds in both
+  /// directions.
+  ///
+  /// Content that does not fit SCROLLS inside the banner rather than being
+  /// truncated, so the sentence's beginning — the part that says what happened
+  /// — stays put and the reason is what leaves the visible area first.
+  static const double _maxViewportShare = 0.4;
+
+  /// How many lines of [messageFor]'s sentence are shown before it ellipsizes.
+  static const int _detailMaxLines = 3;
+
   /// The exact sentence [kind]/[detail] renders, without building a widget.
   static String messageFor(SyncBannerKind kind, [String? detail]) =>
       switch (kind) {
         SyncBannerKind.offline => offlineMessage,
-        SyncBannerKind.syncFailed => detail == null
-            ? "Couldn't sync."
-            : "Couldn't sync — $detail.",
+        SyncBannerKind.syncFailed =>
+          detail == null ? "Couldn't sync." : "Couldn't sync — $detail.",
       };
 
   @override
@@ -125,60 +145,78 @@ class SyncBanner extends StatelessWidget {
         borderRadius: BorderRadius.circular(MasiRadii.card),
         border: Border.all(color: tone),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          MasiIcon(glyph, size: 22, color: tone),
-          const SizedBox(width: MasiSpacing.md),
-          // The retry button lives INSIDE this Expanded column rather than as
-          // a third Row child: as a Row sibling it keeps its intrinsic width
-          // at every text scale, and at 3.0x on a 320pt phone that is enough
-          // to squeeze the message column into a horizontal overflow.
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Semantics(
-                  liveRegion: true,
-                  child: Text(
-                    messageFor(kind, detail),
-                    key: const Key('sync-banner-message'),
-                    // A reason is an exception's `toString()` and can be a
-                    // paragraph. Capped for the same reason
-                    // `_StorageWarningBanner` caps its detail line: unbounded,
-                    // it makes this banner tall enough to squeeze whatever the
-                    // list area renders below it.
-                    maxLines: 4,
-                    overflow: TextOverflow.ellipsis,
-                    style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
-                  ),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.sizeOf(context).height * _maxViewportShare,
+        ),
+        child: SingleChildScrollView(
+          child: _body(colors, textTheme, tone, glyph),
+        ),
+      ),
+    );
+  }
+
+  Widget _body(
+    MasiColors colors,
+    TextTheme textTheme,
+    Color tone,
+    String glyph,
+  ) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        MasiIcon(glyph, size: 22, color: tone),
+        const SizedBox(width: MasiSpacing.md),
+        // The retry button lives INSIDE this Expanded column rather than as
+        // a third Row child: as a Row sibling it keeps its intrinsic width
+        // at every text scale, and at 3.0x on a 320pt phone that is enough
+        // to squeeze the message column into a horizontal overflow.
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Semantics(
+                liveRegion: true,
+                child: Text(
+                  messageFor(kind, detail),
+                  key: const Key('sync-banner-message'),
+                  // A reason is an exception's `toString()` and can be a
+                  // paragraph. Capped for the same reason
+                  // `_StorageWarningBanner` caps its detail line: unbounded,
+                  // it makes this banner tall enough to squeeze whatever the
+                  // list area renders below it. The line cap is the first
+                  // of two — see [_maxViewportShare] for why a line count
+                  // alone is not a height bound.
+                  maxLines: _detailMaxLines,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
                 ),
-                if (onRetry != null) ...[
-                  const SizedBox(height: MasiSpacing.xs),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      key: const Key('sync-banner-retry'),
-                      onPressed: onRetry,
-                      style: TextButton.styleFrom(
-                        padding: EdgeInsets.zero,
-                        minimumSize: Size.zero,
-                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                      ),
-                      child: const Text(
-                        'Retry',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
+              ),
+              if (onRetry != null) ...[
+                const SizedBox(height: MasiSpacing.xs),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton(
+                    key: const Key('sync-banner-retry'),
+                    onPressed: onRetry,
+                    style: TextButton.styleFrom(
+                      padding: EdgeInsets.zero,
+                      minimumSize: Size.zero,
+                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    child: const Text(
+                      'Retry',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                ],
+                ),
               ],
-            ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 }

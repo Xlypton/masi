@@ -18,20 +18,19 @@ void setViewportSize(WidgetTester tester, Size size) {
 
 void main() {
   group('SyncBanner copy', () {
-    testWidgets(
-      'offline renders the one agreed offline sentence, verbatim',
-      (tester) async {
-        await tester.pumpWidget(
-          _wrap(const SyncBanner(kind: SyncBannerKind.offline)),
-        );
+    testWidgets('offline renders the one agreed offline sentence, verbatim', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(const SyncBanner(kind: SyncBannerKind.offline)),
+      );
 
-        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
-        expect(
-          find.text("You're offline — showing your saved topos."),
-          findsOneWidget,
-        );
-      },
-    );
+      expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+      expect(
+        find.text("You're offline — showing your saved topos."),
+        findsOneWidget,
+      );
+    });
 
     testWidgets(
       'the offline sentence is a constant on the widget, so both feeds are '
@@ -201,5 +200,85 @@ void main() {
         expect(tester.takeException(), isNull);
       },
     );
+
+    // Same treatment, and the same reasoning, as `_StorageWarningBanner`'s
+    // viewport-share cap: the invariant is "the list stays reachable", which is
+    // a statement about the screen. `maxLines` alone is not a height bound —
+    // three lines at a 3.0x accessibility text scale are as tall as a dozen at
+    // 1.0x.
+    group('the height cap', () {
+      const long =
+          'Sync failed: ClientException with SocketException: Failed host '
+          "lookup: 'mnaipcqbkqzffgvxpato.supabase.co' (OS Error: nodename nor "
+          'servname provided, or not known, errno = 8) while pulling walls, '
+          'sectors, areas, photos, routes, comments, likes and ascents from '
+          'the backup endpoint';
+
+      Future<void> pumpAt(
+        WidgetTester tester,
+        Size size, {
+        double textScale = 1.0,
+      }) async {
+        setViewportSize(tester, size);
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: MasiTheme.light,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(textScale)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: Column(
+                children: [
+                  const SyncBanner(
+                    kind: SyncBannerKind.syncFailed,
+                    detail: long,
+                  ),
+                  // Stands in for the list: it is what must stay reachable.
+                  Expanded(child: Container(key: const Key('the-list'))),
+                ],
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+      }
+
+      testWidgets('leaves most of a small viewport to the list', (
+        tester,
+      ) async {
+        const surface = Size(400, 420);
+        await pumpAt(tester, surface, textScale: 3.0);
+
+        // MEASURED uncapped at exactly these settings: 407 px of a 420 px
+        // surface, i.e. the entire screen.
+        expect(
+          tester.getSize(find.byKey(const Key('sync-banner'))).height,
+          lessThan(surface.height * 0.5),
+          reason:
+              'a notice that eats the viewport hides the very thing the '
+              'user opened the app for',
+        );
+        expect(
+          tester.getSize(find.byKey(const Key('the-list'))).height,
+          greaterThan(0),
+          reason: 'the list was starved to 0px by the banner above it',
+        );
+        expect(tester.takeException(), isNull);
+      });
+
+      testWidgets('an ordinary phone viewport is unaffected — the cap must not '
+          'shrink the normal case', (tester) async {
+        await pumpAt(tester, const Size(390, 844));
+
+        expect(
+          find.textContaining('Failed host lookup'),
+          findsOneWidget,
+          reason: 'the reason still reads in full at a normal text scale',
+        );
+      });
+    });
   });
 }
