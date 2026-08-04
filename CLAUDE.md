@@ -214,8 +214,32 @@ which executes arbitrary SQL and returns JSON (`[]` for DDL success, rows for SE
   Delta migrations that must be hand-applied to live live in `supabase/migrations/*.sql` (+ the walls
   lat/long ALTER documented in `supabase/schema.sql`). Keep every migration **idempotent** (`ADD COLUMN IF
   NOT EXISTS`, `DROP POLICY IF EXISTS`+`CREATE`) and keep `schema.sql` in sync for fresh-run correctness.
-- **Classifier caveat:** a curl that reads the token file **and** hits the network is blocked by the
-  auto-mode permission classifier unless the user pre-authorizes it. To make it run automatically, the user
-  adds a Bash **allow** rule for this curl pattern in their settings; otherwise the user runs it via a
-  `! <cmd>` prompt (runs as the user). Standing verbal approval does NOT lift the classifier — a settings
-  rule does.
+- **Run it yourself — do NOT hand the user SQL to paste.** A settings allow rule is in place, so the
+  token-reading curl above executes automatically (verified 2026-08-04: inspected the live schema and applied
+  DDL with no prompt). The user has said explicitly he does not want to run these commands manually. So on
+  any schema/backend question: query live, decide, apply, verify — then report what you did. Never end a turn
+  with "here's a migration for you to run".
+- **Inspect live BEFORE writing DDL — never infer the shape from Dart alone.** Column *names* are derivable
+  from the client code; types, nullability and RLS style are not, and guessing them has produced wrong
+  migrations. Cheap first queries:
+  ```bash
+  # what tables exist:
+  ... --data "$(jq -n --arg q "SELECT table_name FROM information_schema.tables WHERE table_schema='public' ORDER BY 1;" '{query:$q}')"
+  # a table's real shape:
+  ... "SELECT column_name, data_type, is_nullable FROM information_schema.columns
+       WHERE table_schema='public' AND table_name='X' ORDER BY ordinal_position;"
+  # existing RLS conventions to copy:
+  ... "SELECT tablename, policyname, cmd, qual, with_check FROM pg_policies WHERE schemaname='public';"
+  ```
+- **Live conventions (verified 2026-08-04 — match these in new DDL):** every table uses **quoted camelCase**
+  identifiers and **`text`** ids — `areas.id text`, `areas."ownerId" text`, plus `createdAt`/`updatedAt`/
+  `deletedAt` as `bigint` and `dirty boolean`. Every owner policy is
+  `USING ("ownerId" = (auth.uid())::text)` with the same `WITH CHECK` — i.e. **`text` compared to a cast
+  `auth.uid()`, never a bare `uuid`**. Live tables as of that date: `areas`, `ascents`, `comments`, `likes`,
+  `photos`, `profiles`, `routes`, `sectors`, `walls`, `backups`. (`public.backups` is the one snake_case
+  outlier, because `backup_remote.dart` sends `user_id`/`snapshot`/`schema_version`/`updated_at`; it was
+  created 2026-08-04 and is currently unreachable from the app — nothing calls `pushBackup`/`pullBackup`.)
+- **After applying, verify and reconcile.** Re-`SELECT` the columns, `pg_class.relrowsecurity`, and
+  `pg_policies` to confirm what actually landed, then update `supabase/schema.sql` (and the
+  `supabase/migrations/*.sql` delta) to the shape that is *really* live — and fix any comment in those files
+  claiming an apply state that turns out to be false.
