@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:drift/drift.dart' show DatabaseConnection;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -204,6 +207,130 @@ void main() {
         completes,
       );
       expect(container.read(storageRetryProvider), StorageRetryStatus.idle);
+    });
+
+    group('a retry whose probe NEVER answers still resolves (B3)', () {
+      // THE B3 bug. `retry()` set `retrying`, invalidated `appDatabaseProvider`,
+      // then awaited `probeDatabaseUsable` — a real query against a freshly
+      // opened database, with no timeout anywhere on that path in drift 2.34.2
+      // or the sqlite3 OPFS VFS. The user only taps this button because
+      // something is ALREADY wedged, so the re-open wedging the same way is the
+      // likely case, not the exotic one: the await never returned, the `finally`
+      // never ran, and the button stayed disabled at "Trying…" for the rest of
+      // the run. The one documented way out of a hang, hanging unrecoverably, on
+      // an installed PWA with no reload control.
+      //
+      // The probe never completes, so the timeout always wins — `tiny` keeps
+      // that deterministic without a real 30s wait.
+      const tiny = Duration(milliseconds: 20);
+
+      /// A container whose `appDatabaseProvider` builds a database over a
+      /// connection that NEVER resolves, so `customSelect('SELECT 1').get()`
+      /// hangs exactly as it does behind a wedged web worker.
+      ProviderContainer makeWedged() {
+        final never = Completer<DatabaseConnection>();
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWith(
+              (ref) => AppDatabase(DatabaseConnection.delayed(never.future)),
+            ),
+          ],
+        );
+        // Deliberately NOT completed at teardown: a wedged worker cannot be
+        // unwedged, and neither can this. Nothing awaits it.
+        addTearDown(container.dispose);
+        return container;
+      }
+
+      test(
+        'THE assertion: the button is re-enabled instead of sitting on '
+        '"Trying…" forever',
+        () async {
+          final container = makeWedged();
+          container
+              .read(storageDurabilityProvider.notifier)
+              .report(const StorageDurability.unavailable('dead at boot'));
+
+          await expectLater(
+            container.read(storageRetryProvider.notifier).retry(timeout: tiny),
+            completes,
+            reason: 'unbounded, this future never completed at all',
+          );
+          expect(
+            container.read(storageRetryProvider),
+            StorageRetryStatus.idle,
+            reason: 'the banner\'s onPressed is null while retrying — leaving '
+                'this at `retrying` disables the only recovery control the app '
+                'has, permanently',
+          );
+        },
+      );
+
+      test('and the failure is REPORTABLE, not silent', () async {
+        final container = makeWedged();
+        container.read(storageDurabilityProvider.notifier).report(
+              const StorageDurability.unavailable('dead at boot'),
+            );
+
+        await container
+            .read(storageRetryProvider.notifier)
+            .retry(timeout: tiny);
+
+        final durability = container.read(storageDurabilityProvider);
+        expect(durability.unavailable, isTrue);
+        expect(
+          durability.unavailableReason,
+          contains('did not answer within ${tiny.inSeconds}s'),
+          reason: 'the reason has to say what actually happened — the retry '
+              'timed out, which is not the same news as the original failure',
+        );
+        expect(
+          storageRetryNotice(durability),
+          isNotNull,
+          reason: 'classified as `failed`, so the banner stays up and another '
+              'attempt is still offered',
+        );
+      });
+
+      test(
+        'a timed-out retry PRESERVES the measured backend, so a field report '
+        'does not get worse every time the user taps the button',
+        () async {
+          final container = makeWedged();
+          container.read(storageDurabilityProvider.notifier).report(
+                StorageDurability.unavailableOver(
+                  const StorageDurability(
+                    backend: StorageBackend.opfsLocks,
+                    missingFeatures: {
+                      StorageMissingFeature.dedicatedWorkersInSharedWorkers,
+                    },
+                  ),
+                  'the local database did not answer its first query within 30s',
+                ),
+              );
+
+          await container
+              .read(storageRetryProvider.notifier)
+              .retry(timeout: tiny);
+
+          final durability = container.read(storageDurabilityProvider);
+          expect(durability.measuredBackend, StorageBackend.opfsLocks);
+          expect(
+            durability.missingFeatures,
+            {StorageMissingFeature.dedicatedWorkersInSharedWorkers},
+          );
+        },
+      );
+
+      test('the bound matches boot\'s allowance for the same work', () {
+        expect(
+          kStorageRetryTimeout >= const Duration(seconds: 20),
+          isTrue,
+          reason: 'the retry does a full cold open PLUS the first query drift '
+              'defers into the worker; anything tighter would call a slow '
+              'low-end Android broken',
+        );
+      });
     });
 
     test(

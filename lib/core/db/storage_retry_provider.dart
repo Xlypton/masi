@@ -1,3 +1,6 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'database_provider.dart';
@@ -6,6 +9,26 @@ import 'storage_durability_provider.dart';
 /// Whether a storage retry is currently in flight — the banner's button reads
 /// this to show progress and to refuse a second concurrent attempt.
 enum StorageRetryStatus { idle, retrying }
+
+/// How long [StorageRetryController.retry] waits for the re-opened database to
+/// answer before calling the attempt failed.
+///
+/// 30 seconds — deliberately the same allowance as `main.dart`'s
+/// `kBootStorageDeadline`, because the retry does exactly the work boot does: a
+/// fresh `openConnection` plus one `SELECT 1`, which on web means
+/// `WasmDatabase.open` (bounded at `kStorageOpenTimeout`, 20s) AND the
+/// first-query work that open defers into the worker — `WasmSqlite3.loadFromUrl`
+/// and VFS setup, and on a first run the v1->v9 migration's few hundred
+/// statements. A tighter bound would call "broken" on a cold low-end Android
+/// that boot would have called merely slow, which is the one thing these
+/// timeouts must never do.
+///
+/// The ONLY thing that makes 30s the right number rather than 25 or 40 is the
+/// alternative: unbounded. Without a bound the `await` below never returns, the
+/// `finally` never runs, and the button stays disabled at "Trying…" forever —
+/// the one documented way out of a hang, itself hanging unrecoverably, with no
+/// reload control in an installed PWA.
+const Duration kStorageRetryTimeout = Duration(seconds: 30);
 
 /// The user-driven "open the local database again" action (UF-4 follow-up).
 ///
@@ -36,7 +59,16 @@ class StorageRetryController extends Notifier<StorageRetryStatus> {
   /// Re-opens the local database and re-publishes the verdict. Never throws
   /// (the probe it delegates to cannot), and is a no-op while an earlier retry
   /// is still running.
-  Future<void> retry() async {
+  ///
+  /// ALWAYS RESOLVES, bounded by [timeout]. It did not: the probe below is a
+  /// real query against a freshly-opened database, and neither drift 2.34.2 nor
+  /// the sqlite3 OPFS VFS has a timeout anywhere on that path. If the re-open
+  /// wedged the same way the original open did — which is the LIKELY case, since
+  /// the user only taps this because something is already wedged — the `await`
+  /// never returned, the `finally` never ran, and the button stayed disabled at
+  /// "Trying…" for the rest of the run. The single documented way out of a hang
+  /// could hang, unrecoverably, on an installed PWA with no reload control.
+  Future<void> retry({Duration timeout = kStorageRetryTimeout}) async {
     if (state == StorageRetryStatus.retrying) return;
     state = StorageRetryStatus.retrying;
 
@@ -70,6 +102,30 @@ class StorageRetryController extends Notifier<StorageRetryStatus> {
           failed = true;
           storage.report(verdict);
         },
+      ).timeout(
+        timeout,
+        onTimeout: () {
+          failed = true;
+          // Logged unconditionally, like `logStorageDurability`: on a release
+          // web build this line is the only record that the user tried.
+          debugPrint(
+            'masi/storage: retry gave up after ${timeout.inSeconds}s — the '
+            're-opened database never answered. The old database was disposed '
+            'and its worker may still be wedged; only a page reload can clear '
+            'that.',
+          );
+          if (!ref.mounted) return;
+          // `unavailableOver`, so the backend and missing-feature set the
+          // connection layer measured survive the retry rather than being
+          // zeroed out of the field report (see `StorageDurability`).
+          storage.report(
+            StorageDurability.unavailableOver(
+              ref.read(storageDurabilityProvider),
+              're-opening the local database did not answer within '
+              '${timeout.inSeconds}s',
+            ),
+          );
+        },
       );
 
       if (!failed &&
@@ -78,9 +134,20 @@ class StorageRetryController extends Notifier<StorageRetryStatus> {
         storage.report(const StorageDurability.probing());
       }
     } finally {
-      // `ref.mounted`-guarded: the container can be torn down mid-retry (a hot
-      // restart, or the user navigating away on web while a wedged open is
-      // still hanging), and assigning `state` after disposal throws.
+      // Reached even when the probe never answered, which is the whole point of
+      // the bound above: the button goes back to being tappable instead of
+      // sitting on "Trying…" forever.
+      //
+      // Be honest about what that does NOT fix. The abandoned probe future is
+      // still out there, and a web worker wedged on the sqlite3 OPFS VFS's
+      // `Atomics.wait(int32View, _responseIndex, -1)` (no timeout) cannot be
+      // unblocked from Dart at all — it cannot even process a `close()`. So a
+      // second tap will very likely wedge and time out again; what the user gets
+      // back is an accurate verdict and a live control, not a repaired
+      // database. Only a page reload discards the wedged worker. (If the
+      // abandoned probe DOES eventually resolve with a real error, its report
+      // lands then and replaces this timeout verdict, which is strictly more
+      // accurate — a later verdict is a newer fact.)
       if (ref.mounted) state = StorageRetryStatus.idle;
     }
   }
