@@ -168,13 +168,19 @@ void main() {
       await tester.pumpWidget(_wrap(_makeContainer(downgrade)));
       await _drain(tester);
 
+      // The floating `topos-new-topo` FAB is OMITTED entirely on this verdict
+      // (device-screenshot bug fix, see `ToposScreen.build`'s
+      // `!storage.isEphemeral` gate around its `Positioned`) rather than
+      // merely disabled — a control the interlock already forces off must
+      // not sit on screen to overlap this very banner's own text on a
+      // squeezed viewport. The interlock itself (`canCreate`) is unchanged;
+      // only whether the FAB is drawn at all.
       expect(
-        tester
-            .widget<ElevatedButton>(find.byKey(const Key('topos-new-topo')))
-            .onPressed,
-        isNull,
+        find.byKey(const Key('topos-new-topo')),
+        findsNothing,
         reason: 'a database we are refusing to open must not be written to '
-            'either, whatever the banner says',
+            'either, whatever the banner says — and the button that can '
+            "never work here shouldn't be on screen to invite a tap",
       );
     });
   });
@@ -182,28 +188,47 @@ void main() {
   group('unclassified unavailable verdict', () {
     const failed = StorageDurability.unavailable('Bad worker: boom');
 
-    testWidgets('gets its own copy, and still does not blame private '
-        'browsing', (tester) async {
-      await tester.pumpWidget(_wrap(_makeContainer(failed)));
-      await _drain(tester);
-
-      expect(find.byKey(const Key('topos-storage-warning')), findsOneWidget);
-      final text = '${_titleOf(tester)} ${_bodyOf(tester)}';
-      expect(text, isNot(contains('Private browsing')));
-      // A failed OPEN deletes nothing, so this copy may say so honestly.
-      expect(_bodyOf(tester), contains('not been deleted'));
-    });
-
-    testWidgets('surfaces unavailableReason in the detail line', (
+    // `storageRetryNotice(failed)` is non-null for exactly this verdict (any
+    // `unavailable` that isn't a schema downgrade) — meaning
+    // `app/nav_shell.dart`'s `ShellNotices` is ALREADY rendering
+    // `StorageRetryBanner` with almost this same sentence plus a working
+    // retry, above this whole branch, in the real app. `ToposScreen` (see its
+    // `build`) deliberately does NOT render this full banner for that reason
+    // — `_StorageDetailNotice` takes its place instead, so the failure is
+    // said once, not twice. `topos_storage_banner_test.dart`'s OTHER three
+    // groups (schema-downgrade, height-bounded, non-durable backend) are
+    // exactly the verdicts where the shell has nothing to say, so this
+    // banner's own copy still renders unchanged there — this group is the
+    // one place `_StorageWarningBanner` and `ToposScreen`'s call site
+    // deliberately disagree.
+    testWidgets('does not render the full banner via ToposScreen — the shell '
+        'retry banner already covers this verdict (say-it-once)', (
       tester,
     ) async {
       await tester.pumpWidget(_wrap(_makeContainer(failed)));
       await _drain(tester);
 
-      final detail = _detailOf(tester);
+      expect(
+        find.byKey(const Key('topos-storage-warning')),
+        findsNothing,
+        reason: 'nav_shell_test.dart pins the composed behavior — this file '
+            "only needs to know ToposScreen stops rendering this banner's "
+            'OWN copy for this one verdict',
+      );
+    });
+
+    testWidgets('still surfaces the reason to report, just without the '
+        'restated explanation', (tester) async {
+      await tester.pumpWidget(_wrap(_makeContainer(failed)));
+      await _drain(tester);
+
+      final detail = tester
+          .widget<Text>(find.byKey(const Key('topos-storage-detail-only')))
+          .data!;
       // Independent of the downgrade work: holding a real reason string and
       // rendering `Storage: unknown` was a bug of its own — it threw away the
-      // one line that makes a field report answerable.
+      // one line that makes a field report answerable. Same invariant, now
+      // pinned on the compact notice rather than the full banner.
       expect(detail, contains('Bad worker: boom'));
       expect(detail, isNot(contains('unknown')));
     });

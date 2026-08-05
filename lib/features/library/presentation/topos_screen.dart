@@ -97,6 +97,79 @@ part 'topos_storage_banner.dart';
 const String _createFailedMessage =
     "Couldn't create the topo — please try again";
 
+/// The compact companion to [_StorageWarningBanner] (device-screenshot bug
+/// fix, "say it once"): rendered in its place whenever `storageRetryNotice`
+/// is non-null, i.e. whenever `app/nav_shell.dart`'s `ShellNotices` is
+/// ALREADY showing `StorageRetryBanner` above this whole branch with the
+/// human sentence and a working "Try again".
+///
+/// `_StorageWarningBanner`'s `unavailable` branch says almost that same
+/// sentence again ("Can't open your saved topos... reload to try again"),
+/// which is what produced the reported bug: two red blocks, one message,
+/// filling the whole screen. This widget is deliberately NOT a rewrite of
+/// that banner — `topos_storage_banner.dart` stays untouched, since its copy
+/// is still exactly right for the two verdicts where the shell has nothing to
+/// say (a schema downgrade; a chosen non-durable backend) — it is what is
+/// left to say ONLY for the verdict the shell already covers: the technical
+/// detail line worth reporting. Deleting that line outright was considered
+/// and rejected — it is the one thing a "my data vanished" report needs and
+/// the shell's compact banner has no room for it.
+///
+/// Bounded by construction (`maxLines`, no scroll needed) rather than by a
+/// `ConstrainedBox`/viewport-share cap like `_StorageWarningBanner`: three
+/// short lines of monospace-ish diagnostic text cannot repeat that banner's
+/// 561px-into-364px overflow, so there is nothing here for a cap to guard
+/// against — see `topos_screen_test.dart`'s squeeze-viewport coverage, which
+/// pins that this stays true.
+class _StorageDetailNotice extends StatelessWidget {
+  const _StorageDetailNotice({required this.durability});
+
+  final StorageDurability durability;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    // Deliberately re-derived here rather than shared with
+    // `_StorageWarningBanner`'s identical computation: that banner lives in
+    // `topos_storage_banner.dart`, a file this fix does not touch, and the
+    // alternative (a shared helper in `core/db/connection/storage_durability.dart`)
+    // would edit a file outside this fix's remit for eight lines of string
+    // formatting. Both computations read only `StorageDurability`'s public
+    // getters, so they cannot drift into disagreement about what those
+    // getters mean — only about wording, and there is none to disagree on
+    // here.
+    final missing = durability.missingFeatures.map((f) => f.name).toList()
+      ..sort();
+    final detail = StringBuffer(
+      'Storage: '
+      '${durability.backend?.name ?? (durability.unavailable ? 'unavailable' : 'probing')}',
+    );
+    if (missing.isNotEmpty) {
+      detail.write(' · missing: ${missing.join(', ')}');
+    }
+    if (durability.unavailableReason != null) {
+      detail.write(' · ${durability.unavailableReason}');
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        MasiSpacing.lg,
+        MasiSpacing.sm,
+        MasiSpacing.lg,
+        0,
+      ),
+      child: Text(
+        'If this keeps happening, report: ${detail.toString()}',
+        key: const Key('topos-storage-detail-only'),
+        maxLines: 3,
+        overflow: TextOverflow.ellipsis,
+        style: textTheme.labelSmall?.copyWith(color: colors.ink3),
+      ),
+    );
+  }
+}
+
 class ToposScreen extends ConsumerStatefulWidget {
   const ToposScreen({
     super.key,
@@ -208,6 +281,20 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     // letting the user record a topo into a store that will drop it. See
     // `lib/core/db/storage_durability_provider.dart`.
     final storage = ref.watch(storageDurabilityProvider);
+    // "Say it once" (device-screenshot bug fix): `storageRetryNotice` is the
+    // EXACT same predicate `app/nav_shell.dart`'s `ShellNotices` uses to
+    // decide whether `StorageRetryBanner` is on screen above this whole
+    // branch — non-null for `StorageDurability.unavailable` verdicts other
+    // than a schema downgrade (see that function's doc). Whenever it is
+    // non-null, the shell has ALREADY said the human sentence and offered a
+    // working "Try again" — `_StorageWarningBanner`'s own `unavailable`
+    // branch says almost the identical sentence, so rendering both stacked
+    // vertically filled the whole screen with two red blocks repeating one
+    // fact. Computed from `storage` alone (not from anything about the
+    // widget tree), which is safe because `ToposScreen` is only ever reached
+    // as a branch of `NavShell` in production (see `router.dart`), so this
+    // always agrees with what the shell actually did.
+    final storageRetryNoticeText = storageRetryNotice(storage);
 
     // Only an *actually loaded* topo list (AsyncData) is a safe source for
     // the "New topo" count; while still loading or errored there is no
@@ -334,7 +421,16 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
             child: Column(
               children: [
                 if (storage.isEphemeral)
-                  _StorageWarningBanner(durability: storage),
+                  // The two DON'T always collide: a schema downgrade and a
+                  // chosen-but-non-durable backend (`StorageBackend.inMemory`)
+                  // both return `null` from `storageRetryNotice` — the shell
+                  // has nothing to say about either, so `_StorageWarningBanner`
+                  // remains the ONLY explanation and renders exactly as before.
+                  // Only the `unavailable`-and-not-a-downgrade case (the one
+                  // in the bug report) is ever actually duplicated.
+                  storageRetryNoticeText != null
+                      ? _StorageDetailNotice(durability: storage)
+                      : _StorageWarningBanner(durability: storage),
                 if (bannerKind != null)
                   SyncBanner(
                     kind: bannerKind,
@@ -479,67 +575,83 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
           // below -- asserted pixel-for-pixel by `topos_screen_test.dart`'s
           // contrast tests -- are untouched; only its PARENT changed (from a
           // Column-child Padding/Align to a Stack-child Positioned).
-          Positioned(
-            right: MasiSpacing.lg,
-            bottom: MasiSpacing.lg + bottomChromeInset,
-            child: SizedBox(
-              width: 48,
-              height: 48,
-              child: ElevatedButton(
-                key: const Key('topos-new-topo'),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: colors.accent,
-                  foregroundColor: colors.onAccent,
-                  // Without these, Material's disabled-state fallback
-                  // (onSurface @ ~38% alpha) takes over while the topos
-                  // list is loading or a create is in-flight, reading as
-                  // dark low-contrast text on the still-purple background.
-                  // Keep the accent fill so the button doesn't visibly
-                  // change shape/color, but dim the label just enough to
-                  // read as "disabled" while staying legible.
-                  disabledBackgroundColor: colors.accent,
-                  disabledForegroundColor: colors.onAccent.withValues(
-                    alpha: 0.7,
+          //
+          // OMITTED ENTIRELY (device-screenshot bug fix), not merely
+          // disabled, while `storage.isEphemeral`: `canCreate` below already
+          // forces `onPressed: null` in that state -- the interlock was never
+          // the gap. The gap was that a `Positioned` button, unlike a Column
+          // sibling, does not shrink the space above it to make room; it
+          // floats at a FIXED bottom-right spot regardless of how tall
+          // `_StorageWarningBanner`/`_StorageDetailNotice` render above it, so
+          // on a squeezed viewport it sat visually on top of that banner's own
+          // text. A button that cannot work should not be there to overlap
+          // anything, so this branch removes it from the tree rather than
+          // reserving dead space for it. The legitimate action while storage
+          // is unavailable is Retry (`StorageRetryBanner`, shell-level) or a
+          // manual reload, per `_StorageWarningBanner`'s copy -- never
+          // creation.
+          if (!storage.isEphemeral)
+            Positioned(
+              right: MasiSpacing.lg,
+              bottom: MasiSpacing.lg + bottomChromeInset,
+              child: SizedBox(
+                width: 48,
+                height: 48,
+                child: ElevatedButton(
+                  key: const Key('topos-new-topo'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: colors.accent,
+                    foregroundColor: colors.onAccent,
+                    // Without these, Material's disabled-state fallback
+                    // (onSurface @ ~38% alpha) takes over while the topos
+                    // list is loading or a create is in-flight, reading as
+                    // dark low-contrast text on the still-purple background.
+                    // Keep the accent fill so the button doesn't visibly
+                    // change shape/color, but dim the label just enough to
+                    // read as "disabled" while staying legible.
+                    disabledBackgroundColor: colors.accent,
+                    disabledForegroundColor: colors.onAccent.withValues(
+                      alpha: 0.7,
+                    ),
+                    padding: EdgeInsets.zero,
+                    shape: const CircleBorder(),
                   ),
-                  padding: EdgeInsets.zero,
-                  shape: const CircleBorder(),
-                ),
-                onPressed: canCreate ? _handleNewTopo : null,
-                // No explicit `color`: `ButtonStyleButton` merges an
-                // `IconTheme` from this button's own `foregroundColor`/
-                // `disabledForegroundColor` above (falling back to
-                // `foregroundColor` since no separate `iconColor` is
-                // set), so the glyph inherits the SAME onAccent-enabled
-                // / dimmed-disabled contrast the old `Text('New topo')`
-                // had -- just on an icon instead of a label. Wrapped in
-                // `Semantics` since the icon alone carries no accessible
-                // label for VoiceOver/TalkBack -- the button's own `key`
-                // is not a substitute.
-                // While the create's TAIL is running (see `_writing`) the glyph
-                // becomes the cue, in place: the button is a fixed 48×48, and
-                // the inline indicator is 20 px, so nothing can reflow. Timing
-                // is the shared gate's, so a create that somehow finishes
-                // instantly still paints no spinner.
-                child: MasiLoadingGate(
-                  isLoading: _writing,
-                  builder: (context, showSpinner) => showSpinner
-                      ? MasiLoadingIndicator.inline(
-                          // The gate already applied the delay and owns the
-                          // hold — nesting a second one would stack to ~360 ms.
-                          revealDelay: Duration.zero,
-                          minVisible: Duration.zero,
-                          color: colors.onAccent,
-                          semanticLabel: 'Creating your topo',
-                        )
-                      : Semantics(
-                          label: 'New topo',
-                          button: true,
-                          child: const MasiIcon('add', size: 22),
-                        ),
+                  onPressed: canCreate ? _handleNewTopo : null,
+                  // No explicit `color`: `ButtonStyleButton` merges an
+                  // `IconTheme` from this button's own `foregroundColor`/
+                  // `disabledForegroundColor` above (falling back to
+                  // `foregroundColor` since no separate `iconColor` is
+                  // set), so the glyph inherits the SAME onAccent-enabled
+                  // / dimmed-disabled contrast the old `Text('New topo')`
+                  // had -- just on an icon instead of a label. Wrapped in
+                  // `Semantics` since the icon alone carries no accessible
+                  // label for VoiceOver/TalkBack -- the button's own `key`
+                  // is not a substitute.
+                  // While the create's TAIL is running (see `_writing`) the glyph
+                  // becomes the cue, in place: the button is a fixed 48×48, and
+                  // the inline indicator is 20 px, so nothing can reflow. Timing
+                  // is the shared gate's, so a create that somehow finishes
+                  // instantly still paints no spinner.
+                  child: MasiLoadingGate(
+                    isLoading: _writing,
+                    builder: (context, showSpinner) => showSpinner
+                        ? MasiLoadingIndicator.inline(
+                            // The gate already applied the delay and owns the
+                            // hold — nesting a second one would stack to ~360 ms.
+                            revealDelay: Duration.zero,
+                            minVisible: Duration.zero,
+                            color: colors.onAccent,
+                            semanticLabel: 'Creating your topo',
+                          )
+                        : Semantics(
+                            label: 'New topo',
+                            button: true,
+                            child: const MasiIcon('add', size: 22),
+                          ),
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
     );

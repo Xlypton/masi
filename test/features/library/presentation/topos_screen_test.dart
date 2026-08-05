@@ -1297,11 +1297,13 @@ void main() {
         );
 
         expect(
-          tester
-              .widget<ElevatedButton>(find.byKey(const Key('topos-new-topo')))
-              .onPressed,
-          isNull,
-          reason: 'topos-new-topo must be disabled on a non-durable backend',
+          find.byKey(const Key('topos-new-topo')),
+          findsNothing,
+          reason: 'a control the interlock already forces onPressed:null on '
+              'must not sit on screen at all -- a `Positioned` FAB does not '
+              'shrink the space above it the way a disabled-but-present '
+              'Column sibling would, so left on screen it visually overlaps '
+              'the warning banner\'s own text on a squeezed viewport',
         );
         expect(
           tester
@@ -1404,7 +1406,12 @@ void main() {
         );
         await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('topos-new-topo')));
+        // The floating `topos-new-topo` FAB is gone on this backend (see the
+        // test above) -- the empty state's OWN inline button runs the exact
+        // same `_handleNewTopo` flow and is the one still on screen, still
+        // disabled, so tapping it is the surviving way to exercise "the
+        // interlocked control does nothing" on this verdict.
+        await tester.tap(find.byKey(const Key('topos-empty-new-topo')));
         await _drain(tester);
 
         expect(pickerOpened, 0);
@@ -1413,6 +1420,80 @@ void main() {
           () => container.read(libraryCrudRepositoryProvider).watchTopos().first,
         );
         expect(topos, isEmpty);
+      },
+    );
+  });
+
+  group('§1a follow-up: say it once + no FAB overlap (unavailable verdict)', () {
+    // `storageRetryNotice` (see `core/db/connection/storage_durability.dart`)
+    // is non-null for exactly this shape — `unavailable`, cause NOT a schema
+    // downgrade — which is the one verdict `app/nav_shell.dart`'s
+    // `ShellNotices` ALSO renders a `StorageRetryBanner` for, above this
+    // whole screen in production. `nav_shell_test.dart` pins the composed
+    // behavior; this group only needs `ToposScreen` itself to have stopped
+    // rendering the FULL `_StorageWarningBanner` for this one verdict.
+    const unavailableFailed = StorageDurability.unavailable(
+      'the local database did not answer its first query within 30s',
+    );
+
+    testWidgets(
+      'shows the compact detail notice (not the full explanatory banner) '
+      'and hides the FAB entirely',
+      (tester) async {
+        final container = _makeContainer(
+          storageDurability: unavailableFailed,
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('topos-storage-warning')),
+          findsNothing,
+          reason: 'the shell already carries this exact sentence + a working '
+              'retry -- restating it here is the duplicate the fix removes',
+        );
+        expect(find.text("Can't open your saved topos"), findsNothing);
+        expect(
+          find.byKey(const Key('topos-storage-detail-only')),
+          findsOneWidget,
+          reason: 'the technical reason to report must still be reachable',
+        );
+        expect(
+          find.textContaining(
+            'the local database did not answer its first query within 30s',
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('topos-new-topo')),
+          findsNothing,
+          reason: 'canCreate is already false here -- a button that cannot '
+              'work must not be on screen to overlap the detail text',
+        );
+      },
+    );
+
+    testWidgets(
+      'the compact detail notice tolerates a squeezed 400x300 viewport',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 300);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        final container = _makeContainer(
+          storageDurability: unavailableFailed,
+        );
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'a squeezed viewport is a required case, not an edge case '
+              '-- see topos_storage_banner.dart\'s own 400x420 measured '
+              'repro for why',
+        );
       },
     );
   });
