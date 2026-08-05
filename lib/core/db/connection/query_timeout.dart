@@ -37,6 +37,17 @@ import 'package:drift/drift.dart';
 /// decision for after the field telemetry (`masi/storage:`) exists, not before.
 const Duration kDatabaseQueryTimeout = Duration(seconds: 30);
 
+/// Renders a bound for a human: `30s` for the production one, `100ms` for an
+/// injected test one.
+///
+/// `'${timeout.inSeconds}s'` alone reads "within 0s" for any sub-second bound,
+/// which is a confusing thing to find in a diagnostic — and these strings reach
+/// real users through `MasiAsyncView(showErrorDetail: true)` and the release
+/// `masi/storage:` log line.
+String describeQueryBound(Duration bound) => bound.inSeconds >= 1
+    ? '${bound.inSeconds}s'
+    : '${bound.inMilliseconds}ms';
+
 /// Bounds every asynchronous database operation drift routes through a
 /// [QueryInterceptor], turning "this future never completes" into a named
 /// [TimeoutException].
@@ -131,7 +142,7 @@ class QueryTimeoutInterceptor extends QueryInterceptor {
 
   TimeoutException _timedOut(String operation) => TimeoutException(
     'the local database did not answer $operation within '
-    '${timeout.inSeconds}s',
+    '${describeQueryBound(timeout)}',
     timeout,
   );
 
@@ -187,8 +198,8 @@ class QueryTimeoutInterceptor extends QueryInterceptor {
       return Future<bool>.error(
         TimeoutException(
           'the local database stopped responding: an earlier attempt to open '
-          'it did not answer within ${timeout.inSeconds}s. Reloading the app '
-          'is the only way to clear this.',
+          'it did not answer within ${describeQueryBound(timeout)}. Reloading '
+          'the app is the only way to clear this.',
           timeout,
         ),
         StackTrace.current,

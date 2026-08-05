@@ -1,10 +1,19 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/db/connection/query_timeout.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/db/storage_durability_provider.dart';
 import 'package:masi/features/library/application/library_providers.dart';
-import 'package:drift/drift.dart' show LazyDatabase;
+import 'package:drift/drift.dart'
+    show
+        BatchedStatements,
+        LazyDatabase,
+        QueryExecutor,
+        QueryExecutorUser,
+        SqlDialect,
+        TransactionExecutor;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -36,6 +45,66 @@ class _FakePathProviderPlatform extends PathProviderPlatform {
 /// query keeps succeeding.
 AppDatabase _brokenDatabase() => AppDatabase(
   LazyDatabase(() async => throw StateError('no storage backend')),
+);
+
+/// The bound the query-timeout tests below inject. Small enough to keep the
+/// suite fast, on a REAL clock (these are plain `test()`s, so `Future.timeout`
+/// uses the real one).
+const Duration kTestQueryBound = Duration(milliseconds: 100);
+
+/// A [QueryExecutor] whose asynchronous methods NEVER complete — the Dart-side
+/// stand-in for a wedged OPFS worker, and the one shape `_brokenDatabase()`
+/// above cannot express (it THROWS, which already worked; the bug being fixed
+/// is a future that stays pending for the lifetime of the page).
+class _HangingExecutor extends QueryExecutor {
+  final Completer<Never> _never = Completer<Never>();
+
+  Future<T> _hang<T>() => _never.future;
+
+  @override
+  SqlDialect get dialect => SqlDialect.sqlite;
+
+  @override
+  Future<bool> ensureOpen(QueryExecutorUser user) => _hang();
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    String statement,
+    List<Object?> args,
+  ) => _hang();
+
+  @override
+  Future<int> runInsert(String statement, List<Object?> args) => _hang();
+
+  @override
+  Future<int> runUpdate(String statement, List<Object?> args) => _hang();
+
+  @override
+  Future<int> runDelete(String statement, List<Object?> args) => _hang();
+
+  @override
+  Future<void> runCustom(String statement, [List<Object?>? args]) => _hang();
+
+  @override
+  Future<void> runBatched(BatchedStatements statements) => _hang();
+
+  @override
+  TransactionExecutor beginTransaction() => throw UnimplementedError();
+
+  @override
+  QueryExecutor beginExclusive() => throw UnimplementedError();
+
+  @override
+  Future<void> close() => _hang();
+}
+
+/// The verdict production actually measures on the deployed site, per
+/// `connection_web.dart` — an OPFS backend that nevertheless reports one
+/// missing browser feature. Used as the "already measured" state that a stall
+/// verdict must not destroy.
+const StorageDurability _measuredInProduction = StorageDurability(
+  backend: StorageBackend.opfsLocks,
+  missingFeatures: {StorageMissingFeature.dedicatedWorkersInSharedWorkers},
 );
 
 /// Regression coverage for the cold-cache device bug: `photoRepositoryProvider`
@@ -195,5 +264,221 @@ void main() {
       );
       expect(container.read(storageDurabilityProvider).unavailable, isFalse);
     });
+  });
+
+  // Task #54 — the per-operation database bound, wired.
+  //
+  // Read the honest scope first: NOTHING here cures a hang. sqlite3's OPFS VFS
+  // blocks on `Atomics.wait(int32View, _responseIndex, -1)` with no timeout
+  // inside a web worker, and a Dart-side timeout does not release drift's
+  // `_openingLock`. What is asserted below is only that our side stops waiting
+  // silently, that the failure is NAMED, and that it reaches the machinery that
+  // already exists to explain it.
+  group('databaseQueryTimeoutProvider', () {
+    test(
+      'assertion 1 — is NULL under flutter test, because kIsWeb is permanently '
+      'false there. This negative is the ONLY way the platform gate is '
+      'observable at all; that it ENGAGES on web can only be shown in a real '
+      'browser (integration_test/web_query_timeout_test.dart)',
+      () {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+
+        expect(
+          container.read(databaseQueryTimeoutProvider),
+          isNull,
+          reason: 'a non-null bound here would mean every flutter test — and '
+              'every iOS/Android build — had silently acquired an executor '
+              'identity change and a timeout it has no use for',
+        );
+      },
+    );
+
+    test(
+      'assertion 2 — a database that never ANSWERS (not one that throws) is '
+      'reported as unavailable, with the bound named in the reason',
+      () async {
+        // As faithful as `flutter test` allows: the bound is taken FROM
+        // `databaseQueryTimeoutProvider`, exactly as `appDatabaseProvider`
+        // does, and only the executor is substituted — `openConnection()`
+        // resolves the native seam here and opens a real, healthy sqlite file
+        // that could never stall.
+        final container = ProviderContainer(
+          overrides: [
+            databaseQueryTimeoutProvider.overrideWithValue(kTestQueryBound),
+            appDatabaseProvider.overrideWith(
+              (ref) => AppDatabase(
+                bindQueryTimeout(
+                  _HangingExecutor(),
+                  timeout: ref.watch(databaseQueryTimeoutProvider),
+                ),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await verifyDatabaseUsable(container);
+
+        final verdict = container.read(storageDurabilityProvider);
+        expect(verdict.unavailable, isTrue);
+        expect(
+          verdict.isEphemeral,
+          isTrue,
+          reason: 'the create-topo interlock blocks on exactly this — writes '
+              'into a wedged worker will not land',
+        );
+        expect(
+          verdict.unavailableReason,
+          contains('TimeoutException'),
+          reason: 'MasiAsyncView(showErrorDetail: true) and the release '
+              '`masi/storage:` log line both render this string; "it did not '
+              'answer" has to be IN it',
+        );
+        // `100ms`, not `0s` — `describeQueryBound`'s sub-second branch. Its
+        // other branch (`30s`) is covered by assertion 3 below.
+        expect(verdict.unavailableReason, contains('within 100ms'));
+      },
+    );
+  });
+
+  group('StorageStallReporter', () {
+    /// A container already holding the verdict production actually measures.
+    (ProviderContainer, StorageStallReporter) reporterOver(
+      StorageDurability initial,
+    ) {
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      container.read(storageDurabilityProvider.notifier).report(initial);
+      return (
+        container,
+        StorageStallReporter(
+          current: () => container.read(storageDurabilityProvider),
+          report: container.read(storageDurabilityProvider.notifier).report,
+          timeout: kDatabaseQueryTimeout,
+        ),
+      );
+    }
+
+    test(
+      'assertion 3 — the stall verdict carries measuredBackend and '
+      'missingFeatures FORWARD. This re-guards the regression commit 340ba7b '
+      'fixed: plain StorageDurability.unavailable() hard-zeroes both fields, '
+      'and they are the ONLY field-diagnosable facts this app ever learns '
+      "about a browser's storage — a real field report came back with no "
+      '`· missing: …` segment for exactly that reason',
+      () {
+        final (container, reporter) = reporterOver(_measuredInProduction);
+
+        reporter.onStall();
+
+        final verdict = container.read(storageDurabilityProvider);
+        expect(verdict.unavailable, isTrue);
+        expect(
+          verdict.measuredBackend,
+          StorageBackend.opfsLocks,
+          reason: 'zeroed => StorageDurability.unavailable() crept back in',
+        );
+        expect(verdict.missingFeatures, {
+          StorageMissingFeature.dedicatedWorkersInSharedWorkers,
+        });
+        expect(
+          verdict.backend,
+          isNull,
+          reason: '`backend` means "in effect NOW", and a database that cannot '
+              'be reached has no backend in effect',
+        );
+        expect(verdict.unavailableReason, contains('30s'));
+      },
+    );
+
+    test(
+      'assertion 4 — that one verdict lights up BOTH existing notices: the '
+      'retry banner (storageRetryNotice) on every tab, and the create-topo '
+      'interlock copy (storageBlockedNotice). No new UI was invented for this',
+      () {
+        final (container, reporter) = reporterOver(_measuredInProduction);
+
+        reporter.onStall();
+        final verdict = container.read(storageDurabilityProvider);
+
+        expect(storageRetryNotice(verdict), isNotNull);
+        expect(storageBlockedNotice(verdict), isNotNull);
+        expect(
+          verdict.unavailableCause,
+          StorageUnavailableCause.failed,
+          reason: 'a schemaDowngrade cause would suppress the retry notice and '
+              'tell the user their intact library needs a newer app',
+        );
+      },
+    );
+
+    test(
+      'assertion 5 — a success RESTORES the displaced verdict, so a merely-slow '
+      'database is not permanently branded broken',
+      () {
+        final (container, reporter) = reporterOver(_measuredInProduction);
+
+        reporter.onStall();
+        expect(container.read(storageDurabilityProvider).unavailable, isTrue);
+
+        reporter.onRecovered();
+
+        expect(
+          container.read(storageDurabilityProvider),
+          _measuredInProduction,
+          reason: 'the exact verdict the connection layer had measured, back '
+              'again — not a fresh `probing`, which would hide a real problem',
+        );
+      },
+    );
+
+    test(
+      'assertion 6 — a THIRD verdict published BETWEEN the stall and the '
+      'success SURVIVES: a later verdict is a newer fact. Revert the '
+      '`current() != published` guard and the restore becomes unconditional, '
+      'resurrecting a stale verdict over a fresher one',
+      () {
+        final (container, reporter) = reporterOver(_measuredInProduction);
+
+        reporter.onStall();
+        // e.g. boot's storage deadline, or a storage retry, landing its own
+        // verdict while the query is still stalled.
+        const fresher = StorageDurability(backend: StorageBackend.inMemory);
+        container.read(storageDurabilityProvider.notifier).report(fresher);
+
+        reporter.onRecovered();
+
+        expect(container.read(storageDurabilityProvider), fresher);
+      },
+    );
+
+    test(
+      'onRecovered without a preceding stall does nothing at all — the healthy '
+      'path must not publish verdicts',
+      () {
+        final (container, reporter) = reporterOver(_measuredInProduction);
+
+        reporter.onRecovered();
+
+        expect(container.read(storageDurabilityProvider), _measuredInProduction);
+      },
+    );
+
+    test(
+      'a stall with nowhere to report (the container is gone) is logged and '
+      'dropped, never thrown — this fires from a microtask, where an '
+      'unhandled error is nobody\'s to catch',
+      () {
+        final reporter = StorageStallReporter(
+          current: () => throw StateError('the provider container is gone'),
+          report: (_) => fail('nothing can be reported with no verdict to read'),
+          timeout: kDatabaseQueryTimeout,
+        );
+
+        expect(reporter.onStall, returnsNormally);
+        expect(reporter.onRecovered, returnsNormally);
+      },
+    );
   });
 }
