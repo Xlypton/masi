@@ -573,10 +573,35 @@ class SupabaseSyncRemote implements SyncRemote {
   Future<Map<String, List<Map<String, dynamic>>>> fetchOwnRows(
     String uid,
   ) async {
+    // One SELECT per table, ISSUED CONCURRENTLY. These queries are mutually
+    // independent — each is `ownerId = uid` against a different table, with no
+    // value from one feeding another — so awaiting them in sequence spent
+    // `syncTableNames.length` (9) round-trips of latency to do one round-trip
+    // of work. On the mobile connection this app is actually used on (a phone
+    // at a crag), that is the difference between a pull that feels instant and
+    // one that visibly hangs.
+    //
+    // `Future.wait` WITHOUT `eagerError` on purpose: it waits for every query
+    // to settle before completing, then reports the first error. `eagerError:
+    // true` would complete on the first failure and leave the other in-flight
+    // futures to fail into the zone as unhandled errors. Failure semantics for
+    // the caller are unchanged either way — the whole fetch still throws.
+    //
+    // [syncTableNames] is FK dependency order and `result`'s INSERTION order
+    // is load-bearing (`BackupRepository.importSnapshot` applies tables in the
+    // order it iterates them), so the map is rebuilt by walking `tableNames`
+    // in order after the wait — never by completion order.
+    final tableNames = syncTableNames;
+    final fetched = await Future.wait(<Future<List<Map<String, dynamic>>>>[
+      for (final tableName in tableNames)
+        _client.from(tableName).select().eq('ownerId', uid),
+    ]);
+
     final result = <String, List<Map<String, dynamic>>>{};
-    for (final tableName in syncTableNames) {
-      final rows = await _client.from(tableName).select().eq('ownerId', uid);
-      final mapped = [for (final row in rows) Map<String, dynamic>.from(row)];
+    for (var i = 0; i < tableNames.length; i++) {
+      final mapped = [
+        for (final row in fetched[i]) Map<String, dynamic>.from(row),
+      ];
       // Full required-NOT-NULL-field validation per table (sync-resilience
       // hardening) — was `const ['id']` only (P0 fix, #72), which caught a
       // missing primary key but let a row with any OTHER null NOT-NULL
@@ -585,10 +610,10 @@ class SupabaseSyncRemote implements SyncRemote {
       // importSnapshot`. [syncRequiredFields] is the authoritative map (see
       // its doc); the `?? const ['id']` fallback is defensive only — every
       // name in [syncTableNames] has a matching entry there.
-      result[tableName] = filterValidSyncRows(
+      result[tableNames[i]] = filterValidSyncRows(
         mapped,
-        syncRequiredFields[tableName] ?? const ['id'],
-        debugLabel: 'own $tableName',
+        syncRequiredFields[tableNames[i]] ?? const ['id'],
+        debugLabel: 'own ${tableNames[i]}',
       );
     }
     return result;
@@ -596,12 +621,13 @@ class SupabaseSyncRemote implements SyncRemote {
 
   @override
   Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
-    // TODO(P0 backend): this is the naive client-side, multi-round-trip join
-    // this phase's fake mirrors (walls -> sectors -> areas, plus
-    // photos/routes/comments/likes by wallId). The real backend should
-    // probably expose this as a single RPC/view instead — both for
-    // round-trip cost and because RLS on `sectors`/`areas` has no
-    // `visibility` column of its own to filter on; it would need to derive
+    // TODO(P0 backend): this is still a client-side join (walls -> sectors ->
+    // areas, plus photos/routes/comments/likes by wallId), the shape this
+    // phase's fake mirrors. It is now issued in dependency WAVES rather than
+    // one query at a time — 3 round-trips instead of 7 — but the real backend
+    // should still expose it as a single RPC/view: three round-trips is the
+    // floor for a client-side join, and RLS on `sectors`/`areas` has no
+    // `visibility` column of its own to filter on, so it would need to derive
     // "ancestor of a shared wall" the same way this client-side code does,
     // e.g. via a security-definer function.
     final rawWalls = <Map<String, dynamic>>[
@@ -630,15 +656,52 @@ class SupabaseSyncRemote implements SyncRemote {
     final wallIds = [for (final w in wallRows) w['id'] as String];
     final sectorIds = {for (final w in wallRows) w['sectorId'] as String}.toList();
 
+    // WAVE 2 — everything reachable from `wallRows` alone, issued together.
+    // `sectors` is keyed on `sectorIds` and the other four on `wallIds`; all
+    // five come straight off the wall rows, so nothing here waits on anything
+    // else here. Only `areas` (wave 3) genuinely depends on a wave-2 result,
+    // because its ids come out of the SECTOR rows. Sequencing all six cost six
+    // round-trips of latency for two round-trips of actual dependency depth.
+    // See [fetchOwnRows] for why `Future.wait` runs without `eagerError`.
+    final wave2 = await Future.wait(<Future<List<Map<String, dynamic>>>>[
+      _client.from('sectors').select().inFilter('id', sectorIds),
+      _client.from('photos').select().inFilter('wallId', wallIds),
+      _client.from('routes').select().inFilter('wallId', wallIds),
+      _client.from('comments').select().inFilter('wallId', wallIds),
+      _client.from('likes').select().inFilter('wallId', wallIds),
+    ]);
+
     final rawSectors = <Map<String, dynamic>>[
-      for (final row in await _client.from('sectors').select().inFilter('id', sectorIds))
-        Map<String, dynamic>.from(row),
+      for (final row in wave2[0]) Map<String, dynamic>.from(row),
     ];
     final sectorRows = filterValidSyncRows(
       rawSectors,
       const ['id', 'areaId'],
       debugLabel: 'shared sector',
     );
+
+    final rawPhotos = <Map<String, dynamic>>[
+      for (final row in wave2[1]) Map<String, dynamic>.from(row),
+    ];
+    final photoRows = filterValidSyncRows(rawPhotos, const ['id'], debugLabel: 'shared photo');
+
+    final rawRoutes = <Map<String, dynamic>>[
+      for (final row in wave2[2]) Map<String, dynamic>.from(row),
+    ];
+    final routeRows = filterValidSyncRows(rawRoutes, const ['id'], debugLabel: 'shared route');
+
+    final rawComments = <Map<String, dynamic>>[
+      for (final row in wave2[3]) Map<String, dynamic>.from(row),
+    ];
+    final commentRows = filterValidSyncRows(rawComments, const ['id'], debugLabel: 'shared comment');
+
+    final rawLikes = <Map<String, dynamic>>[
+      for (final row in wave2[4]) Map<String, dynamic>.from(row),
+    ];
+    final likeRows = filterValidSyncRows(rawLikes, const ['id'], debugLabel: 'shared like');
+
+    // WAVE 3 — areas, the one genuine dependency: its ids come from the
+    // validated sector rows above, so it cannot be hoisted into wave 2.
     final areaIds = {for (final s in sectorRows) s['areaId'] as String}.toList();
 
     final rawAreas = <Map<String, dynamic>>[
@@ -646,30 +709,6 @@ class SupabaseSyncRemote implements SyncRemote {
         Map<String, dynamic>.from(row),
     ];
     final areaRows = filterValidSyncRows(rawAreas, const ['id'], debugLabel: 'shared area');
-
-    final rawPhotos = <Map<String, dynamic>>[
-      for (final row in await _client.from('photos').select().inFilter('wallId', wallIds))
-        Map<String, dynamic>.from(row),
-    ];
-    final photoRows = filterValidSyncRows(rawPhotos, const ['id'], debugLabel: 'shared photo');
-
-    final rawRoutes = <Map<String, dynamic>>[
-      for (final row in await _client.from('routes').select().inFilter('wallId', wallIds))
-        Map<String, dynamic>.from(row),
-    ];
-    final routeRows = filterValidSyncRows(rawRoutes, const ['id'], debugLabel: 'shared route');
-
-    final rawComments = <Map<String, dynamic>>[
-      for (final row in await _client.from('comments').select().inFilter('wallId', wallIds))
-        Map<String, dynamic>.from(row),
-    ];
-    final commentRows = filterValidSyncRows(rawComments, const ['id'], debugLabel: 'shared comment');
-
-    final rawLikes = <Map<String, dynamic>>[
-      for (final row in await _client.from('likes').select().inFilter('wallId', wallIds))
-        Map<String, dynamic>.from(row),
-    ];
-    final likeRows = filterValidSyncRows(rawLikes, const ['id'], debugLabel: 'shared like');
 
     return {
       'areas': areaRows,
@@ -717,9 +756,19 @@ class SupabaseSyncRemote implements SyncRemote {
     final wallIds = {for (final a in ascentRows) a['wallId'] as String}.toList();
     final routeIds = {for (final a in ascentRows) a['routeId'] as String}.toList();
 
+    // The ancestor chain is a 4-deep DAG, not a 6-step line. Both `walls` and
+    // `routes` key off the ascent rows; `sectors` needs walls and `photos`
+    // needs routes, but NOT each other; only `areas` needs sectors. Walking it
+    // depth-first cost six round-trips to resolve four levels. Issuing each
+    // level's queries together costs four. See [fetchOwnRows] for why
+    // `Future.wait` runs without `eagerError`.
+    final wave2 = await Future.wait(<Future<List<Map<String, dynamic>>>>[
+      _client.from('walls').select().inFilter('id', wallIds),
+      _client.from('routes').select().inFilter('id', routeIds),
+    ]);
+
     final rawWalls = <Map<String, dynamic>>[
-      for (final row in await _client.from('walls').select().inFilter('id', wallIds))
-        Map<String, dynamic>.from(row),
+      for (final row in wave2[0]) Map<String, dynamic>.from(row),
     ];
     final wallRows = filterValidSyncRows(
       rawWalls,
@@ -728,26 +777,8 @@ class SupabaseSyncRemote implements SyncRemote {
     );
     final sectorIds = {for (final w in wallRows) w['sectorId'] as String}.toList();
 
-    final rawSectors = <Map<String, dynamic>>[
-      for (final row in await _client.from('sectors').select().inFilter('id', sectorIds))
-        Map<String, dynamic>.from(row),
-    ];
-    final sectorRows = filterValidSyncRows(
-      rawSectors,
-      const ['id', 'areaId'],
-      debugLabel: 'shared-ascent sector',
-    );
-    final areaIds = {for (final s in sectorRows) s['areaId'] as String}.toList();
-
-    final rawAreas = <Map<String, dynamic>>[
-      for (final row in await _client.from('areas').select().inFilter('id', areaIds))
-        Map<String, dynamic>.from(row),
-    ];
-    final areaRows = filterValidSyncRows(rawAreas, const ['id'], debugLabel: 'shared-ascent area');
-
     final rawRoutes = <Map<String, dynamic>>[
-      for (final row in await _client.from('routes').select().inFilter('id', routeIds))
-        Map<String, dynamic>.from(row),
+      for (final row in wave2[1]) Map<String, dynamic>.from(row),
     ];
     final routeRows = filterValidSyncRows(
       rawRoutes,
@@ -756,11 +787,32 @@ class SupabaseSyncRemote implements SyncRemote {
     );
     final photoIds = {for (final r in routeRows) r['photoId'] as String}.toList();
 
+    final wave3 = await Future.wait(<Future<List<Map<String, dynamic>>>>[
+      _client.from('sectors').select().inFilter('id', sectorIds),
+      _client.from('photos').select().inFilter('id', photoIds),
+    ]);
+
+    final rawSectors = <Map<String, dynamic>>[
+      for (final row in wave3[0]) Map<String, dynamic>.from(row),
+    ];
+    final sectorRows = filterValidSyncRows(
+      rawSectors,
+      const ['id', 'areaId'],
+      debugLabel: 'shared-ascent sector',
+    );
+
     final rawPhotos = <Map<String, dynamic>>[
-      for (final row in await _client.from('photos').select().inFilter('id', photoIds))
-        Map<String, dynamic>.from(row),
+      for (final row in wave3[1]) Map<String, dynamic>.from(row),
     ];
     final photoRows = filterValidSyncRows(rawPhotos, const ['id'], debugLabel: 'shared-ascent photo');
+
+    final areaIds = {for (final s in sectorRows) s['areaId'] as String}.toList();
+
+    final rawAreas = <Map<String, dynamic>>[
+      for (final row in await _client.from('areas').select().inFilter('id', areaIds))
+        Map<String, dynamic>.from(row),
+    ];
+    final areaRows = filterValidSyncRows(rawAreas, const ['id'], debugLabel: 'shared-ascent area');
 
     return {
       'areas': areaRows,
