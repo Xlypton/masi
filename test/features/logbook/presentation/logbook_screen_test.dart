@@ -146,6 +146,33 @@ Widget _wrap(ProviderContainer container, Widget screen) {
   );
 }
 
+/// Same as [_wrap], but [screen] is reached via a genuine `Navigator.push`
+/// from a first screen — the shape the real `/logbook` route (pushed from
+/// `router.dart`'s top-level `GoRoute`) actually has, so `Navigator.canPop`
+/// is `true`, unlike [_wrap]'s `home:` (always the sole/first route).
+Widget _wrapPushed(ProviderContainer container, Widget screen) {
+  return UncontrolledProviderScope(
+    container: container,
+    child: MaterialApp(
+      theme: MasiTheme.light,
+      home: Builder(
+        builder: (context) => Scaffold(
+          key: const Key('first-screen'),
+          body: Center(
+            child: ElevatedButton(
+              key: const Key('push-logbook'),
+              onPressed: () => Navigator.of(
+                context,
+              ).push(MaterialPageRoute<void>(builder: (_) => screen)),
+              child: const Text('Push'),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 /// Advances real asynchronous work (Drift's in-memory background executor
 /// and any other awaited futures) that would otherwise never make progress
 /// under `testWidgets`' fake-async clock, then pumps to flush the resulting
@@ -1100,4 +1127,62 @@ void main() {
       );
     },
   );
+
+  group('Web back button (webBackLeading)', () {
+    testWidgets(
+      'LB1: isWeb:true + genuinely pushed (as the real /logbook route is) '
+      '-> web-back-button appears, and tapping it pops back to the first '
+      'screen',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          _wrapPushed(container, const LogbookScreen(isWeb: true)),
+        );
+        await tester.tap(find.byKey(const Key('push-logbook')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('web-back-button')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('web-back-button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('first-screen')), findsOneWidget);
+        expect(find.byKey(const Key('logbook-screen')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'LB2: isWeb:true but rendered as the sole/first route -> absent',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          _wrap(container, const LogbookScreen(isWeb: true)),
+        );
+        await _drain(tester);
+
+        expect(find.byKey(const Key('web-back-button')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'LB3: default (isWeb omitted -> real kIsWeb, false under flutter '
+      'test) even when genuinely pushed -> absent — the native no-op '
+      "guarantee: Flutter's own automatic back arrow is what shows, never "
+      'a second control alongside it',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(
+          _wrapPushed(container, const LogbookScreen()),
+        );
+        await tester.tap(find.byKey(const Key('push-logbook')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('web-back-button')), findsNothing);
+        expect(find.byType(BackButtonIcon), findsOneWidget);
+      },
+    );
+  });
 }

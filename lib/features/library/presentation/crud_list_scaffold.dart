@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../app/web_back_button.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
@@ -69,6 +70,7 @@ class CrudListScaffold<T> extends StatelessWidget {
     this.subtitleOf,
     this.onMove,
     this.createBlockedReason,
+    this.isWeb,
   });
 
   final String title;
@@ -117,6 +119,11 @@ class CrudListScaffold<T> extends StatelessWidget {
   /// nothing saying why, is the "dead tap" failure in a quieter costume.
   final String? createBlockedReason;
 
+  /// Forces [webBackLeading]'s web branch in a widget test — see that
+  /// function's doc. `null` (the default, used by every real screen) keeps
+  /// the real compile-time `kIsWeb`.
+  final bool? isWeb;
+
   /// What the failure state says, per the app's "name what failed, never
   /// print 'Error'" rule. Derived from [entityKey] rather than taken as a
   /// parameter because all three entity keys ("area", "sector", "wall")
@@ -150,6 +157,7 @@ class CrudListScaffold<T> extends StatelessWidget {
 
     return Scaffold(
       appBar: AppBar(
+        leading: webBackLeading(context, isWeb: isWeb),
         title: Text(
           title,
           style: textTheme.displaySmall,

@@ -188,6 +188,129 @@ void main() {
     );
 
     testWidgets(
+      'AR-web1: isWeb:true + genuinely pushed (as the real /walls/:wallId/ar '
+      'route is) -> web-back-button appears on the unsupported-placeholder '
+      "AppBar, and tapping it pops back to the first screen; default isWeb "
+      "(real kIsWeb, false under flutter test) -> absent, Flutter's own "
+      'automatic back arrow shows instead',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final crud = container.read(libraryCrudRepositoryProvider);
+        final area = await crud.createArea('Area');
+        final sector = await crud.createSector(area.id, 'Sector');
+        final wall = await crud.createWall(sector.id, 'Wall');
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: Builder(
+                builder: (context) => Scaffold(
+                  key: const Key('first-screen'),
+                  body: Center(
+                    child: ElevatedButton(
+                      key: const Key('push-ar'),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              ArScreen(wallId: wall.id, isWeb: true),
+                        ),
+                      ),
+                      child: const Text('Push'),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(const Key('push-ar')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('ar-unsupported-placeholder')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('web-back-button')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('web-back-button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('first-screen')), findsOneWidget);
+        expect(
+          find.byKey(const Key('ar-unsupported-placeholder')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'AR-web2: default isWeb (omitted -> real kIsWeb, false under flutter '
+      'test) even when genuinely pushed -> absent — the native no-op '
+      "guarantee: leading stays null so Flutter's own automatic back arrow "
+      'is what shows, never a second control alongside it',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final crud = container.read(libraryCrudRepositoryProvider);
+        final area = await crud.createArea('Area');
+        final sector = await crud.createSector(area.id, 'Sector');
+        final wall = await crud.createWall(sector.id, 'Wall');
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: Builder(
+                builder: (context) => Scaffold(
+                  body: Center(
+                    child: ElevatedButton(
+                      key: const Key('push-ar'),
+                      onPressed: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (_) => ArScreen(wallId: wall.id),
+                        ),
+                      ),
+                      child: const Text('Push'),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        await tester.tap(find.byKey(const Key('push-ar')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('ar-unsupported-placeholder')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('web-back-button')), findsNothing);
+        expect(find.byType(BackButtonIcon), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'Fix 1: entering AR for a different wall resets arControllerProvider '
       'back to the auto (ARKit-tracking) default, manualAlignProvider back '
       'to identity, and arLockedProvider back to unlocked, even though all '

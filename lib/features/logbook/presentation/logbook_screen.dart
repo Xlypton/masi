@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../app/web_back_button.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../../shared/filtering/ascent_type_filter_chips.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
@@ -23,7 +24,12 @@ import 'logbook_providers.dart';
 /// re-entrancy-guarded creation flow here, only a live list + a per-row
 /// delete action, so no local widget state is needed.
 class LogbookScreen extends ConsumerWidget {
-  const LogbookScreen({super.key});
+  const LogbookScreen({super.key, this.isWeb});
+
+  /// Forces [webBackLeading]'s web branch in a widget test — see that
+  /// function's doc. `null` (the default, used by the real route) keeps the
+  /// real compile-time `kIsWeb`.
+  final bool? isWeb;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -32,6 +38,7 @@ class LogbookScreen extends ConsumerWidget {
     return Scaffold(
       key: const Key('logbook-screen'),
       appBar: AppBar(
+        leading: webBackLeading(context, isWeb: isWeb),
         title: Text(
           'Logbook',
           style: Theme.of(context).textTheme.displaySmall,

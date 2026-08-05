@@ -24,6 +24,7 @@ Widget _harness({
   onMove,
   Future<void> Function(String item, String newName)? onRename,
   Future<void> Function(String name)? onCreate,
+  bool? isWeb,
 }) {
   return MaterialApp(
     theme: MasiTheme.light,
@@ -42,6 +43,49 @@ Widget _harness({
       onRename: onRename ?? (item, name) async {},
       onDelete: onDelete,
       onMove: onMove,
+      isWeb: isWeb,
+    ),
+  );
+}
+
+/// Same [CrudListScaffold] as [_harness], but reached via a genuine
+/// `Navigator.push` from a first screen — the shape every real call site
+/// (`AreasScreen`/`SectorsScreen`/`WallsScreen`, pushed from `router.dart`'s
+/// top-level `GoRoute`s) actually has, so `Navigator.canPop` is `true` —
+/// unlike [_harness]'s `home:`, which is always the sole/first route.
+Widget _pushedHarness({bool? isWeb}) {
+  return MaterialApp(
+    theme: MasiTheme.light,
+    home: Builder(
+      builder: (context) => Scaffold(
+        key: const Key('first-screen'),
+        body: Center(
+          child: ElevatedButton(
+            key: const Key('push-areas'),
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(
+                builder: (_) => CrudListScaffold<String>(
+                  title: 'Areas',
+                  entityKey: 'area',
+                  asyncItems: const AsyncValue.data(['Test Area']),
+                  idOf: (item) => item,
+                  nameOf: (item) => item,
+                  emptyMessage: 'No areas yet',
+                  addDialogTitle: 'New Area',
+                  renameDialogTitle: 'Rename Area',
+                  onRetry: () {},
+                  onTap: (_) {},
+                  onCreate: (_) async {},
+                  onRename: (item, name) async {},
+                  onDelete: (_) async {},
+                  isWeb: isWeb,
+                ),
+              ),
+            ),
+            child: const Text('Push'),
+          ),
+        ),
+      ),
     ),
   );
 }
@@ -528,6 +572,53 @@ void main() {
         deletes.complete();
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 600));
+      },
+    );
+  });
+
+  group('Web back button (webBackLeading)', () {
+    testWidgets(
+      'CB1: isWeb:true + genuinely pushed (as every real Areas/Sectors/'
+      'Walls route is) -> web-back-button appears, and tapping it pops '
+      'back to the first screen',
+      (tester) async {
+        await tester.pumpWidget(_pushedHarness(isWeb: true));
+        await tester.tap(find.byKey(const Key('push-areas')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('web-back-button')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('web-back-button')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('first-screen')), findsOneWidget);
+        expect(find.text('Areas'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'CB2: isWeb:true but rendered as the sole/first route (nothing to '
+      'pop, as landing directly on a bookmarked/deep-linked list would) '
+      '-> absent',
+      (tester) async {
+        await tester.pumpWidget(_harness(onDelete: (_) async {}, isWeb: true));
+
+        expect(find.byKey(const Key('web-back-button')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'CB3: default (isWeb omitted -> real kIsWeb, false under flutter '
+      'test) even when genuinely pushed -> absent — the native no-op '
+      "guarantee: leading stays null so Flutter's own automatic back arrow "
+      'is what shows, never a second control alongside it',
+      (tester) async {
+        await tester.pumpWidget(_pushedHarness());
+        await tester.tap(find.byKey(const Key('push-areas')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('web-back-button')), findsNothing);
+        expect(find.byType(BackButtonIcon), findsOneWidget);
       },
     );
   });

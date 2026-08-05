@@ -8,6 +8,7 @@ import 'package:flutter/services.dart' show StandardMessageCodec;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:masi/app/theme.dart';
+import 'package:masi/app/web_back_button.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/platform/ar_support.dart';
 import 'package:masi/features/ar/application/ar_channel.dart';
@@ -71,10 +72,15 @@ const double _kHeldFrameConfidenceCap = 0.2;
 /// [ArOverlayPainter]/[ArController]/[ManualAlignController] wiring, zero
 /// native view, zero platform gating to work around.
 class ArScreen extends ConsumerStatefulWidget {
-  const ArScreen({super.key, required this.wallId});
+  const ArScreen({super.key, required this.wallId, this.isWeb});
 
   /// The wall whose original photo + routes this AR session aligns against.
   final String wallId;
+
+  /// Forces [webBackLeading]'s web branch in a widget test — see that
+  /// function's doc. `null` (the default, used by the real route) keeps the
+  /// real compile-time `kIsWeb`.
+  final bool? isWeb;
 
   @override
   ConsumerState<ArScreen> createState() => _ArScreenState();
@@ -488,7 +494,10 @@ class _ArScreenState extends ConsumerState<ArScreen> {
       // 180 ms reveal delay (the anti-flash half, and the half that matters
       // here: this read normally resolves well inside it) applies either way.
       return Scaffold(
-        appBar: AppBar(title: const Text('AR view')),
+        appBar: AppBar(
+          leading: webBackLeading(context, isWeb: widget.isWeb),
+          title: const Text('AR view'),
+        ),
         body: const Center(
           key: Key('ar-loading'),
           child: MasiLoadingIndicator.standalone(label: 'Starting camera…'),
@@ -501,7 +510,10 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     // arSupportedProvider (e.g. in a test) rebuilds this gate.
     if (!ref.watch(arSupportedProvider)) {
       return Scaffold(
-        appBar: AppBar(title: const Text('AR view')),
+        appBar: AppBar(
+          leading: webBackLeading(context, isWeb: widget.isWeb),
+          title: const Text('AR view'),
+        ),
         body: _buildUnsupportedPlaceholder(context),
       );
     }
@@ -510,7 +522,10 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     final routes = _routes;
     if (photo == null || routes == null || routes.isEmpty) {
       return Scaffold(
-        appBar: AppBar(title: const Text('AR view')),
+        appBar: AppBar(
+          leading: webBackLeading(context, isWeb: widget.isWeb),
+          title: const Text('AR view'),
+        ),
         body: _buildMissingDataPlaceholder(context),
       );
     }
@@ -523,7 +538,10 @@ class _ArScreenState extends ConsumerState<ArScreen> {
     final autoTracking = ref.watch(arAutoTrackingProvider);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('AR view')),
+      appBar: AppBar(
+        leading: webBackLeading(context, isWeb: widget.isWeb),
+        title: const Text('AR view'),
+      ),
       body: ArAlignmentStage(
         cameraView: autoTracking
             ? UiKitView(
