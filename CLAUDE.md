@@ -66,9 +66,99 @@ ls build/screenshots/ && # then Read each PNG to inspect
 - `integration_test/web_harness_check_test.dart` = trivial-widget pipeline check; `web_smoke_test.dart` =
   real app boot → Area→Sector→Wall against drift-on-WASM/IndexedDB — **both green**. Note what that
   proves: the app boots and the flow does not throw. It contains **zero `expect()` calls**, so it does
-  NOT prove persistence — a write→reload→assert test is still owed.
+  NOT prove persistence. `integration_test/e2e_signed_in_test.dart` (see the signed-in E2E section below)
+  is the assertion-bearing replacement; a write→**full page reload**→assert was verified BY HAND on
+  2026-08-05 (created an Area, reloaded the browser, it was still there) but is **not yet automated** —
+  one `integration_test` page can't easily re-boot the browser.
 - Same native-picker gap as iOS: photo pick/camera is a native chooser `integration_test` can't drive →
   override the picker provider / seed state to reach photo flows (seam pending, post-2C).
+
+## Signed-in E2E in Chrome — DO THIS AFTER ANY BIG CHANGE
+
+**Standing instruction: after any non-trivial change to app behavior, UI, routing, or the data layer,
+exercise the app signed-in in a real browser before calling the work done.** Analyze + unit tests do not
+catch layout breakage, dead buttons, broken navigation, or a screen that renders empty because a provider
+threw. Looking at the running app does.
+
+### Why a fake identity, and not a real account
+Web sign-in is a hard wall (`webAuthGateEnabledProvider` defaults to `kIsWeb` → `_webAuthGateRedirect`
+bounces every route to `/account`). **There is no password login.** All three real routes in — magic link,
+emailed OTP, Google OAuth — need a mailbox or a consent screen no agent can drive. So the signed-in surface
+of the app is unreachable to automation without a seam.
+
+The seam is `bootApp(overrides:)` in `lib/main.dart` (it exists for exactly this). `lib/main_e2e.dart`
+uses it to boot the **real** app — real router, real widgets, real drift-on-OPFS, real photo pipeline —
+with only two overrides: auth wall off, and a fake signed-in `AuthRepository`.
+
+- Identity: **`e2e@masi.test`** (RFC 2606 reserved TLD — can never be a real mailbox) /
+  uid **`00000000-0000-4000-8000-000000000e2e`**.
+- The uid is **fixed on purpose**: it is an ownership key. `effectiveUidProvider` feeds every owner-scoped
+  query and `PhotoFiles`' per-user path prefix, so a random uid would orphan the previous run's library
+  and nothing would ever persist across runs.
+- **What this does NOT test:** real Supabase auth, JWT issuance, and anything gated on server-side RLS
+  (`auth.uid()` is null under the anon key, so live push/pull is rejected). Never report those as verified
+  from this harness — they need a real session, human-in-the-loop.
+
+### Interactive loop (this is the one to reach for)
+```bash
+flutter build web --wasm --no-web-resources-cdn --pwa-strategy=none \
+  -t lib/main_e2e.dart -o build/web_e2e
+dart run tool/serve_web.dart build/web_e2e 8099   # COOP/COEP-correct static server
+```
+Then drive `http://localhost:8099` with the browser tools: `navigate` → `computer{action:"screenshot"}` →
+click by coordinate/ref → screenshot again. Read the PNGs. Also check
+`read_console_messages` for thrown exceptions — a Flutter widget error shows there while the canvas still
+looks plausible.
+
+**The server must send COOP/COEP** (`same-origin` / `require-corp`) or drift silently falls off OPFS onto
+the IndexedDB VFS, whose `xSync` is a no-op — you would be testing a different, weaker storage backend than
+production. Confirm with `self.crossOriginIsolated === true` and a
+`masi/storage: backend=opfsLocks` console line. `python tool/serve_web_isolated.py` does the same job where
+Python is installed.
+
+### Scripted regression loop
+`integration_test/e2e_signed_in_test.dart` boots via the same `e2eOverrides()`, so hand-driven and scripted
+runs can't disagree about a bug. Unlike `web_smoke_test.dart`, it is **assertion-heavy on purpose** — it
+fails when a step is unreachable instead of `if (tester.any(...))`-skipping past it.
+```bash
+flutter drive --driver=test_driver/integration_test.dart \
+  --target=integration_test/e2e_signed_in_test.dart \
+  -d web-server --browser-name=chrome --driver-port=4444 --headless \
+  --no-web-resources-cdn --timeout=600     # needs chromedriver already listening on 4444
+```
+
+### Traps that WILL cost you an hour (all hit for real on 2026-08-05)
+- **A stale service worker serves the PREVIOUS build and you will debug a ghost.** The SW from an earlier
+  build stays registered on the origin and answers from its precache, so a freshly-built bundle never
+  loads — the app looks unchanged and you conclude your code did nothing. Symptom: the console still
+  prints the OLD `masi/sw: warmed … (version <hash>)` and `caches.keys()` shows `masi-shell-<old hash>`.
+  **Before trusting any fresh build, run this in the page and reload:**
+  ```js
+  (async () => { for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+                 for (const k of await caches.keys()) await caches.delete(k); })()
+  ```
+  Then confirm you are on the new bundle:
+  `await (await fetch('/main.dart.js', {cache:'reload'})).text().then(t => t.includes('e2e@masi.test'))`.
+- **`dart.bat` is a wrapper — killing its PID does NOT free the port.** It spawns a `dartvm` child that
+  keeps the listen socket, so the next server dies with `SocketException … errno = 10048` and the OLD
+  server keeps answering on the same port. A 200 from the port is therefore NOT proof your new server is
+  the one serving. Kill by port owner, not by the PID you started:
+  ```powershell
+  Get-Process -Id (Get-NetTCPConnection -LocalPort 8099 -State Listen).OwningProcess | Stop-Process -Force
+  ```
+  Then confirm the new server actually bound — it prints `serving <dir> on http://localhost:<port>`; an
+  empty stdout means it died.
+- **`New topo` opens the native photo picker, which no agent can drive** (same gap as iOS). Reach the
+  library via the **folder icon → Areas → Sectors → Walls** path instead, which needs no photo.
+- **Repeated `401`s in the console are EXPECTED here** and are not a bug: the fake session carries no real
+  JWT, so Supabase rejects every sync call. That is also what makes this harness safe — it cannot write to
+  the live dev backend.
+
+### The one hard rule
+`lib/main_e2e.dart` **bypasses authentication and must never be deployed.** It is reachable only via an
+explicit `-t`, and `tool/build_web.sh` greps the emitted bundle for `e2e@masi.test` and fails the build if
+it appears. Build it to `-o build/web_e2e`, never over `build/web` (what the deploy skill ships). If you
+ever touch that gate, keep it.
 
 ## Web offline stack
 
