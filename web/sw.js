@@ -20,7 +20,14 @@
 //   everything else    -> cache-first. Safe because the cache name is
 //                         per-build and every other cache is deleted on
 //                         activate, so a cached asset can never outlive the
-//                         build it came from.
+//                         build it came from. A cache MISS with no network
+//                         fails fast (see `cacheFirst`) instead of waiting on
+//                         a fetch that cannot succeed.
+//   renderer artifacts -> precached at install by `rendererArtifacts()`, which
+//                         the static manifest cannot name (the loader picks
+//                         the renderer at runtime). Without this an offline
+//                         cold start hangs on the splash forever on the very
+//                         browsers that need them; see that function.
 //   cross-origin       -> not intercepted at all. Supabase, Google auth and
 //                         OSM tiles go straight to the network. (Stage 3 adds
 //                         a separate `masi-runtime-*` tile cache; the prune
@@ -90,6 +97,83 @@ const NEVER_CACHE = new Set([
 // year-old browser cache entry. Precaching them with `cache: 'reload'`
 // bypasses the HTTP cache so the precache is genuinely this build's copy.
 const RELOAD_ON_PRECACHE = new Set(['sqlite3.wasm', 'drift_worker.js']);
+
+/**
+ * THE RENDERER, which the static precache manifest structurally cannot name.
+ *
+ * `tool/gen_sw_manifest.dart` excludes `main.dart.js` and all of `canvaskit/`
+ * (37 MB across six variants) because exactly ONE variant is used per browser
+ * and the loader decides which at runtime. The intent was to warm them from
+ * the page's resource timing after the first frame — but that warm is a RACE,
+ * not a guarantee:
+ *
+ *   - it is posted from `flutter-first-frame`, so it never runs at all on a
+ *     load that fails to paint (which is exactly the offline load we are
+ *     trying to make work);
+ *   - `activate` deletes the previous per-build cache, so EVERY deploy resets
+ *     the renderer to "not cached". A user who opens the app online once after
+ *     a deploy (installing the new worker, dropping the old cache) and goes
+ *     offline before the warm finishes has a cache with no renderer in it, and
+ *     the next cold start hangs on the splash forever;
+ *   - `tool/verify_offline_shell.py` waits for `__masiShellWarmed` before it
+ *     kills the origin, so the harness has been masking this the whole time.
+ *
+ * So install precaches the renderer THIS scope will actually need, best-effort
+ * and per-URL (below). Which one is decided the same way `flutter.js` decides
+ * it, from `_flutter.buildConfig` (`useLocalCanvasKit: true`, two builds:
+ * dart2wasm/skwasm and dart2js/canvaskit):
+ *
+ *   - skwasm requires WasmGC **and** an allow-listed browser engine. The
+ *     loader's default `wasmAllowList` is `{blink: true, gecko: false,
+ *     webkit: false, unknown: false}` — so Safari takes the dart2js/canvaskit
+ *     build even on a WebKit that supports WasmGC, and needs `main.dart.js`
+ *     plus the FULL `canvaskit/canvaskit.{js,wasm}` (the smaller `chromium/`
+ *     variant requires `ImageDecoder` + `Intl.v8BreakIterator`, both
+ *     blink-only);
+ *   - blink takes skwasm: `canvaskit/skwasm.{js,wasm}`. Its `.ww.js` worker is
+ *     built from a Blob by the loader, never fetched, so it needs no entry.
+ *
+ * Cost, stated explicitly, because it is a product decision: +3.6 MB on blink,
+ * +11.8 MB on everything else, on top of the ~5.5 MB manifest. Nothing cheaper
+ * exists — these are the bytes the engine cannot boot without. Per-deploy
+ * download is far smaller than that: `web/_headers` serves everything
+ * `Cache-Control: no-cache`, so the (engine-revision-stable) canvaskit/skwasm
+ * wasm revalidates to a 304 and only `main.dart.js` is a real transfer. We
+ * deliberately do NOT `cache: 'reload'` these, so that revalidation can happen.
+ *
+ * NOT covered on purpose: `skwasm_heavy` and `wimp`. Choosing between them
+ * needs `ImageDecoder`, which is `[Exposed=(Window,DedicatedWorker)]` and so is
+ * always undefined here — probing it in a service worker would confidently
+ * cache the wrong 5 MB. A blink browser that ends up on one of those still
+ * fetches it online and the warm pass still catches it, exactly as today.
+ */
+function supportsWasmGc() {
+  try {
+    // The same 15-byte module `flutter.js` validates: a type section declaring
+    // one GC struct type. `validate` is false on an engine without WasmGC.
+    return WebAssembly.validate(
+      new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0, 1, 5, 1, 95, 1, 120, 0])
+    );
+  } catch (error) {
+    return false;
+  }
+}
+
+function isBlinkLike() {
+  const ua = (self.navigator && self.navigator.userAgent) || '';
+  // Every browser on iOS is WebKit whatever it calls itself, and those are
+  // precisely the ones that advertise a Chrome-ish token while taking the
+  // dart2js path. Check them first.
+  if (/(CriOS|EdgiOS|FxiOS|OPiOS|GSA)\//.test(ua)) return false;
+  return /(Chrome|Chromium|Edg)\/\d/.test(ua);
+}
+
+function rendererArtifacts() {
+  if (supportsWasmGc() && isBlinkLike()) {
+    return ['canvaskit/skwasm.js', 'canvaskit/skwasm.wasm'];
+  }
+  return ['main.dart.js', 'canvaskit/canvaskit.js', 'canvaskit/canvaskit.wasm'];
+}
 
 /**
  * THE ONE PLACE THE UPDATE TRADE-OFF IS DECIDED. Changing this function body
@@ -206,6 +290,12 @@ self.addEventListener('install', (event) => {
         }
         await cache.put(SHELL_CACHE_KEY(), shell);
       }
+      // AFTER the all-or-nothing block, and deliberately best-effort: a
+      // renderer download that fails must not abort the install, because an
+      // aborted install strands the user on the previous build. A renderer
+      // that is merely missing costs an offline cold start, which is what the
+      // warm pass then retries; a failed update costs every fix in the deploy.
+      await cacheMissing(cache, rendererArtifacts());
     }
     if (SHELL_STRATEGY.takeOverImmediately) {
       await self.skipWaiting();
@@ -340,6 +430,23 @@ async function cacheFirst(event, request) {
   const cache = await caches.open(CACHE_NAME);
   const cached = await cache.match(request);
   if (cached) return cached;
+
+  // A miss with no network cannot be satisfied, so do not start a fetch that
+  // can only stall. `fetch()` here is deliberately NOT wrapped in
+  // `withTimeout` — `main.dart.wasm` is 4 MB and a slow-but-working link must
+  // still be allowed to finish it — which is precisely why the offline case
+  // needs its own answer: an unbounded fetch on a dead network is how the
+  // engine ends up awaiting an asset forever with the HTML splash still up.
+  // `Response.error()` is a network-error response, so the caller sees a
+  // failed request immediately and runs its own degradation path.
+  //
+  // `navigator.onLine === false` is trusted in the NEGATIVE direction only.
+  // `true` is the unreliable half (a captive portal reports connected), which
+  // is why `reachabilityProvider` probes rather than reading this flag — but a
+  // browser that says it has no network never secretly has one. Nothing is
+  // deleted or downgraded on this path; the cache is only ever read.
+  if (self.navigator.onLine === false) return Response.error();
+
   const response = await fetch(request);
   if (isCacheable(response)) {
     event.waitUntil(cache.put(request, response.clone()));
@@ -369,21 +476,7 @@ self.addEventListener('message', (event) => {
 
 async function warmShell(urls, client) {
   const cache = await caches.open(CACHE_NAME);
-  let cached = 0;
-  for (const url of urls) {
-    const path = scopedPath(url);
-    if (path === null || NEVER_CACHE.has(path)) continue;
-    try {
-      if (await cache.match(url)) { cached++; continue; }
-      const response = await fetch(url);
-      if (isCacheable(response)) {
-        await cache.put(url, response.clone());
-        cached++;
-      }
-    } catch (error) {
-      // Ignored on purpose — see the doc above.
-    }
-  }
+  const cached = await cacheMissing(cache, urls);
   if (client) {
     client.postMessage({
       type: 'masi-warm-done',
@@ -392,4 +485,36 @@ async function warmShell(urls, client) {
       total: urls.length,
     });
   }
+}
+
+/**
+ * Stores any of [urls] not already in [cache], one at a time, tolerating
+ * per-URL failure. Shared by the install-time renderer precache and the warm
+ * pass, which want identical semantics: fetch only what is missing, never let
+ * one bad URL take the rest down. Returns how many are now cached.
+ *
+ * Accepts scope-relative paths or absolute same-origin URLs — the warm pass
+ * supplies the latter (straight from `performance.getEntriesByType`).
+ */
+async function cacheMissing(cache, urls) {
+  let cached = 0;
+  for (const url of urls) {
+    const absolute = new URL(url, SCOPE).href;
+    const path = scopedPath(absolute);
+    if (path === null || NEVER_CACHE.has(path)) continue;
+    try {
+      if (await cache.match(absolute)) { cached++; continue; }
+      // Same reasoning as `cacheFirst`: with no network there is nothing to
+      // fetch, and this loop is awaited by `install` and by a `waitUntil`.
+      if (self.navigator.onLine === false) continue;
+      const response = await fetch(absolute);
+      if (isCacheable(response)) {
+        await cache.put(absolute, response.clone());
+        cached++;
+      }
+    } catch (error) {
+      // Ignored on purpose — see the docs on both callers.
+    }
+  }
+  return cached;
 }
