@@ -2077,4 +2077,162 @@ void main() {
       },
     );
   });
+
+  group('v9 -> v10 migration (FK lookup indexes)', () {
+    /// Every index the `from < 10` branch is responsible for, as
+    /// `index name -> table`.
+    const expectedIndexes = <String, String>{
+      'idx_sectors_area_live': 'sectors',
+      'idx_walls_sector_live': 'walls',
+      'idx_photos_wall_live': 'photos',
+      'idx_photos_parent_live': 'photos',
+      'idx_routes_wall_live': 'routes',
+      'idx_comments_wall_live': 'comments',
+      'idx_comments_ascent_live': 'comments',
+      'idx_likes_wall_live': 'likes',
+      'idx_likes_ascent_live': 'likes',
+      'idx_ascents_route_live': 'ascents',
+      'idx_ascents_wall_live': 'ascents',
+    };
+
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('masi_v10_migration_');
+      dbFile = File(p.join(tempDir.path, 'v9.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    Future<Set<String>> indexNames(AppDatabase db) async => (await db
+            .customSelect("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .map((row) => row.read<String>('name'))
+            .get())
+        .toSet();
+
+    test('a fresh install gets every FK index straight from onCreate',
+        () async {
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+      // Forces onCreate to actually run (drift is lazy).
+      await db.customSelect('SELECT 1').get();
+
+      expect(
+        await indexNames(db),
+        containsAll(expectedIndexes.keys),
+        reason: 'the @TableIndex.sql annotations in tables.dart are what '
+            'createAll() emits — if a fresh install and an upgraded install '
+            'disagree about the index set, the migration branch and the '
+            'annotations have drifted apart.',
+      );
+    });
+
+    test('creates every FK index on an existing v9 database without losing '
+        'rows', () async {
+      // Build a REAL current-schema file via onCreate, seed a row, then rewind
+      // it to the pre-v10 shape on disk (drop the new indexes, stamp
+      // user_version = 9). Reopening forces drift down the onUpgrade(m, 9, 10)
+      // path a real updating device takes.
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await fresh.into(fresh.areas).insert(
+            AreasCompanion.insert(
+              id: 'area-v9',
+              createdAt: 100,
+              updatedAt: 100,
+              name: 'Pre-v10 Area',
+            ),
+          );
+      await fresh.close();
+
+      final raw = sqlite3lib.sqlite3.open(dbFile.path);
+      for (final name in expectedIndexes.keys) {
+        raw.execute('DROP INDEX $name;');
+      }
+      raw.execute('PRAGMA user_version = 9;');
+      expect(raw.select('PRAGMA user_version;').first.values.first, 9);
+      expect(
+        raw
+            .select("SELECT name FROM sqlite_master WHERE type = 'index'")
+            .map((r) => r['name'] as String),
+        isNot(anyElement(isIn(expectedIndexes.keys))),
+        reason: 'the rewind must actually remove them, or this test would '
+            'pass without the migration doing anything',
+      );
+      raw.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+
+      // Forces the migration to actually run (drift is lazy).
+      final area = await (db.select(db.areas)
+            ..where((t) => t.id.equals('area-v9')))
+          .getSingle();
+      expect(
+        area.name,
+        'Pre-v10 Area',
+        reason: 'this migration is purely additive — no row may be touched',
+      );
+
+      expect(await indexNames(db), containsAll(expectedIndexes.keys));
+    });
+
+    test('is re-runnable: a v9 stamp on a database that already has the '
+        'indexes does not fail', () async {
+      // The `IF NOT EXISTS` guard matters because a downgrade-then-reupgrade,
+      // or a partially-applied migration, can leave some indexes already
+      // present when the branch runs.
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await fresh.customSelect('SELECT 1').get();
+      await fresh.close();
+
+      final raw = sqlite3lib.sqlite3.open(dbFile.path);
+      // Indexes deliberately LEFT IN PLACE; only the version is rewound.
+      raw.execute('PRAGMA user_version = 9;');
+      raw.close();
+
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+
+      await expectLater(db.customSelect('SELECT 1').get(), completes);
+      expect(await indexNames(db), containsAll(expectedIndexes.keys));
+    });
+
+    test('SQLite actually PLANS with the new indexes, not just stores them',
+        () async {
+      // The point of the migration is query plans, so assert on the plan.
+      // Without an index, `EXPLAIN QUERY PLAN` for these reads says
+      // "SCAN routes"; with it, "SEARCH routes USING INDEX
+      // idx_routes_wall_live". A test that only checks sqlite_master would
+      // pass for an index the planner never chooses.
+      final db = AppDatabase(NativeDatabase(dbFile));
+      addTearDown(db.close);
+
+      Future<String> planFor(String sql) async {
+        final rows = await db.customSelect('EXPLAIN QUERY PLAN $sql').get();
+        return rows.map((r) => r.read<String>('detail')).join(' | ');
+      }
+
+      expect(
+        await planFor(
+          "SELECT * FROM routes WHERE wall_id = 'w' AND deleted_at IS NULL",
+        ),
+        contains('idx_routes_wall_live'),
+      );
+      expect(
+        await planFor(
+          "SELECT * FROM photos WHERE wall_id = 'w' AND deleted_at IS NULL",
+        ),
+        contains('idx_photos_wall_live'),
+      );
+      expect(
+        await planFor(
+          "SELECT * FROM walls WHERE sector_id = 's' AND deleted_at IS NULL",
+        ),
+        contains('idx_walls_sector_live'),
+      );
+    });
+  });
 }

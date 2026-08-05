@@ -13,8 +13,15 @@ void main() {
     await db.close();
   });
 
-  test('schemaVersion is 9', () {
-    expect(db.schemaVersion, 9);
+  test('schemaVersion is 10', () {
+    expect(
+      db.schemaVersion,
+      10,
+      reason: 'bumping this is only correct alongside a matching `if (from < '
+          'N)` branch in AppDatabase.migration and a v(N-1) -> vN group in '
+          'app_database_migration_test.dart — the version alone migrates '
+          'nothing.',
+    );
   });
 
   test('insert and read back one row per table, satisfying FKs', () async {

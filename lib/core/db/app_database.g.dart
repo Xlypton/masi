@@ -7306,9 +7306,53 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $LikesTable likes = $LikesTable(this);
   late final $ProfilesTable profiles = $ProfilesTable(this);
   late final $AppSettingsTable appSettings = $AppSettingsTable(this);
+  late final Index idxSectorsAreaLive = Index(
+    'idx_sectors_area_live',
+    'CREATE INDEX idx_sectors_area_live ON sectors (area_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxWallsSectorLive = Index(
+    'idx_walls_sector_live',
+    'CREATE INDEX idx_walls_sector_live ON walls (sector_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxPhotosWallLive = Index(
+    'idx_photos_wall_live',
+    'CREATE INDEX idx_photos_wall_live ON photos (wall_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxPhotosParentLive = Index(
+    'idx_photos_parent_live',
+    'CREATE INDEX idx_photos_parent_live ON photos (parent_photo_id) WHERE deleted_at IS NULL',
+  );
   late final Index idxRoutesPhotoNumberLive = Index(
     'idx_routes_photo_number_live',
     'CREATE UNIQUE INDEX idx_routes_photo_number_live ON routes (photo_id, number) WHERE deleted_at IS NULL',
+  );
+  late final Index idxRoutesWallLive = Index(
+    'idx_routes_wall_live',
+    'CREATE INDEX idx_routes_wall_live ON routes (wall_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxCommentsWallLive = Index(
+    'idx_comments_wall_live',
+    'CREATE INDEX idx_comments_wall_live ON comments (wall_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxCommentsAscentLive = Index(
+    'idx_comments_ascent_live',
+    'CREATE INDEX idx_comments_ascent_live ON comments (ascent_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxLikesWallLive = Index(
+    'idx_likes_wall_live',
+    'CREATE INDEX idx_likes_wall_live ON likes (wall_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxLikesAscentLive = Index(
+    'idx_likes_ascent_live',
+    'CREATE INDEX idx_likes_ascent_live ON likes (ascent_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxAscentsRouteLive = Index(
+    'idx_ascents_route_live',
+    'CREATE INDEX idx_ascents_route_live ON ascents (route_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxAscentsWallLive = Index(
+    'idx_ascents_wall_live',
+    'CREATE INDEX idx_ascents_wall_live ON ascents (wall_id) WHERE deleted_at IS NULL',
   );
   @override
   Iterable<TableInfo<Table, Object?>> get allTables =>
@@ -7325,7 +7369,18 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     likes,
     profiles,
     appSettings,
+    idxSectorsAreaLive,
+    idxWallsSectorLive,
+    idxPhotosWallLive,
+    idxPhotosParentLive,
     idxRoutesPhotoNumberLive,
+    idxRoutesWallLive,
+    idxCommentsWallLive,
+    idxCommentsAscentLive,
+    idxLikesWallLive,
+    idxLikesAscentLive,
+    idxAscentsRouteLive,
+    idxAscentsWallLive,
   ];
 }
 

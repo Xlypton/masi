@@ -46,7 +46,7 @@ class AppDatabase extends _$AppDatabase {
   final bool _flushAfterCommit;
 
   @override
-  int get schemaVersion => 9;
+  int get schemaVersion => 10;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -242,6 +242,56 @@ class AppDatabase extends _$AppDatabase {
       // sync.
       if (from < 9) {
         await m.createTable(appSettings);
+      }
+      // v9 -> v10: FK lookup indexes. Purely additive and data-free — no
+      // column, table or row is touched; only SQLite's own query plans change.
+      //
+      // SQLite gives a foreign key NO index of its own (only the PARENT's
+      // primary key is indexed), so before this the schema carried exactly one
+      // index — `idx_routes_photo_number_live`, created for uniqueness rather
+      // than for lookups — and every `where(wallId.equals(...))`-shaped read
+      // was a full table scan. That is invisible on a small library and gets
+      // steadily worse as one grows, and it grows from BOTH directions here:
+      // the user's own topos, plus every shared topo pulled in from the
+      // community feed, which lands in these same tables.
+      //
+      // Each one is PARTIAL on `deleted_at IS NULL` to match the actual query
+      // predicate (deletes are soft, and reads pair the FK filter with
+      // `deletedAt.isNull()`) — see the block comment above `Routes` in
+      // `tables.dart`.
+      //
+      // `IF NOT EXISTS` on every statement: a fresh install already has all of
+      // them from `onCreate`/`createAll` via the `@TableIndex.sql` annotations,
+      // and this branch must stay re-runnable, exactly like the v6 index swap
+      // above.
+      if (from < 10) {
+        const liveFkIndexes = <String>[
+          'CREATE INDEX IF NOT EXISTS idx_sectors_area_live '
+              'ON sectors (area_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_walls_sector_live '
+              'ON walls (sector_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_photos_wall_live '
+              'ON photos (wall_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_photos_parent_live '
+              'ON photos (parent_photo_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_routes_wall_live '
+              'ON routes (wall_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_comments_wall_live '
+              'ON comments (wall_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_comments_ascent_live '
+              'ON comments (ascent_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_likes_wall_live '
+              'ON likes (wall_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_likes_ascent_live '
+              'ON likes (ascent_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_ascents_route_live '
+              'ON ascents (route_id) WHERE deleted_at IS NULL',
+          'CREATE INDEX IF NOT EXISTS idx_ascents_wall_live '
+              'ON ascents (wall_id) WHERE deleted_at IS NULL',
+        ];
+        for (final statement in liveFkIndexes) {
+          await customStatement(statement);
+        }
       }
     },
     beforeOpen: (details) async {

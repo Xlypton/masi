@@ -85,6 +85,15 @@ class Areas extends Table with SyncColumns {
   Set<Column> get primaryKey => {id};
 }
 
+// FK LOOKUP INDEX. SQLite does NOT index a foreign key just because it is
+// declared as one — only the parent's PRIMARY KEY gets an implicit index — so
+// every `where(sectorId.equals(...))`-shaped read is a full table scan until an
+// index like this exists. See the block comment above `Routes` for why all of
+// these are PARTIAL on `deleted_at IS NULL`.
+@TableIndex.sql(
+  'CREATE INDEX idx_sectors_area_live ON sectors (area_id) '
+  'WHERE deleted_at IS NULL',
+)
 class Sectors extends Table with SyncColumns {
   TextColumn get areaId => text().references(Areas, #id)();
   TextColumn get name => text()();
@@ -94,6 +103,10 @@ class Sectors extends Table with SyncColumns {
   Set<Column> get primaryKey => {id};
 }
 
+@TableIndex.sql(
+  'CREATE INDEX idx_walls_sector_live ON walls (sector_id) '
+  'WHERE deleted_at IS NULL',
+)
 class Walls extends Table with SyncColumns {
   TextColumn get sectorId => text().references(Sectors, #id)();
   TextColumn get name => text()();
@@ -121,6 +134,17 @@ class Walls extends Table with SyncColumns {
   Set<Column> get primaryKey => {id};
 }
 
+// `parent_photo_id` gets its own index because slice lookups
+// (`parentPhotoId.equals(photoId)`) are a distinct access path from the
+// wall-scoped photo list, and neither index can serve the other.
+@TableIndex.sql(
+  'CREATE INDEX idx_photos_wall_live ON photos (wall_id) '
+  'WHERE deleted_at IS NULL',
+)
+@TableIndex.sql(
+  'CREATE INDEX idx_photos_parent_live ON photos (parent_photo_id) '
+  'WHERE deleted_at IS NULL',
+)
 class Photos extends Table with SyncColumns {
   TextColumn get wallId => text().references(Walls, #id)();
   TextColumn get localPath => text()();
@@ -181,8 +205,23 @@ class Photos extends Table with SyncColumns {
 // raw-SQL `TableIndex.sql` variant instead (still validated by drift_dev at
 // build time). Column/table names below are the generated snake_case names
 // (`routes`, `photo_id`, `deleted_at`) confirmed against app_database.g.dart.
+//
+// WHY EVERY INDEX IN THIS FILE IS PARTIAL ON `deleted_at IS NULL`: deletes here
+// are soft (a tombstone row that stays for sync), and essentially every read
+// pairs its FK filter with `deletedAt.isNull()` — 84 such call sites across the
+// repositories. A partial index therefore matches the real query predicate,
+// covers only live rows, and lets the tombstones a long-lived library
+// accumulates sit outside the index entirely instead of bloating it.
+//
+// `idx_routes_photo_number_live` below leads with `photo_id`, so it already
+// serves plain `photoId.equals(...)` lookups on Routes as a prefix match —
+// there is deliberately no separate single-column index for that.
 @TableIndex.sql(
   'CREATE UNIQUE INDEX idx_routes_photo_number_live ON routes (photo_id, number) WHERE deleted_at IS NULL',
+)
+@TableIndex.sql(
+  'CREATE INDEX idx_routes_wall_live ON routes (wall_id) '
+  'WHERE deleted_at IS NULL',
 )
 class Routes extends Table with SyncColumns {
   TextColumn get wallId => text().references(Walls, #id)();
@@ -221,6 +260,17 @@ class Routes extends Table with SyncColumns {
   Set<Column> get primaryKey => {id};
 }
 
+// Two indexes because a comment attaches to EITHER a wall or an ascent (see
+// `wallId`/`ascentId` below) and both are read paths: the topo detail screen
+// filters on one, the ascent detail screen on the other.
+@TableIndex.sql(
+  'CREATE INDEX idx_comments_wall_live ON comments (wall_id) '
+  'WHERE deleted_at IS NULL',
+)
+@TableIndex.sql(
+  'CREATE INDEX idx_comments_ascent_live ON comments (ascent_id) '
+  'WHERE deleted_at IS NULL',
+)
 class Comments extends Table with SyncColumns {
   /// Nullable as of Feature #12 (public opt-in ascent logs): a comment now
   /// attaches to EITHER a wall (topo) OR an ascent, never both — see
@@ -240,6 +290,14 @@ class Comments extends Table with SyncColumns {
   Set<Column> get primaryKey => {id};
 }
 
+@TableIndex.sql(
+  'CREATE INDEX idx_likes_wall_live ON likes (wall_id) '
+  'WHERE deleted_at IS NULL',
+)
+@TableIndex.sql(
+  'CREATE INDEX idx_likes_ascent_live ON likes (ascent_id) '
+  'WHERE deleted_at IS NULL',
+)
 class Likes extends Table with SyncColumns {
   /// Nullable as of Feature #12 (public opt-in ascent logs): a like now
   /// attaches to EITHER a wall (topo) OR an ascent, never both — see
@@ -257,6 +315,14 @@ class Likes extends Table with SyncColumns {
   Set<Column> get primaryKey => {id};
 }
 
+@TableIndex.sql(
+  'CREATE INDEX idx_ascents_route_live ON ascents (route_id) '
+  'WHERE deleted_at IS NULL',
+)
+@TableIndex.sql(
+  'CREATE INDEX idx_ascents_wall_live ON ascents (wall_id) '
+  'WHERE deleted_at IS NULL',
+)
 class Ascents extends Table with SyncColumns {
   TextColumn get routeId => text().references(Routes, #id)();
   TextColumn get wallId => text().references(Walls, #id)();
