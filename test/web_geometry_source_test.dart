@@ -109,5 +109,31 @@ void main() {
             'flutter-view.',
       );
     });
+
+    // The splash is held across the cold-launch viewport settle on standalone
+    // iOS (the top safe-area inset lands a beat after the first frame, and
+    // everything bound to it jumps down while the inset-blind full-bleed topo
+    // canvas does not). That hold reads the viewport instead of faking it —
+    // the safe mechanism — but a hold with no ceiling would be indistinguish-
+    // able from the boot hang that #19 had to grow a retry affordance for.
+    // So: pin that the settle loop always has an escape hatch. Asserted as a
+    // property (any `performance.now()` deadline comparison or a setTimeout
+    // fallback), not as the exact expression, so a rephrase still counts.
+    test('the standalone splash hold is bounded, never open-ended', () {
+      final source = _read('web/index.html');
+      final settle = RegExp(
+        r'requestAnimationFrame\s*\(\s*settle\s*\)',
+      ).hasMatch(source);
+      if (!settle) return; // hold removed entirely — nothing to bound.
+      expect(
+        RegExp(r'performance\.now\s*\(\s*\)\s*>=|setTimeout').hasMatch(source),
+        isTrue,
+        reason: 'the splash-hold loop in web/index.html recurses through '
+            'requestAnimationFrame with no deadline or timeout in sight. If '
+            'the viewport never goes quiet, the branded splash stays up '
+            'forever and the app looks hung with no retry affordance — the '
+            'exact failure mode #19 had to be fixed for. Keep the hard cap.',
+      );
+    });
   });
 }
