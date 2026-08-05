@@ -63,11 +63,17 @@ void main() {
         p.join('_skwasm_impl', 'skwasm_impl', 'font_collection.dart'),
       );
       if (file == null) {
-        markTestSkipped(
+        fail(
           'skwasm font_collection.dart not found under the resolved SDK — '
-          'cannot verify the suppression sentinel on this machine.',
+          'cannot verify the suppression sentinel on this machine. This is '
+          'a FAILURE, not a skip: a guard that goes green when it cannot '
+          'check anything is worthless. Either the SDK layout moved (ascend '
+          'from Platform.resolvedExecutable further, or re-derive the '
+          'relative path from the current flutter_web_sdk tree) or the file '
+          'was renamed/removed upstream — re-point findUnderSdk\'s relative '
+          'path and re-verify the literal-\'Roboto\' sentinel still exists '
+          'before restoring this test.',
         );
-        return;
       }
       final source = file.readAsStringSync();
       final match = RegExp(
@@ -97,11 +103,17 @@ void main() {
         p.join('_engine', 'engine', 'canvaskit', 'fonts.dart'),
       );
       if (file == null) {
-        markTestSkipped(
+        fail(
           'canvaskit fonts.dart not found under the resolved SDK — cannot '
-          'verify the suppression sentinel on this machine.',
+          'verify the suppression sentinel on this machine. This is a '
+          'FAILURE, not a skip: a guard that goes green when it cannot '
+          'check anything is worthless. Either the SDK layout moved '
+          '(ascend from Platform.resolvedExecutable further, or re-derive '
+          'the relative path from the current flutter_web_sdk tree) or the '
+          'file was renamed/removed upstream — re-point findUnderSdk\'s '
+          'relative path and re-verify the literal-\'Roboto\' sentinel '
+          'still exists before restoring this test.',
         );
-        return;
       }
       final source = file.readAsStringSync();
       final match = RegExp(

@@ -180,13 +180,31 @@ if ! grep -q '"family":"Roboto"' "$FONT_MANIFEST" && \
 fi
 echo "    ok: $FONT_MANIFEST declares the Roboto family"
 
-if [[ ! -f "build/web/assets/fonts/Roboto-Regular.ttf" ]]; then
-  echo "FAIL: build/web/assets/fonts/Roboto-Regular.ttf was not bundled." >&2
-  echo "      FontManifest.json names a Roboto family but the asset itself" >&2
-  echo "      is missing from the build output." >&2
-  exit 1
-fi
-echo "    ok: build/web/assets/fonts/Roboto-Regular.ttf present"
+# Double `assets/` is NOT a typo — do not "fix" it back to a single prefix.
+# pubspec.yaml declares these fonts as `asset: assets/fonts/Roboto-*.ttf`
+# (a path relative to the repo root, same shape as any other pubspec-relative
+# asset). `flutter build web` always prefixes pubspec-relative asset paths
+# with an extra `assets/` when it copies them into the build output — the
+# exact same double-`assets` shape already visible at
+# `build/web/assets/assets/icons/masi/`. So the real emitted path is
+# `build/web/assets/assets/fonts/Roboto-*.ttf`, not
+# `build/web/assets/fonts/Roboto-*.ttf` (that single-prefixed path is where
+# Flutter's OWN built-in fonts land, e.g. MaterialIcons-Regular.otf, which is
+# not a pubspec-relative asset and never gets the extra prefix). Checking the
+# single-prefixed path meant this gate's `-f` test could never be true, its
+# `exit 1` fired before `dart run tool/gen_sw_manifest.dart` ran, and every
+# build from this pipeline shipped `SHELL_VERSION='dev'` / `PRECACHE=[]` —
+# i.e. no offline shell at all, even though the font itself was bundled fine.
+for weight in Regular Medium Bold; do
+  FONT_FILE="build/web/assets/assets/fonts/Roboto-$weight.ttf"
+  if [[ ! -s "$FONT_FILE" ]]; then
+    echo "FAIL: $FONT_FILE was not bundled (or is empty)." >&2
+    echo "      FontManifest.json names a Roboto family but the asset itself" >&2
+    echo "      is missing/empty in the build output." >&2
+    exit 1
+  fi
+  echo "    ok: $FONT_FILE present and non-empty"
+done
 
 echo "==> service-worker precache manifest"
 # Rewrites the two BUILD STAMP lines in build/web/sw.js (which `flutter build

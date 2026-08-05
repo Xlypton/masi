@@ -46,7 +46,13 @@ Directory _fakeBuildDir({int wasmBytes = 1024}) {
   write('assets/FontManifest.json');
   write('assets/NOTICES', bytes: 1400 * 1024);
   write('assets/fonts/MaterialIcons-Regular.otf');
-  write('assets/fonts/Roboto-Regular.ttf');
+  // Pubspec-declared fonts land double-`assets`-prefixed, same shape as
+  // `assets/assets/icons/masi/` below — `flutter build web` adds one
+  // `assets/` on top of the pubspec-relative `assets/fonts/Roboto-*.ttf`
+  // path. `assets/fonts/MaterialIcons-Regular.otf` above is a Flutter
+  // BUILT-IN font, not pubspec-declared, so it does NOT get the extra
+  // prefix — the two paths are deliberately different shapes.
+  write('assets/assets/fonts/Roboto-Regular.ttf');
   write('assets/shaders/ink_sparkle.frag');
   write('assets/packages/cupertino_icons/assets/CupertinoIcons.ttf');
   write('assets/assets/icons/masi/masi_add.svg');
@@ -107,7 +113,13 @@ void main() {
     // an accident, so a future "exclude large binary assets" cleanup does
     // not silently re-introduce the cross-origin fetch this fix removed.
     test('does not exclude bundled font files', () {
-      expect(isPrecacheExcluded('assets/fonts/Roboto-Regular.ttf'), isFalse);
+      // Real emitted path is double-`assets`-prefixed (see the fixture
+      // helper above) — a single-prefixed path here would never have
+      // caught the D1 bug, since isPrecacheExcluded has no font-specific
+      // rule at all and this test's job is to prove that absence on the
+      // path shape that actually ships.
+      expect(isPrecacheExcluded('assets/assets/fonts/Roboto-Regular.ttf'),
+          isFalse);
     });
   });
 
@@ -152,7 +164,8 @@ void main() {
       expect(manifest.urls, contains('sqlite3.wasm'));
       expect(manifest.urls, contains('drift_worker.js'));
       expect(manifest.urls, contains('assets/assets/icons/masi/masi_add.svg'));
-      expect(manifest.urls, contains('assets/fonts/Roboto-Regular.ttf'));
+      expect(
+          manifest.urls, contains('assets/assets/fonts/Roboto-Regular.ttf'));
 
       expect(manifest.urls, isNot(contains('sw.js')));
       expect(manifest.urls, isNot(contains('main.dart.js')));

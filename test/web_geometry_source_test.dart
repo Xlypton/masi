@@ -171,10 +171,16 @@ void main() {
       }
       final engineFile = found ?? File(relative);
       if (!engineFile.existsSync()) {
-        // Skip rather than fail: a differently-laid-out SDK must not turn this
-        // guard into a red herring. It still runs on this machine and in CI.
-        markTestSkipped('engine source not found at ${engineFile.path}');
-        return;
+        // FAIL rather than skip: a guard that goes green when it cannot
+        // check anything is worthless — its entire job is to fail when an
+        // SDK upgrade moves this file and silently reintroduces the
+        // viewport-meta mismatch. Either the SDK layout moved (ascend from
+        // Platform.resolvedExecutable further, or re-derive `relative` from
+        // the current flutter_web_sdk tree) or the file was renamed
+        // upstream — re-point the locator and re-verify the engine's
+        // `..content =` viewport assignment still exists before restoring
+        // this test.
+        fail('engine source not found at ${engineFile.path}');
       }
 
       // `..content =` is followed by one or more adjacent Dart string literals.
