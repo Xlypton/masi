@@ -437,3 +437,46 @@ ALTER TABLE public.backups ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "backups_owner_all" ON public.backups;
 CREATE POLICY "backups_owner_all" ON public.backups FOR ALL TO authenticated
   USING (user_id = (auth.uid())::text) WITH CHECK (user_id = (auth.uid())::text);
+
+
+-- ============================================================================
+-- LOOKUP INDEXES (delta 2026-08-06 — see migrations/20260806_sync_lookup_indexes.sql)
+--
+-- Kept here so a project provisioned fresh from this file comes up identical
+-- to live, which is the schema-drift bug class #64/#65/#72 exists to prevent.
+-- Postgres indexes a PRIMARY KEY and a UNIQUE constraint automatically and
+-- nothing else — not foreign keys — so before this delta every one of these
+-- filters was a sequential scan.
+--
+-- "ownerId" is the RLS predicate on EVERY table
+-- (USING ("ownerId" = (auth.uid())::text)), so it is evaluated on every row of
+-- every access regardless of what the client asked for; `fetchOwnRows` then
+-- filters on it explicitly across all nine sync tables at once.
+--
+-- These are deliberately NOT partial on "deletedAt", unlike their local Drift
+-- counterparts in lib/core/db/tables.dart: the sync engine pulls TOMBSTONES ON
+-- PURPOSE (a soft delete has to reach the other devices), so a
+-- `WHERE "deletedAt" IS NULL` index would not apply to these queries at all.
+-- See the migration file for the full derivation, including which columns are
+-- left unindexed and why.
+-- ============================================================================
+
+CREATE INDEX IF NOT EXISTS idx_profiles_owner ON public.profiles ("ownerId");
+CREATE INDEX IF NOT EXISTS idx_areas_owner    ON public.areas    ("ownerId");
+CREATE INDEX IF NOT EXISTS idx_sectors_owner  ON public.sectors  ("ownerId");
+CREATE INDEX IF NOT EXISTS idx_walls_owner    ON public.walls    ("ownerId");
+CREATE INDEX IF NOT EXISTS idx_photos_owner   ON public.photos   ("ownerId");
+CREATE INDEX IF NOT EXISTS idx_routes_owner   ON public.routes   ("ownerId");
+CREATE INDEX IF NOT EXISTS idx_ascents_owner  ON public.ascents  ("ownerId");
+CREATE INDEX IF NOT EXISTS idx_comments_owner ON public.comments ("ownerId");
+CREATE INDEX IF NOT EXISTS idx_likes_owner    ON public.likes    ("ownerId");
+
+CREATE INDEX IF NOT EXISTS idx_walls_shared
+  ON public.walls ("visibility") WHERE "visibility" = 'shared';
+CREATE INDEX IF NOT EXISTS idx_ascents_shared
+  ON public.ascents ("visibility") WHERE "visibility" = 'shared';
+
+CREATE INDEX IF NOT EXISTS idx_photos_wall   ON public.photos   ("wallId");
+CREATE INDEX IF NOT EXISTS idx_routes_wall   ON public.routes   ("wallId");
+CREATE INDEX IF NOT EXISTS idx_comments_wall ON public.comments ("wallId");
+CREATE INDEX IF NOT EXISTS idx_likes_wall    ON public.likes    ("wallId");
