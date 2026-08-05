@@ -104,6 +104,37 @@ void main() {
       );
     });
 
+    test('BOUNDS the open — an unbounded WasmDatabase.open leaves the verdict '
+        'at `probing` forever, which the create-topo interlock reads as '
+        'allow-creation', () {
+      // Source-level because `connection_web.dart` imports
+      // `package:drift/wasm.dart` -> `dart:js_interop` and cannot be loaded by
+      // the Dart VM at all. The bound's BEHAVIOUR is driven for real in
+      // `test/core/db/storage_durability_test.dart`'s `boundStorageOpen` group;
+      // what can only be checked here is that production actually goes through
+      // it. `.timeout(` inline would satisfy neither test, hence the named
+      // helper.
+      final code = _stripCommentLines(File(webPath).readAsStringSync());
+      final boundAt = code.indexOf('boundStorageOpen(');
+      final openAt = code.indexOf('WasmDatabase.open(');
+
+      expect(
+        boundAt,
+        isNonNegative,
+        reason: 'drift 2.34.2 has four awaits on this path that can never '
+            'complete, and the sqlite3 OPFS VFS blocks on '
+            '`Atomics.wait(..., -1)` with no timeout — nothing else stops a '
+            'wedged worker hanging the open for the lifetime of the page',
+      );
+      expect(openAt, isNonNegative, reason: 'expected a WasmDatabase.open call');
+      expect(
+        boundAt,
+        lessThan(openAt),
+        reason: 'the open must be WRAPPED by the bound, not merely mentioned '
+            'next to it',
+      );
+    });
+
     test('does NOT pass moveExistingIndexedDbToOpfs — drift 2.34.2 cannot '
         'perform that move safely', () {
       // Comment-stripped: the doc block above the `WasmDatabase.open` call

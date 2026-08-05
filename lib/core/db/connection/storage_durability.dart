@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 
 /// Where the local database actually ended up living, as reported by the
@@ -333,6 +335,70 @@ String? storageRetryNotice(StorageDurability durability) {
   }
   return "Your topos couldn't be opened — this device's storage isn't "
       'responding. Nothing has been deleted.';
+}
+
+/// How long the platform connection layer's OPEN may take before it is treated
+/// as a failure rather than as slowness.
+///
+/// 20 seconds. Justification, in both directions:
+///
+///  * FLOOR — what a legitimate cold open costs. `WasmDatabase.open` fetches
+///    `drift_worker.js`, spawns a dedicated and a shared worker, runs the
+///    browser-feature probe and acquires OPFS handles. On the deployed site
+///    that is sub-second warm; the pathological legitimate case is a cold
+///    low-end Android on slow mobile data fetching the worker script for the
+///    first time. 20s covers that with room to spare, and — importantly — it
+///    does NOT have to cover the expensive parts: `WasmSqlite3.loadFromUrl`,
+///    VFS setup and the v1->v9 migration all happen INSIDE the worker on the
+///    first query (drift 2.34.2's `wasm_setup/shared.dart:284` `LazyDatabase`),
+///    which this timeout never sees.
+///  * CEILING — it must be smaller than `main.dart`'s `kBootStorageDeadline`
+///    (30s), so that when the open is the thing that wedged, its own specific
+///    reason ("did not finish opening") is published BEFORE boot's generic
+///    "did not answer its first query" fallback can fire. A subsystem that
+///    knows what broke should always get to say so first.
+///
+/// What it CANNOT do: unwedge anything. drift's four unbounded awaits and the
+/// sqlite3 OPFS VFS's `Atomics.wait(int32View, _responseIndex, -1)`
+/// (`sync_channel.dart:62`, no timeout) live inside web workers. If Android
+/// Chrome kills the VFS server worker of a backgrounded PWA, the database
+/// worker blocks forever and cannot even process a `close()`. This timeout only
+/// guarantees that OUR side stops waiting and says so honestly; the worker
+/// stays wedged until the page is reloaded.
+const Duration kStorageOpenTimeout = Duration(seconds: 20);
+
+/// Bounds an otherwise-unbounded platform database [open].
+///
+/// `WasmDatabase.open` has no timeout of its own, and neither does anything
+/// drift calls underneath it, so a wedged worker used to leave the returned
+/// future pending for the lifetime of the page: no verdict, no error, no
+/// report, and — because `storageDurabilityProvider` stays
+/// [StorageDurability.probing] — the create-topo interlock reading that as
+/// "allow creation".
+///
+/// Turns that silence into a `TimeoutException` whose `toString()` names both
+/// the subsystem and the bound, so the connection layer's existing
+/// `catch`/report/rethrow path publishes it verbatim as
+/// [StorageDurability.unavailableReason] and the release `masi/storage:` log
+/// line carries it. Deliberately THROWS rather than returning a fallback
+/// executor: there is no honest fallback, and inventing one is how L1
+/// (a silent in-memory database) happened in the first place.
+///
+/// Lives here, in the VM-compatible vocabulary file, rather than inline in
+/// `connection_web.dart` — that file imports `package:drift/wasm.dart` and so
+/// `dart:js_interop`, which no `flutter test` can load. The bound is the part
+/// worth testing, so the bound is the part that lives somewhere testable.
+Future<T> boundStorageOpen<T>(
+  Future<T> open, {
+  Duration timeout = kStorageOpenTimeout,
+}) {
+  return open.timeout(
+    timeout,
+    onTimeout: () => throw TimeoutException(
+      'the browser did not finish opening the local database',
+      timeout,
+    ),
+  );
 }
 
 /// Logs [durability] — deliberately NOT behind `kDebugMode`.

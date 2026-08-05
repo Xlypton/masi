@@ -227,10 +227,27 @@ QueryExecutor openConnection({
       // function where we cannot interpose. Re-enable this only behind a
       // genuinely crash-safe migration (own in-progress marker, partial-OPFS
       // cleanup before open), proven on a real cross-origin-isolated browser.
-      final result = await WasmDatabase.open(
-        databaseName: 'climbtopo',
-        sqlite3Uri: Uri.parse('sqlite3.wasm'),
-        driftWorkerUri: Uri.parse('drift_worker.js'),
+      //
+      // `boundStorageOpen` is what stops this await being unbounded. Neither
+      // `WasmDatabase.open` nor anything drift calls underneath it has a
+      // timeout (`grep -rE 'timeout|Future\.any'` over `drift-2.34.2`'s web
+      // sources finds nothing), and four of its awaits can never complete —
+      // the worst being `_loadLockedWasmVfs`'s
+      // `messageEvent.forTarget(worker).first`, which has no error listener at
+      // all. Without a bound a wedged worker leaves this future pending for the
+      // lifetime of the page: no verdict, no error, and
+      // `storageDurabilityProvider` stuck at `probing`, which the create-topo
+      // interlock reads as "allow creation". The `catch` below then turns the
+      // `TimeoutException` into an honest `unavailable` verdict.
+      //
+      // It cannot unwedge the worker — see `kStorageOpenTimeout`'s doc. Only a
+      // page reload does that.
+      final result = await boundStorageOpen(
+        WasmDatabase.open(
+          databaseName: 'climbtopo',
+          sqlite3Uri: Uri.parse('sqlite3.wasm'),
+          driftWorkerUri: Uri.parse('drift_worker.js'),
+        ),
       );
       onStorageReport?.call(
         StorageDurability(
