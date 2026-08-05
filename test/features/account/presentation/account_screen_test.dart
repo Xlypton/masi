@@ -20,7 +20,7 @@ import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart' show SystemChannels;
+import 'package:flutter/services.dart' show PlatformException, SystemChannels;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -2000,5 +2000,99 @@ void main() {
         expect(clipboardText, contains('denied'));
       },
     );
+
+    testWidgets(
+      'assertion 8: a rejected Clipboard.setData surfaces a user-visible '
+      'error message, never the success confirmation, and produces no '
+      'unhandled async error (the review finding: a bare await + a '
+      "discarded Future meant the button's only failure mode was silence)",
+      (tester) async {
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(SystemChannels.platform, (
+          call,
+        ) async {
+          if (call.method == 'Clipboard.setData') {
+            throw PlatformException(
+              code: 'unavailable',
+              message: 'clipboard-write denied',
+            );
+          }
+          return null;
+        });
+        addTearDown(
+          () => messenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            null,
+          ),
+        );
+
+        final (container, _) = makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.ensureVisible(
+          find.byKey(const Key('account-storage-copy')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('account-storage-copy')));
+        await tester.pump();
+
+        // No unhandled async error: reaching this line at all (rather than
+        // the test framework failing on an uncaught exception thrown into
+        // the zone) is itself part of what this assertion is checking.
+        expect(find.textContaining("Couldn't copy diagnostics"), findsOneWidget);
+        expect(find.text('Diagnostics copied.'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'assertion 9: a notApplicable persistence outcome renders truthful '
+      'native wording, never the literal "persisted: false" — the type '
+      "doc's own words forbid reading that as \"native storage is fragile\"",
+      (tester) async {
+        final (container, _) = makeContainer(
+          persistence: const StoragePersistenceStatus(
+            outcome: StoragePersistOutcome.notApplicable,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('persisted: false'), findsNothing);
+        expect(find.textContaining('notApplicable'), findsNothing);
+        expect(
+          find.textContaining('this platform has no evictable storage'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    for (final outcome in [
+      StoragePersistOutcome.denied,
+      StoragePersistOutcome.granted,
+      StoragePersistOutcome.failed,
+      StoragePersistOutcome.unsupported,
+    ]) {
+      testWidgets(
+        'assertion 10: web outcome $outcome still renders the pre-existing '
+        '"<outcome> (persisted: <bool>)" row unchanged',
+        (tester) async {
+          final (container, _) = makeContainer(
+            persistence: StoragePersistenceStatus(outcome: outcome),
+          );
+
+          await tester.pumpWidget(_wrap(container, const AccountScreen()));
+          await tester.pumpAndSettle();
+
+          expect(
+            find.textContaining('${outcome.name} (persisted: false)'),
+            findsOneWidget,
+          );
+        },
+      );
+    }
   });
 }

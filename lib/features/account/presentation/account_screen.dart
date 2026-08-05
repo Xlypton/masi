@@ -1045,8 +1045,7 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
         (durability.unavailable ? 'unavailable' : 'probing');
     final missingFeatures = _sortedMissingFeatureNames(durability);
     final errorReason = durability.unavailableReason;
-    final evictionLabel =
-        '${persistence.outcome.name} (persisted: ${persistence.persisted})';
+    final evictionLabel = _evictionLabel(persistence);
     final spaceLabel = _spaceUsedLabel(persistence.estimate);
 
     return Column(
@@ -1133,9 +1132,18 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
             ),
           ),
           const SizedBox(width: MasiSpacing.sm),
+          // `SelectableText`, not `Text`: this is the honest fallback for
+          // when [_handleCopy] fails (permissions-policy, an unfocused
+          // document, a non-secure context — see that method's doc) — a
+          // support-diagnostics row whose ONLY job is "get this string out of
+          // the app" must still let the user copy it by hand if the
+          // clipboard API itself won't cooperate. `find.textContaining` still
+          // matches it (`_MatchTextFinder` special-cases `EditableText`,
+          // which `SelectableText` builds internally), so no existing
+          // assertion needed to change.
           Expanded(
             flex: 2,
-            child: Text(
+            child: SelectableText(
               value,
               textAlign: TextAlign.end,
               style: textTheme.bodySmall,
@@ -1146,21 +1154,60 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
     );
   }
 
+  /// [_handleCopy]'s error case is user-visible EXCEPT when the widget has
+  /// since been unmounted (screen popped mid-copy) — there is no messenger
+  /// left to show anything to at that point, and that is fine: nothing was
+  /// silently swallowed, the user simply isn't looking anymore.
+  ///
+  /// Not a [MasiPendingButton]: that widget only ships filled/text chrome
+  /// (see its doc), and this row already commits to the plain
+  /// [OutlinedButton] pair used for both actions here. The copy itself is a
+  /// single non-cancellable clipboard write with no meaningful in-flight
+  /// state to show a spinner for — the actual bug this fixes is the DROPPED
+  /// FUTURE and the silent failure, not a missing pending cue.
   Future<void> _handleCopy(
     BuildContext context,
     StorageDurability durability,
     StoragePersistenceStatus persistence,
   ) async {
     final messenger = ScaffoldMessenger.of(context);
-    await Clipboard.setData(
-      ClipboardData(
-        text: diagnosticsClipboardLine(durability, persistence),
-      ),
-    );
+    try {
+      await Clipboard.setData(
+        ClipboardData(
+          text: diagnosticsClipboardLine(durability, persistence),
+        ),
+      );
+    } catch (e) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            "Couldn't copy diagnostics — select the values above to copy "
+            'them by hand ($e).',
+          ),
+        ),
+      );
+      return;
+    }
     messenger.showSnackBar(
       const SnackBar(content: Text('Diagnostics copied.')),
     );
   }
+}
+
+/// [_diagnosticsRow]'s "Eviction protection" value. [StoragePersistOutcome
+/// .notApplicable] means this platform has no evictable-storage concept at
+/// all (see `storage_persistence_types.dart`'s doc on that enum value,
+/// verbatim: "Callers must NOT read that as 'native storage is fragile'") —
+/// rendering it as `notApplicable (persisted: false)` puts a raw `false`
+/// next to the word "protection" on every native build, which reads exactly
+/// like the thing the type doc forbids. Every other outcome is a real
+/// browser answer and renders exactly as before.
+String _evictionLabel(StoragePersistenceStatus persistence) {
+  if (persistence.outcome == StoragePersistOutcome.notApplicable) {
+    return 'Not applicable — this platform has no evictable storage to '
+        'protect';
+  }
+  return '${persistence.outcome.name} (persisted: ${persistence.persisted})';
 }
 
 /// [StorageDurability.missingFeatures]' names, sorted — shared by the
