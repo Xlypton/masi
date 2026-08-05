@@ -1001,4 +1001,320 @@ void main() {
       expect(outcome.fractionFreed, isNull);
     });
   });
+
+  group('PublicPhotoPruneOutcome.automaticReliefExhausted (#51)', () {
+    test(
+      'true for nothingPrunable and poolExhausted — the two reasons that mean '
+      '"still over pressure, nothing further automatic pruning can do"',
+      () {
+        for (final reason in [
+          PublicPhotoPruneReason.nothingPrunable,
+          PublicPhotoPruneReason.poolExhausted,
+        ]) {
+          expect(
+            PublicPhotoPruneOutcome(reason: reason).automaticReliefExhausted,
+            isTrue,
+            reason: '${reason.name} should exhaust automatic relief',
+          );
+        }
+      },
+    );
+
+    test(
+      'false for every other reason — including capReached, which will '
+      'likely resolve on the very next pull and must not raise a false alarm',
+      () {
+        for (final reason in [
+          PublicPhotoPruneReason.noEstimate,
+          PublicPhotoPruneReason.belowHighWatermark,
+          PublicPhotoPruneReason.unknownSession,
+          PublicPhotoPruneReason.relieved,
+          PublicPhotoPruneReason.estimateLost,
+          PublicPhotoPruneReason.capReached,
+        ]) {
+          expect(
+            PublicPhotoPruneOutcome(reason: reason).automaticReliefExhausted,
+            isFalse,
+            reason: '${reason.name} should NOT exhaust automatic relief',
+          );
+        }
+      },
+    );
+  });
+
+  group(
+    'clearAllCachedForeignPhotos — the manual, consented, floor-piercing '
+    'action (#51)',
+    () {
+      test(
+        'clears every foreign key, INCLUDING the ones inside the '
+        'keepNewestForeign floor pruneIfUnderPressure always protects',
+        () async {
+          for (var i = 0; i < 5; i++) {
+            await seedWall(
+              id: 'w-$i',
+              ownerId: 'them',
+              updatedAt: i + 1,
+              keys: ['photos/f-$i.jpg'],
+            );
+          }
+
+          final outcome = await makeService(
+            // Comfortably BELOW the high watermark — proves this action is
+            // not gated on pressure the way pruneIfUnderPressure is.
+            storage: _ScriptedStorage(const [0.10]),
+            keepNewestForeign: 2,
+          ).clearAllCachedForeignPhotos();
+
+          // pruneIfUnderPressure with this same floor would stop at 3
+          // (5 - keepNewest 2); this action clears all 5.
+          expect(
+            photoFiles.deleted.toSet(),
+            {
+              'photos/f-0.jpg',
+              'photos/f-1.jpg',
+              'photos/f-2.jpg',
+              'photos/f-3.jpg',
+              'photos/f-4.jpg',
+            },
+          );
+          expect(outcome.clearedKeys, hasLength(5));
+          expect(outcome.didClear, isTrue);
+        },
+      );
+
+      test(
+        'own and unowned photos survive even though the floor is widened to '
+        'zero — ownership protection does not depend on keepNewest at all',
+        () async {
+          await seedWall(
+            id: 'w-own',
+            ownerId: 'me',
+            updatedAt: 1,
+            keys: ['photos/own.jpg'],
+          );
+          await seedWall(
+            id: 'w-unowned',
+            ownerId: null,
+            updatedAt: 2,
+            keys: ['photos/unowned.jpg'],
+          );
+          await seedWall(
+            id: 'w-foreign',
+            ownerId: 'them',
+            updatedAt: 3,
+            keys: ['photos/foreign.jpg'],
+          );
+
+          final outcome = await makeService(
+            storage: _ScriptedStorage(const [0.10]),
+          ).clearAllCachedForeignPhotos();
+
+          expect(outcome.clearedKeys, ['photos/foreign.jpg']);
+          expect(photoFiles.deleted, isNot(contains('photos/own.jpg')));
+          expect(photoFiles.deleted, isNot(contains('photos/unowned.jpg')));
+        },
+      );
+
+      test(
+        'a key shared by an own row and a foreign row survives — the bytes '
+        'are one object and one of its referents is irreplaceable',
+        () async {
+          await seedWall(
+            id: 'w-own',
+            ownerId: 'me',
+            updatedAt: 1,
+            keys: ['photos/shared.jpg'],
+          );
+          await seedWall(
+            id: 'w-foreign',
+            ownerId: 'them',
+            updatedAt: 2,
+            keys: ['photos/shared.jpg'],
+          );
+          await seedWall(
+            id: 'w-foreign-2',
+            ownerId: 'them',
+            updatedAt: 3,
+            keys: ['photos/solo.jpg'],
+          );
+
+          final outcome = await makeService(
+            storage: _ScriptedStorage(const [0.10]),
+          ).clearAllCachedForeignPhotos();
+
+          expect(outcome.clearedKeys, isNot(contains('photos/shared.jpg')));
+          expect(outcome.clearedKeys, ['photos/solo.jpg']);
+        },
+      );
+
+      test(
+        'a photo whose wall row is missing entirely is never cleared — the '
+        'join cannot establish ownership, so it is protected regardless of '
+        'the widened floor',
+        () async {
+          await seedWall(
+            id: 'w-orphan',
+            ownerId: 'them',
+            updatedAt: 1,
+            keys: ['photos/orphan.jpg'],
+          );
+          await seedWall(
+            id: 'w-foreign',
+            ownerId: 'them',
+            updatedAt: 2,
+            keys: ['photos/foreign.jpg'],
+          );
+          await db.customStatement('PRAGMA foreign_keys = OFF');
+          await db.customStatement("DELETE FROM walls WHERE id = 'w-orphan'");
+          await db.customStatement('PRAGMA foreign_keys = ON');
+
+          final outcome = await makeService(
+            storage: _ScriptedStorage(const [0.10]),
+          ).clearAllCachedForeignPhotos();
+
+          expect(outcome.clearedKeys, isNot(contains('photos/orphan.jpg')));
+          expect(outcome.clearedKeys, ['photos/foreign.jpg']);
+        },
+      );
+
+      test(
+        'no known session clears nothing — ownership cannot be established '
+        'for any photo without a uid',
+        () async {
+          await seedWall(
+            id: 'w-foreign',
+            ownerId: 'them',
+            updatedAt: 1,
+            keys: ['photos/foreign.jpg'],
+          );
+
+          final outcome = await makeService(
+            storage: _ScriptedStorage(const [0.10]),
+            ownUid: null,
+          ).clearAllCachedForeignPhotos();
+
+          expect(photoFiles.deleted, isEmpty);
+          expect(outcome.clearedKeys, isEmpty);
+          expect(outcome.didClear, isFalse);
+        },
+      );
+
+      test(
+        'is NOT capped by maxDeletionsPerPass — a cache far larger than any '
+        'automatic pass would ever touch is cleared in one call',
+        () async {
+          for (var i = 0; i < 20; i++) {
+            await seedWall(
+              id: 'w-${i.toString().padLeft(2, '0')}',
+              ownerId: 'them',
+              updatedAt: i + 1,
+              keys: ['photos/f-${i.toString().padLeft(2, '0')}.jpg'],
+            );
+          }
+
+          final outcome = await makeService(
+            storage: _ScriptedStorage(const [0.10]),
+            maxDeletionsPerPass: 5,
+          ).clearAllCachedForeignPhotos();
+
+          expect(outcome.clearedKeys, hasLength(20));
+        },
+      );
+
+      test(
+        'byte-less rows are skipped free of charge — a row is not bytes, same '
+        'as the automatic pass, so nothing is "cleared" that held nothing',
+        () async {
+          await seedWall(
+            id: 'w-absent',
+            ownerId: 'them',
+            updatedAt: 1,
+            keys: ['photos/absent.jpg'],
+          );
+          await seedWall(
+            id: 'w-present',
+            ownerId: 'them',
+            updatedAt: 2,
+            keys: ['photos/present.jpg'],
+          );
+          photoFiles.absent.add('photos/absent.jpg');
+
+          final outcome = await makeService(
+            storage: _ScriptedStorage(const [0.10]),
+          ).clearAllCachedForeignPhotos();
+
+          expect(outcome.clearedKeys, ['photos/present.jpg']);
+          expect(photoFiles.deleted, isNot(contains('photos/absent.jpg')));
+        },
+      );
+
+      test(
+        'a per-key delete failure is counted, not fatal — the rest of the '
+        'clear still completes',
+        () async {
+          for (var i = 0; i < 3; i++) {
+            await seedWall(
+              id: 'w-$i',
+              ownerId: 'them',
+              updatedAt: i + 1,
+              keys: ['photos/f-$i.jpg'],
+            );
+          }
+          photoFiles.throwOn.add('photos/f-1.jpg');
+
+          final outcome = await makeService(
+            storage: _ScriptedStorage(const [0.10]),
+          ).clearAllCachedForeignPhotos();
+
+          expect(outcome.clearedKeys, hasLength(2));
+          expect(outcome.failedDeleteCount, 1);
+          expect(outcome.clearedKeys, isNot(contains('photos/f-1.jpg')));
+        },
+      );
+
+      test(
+        'reports the fraction before and after, reading the estimate exactly '
+        'twice — once before, once after, never mid-clear',
+        () async {
+          await seedWall(
+            id: 'w-foreign',
+            ownerId: 'them',
+            updatedAt: 1,
+            keys: ['photos/foreign.jpg'],
+          );
+          final storage = _ScriptedStorage(const [0.9, 0.5]);
+
+          final outcome = await makeService(
+            storage: storage,
+          ).clearAllCachedForeignPhotos();
+
+          expect(outcome.usedFractionBefore, 0.9);
+          expect(outcome.usedFractionAfter, 0.5);
+          expect(storage.estimateCalls, 2);
+        },
+      );
+
+      test(
+        'works even when the platform gives no estimate at all — the action '
+        'is meaningful with or without a pressure signal',
+        () async {
+          await seedWall(
+            id: 'w-foreign',
+            ownerId: 'them',
+            updatedAt: 1,
+            keys: ['photos/foreign.jpg'],
+          );
+
+          final outcome = await makeService(
+            storage: _ScriptedStorage(const [null]),
+          ).clearAllCachedForeignPhotos();
+
+          expect(outcome.clearedKeys, ['photos/foreign.jpg']);
+          expect(outcome.usedFractionBefore, isNull);
+          expect(outcome.usedFractionAfter, isNull);
+        },
+      );
+    },
+  );
 }

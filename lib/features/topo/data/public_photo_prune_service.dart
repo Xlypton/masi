@@ -237,12 +237,89 @@ class PublicPhotoPruneOutcome {
       ? null
       : usedFractionBefore! - usedFractionAfter!;
 
+  /// True when this pass ended STILL under pressure with nothing further it
+  /// is automatically permitted to delete — #49 P3 (task #51). The two
+  /// reasons that mean this:
+  ///
+  ///  * [PublicPhotoPruneReason.nothingPrunable] — no evictable foreign bytes
+  ///    existed outside the [kPruneKeepNewestForeign] floor to begin with
+  ///    (the confirmed #46 terminal case: one pull from cold leaves exactly
+  ///    the floor's worth of foreign bytes cached, because
+  ///    `kSharedPhotoByteBudgetPerPull == kPruneKeepNewestForeign`);
+  ///  * [PublicPhotoPruneReason.poolExhausted] — this pass (or an earlier
+  ///    one) DID free everything outside the floor, and pressure is still
+  ///    high regardless.
+  ///
+  /// Both describe the identical remaining state: every foreign byte left on
+  /// this device sits inside the protected floor, and this service's own
+  /// policy will never touch it. That is exactly the gap the manual,
+  /// explicitly-consented "clear cached community photos" action
+  /// (`PublicPhotoPruneService.clearAllCachedForeignPhotos`) exists to close
+  /// — so a caller can use this getter to decide whether to offer that
+  /// action, without re-deriving the reason logic itself.
+  ///
+  /// Deliberately EXCLUDES [PublicPhotoPruneReason.capReached]: there IS more
+  /// prunable content there, just deferred past this pass's
+  /// [PublicPhotoPruneService.maxDeletionsPerPass] cap — the next pull
+  /// finishes the job automatically, so warning the user would be both noisy
+  /// and wrong (the very next successful pull may well resolve it on its
+  /// own). Also excludes [PublicPhotoPruneReason.estimateLost]: the pressure
+  /// signal went dark mid-sweep, so there is no reliable evidence pressure is
+  /// STILL high — acting on a guess is the one thing this whole file refuses
+  /// to do (see the library doc).
+  bool get automaticReliefExhausted =>
+      reason == PublicPhotoPruneReason.nothingPrunable ||
+      reason == PublicPhotoPruneReason.poolExhausted;
+
   @override
   String toString() =>
       'PublicPhotoPruneOutcome(reason: ${reason.name}, '
       'deleted: ${deletedKeys.length}, failed: $failedDeleteCount, '
       'fraction: $usedFractionBefore -> $usedFractionAfter, '
       'fractionFreed: $fractionFreed)';
+}
+
+/// What one manual, explicitly-consented "clear cached community photos"
+/// pass did (#49 P3 / task #51) — the sibling of [PublicPhotoPruneOutcome]
+/// for [PublicPhotoPruneService.clearAllCachedForeignPhotos].
+///
+/// Deliberately a SEPARATE type rather than reusing [PublicPhotoPruneOutcome]:
+/// that type's [PublicPhotoPruneReason] enumerates reasons an AUTOMATIC pass
+/// stopped (watermarks, caps, batching) — none of which apply here. This pass
+/// is not triggered by pressure, is not capped, and does not stop early; it
+/// either clears everything it is allowed to (every definitely-foreign key,
+/// INCLUDING the [kPruneKeepNewestForeign] floor) or it does not run at all
+/// (no known session).
+class PublicPhotoManualClearOutcome {
+  const PublicPhotoManualClearOutcome({
+    this.clearedKeys = const [],
+    this.failedDeleteCount = 0,
+    this.usedFractionBefore,
+    this.usedFractionAfter,
+  });
+
+  /// Keys whose bytes were successfully deleted.
+  final List<String> clearedKeys;
+
+  /// Deletes that threw — see [PublicPhotoPruneOutcome.failedDeleteCount] for
+  /// why this does not abort the rest of the pass.
+  final int failedDeleteCount;
+
+  /// `usedFraction` immediately before this pass ran, or `null` when the
+  /// platform gave no estimate.
+  final double? usedFractionBefore;
+
+  /// `usedFraction` immediately after, or `null` for the same reason.
+  final double? usedFractionAfter;
+
+  /// Whether any bytes were actually freed.
+  bool get didClear => clearedKeys.isNotEmpty;
+
+  @override
+  String toString() =>
+      'PublicPhotoManualClearOutcome(cleared: ${clearedKeys.length}, '
+      'failed: $failedDeleteCount, '
+      'fraction: $usedFractionBefore -> $usedFractionAfter)';
 }
 
 /// Every live photo row paired with its owning wall's ownership + recency.
@@ -333,7 +410,15 @@ class PublicPhotoPruneService {
       );
     }
 
-    final order = await _keysHoldingBytes(await _evictionOrder(ownUid));
+    final order = await _keysHoldingBytes(
+      await _evictionOrder(ownUid),
+      // Preserves the exact pre-existing cap: `maxDeletionsPerPass + 1` lets
+      // `_sweep` distinguish `capReached` from `poolExhausted` (see
+      // `_keysHoldingBytes`'s doc) without spending an unbounded number of
+      // presence probes on a cache far larger than one pass could ever
+      // delete.
+      limit: maxDeletionsPerPass + 1,
+    );
     if (order.isEmpty) {
       return PublicPhotoPruneOutcome(
         reason: PublicPhotoPruneReason.nothingPrunable,
@@ -345,6 +430,89 @@ class PublicPhotoPruneService {
     return _sweep(order: order, before: before);
   }
 
+  /// Deletes EVERY cached foreign photo's bytes this device holds, INCLUDING
+  /// the [keepNewestForeign] floor [pruneIfUnderPressure] always protects —
+  /// the one thing that floor exists to be immune to except this single,
+  /// explicitly user-consented action (#49 P3 / task #51).
+  ///
+  /// WHY THIS IS SAFE TO WIDEN PAST THE FLOOR. Ownership protection —
+  /// [PublicPhotoPruner.selectForEviction]'s own-uid check, plus this
+  /// service's own "unrankable row" and "key shared with a withheld row"
+  /// guards in [_evictionOrder] — is unconditional and does not depend on
+  /// [PublicPhotoPruneService.keepNewestForeign] at all. Passing `keepNewest:
+  /// 0` only removes the "keep browsing the feed uninterrupted" courtesy; it
+  /// cannot and does not touch the never-evict-own guarantee, which has no
+  /// keepNewest-shaped escape hatch anywhere in this file.
+  ///
+  /// WHY THIS IS NOT GATED ON PRESSURE, UNLIKE [pruneIfUnderPressure]. The
+  /// user has already explicitly asked to reclaim everything sharable right
+  /// now — in a UI action the caller has already put behind a consent dialog
+  /// (see `community_photo_clear_controller.dart`) — so re-checking the
+  /// watermark here would only produce a confusing no-op for someone who
+  /// pressed a button that promised to work. It also runs even when
+  /// `estimate()` is unavailable ([PublicPhotoManualClearOutcome
+  /// .usedFractionBefore]/`After` simply come back `null`), because the
+  /// action is meaningful with or without a pressure signal — the user just
+  /// wants the space back.
+  ///
+  /// WHY THIS IS UNCAPPED, UNLIKE a prune pass. [kPruneMaxDeletionsPerPass]
+  /// exists to bound a housekeeping sweep the user never asked for and might
+  /// not even know is running; a single explicit tap is the opposite of
+  /// that — the user asked for everything, and stopping partway through would
+  /// leave the very state ([PublicPhotoPruneReason.nothingPrunable] /
+  /// [PublicPhotoPruneReason.poolExhausted]) this action exists to escape.
+  ///
+  /// THIS METHOD PERFORMS NO CONSENT CHECK ITSELF — trusting the caller here
+  /// is deliberate, the same way [PhotoFiles.deletePhotoBytes] trusts ITS
+  /// caller, but it means this method must never be reachable from any
+  /// automatic path (a pull, a retry, app resume, connectivity regain).
+  /// [pruneIfUnderPressure] is the ONLY autonomous entry point into this
+  /// class; this is the only consent-gated one, and nothing in this file
+  /// calls it.
+  ///
+  /// Never throws: a signed-out/unknown-session device (where ownership can
+  /// never be established — see [pruneIfUnderPressure]'s identical guard)
+  /// clears nothing rather than guessing, and a per-key delete failure is
+  /// counted in [PublicPhotoManualClearOutcome.failedDeleteCount] rather than
+  /// aborting the rest of the pass.
+  Future<PublicPhotoManualClearOutcome> clearAllCachedForeignPhotos() async {
+    final before = await _readFraction();
+
+    final ownUid = _currentUid();
+    if (ownUid == null) {
+      return PublicPhotoManualClearOutcome(
+        usedFractionBefore: before,
+        usedFractionAfter: before,
+      );
+    }
+
+    final keys = await _keysHoldingBytes(
+      await _evictionOrder(ownUid, keepNewest: 0),
+      // No cap: this pass clears everything it is allowed to, in one go.
+    );
+
+    final cleared = <String>[];
+    var failures = 0;
+    for (final key in keys) {
+      try {
+        await _photoFiles.deletePhotoBytes(key);
+        cleared.add(key);
+      } catch (_) {
+        // Mirrors `_sweep`'s per-key guard: one stubborn key must not strand
+        // the rest of an explicit, user-requested clear.
+        failures++;
+      }
+    }
+
+    final after = await _readFraction();
+    return PublicPhotoManualClearOutcome(
+      clearedKeys: cleared,
+      failedDeleteCount: failures,
+      usedFractionBefore: before,
+      usedFractionAfter: after,
+    );
+  }
+
   /// [order], narrowed to the keys that ACTUALLY hold bytes right now.
   ///
   /// Without this the pass spends [maxDeletionsPerPass] on keys whose bytes are
@@ -354,18 +522,24 @@ class PublicPhotoPruneService {
   /// probing is much cheaper than the delete it is deciding about, and the walk
   /// stops as soon as it has more keys than this pass could possibly delete.
   ///
-  /// It collects [maxDeletionsPerPass] + 1 rather than exactly the cap so
-  /// [_sweep] can still distinguish its two stopping reasons: a leftover key is
-  /// what tells "the cap stopped me" ([PublicPhotoPruneReason.capReached]) from
-  /// "I ran out of things I was allowed to delete"
-  /// ([PublicPhotoPruneReason.poolExhausted]).
+  /// [limit], when given, callers pass [maxDeletionsPerPass] + 1 rather than
+  /// exactly the cap so [_sweep] can still distinguish its two stopping
+  /// reasons: a leftover key is what tells "the cap stopped me"
+  /// ([PublicPhotoPruneReason.capReached]) from "I ran out of things I was
+  /// allowed to delete" ([PublicPhotoPruneReason.poolExhausted]).
   ///
-  /// Order is preserved, so the sweep still deletes oldest-touched first.
-  Future<List<String>> _keysHoldingBytes(List<String> order) async {
-    final wanted = maxDeletionsPerPass + 1;
+  /// `limit: null` (used by [clearAllCachedForeignPhotos], which is never
+  /// capped) probes every candidate and returns every key that holds bytes.
+  ///
+  /// Order is preserved, so a bounded caller still deletes oldest-touched
+  /// first.
+  Future<List<String>> _keysHoldingBytes(
+    List<String> order, {
+    int? limit,
+  }) async {
     final present = <String>[];
     for (final key in order) {
-      if (present.length >= wanted) break;
+      if (limit != null && present.length >= limit) break;
       bool holdsBytes;
       try {
         holdsBytes = await _photoFiles.hasPhotoBytes(key);
@@ -386,7 +560,17 @@ class PublicPhotoPruneService {
   ///
   /// Permission only — this speaks about rows, so a key here may well hold no
   /// bytes at all. [_keysHoldingBytes] is what turns permission into work.
-  Future<List<String>> _evictionOrder(String ownUid) async {
+  ///
+  /// [keepNewest] overrides [keepNewestForeign] for one call — used by
+  /// [clearAllCachedForeignPhotos] to pass `0`, widening the offered pool to
+  /// EVERY definitely-foreign row instead of stopping at the floor.
+  /// Ownership protection below (own rows, unrankable rows, shared keys) does
+  /// not depend on [keepNewest] at all, so this can only ever widen the pool
+  /// past the floor — it can never reach past ownership.
+  Future<List<String>> _evictionOrder(
+    String ownUid, {
+    int? keepNewest,
+  }) async {
     final rows = await _db.customSelect(_candidateSql).get();
 
     final candidates = <PrunablePhoto>[];
@@ -439,7 +623,7 @@ class PublicPhotoPruneService {
     final offered = pruner.selectForEviction(
       photos: candidates,
       ownUid: ownUid,
-      keepNewest: keepNewestForeign,
+      keepNewest: keepNewest ?? keepNewestForeign,
     );
     final offeredSurrogates = offered.toSet();
 
