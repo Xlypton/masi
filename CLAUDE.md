@@ -42,10 +42,17 @@ file/line brief: `WEB_PORT_BRIEF.md`.
   import 'x_stub.dart' if (dart.library.io) 'x_native.dart' if (dart.library.js_interop) 'x_web.dart';
   ```
   `_native.dart` files hold existing code verbatim (iOS/Android stays bit-identical). `kIsWeb` is reserved
-  for behavioral gates on web-capable plugins. **Grep gate (CI + build_web.sh):**
-  `grep -r "dart:io" lib --include="*.dart" | grep -v _native.dart` must be empty (goes green at M2).
-- **CI floor:** `.github/workflows/ci.yml` (analyze+test required; web build + grep gate `continue-on-error`
-  until M2). Repo is local-first / not pushed; the workflow is the spec, `tool/build_web.sh` is the local gate.
+  for behavioral gates on web-capable plugins. **Grep gate (CI + build_web.sh) — DIRECTIVES ONLY:**
+  ```bash
+  grep -rlE "^[[:space:]]*(import|export)[[:space:]]+['\"]dart:io['\"]" lib --include="*.dart" | grep -v '_native.dart'
+  ```
+  must be empty. Do **not** use a raw substring `grep -r "dart:io" lib` — it returns ~43 hits on clean code,
+  because the seam files' doc comments legitimately name `dart:io` while explaining the conditional-import
+  split. That false-positive form is what used to keep this gate red on code that was already correct. Keep
+  the regex byte-identical across `tool/build_web.sh:40` and `.github/workflows/ci.yml`.
+- **CI floor:** `.github/workflows/ci.yml` — analyze, test, **and the `dart:io` gate** are required jobs; only
+  `web-build` is still `continue-on-error`. Repo is local-first; the workflow is the spec, `tool/build_web.sh`
+  is the local gate.
 - **`dart:io` on web COMPILES (it's stubbed), it does not fail the build.** `flutter build web` and
   `flutter build web --wasm` both succeed even with `import 'dart:io'` present — Dart 3.12 stubs the library
   and throws at *runtime*. So the grep gate is a **runtime-correctness guardrail, not a compile gate**: a
@@ -222,7 +229,7 @@ none of it shows up in a `grep -i dart:io`. Read this before touching sync, the 
 
 ```bash
 export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutter analyze   # must be 0 issues
-export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutter test        # 1930+ tests, must be green
+export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutter test        # 2500+ tests, must be green
 ```
 **Never drive a real image-codec decode in widget tests** — it hangs under fake-async. Use the injected
 `imageSize` / `TopoCanvasBody` harness (see existing tests).
