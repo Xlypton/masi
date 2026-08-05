@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:masi/core/coordinates/coordinate_transformer.dart';
+import 'package:masi/core/db/database_provider.dart' show photoFilesProvider;
 import 'package:masi/features/ar/domain/rock_box.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/application/rock_highlight_controller.dart';
@@ -379,6 +380,15 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
           // pre-existing hand-drawn fallback geometry (see that class's
           // doc) instead of ever throwing or hanging.
         });
+    _maybeProbeDecodedSize();
+  }
+
+  @override
+  void didUpdateWidget(TopoCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.imagePath != oldWidget.imagePath) {
+      _maybeProbeDecodedSize();
+    }
   }
 
   @override
@@ -387,6 +397,66 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       picture.dispose();
     }
     super.dispose();
+  }
+
+  /// Starts a best-effort probe for [widget.imagePath]'s REAL decoded size —
+  /// see [_decodedImageSize]'s doc for why. No-ops if a probe for this exact
+  /// path has already been started (or already resolved) — [_decodeProbePath]
+  /// tracks that. Called once from [initState] (the very first photo) and
+  /// again from [didUpdateWidget] whenever [widget.imagePath] actually
+  /// changes (a photo switch); never re-run for the SAME path on an
+  /// unrelated rebuild.
+  ///
+  /// Uses [PhotoImageProvider] — the same cross-platform (native `FileImage`
+  /// / web cached-blob-URL) dimension resolver [PhotoImage] itself decodes
+  /// through, so this shares that decode/cache rather than doubling it (see
+  /// `photo_image_source_native.dart`/`_web.dart`'s own dimension-probe
+  /// docs) — purely to LEARN the real size, never to gate rendering on it:
+  /// the `onError` branch deliberately does nothing (no error field, no
+  /// state at all) so a probe failure changes zero observable behavior,
+  /// unlike the pre-F-A2 architecture this deliberately does not repeat (see
+  /// [_decodedImageSize]'s doc).
+  void _maybeProbeDecodedSize() {
+    final path = widget.imagePath;
+    if (_decodeProbePath == path) return;
+    _decodeProbePath = path;
+    // A stale correction from whatever photo was previously active must
+    // never leak onto this new one while its own probe is in flight.
+    if (_decodedImageSize != null) {
+      setState(() => _decodedImageSize = null);
+    }
+
+    final photoFiles = ref.read(photoFilesProvider);
+    final stream = PhotoImageProvider(
+      path,
+      photoFiles: photoFiles,
+    ).resolve(const ImageConfiguration());
+    late ImageStreamListener listener;
+    listener = ImageStreamListener(
+      (info, synchronousCall) {
+        stream.removeListener(listener);
+        // Stale-result guard: this widget may have moved on to a DIFFERENT
+        // photo (or unmounted) while this decode was in flight.
+        if (!mounted || _decodeProbePath != path) return;
+        final real = Size(
+          info.image.width.toDouble(),
+          info.image.height.toDouble(),
+        );
+        if (real.width <= 0 || real.height <= 0 || real == widget.imageSize) {
+          // Degenerate, or already agrees with the persisted size — nothing
+          // to correct (the overwhelmingly common case).
+          return;
+        }
+        setState(() => _decodedImageSize = real);
+      },
+      onError: (error, stackTrace) {
+        stream.removeListener(listener);
+        // Best-effort only — see this method's doc. Deliberately swallowed:
+        // no field is set, so [_effectiveImageSize] keeps falling back to
+        // [widget.imageSize] exactly as if this probe never ran.
+      },
+    );
+    stream.addListener(listener);
   }
 
   /// Index into `DrawState.currentPoints` currently being dragged, or null
@@ -463,6 +533,65 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// `beginPhotoSwitch` and reset the shared controller.
   String? _framedImagePath;
 
+  /// The real, decoded natural size of [widget.imagePath]'s bytes, once
+  /// learned via [_maybeProbeDecodedSize] — or `null` if it hasn't resolved
+  /// yet (or ever failed to). [widget.imageSize] is a *persisted* value
+  /// (the wall's [PhotoRef.width]/[PhotoRef.height], recorded once at import
+  /// time — see [TopoCanvasScreen]'s doc) that this widget's caller can
+  /// never re-verify against what actually decodes for THIS render: an
+  /// EXIF-orientation disagreement between the import-time prober and the
+  /// display-time decoder, or a public photo whose locally-available bytes
+  /// are a substituted variant, can leave it describing a different aspect
+  /// ratio than what [PhotoImage] actually paints.
+  ///
+  /// [PhotoImage] itself already tolerates that mismatch harmlessly — it
+  /// paints via `BoxFit.contain`, so a wrong aspect ratio just letterboxes
+  /// inside the `SizedBox(imageSize)` box. The real bug is everything
+  /// ELSE sharing that same box: the route overlay ([TopoPainter]) and
+  /// every hit test ([_hitTestHandle]/[_beginInteraction]/
+  /// [_updateInteraction]/[_endInteraction]/[_endViewTap]) treat the WHOLE
+  /// box as the image, so a letterboxed photo leaves them permanently
+  /// offset from what's actually on screen.
+  ///
+  /// [_effectiveImageSize] is the single fix for this: once this field is
+  /// non-null, EVERY use of "the image size" in this state — the paint
+  /// box, the `CustomPaint` overlays, every coordinate conversion, and the
+  /// fit/zoom-range math — switches to it, so the box always has the exact
+  /// aspect ratio of what's actually decoded and `BoxFit.contain` never has
+  /// anything left to letterbox. That is deliberately the ONLY change: no
+  /// second, letterbox-offset transform is introduced anywhere, so paint
+  /// and hit-test keep sharing exactly one mapping (this size, plus
+  /// [widget.transformationController]) — see this class's `Transform`/
+  /// `toScene` doc for why that single-sourcing matters.
+  ///
+  /// A failed/absent probe (no bytes yet, a genuinely missing photo) leaves
+  /// this `null` forever for that photo, which is safe BY CONSTRUCTION:
+  /// [_effectiveImageSize] then falls back to [widget.imageSize], exactly
+  /// today's behavior. This is deliberately NOT the pre-F-A2 architecture
+  /// (see `topo_canvas_missing_bytes_test.dart`) that latched a permanent
+  /// error state on decode failure and blanked the whole canvas — a failed
+  /// probe here changes NOTHING observable; only a SUCCESSFUL decode with a
+  /// genuinely different size ever changes what's rendered.
+  Size? _decodedImageSize;
+
+  /// The `widget.imagePath` [_maybeProbeDecodedSize] has already started (or
+  /// finished) a probe for, so a rebuild for the SAME photo never starts a
+  /// second redundant probe. Reset (and [_decodedImageSize] cleared) the
+  /// moment [widget.imagePath] changes, so a stale correction from the
+  /// PREVIOUS photo can never leak onto a new one that happens to reuse this
+  /// same long-lived [_TopoCanvasState] (mirrors [_framedImagePath]'s own
+  /// per-photo scoping, for the same reason).
+  String? _decodeProbePath;
+
+  /// The image size every paint/overlay/hit-test/fit computation in this
+  /// state actually uses — [_decodedImageSize] once a probe has SUCCESSFULLY
+  /// resolved a real, positive-area size for the current photo, otherwise
+  /// [widget.imageSize] (today's behavior). See [_decodedImageSize]'s doc for
+  /// the full rationale; every call site below that used to read
+  /// `widget.imageSize` directly now reads this instead, so there is exactly
+  /// ONE size in play at any given time — never two competing derivations.
+  Size get _effectiveImageSize => _decodedImageSize ?? widget.imageSize;
+
   /// The `viewportSize` this widget was last framed for (reframe-on-resize
   /// fix). A [LayoutBuilder] viewport can be transient/degenerate on its
   /// first pass (e.g. ~110x70, before a surrounding `Scaffold`'s `AppBar`/
@@ -528,14 +657,14 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// size arrives, that is the first REAL content frame and gets a proper
   /// fit.
   bool get _hasFrameableImageSize =>
-      widget.imageSize.width > 0 && widget.imageSize.height > 0;
+      _effectiveImageSize.width > 0 && _effectiveImageSize.height > 0;
 
   /// Computes the scale at which [widget.imageSize] fits entirely within a
   /// viewport of [viewportSize] (letterboxed on whichever axis has slack).
   /// Delegates to [TopoCanvas.computeFitScale] (the pure, directly-testable
   /// form of this same math).
   double _fitScale(Size viewportSize) => TopoCanvas.computeFitScale(
-    imageSize: widget.imageSize,
+    imageSize: _effectiveImageSize,
     viewportSize: viewportSize,
   );
 
@@ -582,7 +711,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     // it — never expected in practice (maxScale is derived from the same
     // fitScale and is always >> minScale), but cheap to guard.
     final fillWidthScale = TopoCanvas.computeFillWidthTransform(
-      imageSize: widget.imageSize,
+      imageSize: _effectiveImageSize,
       viewportSize: viewportSize,
     ).getMaxScaleOnAxis();
     if (fillWidthScale > maxScale) {
@@ -604,7 +733,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// zoom-out reference — see [_scaleRangeFor]) or the older COVER/fill
   /// behavior ([TopoCanvas.computeFitTransform]).
   Matrix4 _fitMatrix(Size viewportSize) => TopoCanvas.computeFillWidthTransform(
-    imageSize: widget.imageSize,
+    imageSize: _effectiveImageSize,
     viewportSize: viewportSize,
   );
 
@@ -675,7 +804,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     // switch slip through the "truly unchanged" early return below and
     // strand the new photo at identity.
     final sameImage =
-        _framedImageSize == widget.imageSize &&
+        _framedImageSize == _effectiveImageSize &&
         _framedImagePath == widget.imagePath;
     final viewportChanged =
         _framedViewportSize == null ||
@@ -712,7 +841,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // First frame ever, and a test/caller pre-seeded a non-identity
       // controller: leave it exactly as given.
       _hasFramed = true;
-      _framedImageSize = widget.imageSize;
+      _framedImageSize = _effectiveImageSize;
       _framedImagePath = widget.imagePath;
       _framedViewportSize = viewportSize;
       _lastAutoFrameMatrix = null;
@@ -723,7 +852,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     }
 
     _hasFramed = true;
-    _framedImageSize = widget.imageSize;
+    _framedImageSize = _effectiveImageSize;
     _framedImagePath = widget.imagePath;
     _framedViewportSize = viewportSize;
 
@@ -762,7 +891,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     for (var i = 0; i < currentPointsPercent.length; i++) {
       final scenePoint = CoordinateTransformer.percentToScene(
         currentPointsPercent[i],
-        widget.imageSize,
+        _effectiveImageSize,
       );
       final distance = (scenePoint - sceneTap).distance;
       if (distance <= thresholdScenePx && distance < nearestDistance) {
@@ -824,7 +953,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       _pendingTapDownPosition = null;
       final percent = CoordinateTransformer.sceneToPercent(
         scene,
-        widget.imageSize,
+        _effectiveImageSize,
       );
       final outcome = await ref
           .read(drawControllerProvider(widget.wallId).notifier)
@@ -877,7 +1006,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       );
       final percent = CoordinateTransformer.sceneToPercent(
         scene,
-        widget.imageSize,
+        _effectiveImageSize,
       );
       ref
           .read(drawControllerProvider(widget.wallId).notifier)
@@ -919,7 +1048,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     );
     final percent = CoordinateTransformer.sceneToPercent(
       scene,
-      widget.imageSize,
+      _effectiveImageSize,
     );
     unawaited(HapticFeedback.selectionClick());
     ref.read(drawControllerProvider(widget.wallId).notifier).addPoint(percent);
@@ -995,7 +1124,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         route.copyWith(
           points: [
             for (final p in route.points)
-              CoordinateTransformer.percentToScene(p, widget.imageSize),
+              CoordinateTransformer.percentToScene(p, _effectiveImageSize),
           ],
         ),
     ];
@@ -1075,15 +1204,15 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
           maxScale: maxScale,
           boundaryMargin: const EdgeInsets.all(double.infinity),
           child: SizedBox(
-            width: widget.imageSize.width,
-            height: widget.imageSize.height,
+            width: _effectiveImageSize.width,
+            height: _effectiveImageSize.height,
             child: Stack(
               children: [
                 PhotoImage(
                   widget.imagePath,
                   fit: BoxFit.contain,
-                  width: widget.imageSize.width,
-                  height: widget.imageSize.height,
+                  width: _effectiveImageSize.width,
+                  height: _effectiveImageSize.height,
                   // Swallow decode errors (e.g. a path that doesn't resolve
                   // to a real file, as widget tests use) instead of letting
                   // them propagate as an unhandled exception — see class
@@ -1108,8 +1237,8 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   // sized placeholder would move the moment the real frame
                   // arrived.
                   loadingPlaceholder: () => PhotoLoadingFill(
-                    width: widget.imageSize.width,
-                    height: widget.imageSize.height,
+                    width: _effectiveImageSize.width,
+                    height: _effectiveImageSize.height,
                   ),
                 ),
                 // Rock-highlight overlay: painted BETWEEN the photo and the
@@ -1129,10 +1258,10 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                 if (rockBox != null)
                   RepaintBoundary(
                     child: CustomPaint(
-                      size: widget.imageSize,
+                      size: _effectiveImageSize,
                       painter: RockBoxPainter(
                         box: rockBox,
-                        imageSize: widget.imageSize,
+                        imageSize: _effectiveImageSize,
                       ),
                     ),
                   ),
@@ -1166,9 +1295,9 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   // layer-boundary hint.
                   builder: (context, _) => RepaintBoundary(
                     child: CustomPaint(
-                      size: widget.imageSize,
+                      size: _effectiveImageSize,
                       painter: TopoPainter(
-                        imageSize: widget.imageSize,
+                        imageSize: _effectiveImageSize,
                         routes: drawState.routes,
                         currentPoints: drawState.currentPoints,
                         currentSymbols: drawState.currentSymbols,
