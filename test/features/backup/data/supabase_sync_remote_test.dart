@@ -20,7 +20,6 @@
 // reach 1, because the next query is not even ISSUED until the previous
 // response has been consumed. So `maxInFlight` is a deterministic witness of
 // which shape the code has, not a flaky stopwatch.
-import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;

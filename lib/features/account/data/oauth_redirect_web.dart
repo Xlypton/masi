@@ -71,7 +71,7 @@ Future<bool> redirectTopLevel(String url) async {
   }
   if (!navigated) return false;
 
-  await Future.delayed(watchdogGrace);
+  await Future<void>.delayed(watchdogGrace);
   // Still here => nothing tore this document down => the navigation never
   // actually happened, whatever the synchronous call claimed.
   return false;

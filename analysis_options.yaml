@@ -13,6 +13,31 @@ analyzer:
   exclude:
     - "**.g.dart"
 
+  # STRICT LANGUAGE MODES. These are not lints — they close holes in the type
+  # system itself, so what they catch is a would-be RUNTIME failure, not a
+  # style preference:
+  #
+  #   strict-casts     — no implicit `dynamic` -> T downcast. Without it, a
+  #                      `jsonDecode(...)` result flowing into a typed variable
+  #                      is accepted silently and blows up at runtime on the
+  #                      first malformed payload. This app decodes untrusted
+  #                      JSON on every sync pull and on every `route_mapper`
+  #                      read, so that is a live path, not a hypothetical.
+  #   strict-inference — no inference that silently falls back to `dynamic`
+  #                      (e.g. a bare `Future.delayed` whose type argument
+  #                      cannot be inferred).
+  #   strict-raw-types — no raw generic types; `List` must be `List<Something>`.
+  #
+  # Adopting all three cost exactly TWO fixes across ~65k lines of lib and ~95k
+  # lines of test, measured before enabling. That is the point of turning them
+  # on now: the codebase already satisfies them, so this PINS the property
+  # rather than starting a cleanup. Keeping `flutter analyze` at 0 issues (see
+  # CLAUDE.md) is what makes it enforceable.
+  language:
+    strict-casts: true
+    strict-inference: true
+    strict-raw-types: true
+
 linter:
   # The lint rules applied to this project can be customized in the
   # section below to disable rules from the `package:flutter_lints/flutter.yaml`
@@ -24,6 +49,25 @@ linter:
   # or a specific dart file by using the `// ignore: name_of_lint` and
   # `// ignore_for_file: name_of_lint` syntax on the line or in the file
   # producing the lint.
+  #
+  # DELIBERATELY NOT ENABLED (measured, not assumed):
+  #   unawaited_futures   — 58 hits, 55 of them in test/. Of the 3 in lib/, one
+  #                         is a real fire-and-forget platform-channel call and
+  #                         two are idiomatic non-bugs the rule cannot tell
+  #                         apart: `context.push(...)` (go_router's Future
+  #                         completes when the route POPS — nobody awaits that)
+  #                         and `map.remove(k)` on a `Map<_, Future>`, where the
+  #                         "unawaited future" is just the removed value.
+  #                         Wrapping those in `unawaited(...)` would make the
+  #                         code read worse to satisfy a rule that was wrong
+  #                         about them.
+  #   avoid_dynamic_calls — 6 hits, all in `route_mapper.dart`, all of the form
+  #                         `entry['x'] as num` over a `List<dynamic>` from
+  #                         `jsonDecode`. The cast is already explicit and
+  #                         adjacent, so a bad payload throws a clear cast error
+  #                         either way.
+  # Both are worth revisiting as their own scoped cleanup; neither earns its
+  # churn as a drive-by.
   rules:
     # avoid_print: false  # Uncomment to disable the `avoid_print` rule
     # prefer_single_quotes: true  # Uncomment to enable the `prefer_single_quotes` rule
