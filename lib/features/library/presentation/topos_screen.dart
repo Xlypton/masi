@@ -171,6 +171,21 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     }
   }
 
+  /// [_OfflineEmptyState]'s Retry: re-probes `reachabilityProvider` first
+  /// (the same probe-on-demand contract `initState` uses at mount — see that
+  /// provider's doc), then re-runs the real pull too, but ONLY if that fresh
+  /// probe actually came back online. Re-pulling while still offline would
+  /// just repeat the same failed request; re-probing without ever pulling
+  /// would leave a genuinely-restored connection sitting there unused until
+  /// the next unrelated rebuild. Never throws — `refresh()`/`pullNow()` are
+  /// both documented not to.
+  Future<void> _handleOfflineRetry() async {
+    final verdict = await ref.read(reachabilityProvider.notifier).refresh();
+    if (verdict.isKnownOnline) {
+      await ref.read(syncOrchestratorProvider.notifier).pullNow();
+    }
+  }
+
   @override
   void dispose() {
     _searchController.removeListener(_onSearchChanged);
@@ -384,6 +399,19 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                             onRetry: () => ref
                                 .read(syncOrchestratorProvider.notifier)
                                 .pullNow(),
+                          );
+                        }
+                        // Stage 3 offline-reads gap: a genuinely empty
+                        // library with NO reported pull error can still mean
+                        // "the app cannot currently tell" rather than "this
+                        // account really has nothing" — a device that never
+                        // pulled at all, or whose last pull succeeded before
+                        // the signal dropped. `isKnownOffline`, never
+                        // `!= online`, matching every other reachability
+                        // check on this screen (see `bannerKind` above).
+                        if (reachability.isKnownOffline) {
+                          return _OfflineEmptyState(
+                            onRetry: _handleOfflineRetry,
                           );
                         }
                         return _EmptyState(

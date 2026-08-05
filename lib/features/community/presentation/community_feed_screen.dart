@@ -305,7 +305,9 @@ class _FeedView extends ConsumerWidget {
     //
     // `isKnownOffline`, never `!= online`: `Reachability.unknown` is the
     // pre-probe state, and treating it as offline flashes this banner for a
-    // frame on every cold start (see `reachability_providers.dart`).
+    // frame on every cold start (see `reachability_providers.dart`). Moved
+    // above `showSyncError`'s sibling gate below because that gate now needs
+    // the verdict too.
     //
     // It yields the sync-failure case to `_SyncErrorEmptyState` (that is
     // exactly `showSyncError`), which says the same sentence larger and with
@@ -318,6 +320,16 @@ class _FeedView extends ConsumerWidget {
     // branches are local-database states that losing signal does not cause
     // and an offline banner would not explain.
     final reachability = ref.watch(reachabilityProvider);
+    // Stage 3 offline-reads gap: a genuinely empty feed with NO reported
+    // pull error can still mean "the app cannot currently tell" rather than
+    // "this account really has nothing shared to it" — a device that never
+    // pulled at all, or whose last pull succeeded before the signal dropped.
+    // Gated on `items.isEmpty` exactly like `showSyncError` (the search/
+    // filter-narrowed empty states are untouched — there IS data in those
+    // cases) and yields to `showSyncError`: a real reported failure is more
+    // specific than "no signal" and should win when both are true.
+    final showOfflineEmpty =
+        items.isEmpty && !showSyncError && reachability.isKnownOffline;
     // #49 P2 fix: lowest priority — see `topos_screen.dart`'s identical
     // reasoning. This is the screen the withheld photos are actually
     // MISSING FROM (the shared pull is what skips them), so it is the more
@@ -418,6 +430,8 @@ class _FeedView extends ConsumerWidget {
                           height: constraints.maxHeight,
                           child: showSyncError
                               ? _SyncErrorEmptyState(message: syncError)
+                              : showOfflineEmpty
+                              ? const _OfflineEmptyState()
                               : _EmptyState(message: emptyMessage),
                         ),
                       ],
@@ -632,6 +646,80 @@ class _SyncErrorEmptyState extends ConsumerWidget {
             child: const Text('Retry'),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Shown instead of [_EmptyState] when the feed is genuinely empty (no
+/// shared topos at all) AND reachability has completed and FAILED
+/// (`Reachability.isKnownOffline` -- never `unknown`, the same guard
+/// [SyncBanner] uses) AND there is no [SyncOrchestratorState.lastPullError]
+/// to report instead -- when there IS one, [_SyncErrorEmptyState] takes
+/// priority (see [_FeedView.build]'s `showOfflineEmpty` gate), since a real
+/// reported failure is more specific than "no signal".
+///
+/// Stage 3's design-doc gap: before this state existed, offline with an
+/// empty feed and NO pull error -- a device that never pulled at all, or
+/// whose last pull succeeded before the signal dropped -- fell all the way
+/// through to [_EmptyState]'s plain "No shared topos yet", indistinguishable
+/// from a genuinely empty, fully-synced account. [SyncBanner] above the list
+/// already says "you're offline" (T2), so this widget deliberately does NOT
+/// repeat that sentence -- it is the "what you can do about it" surface:
+/// Retry re-probes reachability and, only if the signal is actually back,
+/// immediately re-pulls too.
+///
+/// Wrapped in a [SingleChildScrollView] rather than a bare [Center] --
+/// unlike `topos_empty_states.dart`'s `_EmptyStateShell`-backed states, this
+/// screen's `_EmptyState`/`_SyncErrorEmptyState` neighbors have no such
+/// squeeze-tolerance of their own, and this widget MEASURABLY overflowed
+/// (`RenderFlex overflowed by 124 pixels`) at 400x300 with the offline
+/// [SyncBanner] rendered above it -- the exact same shape of bug
+/// `topos_empty_states.dart`'s doc comment describes fixing for two other
+/// widgets. A scrollable degrades the squeeze into a short scroll instead.
+class _OfflineEmptyState extends ConsumerWidget {
+  const _OfflineEmptyState();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    return SingleChildScrollView(
+      key: const Key('community-offline-empty'),
+      child: Center(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MasiIcon('phone_off', size: 40, color: colors.accent),
+            const SizedBox(height: MasiSpacing.md),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.lg),
+              child: Text(
+                "Can't check for shared topos while you're offline",
+                textAlign: TextAlign.center,
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+              ),
+            ),
+            const SizedBox(height: MasiSpacing.md),
+            // Re-probes reachability first, then re-pulls ONLY if that fresh
+            // probe actually came back online -- same reasoning as
+            // `_ToposScreenState._handleOfflineRetry`. Never throws:
+            // `refresh()`/`pullNow()` are both documented not to.
+            MasiPendingButton.text(
+              key: const Key('community-offline-retry'),
+              onPressed: () async {
+                final verdict = await ref
+                    .read(reachabilityProvider.notifier)
+                    .refresh();
+                if (verdict.isKnownOnline) {
+                  await ref.read(syncOrchestratorProvider.notifier).pullNow();
+                }
+              },
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
       ),
     );
   }

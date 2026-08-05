@@ -153,6 +153,64 @@ class _SyncErrorEmptyState extends StatelessWidget {
   }
 }
 
+/// Shown instead of [_EmptyState] when the Topos home is genuinely empty AND
+/// the reachability probe has completed and FAILED
+/// (`Reachability.isKnownOffline` -- never `unknown`, the same guard
+/// `SyncBanner` uses; see `reachability_providers.dart`) AND there is no
+/// [SyncOrchestratorState.lastPullError] to report instead -- when there IS
+/// one, [_SyncErrorEmptyState] takes priority, since a real reported failure
+/// is more specific than "no signal" (see [ToposScreen.build]'s ordering).
+///
+/// Stage 3's design-doc gap: before this state existed, offline with an
+/// empty library and NO pull error -- a device that never pulled at all, or
+/// whose last pull succeeded before the signal dropped -- fell all the way
+/// through to [_EmptyState]'s plain "No topos yet", which reads as "your
+/// topos are gone" rather than "the app cannot currently check". The
+/// [SyncBanner] above the list already says "you're offline" (T2), so this
+/// widget deliberately does NOT repeat that sentence -- it is the "what you
+/// can do about it" surface: Retry re-probes reachability and, only if the
+/// signal is actually back, immediately re-pulls too.
+class _OfflineEmptyState extends StatelessWidget {
+  const _OfflineEmptyState({required this.onRetry});
+
+  /// [_ToposScreenState._handleOfflineRetry]: re-probes
+  /// `reachabilityProvider`, then `pullNow()`s only if that probe now comes
+  /// back online. Never throws -- both underlying calls are documented not
+  /// to.
+  final Future<void> Function() onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return _EmptyStateShell(
+      stateKey: const Key('topos-offline-empty'),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          MasiIcon('phone_off', size: 40, color: colors.accent),
+          const SizedBox(height: MasiSpacing.md),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.lg),
+            child: Text(
+              "Can't check for topos while you're offline",
+              textAlign: TextAlign.center,
+              style: Theme.of(
+                context,
+              ).textTheme.titleMedium?.copyWith(color: colors.ink2),
+            ),
+          ),
+          const SizedBox(height: MasiSpacing.md),
+          MasiPendingButton.text(
+            key: const Key('topos-offline-retry'),
+            onPressed: onRetry,
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 /// Shown instead of [_EmptyState] when there ARE topos but every one of them
 /// was excluded by the active [ToposFilter] (see [applyToposFilter]) --
 /// distinct from "no topos yet" so the user isn't misled into thinking their

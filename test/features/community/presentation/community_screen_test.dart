@@ -156,7 +156,11 @@ ProviderContainer _makeContainer({
 class _ScriptedConnectivity implements ConnectivityService {
   _ScriptedConnectivity({required this.reachable, this.gate});
 
-  final bool reachable;
+  // Mutable (not `final`): the Stage 3 offline-empty-state retry tests flip
+  // this mid-test to simulate the signal coming back between the empty
+  // state rendering and the user tapping Retry — mirrors
+  // `reachability_providers_test.dart`'s identical double.
+  bool reachable;
   final Completer<void>? gate;
   int probeCount = 0;
 
@@ -1082,8 +1086,9 @@ void main() {
     );
 
     testWidgets(
-      'an EMPTY feed that is offline DOES get the offline banner — the empty '
-      'state says nothing about reachability',
+      'an EMPTY feed that is offline DOES get the offline banner AND the '
+      'offline empty state (see the Stage 3 group below) — never the plain '
+      'community-empty prompt',
       (tester) async {
         final container = _makeContainer(
           connectivity: _ScriptedConnectivity(reachable: false),
@@ -1094,7 +1099,165 @@ void main() {
 
         expect(find.byKey(const Key('sync-banner')), findsOneWidget);
         expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-offline-empty')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('community-empty')), findsNothing);
+      },
+    );
+  });
+
+  group('Stage 3: offline empty state (the design-doc gap)', () {
+    testWidgets(
+      'THE HOLE: offline + empty + NO pull error shows the offline empty '
+      'state, not the plain community-empty prompt',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-offline-empty')),
+          findsOneWidget,
+        );
+        expect(
+          find.text("Can't check for shared topos while you're offline"),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('community-empty')), findsNothing);
+        expect(
+          find.byKey(const Key('community-sync-error-empty')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'offline + empty + a pull error still shows the sync-error state — a '
+      'real reported failure is more specific than "no signal" and must not '
+      'be shadowed by the new offline variant',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: shared rows fetch failed',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-sync-error-empty')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('community-offline-empty')), findsNothing);
+        expect(find.byKey(const Key('community-empty')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'NEGATIVE CONTROL: online + empty shows the generic community-empty '
+      'state, never the offline one — without this, a test suite that '
+      'always found the offline variant true would prove nothing',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
         expect(find.byKey(const Key('community-empty')), findsOneWidget);
+        expect(find.byKey(const Key('community-offline-empty')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'tapping Retry on the offline empty state re-probes reachability and, '
+      'once the signal is actually back, re-pulls too',
+      (tester) async {
+        final connectivity = _ScriptedConnectivity(reachable: false);
+        final fakeOrchestrator = _FakeSyncOrchestrator();
+        final container = _makeContainer(
+          connectivity: connectivity,
+          syncOrchestrator: fakeOrchestrator,
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-offline-empty')),
+          findsOneWidget,
+        );
+        expect(connectivity.probeCount, 1);
+        expect(fakeOrchestrator.pullNowCallCount, 0);
+
+        // The signal comes back between the empty state rendering and the
+        // user tapping Retry.
+        connectivity.reachable = true;
+        await tester.tap(find.byKey(const Key('community-offline-retry')));
+        await _drain(tester);
+
+        expect(connectivity.probeCount, 2);
+        expect(fakeOrchestrator.pullNowCallCount, 1);
+      },
+    );
+
+    testWidgets(
+      'tapping Retry while STILL offline re-probes but does NOT call '
+      'pullNow() — retrying a request that would fail the same way again is '
+      'not useful work',
+      (tester) async {
+        final connectivity = _ScriptedConnectivity(reachable: false);
+        final fakeOrchestrator = _FakeSyncOrchestrator();
+        final container = _makeContainer(
+          connectivity: connectivity,
+          syncOrchestrator: fakeOrchestrator,
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('community-offline-retry')));
+        await _drain(tester);
+
+        expect(connectivity.probeCount, 2);
+        expect(fakeOrchestrator.pullNowCallCount, 0);
+        expect(
+          find.byKey(const Key('community-offline-empty')),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'the offline empty state does not overflow when the offline banner '
+      'above it squeezes the available height',
+      (tester) async {
+        tester.view.physicalSize = const Size(400, 300);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.resetPhysicalSize);
+        addTearDown(tester.view.resetDevicePixelRatio);
+
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-offline-empty')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
       },
     );
   });
