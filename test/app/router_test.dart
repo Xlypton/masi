@@ -20,6 +20,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import '../support/async_drain.dart';
+import '../support/blocked_network.dart';
 
 /// Builds a [ProviderContainer] wired to a fresh in-memory database, mirroring
 /// the pattern in `areas_screen_test.dart`: `db.close` is registered BEFORE
@@ -62,10 +63,19 @@ Future<void> _drain(WidgetTester tester) async {
 /// seam). `pumpAndSettle` would wait on that tile fetch forever under
 /// `flutter_test` — a handful of bounded pumps is enough to let GoRouter
 /// resolve the route and build the widget tree.
-Future<void> _pumpBounded(WidgetTester tester) async {
-  for (var i = 0; i < 6; i++) {
-    await tester.pump(const Duration(milliseconds: 30));
-  }
+///
+/// #29: because there is no `tileProvider` seam at this call site, the pump
+/// loop is wrapped in [BlockedNetworkGuard] so the real tile fetch this
+/// screen kicks off during those pumps hits a thrown [StateError] at the
+/// socket-connect boundary instead of ever reaching a real host — see
+/// `test/support/blocked_network.dart` for why this is the ONE shared
+/// mechanism instead of a one-off `HttpOverrides` per call site.
+Future<void> _pumpBounded(WidgetTester tester) {
+  return BlockedNetworkGuard().run(() async {
+    for (var i = 0; i < 6; i++) {
+      await tester.pump(const Duration(milliseconds: 30));
+    }
+  });
 }
 
 /// Minimal in-memory [AuthRepository] double for the web-auth-wall tests
