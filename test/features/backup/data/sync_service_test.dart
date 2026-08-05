@@ -2196,6 +2196,227 @@ void main() {
     );
   });
 
+  /// The live sync failure, end to end:
+  ///
+  ///     Couldn't sync — Sync failed: own rows import failed: Bad state:
+  ///     importSnapshot: 3 table(s) failed: ascents: SqliteException(787):
+  ///     FOREIGN KEY constraint failed
+  ///
+  /// [SyncRemote.fetchOwnRows] is scoped `ownerId = uid`, so an Ascent/Comment/
+  /// Like the signed-in user made on ANOTHER owner's shared topo arrives WITHOUT
+  /// its parent Wall/Route — those belong to the other owner and come with the
+  /// SHARED batch, which is imported after the own batch. Confirmed present in
+  /// the live (dev) Supabase for all three tables.
+  group('pullOwnAndShared: own rows whose FK parent belongs to another owner', () {
+    test(
+      "an ascent + comment + like the user made on someone else's shared topo "
+      'come back in the SAME pull into a fresh install, with no errors and '
+      'without taking their own-topo rows down with them',
+      () async {
+        final remote = FakeSyncRemote();
+
+        // ---- u2 publishes a shared topo ---------------------------------
+        final u2 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU2));
+        addTearDown(() => u2.db.close());
+        await seedWallHierarchy(
+          u2.db,
+          ownerId: _uidU2,
+          areaId: 'area-u2',
+          sectorId: 'sector-u2',
+          wallId: 'wall-u2',
+          photoId: 'photo-u2',
+          routeId: 'route-u2',
+          visibility: 'shared',
+          localPath: writeFile(u2.srcDir, 'wall-u2.jpg', 9).path,
+        );
+        await u2.service.pushOwn();
+
+        // ---- u1 pulls it, keeps a topo of their own, and logs an ascent,
+        //      a comment and a like on u2's shared topo -------------------
+        final u1 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => u1.db.close());
+        await u1.service.pullOwnAndShared();
+        await seedWallHierarchy(
+          u1.db,
+          ownerId: _uidU1,
+          areaId: 'area-u1',
+          sectorId: 'sector-u1',
+          wallId: 'wall-u1',
+          photoId: 'photo-u1',
+          routeId: 'route-u1',
+          localPath: writeFile(u1.srcDir, 'wall-u1.jpg', 4).path,
+        );
+        for (final (id, routeId, wallId) in const [
+          ('ascent-own', 'route-u1', 'wall-u1'),
+          ('ascent-on-u2', 'route-u2', 'wall-u2'),
+        ]) {
+          await u1.db.into(u1.db.ascents).insert(
+            AscentsCompanion.insert(
+              id: id,
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value(_uidU1),
+              routeId: routeId,
+              wallId: wallId,
+              climbedAt: 100,
+              style: 'redpoint',
+            ),
+          );
+        }
+        for (final (id, wallId) in const [
+          ('comment-own', 'wall-u1'),
+          ('comment-on-u2', 'wall-u2'),
+        ]) {
+          await u1.db.into(u1.db.comments).insert(
+            CommentsCompanion.insert(
+              id: id,
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value(_uidU1),
+              wallId: Value(wallId),
+              body: 'good line',
+            ),
+          );
+        }
+        for (final (id, wallId) in const [
+          ('like-own', 'wall-u1'),
+          ('like-on-u2', 'wall-u2'),
+        ]) {
+          await u1.db.into(u1.db.likes).insert(
+            LikesCompanion.insert(
+              id: id,
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value(_uidU1),
+              wallId: Value(wallId),
+            ),
+          );
+        }
+        await u1.service.pushOwn();
+
+        // ---- fresh install, same account: the failing pull --------------
+        final fresh = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => fresh.db.close());
+        expect(await fresh.db.select(fresh.db.ascents).get(), isEmpty);
+
+        final result = await fresh.service.pullOwnAndShared();
+
+        expect(
+          result.errors,
+          isEmpty,
+          reason: 'pre-fix: ["own rows import failed: Bad state: '
+              'importSnapshot: 3 table(s) failed: ascents/comments/likes ... '
+              'FOREIGN KEY constraint failed"]',
+        );
+        expect(result.ownImported, isTrue);
+        expect(
+          (await fresh.db.select(fresh.db.ascents).get()).map((a) => a.id),
+          unorderedEquals(['ascent-own', 'ascent-on-u2']),
+          reason: "the own-topo ascent was collateral damage of the foreign "
+              'one detonating the table',
+        );
+        expect(
+          (await fresh.db.select(fresh.db.comments).get()).map((c) => c.id),
+          unorderedEquals(['comment-own', 'comment-on-u2']),
+        );
+        expect(
+          (await fresh.db.select(fresh.db.likes).get()).map((l) => l.id),
+          unorderedEquals(['like-own', 'like-on-u2']),
+        );
+      },
+    );
+
+    test(
+      'a TRUE orphan (the other owner un-shared the topo, so no batch can '
+      'supply the parent) is reported on the visible error surface, never '
+      'silently dropped -- and the rest of the pull still lands',
+      () async {
+        final remote = FakeSyncRemote();
+
+        final u2 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU2));
+        addTearDown(() => u2.db.close());
+        await seedWallHierarchy(
+          u2.db,
+          ownerId: _uidU2,
+          areaId: 'area-u2',
+          sectorId: 'sector-u2',
+          wallId: 'wall-u2',
+          photoId: 'photo-u2',
+          routeId: 'route-u2',
+          visibility: 'shared',
+          localPath: writeFile(u2.srcDir, 'wall-u2.jpg', 9).path,
+        );
+        await u2.service.pushOwn();
+
+        final u1 = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => u1.db.close());
+        await u1.service.pullOwnAndShared();
+        await seedWallHierarchy(
+          u1.db,
+          ownerId: _uidU1,
+          areaId: 'area-u1',
+          sectorId: 'sector-u1',
+          wallId: 'wall-u1',
+          photoId: 'photo-u1',
+          routeId: 'route-u1',
+          localPath: writeFile(u1.srcDir, 'wall-u1.jpg', 4).path,
+        );
+        await u1.db.into(u1.db.likes).insert(
+          LikesCompanion.insert(
+            id: 'like-on-u2',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            wallId: const Value('wall-u2'),
+          ),
+        );
+        await u1.db.into(u1.db.likes).insert(
+          LikesCompanion.insert(
+            id: 'like-own',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            wallId: const Value('wall-u1'),
+          ),
+        );
+        await u1.service.pushOwn();
+
+        // u2 un-shares the topo: it drops out of fetchSharedTopos entirely,
+        // so u1's like on it can never resolve its wallId FK.
+        await (u2.db.update(u2.db.walls)..where((t) => t.id.equals('wall-u2')))
+            .write(
+              const WallsCompanion(
+                visibility: Value('private'),
+                updatedAt: Value(500),
+              ),
+            );
+        await u2.service.pushOwn();
+
+        final fresh = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => fresh.db.close());
+        final result = await fresh.service.pullOwnAndShared();
+
+        expect(
+          result.errors.join(' | '),
+          allOf(contains('own rows deferred'), contains('like-on-u2')),
+          reason: '#72: an unimportable row must never vanish behind a '
+              'debugPrint -- it belongs on the "Couldn\'t sync ... Retry" '
+              'surface',
+        );
+        expect(result.ownImported, isFalse);
+        // Everything importable still imported.
+        expect(
+          (await fresh.db.select(fresh.db.likes).get()).map((l) => l.id),
+          ['like-own'],
+        );
+        expect(
+          (await fresh.db.select(fresh.db.walls).get()).map((w) => w.id),
+          ['wall-u1'],
+        );
+      },
+    );
+  });
+
   group('S6: the "already uploaded" skip-set is not truncated at 100', () {
     /// Seeds one wall carrying [count] photos, each with real bytes on disk —
     /// essential, since a photo with no local bytes would fall into the

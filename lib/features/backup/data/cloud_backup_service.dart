@@ -254,7 +254,21 @@ class CloudBackupService {
     final photosRestored = await _downloadAndRewritePhotos(uid, tables);
 
     snapshot['tables'] = tables;
-    await _backupRepository.importSnapshot(snapshot, mode: mode);
+    final report = await _backupRepository.importSnapshot(snapshot, mode: mode);
+    // A whole-DB backup blob is self-contained by construction (exportSnapshot
+    // writes every row of every table), so a deferral here means the blob is
+    // internally inconsistent — a child row whose parent is in neither the blob
+    // nor this device. Before `importSnapshot` learned to defer, that surfaced
+    // as an FK-violation aggregate throw; it must not quietly become a silent
+    // skip now. Thrown AFTER the import, matching the aggregate-failure
+    // convention above: what imported stays imported, and the caller is told
+    // exactly which rows did not.
+    if (report.hasDeferrals) {
+      throw StateError(
+        'pullBackup: ${report.deferred.length} row(s) could not be restored, '
+        'their parent row is missing from the backup: ${report.summary}',
+      );
+    }
 
     return PullBackupResult.restored(photosRestored: photosRestored);
   }

@@ -1,4 +1,4 @@
-import 'package:flutter/foundation.dart' show debugPrint;
+import 'package:flutter/foundation.dart' show debugPrint, immutable;
 
 import '../../../core/db/app_database.dart' as db;
 
@@ -14,6 +14,121 @@ enum ConflictMode {
   /// row's. Otherwise the local row is left untouched. This is what the
   /// automatic sign-in restore uses so it never clobbers newer local edits.
   lww,
+}
+
+/// One row [BackupRepository.importSnapshot] deliberately did NOT write,
+/// because one of its foreign keys points at a parent row that exists neither
+/// in the snapshot being imported nor in the local database.
+///
+/// This is a normal, expected outcome of a SYNC pull, not corruption. The
+/// signed-in user's own row set (`SyncRemote.fetchOwnRows`, scoped
+/// `ownerId = uid`) can contain an Ascent/Comment/Like the user made on
+/// ANOTHER owner's shared topo — the parent Wall/Route belongs to that other
+/// owner, so it is absent from the own batch by construction and arrives with
+/// the SHARED batch instead, which imports afterwards. Inserting the child
+/// first is an FK violation (`PRAGMA foreign_keys = ON`), and because the
+/// insert used to be attempted unconditionally, ONE such row aborted the whole
+/// `ascents`/`comments`/`likes` table for that pull — losing the user's own
+/// ascents on their OWN topos too.
+///
+/// Deferring is not dropping: the row stays in the cloud, this object carries
+/// the row JSON verbatim back to the caller (see [ImportReport.deferredRows]),
+/// and `SyncService.pullOwnAndShared` re-imports exactly these rows once the
+/// shared batch has landed their parents. Anything still deferred after that
+/// is reported into `PullResult.errors`, i.e. onto the visible
+/// "Couldn't sync … Retry" surface — never swallowed (#72's lesson).
+@immutable
+class DeferredRow {
+  const DeferredRow({
+    required this.table,
+    required this.id,
+    required this.column,
+    required this.missingParentId,
+  });
+
+  /// Snapshot table name the row belongs to (e.g. `'ascents'`).
+  final String table;
+
+  /// The deferred row's own primary key.
+  final String id;
+
+  /// The FK column whose parent is missing (e.g. `'routeId'`).
+  final String column;
+
+  /// The id [column] points at, which no row currently has.
+  final String missingParentId;
+
+  @override
+  String toString() => '$table $id: $column -> missing $missingParentId';
+}
+
+/// What [BackupRepository.importSnapshot] left unwritten without failing.
+///
+/// An empty report ([hasDeferrals] false) means every row in the snapshot was
+/// either written or deliberately skipped by [ConflictMode.lww] because the
+/// local copy is newer — nothing was lost either way.
+@immutable
+class ImportReport {
+  const ImportReport({required this.deferred, required this.deferredRows});
+
+  /// A clean report: nothing deferred.
+  static const clean = ImportReport(
+    deferred: <DeferredRow>[],
+    deferredRows: <String, List<Map<String, dynamic>>>{},
+  );
+
+  /// Every row that was not written, with the FK that blocked it.
+  final List<DeferredRow> deferred;
+
+  /// The same rows' verbatim JSON, keyed by table name — shaped EXACTLY like
+  /// `snapshot['tables']`, so a caller can hand it straight back to
+  /// [BackupRepository.importSnapshot] once the missing parents have arrived.
+  final Map<String, List<Map<String, dynamic>>> deferredRows;
+
+  bool get hasDeferrals => deferred.isNotEmpty;
+
+  /// One-line, log/UI-safe rendering of every deferral.
+  String get summary => deferred.map((d) => '$d').join('; ');
+
+  @override
+  String toString() => 'ImportReport(${deferred.length} deferred: $summary)';
+}
+
+/// Collects [BackupRepository.importSnapshot]'s deferrals as it walks the
+/// tables, in the exact JSON shape a re-import needs.
+class _DeferralSink {
+  final List<DeferredRow> _deferred = [];
+  final Map<String, List<Map<String, dynamic>>> _rows = {};
+
+  void defer({
+    required String table,
+    required String id,
+    required String column,
+    required String missingParentId,
+    required Map<String, dynamic> json,
+  }) {
+    _deferred.add(
+      DeferredRow(
+        table: table,
+        id: id,
+        column: column,
+        missingParentId: missingParentId,
+      ),
+    );
+    (_rows[table] ??= <Map<String, dynamic>>[]).add(json);
+    debugPrint(
+      'importSnapshot: deferred $table $id — $column -> missing '
+      '$missingParentId (parent not in snapshot nor local DB)',
+    );
+  }
+
+  ImportReport get report => ImportReport(
+    deferred: List<DeferredRow>.of(_deferred),
+    deferredRows: {
+      for (final entry in _rows.entries)
+        entry.key: List<Map<String, dynamic>>.of(entry.value),
+    },
+  );
 }
 
 /// Thrown when a snapshot exported by a NEWER build is handed to an OLDER
@@ -106,6 +221,17 @@ class SnapshotSchemaDowngradeException implements Exception {
 /// has a self-FK (`parentPhotoId`), so within Photos, rows with no parent
 /// (originals) are always imported before rows that reference a parent
 /// (slices), regardless of the order they appear in the snapshot.
+///
+/// FK-dependency ORDER alone is not enough, though, and the missing half was a
+/// live sync failure ("own rows import failed: FOREIGN KEY constraint failed",
+/// 3 tables at once): a row can reference a parent that is in NO table of this
+/// snapshot at all. Every child row is therefore FK-CHECKED against the actual
+/// parent ids present (in the DB, after the parent tables of this same import
+/// have been applied) before its insert is attempted; a row whose parent is
+/// missing is DEFERRED — not inserted, not dropped — and returned verbatim in
+/// the [ImportReport] for the caller to re-import once the parent arrives. See
+/// [DeferredRow] for why the own-rows batch legitimately contains such rows and
+/// how `SyncService.pullOwnAndShared` resolves them within the same pull.
 class BackupRepository {
   BackupRepository(this._db);
 
@@ -161,7 +287,12 @@ class BackupRepository {
     };
   }
 
-  Future<void> importSnapshot(
+  /// Imports [snapshot], returning what it could NOT write — see
+  /// [ImportReport]/[DeferredRow]. A clean import returns
+  /// [ImportReport.clean]-shaped (empty) report; a table that genuinely FAILED
+  /// (a malformed row, a decode error) still throws the aggregate [StateError]
+  /// described on this class, which is a different thing from a deferral.
+  Future<ImportReport> importSnapshot(
     Map<String, dynamic> snapshot, {
     ConflictMode mode = ConflictMode.replace,
   }) async {
@@ -174,6 +305,7 @@ class BackupRepository {
 
     final tables = (snapshot['tables'] as Map).cast<String, dynamic>();
     final failures = <String>[];
+    final sink = _DeferralSink();
 
     // Runs one table's import inside its OWN transaction and isolates its
     // failure: if `run` throws, only that table's transaction rolls back —
@@ -203,19 +335,19 @@ class BackupRepository {
     );
     await importTable(
       'sectors',
-      () => _importSectors(_rowsOf(tables, 'sectors'), mode),
+      () => _importSectors(_rowsOf(tables, 'sectors'), mode, sink),
     );
     await importTable(
       'walls',
-      () => _importWalls(_rowsOf(tables, 'walls'), mode),
+      () => _importWalls(_rowsOf(tables, 'walls'), mode, sink),
     );
     await importTable(
       'photos',
-      () => _importPhotos(_rowsOf(tables, 'photos'), mode),
+      () => _importPhotos(_rowsOf(tables, 'photos'), mode, sink),
     );
     await importTable(
       'routes',
-      () => _importRoutes(_rowsOf(tables, 'routes'), mode),
+      () => _importRoutes(_rowsOf(tables, 'routes'), mode, sink),
     );
     // Ascents must be imported BEFORE Comments/Likes: Feature #12 (public
     // opt-in ascent logs) added `Comments.ascentId`/`Likes.ascentId` FKs
@@ -228,15 +360,15 @@ class BackupRepository {
     // bug: each failure is still independent and recorded below.
     await importTable(
       'ascents',
-      () => _importAscents(_rowsOf(tables, 'ascents'), mode),
+      () => _importAscents(_rowsOf(tables, 'ascents'), mode, sink),
     );
     await importTable(
       'comments',
-      () => _importComments(_rowsOf(tables, 'comments'), mode),
+      () => _importComments(_rowsOf(tables, 'comments'), mode, sink),
     );
     await importTable(
       'likes',
-      () => _importLikes(_rowsOf(tables, 'likes'), mode),
+      () => _importLikes(_rowsOf(tables, 'likes'), mode, sink),
     );
 
     if (failures.isNotEmpty) {
@@ -245,6 +377,39 @@ class BackupRepository {
         '${failures.join('; ')}',
       );
     }
+
+    return sink.report;
+  }
+
+  /// The `id`s currently present in [sqlTable] — the FK-parent presence set
+  /// every child-table import below checks a row against before attempting its
+  /// insert.
+  ///
+  /// Reads the `id` COLUMN only (not whole rows), and includes soft-deleted
+  /// tombstones deliberately: a tombstone is a perfectly real row as far as
+  /// SQLite's FK enforcement is concerned, so a child pointing at a tombstoned
+  /// parent IS importable and must not be deferred. (This is also why
+  /// tombstone-skipping was never the cause of the live FK failure — nothing
+  /// here or in `SyncRemote`'s fetches filters on `deletedAt` at all.)
+  ///
+  /// [sqlTable] is always one of this file's own hard-coded generated
+  /// snake_case table names — never anything derived from a snapshot — so the
+  /// interpolation carries no injection surface.
+  Future<Set<String>> _existingIds(String sqlTable) async {
+    final rows = await _db.customSelect('SELECT id FROM $sqlTable').get();
+    return {for (final row in rows) row.read<String>('id')};
+  }
+
+  /// The first FK in [checks] whose non-null parent id is absent from its
+  /// presence set, or `null` when every FK resolves. A `null` parent id (an
+  /// optional FK, e.g. `Comments.wallId` since Feature #12) always resolves.
+  (String, String)? _firstMissingFk(List<(String, String?, Set<String>)> checks) {
+    for (final (column, parentId, presentIds) in checks) {
+      if (parentId != null && !presentIds.contains(parentId)) {
+        return (column, parentId);
+      }
+    }
+    return null;
   }
 
   List<Map<String, dynamic>> _rowsOf(Map<String, dynamic> tables, String key) {
@@ -330,10 +495,12 @@ class BackupRepository {
   Future<void> _importSectors(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,
+    _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
         ? {for (final r in await _db.select(_db.sectors).get()) r.id: r.updatedAt}
         : const <String, int>{};
+    final areaIds = await _existingIds('areas');
 
     for (final json in rows) {
       final sector = db.Sector.fromJson(_notDirty(json));
@@ -344,6 +511,17 @@ class BackupRepository {
           )) {
         continue;
       }
+      final missing = _firstMissingFk([('areaId', sector.areaId, areaIds)]);
+      if (missing != null) {
+        sink.defer(
+          table: 'sectors',
+          id: sector.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: json,
+        );
+        continue;
+      }
       await _db.into(_db.sectors).insertOnConflictUpdate(sector);
     }
   }
@@ -351,10 +529,12 @@ class BackupRepository {
   Future<void> _importWalls(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,
+    _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
         ? {for (final r in await _db.select(_db.walls).get()) r.id: r.updatedAt}
         : const <String, int>{};
+    final sectorIds = await _existingIds('sectors');
 
     for (final json in rows) {
       // `visibility` (schema v2) is absent from pre-v2 snapshots; default it to
@@ -370,6 +550,17 @@ class BackupRepository {
           )) {
         continue;
       }
+      final missing = _firstMissingFk([('sectorId', wall.sectorId, sectorIds)]);
+      if (missing != null) {
+        sink.defer(
+          table: 'walls',
+          id: wall.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: json,
+        );
+        continue;
+      }
       await _db.into(_db.walls).insertOnConflictUpdate(wall);
     }
   }
@@ -381,10 +572,17 @@ class BackupRepository {
   Future<void> _importPhotos(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,
+    _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
         ? {for (final r in await _db.select(_db.photos).get()) r.id: r.updatedAt}
         : const <String, int>{};
+    final wallIds = await _existingIds('walls');
+    // GROWS as rows land: a slice's `parentPhotoId` may point at an original
+    // being inserted in this very pass (originals go first, below), so the
+    // presence set has to include what this loop has already written, not just
+    // what the DB held when the pass started.
+    final photoIds = await _existingIds('photos');
 
     // Old backup snapshots predate the `sortOrder`/`isPrimary` columns (added
     // in schema v6) entirely, so their photo JSON has no such keys. Inject
@@ -400,6 +598,11 @@ class BackupRepository {
     final originals = photos.where((p) => p.parentPhotoId == null);
     final slices = photos.where((p) => p.parentPhotoId != null);
 
+    // Index the raw JSON by id so a deferral can carry the row back verbatim
+    // (the decoded `Photo` had defaults injected above; the caller re-imports
+    // through this same door, so the ORIGINAL json is what must be preserved).
+    final jsonById = {for (final json in rows) json['id'] as String?: json};
+
     for (final photo in [...originals, ...slices]) {
       if (mode == ConflictMode.lww &&
           !_shouldWriteLww(
@@ -408,17 +611,35 @@ class BackupRepository {
           )) {
         continue;
       }
+      final missing = _firstMissingFk([
+        ('wallId', photo.wallId, wallIds),
+        ('parentPhotoId', photo.parentPhotoId, photoIds),
+      ]);
+      if (missing != null) {
+        sink.defer(
+          table: 'photos',
+          id: photo.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: jsonById[photo.id] ?? photo.toJson(),
+        );
+        continue;
+      }
       await _db.into(_db.photos).insertOnConflictUpdate(photo);
+      photoIds.add(photo.id);
     }
   }
 
   Future<void> _importRoutes(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,
+    _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
         ? {for (final r in await _db.select(_db.routes).get()) r.id: r.updatedAt}
         : const <String, int>{};
+    final wallIds = await _existingIds('walls');
+    final photoIds = await _existingIds('photos');
 
     for (final json in rows) {
       final route = db.Route.fromJson(_notDirty(json));
@@ -429,6 +650,20 @@ class BackupRepository {
           )) {
         continue;
       }
+      final missing = _firstMissingFk([
+        ('wallId', route.wallId, wallIds),
+        ('photoId', route.photoId, photoIds),
+      ]);
+      if (missing != null) {
+        sink.defer(
+          table: 'routes',
+          id: route.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: json,
+        );
+        continue;
+      }
       await _db.into(_db.routes).insertOnConflictUpdate(route);
     }
   }
@@ -436,10 +671,13 @@ class BackupRepository {
   Future<void> _importComments(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,
+    _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
         ? {for (final r in await _db.select(_db.comments).get()) r.id: r.updatedAt}
         : const <String, int>{};
+    final wallIds = await _existingIds('walls');
+    final ascentIds = await _existingIds('ascents');
 
     for (final json in rows) {
       final comment = db.Comment.fromJson(_notDirty(json));
@@ -450,6 +688,20 @@ class BackupRepository {
           )) {
         continue;
       }
+      final missing = _firstMissingFk([
+        ('wallId', comment.wallId, wallIds),
+        ('ascentId', comment.ascentId, ascentIds),
+      ]);
+      if (missing != null) {
+        sink.defer(
+          table: 'comments',
+          id: comment.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: json,
+        );
+        continue;
+      }
       await _db.into(_db.comments).insertOnConflictUpdate(comment);
     }
   }
@@ -457,10 +709,13 @@ class BackupRepository {
   Future<void> _importLikes(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,
+    _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
         ? {for (final r in await _db.select(_db.likes).get()) r.id: r.updatedAt}
         : const <String, int>{};
+    final wallIds = await _existingIds('walls');
+    final ascentIds = await _existingIds('ascents');
 
     for (final json in rows) {
       final like = db.Like.fromJson(_notDirty(json));
@@ -469,6 +724,20 @@ class BackupRepository {
             localUpdatedAt: existing[like.id],
             incomingUpdatedAt: like.updatedAt,
           )) {
+        continue;
+      }
+      final missing = _firstMissingFk([
+        ('wallId', like.wallId, wallIds),
+        ('ascentId', like.ascentId, ascentIds),
+      ]);
+      if (missing != null) {
+        sink.defer(
+          table: 'likes',
+          id: like.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: json,
+        );
         continue;
       }
       await _db.into(_db.likes).insertOnConflictUpdate(like);
@@ -490,10 +759,16 @@ class BackupRepository {
   Future<void> _importAscents(
     List<Map<String, dynamic>> rows,
     ConflictMode mode,
+    _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
         ? {for (final r in await _db.select(_db.ascents).get()) r.id: r.updatedAt}
         : const <String, int>{};
+    // The pair that produced the live failure: an ascent the signed-in user
+    // logged on ANOTHER owner's shared route. `fetchOwnRows` can only see rows
+    // whose `ownerId` is the caller, so neither parent is in the own batch.
+    final routeIds = await _existingIds('routes');
+    final wallIds = await _existingIds('walls');
 
     for (final json in rows) {
       // `visibility` (Feature #12) is absent from pre-#12 snapshots; default it
@@ -508,6 +783,20 @@ class BackupRepository {
             localUpdatedAt: existing[ascent.id],
             incomingUpdatedAt: ascent.updatedAt,
           )) {
+        continue;
+      }
+      final missing = _firstMissingFk([
+        ('routeId', ascent.routeId, routeIds),
+        ('wallId', ascent.wallId, wallIds),
+      ]);
+      if (missing != null) {
+        sink.defer(
+          table: 'ascents',
+          id: ascent.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: json,
+        );
         continue;
       }
       await _db.into(_db.ascents).insertOnConflictUpdate(ascent);

@@ -562,6 +562,376 @@ void main() {
     );
   });
 
+  /// The live sync failure this group exists for, verbatim off a device:
+  ///
+  ///     Couldn't sync — Sync failed: own rows import failed: Bad state:
+  ///     importSnapshot: 3 table(s) failed: ascents: SqliteException(787):
+  ///     FOREIGN KEY constraint failed
+  ///
+  /// Root cause: `SyncRemote.fetchOwnRows` is scoped `ownerId = uid`, so the
+  /// signed-in user's own batch contains their Ascents/Comments/Likes made on
+  /// ANOTHER owner's shared topo but CANNOT contain the parent Wall/Route,
+  /// which belongs to that other owner and arrives with the shared batch (which
+  /// imports afterwards). Inserting the child unconditionally violated
+  /// `PRAGMA foreign_keys = ON` and — because each table imports in its own
+  /// transaction — took the WHOLE table down, so the user also lost their
+  /// ascents/comments/likes on their OWN topos. Three tables, every time:
+  /// ascents, comments, likes.
+  ///
+  /// Confirmed against the live (dev) Supabase: `ascents`, `comments` and
+  /// `likes` rows all exist whose owner differs from their parent wall/route's
+  /// owner, including two whose parents are additionally soft-deleted.
+  group('FK orphans: a child whose parent is absent is DEFERRED, not a 787 '
+      'that loses its whole table', () {
+    /// A second Area→Sector→Wall→Photo→Route hierarchy standing in for ANOTHER
+    /// owner's shared topo — the rows `fetchOwnRows` structurally cannot
+    /// return.
+    Future<void> seedForeign(AppDatabase db) async {
+      await db.into(db.areas).insert(
+        AreasCompanion.insert(
+          id: 'area-f',
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: const Value('other-owner'),
+          name: 'Foreign Area',
+        ),
+      );
+      await db.into(db.sectors).insert(
+        SectorsCompanion.insert(
+          id: 'sector-f',
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: const Value('other-owner'),
+          areaId: 'area-f',
+          name: 'Foreign Sector',
+          sortOrder: 0,
+        ),
+      );
+      await db.into(db.walls).insert(
+        WallsCompanion.insert(
+          id: 'wall-f',
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: const Value('other-owner'),
+          sectorId: 'sector-f',
+          name: 'Foreign Wall',
+          sortOrder: 0,
+          visibility: const Value('shared'),
+        ),
+      );
+      await db.into(db.photos).insert(
+        PhotosCompanion.insert(
+          id: 'photo-f',
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: const Value('other-owner'),
+          wallId: 'wall-f',
+          localPath: '/tmp/foreign.jpg',
+          kind: 'original',
+          width: 800,
+          height: 600,
+        ),
+      );
+      await db.into(db.routes).insert(
+        RoutesCompanion.insert(
+          id: 'route-f',
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: const Value('other-owner'),
+          wallId: 'wall-f',
+          photoId: 'photo-f',
+          number: 1,
+          colorIndex: 0,
+          pointsJson: '[]',
+          symbolsJson: '[]',
+          sortOrder: 0,
+        ),
+      );
+    }
+
+    /// The signed-in user's own community rows: one of each on their OWN topo
+    /// (must always come back) and one of each on the FOREIGN topo (the rows
+    /// that used to detonate the table).
+    Future<void> seedOwnChildren(AppDatabase db) async {
+      Future<void> ascent(String id, String routeId, String wallId) =>
+          db.into(db.ascents).insert(
+            AscentsCompanion.insert(
+              id: id,
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('me'),
+              routeId: routeId,
+              wallId: wallId,
+              climbedAt: 100,
+              style: 'redpoint',
+            ),
+          );
+      await ascent('ascent-own', 'route-1', 'wall-1');
+      await ascent('ascent-foreign', 'route-f', 'wall-f');
+
+      Future<void> comment(String id, {String? wallId, String? ascentId}) =>
+          db.into(db.comments).insert(
+            CommentsCompanion.insert(
+              id: id,
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('me'),
+              wallId: Value(wallId),
+              ascentId: Value(ascentId),
+              body: 'nice line',
+            ),
+          );
+      await comment('comment-own', wallId: 'wall-1');
+      await comment('comment-on-own-ascent', ascentId: 'ascent-own');
+      await comment('comment-foreign', wallId: 'wall-f');
+
+      Future<void> like(String id, {String? wallId, String? ascentId}) =>
+          db.into(db.likes).insert(
+            LikesCompanion.insert(
+              id: id,
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('me'),
+              wallId: Value(wallId),
+              ascentId: Value(ascentId),
+            ),
+          );
+      await like('like-own', wallId: 'wall-1');
+      await like('like-foreign', wallId: 'wall-f');
+    }
+
+    /// Every table, reverse-FK order — so the DB is genuinely empty (the fresh
+    /// install / logged-back-in case) but the connection + FK pragma survive.
+    Future<void> wipeAll(AppDatabase db) async {
+      await db.delete(db.likes).go();
+      await db.delete(db.comments).go();
+      await db.delete(db.ascents).go();
+      await db.delete(db.routes).go();
+      await db.delete(db.photos).go();
+      await db.delete(db.walls).go();
+      await db.delete(db.sectors).go();
+      await db.delete(db.areas).go();
+    }
+
+    /// Drops every `-f` (foreign-owner) row from [snapshot]'s parent tables,
+    /// leaving exactly the shape `fetchOwnRows(uid)` returns: the user's own
+    /// rows, INCLUDING their children on the foreign topo, but none of that
+    /// topo's parent rows.
+    Map<String, dynamic> ownOnly(Map<String, dynamic> snapshot) {
+      final tables = (snapshot['tables'] as Map).cast<String, dynamic>();
+      for (final table in const ['areas', 'sectors', 'walls', 'photos', 'routes']) {
+        tables[table] = [
+          for (final row in (tables[table] as List).cast<Map<String, dynamic>>())
+            if (!(row['id'] as String).endsWith('-f')) row,
+        ];
+      }
+      return {'tables': tables};
+    }
+
+    /// export → strip the foreign parents → wipe → import, i.e. exactly one
+    /// own-rows pull into an empty database.
+    Future<ImportReport> pullOwnOnly() async {
+      await seed(db);
+      await seedForeign(db);
+      await seedOwnChildren(db);
+      final snapshot = ownOnly(await repo.exportSnapshot());
+      await wipeAll(db);
+      return repo.importSnapshot(snapshot, mode: ConflictMode.lww);
+    }
+
+    test(
+      'the own-rows pull no longer throws, and every own-topo ascent/comment/'
+      'like still lands — the three orphans are reported, not dropped',
+      () async {
+        final report = await pullOwnOnly();
+
+        // Pre-fix this line threw:
+        //   Bad state: importSnapshot: 3 table(s) failed: ascents: ... 787
+        expect(report.hasDeferrals, isTrue);
+        expect(
+          report.deferred.map((d) => '${d.table}/${d.id}/${d.column}'),
+          unorderedEquals(const [
+            'ascents/ascent-foreign/routeId',
+            'comments/comment-foreign/wallId',
+            'likes/like-foreign/wallId',
+          ]),
+          reason: 'all THREE live-failing tables must be covered',
+        );
+        expect(
+          report.deferred.singleWhere((d) => d.table == 'ascents').missingParentId,
+          'route-f',
+        );
+
+        // The whole point: the rows on the user's OWN topo survived.
+        expect(
+          (await db.select(db.ascents).get()).map((a) => a.id),
+          ['ascent-own'],
+        );
+        expect(
+          (await db.select(db.comments).get()).map((c) => c.id),
+          unorderedEquals(['comment-own', 'comment-on-own-ascent']),
+        );
+        expect((await db.select(db.likes).get()).map((l) => l.id), ['like-own']);
+      },
+    );
+
+    test(
+      'the deferred rows are handed back verbatim and import cleanly once the '
+      "other owner's parents arrive (the shared batch) — nothing is lost",
+      () async {
+        final report = await pullOwnOnly();
+
+        // The shared batch lands the other owner's topo...
+        await seedForeign(db);
+
+        // ...and the SAME rows, re-imported through the same door, land.
+        final retry = await repo.importSnapshot(
+          {'tables': report.deferredRows},
+          mode: ConflictMode.lww,
+        );
+
+        expect(retry.hasDeferrals, isFalse, reason: retry.summary);
+        expect(
+          (await db.select(db.ascents).get()).map((a) => a.id),
+          unorderedEquals(['ascent-own', 'ascent-foreign']),
+        );
+        expect(
+          (await db.select(db.comments).get()).map((c) => c.id),
+          unorderedEquals([
+            'comment-own',
+            'comment-on-own-ascent',
+            'comment-foreign',
+          ]),
+        );
+        expect(
+          (await db.select(db.likes).get()).map((l) => l.id),
+          unorderedEquals(['like-own', 'like-foreign']),
+        );
+      },
+    );
+
+    test(
+      'a comment/like pointing at a missing ASCENT (not wall) is deferred too '
+      '-- Feature #12 added that second FK',
+      () async {
+        await seed(db);
+
+        final report = await repo.importSnapshot({
+          'tables': {
+            'comments': [
+              {
+                'id': 'comment-orphan-ascent',
+                'createdAt': 100,
+                'updatedAt': 100,
+                'deletedAt': null,
+                'remoteId': null,
+                'dirty': false,
+                'ownerId': 'me',
+                'wallId': null,
+                'ascentId': 'ascent-gone',
+                'body': 'orphan',
+                'authorName': null,
+              },
+            ],
+            'likes': [
+              {
+                'id': 'like-orphan-ascent',
+                'createdAt': 100,
+                'updatedAt': 100,
+                'deletedAt': null,
+                'remoteId': null,
+                'dirty': false,
+                'ownerId': 'me',
+                'wallId': null,
+                'ascentId': 'ascent-gone',
+              },
+            ],
+          },
+        }, mode: ConflictMode.lww);
+
+        expect(
+          report.deferred.map((d) => '${d.table}/${d.column}'),
+          unorderedEquals(const ['comments/ascentId', 'likes/ascentId']),
+        );
+        expect(await db.select(db.comments).get(), isEmpty);
+        expect(await db.select(db.likes).get(), isEmpty);
+      },
+    );
+
+    test(
+      'a TOMBSTONED parent is still a parent: a child of a soft-deleted wall '
+      'imports normally and is NOT deferred',
+      () async {
+        await seed(db);
+        // Soft-delete the wall the way the app does (tombstone, row stays).
+        await (db.update(db.walls)..where((t) => t.id.equals('wall-1'))).write(
+          WallsCompanion(deletedAt: const Value(999), updatedAt: const Value(999)),
+        );
+
+        final report = await repo.importSnapshot({
+          'tables': {
+            'likes': [
+              {
+                'id': 'like-on-tombstoned-wall',
+                'createdAt': 100,
+                'updatedAt': 100,
+                'deletedAt': null,
+                'remoteId': null,
+                'dirty': false,
+                'ownerId': 'me',
+                'wallId': 'wall-1',
+                'ascentId': null,
+              },
+            ],
+          },
+        }, mode: ConflictMode.lww);
+
+        expect(report.hasDeferrals, isFalse, reason: report.summary);
+        expect((await db.select(db.likes).get()).single.wallId, 'wall-1');
+      },
+    );
+
+    test(
+      'the guard is not ascents-only: a sector whose area is missing is '
+      'deferred while every other sector in the same batch still imports',
+      () async {
+        await seed(db);
+
+        Map<String, dynamic> sectorRow(String id, String areaId) => {
+          'id': id,
+          'createdAt': 100,
+          'updatedAt': 100,
+          'deletedAt': null,
+          'remoteId': null,
+          'dirty': false,
+          'ownerId': 'me',
+          'areaId': areaId,
+          'name': 'Sector $id',
+          'sortOrder': 0,
+        };
+
+        final report = await repo.importSnapshot({
+          'tables': {
+            'sectors': [
+              sectorRow('sector-good', 'area-1'),
+              sectorRow('sector-orphan', 'area-gone'),
+            ],
+          },
+        }, mode: ConflictMode.lww);
+
+        expect(
+          report.deferred.map((d) => d.id),
+          ['sector-orphan'],
+          reason: 'one orphan must not roll back the whole sectors table',
+        );
+        expect(
+          (await db.select(db.sectors).get()).map((s) => s.id),
+          unorderedEquals(['sector-1', 'sector-good']),
+        );
+      },
+    );
+  });
+
   /// The restore-path half of the schema-downgrade hazard already closed for
   /// the local database by `SchemaDowngradeException`
   /// (`lib/core/db/schema_downgrade.dart`): there, an older shell opened a

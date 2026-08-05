@@ -1289,6 +1289,10 @@ class SyncService {
     var ownFetchOk = false;
     var ownHadError = false;
     var ownTables = <String, List<Map<String, dynamic>>>{};
+    // What the own import could not write because a foreign key pointed at
+    // another owner's row — retried after the SHARED import below, which is
+    // where those parents come from. See [DeferredRow].
+    var ownReport = ImportReport.clean;
     try {
       ownTables = await _remote.fetchOwnRows(uid);
       ownRowsPulled = _countRows(ownTables);
@@ -1317,7 +1321,10 @@ class SyncService {
       }
 
       try {
-        await _backupRepository.importSnapshot({'tables': ownTables}, mode: ConflictMode.lww);
+        ownReport = await _backupRepository.importSnapshot(
+          {'tables': ownTables},
+          mode: ConflictMode.lww,
+        );
         // ownImported reflects the WHOLE own pipeline (fetch + photo
         // download + import), not just this final write — a hiccup earlier
         // (e.g. the photo download) still means "own" wasn't a clean,
@@ -1473,13 +1480,59 @@ class SyncService {
     }
 
     try {
-      await _backupRepository.importSnapshot({'tables': sharedTables}, mode: ConflictMode.lww);
+      final sharedReport = await _backupRepository.importSnapshot(
+        {'tables': sharedTables},
+        mode: ConflictMode.lww,
+      );
       // sharedImported reflects the WHOLE shared pipeline (shared-topos +
       // shared-ascents + profiles fetches, photo downloads, and this final
       // import), not just this write — mirrors ownImported above.
       sharedImported = !sharedHadError;
+      if (sharedReport.hasDeferrals) {
+        // Should not normally happen: both shared fetches assemble their rows
+        // WITH the ancestor chain those rows need. If it does, the rows stayed
+        // in the cloud and are re-tried on the next pull — but it is reported,
+        // never swallowed (#72).
+        sharedImported = false;
+        errors.add('shared rows deferred (parent row missing): ${sharedReport.summary}');
+      }
     } catch (e) {
       errors.add('shared rows import failed: $e');
+    }
+
+    // ---- OWN, second pass ------------------------------------------------
+    // The user's own Ascents/Comments/Likes on ANOTHER owner's shared topo
+    // reference a Wall/Route that `fetchOwnRows` (scoped `ownerId = uid`)
+    // structurally cannot return — those parents arrive with the SHARED batch,
+    // which has only now been imported. Before this pass, every such row hit
+    // `FOREIGN KEY constraint failed` and took its ENTIRE table down with it
+    // (the live "own rows import failed: 3 table(s) failed" — ascents,
+    // comments and likes, all three), so the user also lost their ascents on
+    // their OWN topos. Re-importing exactly the deferred rows here resolves
+    // them inside the SAME pull rather than leaving the user to hope a later
+    // one happens to find the parents already local.
+    if (ownReport.hasDeferrals) {
+      try {
+        final retry = await _backupRepository.importSnapshot(
+          {'tables': ownReport.deferredRows},
+          mode: ConflictMode.lww,
+        );
+        if (retry.hasDeferrals) {
+          // A genuine orphan: the parent is in neither batch (e.g. its owner
+          // un-shared or hard-deleted the topo this row hangs off). The row is
+          // untouched in the cloud and will be retried on every pull — and the
+          // user is TOLD, on the visible "Couldn't sync … Retry" surface,
+          // rather than it disappearing behind a debugPrint.
+          ownImported = false;
+          errors.add(
+            'own rows deferred (parent row missing after shared import): '
+            '${retry.summary}',
+          );
+        }
+      } catch (e) {
+        ownImported = false;
+        errors.add('own deferred rows import failed: $e');
+      }
     }
 
     return PullResult.pulled(
