@@ -87,18 +87,27 @@
       }
     }
 
-    /* #74 residual: on an installed iOS PWA, WebKit antialiases the top edge
-       of Flutter's canvas layer against the page background into a faint
-       hairline. Overscan the Flutter host up 2px (standalone only) so the
-       seam falls into the blank top safe-area, off-screen. In-browser tabs
-       don't show the seam. Cosmetic; Flutter's logical size is effectively
-       unchanged. Do NOT extend this to flt-glass-pane/flt-scene-host/canvas —
-       those carry a scale transform and forcing them breaks rendering. */
-    @media all and (display-mode: standalone) {
-      flutter-view {
-        top: -2px !important;
-      }
-    }
+    /* #74's cosmetic 1px hairline fix (this comment marks where it lived —
+       a standalone-only rule that set flutter-view's `top` offset to
+       -2px, `!important`, plus the clientHeight/clientWidth alias script
+       further below) was REMOVED 2026-08-05. It caused a real bug: on the
+       installed iOS PWA, touch
+       targets were displaced from painted content (Google sign-in appeared
+       dead because taps were landing off the button entirely).
+       Root cause: `<flutter-view>`'s CSS box — the SAME box the web engine
+       paints into and measures native pointer events against, via
+       `computeEventOffsetToTarget` — is sized on iOS directly from
+       `document.documentElement.clientHeight/clientWidth`
+       (full_page_dimensions_provider.dart). Aliasing those getters to
+       `window.innerHeight/innerWidth` UNCONDITIONALLY (not scoped to one
+       boot frame) defeated the engine's own iOS-specific correctness fix
+       and could leave the mismatch UNSETTLED instead of self-correcting.
+       Neither this alias nor the `top: -2px` rule was ever verified on a
+       real installed iOS PWA before shipping — only via headless Chrome,
+       which cannot execute the standalone code path at all. The #74
+       hairline is an accepted, known, COSMETIC regression now that both
+       are gone; see test/web_geometry_source_test.dart, which pins their
+       absence. */
 
     /* Branded splash shown while the Flutter engine boots. Removed once the
        first frame is painted (see the `flutter-first-frame` listener below),
@@ -145,27 +154,25 @@
     For more details:
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
-  <script>
-    // iOS Safari PWA first-paint fix (flutter/flutter#84833): on WebKit,
-    // Flutter's web engine sizes its view from
-    // document.documentElement.clientHeight/clientWidth rather than
-    // window.innerHeight/innerWidth. On a cold-launched standalone PWA that
-    // value is briefly unsettled (missing the viewport-fit=cover safe-area
-    // adjustment), so Flutter's canvas paints a few px short of the true top
-    // edge for one frame, exposing a hairline strip at the top until any
-    // relayout (e.g. a back-navigation) makes WebKit settle it. Aliasing the
-    // getters to the already-correct window.innerHeight/innerWidth makes the
-    // very first read correct. Inert on Chrome/Android (Flutter doesn't read
-    // clientHeight there).
-    Object.defineProperty(document.documentElement, 'clientHeight', {
-      get: function () { return window.innerHeight; },
-      configurable: true,
-    });
-    Object.defineProperty(document.documentElement, 'clientWidth', {
-      get: function () { return window.innerWidth; },
-      configurable: true,
-    });
-  </script>
+  <!--
+    REMOVED 2026-08-05: an inline script here used to alias
+    document.documentElement.clientHeight/clientWidth to
+    window.innerHeight/innerWidth (flutter/flutter#84833 first-paint fix for
+    the #74 hairline). On iOS, Flutter's web engine sizes `<flutter-view>`'s
+    CSS box — the SAME box it paints into and measures native pointer events
+    against — directly from clientHeight/clientWidth
+    (full_page_dimensions_provider.dart). Aliasing those getters
+    UNCONDITIONALLY (not just for the first frame) defeated the engine's own
+    iOS-specific correctness fix (it deliberately avoids `visualViewport` on
+    iOS due to a WebKit rotation bug) and could leave the view geometry
+    unsettled instead of self-correcting after one frame. Result: on the
+    installed iOS PWA, touch input landed away from painted content — the
+    "Continue with Google" button looked dead because taps on it never
+    reached it. Never verified on a real installed iOS PWA before shipping.
+    See test/web_geometry_source_test.dart, which pins this override's
+    absence. Removing it means the original one-frame cosmetic hairline can
+    reappear — accepted; see commit history for #74.
+  -->
   <script src="flutter_bootstrap.js" async></script>
 
   <script>
