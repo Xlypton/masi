@@ -221,11 +221,28 @@ class PublicPhotoPruneOutcome {
   /// Whether any bytes were actually freed.
   bool get didPrune => deletedKeys.isNotEmpty;
 
+  /// How much of the origin quota this pass actually reclaimed —
+  /// `usedFractionBefore - usedFractionAfter` when both readings are known,
+  /// `null` when either is missing (e.g. [PublicPhotoPruneReason.noEstimate]).
+  ///
+  /// This is the field #49 exists for. [deletedKeys] is a COUNT OF DELETE
+  /// CALLS THAT DID NOT THROW — before the "row is not bytes" fix (see the
+  /// library doc), that count kept climbing to [kPruneMaxDeletionsPerPass]
+  /// while this stayed at (or near) zero, because every "deleted" key held no
+  /// bytes to begin with. "50 deletions, fraction 0.80 -> 0.80" is a
+  /// self-evident contradiction that nothing was watching for; a caller that
+  /// surfaces this alongside [deletedKeys] can catch that class of bug the
+  /// moment it recurs, rather than needing a debugger attached in production.
+  double? get fractionFreed => (usedFractionBefore == null || usedFractionAfter == null)
+      ? null
+      : usedFractionBefore! - usedFractionAfter!;
+
   @override
   String toString() =>
       'PublicPhotoPruneOutcome(reason: ${reason.name}, '
       'deleted: ${deletedKeys.length}, failed: $failedDeleteCount, '
-      'fraction: $usedFractionBefore -> $usedFractionAfter)';
+      'fraction: $usedFractionBefore -> $usedFractionAfter, '
+      'fractionFreed: $fractionFreed)';
 }
 
 /// Every live photo row paired with its owning wall's ownership + recency.

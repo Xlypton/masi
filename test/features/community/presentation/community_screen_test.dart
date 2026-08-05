@@ -13,6 +13,7 @@ import 'package:masi/features/community/data/community_repository.dart';
 import 'package:masi/features/backup/application/backup_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
+import 'package:masi/features/backup/data/sync_service.dart' show SharedPhotoBudgetReason;
 import 'package:masi/features/community/presentation/community_screen.dart';
 import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
@@ -1030,6 +1031,32 @@ void main() {
 
       expect(find.byKey(const Key('sync-banner')), findsNothing);
     });
+
+    testWidgets(
+      '#49 P2: a pull that succeeded but withheld other climbers\' photos for '
+      'storage pressure shows the sharedPhotosWithheld banner on the Feed — '
+      'this is the screen the withheld pictures are actually missing from',
+      (tester) async {
+        final container = _makeContainer(
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastSharedPhotoBudgetReason: SharedPhotoBudgetReason.storagePressure,
+            ),
+          ),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.text(SyncBanner.sharedPhotosWithheldMessage),
+          findsOneWidget,
+        );
+      },
+    );
 
     testWidgets(
       'an EMPTY feed with a pull error does not print the same sentence '

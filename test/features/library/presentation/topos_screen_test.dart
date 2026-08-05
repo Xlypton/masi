@@ -13,6 +13,7 @@ import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/backup/application/backup_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
+import 'package:masi/features/backup/data/sync_service.dart' show SharedPhotoBudgetReason;
 import 'package:masi/features/community/application/community_providers.dart';
 import 'package:masi/features/community/data/community_repository.dart';
 import 'package:masi/features/library/application/library_providers.dart';
@@ -953,6 +954,61 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      '#49 P2: a pull that succeeded but withheld other climbers\' photos for '
+      'storage pressure shows the sharedPhotosWithheld banner — before this, '
+      'SharedPhotoBudgetReason.storagePressure was read by nothing outside '
+      'sync_service.dart, so the user just saw placeholders with no '
+      'explanation anywhere in the app',
+      (tester) async {
+        final container = _makeContainer(
+          topos: populated,
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastSharedPhotoBudgetReason: SharedPhotoBudgetReason.storagePressure,
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.text(SyncBanner.sharedPhotosWithheldMessage),
+          findsOneWidget,
+        );
+        // Nothing to retry — the pull already succeeded.
+        expect(find.byKey(const Key('sync-banner-retry')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      '#49 P2: a real sync failure outranks the storage-pressure notice — the '
+      'user should read about the fault that needs a retry, not a merely '
+      'advisory one that does not',
+      (tester) async {
+        final container = _makeContainer(
+          topos: populated,
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: boom',
+              lastSharedPhotoBudgetReason: SharedPhotoBudgetReason.storagePressure,
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.text("Couldn't sync — Sync failed: boom."), findsOneWidget);
+        expect(
+          find.text(SyncBanner.sharedPhotosWithheldMessage),
+          findsNothing,
+        );
       },
     );
 

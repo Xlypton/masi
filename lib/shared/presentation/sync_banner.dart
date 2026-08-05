@@ -6,10 +6,13 @@ import 'masi_icon.dart';
 /// What a [SyncBanner] is telling the user, and therefore which sentence and
 /// which tone it renders.
 ///
-/// The two are deliberately NOT collapsed into one "something's wrong" state:
-/// they call for opposite reactions. [offline] is reassurance — the data is
-/// on the device, nothing is lost, keep climbing. [syncFailed] is a fault
-/// report with a reason worth reading and an action worth taking.
+/// The three are deliberately NOT collapsed into one "something's wrong"
+/// state: they call for different reactions. [offline] is reassurance — the
+/// data is on the device, nothing is lost, keep climbing. [syncFailed] is a
+/// fault report with a reason worth reading and an action worth taking.
+/// [sharedPhotosWithheld] is neither — nothing failed and nothing needs a
+/// retry, it just explains a blank spot the user would otherwise have no way
+/// to account for.
 enum SyncBannerKind {
   /// A reachability probe has completed and FAILED
   /// (`Reachability.isKnownOffline` — never `unknown`, see
@@ -21,6 +24,17 @@ enum SyncBannerKind {
   /// problem (`SyncOrchestratorState.lastPullError`). Carries the reason
   /// verbatim in [SyncBanner.detail].
   syncFailed,
+
+  /// The most recent pull SUCCEEDED, but downloaded ZERO other climbers'
+  /// photo bytes because this device is over the storage-pressure watermark
+  /// (`SyncOrchestratorState.lastSharedPhotoBudgetReason ==
+  /// SharedPhotoBudgetReason.storagePressure` — see `sync_service.dart`).
+  ///
+  /// #49 P2 fix: before this kind existed, that fact was computed on every
+  /// pull and then read by nothing outside `sync_service.dart` — the user
+  /// just saw the Community feed fill up with placeholders, with no banner,
+  /// no empty state, and no explanation anywhere in the app.
+  sharedPhotosWithheld,
 }
 
 /// The one sync/offline banner both feeds render — Library
@@ -63,6 +77,15 @@ class SyncBanner extends StatelessWidget {
   static const String offlineMessage =
       "You're offline — showing your saved topos.";
 
+  /// The single [SyncBannerKind.sharedPhotosWithheld] sentence used app-wide
+  /// — same "one agreed string, asserted verbatim" reasoning as
+  /// [offlineMessage]. Deliberately does not name a byte count or a fraction:
+  /// those numbers move every pull and would make this read like a progress
+  /// readout rather than an explanation.
+  static const String sharedPhotosWithheldMessage =
+      "This device is low on storage, so other climbers' photos aren't "
+      'downloading right now.';
+
   final SyncBannerKind kind;
 
   /// The failure reason for [SyncBannerKind.syncFailed] — in practice
@@ -71,10 +94,12 @@ class SyncBanner extends StatelessWidget {
   /// `'Sync failed: <PullResult.errors text>'`, so the real fault is
   /// readable on-device without a debugger (#72).
   ///
-  /// IGNORED for [SyncBannerKind.offline]: a stale pull error from before
+  /// IGNORED for [SyncBannerKind.offline] and
+  /// [SyncBannerKind.sharedPhotosWithheld]: a stale pull error from before
   /// the signal dropped is not what an offline user needs to read, and
   /// pasting a raw `SocketException` under "you're offline" turns
-  /// reassurance back into alarm.
+  /// reassurance back into alarm; [sharedPhotosWithheldMessage] is likewise a
+  /// fixed sentence that does not take a detail.
   final String? detail;
 
   /// Optional action. `null` renders no button — correct for the offline
@@ -114,21 +139,34 @@ class SyncBanner extends StatelessWidget {
         SyncBannerKind.offline => offlineMessage,
         SyncBannerKind.syncFailed =>
           detail == null ? "Couldn't sync." : "Couldn't sync — $detail.",
+        SyncBannerKind.sharedPhotosWithheld => sharedPhotosWithheldMessage,
       };
 
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
-    final isOffline = kind == SyncBannerKind.offline;
 
-    // Never `gradeHard` for offline: red is the app's "your data is in
-    // danger" tone, and being out of signal at a crag is the one situation
-    // where that is emphatically not true. `phone_off` is the closest glyph
-    // in `assets/icons/masi/` to "no connection" (a device with a strike
-    // through it); the set carries no wifi/cloud-off variant.
-    final tone = isOffline ? colors.accent : colors.gradeHard;
-    final glyph = isOffline ? 'phone_off' : 'warning';
+    // Never `gradeHard` for offline or sharedPhotosWithheld: red is the
+    // app's "your data is in danger" tone. Being out of signal at a crag is
+    // the one situation where that is emphatically not true (reassurance,
+    // not alarm), and withheld shared photos is likewise not a fault — the
+    // pull succeeded, the user's own data is untouched, and nothing here
+    // needs a retry. Only [SyncBannerKind.syncFailed] is a genuine fault
+    // report. `phone_off` is the closest glyph in `assets/icons/masi/` to "no
+    // connection" (a device with a strike through it); the set carries no
+    // wifi/cloud-off/storage variant, so `sharedPhotosWithheld` reuses
+    // `warning` — advisory, not alarming, same as its tone.
+    final tone = switch (kind) {
+      SyncBannerKind.offline => colors.accent,
+      SyncBannerKind.syncFailed => colors.gradeHard,
+      SyncBannerKind.sharedPhotosWithheld => colors.accent,
+    };
+    final glyph = switch (kind) {
+      SyncBannerKind.offline => 'phone_off',
+      SyncBannerKind.syncFailed => 'warning',
+      SyncBannerKind.sharedPhotosWithheld => 'warning',
+    };
 
     return Container(
       key: const Key('sync-banner'),

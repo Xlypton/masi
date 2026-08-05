@@ -52,6 +52,9 @@ class SyncOrchestratorState {
     this.lastPullError,
     this.lastPushError,
     this.lastPushWarning,
+    this.lastPublicPhotoPruneOutcome,
+    this.lastSharedPhotoBytesSkipped = 0,
+    this.lastSharedPhotoBudgetReason = SharedPhotoBudgetReason.withinBudget,
   });
 
   final SyncStatus status;
@@ -129,6 +132,34 @@ class SyncOrchestratorState {
   /// not a SnackBar, and not a blocker.
   final String? lastPushWarning;
 
+  /// What the most recent [SyncOrchestrator._prunePublicPhotosBestEffort]
+  /// pass did — #49 P1 fix. `PublicPhotoPruneOutcome` was fully built,
+  /// tested, and triggered on every successful pull, but only ever reached
+  /// `debugPrint`, which is silent in a release build on device (see
+  /// `CLAUDE.md`'s devicectl notes). That is exactly why a pass that
+  /// "deleted" 50 keys while freeing zero bytes (`PublicPhotoPruneOutcome
+  /// .fractionFreed`) went unnoticed until it caused a user's own-photo
+  /// import to throw on quota. `null` until the first pull of the app run
+  /// completes; carried forward by every unrelated state transition
+  /// (push/pull error, cloud-availability) so it is never clobbered by news
+  /// that has nothing to do with it.
+  final PublicPhotoPruneOutcome? lastPublicPhotoPruneOutcome;
+
+  /// [PullResult.sharedPhotoBytesSkipped] from the most recent completed
+  /// pull — #49 P2 fix. `0` until the first pull, and whenever
+  /// [lastSharedPhotoBudgetReason] is [SharedPhotoBudgetReason.withinBudget].
+  final int lastSharedPhotoBytesSkipped;
+
+  /// [PullResult.sharedPhotoBudgetReason] from the most recent completed
+  /// pull. Before this field existed, nothing outside `sync_service.dart`
+  /// could ever read it, so [SharedPhotoBudgetReason.storagePressure] — "this
+  /// device is over the watermark, so this pull deliberately downloaded ZERO
+  /// other climbers' photos" — reached the user only as a silent wall of
+  /// placeholders in the Community feed, with no explanation anywhere.
+  /// `sync_banner.dart`'s `SyncBannerKind.sharedPhotosWithheld` keys off this
+  /// being [SharedPhotoBudgetReason.storagePressure].
+  final SharedPhotoBudgetReason lastSharedPhotoBudgetReason;
+
   SyncOrchestratorState copyWith({SyncStatus? status, DateTime? lastSyncedAt}) =>
       SyncOrchestratorState(
         status: status ?? this.status,
@@ -136,6 +167,9 @@ class SyncOrchestratorState {
         lastPullError: lastPullError,
         lastPushError: lastPushError,
         lastPushWarning: lastPushWarning,
+        lastPublicPhotoPruneOutcome: lastPublicPhotoPruneOutcome,
+        lastSharedPhotoBytesSkipped: lastSharedPhotoBytesSkipped,
+        lastSharedPhotoBudgetReason: lastSharedPhotoBudgetReason,
       );
 
   @override
@@ -146,7 +180,10 @@ class SyncOrchestratorState {
           other.lastSyncedAt == lastSyncedAt &&
           other.lastPullError == lastPullError &&
           other.lastPushError == lastPushError &&
-          other.lastPushWarning == lastPushWarning);
+          other.lastPushWarning == lastPushWarning &&
+          other.lastPublicPhotoPruneOutcome == lastPublicPhotoPruneOutcome &&
+          other.lastSharedPhotoBytesSkipped == lastSharedPhotoBytesSkipped &&
+          other.lastSharedPhotoBudgetReason == lastSharedPhotoBudgetReason);
 
   @override
   int get hashCode => Object.hash(
@@ -155,13 +192,19 @@ class SyncOrchestratorState {
     lastPullError,
     lastPushError,
     lastPushWarning,
+    lastPublicPhotoPruneOutcome,
+    lastSharedPhotoBytesSkipped,
+    lastSharedPhotoBudgetReason,
   );
 
   @override
   String toString() =>
       'SyncOrchestratorState(status: $status, lastSyncedAt: $lastSyncedAt, '
       'lastPullError: $lastPullError, lastPushError: $lastPushError, '
-      'lastPushWarning: $lastPushWarning)';
+      'lastPushWarning: $lastPushWarning, '
+      'lastPublicPhotoPruneOutcome: $lastPublicPhotoPruneOutcome, '
+      'lastSharedPhotoBytesSkipped: $lastSharedPhotoBytesSkipped, '
+      'lastSharedPhotoBudgetReason: ${lastSharedPhotoBudgetReason.name})';
 }
 
 /// Debounce window [SyncOrchestrator] waits after the LAST local table write
@@ -393,6 +436,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
     SyncStatus status = SyncStatus.error,
     DateTime? lastSyncedAt,
     String? lastPushWarning,
+    PublicPhotoPruneOutcome? lastPublicPhotoPruneOutcome,
+    int lastSharedPhotoBytesSkipped = 0,
+    SharedPhotoBudgetReason lastSharedPhotoBudgetReason = SharedPhotoBudgetReason.withinBudget,
   }) {
     final message = cloudUnavailableMessage(cloudInit);
     return SyncOrchestratorState(
@@ -401,6 +447,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       lastPullError: message,
       lastPushError: message,
       lastPushWarning: lastPushWarning,
+      lastPublicPhotoPruneOutcome: lastPublicPhotoPruneOutcome,
+      lastSharedPhotoBytesSkipped: lastSharedPhotoBytesSkipped,
+      lastSharedPhotoBudgetReason: lastSharedPhotoBudgetReason,
     );
   }
 
@@ -446,6 +495,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         status: state.status,
         lastSyncedAt: state.lastSyncedAt,
         lastPushWarning: state.lastPushWarning,
+        lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+        lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+        lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
       );
       return true;
     }
@@ -455,6 +507,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       status: await _failureStatus(),
       lastSyncedAt: state.lastSyncedAt,
       lastPushWarning: state.lastPushWarning,
+      lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+      lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+      lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
     );
     return false;
   }
@@ -594,6 +649,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
           status: state.lastPullError != null ? state.status : SyncStatus.idle,
           lastSyncedAt: state.lastSyncedAt,
           lastPullError: state.lastPullError,
+          lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+          lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+          lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
         );
       }
       return;
@@ -636,6 +694,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
               lastSyncedAt: _now(),
               lastPullError: state.lastPullError,
               lastPushWarning: pushWarning,
+              lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+              lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+              lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
             );
           } else {
             state = SyncOrchestratorState(
@@ -653,6 +714,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
                   'Sync failed: ${result.rowsFailed} change(s) and '
                   '${result.photosFailed} photo(s) not uploaded — '
                   '${[...result.errors, ...result.photoErrors].join('; ')}',
+              lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+              lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+              lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
             );
             _scheduleRetry();
           }
@@ -670,6 +734,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             status: SyncStatus.idle,
             lastSyncedAt: state.lastSyncedAt,
             lastPullError: state.lastPullError,
+            lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+            lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+            lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
           );
         case SyncPushOutcome.skippedNotWifi:
           // Not a failure, and deliberately NOT retried on a timer: this
@@ -686,6 +753,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         lastPullError: state.lastPullError,
         lastPushError: 'Sync failed: $e',
         lastPushWarning: state.lastPushWarning,
+        lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+        lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+        lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
       );
       _scheduleRetry();
     }
@@ -914,6 +984,15 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             // advisory is push-derived for the same reason.
             lastPushError: state.lastPushError,
             lastPushWarning: state.lastPushWarning,
+            // Carried, not re-derived here: the prune itself runs AFTER this
+            // write (see below), so this write must not clobber whatever the
+            // PREVIOUS pull's pass last reported.
+            lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+            // #49 P2 fix: THIS pull's own advisory, straight off `result` —
+            // the one place in the app that could read it before now was
+            // `sync_service.dart` itself.
+            lastSharedPhotoBytesSkipped: result.sharedPhotoBytesSkipped,
+            lastSharedPhotoBudgetReason: result.sharedPhotoBudgetReason,
           );
           // AFTER the state write, and deliberately NOT awaited — see
           // [_prunePublicPhotosBestEffort].
@@ -925,6 +1004,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
             lastPullError: pullError,
             lastPushError: state.lastPushError,
             lastPushWarning: state.lastPushWarning,
+            lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+            lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+            lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
           );
       }
     } catch (e, st) {
@@ -935,6 +1017,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         lastPullError: 'Sync failed: $e',
         lastPushError: state.lastPushError,
         lastPushWarning: state.lastPushWarning,
+        lastPublicPhotoPruneOutcome: state.lastPublicPhotoPruneOutcome,
+        lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+        lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
       );
     }
   }
@@ -976,16 +1061,33 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   /// try/catch is belt-and-braces for a fire-and-forget future, where an
   /// escaping error would be unhandled.
   ///
-  /// Observability: anything that actually deleted (or failed to delete) bytes
-  /// is logged with its full [PublicPhotoPruneOutcome] — reason, count, and the
-  /// used-fraction before/after. The two boring reasons (no pressure signal,
-  /// below the watermark) are silent, because they are what every single pull
-  /// reports and logging them would drown the console.
+  /// Observability: every pass's full [PublicPhotoPruneOutcome] — reason,
+  /// count, and the used-fraction before/after — now lands on
+  /// [SyncOrchestratorState.lastPublicPhotoPruneOutcome] (#49 P1 fix), so it
+  /// is inspectable from `account_screen.dart` or a debugger attached to a
+  /// RELEASE build, not just a `debugPrint` that is silent there (see
+  /// `CLAUDE.md`'s devicectl notes on Dart logs vanishing in release). The
+  /// `debugPrint` below is UNCHANGED and kept for the local dev-console case;
+  /// the two boring reasons (no pressure signal, below the watermark) stay
+  /// silent there because they are what every single pull reports and
+  /// logging them would drown the console — but they still reach `state`,
+  /// same as every other reason, so a caller can always tell "nothing to
+  /// report" apart from "no pull has completed yet" (`null`).
   Future<void> _prunePublicPhotosBestEffort() async {
     try {
       final outcome = await ref
           .read(publicPhotoPruneServiceProvider)
           .pruneIfUnderPressure();
+      state = SyncOrchestratorState(
+        status: state.status,
+        lastSyncedAt: state.lastSyncedAt,
+        lastPullError: state.lastPullError,
+        lastPushError: state.lastPushError,
+        lastPushWarning: state.lastPushWarning,
+        lastPublicPhotoPruneOutcome: outcome,
+        lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
+        lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
+      );
       switch (outcome.reason) {
         case PublicPhotoPruneReason.noEstimate:
         case PublicPhotoPruneReason.belowHighWatermark:

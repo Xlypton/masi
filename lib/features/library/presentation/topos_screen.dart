@@ -18,6 +18,7 @@ import '../../account/application/auth_providers.dart';
 import '../../account/application/email_initials.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
+import '../../backup/data/sync_service.dart' show SharedPhotoBudgetReason;
 import '../../community/data/community_repository.dart' show SharedTopo;
 import '../../topo/presentation/photo_image.dart';
 import '../../topo/presentation/photo_source_sheet.dart';
@@ -215,7 +216,8 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     // pre-probe state, and treating it as offline flashes this banner for a
     // frame on every cold start (see `reachability_providers.dart`).
     final reachability = ref.watch(reachabilityProvider);
-    final pullError = ref.watch(syncOrchestratorProvider).lastPullError;
+    final syncState = ref.watch(syncOrchestratorProvider);
+    final pullError = syncState.lastPullError;
     // The full-screen `_SyncErrorEmptyState` below already reports a pull
     // error — larger, and with its own Retry — whenever the library is
     // genuinely empty. Rendering the banner too would print the same
@@ -225,10 +227,18 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     // reads as "your topos are gone".
     final emptyStateOwnsTheError =
         loadedTopos != null && proximityEntries.isEmpty && pullError != null;
+    // #49 P2 fix: lowest priority of the three — a real fault or being
+    // offline is worth reading about first, and this is neither: the pull
+    // succeeded, it just downloaded fewer other-climbers' photos than usual.
+    final sharedPhotosWithheld =
+        syncState.lastSharedPhotoBudgetReason ==
+        SharedPhotoBudgetReason.storagePressure;
     final SyncBannerKind? bannerKind = reachability.isKnownOffline
         ? SyncBannerKind.offline
         : (pullError != null && !emptyStateOwnsTheError)
         ? SyncBannerKind.syncFailed
+        : sharedPhotosWithheld
+        ? SyncBannerKind.sharedPhotosWithheld
         : null;
 
     // The account button shows initials once actually signed in with a

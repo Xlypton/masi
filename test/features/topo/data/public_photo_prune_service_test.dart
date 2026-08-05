@@ -958,4 +958,47 @@ void main() {
       },
     );
   });
+
+  group('PublicPhotoPruneOutcome.fractionFreed (#49)', () {
+    test(
+      'reports the drop when both readings are known — the field that would '
+      'have caught the pre-fix bug outright',
+      () {
+        const outcome = PublicPhotoPruneOutcome(
+          reason: PublicPhotoPruneReason.relieved,
+          usedFractionBefore: 0.80,
+          usedFractionAfter: 0.60,
+        );
+        expect(outcome.fractionFreed, closeTo(0.20, 1e-9));
+      },
+    );
+
+    test(
+      'is exactly zero for the confirmed pre-fix shape — 50 "deletions" that '
+      'moved the fraction not at all, as opposed to reading null or being '
+      'skipped for lack of a getter at all',
+      () {
+        final outcome = PublicPhotoPruneOutcome(
+          reason: PublicPhotoPruneReason.capReached,
+          deletedKeys: List.generate(50, (i) => 'photos/f-$i.jpg'),
+          usedFractionBefore: 0.80,
+          usedFractionAfter: 0.80,
+        );
+        expect(outcome.fractionFreed, 0.0);
+        expect(
+          outcome.deletedKeys.length,
+          greaterThan(0),
+          reason: 'the contradiction only reads as one if deletedKeys is '
+              'non-empty alongside a zero fractionFreed',
+        );
+      },
+    );
+
+    test('is null when either reading is missing — e.g. noEstimate', () {
+      const outcome = PublicPhotoPruneOutcome(
+        reason: PublicPhotoPruneReason.noEstimate,
+      );
+      expect(outcome.fractionFreed, isNull);
+    });
+  });
 }

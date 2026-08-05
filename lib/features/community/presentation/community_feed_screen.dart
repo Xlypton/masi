@@ -12,6 +12,7 @@ import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
+import '../../backup/data/sync_service.dart' show SharedPhotoBudgetReason;
 import '../../logbook/application/ascents_providers.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
@@ -293,7 +294,8 @@ class _FeedView extends ConsumerWidget {
     // or retry. Deliberately gated on `items.isEmpty` specifically (not
     // `emptyMessage != null`): the search/filter-narrowed empty states
     // below are unaffected by a sync problem — there IS data in that case.
-    final syncError = ref.watch(syncOrchestratorProvider).lastPullError;
+    final syncState = ref.watch(syncOrchestratorProvider);
+    final syncError = syncState.lastPullError;
     final showSyncError = items.isEmpty && syncError != null;
 
     // Stage 3 (T2). The `showSyncError` gate above is empty-feed-only, so a
@@ -316,10 +318,20 @@ class _FeedView extends ConsumerWidget {
     // branches are local-database states that losing signal does not cause
     // and an offline banner would not explain.
     final reachability = ref.watch(reachabilityProvider);
+    // #49 P2 fix: lowest priority — see `topos_screen.dart`'s identical
+    // reasoning. This is the screen the withheld photos are actually
+    // MISSING FROM (the shared pull is what skips them), so it is the more
+    // important of the two call sites for this banner, not a copy-paste
+    // extra.
+    final sharedPhotosWithheld =
+        syncState.lastSharedPhotoBudgetReason ==
+        SharedPhotoBudgetReason.storagePressure;
     final SyncBannerKind? bannerKind = reachability.isKnownOffline
         ? SyncBannerKind.offline
         : (syncError != null && !showSyncError)
         ? SyncBannerKind.syncFailed
+        : sharedPhotosWithheld
+        ? SyncBannerKind.sharedPhotosWithheld
         : null;
 
     return Column(

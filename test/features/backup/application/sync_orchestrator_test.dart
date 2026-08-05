@@ -222,6 +222,7 @@ class _RecordingPruneService extends PublicPhotoPruneService {
     this.reason = PublicPhotoPruneReason.belowHighWatermark,
     this.gate,
     this.throws = false,
+    this.outcomeOverride,
   }) : super(
          photoFiles: PhotoFiles(),
          storage: const PlatformStoragePersistenceService(),
@@ -238,6 +239,12 @@ class _RecordingPruneService extends PublicPhotoPruneService {
   /// the pull does NOT wait for it.
   final Future<void>? gate;
 
+  /// When set, returned verbatim instead of the plain `reason`-only outcome —
+  /// lets a test hand back a specific [PublicPhotoPruneOutcome] (e.g. one
+  /// with non-empty `deletedKeys` alongside an unmoved fraction — #49's
+  /// motivating contradiction).
+  final PublicPhotoPruneOutcome? outcomeOverride;
+
   @override
   Future<PublicPhotoPruneOutcome> pruneIfUnderPressure() async {
     calls++;
@@ -245,7 +252,7 @@ class _RecordingPruneService extends PublicPhotoPruneService {
     // `pruneIfUnderPressure` never throws by contract; this models a future
     // regression that breaks that contract, which must still not fail a pull.
     if (throws) throw Exception('prune-boom');
-    return PublicPhotoPruneOutcome(reason: reason);
+    return outcomeOverride ?? PublicPhotoPruneOutcome(reason: reason);
   }
 }
 
@@ -2431,6 +2438,221 @@ void main() {
         await pumpEventQueue();
 
         expect(prune.calls, 0);
+      },
+    );
+
+    test(
+      '#49 P1: the prune outcome reaches state, not just debugPrint — a '
+      'caller (a UI, a debugger attached to a RELEASE build) can read what '
+      'the last pass did without a dev console, which is silent for '
+      'debugPrint in release (see CLAUDE.md)',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final prune = _RecordingPruneService(
+          db: db,
+          reason: PublicPhotoPruneReason.relieved,
+        );
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          pruneService: prune,
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        await pumpEventQueue();
+
+        final outcome = container
+            .read(syncOrchestratorProvider)
+            .lastPublicPhotoPruneOutcome;
+        expect(outcome, isNotNull);
+        expect(outcome!.reason, PublicPhotoPruneReason.relieved);
+      },
+    );
+
+    test(
+      '#49 P1: a pass that "deleted" keys without freeing any of the quota — '
+      'the exact pre-fix bug (50 deletions, fraction 0.80 -> 0.80) — is '
+      'visible in state as a self-evident contradiction: deletedKeys is '
+      'non-empty but fractionFreed is (near) zero',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final contradictoryOutcome = PublicPhotoPruneOutcome(
+          reason: PublicPhotoPruneReason.capReached,
+          deletedKeys: List.generate(50, (i) => 'photos/foreign-$i.jpg'),
+          usedFractionBefore: 0.80,
+          usedFractionAfter: 0.80,
+        );
+        final prune = _RecordingPruneService(
+          db: db,
+          outcomeOverride: contradictoryOutcome,
+        );
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          pruneService: prune,
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        await pumpEventQueue();
+
+        final outcome = container
+            .read(syncOrchestratorProvider)
+            .lastPublicPhotoPruneOutcome!;
+        expect(outcome.deletedKeys, hasLength(50));
+        expect(
+          outcome.fractionFreed,
+          0.0,
+          reason: '50 "deletions" that freed nothing must be readable as '
+              'exactly that, not lost inside a deletedKeys count alone',
+        );
+      },
+    );
+
+    test(
+      '#49 P1: an unrelated, fully-landed push does not clobber the last '
+      'prune outcome — it describes on-device storage housekeeping, not the '
+      'push/pull it happened to run alongside',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final prune = _RecordingPruneService(
+          db: db,
+          reason: PublicPhotoPruneReason.relieved,
+        );
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          pruneService: prune,
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        await pumpEventQueue();
+        final afterPull = container
+            .read(syncOrchestratorProvider)
+            .lastPublicPhotoPruneOutcome;
+        expect(afterPull, isNotNull);
+
+        // A real, fully-landed push (a dirty row present) — the branch that
+        // actually writes a fresh state, and so the one most likely to
+        // forget to carry an unrelated field forward.
+        await insertArea(db, 'area-1', ownerId: 'u1');
+        await container.read(syncOrchestratorProvider.notifier).pushNow();
+
+        expect(
+          container.read(syncOrchestratorProvider).status,
+          SyncStatus.idle,
+          reason: 'sanity: the push actually landed',
+        );
+        expect(
+          container.read(syncOrchestratorProvider).lastPublicPhotoPruneOutcome,
+          same(afterPull),
+        );
+      },
+    );
+  });
+
+  group('#49 P2: shared photo budget advisory reaches state', () {
+    test(
+      'a pull that withheld shared photo bytes for storage pressure records '
+      'BOTH the count and the reason on state — before this,  '
+      'PullResult.sharedPhotoBytesSkipped/sharedPhotoBudgetReason were read '
+      'by nothing outside sync_service.dart',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = makeContainer(
+          db: db,
+          remote: _CountingSyncRemote(),
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          syncService: _PressuredPullSyncService(
+            db: db,
+            backupRepository: BackupRepository(db),
+            remote: _CountingSyncRemote(),
+            authRepository: _FakeAuthRepository(
+              const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+            ),
+            connectivity: _FakeConnectivityService(NetworkStatus.wifi),
+          ),
+        );
+        primeOrchestrator(container);
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+
+        final state = container.read(syncOrchestratorProvider);
+        expect(state.lastSharedPhotoBytesSkipped, 3);
+        expect(
+          state.lastSharedPhotoBudgetReason,
+          SharedPhotoBudgetReason.storagePressure,
+        );
+        // Not an error: the pull still succeeded cleanly.
+        expect(state.lastPullError, isNull);
+        expect(state.status, SyncStatus.idle);
+      },
+    );
+
+    test(
+      'a later pull that is back within budget CLEARS the advisory — it must '
+      'not linger once the condition that produced it stops holding',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _CountingSyncRemote();
+        final auth = _FakeAuthRepository(
+          const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+        );
+        final connectivity = _FakeConnectivityService(NetworkStatus.wifi);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: auth,
+          syncService: _PressuredPullSyncService(
+            db: db,
+            backupRepository: BackupRepository(db),
+            remote: remote,
+            authRepository: auth,
+            connectivity: connectivity,
+          ),
+        );
+        primeOrchestrator(container);
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        expect(
+          container.read(syncOrchestratorProvider).lastSharedPhotoBudgetReason,
+          SharedPhotoBudgetReason.storagePressure,
+        );
+
+        // Swap in a plain, within-budget SyncService and pull again.
+        final container2 = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: auth,
+        );
+        primeOrchestrator(container2);
+        await container2.read(syncOrchestratorProvider.notifier).pullNow();
+
+        expect(
+          container2.read(syncOrchestratorProvider).lastSharedPhotoBudgetReason,
+          SharedPhotoBudgetReason.withinBudget,
+        );
+        expect(
+          container2.read(syncOrchestratorProvider).lastSharedPhotoBytesSkipped,
+          0,
+        );
       },
     );
   });
