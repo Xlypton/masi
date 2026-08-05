@@ -245,17 +245,170 @@
         });
       });
       navigator.serviceWorker.addEventListener('message', function (event) {
-        if (!event.data || event.data.type !== 'masi-warm-done') return;
-        // Read by the Account screen's storage-diagnostics row (§2c) and by
-        // tool/verify_offline_shell.py, which waits for it before cutting the
-        // network.
-        window.__masiShellWarmed = true;
-        console.log(
-          'masi/sw: warmed ' + event.data.cached + '/' + event.data.total +
-          ' (version ' + event.data.version + ')'
-        );
+        var data = event.data;
+        if (!data) return;
+        if (data.type === 'masi-warm-done') {
+          // Read by the Account screen's storage-diagnostics row (§2c). NOT a
+          // precondition of tool/verify_offline_shell.py's offline assertion
+          // any more: waiting for it there structurally masked the whole
+          // renderer bug class, because it only ever becomes true on a load
+          // that PAINTED.
+          window.__masiShellWarmed = true;
+          console.log(
+            'masi/sw: warmed ' + data.cached + '/' + data.total +
+            ' (version ' + data.version + ')'
+          );
+          return;
+        }
+        if (data.type === 'masi-observed-done') {
+          // Cumulative across batches — the reporter below posts more than
+          // once. tool/verify_offline_shell.py polls these to know the early
+          // reporter has actually landed before it kills the origin.
+          // `__masiObservedStored` is the load-bearing one: it lists what the
+          // OBSERVED path newly stored, as opposed to found already present, so
+          // a cache entry can be attributed to this reporter rather than to the
+          // first-frame warm.
+          window.__masiObservedAcks = (window.__masiObservedAcks || 0) + 1;
+          window.__masiObservedCached =
+            (window.__masiObservedCached || 0) + (data.cached || 0);
+          window.__masiObservedStored =
+            (window.__masiObservedStored || []).concat(data.stored || []);
+          console.log(
+            'masi/sw: observed ' + data.cached + '/' + data.total +
+            ' (stored ' + (data.stored || []).length +
+            ', version ' + data.version + ')'
+          );
+        }
       });
     }
+
+    // --- Early observed-resource reporter -------------------------------
+    //
+    // THE PAGE IS THE AUTHORITY ON WHICH RENDERER THE LOADER PICKED.
+    //
+    // `web/sw.js`'s install-time `rendererArtifacts()` is a guess and can only
+    // ever be a guess: a ServiceWorker has no `document`, so it cannot run the
+    // loader's `detectWebGLVersion()` probe. The loader's real rule is
+    // `supportsWasmGC && webGLVersion > 0 && wasmAllowList[engine]`
+    // (flutter_web_sdk/flutter_js/src/loader.js:13-14), and when WebGL is
+    // absent it falls back to dart2js/canvaskit, after which
+    // `canvaskit_loader.js:15-22` picks the *chromium* canvaskit variant on
+    // blink. So a blink browser WITHOUT WebGL — GPU blocklisted,
+    // `--disable-gpu`, WebGL disabled by enterprise policy, some VM/RDP
+    // sessions, and this repo's own headless harness — needs
+    // `main.dart.js` + `canvaskit/chromium/canvaskit.{js,wasm}` while the
+    // worker confidently precached `canvaskit/skwasm.*`. No smarter heuristic
+    // fixes that inside a worker.
+    //
+    // This page, however, HAS a document, and rather than duplicate the
+    // loader's logic we simply observe what it actually fetched:
+    // `PerformanceObserver` with `{type:'resource', buffered:true}`, which
+    // includes entries that completed before the observer existed, so nothing
+    // is missed however early boot is. It is authoritative by construction.
+    //
+    // Deliberately NOT gated on `flutter-first-frame`. The warm pass further
+    // down is, and that is precisely why it cannot fix this: it never runs at
+    // all on a load that fails to paint, which is exactly the load we are
+    // trying to repair. This reporter fires long before first paint. The warm
+    // stays as a harmless final backstop for anything lazily loaded after
+    // paint.
+    //
+    // The post goes to `registration.active`, NOT
+    // `navigator.serviceWorker.controller`: on a FIRST visit the page is
+    // uncontrolled and `controller` is `null`, so a controller-based post is a
+    // silent no-op — and the first visit is the one that has to populate the
+    // cache before the user ever goes offline.
+    //
+    // Every part of this runs on every page load, so every part of it is
+    // wrapped: a browser without `PerformanceObserver`, without a service
+    // worker, or with registration blocked degrades silently to the previous
+    // behaviour and can never throw into the boot path.
+    (function () {
+      try {
+        if (!('serviceWorker' in navigator)) return;
+        if (typeof PerformanceObserver !== 'function') return;
+        if (!window.performance) return;
+
+        var prefix = location.origin + '/';
+        var seen = Object.create(null);
+        var pending = [];
+        var worker = null;
+        var timer = null;
+        window.__masiObservedPosted = 0;
+        window.__masiObservedAcks = 0;
+        window.__masiObservedCached = 0;
+        window.__masiObservedStored = [];
+
+        function flush() {
+          timer = null;
+          if (!worker || pending.length === 0) return;
+          var batch = pending;
+          pending = [];
+          try {
+            worker.postMessage({ type: 'masi-observed', urls: batch });
+            window.__masiObservedPosted += batch.length;
+          } catch (error) {
+            console.warn('masi/sw: observed post failed:', error);
+          }
+        }
+
+        // One message per batch, not per resource: boot fetches dozens of
+        // assets and each `postMessage` costs a structured clone plus a worker
+        // task. A short debounce coalesces the burst while still landing well
+        // inside the boot window.
+        function schedule() {
+          if (timer !== null || !worker || pending.length === 0) return;
+          timer = setTimeout(flush, 200);
+        }
+
+        function collect(entries) {
+          for (var i = 0; i < entries.length; i++) {
+            var name = entries[i] && entries[i].name;
+            if (typeof name !== 'string') continue;
+            if (name.indexOf(prefix) !== 0) continue;   // cross-origin: not ours
+            if (seen[name]) continue;
+            seen[name] = true;
+            pending.push(name);
+          }
+          schedule();
+        }
+
+        function listener(list) {
+          try { collect(list.getEntries()); } catch (_) {}
+        }
+
+        try {
+          new PerformanceObserver(listener).observe({
+            type: 'resource',
+            buffered: true,
+          });
+        } catch (_) {
+          // The `{type, buffered}` form is not universal; the older
+          // `entryTypes` form loses buffered entries but is better than
+          // nothing. If neither is accepted, give up silently.
+          try {
+            new PerformanceObserver(listener).observe({
+              entryTypes: ['resource'],
+            });
+          } catch (__) { return; }
+        }
+
+        // `ready` resolves once there IS an active worker for this scope, which
+        // on a first visit is only after our `load`-time registration installs
+        // and activates. Everything observed before then is buffered above and
+        // flushed here.
+        navigator.serviceWorker.ready.then(function (registration) {
+          worker = registration.active;
+          if (!worker) return;
+          flush();
+        }).catch(function (error) {
+          console.warn('masi/sw: observed handoff failed:', error);
+        });
+      } catch (error) {
+        // Boot must never depend on this.
+        try { console.warn('masi/sw: observer unavailable:', error); } catch (_) {}
+      }
+    })();
 
     window.addEventListener('flutter-first-frame', function () {
       // A DOM-free "the app is actually running" signal. The Flutter app
@@ -267,10 +420,14 @@
       navigator.serviceWorker.ready.then(function (registration) {
         var worker = registration.active || navigator.serviceWorker.controller;
         if (!worker) return;
-        // Everything this page actually fetched from this origin — which is
-        // precisely the renderer variant the loader's feature probe chose,
-        // plus any lazily-loaded asset. The precache cannot know that
-        // statically; see web/sw.js's warmShell doc.
+        // BACKSTOP ONLY. The early reporter above already posted the renderer
+        // (and everything else same-origin) long before this point, and unlike
+        // this hook it runs on loads that never paint. This final sweep is
+        // kept because it is free — `cacheMissing` skips what is already
+        // stored — and it is the only thing that catches an asset fetched
+        // lazily AFTER the first frame. It must never be the mechanism the
+        // offline shell depends on; see tool/verify_offline_shell.py, which
+        // deliberately kills the origin before this can run.
         var prefix = location.origin + '/';
         var urls = performance.getEntriesByType('resource')
           .map(function (entry) { return entry.name; })

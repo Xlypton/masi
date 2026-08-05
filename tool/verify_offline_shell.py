@@ -14,19 +14,45 @@ What this does instead:
   2. drives headless Chrome through chromedriver over plain HTTP (no
      websocket, no CDP, no third-party client — chromedriver is already a
      hard requirement of tool/drive_web.sh);
-  3. loads the app, waits for its first frame AND for the service worker's
-     warm pass to finish;
+  3. PRIMES: loads the app once and waits ONLY for the service worker to
+     reach `activated` and for the page's early observed-resource reporter
+     to have got the renderer into the cache;
   4. asserts the worker is active, the cache is named for this build, the
-     precache holds every stamped URL, and `crossOriginIsolated` is true;
+     precache holds every stamped URL, every renderer artifact the loader
+     ACTUALLY fetched is cached, and `crossOriginIsolated` is true;
   5. KILLS THE SERVER — not a CDP offline emulation, an actually dead
-     origin — and reloads;
+     origin — destroys the primed page, and loads the app cold;
   6. asserts the app reaches its first frame anyway and is STILL
      cross-origin isolated, which is what proves the cached responses kept
      their COOP/COEP headers (and therefore that drift can still reach OPFS).
 
+WHAT CHANGED, AND WHY IT MATTERS: this script used to wait for
+`__masiShellWarmed` — the first-frame warm pass — before killing the origin.
+That structurally masked an entire bug class, and did mask a real one. The warm
+is posted from `flutter-first-frame`, so it only exists on a load that PAINTED;
+by waiting for it, the harness guaranteed the cache was already correct before
+it ever tested anything, and a wrong install-time renderer guess could never
+show up. It now waits only for `activated` plus a bounded settle, and — this is
+the part that makes it able to fail — it REQUIRES that the renderer entries were
+NEWLY STORED BY THE EARLY REPORTER, read from the `stored` list in the
+`masi-observed` ack. Merely finding them in the cache is not enough, because the
+warm caches the same URLs from the same source: with the reporter deleted and
+only "is it cached" asserted, this harness passed. Measured, on this machine.
+The warm is still checked — separately, at the end, and never as a precondition.
+
+The browser flags are load-bearing, `--disable-gpu` above all. It makes
+`detectWebGLVersion()` return 0, so the loader takes dart2js/canvaskit and
+`canvaskit_loader.js` picks the `chromium/` variant — i.e. this harness runs as
+the exact population `web/sw.js`'s install-time guess gets WRONG (blink +
+WasmGC + no WebGL). That is the point of it, not a limitation.
+
 Usage:
 
-    tool/build_web.sh                 # must run first; stamps build/web/sw.js
+    # must run first; stamps build/web/sw.js
+    tool/build_web.sh
+    #   ...or, without the gate:
+    #   flutter build web --wasm --no-web-resources-cdn --pwa-strategy=none
+    #   dart run tool/gen_sw_manifest.dart build/web
     python3 tool/verify_offline_shell.py [port]
 
 Exit code 0 means every assertion held. Anything else prints the failing
@@ -176,6 +202,121 @@ const deadline = Date.now() + arguments[0];
 })();
 """
 
+# Resolves once the service worker OWNS this scope, which is all the priming
+# phase is allowed to wait for on the page's behalf. `activated` implies install
+# finished, which implies the precache and the install-time renderer guess are
+# both written.
+WAIT_SW_ACTIVATED = """
+const done = arguments[arguments.length - 1];
+const deadline = Date.now() + arguments[0];
+(async function poll() {
+  if (!('serviceWorker' in navigator)) {
+    done({ok: false, reason: 'no serviceWorker in this browser'});
+    return;
+  }
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    if (reg && reg.active && reg.active.state === 'activated') {
+      done({ok: true, script: new URL(reg.active.scriptURL).pathname});
+      return;
+    }
+  } catch (error) {
+    done({ok: false, reason: String(error)});
+    return;
+  }
+  if (Date.now() > deadline) {
+    done({ok: false, reason: 'the worker never reached activated'});
+    return;
+  }
+  setTimeout(poll, 100);
+})();
+"""
+
+# THE BOUNDED SETTLE, and the reason this harness can now fail.
+#
+# It resolves when every renderer artifact THIS PAGE actually fetched is in the
+# per-build cache AND the EARLY REPORTER is the thing that put it there. Both
+# halves are necessary:
+#
+#   - the set comes from resource timing, so it is the loader's real choice, not
+#     a guess. Under `--disable-gpu` it is `/main.dart.js` +
+#     `/canvaskit/chromium/canvaskit.{js,wasm}` — exactly what `web/sw.js`'s
+#     install-time `rendererArtifacts()` does NOT precache;
+#   - attribution comes from `__masiObservedStored`, the `stored` list in the
+#     `masi-observed` ack, which the worker fills only with entries it NEWLY put
+#     (a URL already present is reported as merely `cached`). Without this the
+#     harness could not tell the early reporter from the first-frame warm and
+#     would pass with the reporter deleted — MEASURED, not hypothetical: the
+#     warm won the race in that exact experiment.
+#
+# `firstFrame`/`warmed` are still reported, as diagnostics. They are NOT the
+# gate, because on a FIRST visit both page-side reporters are queued behind
+# `navigator.serviceWorker.ready` (install has ~9.6 MB to download first), so
+# the first frame can legitimately land before the reporter is even able to
+# post. `stored` is immune to that ordering.
+WAIT_RENDERER_CACHED = """
+const done = arguments[arguments.length - 1];
+const deadline = Date.now() + arguments[0];
+const prefix = location.origin + '/';
+function rendererPaths() {
+  const out = [];
+  for (const entry of performance.getEntriesByType('resource')) {
+    const name = entry && entry.name;
+    if (typeof name !== 'string' || name.indexOf(prefix) !== 0) continue;
+    const path = new URL(name).pathname;
+    if (path.indexOf('/canvaskit/') === 0 || path === '/main.dart.js') {
+      if (out.indexOf(path) === -1) out.push(path);
+    }
+  }
+  return out;
+}
+(async function poll() {
+  const state = {
+    acks: window.__masiObservedAcks || 0,
+    posted: window.__masiObservedPosted || 0,
+    observedCached: window.__masiObservedCached || 0,
+    observedStored: (window.__masiObservedStored || []).slice(),
+    firstFrame: window.__masiFirstFrame === true,
+    warmed: window.__masiShellWarmed === true,
+    renderer: rendererPaths(),
+    rendererCached: [],
+    rendererStoredByReporter: [],
+  };
+  try {
+    const names = (await caches.keys())
+      .filter((n) => n.indexOf('masi-shell-') === 0);
+    if (names.length === 1) {
+      const cache = await caches.open(names[0]);
+      const keys = await cache.keys();
+      const cached = keys.map((r) => new URL(r.url).pathname);
+      state.rendererCached =
+        state.renderer.filter((p) => cached.indexOf(p) !== -1);
+    }
+  } catch (error) {
+    state.error = String(error);
+  }
+  state.rendererStoredByReporter =
+    state.renderer.filter((p) => state.observedStored.indexOf(p) !== -1);
+  if (state.renderer.length > 0 &&
+      state.rendererCached.length === state.renderer.length &&
+      state.rendererStoredByReporter.length === state.renderer.length) {
+    state.ok = true;
+    done(state);
+    return;
+  }
+  if (Date.now() > deadline) {
+    state.ok = false;
+    state.reason = 'the early reporter did not store the renderer (cached ' +
+      state.rendererCached.length + '/' + state.renderer.length +
+      ', stored by the reporter ' + state.rendererStoredByReporter.length +
+      '/' + state.renderer.length + ')';
+    done(state);
+    return;
+  }
+  setTimeout(poll, 100);
+})();
+"""
+
 # Everything the assertions need, in one round trip.
 READ_STATE = """
 const done = arguments[arguments.length - 1];
@@ -279,14 +420,38 @@ def stamped_precache():
     return version, precache
 
 
-def check_online(browser, url, version, precache):
+SETTLE_BUDGET_MS = 20000
+
+
+def prime(browser, url):
+    """Load the app once, online, and wait for the LEAST possible.
+
+    Only two things: the worker reaching `activated`, and the bounded settle
+    above. Deliberately NOT the first frame and NOT `__masiShellWarmed` — both
+    would let the first-frame warm write the cache and make the offline
+    assertion vacuous, which is the flaw this replaces.
+    """
     browser.navigate(url)
 
-    await_first_frame(browser, 45000, "the online load never painted")
+    sw = browser.execute_async(WAIT_SW_ACTIVATED, [60000])
+    require(sw.get("ok"), f"the worker never activated: {sw.get('reason')}")
+    require(
+        sw.get("script", "").endswith("/sw.js"),
+        f"the active worker is {sw.get('script')}, not our /sw.js — if this "
+        f"is flutter_service_worker.js then --pwa-strategy=none is missing "
+        f"and the loader clobbered our registration",
+    )
 
-    warm = browser.execute_async(WAIT_WARMED, [45000])
-    require(warm.get("ok"), f"warm pass never completed: {warm.get('reason')}")
+    return browser.execute_async(WAIT_RENDERER_CACHED, [SETTLE_BUDGET_MS])
 
+
+def check_primed_cache(browser, version, precache, settle):
+    """Everything the cache must hold, read AFTER the origin is already dead.
+
+    Reading it late is intentional: nothing here can be satisfied by a fetch,
+    so it describes only what the install precache and the page's early
+    reporter managed to store while the origin was alive.
+    """
     state = browser.execute_async(READ_STATE)
     require("error" not in state, f"probe threw: {state.get('error')}")
 
@@ -294,16 +459,10 @@ def check_online(browser, url, version, precache):
         state["swState"] == "activated",
         f"service worker is '{state['swState']}', expected 'activated'",
     )
-    require(
-        state["swScript"] and state["swScript"].endswith("/sw.js"),
-        f"the active worker is {state['swScript']}, not our /sw.js — if this "
-        f"is flutter_service_worker.js then --pwa-strategy=none is missing "
-        f"and the loader clobbered our registration",
-    )
     require(state["controlled"], "the page is not controlled by the worker")
     require(
         state["crossOriginIsolated"],
-        "crossOriginIsolated is FALSE on the online load — COOP/COEP did not "
+        "crossOriginIsolated is FALSE on the primed load — COOP/COEP did not "
         "arrive, so drift cannot reach OPFS (design doc open question 2)",
     )
 
@@ -324,15 +483,30 @@ def check_online(browser, url, version, precache):
         f"{len(missing)} precached url(s) missing from the cache: {missing[:8]}",
     )
 
-    # The warm pass must have picked up the renderer, which is deliberately
-    # NOT precached. Without this the offline reload below would be the first
-    # place we found out.
-    renderer = [u for u in cached if u.startswith("/canvaskit/")]
+    # THE renderer assertion, and it is deliberately about the artifacts the
+    # loader REALLY fetched rather than "some canvaskit/ file is present".
+    # `web/sw.js`'s install-time guess always caches *a* canvaskit/ pair, so the
+    # old shape of this check passed even when the pair was the wrong one.
+    observed = settle.get("renderer") or []
     require(
-        renderer,
-        "no canvaskit/ asset was warmed — the renderer would be missing "
-        "offline. Check web/index.html's flutter-first-frame warm hook.",
+        observed,
+        "the page fetched no renderer artifact at all, which cannot happen — "
+        "resource timing is empty, so this run proves nothing",
     )
+    absent = [p for p in observed if p not in cached]
+    if absent:
+        # Reported, not raised: the verdict on this belongs to the offline load
+        # below, which is the actual claim. Raising here would hide the real
+        # symptom (a splash that never goes away) behind a cache inventory.
+        print(
+            f"    the renderer the loader ACTUALLY chose is NOT cached: "
+            f"{absent}\n"
+            f"    cached canvaskit paths: "
+            f"{sorted(u for u in cached if u.startswith('/canvaskit/'))}\n"
+            f"    (web/sw.js's install-time guess is wrong for this engine and "
+            f"nothing corrected it)",
+            file=sys.stderr,
+        )
     return state
 
 
@@ -409,13 +583,13 @@ def main():
 
         browser = Browser(f"http://127.0.0.1:{CHROMEDRIVER_PORT}", profile_dir)
 
-        print("==> online load")
-        check_online(browser, url, version, precache)
-        print(
-            "    ok: worker active, precache complete, renderer warmed, "
-            "crossOriginIsolated"
-        )
+        print("==> priming load (worker + early reporter only, NO warm)")
+        settle = prime(browser, url)
 
+        # KILL FIRST, ASK QUESTIONS AFTER. Every millisecond between the settle
+        # resolving and the origin dying is a millisecond in which the
+        # first-frame warm could still write the cache and make everything
+        # below vacuous. So the origin goes down before anything is read back.
         print("==> killing the origin")
         server.terminate()
         server.wait(timeout=15)
@@ -433,11 +607,59 @@ def main():
             pass
         print("    ok: origin is unreachable")
 
+        print(
+            f"    reporter: {settle.get('acks')} ack(s), "
+            f"{settle.get('posted')} url(s) posted, "
+            f"{settle.get('observedCached')} cached by the observed path"
+        )
+        print(
+            f"    loader actually fetched: {settle.get('renderer')}\n"
+            f"      cached:                {settle.get('rendererCached')}\n"
+            f"      STORED BY THE EARLY REPORTER: "
+            f"{settle.get('rendererStoredByReporter')}"
+        )
+        print(
+            f"    at kill time: firstFrame={settle.get('firstFrame')} "
+            f"warmed={settle.get('warmed')}  (diagnostics only — attribution "
+            f"is the STORED list above)"
+        )
+        settle_failed = not settle.get("ok")
+        if settle_failed:
+            print(
+                f"    WARNING: settle did not complete: {settle.get('reason')}",
+                file=sys.stderr,
+            )
+
+        check_primed_cache(browser, version, precache, settle)
+        print("    ok: precache complete, crossOriginIsolated")
+
         print("==> offline cold start")
+        # `about:blank` first: destroying the primed page is what guarantees no
+        # late `flutter-first-frame` handler on it can post anything else.
         browser.navigate("about:blank")
         browser.navigate(url)
         check_offline(browser)
         print("    ok: the app painted with no network, still isolated")
+
+        # ADDITIONAL, and clearly separate: the warm pass is still wired up. It
+        # is NOT a precondition of anything above — it runs here for the first
+        # time in this whole run, on the offline load, and every URL it reports
+        # is already cached.
+        print("==> warm pass (additional, not a precondition)")
+        warm = browser.execute_async(WAIT_WARMED, [30000])
+        require(
+            warm.get("ok"),
+            f"the first-frame warm pass never completed: {warm.get('reason')}",
+        )
+        print("    ok: the warm backstop still runs")
+
+        require(
+            not settle_failed,
+            f"the app booted offline, but the EARLY REPORTER is not what put "
+            f"the renderer in the cache ({settle.get('reason')}) — the "
+            f"first-frame warm got there instead, so this run proves nothing "
+            f"about the load that never paints. Inconclusive, not a pass.",
+        )
 
         print("PASS: offline shell verified")
     except Failure as failure:

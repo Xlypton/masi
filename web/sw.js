@@ -25,9 +25,13 @@
 //                         a fetch that cannot succeed.
 //   renderer artifacts -> precached at install by `rendererArtifacts()`, which
 //                         the static manifest cannot name (the loader picks
-//                         the renderer at runtime). Without this an offline
-//                         cold start hangs on the splash forever on the very
-//                         browsers that need them; see that function.
+//                         the renderer at runtime). That install-time pick is a
+//                         GUESS — a worker has no `document` and so cannot run
+//                         the loader's WebGL probe — and it is CORRECTED by the
+//                         `masi-observed` list the page posts from a
+//                         `PerformanceObserver` before its first frame. Without
+//                         both, an offline cold start hangs on the splash
+//                         forever; see `rendererArtifacts()`.
 //   cross-origin       -> not intercepted at all. Supabase, Google auth and
 //                         OSM tiles go straight to the network. (Stage 3 adds
 //                         a separate `masi-runtime-*` tile cache; the prune
@@ -101,6 +105,28 @@ const RELOAD_ON_PRECACHE = new Set(['sqlite3.wasm', 'drift_worker.js']);
 /**
  * THE RENDERER, which the static precache manifest structurally cannot name.
  *
+ * READ THIS FIRST: `rendererArtifacts()` below is a GUESS, not the loader's
+ * decision, and it CANNOT be made into the loader's decision here. The loader's
+ * real rule is `supportsWasmGC && webGLVersion > 0 && wasmAllowList[engine]`
+ * (`flutter_web_sdk/flutter_js/src/loader.js:13-14`), and a ServiceWorker has
+ * no `document`, so it can never run `detectWebGLVersion()` — that probe
+ * creates a canvas. When WebGL is absent the loader falls back to
+ * dart2js/canvaskit and `canvaskit_loader.js:15-22` then picks the *chromium*
+ * canvaskit variant on blink. So on blink + WasmGC + NO WebGL (GPU blocklisted,
+ * `--disable-gpu`, WebGL disabled by policy, some VM/RDP sessions, and this
+ * repo's own headless harness) the guess below caches `skwasm.*` while the page
+ * needs `main.dart.js` + `canvaskit/chromium/canvaskit.{js,wasm}`. No better
+ * heuristic exists inside a worker.
+ *
+ * The guess is kept anyway because install is the ONLY chance to cache anything
+ * before a message can arrive, and it is right for essentially all real Chrome.
+ * THE AUTHORITY THAT CORRECTS IT is the page: `web/index.html`'s early
+ * `PerformanceObserver` reports the URLs the loader ACTUALLY fetched — observed,
+ * not inferred — and `masi-observed` below stores them through the very same
+ * `cacheMissing()`. That reporter is deliberately not gated on
+ * `flutter-first-frame`, so unlike the warm pass it also runs on a load that
+ * never paints.
+ *
  * `tool/gen_sw_manifest.dart` excludes `main.dart.js` and all of `canvaskit/`
  * (37 MB across six variants) because exactly ONE variant is used per browser
  * and the loader decides which at runtime. The intent was to warm them from
@@ -115,8 +141,11 @@ const RELOAD_ON_PRECACHE = new Set(['sqlite3.wasm', 'drift_worker.js']);
  *     a deploy (installing the new worker, dropping the old cache) and goes
  *     offline before the warm finishes has a cache with no renderer in it, and
  *     the next cold start hangs on the splash forever;
- *   - `tool/verify_offline_shell.py` waits for `__masiShellWarmed` before it
- *     kills the origin, so the harness has been masking this the whole time.
+ *   - `tool/verify_offline_shell.py` USED to wait for `__masiShellWarmed`
+ *     before it killed the origin, so the harness masked this entire bug class.
+ *     It now waits only for the worker to activate and for the early reporter
+ *     to land, and kills the origin BEFORE the first frame can fire — so the
+ *     warm provably cannot be what makes the offline assertion pass.
  *
  * So install precaches the renderer THIS scope will actually need, best-effort
  * and per-URL (below). Which one is decided the same way `flutter.js` decides
@@ -445,6 +474,15 @@ async function cacheFirst(event, request) {
   // is why `reachabilityProvider` probes rather than reading this flag — but a
   // browser that says it has no network never secretly has one. Nothing is
   // deleted or downgraded on this path; the cache is only ever read.
+  //
+  // CORRECTING THE RECORD: commit c19dde5's message claimed this guard is what
+  // fixes the offline splash hang. It is not, and it cannot be — MEASURED in
+  // headless Chrome with the origin process killed, `navigator.onLine` stays
+  // `true` (it reports interface state, not reachability, the same reason
+  // `reachabilityProvider` exists). So this branch does not even run in the
+  // scenario it was credited with. It is defence-in-depth for a genuinely
+  // offline interface. What actually fixes the hang is having the bytes in the
+  // cache: the install-time precache plus the page's observed-resource list.
   if (self.navigator.onLine === false) return Response.error();
 
   const response = await fetch(request);
@@ -455,54 +493,104 @@ async function cacheFirst(event, request) {
 }
 
 /**
- * Warm pass.
+ * Page-reported URL lists. TWO senders, one mechanism:
  *
- * The precache deliberately omits `canvaskit/**` (37 MB across four renderer
- * variants, of which a browser uses exactly one) and `main.dart.js` (4.2 MB,
- * used only by browsers without WasmGC). Which of those a given browser needs
- * is decided at runtime by the loader's feature probe, so the only accurate
- * source is what the page actually fetched. After its first frame,
- * `web/index.html` posts its own `performance.getEntriesByType('resource')`
- * list here and we cache whatever is same-origin and not already stored.
+ *   `masi-observed`  the EARLY reporter — `web/index.html`'s
+ *                    `PerformanceObserver({type:'resource', buffered:true})`,
+ *                    which posts what the loader actually fetched as it
+ *                    happens, long before the first frame and (crucially) even
+ *                    on a load that never paints. This is what corrects
+ *                    `rendererArtifacts()`'s unavoidable guess; see its doc.
+ *   `masi-warm`      the first-frame BACKSTOP sweep, kept for assets loaded
+ *                    lazily after paint. It is a superset-in-principle and a
+ *                    no-op in practice, because the early reporter got there
+ *                    first.
  *
- * Deliberately per-URL fault-tolerant, unlike the precache: one asset failing
- * must never abandon the rest.
+ * Both go through `cacheMissing()` so the semantics are identical by
+ * construction: fetch only what is missing, tolerate per-URL failure, never
+ * abandon the rest. The precache deliberately omits `canvaskit/**` (37 MB
+ * across six variants, of which a browser uses exactly one) and `main.dart.js`
+ * (4.2 MB, used only by browsers that do not take the skwasm path), so an
+ * observed list is the only accurate source for those.
+ *
+ * Message shapes are untrusted: anything with a `postMessage` handle to this
+ * worker can send anything. `normalisedUrls` reduces every hostile shape to an
+ * empty list rather than letting it throw out of a `waitUntil`.
  */
 self.addEventListener('message', (event) => {
   const data = event.data;
-  if (!data || data.type !== 'masi-warm') return;
-  event.waitUntil(warmShell(data.urls || [], event.source));
+  if (!data || typeof data !== 'object') return;
+  if (data.type === 'masi-observed') {
+    event.waitUntil(
+      reportUrls(normalisedUrls(data.urls), event.source, 'masi-observed-done')
+    );
+    return;
+  }
+  if (data.type === 'masi-warm') {
+    event.waitUntil(
+      reportUrls(normalisedUrls(data.urls), event.source, 'masi-warm-done')
+    );
+  }
 });
 
-async function warmShell(urls, client) {
+/** Every non-string, and every non-array, becomes an empty list. */
+function normalisedUrls(value) {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry) => typeof entry === 'string');
+}
+
+async function reportUrls(urls, client, doneType) {
   const cache = await caches.open(CACHE_NAME);
-  const cached = await cacheMissing(cache, urls);
-  if (client) {
-    client.postMessage({
-      type: 'masi-warm-done',
-      version: SHELL_VERSION,
-      cached: cached,
-      total: urls.length,
-    });
+  const stored = [];
+  const cached = await cacheMissing(cache, urls, stored);
+  // The ack is diagnostics only (a console line, the Account screen's storage
+  // row, and the harness's settle signal). A client that has already navigated
+  // away throws here, and that must not turn a successful cache write into a
+  // rejected `waitUntil`.
+  try {
+    if (client) {
+      client.postMessage({
+        type: doneType,
+        version: SHELL_VERSION,
+        cached: cached,
+        total: urls.length,
+        stored: stored,
+      });
+    }
+  } catch (error) {
+    // Ignored on purpose.
   }
 }
 
 /**
  * Stores any of [urls] not already in [cache], one at a time, tolerating
- * per-URL failure. Shared by the install-time renderer precache and the warm
- * pass, which want identical semantics: fetch only what is missing, never let
- * one bad URL take the rest down. Returns how many are now cached.
+ * per-URL failure. Shared by the install-time renderer precache, the early
+ * observed-resource reporter and the first-frame warm, which want identical
+ * semantics: fetch only what is missing, never let one bad URL take the rest
+ * down. Returns how many are now cached.
  *
- * Accepts scope-relative paths or absolute same-origin URLs — the warm pass
- * supplies the latter (straight from `performance.getEntriesByType`).
+ * Accepts scope-relative paths or absolute same-origin URLs — both page-driven
+ * paths supply the latter (straight from resource-timing entry names).
+ *
+ * The URL parse is INSIDE the try: these lists arrive over `postMessage`, and
+ * `new URL('%', SCOPE)` throws. Parsing outside would let one malformed entry
+ * reject the whole `waitUntil` and abandon every URL after it.
+ *
+ * [storedOut], when supplied, collects the paths this call NEWLY stored — as
+ * opposed to found already present. That distinction is the only way to
+ * attribute a cache entry to one sender: a URL reported `stored` by
+ * `masi-observed` was put there by the early reporter and by nothing else, which
+ * is what `tool/verify_offline_shell.py` requires before it will call a run a
+ * pass (otherwise the first-frame warm could have done the work and the run
+ * would prove nothing).
  */
-async function cacheMissing(cache, urls) {
+async function cacheMissing(cache, urls, storedOut) {
   let cached = 0;
   for (const url of urls) {
-    const absolute = new URL(url, SCOPE).href;
-    const path = scopedPath(absolute);
-    if (path === null || NEVER_CACHE.has(path)) continue;
     try {
+      const absolute = new URL(url, SCOPE).href;
+      const path = scopedPath(absolute);
+      if (path === null || NEVER_CACHE.has(path)) continue;
       if (await cache.match(absolute)) { cached++; continue; }
       // Same reasoning as `cacheFirst`: with no network there is nothing to
       // fetch, and this loop is awaited by `install` and by a `waitUntil`.
@@ -511,6 +599,11 @@ async function cacheMissing(cache, urls) {
       if (isCacheable(response)) {
         await cache.put(absolute, response.clone());
         cached++;
+        // The absolute PATHNAME, not `path`: `scopedPath` strips the scope
+        // prefix, so under scope `/` it yields `canvaskit/x.wasm` with no
+        // leading slash and nothing comparing against `location.pathname`-style
+        // values would ever match it.
+        if (storedOut) storedOut.push(new URL(absolute).pathname);
       }
     } catch (error) {
       // Ignored on purpose — see the docs on both callers.

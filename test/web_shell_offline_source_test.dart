@@ -23,14 +23,63 @@ import 'package:path/path.dart' as p;
 ///     The static manifest excludes them by design and `activate` drops the
 ///     previous cache on every deploy, so the only thing that used to put them
 ///     back was the first-frame warm pass — which cannot run on a load that
-///     never reaches a first frame. `tool/verify_offline_shell.py` waits for
+///     never reaches a first frame. `tool/verify_offline_shell.py` waited for
 ///     `__masiShellWarmed` before killing the origin, so it could never have
-///     caught this.
+///     caught this; it now waits only for `activated` plus the early reporter;
+///  3. the install-time renderer pick being WRONG. A ServiceWorker has no
+///     `document`, so it cannot run the loader's `detectWebGLVersion()` probe,
+///     and the loader's real rule is
+///     `supportsWasmGC && webGLVersion > 0 && wasmAllowList[engine]`. On blink
+///     WITHOUT WebGL the loader takes dart2js/canvaskit and then the
+///     `chromium/` canvaskit variant, so the worker's `skwasm.*` guess is the
+///     wrong 3.6 MB. This is not fixable by a better heuristic inside the
+///     worker; the pins below therefore require the PAGE to report what the
+///     loader actually fetched, early and independently of paint.
+///
+/// EVERYTHING HERE IS A SOURCE-LEVEL PIN, NOT EXECUTION. `flutter test` runs no
+/// JavaScript and no browser: these assertions prove the code that must exist
+/// is present and shaped correctly, and nothing about its runtime behaviour. The
+/// behavioural proof is `tool/verify_offline_shell.py`, which drives real
+/// headless Chrome with the origin killed — and which is mutation-tested
+/// (deleting the early reporter from the built `index.html` makes it fail).
+/// Do not read a green run of this file as "the offline shell works".
 String _read(String relativePath) {
   final file = File(p.join(Directory.current.path, relativePath));
   expect(file.existsSync(), isTrue, reason: 'expected $relativePath to exist');
   return file.readAsStringSync();
 }
+
+/// The slice of `web/index.html` that lies BEFORE the `flutter-first-frame`
+/// listener which posts the warm.
+///
+/// Position is the pin. A listener's body always follows its
+/// `addEventListener(...)` call, so anything found in this slice is provably
+/// NOT inside that listener — which is the whole property the early reporter
+/// needs: it must run on a load that never paints.
+String _beforeWarmListener(String source) {
+  final warmPost = source.indexOf("type: 'masi-warm'");
+  expect(warmPost, isNot(-1), reason: 'expected the warm post to still exist');
+  final listener =
+      source.lastIndexOf("addEventListener('flutter-first-frame'", warmPost);
+  expect(
+    listener,
+    isNot(-1),
+    reason: 'expected the warm to be posted from a flutter-first-frame listener',
+  );
+  return source.substring(0, listener);
+}
+
+/// [source] with whole-line `//` comments dropped.
+///
+/// Needed for the NEGATIVE pins only: the prose in `web/index.html` explains at
+/// length why the post must not use `navigator.serviceWorker.controller`, and a
+/// naive `isNot(contains(...))` matches that explanation and fails. Whole-line
+/// only, deliberately — stripping trailing `//` would corrupt any string holding
+/// a `//`, and every comment that matters here is on its own line.
+String _withoutFullLineComments(String source) => source
+    .split('\n')
+    .where((line) => !line.trimLeft().startsWith('//'))
+    .join('\n');
 
 /// The body of a top-level function in `web/sw.js`, from its signature to the
 /// first closing brace in column 0. Used to assert things about ONE path
@@ -164,6 +213,28 @@ void main() {
       );
     });
 
+    test('the guess is documented as fallible, with the page as the authority',
+        () {
+      // Source-level pin, and a deliberately prose-shaped one: the ONLY defence
+      // against someone "improving" `rendererArtifacts()` into a supposedly
+      // correct WebGL-aware probe is the file saying, in the file, that a
+      // worker cannot do that. `supportsWasmGc() && isBlinkLike()` is NOT the
+      // loader's rule and cannot be made into it here.
+      final source = _read('web/sw.js');
+      expect(
+        source,
+        contains('detectWebGLVersion'),
+        reason: 'the worker must name the probe it cannot run, or the next '
+            'reader assumes the install-time pick is authoritative',
+      );
+      expect(
+        source,
+        contains('masi-observed'),
+        reason: 'the page-observed list is what corrects the guess; without a '
+            'handler for it the worker is back to guessing',
+      );
+    });
+
     test('WebKit-backed browsers wearing a Chrome token are not blink', () {
       final body = _functionBody(_read('web/sw.js'), 'function isBlinkLike(');
       for (final token in ['CriOS', 'EdgiOS', 'FxiOS']) {
@@ -175,6 +246,149 @@ void main() {
               'iOS PWA with no renderer offline',
         );
       }
+    });
+  });
+
+  // Source-level pins, again — see the file header. These say the reporter
+  // EXISTS and is WIRED the only way that works; only
+  // `tool/verify_offline_shell.py` can say it runs.
+  group('web/index.html early observed-resource reporter', () {
+    test('observes resource timing with buffered entries', () {
+      final early = _beforeWarmListener(_read('web/index.html'));
+      expect(
+        early,
+        contains('PerformanceObserver'),
+        reason: 'the page is the only place that can know which renderer the '
+            'loader chose — a worker has no document and so no WebGL probe',
+      );
+      expect(
+        early,
+        contains("type: 'resource'"),
+        reason: 'must observe resource timing, which is the loader\'s real '
+            'choice rather than a re-implementation of its logic',
+      );
+      expect(
+        early,
+        contains('buffered: true'),
+        reason: 'without `buffered` the observer misses every resource that '
+            'completed before it was constructed — which on a fast boot is '
+            'the renderer itself, i.e. the entire point',
+      );
+    });
+
+    test('is NOT gated on flutter-first-frame', () {
+      final source = _read('web/index.html');
+      final early = _beforeWarmListener(source);
+      expect(
+        early,
+        contains("type: 'masi-observed'"),
+        reason: 'the observed post must sit OUTSIDE the first-frame listener. '
+            'Inside it, it inherits the warm\'s fatal property: it never runs '
+            'on a load that fails to paint, which is the only load that needs '
+            'it',
+      );
+      expect(
+        source.indexOf("type: 'masi-observed'"),
+        lessThan(source.indexOf("type: 'masi-warm'")),
+        reason: 'the early reporter must post before the first-frame warm; the '
+            'warm is a backstop, not the mechanism',
+      );
+    });
+
+    test('posts to the REGISTRATION, never to the controller', () {
+      final early = _beforeWarmListener(_read('web/index.html'));
+      expect(
+        early,
+        contains('navigator.serviceWorker.ready'),
+        reason: 'on a first visit there is no worker yet; `ready` is what '
+            'yields the registration once install has activated one',
+      );
+      expect(
+        early,
+        contains('registration.active'),
+        reason: 'the post target must come from the registration',
+      );
+      expect(
+        _withoutFullLineComments(early),
+        isNot(contains('navigator.serviceWorker.controller')),
+        reason: 'a FIRST visit is uncontrolled, so `controller` is null and a '
+            'controller-based post silently does nothing — and the first '
+            'visit is the only load that can fill the cache before the user '
+            'goes offline',
+      );
+    });
+
+    test('degrades silently instead of throwing into boot', () {
+      final early = _beforeWarmListener(_read('web/index.html'));
+      expect(early, contains("if (!('serviceWorker' in navigator)) return;"));
+      expect(
+        early,
+        contains("typeof PerformanceObserver !== 'function'"),
+        reason: 'this code runs on EVERY page load; a browser without the API '
+            'must lose the reporter, not the app',
+      );
+    });
+  });
+
+  group('web/sw.js page-reported url lists', () {
+    test('the observed list and the warm share cacheMissing exactly', () {
+      final source = _read('web/sw.js');
+      final body = _functionBody(source, 'async function reportUrls(');
+      expect(
+        body,
+        contains('cacheMissing(cache, urls'),
+        reason: 'an observed list must be cached with IDENTICAL semantics to '
+            'the warm and the install precache — fetch only what is missing, '
+            'tolerate per-URL failure — or the two paths drift apart',
+      );
+      final handler = source.substring(
+        source.indexOf("self.addEventListener('message'"),
+        source.indexOf('function normalisedUrls('),
+      );
+      expect(handler, contains("data.type === 'masi-observed'"));
+      expect(handler, contains("data.type === 'masi-warm'"));
+      expect(
+        RegExp(r'reportUrls\(').allMatches(handler),
+        hasLength(2),
+        reason: 'both message types must go through the one function',
+      );
+    });
+
+    test('an unknown or hostile message shape cannot throw', () {
+      final source = _read('web/sw.js');
+      expect(
+        _functionBody(source, 'function normalisedUrls('),
+        contains('Array.isArray'),
+        reason: 'a non-array `urls` would make `for...of` throw straight out '
+            'of a waitUntil',
+      );
+      final missing = _functionBody(source, 'async function cacheMissing(');
+      expect(
+        missing.indexOf('try {'),
+        lessThan(missing.indexOf('new URL(url, SCOPE)')),
+        reason: 'these lists arrive over postMessage and `new URL(\'%\')` '
+            'throws: parsing outside the try lets ONE malformed entry abandon '
+            'every url after it',
+      );
+    });
+
+    test('the ack distinguishes newly stored from already present', () {
+      // This is what makes tool/verify_offline_shell.py able to attribute a
+      // cache entry to the early reporter rather than to the warm. Without it
+      // that harness passed with the reporter deleted — measured, in Chrome.
+      final source = _read('web/sw.js');
+      expect(_functionBody(source, 'async function reportUrls('),
+          contains('stored: stored'));
+      expect(
+        _functionBody(source, 'async function cacheMissing('),
+        contains('storedOut.push('),
+      );
+      expect(
+        source,
+        contains('await cacheMissing(cache, rendererArtifacts());'),
+        reason: 'the install call must stay in its bare two-argument shape — '
+            'install attributes nothing and wants no `stored` list',
+      );
     });
   });
 }
