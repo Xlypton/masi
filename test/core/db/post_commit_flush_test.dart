@@ -193,6 +193,43 @@ class _Recorder extends QueryInterceptor {
 ///    which is exactly what drift's own `_WasmDelegate._flush()`
 ///    (`drift-2.34.2/lib/wasm.dart:358-368`) and this repo's
 ///    `AppDatabase.transaction` override both already await and propagate.
+///  * The third suspected risk, tracked separately and closed by the same
+///    2026-08-05 pass: every `IDBDatabase.transaction()` call this VFS makes
+///    (`_runTransaction`, `indexed_db.dart:87-107`, specifically line 91,
+///    `final raw = _database!.transaction(_storesJs, mode);`) omits the
+///    call's third, OPTIONAL argument — `IDBTransactionOptions({durability})`
+///    (`package:web` 1.1.1, `lib/src/dom/indexeddb.dart:282-286` declares the
+///    parameter; `:357-358` declares the type). Omitting it means the
+///    browser's own default durability applies, and Chrome has shipped that
+///    default as `relaxed` since Chrome 121 (Chrome for Developers blog,
+///    "IndexedDB durability mode now defaults to relaxed"): under `relaxed`,
+///    the `complete` event fires once a write reaches the OS's own buffer,
+///    NOT once it is fsynced to physical storage — `strict` is the mode that
+///    flushes to disk first. That `complete` event is exactly what
+///    `_IndexedDbTransaction`'s `oncomplete` handler resolves
+///    (`indexed_db.dart:132`), i.e. exactly what `flush()` /
+///    `_WasmDelegate._flush()` / this repo's post-commit statement all
+///    await. So a genuine power loss or OS crash in the window between "the
+///    OS buffer has it" and "the OS actually wrote it" can still lose a
+///    transaction this code already saw complete successfully. This is REAL
+///    and REACHABLE — both live IndexedDB backends (`sharedIndexedDb` and
+///    `unsafeIndexedDb`) take this exact code path on every commit — but it
+///    is UNFIXABLE from this layer for two independent reasons: (1) no
+///    configuration surface reaches it — neither
+///    `IndexedDbFileSystem.open()` nor drift's `WasmDatabase.open()` exposes
+///    a durability parameter or a way to inject a custom file system, so
+///    requesting `strict` durability would mean forking sqlite3's WASM VFS
+///    itself; (2) there is no way to even detect it after the fact —
+///    IndexedDB exposes no API distinguishing a `relaxed` completion from a
+///    `strict` one, so this is the same conflated-signal shape as the
+///    `onabort` bullet above, one layer deeper, and the same
+///    `navigator.storage.estimate()`/second-connection rejections apply for
+///    the same reasons. Its failure mode (power loss / OS crash mid-buffer)
+///    is also outside anything a software test harness — including the
+///    browser-kill harness that measures the `onabort` risk above — can
+///    exercise. So unlike that risk, this one has no regression guard here
+///    at all, by construction: there is nothing observable to pin, and no
+///    code in this repo changed for it.
 ///
 /// So the one guard that belongs at this layer isn't a new detector — it's
 /// making sure the existing propagation never regresses into a silent
