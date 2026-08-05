@@ -46,6 +46,7 @@ Directory _fakeBuildDir({int wasmBytes = 1024}) {
   write('assets/FontManifest.json');
   write('assets/NOTICES', bytes: 1400 * 1024);
   write('assets/fonts/MaterialIcons-Regular.otf');
+  write('assets/fonts/Roboto-Regular.ttf');
   write('assets/shaders/ink_sparkle.frag');
   write('assets/packages/cupertino_icons/assets/CupertinoIcons.ttf');
   write('assets/assets/icons/masi/masi_add.svg');
@@ -98,6 +99,16 @@ void main() {
       expect(isPrecacheExcluded('assets/AssetManifest.bin.json'), isFalse);
       expect(isPrecacheExcluded('some/future/flutter/output.bin'), isFalse);
     });
+
+    // Regression guard for the boot-time gstatic Roboto fetch fix: bundled
+    // fonts under assets/fonts/ must land in the SAME-ORIGIN precache, which
+    // is what lets the service worker serve them offline. There is no font
+    // rule in isPrecacheExcluded above — this pins that as an invariant, not
+    // an accident, so a future "exclude large binary assets" cleanup does
+    // not silently re-introduce the cross-origin fetch this fix removed.
+    test('does not exclude bundled font files', () {
+      expect(isPrecacheExcluded('assets/fonts/Roboto-Regular.ttf'), isFalse);
+    });
   });
 
   group('formatShellVersion', () {
@@ -141,6 +152,7 @@ void main() {
       expect(manifest.urls, contains('sqlite3.wasm'));
       expect(manifest.urls, contains('drift_worker.js'));
       expect(manifest.urls, contains('assets/assets/icons/masi/masi_add.svg'));
+      expect(manifest.urls, contains('assets/fonts/Roboto-Regular.ttf'));
 
       expect(manifest.urls, isNot(contains('sw.js')));
       expect(manifest.urls, isNot(contains('main.dart.js')));

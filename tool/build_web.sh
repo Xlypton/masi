@@ -155,6 +155,39 @@ if [[ -s "$LEGACY_SW" ]]; then
 fi
 echo "    ok: no legacy Flutter service worker emitted"
 
+echo "==> bundled Roboto font gate"
+# Proves the pubspec.yaml font declaration actually reached the build output.
+# The literal family name 'Roboto' in build/web/assets/FontManifest.json is
+# what suppresses the unbounded cross-origin fetch of
+# https://fonts.gstatic.com/s/roboto/... on BOTH web renderers at boot
+# (skwasm: flutter_web_sdk/lib/_skwasm_impl/skwasm_impl/font_collection.dart,
+# canvaskit: flutter_web_sdk/lib/_engine/engine/canvaskit/fonts.dart) — see
+# test/web_font_source_test.dart for the SDK-source half of this guard. This
+# is the only END-TO-END check: pubspec.yaml declaring the family is not
+# proof it reached the manifest the browser actually reads.
+FONT_MANIFEST="build/web/assets/FontManifest.json"
+if [[ ! -f "$FONT_MANIFEST" ]]; then
+  echo "FAIL: $FONT_MANIFEST was not emitted" >&2
+  exit 1
+fi
+if ! grep -q '"family":"Roboto"' "$FONT_MANIFEST" && \
+   ! grep -q '"family": "Roboto"' "$FONT_MANIFEST"; then
+  echo "FAIL: $FONT_MANIFEST has no Roboto family entry. Web will fall back" >&2
+  echo "      to fetching Roboto cross-origin from fonts.gstatic.com on" >&2
+  echo "      every boot, unbounded and unawaited-with-timeout, before first" >&2
+  echo "      frame. Did the fonts: section get dropped from pubspec.yaml?" >&2
+  exit 1
+fi
+echo "    ok: $FONT_MANIFEST declares the Roboto family"
+
+if [[ ! -f "build/web/assets/fonts/Roboto-Regular.ttf" ]]; then
+  echo "FAIL: build/web/assets/fonts/Roboto-Regular.ttf was not bundled." >&2
+  echo "      FontManifest.json names a Roboto family but the asset itself" >&2
+  echo "      is missing from the build output." >&2
+  exit 1
+fi
+echo "    ok: build/web/assets/fonts/Roboto-Regular.ttf present"
+
 echo "==> service-worker precache manifest"
 # Rewrites the two BUILD STAMP lines in build/web/sw.js (which `flutter build
 # web` copied verbatim from web/sw.js) with this build's precache list and a
