@@ -37,6 +37,15 @@ Two traps:
 - **The machine is load-sensitive.** The suite is unreliable above roughly 150 load average.
   Check `uptime` first; don't run the full suite alongside several other heavy jobs, and don't
   chase a failure that only appears under load before re-running it clean.
+- **Deploying from a detached HEAD lands in PREVIEW, not production.** Wrangler infers the Pages
+  branch from git, and a worktree checked out at a SHA reports `HEAD`, which is not the production
+  branch — the deploy succeeds, prints "Deployment complete!", and changes nothing for users.
+  Building from a clean worktree is still the right move when the main tree has unrelated
+  work-in-progress (it keeps other agents' uncommitted `lib/` changes out of the bundle), so pass
+  **`--branch=main` explicitly** whenever the tree is not on `main`. Then confirm in
+  `wrangler pages deployment list` that the top row says `Production` / `main` / your SHA.
+  This has actually happened here — the first deploy of the iOS geometry fix went to
+  `head.climb-masi.pages.dev` while production kept serving the previous shell.
 
 ### 2. Build
 
