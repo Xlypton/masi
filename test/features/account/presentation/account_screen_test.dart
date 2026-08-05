@@ -3,6 +3,9 @@ import 'dart:async';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/db/storage_durability_provider.dart';
+import 'package:masi/core/storage/storage_persistence_providers.dart';
+import 'package:masi/core/storage/storage_persistence_types.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/application/pwa_install_providers.dart';
 import 'package:masi/features/account/application/pwa_install_types.dart';
@@ -17,6 +20,7 @@ import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show SystemChannels;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -35,6 +39,49 @@ class _FixedSyncOrchestrator extends SyncOrchestrator {
 
   @override
   SyncOrchestratorState build() => _state;
+}
+
+/// A [StorageDurabilityNotifier] whose `build()` short-circuits to a fixed
+/// [StorageDurability] verdict — the #54 B5 diagnostics-row tests below drive
+/// every verdict shape (a clean backend, a measured-but-stalled
+/// `unavailableOver`, missing features) without ever running the real
+/// connection layer.
+class _FixedStorageDurabilityNotifier extends StorageDurabilityNotifier {
+  _FixedStorageDurabilityNotifier(this._fixed);
+
+  final StorageDurability _fixed;
+
+  @override
+  StorageDurability build() => _fixed;
+}
+
+/// A [StoragePersistenceController] whose `build()` short-circuits to a fixed
+/// [StoragePersistenceStatus] and which RECORDS every [refresh]/
+/// [requestPersistenceOnce] call instead of touching
+/// `storagePersistenceServiceProvider` — lets the #54 B5 diagnostics-row
+/// tests assert the Refresh action calls exactly the right method (see
+/// assertion 6: `refresh()`, never `requestPersistenceOnce()`).
+class _RecordingStoragePersistenceController
+    extends StoragePersistenceController {
+  _RecordingStoragePersistenceController(this._fixed);
+
+  final StoragePersistenceStatus _fixed;
+
+  int refreshCalls = 0;
+  int requestPersistenceOnceCalls = 0;
+
+  @override
+  StoragePersistenceStatus build() => _fixed;
+
+  @override
+  Future<void> refresh() async {
+    refreshCalls++;
+  }
+
+  @override
+  Future<void> requestPersistenceOnce() async {
+    requestPersistenceOnceCalls++;
+  }
 }
 
 /// In-memory [AuthRepository] test double: no [SupabaseClient], no network.
@@ -1717,6 +1764,240 @@ void main() {
         fakeRepo.signOutGate!.complete();
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 400));
+      },
+    );
+  });
+
+  group('#54 B5: storage-diagnostics row', () {
+    /// Signed-in container wired with the fixed [durability]/[persistence]
+    /// notifiers above, plus the same `appDatabaseProvider`/
+    /// `syncOrchestratorProvider` scaffolding the other signed-in groups
+    /// use (a real in-memory db is required by `myDisplayNameProvider`, and
+    /// the fixed sync orchestrator avoids a real debounced-push `Timer`
+    /// outliving the test). Returns the container AND the persistence
+    /// controller (for asserting on its recorded calls).
+    (
+      ProviderContainer container,
+      _RecordingStoragePersistenceController persistenceController,
+    )
+    makeContainer({
+      StorageDurability durability = const StorageDurability.probing(),
+      StoragePersistenceStatus persistence = const StoragePersistenceStatus(),
+    }) {
+      final fakeRepo = FakeAuthRepository(
+        const AuthSessionState.signedIn('climber@example.com'),
+      );
+      addTearDown(fakeRepo.dispose);
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final persistenceController = _RecordingStoragePersistenceController(
+        persistence,
+      );
+      final container = ProviderContainer(
+        overrides: [
+          authRepositoryProvider.overrideWithValue(fakeRepo),
+          appDatabaseProvider.overrideWithValue(db),
+          syncOrchestratorProvider.overrideWith(
+            () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+          ),
+          storageDurabilityProvider.overrideWith(
+            () => _FixedStorageDurabilityNotifier(durability),
+          ),
+          storagePersistenceProvider.overrideWith(() => persistenceController),
+        ],
+      );
+      addTearDown(container.dispose);
+      return (container, persistenceController);
+    }
+
+    testWidgets(
+      'assertion 1: a measured opfsLocks backend with a missing '
+      'dedicatedWorkersInSharedWorkers feature renders both literal names',
+      (tester) async {
+        final (container, _) = makeContainer(
+          durability: const StorageDurability(
+            backend: StorageBackend.opfsLocks,
+            missingFeatures: {
+              StorageMissingFeature.dedicatedWorkersInSharedWorkers,
+            },
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('account-storage-diagnostics')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('opfsLocks'), findsWidgets);
+        expect(
+          find.textContaining('dedicatedWorkersInSharedWorkers'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'assertion 2: an unavailableOver verdict STILL renders the measured '
+      'opfsLocks backend plus the stall reason — reading measuredBackend, '
+      'never backend (340ba7b regression guard)',
+      (tester) async {
+        final measured = const StorageDurability(
+          backend: StorageBackend.opfsLocks,
+          missingFeatures: {
+            StorageMissingFeature.dedicatedWorkersInSharedWorkers,
+          },
+        );
+        final durability = StorageDurability.unavailableOver(
+          measured,
+          'reason text',
+        );
+        final (container, _) = makeContainer(durability: durability);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('opfsLocks'), findsWidgets);
+        expect(find.textContaining('reason text'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'assertion 3: a clean verdict (no missing features, no error) hides '
+      'BOTH the missing-features row and the error row entirely — no empty '
+      'rows of noise on a healthy install',
+      (tester) async {
+        final (container, _) = makeContainer(
+          durability: const StorageDurability(
+            backend: StorageBackend.opfsShared,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('account-storage-missing-features')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const Key('account-storage-error')),
+          findsNothing,
+        );
+      },
+    );
+
+    testWidgets(
+      'assertion 4: a 40,000,000 / 100,000,000 byte estimate renders the '
+      'literal "40%" (the test hard-codes the expected string rather than '
+      'recomputing usage/quota, per this repo\'s own arithmetic-vs-behaviour '
+      'trap)',
+      (tester) async {
+        final (container, _) = makeContainer(
+          persistence: const StoragePersistenceStatus(
+            estimate: StorageEstimateSnapshot(
+              usageBytes: 40000000,
+              quotaBytes: 100000000,
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('40%'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'assertion 5: a null estimate renders "not reported", specifically '
+      'NOT "0%" or "0 B" — unknown usage must never render as zero usage',
+      (tester) async {
+        final (container, _) = makeContainer(
+          persistence: const StoragePersistenceStatus(),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('not reported'), findsOneWidget);
+        expect(find.textContaining('0%'), findsNothing);
+        expect(find.textContaining('0 B'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'assertion 6: tapping Refresh calls StoragePersistenceController.'
+      'refresh() exactly once and never requestPersistenceOnce() — looking '
+      'at the row must not re-trigger the browser persistence prompt',
+      (tester) async {
+        final (container, persistenceController) = makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('account-storage-refresh')));
+        await tester.pump();
+
+        expect(persistenceController.refreshCalls, 1);
+        expect(persistenceController.requestPersistenceOnceCalls, 0);
+      },
+    );
+
+    testWidgets(
+      'assertion 7: Copy diagnostics places a single line containing the '
+      'backend, the missing feature and the persist outcome on the '
+      'clipboard',
+      (tester) async {
+        String? clipboardText;
+        final messenger =
+            TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+        messenger.setMockMethodCallHandler(SystemChannels.platform, (
+          call,
+        ) async {
+          if (call.method == 'Clipboard.setData') {
+            final args = call.arguments as Map<Object?, Object?>;
+            clipboardText = args['text'] as String?;
+          }
+          return null;
+        });
+        addTearDown(
+          () => messenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            null,
+          ),
+        );
+
+        final (container, _) = makeContainer(
+          durability: const StorageDurability(
+            backend: StorageBackend.opfsLocks,
+            missingFeatures: {
+              StorageMissingFeature.dedicatedWorkersInSharedWorkers,
+            },
+          ),
+          persistence: const StoragePersistenceStatus(
+            outcome: StoragePersistOutcome.denied,
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        // The extra missing-features row pushes the Copy button below the
+        // 600px test viewport fold, inside the card's SingleChildScrollView
+        // — scroll it into view before tapping.
+        await tester.ensureVisible(
+          find.byKey(const Key('account-storage-copy')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('account-storage-copy')));
+        await tester.pump();
+
+        expect(clipboardText, isNotNull);
+        expect(clipboardText, contains('opfsLocks'));
+        expect(clipboardText, contains('dedicatedWorkersInSharedWorkers'));
+        expect(clipboardText, contains('denied'));
       },
     );
   });

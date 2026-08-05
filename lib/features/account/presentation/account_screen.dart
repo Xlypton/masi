@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../../../app/theme.dart';
+import '../../../core/db/storage_durability_provider.dart';
+import '../../../core/storage/storage_persistence_providers.dart';
+import '../../../core/storage/storage_persistence_types.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
@@ -872,6 +876,7 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                 child: const Text('Sign out'),
               ),
               const _InstallSection(),
+              const _StorageDiagnosticsSection(),
             ],
           ),
         ),
@@ -994,6 +999,234 @@ class _InstallSection extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// Storage-diagnostics row, appended after [_InstallSection] on the
+/// signed-in card. This is what makes a "my topos vanished" web report
+/// answerable in one tap: which storage backend did this browser actually
+/// choose, is the origin protected from ordinary eviction, and how full is
+/// it — the same facts `logStorageDurability`/`StoragePersistenceController`
+/// already log at boot, just made visible on a screen instead of buried in
+/// a browser console the reporting user has no way to open.
+///
+/// Reads TWO providers, kept deliberately SEPARATE (recorded Decision #16 —
+/// do not merge them into one combined provider):
+///  - `storageDurabilityProvider` for [StorageDurability.measuredBackend]/
+///    [StorageDurability.missingFeatures]/[StorageDurability.unavailable]/
+///    [StorageDurability.unavailableReason];
+///  - `storagePersistenceProvider` for [StoragePersistenceStatus.outcome]/
+///    [StoragePersistenceStatus.persisted]/[StoragePersistenceStatus.estimate],
+///    plus its `.notifier.refresh()` — documented at that provider's own
+///    call site as exactly "the refresh path for the Account screen's
+///    diagnostics row".
+///
+/// Deliberately NOT `kIsWeb`-gated, unlike [_InstallSection]: on native every
+/// value here is still honest ([StorageBackend.nativeFile],
+/// [StoragePersistOutcome.notApplicable]), so gating it would only hide the
+/// row from every widget test with nothing gained on a real native build.
+class _StorageDiagnosticsSection extends ConsumerWidget {
+  const _StorageDiagnosticsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final durability = ref.watch(storageDurabilityProvider);
+    final persistence = ref.watch(storagePersistenceProvider);
+
+    // `measuredBackend`, NEVER `backend`: under an `unavailableOver` verdict
+    // `backend` is null (nothing is "in effect" right now) but
+    // `measuredBackend` carries the real measurement forward. Reading
+    // `backend` here would reproduce the exact `340ba7b` field report — an
+    // "unavailable" line with no missing-features detail at all, even
+    // though the browser had already been measured before it stalled.
+    final backendLabel =
+        durability.measuredBackend?.name ??
+        (durability.unavailable ? 'unavailable' : 'probing');
+    final missingFeatures = _sortedMissingFeatureNames(durability);
+    final errorReason = durability.unavailableReason;
+    final evictionLabel =
+        '${persistence.outcome.name} (persisted: ${persistence.persisted})';
+    final spaceLabel = _spaceUsedLabel(persistence.estimate);
+
+    return Column(
+      key: const Key('account-storage-diagnostics'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: MasiSpacing.lg),
+        Text('Storage diagnostics', style: textTheme.titleMedium),
+        const SizedBox(height: MasiSpacing.sm),
+        _diagnosticsRow(textTheme, colors, 'Local storage', backendLabel),
+        // Hidden entirely when empty — an empty-but-present row would be
+        // noise on the common, healthy case; absence itself is the "nothing
+        // to report" signal.
+        if (missingFeatures.isNotEmpty)
+          _diagnosticsRow(
+            textTheme,
+            colors,
+            'Missing browser features',
+            missingFeatures.join(', '),
+            rowKey: const Key('account-storage-missing-features'),
+          ),
+        // Hidden entirely when null, same reasoning as above.
+        if (errorReason != null)
+          _diagnosticsRow(
+            textTheme,
+            colors,
+            'Last storage error',
+            errorReason,
+            rowKey: const Key('account-storage-error'),
+          ),
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'Eviction protection',
+          evictionLabel,
+        ),
+        _diagnosticsRow(textTheme, colors, 'Space used', spaceLabel),
+        const SizedBox(height: MasiSpacing.sm),
+        Row(
+          children: [
+            Expanded(
+              child: OutlinedButton(
+                key: const Key('account-storage-copy'),
+                onPressed: () =>
+                    _handleCopy(context, durability, persistence),
+                child: const Text('Copy diagnostics'),
+              ),
+            ),
+            const SizedBox(width: MasiSpacing.sm),
+            Expanded(
+              child: OutlinedButton(
+                key: const Key('account-storage-refresh'),
+                // `refresh()`, NEVER `requestPersistenceOnce()`: looking at
+                // this row must never re-trigger the browser's persistence
+                // prompt as a side effect.
+                onPressed: () =>
+                    ref.read(storagePersistenceProvider.notifier).refresh(),
+                child: const Text('Refresh'),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _diagnosticsRow(
+    TextTheme textTheme,
+    MasiColors colors,
+    String label,
+    String value, {
+    Key? rowKey,
+  }) {
+    return Padding(
+      key: rowKey,
+      padding: const EdgeInsets.symmetric(vertical: 2),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Text(
+              label,
+              style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+            ),
+          ),
+          const SizedBox(width: MasiSpacing.sm),
+          Expanded(
+            flex: 2,
+            child: Text(
+              value,
+              textAlign: TextAlign.end,
+              style: textTheme.bodySmall,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _handleCopy(
+    BuildContext context,
+    StorageDurability durability,
+    StoragePersistenceStatus persistence,
+  ) async {
+    final messenger = ScaffoldMessenger.of(context);
+    await Clipboard.setData(
+      ClipboardData(
+        text: diagnosticsClipboardLine(durability, persistence),
+      ),
+    );
+    messenger.showSnackBar(
+      const SnackBar(content: Text('Diagnostics copied.')),
+    );
+  }
+}
+
+/// [StorageDurability.missingFeatures]' names, sorted — shared by the
+/// diagnostics row and [diagnosticsClipboardLine] so both always agree on
+/// ordering.
+List<String> _sortedMissingFeatureNames(StorageDurability durability) =>
+    durability.missingFeatures.map((f) => f.name).toList()..sort();
+
+/// Humanised "usage / quota (NN%)" for [estimate], or `'not reported'` when
+/// [estimate] itself is `null` — deliberately NOT `'0%'`/`'0 B'`, which would
+/// misrepresent "the browser never told us" as "this origin uses nothing".
+/// Same "absence must never render as a value" discipline as an error state
+/// rendering `[]` instead of its error.
+@visibleForTesting
+String spaceUsedLabelForTest(StorageEstimateSnapshot? estimate) =>
+    _spaceUsedLabel(estimate);
+
+String _spaceUsedLabel(StorageEstimateSnapshot? estimate) {
+  if (estimate == null) return 'not reported';
+  final fraction = estimate.usedFraction;
+  final percentSuffix = fraction == null
+      ? ''
+      : ' (${(fraction * 100).round()}%)';
+  return '${_humanizeBytes(estimate.usageBytes)} / '
+      '${_humanizeBytes(estimate.quotaBytes)}$percentSuffix';
+}
+
+/// `bytes` rendered as e.g. `'38.1 MB'`, or `'unknown'` when `bytes` itself
+/// is `null` (never `'0 B'` for an unknown number — see [_spaceUsedLabel]).
+String _humanizeBytes(int? bytes) {
+  if (bytes == null) return 'unknown';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  var value = bytes.toDouble();
+  var unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+  final formatted = unitIndex == 0
+      ? value.toStringAsFixed(0)
+      : value.toStringAsFixed(1);
+  return '$formatted ${units[unitIndex]}';
+}
+
+/// One greppable line — the Copy-diagnostics clipboard payload — combining
+/// [durability]'s backend/missing-features/error with [persistence]'s
+/// persist outcome, in the same `key=value` shape [logStorageDurability]
+/// already uses, so a pasted report reads like the boot log line a user
+/// could never have opened themselves.
+@visibleForTesting
+String diagnosticsClipboardLine(
+  StorageDurability durability,
+  StoragePersistenceStatus persistence,
+) {
+  final backendLabel =
+      durability.measuredBackend?.name ??
+      (durability.unavailable ? 'unavailable' : 'probing');
+  final missing = _sortedMissingFeatureNames(durability);
+  final reasonSuffix = durability.unavailableReason == null
+      ? ''
+      : ' reason=${durability.unavailableReason}';
+  return 'masi/storage: backend=$backendLabel '
+      'missingFeatures=${missing.join(',')} '
+      'persistOutcome=${persistence.outcome.name} '
+      'persisted=${persistence.persisted}'
+      '$reasonSuffix';
 }
 
 /// Whether [error] is Supabase rejecting a magic-link OTP send because
