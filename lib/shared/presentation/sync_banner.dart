@@ -68,7 +68,13 @@ enum SyncBannerKind {
 /// so a screen showing both reads as one stack of notices rather than two
 /// unrelated designs.
 class SyncBanner extends StatelessWidget {
-  const SyncBanner({super.key, required this.kind, this.detail, this.onRetry});
+  const SyncBanner({
+    super.key,
+    required this.kind,
+    this.detail,
+    this.onRetry,
+    this.onDismiss,
+  });
 
   /// The single offline sentence used app-wide. Exposed as a constant so a
   /// consumer or a test can assert against the exact string instead of
@@ -106,6 +112,29 @@ class SyncBanner extends StatelessWidget {
   /// case, where there is nothing useful to press and the honest advice is
   /// simply to wait for signal.
   final VoidCallback? onRetry;
+
+  /// Optional "close this" action, rendered as a trailing close button.
+  ///
+  /// **HONOURED FOR [SyncBannerKind.offline] ONLY**, and that restriction is
+  /// structural (the `kind == SyncBannerKind.offline` test in [_body]) rather
+  /// than a convention a call site is trusted to keep:
+  ///
+  ///  - [SyncBannerKind.syncFailed] must never be dismissible. It is the only
+  ///    signal in the app that the user's work may not have reached the cloud;
+  ///    a closable version of it is how silent data loss becomes invisible.
+  ///  - [SyncBannerKind.sharedPhotosWithheld] is likewise not dismissible — it
+  ///    is the sole explanation for a visibly incomplete feed, so hiding it
+  ///    leaves blank spots with no account of them anywhere in the app.
+  ///
+  /// Being offline is the one case where the message is pure reassurance the
+  /// user is allowed to have finished reading — but only for the CURRENT
+  /// offline episode. The caller (both feeds) resolves this against
+  /// `offlineBannerDismissedProvider`, which re-shows the banner on the next
+  /// offline episode; see that provider's doc for why that reset is not
+  /// optional.
+  ///
+  /// `null` renders no close button at all.
+  final VoidCallback? onDismiss;
 
   /// The most of the viewport this banner may ever occupy.
   ///
@@ -254,6 +283,22 @@ class SyncBanner extends StatelessWidget {
             ],
           ),
         ),
+        // Only ever offline (see [onDismiss]): the fault report and the
+        // withheld-photos explanation stay on screen until the condition
+        // itself clears. Sized/styled exactly like `install_banner.dart`'s
+        // dismiss button so the app has one close affordance, not two.
+        if (onDismiss != null && kind == SyncBannerKind.offline) ...[
+          const SizedBox(width: MasiSpacing.sm),
+          IconButton(
+            key: const Key('sync-banner-dismiss'),
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(),
+            visualDensity: VisualDensity.compact,
+            tooltip: 'Dismiss',
+            onPressed: onDismiss,
+            icon: MasiIcon('close', size: 18, color: colors.ink3),
+          ),
+        ],
       ],
     );
   }

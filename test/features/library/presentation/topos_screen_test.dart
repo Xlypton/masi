@@ -11,6 +11,7 @@ import 'package:masi/core/location/location_service.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/backup/application/backup_providers.dart';
+import 'package:masi/features/backup/application/reachability_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/backup/data/sync_service.dart' show SharedPhotoBudgetReason;
@@ -1055,6 +1056,208 @@ void main() {
         expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
         expect(find.byKey(const Key('topos-offline-empty')), findsOneWidget);
         expect(find.byKey(const Key('topos-empty-state')), findsNothing);
+      },
+    );
+  });
+
+  group('T2b: the offline banner is closable, per offline episode', () {
+    const populated = [
+      TopoRef(
+        wallId: 'wall-1',
+        name: 'Topo One',
+        thumbnailPath: null,
+        routeCount: 2,
+        createdAt: 1000,
+      ),
+    ];
+
+    testWidgets(
+      'THE WHOLE POINT: closing the offline banner reclaims ALL of its space '
+      '(the list moves up by the banner AND its own margin — a collapsed box '
+      'or a surviving margin would be a silent regression), and the next '
+      'offline episode shows it again',
+      (tester) async {
+        final connectivity = _ScriptedConnectivity(reachable: false);
+        final container = _makeContainer(
+          topos: populated,
+          connectivity: connectivity,
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        final row = find.byKey(const Key('topo-item-wall-1'));
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        // `getSize` on the keyed `Container` measures its margin box (the
+        // margin is a `Padding` the Container itself builds), which is exactly
+        // the space dismissal has to give back.
+        final bannerSpace = tester
+            .getSize(find.byKey(const Key('sync-banner')))
+            .height;
+        final rowTopBefore = tester.getTopLeft(row).dy;
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+        expect(find.text(SyncBanner.offlineMessage), findsNothing);
+        expect(
+          rowTopBefore - tester.getTopLeft(row).dy,
+          moreOrLessEquals(bannerSpace, epsilon: 0.5),
+          reason: 'hidden must mean genuinely zero height — the whole request '
+              'was that it stop taking up space',
+        );
+
+        // The signal comes back...
+        connectivity.reachable = true;
+        await tester.runAsync(
+          () => container.read(reachabilityProvider.notifier).refresh(),
+        );
+        await _drain(tester);
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsNothing,
+          reason: 'online with nothing wrong says nothing, dismissed or not',
+        );
+
+        // ...and drops again: a NEW episode, so the acknowledgement of the
+        // previous one has expired. This is the requirement the whole banner
+        // exists for — a user with topos, offline at a crag, watching a list
+        // fail to refresh with no signal at all (see `SyncBanner`'s doc).
+        connectivity.reachable = false;
+        await tester.runAsync(
+          () => container.read(reachabilityProvider.notifier).refresh(),
+        );
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsOneWidget,
+          reason: 'a dismissal that survives offline -> online -> offline '
+              'recreates the exact bug this banner was added to fix',
+        );
+        expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'the dismissal survives a REMOUNT of the screen within one offline '
+      'episode — it is a shared provider, not per-widget State',
+      (tester) async {
+        final container = _makeContainer(
+          topos: populated,
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        // A whole new widget tree over the same container — what ordinary
+        // navigation away and back amounts to. `install_banner.dart`'s local
+        // `bool _dismissed` would come back showing here.
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump();
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'closing the banner leaves the offline EMPTY state completely alone — '
+      'they are separate surfaces, and the empty list is the case where the '
+      '"is my work gone?" question is loudest',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+        expect(find.byKey(const Key('topos-offline-empty')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+        expect(find.byKey(const Key('topos-offline-empty')), findsOneWidget);
+        expect(find.byKey(const Key('topos-empty-state')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      "the sync-FAILURE banner has no close button — \"Couldn't sync\" is the "
+      'only signal that the user\'s work may not have reached the cloud',
+      (tester) async {
+        final container = _makeContainer(
+          topos: populated,
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: shared rows fetch failed',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+        expect(find.byKey(const Key('sync-banner-retry')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'the withheld-shared-photos banner has no close button either — it is '
+      'the only account of a visibly incomplete feed',
+      (tester) async {
+        final container = _makeContainer(
+          topos: populated,
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastSharedPhotoBudgetReason:
+                  SharedPhotoBudgetReason.storagePressure,
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'a dismissed offline banner does NOT fall through to a stale pull error '
+      '— acknowledging "you are offline" must not answer with the raw '
+      'SocketException the offline banner deliberately outranks',
+      (tester) async {
+        final container = _makeContainer(
+          topos: populated,
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: Failed host lookup',
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+        expect(find.textContaining('Failed host lookup'), findsNothing);
       },
     );
   });
@@ -6310,6 +6513,135 @@ void main() {
       await tester.pump(const Duration(milliseconds: 600));
       expect(cue, findsNothing);
     });
+  });
+
+  // REGRESSION GUARDS on a contract this screen already honours (#54 plan,
+  // Step 2b): a failed read must render as a FAILURE, never as an empty list.
+  // Nothing here is new behaviour — the point is that the distinction cannot be
+  // lost by accident, because "no topos yet" over a query that actually broke
+  // is precisely the shape of the #72 report ("my topos are gone").
+  //
+  // Two mandatory mechanics, both of which HANG rather than fail if skipped:
+  // the container is built with `retry: (_, _) => null` (Riverpod v3's default
+  // backoff retry otherwise re-runs the throwing body mid-assertion — see
+  // `masi_async_view.dart`'s testing notes), and there is no `pumpAndSettle()`
+  // anywhere below (`MasiShimmer`'s controller `repeat()`s, so a loading state
+  // never settles). Explicit pumps past `MasiMotion.loadingRevealDelay`
+  // (180 ms) instead.
+  group('#54 Step 2b: a failed topos read never renders as an empty list', () {
+    ProviderContainer makeErroringContainer(
+      AppDatabase db,
+      Stream<List<TopoRef>> Function() stream, {
+      ConnectivityService? connectivity,
+    }) {
+      final container = ProviderContainer(
+        retry: (_, _) => null,
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          connectivityServiceProvider.overrideWithValue(
+            connectivity ?? _ScriptedConnectivity(reachable: true),
+          ),
+          syncOrchestratorProvider.overrideWith(() => _FakeSyncOrchestrator()),
+          storageDurabilityProvider.overrideWith(
+            () => _FakeStorageDurability(const StorageDurability.probing()),
+          ),
+          toposProvider.overrideWith((ref) => stream()),
+        ],
+      );
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    testWidgets(
+      'a toposProvider stream that times out and never emits data shows '
+      "MasiAsyncView's error state and its retry — and NONE of the three "
+      'empty states',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = makeErroringContainer(
+          db,
+          () => Stream<List<TopoRef>>.error(
+            TimeoutException('watchTopos timed out (test)'),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+        expect(find.byKey(MasiAsyncView.retryKey), findsOneWidget);
+        expect(find.byKey(const Key('topos-empty-state')), findsNothing);
+        expect(find.byKey(const Key('topos-sync-error-empty')), findsNothing);
+        expect(find.byKey(const Key('topos-offline-empty')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'the same holds while OFFLINE: a broken local read is not the offline '
+      'empty state, which would tell the user to wait for signal that would '
+      'not fix it',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = makeErroringContainer(
+          db,
+          () => Stream<List<TopoRef>>.error(
+            TimeoutException('watchTopos timed out (test)'),
+          ),
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+        expect(find.byKey(const Key('topos-offline-empty')), findsNothing);
+        expect(find.byKey(const Key('topos-empty-state')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'an error AFTER data keeps the rows on screen behind the stale-error '
+      'bar — a refresh that fails must not blank a list the user is reading',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final controller = StreamController<List<TopoRef>>();
+        addTearDown(controller.close);
+        final container = makeErroringContainer(db, () => controller.stream);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        controller.add(const [
+          TopoRef(
+            wallId: 'wall-1',
+            name: 'Topo One',
+            thumbnailPath: null,
+            routeCount: 2,
+            createdAt: 1000,
+          ),
+        ]);
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        expect(find.byKey(const Key('topo-item-wall-1')), findsOneWidget);
+
+        controller.addError(TimeoutException('watchTopos timed out (test)'));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 200));
+
+        expect(find.byKey(MasiAsyncView.staleErrorKey), findsOneWidget);
+        expect(
+          find.byKey(const Key('topo-item-wall-1')),
+          findsOneWidget,
+          reason: 'the row the user was looking at must survive the failure',
+        );
+        expect(find.byKey(MasiAsyncView.errorKey), findsNothing);
+      },
+    );
   });
 }
 

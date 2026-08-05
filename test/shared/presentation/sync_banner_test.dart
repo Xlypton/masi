@@ -128,16 +128,141 @@ void main() {
     });
   });
 
+  group('SyncBanner dismiss affordance', () {
+    testWidgets(
+      'offline is closable: onDismiss renders the close button and tapping it '
+      'calls back exactly once',
+      (tester) async {
+        var dismissals = 0;
+        await tester.pumpWidget(
+          _wrap(
+            SyncBanner(
+              kind: SyncBannerKind.offline,
+              onDismiss: () => dismissals++,
+            ),
+          ),
+        );
+
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await tester.pump();
+
+        expect(dismissals, 1);
+      },
+    );
+
+    testWidgets('no onDismiss means no close affordance at all', (
+      tester,
+    ) async {
+      await tester.pumpWidget(
+        _wrap(const SyncBanner(kind: SyncBannerKind.offline)),
+      );
+
+      expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+    });
+
+    // The load-bearing half of this feature's scope. "Couldn't sync" is the
+    // ONLY signal that the user's work may not have reached the cloud, and
+    // `sharedPhotosWithheld` is the only account of a visibly incomplete feed
+    // — a closable version of either is how a real problem becomes invisible.
+    // Asserted with `onDismiss` deliberately SUPPLIED, so this pins the
+    // widget's own structural guard rather than the call sites' discipline.
+    for (final kind in const [
+      SyncBannerKind.syncFailed,
+      SyncBannerKind.sharedPhotosWithheld,
+    ]) {
+      testWidgets(
+        '$kind is NOT dismissible even when handed an onDismiss — only being '
+        'offline is a message the user is allowed to have finished reading',
+        (tester) async {
+          var dismissals = 0;
+          await tester.pumpWidget(
+            _wrap(SyncBanner(kind: kind, onDismiss: () => dismissals++)),
+          );
+
+          expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+          expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+          expect(find.text(SyncBanner.messageFor(kind)), findsOneWidget);
+          expect(dismissals, 0);
+        },
+      );
+    }
+
+    testWidgets(
+      'the close button does not push the offline banner into an overflow at '
+      '3.0x text scale on a narrow phone',
+      (tester) async {
+        setViewportSize(tester, const Size(320, 800));
+
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: MasiTheme.light,
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(3.0)),
+              child: child!,
+            ),
+            home: Scaffold(
+              body: Column(
+                children: [
+                  SyncBanner(kind: SyncBannerKind.offline, onDismiss: () {}),
+                ],
+              ),
+            ),
+          ),
+        );
+        await tester.pump();
+
+        expect(tester.takeException(), isNull);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+      },
+    );
+  });
+
   group('SyncBanner iconography', () {
+    /// The LEADING glyph each kind must render. The assertions below are about
+    /// this exact mapping rather than "some MasiIcon is present", so the
+    /// dismissible offline variant (which legitimately renders a second
+    /// MasiIcon, the close glyph) cannot weaken them.
+    const leadingGlyph = {
+      SyncBannerKind.offline: 'phone_off',
+      SyncBannerKind.syncFailed: 'warning',
+      SyncBannerKind.sharedPhotosWithheld: 'warning',
+    };
+
     testWidgets('uses MasiIcon glyphs only — never a Material/Cupertino Icon', (
       tester,
     ) async {
       for (final kind in SyncBannerKind.values) {
         await tester.pumpWidget(_wrap(SyncBanner(kind: kind)));
         expect(find.byType(MasiIcon), findsOneWidget, reason: '$kind');
+        expect(
+          tester.widget<MasiIcon>(find.byType(MasiIcon)).name,
+          leadingGlyph[kind],
+          reason: '$kind',
+        );
         expect(find.byType(Icon), findsNothing, reason: '$kind');
       }
     });
+
+    testWidgets(
+      'the closable offline banner adds the brand close glyph and nothing '
+      'else — the leading glyph is still exactly phone_off, and a '
+      'Material/Cupertino Icon still never appears (masi_close.svg is the '
+      "app's only close glyph)",
+      (tester) async {
+        await tester.pumpWidget(
+          _wrap(SyncBanner(kind: SyncBannerKind.offline, onDismiss: () {})),
+        );
+
+        expect(
+          tester.widgetList<MasiIcon>(find.byType(MasiIcon)).map((i) => i.name),
+          ['phone_off', 'close'],
+        );
+        expect(find.byType(Icon), findsNothing);
+      },
+    );
 
     testWidgets(
       'offline is NOT styled as a danger/error state — being offline is not '

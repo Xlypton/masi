@@ -11,7 +11,14 @@ import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/community/application/community_providers.dart';
 import 'package:masi/features/community/data/community_repository.dart';
 import 'package:masi/features/backup/application/backup_providers.dart';
+import 'package:masi/features/backup/application/offline_banner_dismissal.dart';
+import 'package:masi/features/backup/application/reachability_providers.dart';
 import 'package:masi/features/backup/application/sync_orchestrator.dart';
+// The Library screen appears in exactly one test below — the cross-screen
+// proof that closing the offline banner on the Feed closes it on the Library
+// too, since a per-widget dismissal flag would pass every same-screen
+// assertion in this file.
+import 'package:masi/features/library/presentation/topos_screen.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/backup/data/sync_service.dart' show SharedPhotoBudgetReason;
 import 'package:masi/features/community/presentation/community_screen.dart';
@@ -1099,6 +1106,166 @@ void main() {
 
         expect(find.byKey(const Key('sync-banner')), findsOneWidget);
         expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-offline-empty')),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('community-empty')), findsNothing);
+      },
+    );
+  });
+
+  group('T2b: the offline banner is closable on the Feed too', () {
+    testWidgets(
+      'closing it on the Feed reclaims all of its space, and the next offline '
+      'episode shows it again',
+      (tester) async {
+        final connectivity = _ScriptedConnectivity(reachable: false);
+        final container = _makeContainer(connectivity: connectivity);
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        final row = find.byKey(const Key('community-topo-row-wall-shared-1'));
+        // Margin box of the keyed `Container` — exactly the space dismissal has
+        // to hand back (a collapsed box would keep the margin).
+        final bannerSpace = tester
+            .getSize(find.byKey(const Key('sync-banner')))
+            .height;
+        final rowTopBefore = tester.getTopLeft(row).dy;
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+        expect(
+          rowTopBefore - tester.getTopLeft(row).dy,
+          moreOrLessEquals(bannerSpace, epsilon: 0.5),
+        );
+
+        // Online, then offline again: a new episode, so the acknowledgement of
+        // the previous one has expired.
+        connectivity.reachable = true;
+        await tester.runAsync(
+          () => container.read(reachabilityProvider.notifier).refresh(),
+        );
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        connectivity.reachable = false;
+        await tester.runAsync(
+          () => container.read(reachabilityProvider.notifier).refresh(),
+        );
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'ONE acknowledgement, both feeds: closing it on the Community Feed '
+      'closes it on the Library too — it is one condition, acknowledged once, '
+      'not two banners to swat',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        // The Library, over the SAME container — what switching tabs does.
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsNothing,
+          reason: 'a per-widget dismissal flag would make the user close the '
+              'same sentence again on every screen that shows it',
+        );
+        // One provider, not two flags that happen to agree. (The offline EMPTY
+        // states are a separate, deliberately NON-dismissible surface — each
+        // screen's own test above covers that they survive a dismissal; this
+        // seeded feed's Library is not empty, so it has no empty state to
+        // check here.)
+        expect(container.read(offlineBannerDismissedProvider), isTrue);
+      },
+    );
+
+    testWidgets(
+      'the Feed\'s sync-FAILURE banner has no close button — the one signal '
+      "that the user's work may not have reached the cloud stays put",
+      (tester) async {
+        final container = _makeContainer(
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastPullError: 'Sync failed: shared rows fetch failed',
+            ),
+          ),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+        expect(find.byKey(const Key('sync-banner-retry')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'the Feed\'s withheld-shared-photos banner has no close button either',
+      (tester) async {
+        final container = _makeContainer(
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastSharedPhotoBudgetReason:
+                  SharedPhotoBudgetReason.storagePressure,
+            ),
+          ),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'closing the banner leaves the Feed\'s offline EMPTY state alone — '
+      'separate surface, and the one that answers "is my work gone?"',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+        expect(
+          find.byKey(const Key('community-offline-empty')),
+          findsOneWidget,
+        );
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
         expect(
           find.byKey(const Key('community-offline-empty')),
           findsOneWidget,

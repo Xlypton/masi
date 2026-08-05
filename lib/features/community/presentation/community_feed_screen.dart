@@ -10,6 +10,7 @@ import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/filtering/style_tag_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
+import '../../backup/application/offline_banner_dismissal.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../backup/data/sync_service.dart' show SharedPhotoBudgetReason;
@@ -345,16 +346,32 @@ class _FeedView extends ConsumerWidget {
         : sharedPhotosWithheld
         ? SyncBannerKind.sharedPhotosWithheld
         : null;
+    // Shared with the Library's copy of this banner (see
+    // `offline_banner_dismissal.dart`): closing it there closes it here, since
+    // it is one condition acknowledged once — and it comes back on the next
+    // offline episode. Suppresses the OFFLINE kind only; it never promotes the
+    // stale pull error that `bannerKind` deliberately ranks below it.
+    final offlineBannerDismissed = ref.watch(offlineBannerDismissedProvider);
 
     return Column(
       children: [
-        if (bannerKind != null)
+        // Dismissed means no widget at all — not a zero-height box that still
+        // contributes the banner's own margin.
+        if (bannerKind != null &&
+            !(bannerKind == SyncBannerKind.offline && offlineBannerDismissed))
           SyncBanner(
             kind: bannerKind,
             detail: syncError,
             // Nothing useful to press while genuinely offline.
             onRetry: bannerKind == SyncBannerKind.syncFailed
                 ? () => ref.read(syncOrchestratorProvider.notifier).pullNow()
+                : null,
+            // Offline only — `SyncBanner.onDismiss` enforces that structurally
+            // too, so a future call site cannot make "Couldn't sync" closable.
+            onDismiss: bannerKind == SyncBannerKind.offline
+                ? () => ref
+                      .read(offlineBannerDismissedProvider.notifier)
+                      .dismiss()
                 : null,
           ),
         Padding(

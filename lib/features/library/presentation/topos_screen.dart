@@ -16,6 +16,7 @@ import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/email_initials.dart';
+import '../../backup/application/offline_banner_dismissal.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../backup/data/sync_service.dart' show SharedPhotoBudgetReason;
@@ -342,6 +343,14 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         : sharedPhotosWithheld
         ? SyncBannerKind.sharedPhotosWithheld
         : null;
+    // The user closed the offline banner for THIS offline episode (see
+    // `offline_banner_dismissal.dart` — the acknowledgement is shared with the
+    // Community Feed and resets the next time the signal drops). Applied as a
+    // suppression of the OFFLINE kind specifically rather than folded into the
+    // ranking above: falling through to the next kind would answer "I've read
+    // that you're offline" by printing the stale `SocketException` the offline
+    // banner deliberately outranks.
+    final offlineBannerDismissed = ref.watch(offlineBannerDismissedProvider);
 
     // The account button shows initials once actually signed in with a
     // real (non-empty) email; any other state of the auth stream —
@@ -431,7 +440,13 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   storageRetryNoticeText != null
                       ? _StorageDetailNotice(durability: storage)
                       : _StorageWarningBanner(durability: storage),
-                if (bannerKind != null)
+                // Dismissed means GONE, not collapsed: no widget at all here,
+                // so neither the banner nor its own top margin contributes a
+                // single logical pixel (same requirement `install_banner.dart`
+                // documents at its `SizedBox.shrink()`).
+                if (bannerKind != null &&
+                    !(bannerKind == SyncBannerKind.offline &&
+                        offlineBannerDismissed))
                   SyncBanner(
                     kind: bannerKind,
                     detail: pullError,
@@ -441,6 +456,13 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                         ? () => ref
                               .read(syncOrchestratorProvider.notifier)
                               .pullNow()
+                        : null,
+                    // Offline only — see `SyncBanner.onDismiss`, which enforces
+                    // that structurally as well.
+                    onDismiss: bannerKind == SyncBannerKind.offline
+                        ? () => ref
+                              .read(offlineBannerDismissedProvider.notifier)
+                              .dismiss()
                         : null,
                   ),
                 _ToposFilterBar(
