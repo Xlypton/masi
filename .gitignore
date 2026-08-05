@@ -61,3 +61,6 @@ skills-lock.json
 # Symlink into the gitignored .agents/ skill cache -- tracking it would leave a
 # dangling link in a fresh clone. Real, self-contained skills stay versioned.
 .claude/skills/supabase-server
+
+# Local wrangler/Cloudflare build + deploy cache.
+.wrangler/
