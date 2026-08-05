@@ -28,6 +28,17 @@ class StoragePersistenceController extends Notifier<StoragePersistenceStatus> {
   /// the same already-completed future instead of a second request.
   Future<void>? _requestOnce;
 
+  /// De-dupes concurrent [requestPersistenceAgain] calls onto a single
+  /// in-flight `persist()` — same `_inFlight`-style shape as
+  /// `ReachabilityController.refresh()`
+  /// (`lib/features/backup/application/reachability_providers.dart`):
+  /// assigned SYNCHRONOUSLY (before [_request] reaches its first `await`), so
+  /// same-microtask callers collapse onto one request; CLEARED on completion
+  /// (unlike [_requestOnce]), so a later, separate re-ask (e.g. a second
+  /// `appinstalled`-shaped event, however unlikely) is not permanently
+  /// blocked by an earlier one having already run.
+  Future<void>? _reRequestInFlight;
+
   @override
   StoragePersistenceStatus build() => const StoragePersistenceStatus();
 
@@ -47,6 +58,52 @@ class StoragePersistenceController extends Notifier<StoragePersistenceStatus> {
   /// once per boot — harmless, since `persist()` is itself idempotent in the
   /// browser and does not re-prompt.
   Future<void> requestPersistenceOnce() => _requestOnce ??= _request();
+
+  /// Re-request entry point for LATER in the same session, once a stronger
+  /// grant signal becomes available than existed at boot — an installed PWA
+  /// at a later cold boot, or the `appinstalled` event firing mid-session
+  /// (`lib/main.dart`'s `requestPersistentStorageAtBoot` is the only caller
+  /// today). Unlike [requestPersistenceOnce] this is deliberately NOT
+  /// memoised for the container's whole lifetime: a denial is not sticky —
+  /// both engines re-evaluate the same heuristics on a later call (see this
+  /// seam's design doc, §1b) — so calling this again after a real-world event
+  /// must be able to produce a fresh `persist()`, not the first call's
+  /// long-since-completed future.
+  ///
+  /// Still guarded against hammering the API, two ways:
+  ///  - concurrent callers collapse onto ONE in-flight `persist()` via
+  ///    [_reRequestInFlight], exactly like [requestPersistenceOnce]'s
+  ///    [_requestOnce] guard;
+  ///  - skipped ENTIRELY, before any `persist()` call, when [state] already
+  ///    reports [StoragePersistOutcome.granted] or `persisted == true`
+  ///    (nothing left to gain) or [StoragePersistOutcome.unsupported]
+  ///    (nothing to ask) — see [_canGainFromReRequest].
+  ///
+  /// Same never-throws contract as [requestPersistenceOnce]: every `await`
+  /// inside [_request] is guarded, so a fire-and-forget caller can never
+  /// produce an unhandled async error.
+  Future<void> requestPersistenceAgain() {
+    if (!_canGainFromReRequest()) return Future<void>.value();
+    return _reRequestInFlight ??= _request().whenComplete(
+      () => _reRequestInFlight = null,
+    );
+  }
+
+  /// Whether a fresh `persist()` call could plausibly change anything.
+  /// `false` for [StoragePersistOutcome.granted] and `persisted == true`
+  /// (already have what a re-request buys) and for
+  /// [StoragePersistOutcome.unsupported] (no API to call at all — asking
+  /// again would just re-derive the same "no API" answer). `true` for
+  /// everything else, INCLUDING the initial [StoragePersistOutcome.notRequested]
+  /// and a prior `denied`/`failed`/`notApplicable` — a denial is not sticky,
+  /// so it is always worth asking again given a genuinely new signal.
+  bool _canGainFromReRequest() {
+    final current = state;
+    if (current.outcome == StoragePersistOutcome.unsupported) return false;
+    if (current.outcome == StoragePersistOutcome.granted) return false;
+    if (current.persisted) return false;
+    return true;
+  }
 
   Future<void> _request() async {
     final service = ref.read(storagePersistenceServiceProvider);

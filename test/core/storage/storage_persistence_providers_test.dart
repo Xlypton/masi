@@ -22,17 +22,18 @@ class _FakeStoragePersistenceService implements StoragePersistenceService {
   });
 
   final StoragePersistOutcome outcome;
-  final bool throwOnRequest;
   final bool throwOnPersisted;
   final bool throwOnEstimate;
 
   // Mutable so a test can change what the browser "reports" between the
-  // boot request and a later refresh(). `persisted` keeps its constructor
-  // parameter because a test passes `persisted: false`; `estimateSnapshot` is
-  // only ever reassigned mid-test, so initialising it directly here avoids an
-  // unused constructor parameter (and the `unused_element_parameter`
-  // suppression that used to sit on it).
+  // boot request and a later refresh()/requestPersistenceAgain() call.
+  // `persisted` and `throwOnRequest` keep their constructor parameters
+  // because most tests pass them at construction (e.g. `persisted: false`);
+  // `estimateSnapshot` is only ever reassigned mid-test, so initialising it
+  // directly here avoids an unused constructor parameter (and the
+  // `unused_element_parameter` suppression that used to sit on it).
   bool persisted;
+  bool throwOnRequest;
   StorageEstimateSnapshot? estimateSnapshot = const StorageEstimateSnapshot(
     usageBytes: 1024,
     quotaBytes: 8192,
@@ -218,6 +219,186 @@ void main() {
     expect(fake.requestCalls, 1, reason: 'refresh must not re-request');
     expect(fake.estimateCalls, 2);
     expect(fake.persistedCalls, 2);
+  });
+
+  group('requestPersistenceAgain', () {
+    test('performs a fresh persist() when the current state is denied',
+        () async {
+      final fake = _FakeStoragePersistenceService(
+        outcome: StoragePersistOutcome.denied,
+        persisted: false,
+      );
+      final container = _makeContainer(fake);
+      final controller = container.read(storagePersistenceProvider.notifier);
+
+      await controller.requestPersistenceOnce();
+      expect(fake.requestCalls, 1);
+
+      await controller.requestPersistenceAgain();
+
+      expect(fake.requestCalls, 2, reason: 'denied must be re-askable');
+    });
+
+    test(
+      'does NOT re-request when the current outcome is already granted '
+      '(mutation-tested guard — see the ISOLATED variant below, which is '
+      'the one that actually goes red if the granted check is deleted)',
+      () async {
+        final fake = _FakeStoragePersistenceService(
+          outcome: StoragePersistOutcome.granted,
+          persisted: true,
+        );
+        final container = _makeContainer(fake);
+        final controller = container.read(
+          storagePersistenceProvider.notifier,
+        );
+
+        await controller.requestPersistenceOnce();
+        expect(fake.requestCalls, 1);
+
+        await controller.requestPersistenceAgain();
+
+        expect(
+          fake.requestCalls,
+          1,
+          reason: 'granted already has everything a re-request buys',
+        );
+      },
+    );
+
+    test(
+      'ISOLATED: does NOT re-request on outcome==granted even when '
+      "persisted reads back false — proves the `outcome == granted` clause "
+      'itself is load-bearing, not just the separate `persisted` clause '
+      '(a fake reporting granted-but-not-actually-persisted is an unusual '
+      'combination in practice, but it is exactly what pins the two guard '
+      'clauses to INDEPENDENT lines rather than letting one silently cover '
+      'for a deleted other)',
+      () async {
+        final fake = _FakeStoragePersistenceService(
+          outcome: StoragePersistOutcome.granted,
+          persisted: false,
+        );
+        final container = _makeContainer(fake);
+        final controller = container.read(
+          storagePersistenceProvider.notifier,
+        );
+
+        await controller.requestPersistenceOnce();
+        expect(fake.requestCalls, 1);
+
+        await controller.requestPersistenceAgain();
+
+        expect(
+          fake.requestCalls,
+          1,
+          reason: 'the outcome==granted guard alone must block this, with '
+              'no help from the persisted guard',
+        );
+      },
+    );
+
+    test('does NOT re-request when persisted is already true even if the '
+        'outcome is not granted (e.g. a prior grant surviving a reload)',
+        () async {
+      final fake = _FakeStoragePersistenceService(
+        outcome: StoragePersistOutcome.denied,
+        persisted: true,
+      );
+      final container = _makeContainer(fake);
+      final controller = container.read(storagePersistenceProvider.notifier);
+
+      await controller.requestPersistenceOnce();
+      expect(fake.requestCalls, 1);
+
+      await controller.requestPersistenceAgain();
+
+      expect(fake.requestCalls, 1);
+    });
+
+    test('does NOT re-request when the platform is unsupported', () async {
+      final fake = _FakeStoragePersistenceService(
+        outcome: StoragePersistOutcome.unsupported,
+        persisted: false,
+      );
+      final container = _makeContainer(fake);
+      final controller = container.read(storagePersistenceProvider.notifier);
+
+      await controller.requestPersistenceOnce();
+      expect(fake.requestCalls, 1);
+
+      await controller.requestPersistenceAgain();
+
+      expect(fake.requestCalls, 1, reason: 'nothing to ask for');
+    });
+
+    test(
+      'concurrent calls collapse onto exactly ONE underlying persist() call',
+      () async {
+        final fake = _FakeStoragePersistenceService(
+          outcome: StoragePersistOutcome.denied,
+          persisted: false,
+        );
+        final container = _makeContainer(fake);
+        final controller = container.read(
+          storagePersistenceProvider.notifier,
+        );
+
+        await controller.requestPersistenceOnce();
+        expect(fake.requestCalls, 1);
+
+        // Three callers in the same microtask — same shape as the existing
+        // "persist() is requested EXACTLY ONCE" test above, but for the
+        // re-request entry point.
+        await Future.wait([
+          controller.requestPersistenceAgain(),
+          controller.requestPersistenceAgain(),
+          controller.requestPersistenceAgain(),
+        ]);
+
+        expect(fake.requestCalls, 2, reason: 'boot + exactly one re-request');
+      },
+    );
+
+    test('a later, separate call after completion re-requests again (not '
+        'memoised across calls, unlike requestPersistenceOnce)', () async {
+      final fake = _FakeStoragePersistenceService(
+        outcome: StoragePersistOutcome.denied,
+        persisted: false,
+      );
+      final container = _makeContainer(fake);
+      final controller = container.read(storagePersistenceProvider.notifier);
+
+      await controller.requestPersistenceOnce();
+      await controller.requestPersistenceAgain();
+      await controller.requestPersistenceAgain();
+
+      expect(
+        fake.requestCalls,
+        3,
+        reason: 'boot + two separate, sequential re-requests',
+      );
+    });
+
+    test('a throwing persist() on re-request still degrades to failed '
+        'rather than propagating', () async {
+      final fake = _FakeStoragePersistenceService(
+        outcome: StoragePersistOutcome.denied,
+        persisted: false,
+      );
+      final container = _makeContainer(fake);
+      final controller = container.read(storagePersistenceProvider.notifier);
+
+      await controller.requestPersistenceOnce();
+      fake.throwOnRequest = true;
+
+      await controller.requestPersistenceAgain();
+
+      expect(
+        container.read(storagePersistenceProvider).outcome,
+        StoragePersistOutcome.failed,
+      );
+    });
   });
 
   test('the production default service is inert off the browser', () async {

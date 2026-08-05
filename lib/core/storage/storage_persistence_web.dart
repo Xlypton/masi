@@ -95,6 +95,27 @@ web.StorageManager? _storageManager() {
   return storage as web.StorageManager;
 }
 
+/// Listens for the browser's native `appinstalled` window event and calls
+/// [onInstalled] every time it fires — the moment the strongest known
+/// persistence-grant signal ("is this an installed PWA") flips from false to
+/// true mid-session. Before this existed the event was only ever observed by
+/// `web/index.html`'s own inline listener (which resets its deferred
+/// install-prompt bookkeeping) and never reached Dart at all, so a real
+/// install during a session could not trigger a re-ask even though it is
+/// exactly the moment worth re-asking.
+///
+/// A direct `web.window.addEventListener` call, not a poll of a JS global —
+/// same shape as `online_events_web.dart`'s `online`/`offline` listeners and
+/// `web_lifecycle_web.dart`'s `pagehide`/`visibilitychange` ones. Multiple
+/// listeners on the same event target coexist fine, so this does not replace
+/// or interfere with index.html's own handler.
+void listenForAppInstalled(void Function() onInstalled) {
+  web.window.addEventListener(
+    'appinstalled',
+    ((web.Event _) => onInstalled()).toJS,
+  );
+}
+
 /// Reads [name] off [object] as a Dart `int`, or `null` when the property is
 /// absent, `undefined`/`null`, or not a JS number.
 int? _readIntProperty(JSObject object, String name) {

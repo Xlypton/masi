@@ -18,3 +18,9 @@ Future<bool> isStoragePersisted() async => false;
 /// See [requestPersistentStorage]. No `navigator.storage.estimate()` to read,
 /// so usage/quota are unknown (`null`), never zero.
 Future<StorageEstimateSnapshot?> estimateStorage() async => null;
+
+/// See `listenForAppInstalled` in the web backend
+/// (`storage_persistence_web.dart`) — no `window`/`appinstalled` event exists
+/// here, so [onInstalled] is simply never called. Never throws, never
+/// registers anything.
+void listenForAppInstalled(void Function() onInstalled) {}

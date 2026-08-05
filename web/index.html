@@ -455,6 +455,17 @@
     window.addEventListener('appinstalled', function () {
       _masiDeferredPrompt = null;
       window.__masiCanInstall = false;
+      // Bridge-style diagnostic mirror of the same event, following the
+      // __masiStandalone/__masiCanInstall pattern above: a monotonic counter
+      // (never a plain boolean) so it can be read as "has this fired at
+      // least once" without a reset step. NOT the mechanism that actually
+      // re-asks navigator.storage.persist() — nothing here polls this value.
+      // The real trigger is a direct `window.addEventListener('appinstalled',
+      // ...)` registered from Dart (`storage_persistence_web.dart`'s
+      // `listenForAppInstalled`, wired in `lib/main.dart`), the same native
+      // event this handler is already listening to — so Dart hears it the
+      // instant it fires, not on some later poll.
+      window.__masiAppInstalledCount = (window.__masiAppInstalledCount || 0) + 1;
     });
     window.masiPromptInstall = async function () {
       if (!_masiDeferredPrompt) return 'unavailable';

@@ -9,8 +9,10 @@ import 'app/app.dart';
 import 'core/config/supabase_init_provider.dart';
 import 'core/db/database_provider.dart';
 import 'core/db/storage_durability_provider.dart';
+import 'core/storage/storage_persistence.dart' show listenForAppInstalled;
 import 'core/storage/storage_persistence_providers.dart';
 import 'features/account/application/auth_providers.dart';
+import 'features/account/application/pwa_install.dart' show pwaIsStandalone;
 
 Future<void> main() => bootApp();
 
@@ -460,14 +462,49 @@ String _stalledStorageReason(List<BootTask> stalled, Duration total) {
 /// covered by `integration_test/web_storage_persistence_test.dart`.
 ///
 /// `unawaited` is safe here specifically because
-/// `StoragePersistenceController.requestPersistenceOnce()` is documented and
-/// tested never to complete with an error.
+/// `StoragePersistenceController.requestPersistenceOnce()` (and
+/// `requestPersistenceAgain()`, used below) is documented and tested never to
+/// complete with an error.
+///
+/// Two re-ask paths were layered on top of the original one-shot boot
+/// request (see its own placement comment above, in [bootApp]) — both fixing
+/// the same defect: `persist()` used to be asked exactly once, at the one
+/// instant (pre-first-frame, zero interaction) the browser's grant heuristics
+/// have provably earned nothing, and installation is the single strongest
+/// input to both engines' heuristics, yet was never consulted.
+///
+///  1. **Standalone-at-boot, moments later.** `pwaIsStandalone()` reads a
+///     `window` global that `web/index.html`'s bootstrap script sets
+///     synchronously, long before Dart's `main()` even starts (the Flutter
+///     engine itself takes far longer to load/init) — so it is already
+///     accurate at the instant `requestPersistenceOnce()` above fires, and
+///     that first call already runs INSIDE whatever standalone context this
+///     page load has. This second call therefore does NOT hand the browser
+///     new information the first call lacked; it supplements rather than
+///     replaces. It exists as cheap insurance for the case the very first,
+///     pre-anything-else ask was denied: on the strongest known signal, ask
+///     once more, a beat after boot's other work has run.
+///     `requestPersistenceAgain()`'s own guard (skip once granted/persisted
+///     or unsupported) is what keeps this from ever being a second real ask
+///     once the first one already succeeded.
+///  2. **`appinstalled`, whenever it fires.** This is a GENUINELY new signal
+///     mid-session — the moment a user who started this session NOT
+///     installed becomes installed — and today it is thrown away entirely
+///     (`web/index.html`'s own handler only resets its deferred-prompt
+///     bookkeeping). `listenForAppInstalled` wires a direct browser listener
+///     (inert off the browser) that re-asks right when that signal appears.
 void requestPersistentStorageAtBoot(ProviderContainer container) {
+  final controller = container.read(storagePersistenceProvider.notifier);
   unawaited(
-    container
-        .read(storagePersistenceProvider.notifier)
-        .requestPersistenceOnce(),
+    controller.requestPersistenceOnce().then((_) {
+      if (pwaIsStandalone()) {
+        unawaited(controller.requestPersistenceAgain());
+      }
+    }),
   );
+  listenForAppInstalled(() {
+    unawaited(controller.requestPersistenceAgain());
+  });
 }
 
 /// Defensive hardening: a failed/unreachable Supabase init (bad config, no
