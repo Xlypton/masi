@@ -25,6 +25,8 @@ import simd
 ///
 /// `ArVisionPipeline` (the previous AVFoundation + Vision homography
 /// pipeline) is intentionally left in the target, unused.
+enum RegistrationMode { case vision, orb }
+
 final class ArPlatformView: NSObject, FlutterPlatformView {
 
     private let sceneView = ARSCNView()
@@ -50,6 +52,31 @@ final class ArPlatformView: NSObject, FlutterPlatformView {
     /// `session(_:didUpdate:)`. Independent of the auto-mode pin so auto
     /// mode's existing per-frame path is unaffected.
     private var pinnedManualCorners: [simd_float3]?
+    /// The active pluggable registration engine (see
+    /// `RockRegistrationEngine`), set by `startSession` from the `engine`
+    /// arg. `nil` whenever `engineKind == .arkit` (the untouched default) or
+    /// the chosen engine failed to load its reference -- in both cases
+    /// `session(_:didUpdate:)` falls through to the original ARKit
+    /// pin-once + `projectPoint` block below, byte-for-byte unchanged.
+    private var placementEngine: RockRegistrationEngine?
+    /// Which engine `startSession` was last asked for -- kept alongside
+    /// `placementEngine` (rather than inferred from it being non-nil) so a
+    /// failed engine load can still be logged/diagnosed against what was
+    /// actually requested.
+    private var engineKind: ArPlacementEngineKind = .arkit
+
+    // Phase 2 registration engines — both compiled in; switch by changing this constant
+    static let registrationMode: RegistrationMode = .vision
+    private let visionPipeline = ArVisionPipeline()
+    private let orbMatcher = RockFeatureMatcher()
+
+    // Hold-last-good state for continuous registration
+    private var _lastGoodCorners: [Double]?
+    private var _weakFrameCount: Int = 0
+    private let _weakFrameLimit: Int = 90  // ~3s at 30fps → send tracking:false
+
+    private var refWidth: Int = 0
+    private var refHeight: Int = 0
 
     init(frame: CGRect, viewId: Int64, messenger: FlutterBinaryMessenger, args: Any?) {
         sceneView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -91,6 +118,8 @@ extension ArPlatformView: ArSessionControlling {
         refWidth: Int,
         refHeight: Int,
         routesJson: String,
+        engine: ArPlacementEngineKind,
+        rockQuadPercent: [Double],
         completion: @escaping (Bool, [Double]?, RockMask?) -> Void
     ) {
         NSLog("AR_DBG startSession invoked")
@@ -126,6 +155,35 @@ extension ArPlatformView: ArSessionControlling {
         // removed.
         NSLog("AR_DBG using full-photo reference image, no crop")
 
+        // Pluggable registration engine (see `RockRegistrationEngine`):
+        // `.arkit` (the default/baseline) always clears `placementEngine`,
+        // leaving `session(_:didUpdate:)`'s original ARKit pin-once block as
+        // the only path -- byte-for-byte the pre-existing behavior. `.vision`
+        // builds a `VisionRegistrationEngine`; `.opencv` is wired in Task 2
+        // (left `nil` for now, which -- same as a load failure below --
+        // gracefully falls back to the ARKit path). Any engine whose
+        // `loadReference` fails is discarded (`placementEngine = nil`)
+        // rather than kept half-loaded.
+        engineKind = engine
+        switch engine {
+        case .arkit:
+            placementEngine = nil
+        case .vision:
+            placementEngine = VisionRegistrationEngine()
+        case .opencv:
+            // wired in Task 2
+            placementEngine = nil
+        }
+        if let pe = placementEngine {
+            let engineRefSize = CGSize(width: uprightCG.width, height: uprightCG.height)
+            if !pe.loadReference(uprightCG, refSize: engineRefSize, rockQuadPercent: rockQuadPercent) {
+                NSLog("AR_DBG placement engine %@ loadReference FAILED, falling back to ARKit", engine.rawValue)
+                placementEngine = nil
+            } else {
+                NSLog("AR_DBG placement engine %@ loaded", engine.rawValue)
+            }
+        }
+
         // 0.3m is a nominal physical width -- ARKit only uses it to scale
         // the tracked image's pose in world space. Because we read the
         // corners back out via the anchor's own `physicalSize` (which
@@ -134,6 +192,8 @@ extension ArPlatformView: ArSessionControlling {
         // the real-world print size.
         let ref = ARReferenceImage(uprightCG, orientation: .up, physicalWidth: 0.3)
         referenceImage = ref
+        self.refWidth = refWidth
+        self.refHeight = refHeight
 
         guard ARWorldTrackingConfiguration.isSupported else {
             NSLog("AR_DBG ARWorldTrackingConfiguration.isSupported=false, refusing to start session")
@@ -144,6 +204,22 @@ extension ArPlatformView: ArSessionControlling {
         let config = ARWorldTrackingConfiguration()
         config.detectionImages = [ref]
         config.maximumNumberOfTrackedImages = 1
+
+        // Phase 2: load reference into both registration engines
+        let rw = refWidth, rh = refHeight, rpath = referenceImagePath
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            let vOK = self.visionPipeline.loadReference(path: rpath, refWidth: rw, refHeight: rh)
+            NSLog("AR_DBG visionPipeline.loadReference ok=%@", vOK ? "true" : "false")
+            if let cg = UIImage(contentsOfFile: rpath)?.cgImage {
+                self.orbMatcher.loadReference(cgImage: cg, refWidth: rw, refHeight: rh)
+                NSLog("AR_DBG orbMatcher.loadReference complete")
+            }
+        }
+
+        // Reset hold-last-good state
+        _lastGoodCorners = nil
+        _weakFrameCount = 0
 
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
@@ -160,6 +236,7 @@ extension ArPlatformView: ArSessionControlling {
 
     func stopSession() {
         sceneView.session.pause()
+        _lastGoodCorners = nil; _weakFrameCount = 0; visionPipeline.reset(); orbMatcher.reset()
         NSLog("AR_DBG ARKit session paused")
     }
 
@@ -175,6 +252,7 @@ extension ArPlatformView: ArSessionControlling {
         pinnedManualCorners = nil
         wasTracked = false
         frameCounter = 0
+        _lastGoodCorners = nil; _weakFrameCount = 0; visionPipeline.reset(); orbMatcher.reset()
     }
 
     /// Clears the pinned world transform and re-runs image detection from
@@ -187,6 +265,7 @@ extension ArPlatformView: ArSessionControlling {
         pinnedManualCorners = nil
         wasTracked = false
         frameCounter = 0
+        _lastGoodCorners = nil; _weakFrameCount = 0; visionPipeline.reset(); orbMatcher.reset()
         guard let ref = referenceImage else { return }
         guard ARWorldTrackingConfiguration.isSupported else {
             NSLog("AR_DBG ARWorldTrackingConfiguration.isSupported=false, refusing to rescan")
@@ -431,108 +510,148 @@ extension ArPlatformView: ARSessionDelegate {
         let pinned = pinnedTransform
         let phys = pinnedPhysicalSize
 
-        // `projectPoint` reads current render/view-port state, and the
-        // event sink must be called on the main thread -- ARSessionDelegate
-        // callbacks arrive on ARKit's own background queue, so hop to main
-        // before doing either.
+        let capturedImage = frame.capturedImage
+        let viewBounds = sceneView.bounds.size
+
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
+
+            // ── Manual path: unchanged ──
             if let pts = self.pinnedManualCorners {
-                // Manual world pin takes precedence -- reproject the 4 fixed
-                // world points locked in by `lockManualAlignment`.
                 var out: [Double] = []
                 out.reserveCapacity(8)
                 var allValid = true
                 for p in pts {
                     let s = self.sceneView.projectPoint(SCNVector3(p.x, p.y, p.z))
-                    if !Self.isValidProjection(s) {
-                        allValid = false
-                        break
-                    }
+                    if !Self.isValidProjection(s) { allValid = false; break }
                     out.append(Double(s.x)); out.append(Double(s.y))
                 }
                 guard allValid, isTrackingAvailable else {
-                    // A corner projected behind the camera (or produced a
-                    // non-finite screen point), OR ARKit's own tracking state
-                    // is `.notAvailable` (truly lost, not merely `.limited`)
-                    // -- publishing it would send a garbage/flipped/dishonest
-                    // overlay for this frame, so fall back to the
-                    // not-tracked payload exactly like the `else` branch.
-                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG manual pin invalid projection or non-normal tracking, tracking=false") }
-                    self.channelHandler.sendAlignment(
-                        corners: [], tracking: false, frameWidth: 0, frameHeight: 0,
-                        trackingState: trackingStateStr, limitedReason: limitedReasonStr
-                    )
+                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG manual pin invalid") }
+                    self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0, trackingState: trackingStateStr, limitedReason: limitedReasonStr)
                     return
                 }
                 if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG manual pin tracking=true") }
-                self.channelHandler.sendAlignment(
-                    corners: out, tracking: true, frameWidth: fw, frameHeight: fh,
-                    trackingState: trackingStateStr, limitedReason: limitedReasonStr
-                )
-            } else if let t = pinned, let size = phys {
-                // EXISTING auto path -- unchanged aside from the corner
-                // mapping below.
-                let hw = Float(size.width) / 2
-                let hh = Float(size.height) / 2
-                // DEVICE-VERIFY: straight (un-hacked) corner mapping. The
-                // reference image handed to ARKit is now genuinely EXIF-
-                // upright (see `uprightCGImage` in `startSession`), so the
-                // empirical quarter-turn order that used to compensate for
-                // feeding ARKit RAW (non-upright) pixels is no longer
-                // appropriate -- this is the naive TL/TR/BR/BL reading. It
-                // MUST be confirmed on a physical device with a portrait
-                // reference photo: if the overlay comes out rotated/skewed,
-                // this mapping is the first place to look.
-                let locals: [simd_float4] = [
-                    simd_float4(-hw, 0, -hh, 1),  // TL -> (0,0)
-                    simd_float4( hw, 0, -hh, 1),  // TR -> (w,0)
-                    simd_float4( hw, 0,  hh, 1),  // BR -> (w,h)
-                    simd_float4(-hw, 0,  hh, 1),  // BL -> (0,h)
-                ]
-                var out: [Double] = []
-                out.reserveCapacity(8)
-                var allValid = true
-                for l in locals {
-                    let world = t * l
-                    let screen = self.sceneView.projectPoint(SCNVector3(world.x, world.y, world.z))
-                    if !Self.isValidProjection(screen) {
-                        allValid = false
-                        break
+                self.channelHandler.sendAlignment(corners: out, tracking: true, frameWidth: fw, frameHeight: fh, trackingState: trackingStateStr, limitedReason: limitedReasonStr)
+
+            // ── Continuous registration path (Vision or ORB) ──
+            } else if isTrackingAvailable {
+                // Run registration on background queue, then publish result on main
+                DispatchQueue.global(qos: .userInteractive).async { [weak self] in
+                    guard let self else { return }
+                    let rw = self.refWidth, rh = self.refHeight
+                    guard rw > 0, rh > 0 else { return }
+
+                    // Get the engine result (nil = skip this frame, not a failure)
+                    var engineResult: (homography: [Double], confidence: Double, frameW: Int, frameH: Int)?
+
+                    switch Self.registrationMode {
+                    case .vision:
+                        var vResult: ArAlignmentResult? = nil
+                        let sem = DispatchSemaphore(value: 0)
+                        self.visionPipeline.processLiveFrame(capturedImage) { r in
+                            vResult = r; sem.signal()
+                        }
+                        sem.wait()
+                        if let r = vResult, r.tracking, r.frameWidth > 0 {
+                            engineResult = (r.homography, r.confidence, r.frameWidth, r.frameHeight)
+                        } else if vResult != nil {
+                            engineResult = (ArVisionPipeline.identity, 0.0, 0, 0)
+                        } else {
+                            engineResult = nil  // throttled frame — skip
+                        }
+
+                    case .orb:
+                        if let r = self.orbMatcher.matchFrame(capturedImage) {
+                            let fW = CVPixelBufferGetWidth(capturedImage)
+                            let fH = CVPixelBufferGetHeight(capturedImage)
+                            engineResult = (r.homography, r.confidence, fW, fH)
+                        } else {
+                            engineResult = (ArVisionPipeline.identity, 0.0, 0, 0)
+                        }
                     }
-                    out.append(Double(screen.x)); out.append(Double(screen.y))
+
+                    guard let result = engineResult else { return }  // throttled frame
+
+                    DispatchQueue.main.async { [weak self] in
+                        guard let self else { return }
+
+                        let confidence = result.confidence
+                        let frameW = result.frameW, frameH = result.frameH
+
+                        // Map CV confidence → trackingState for Dart's derivedConfidence
+                        let cvTrackingState: String
+                        let cvLimitedReason: String?
+                        if confidence >= 0.5 { cvTrackingState = "normal"; cvLimitedReason = nil }
+                        else if confidence >= 0.2 { cvTrackingState = "limited"; cvLimitedReason = "insufficientFeatures" }
+                        else { cvTrackingState = "limited"; cvLimitedReason = "insufficientFeatures" }
+
+                        if confidence >= 0.2, frameW > 0, frameH > 0 {
+                            // Project 4 reference corners through the homography → live-frame-pixel → screen
+                            let h = result.homography
+                            let refCorners: [(Double, Double)] = [(0, 0), (Double(rw), 0), (Double(rw), Double(rh)), (0, Double(rh))]
+
+                            // Use ARFrame.displayTransform via sceneView.session.currentFrame (main queue)
+                            let xform: CGAffineTransform
+                            if let currentFrame = self.sceneView.session.currentFrame {
+                                xform = currentFrame.displayTransform(for: .portrait, viewportSize: viewBounds)
+                            } else {
+                                // Fallback: simple scale (will be slightly off but better than nothing)
+                                xform = CGAffineTransform(scaleX: viewBounds.width / CGFloat(frameW), y: viewBounds.height / CGFloat(frameH))
+                            }
+
+                            var corners: [Double] = []
+                            var projectionOK = true
+                            for (rx, ry) in refCorners {
+                                let wx = h[0]*rx + h[1]*ry + h[2]
+                                let wy = h[3]*rx + h[4]*ry + h[5]
+                                let wz = h[6]*rx + h[7]*ry + h[8]
+                                guard abs(wz) > 1e-6 else { projectionOK = false; break }
+                                let lx = wx/wz, ly = wy/wz
+                                let nx = lx / Double(frameW), ny = ly / Double(frameH)
+                                let pt = CGPoint(x: nx, y: ny).applying(xform)
+                                corners.append(Double(pt.x)); corners.append(Double(pt.y))
+                            }
+
+                            guard projectionOK, corners.count == 8 else {
+                                self._weakFrameCount += 1
+                                if self._weakFrameCount >= self._weakFrameLimit {
+                                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG reg lost tracking (sustained weak)") }
+                                    self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0, trackingState: "limited", limitedReason: "insufficientFeatures")
+                                }
+                                return
+                            }
+
+                            self._weakFrameCount = 0
+                            self._lastGoodCorners = corners
+                            if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG reg tracking=true mode=%@", Self.registrationMode == .vision ? "vision" : "orb") }
+                            self.frameCounter += 1
+                            if self.frameCounter == 1 || self.frameCounter % 60 == 0 {
+                                NSLog("AR_DBG reg corners=%@ confidence=%.2f", corners.description, confidence)
+                            }
+                            self.channelHandler.sendAlignment(corners: corners, tracking: true, frameWidth: frameW, frameHeight: frameH, trackingState: cvTrackingState, limitedReason: cvLimitedReason)
+
+                        } else {
+                            // Low confidence or degenerate homography
+                            self._weakFrameCount += 1
+                            if self._weakFrameCount >= self._weakFrameLimit {
+                                if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG reg lost tracking (conf=%.2f)", confidence) }
+                                self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0, trackingState: cvTrackingState, limitedReason: cvLimitedReason)
+                                self._lastGoodCorners = nil
+                            } else if let last = self._lastGoodCorners {
+                                // Hold last good (fade via existing confidence mechanism)
+                                self.channelHandler.sendAlignment(corners: last, tracking: true, frameWidth: frameW > 0 ? frameW : 1, frameHeight: frameH > 0 ? frameH : 1, trackingState: "limited", limitedReason: "insufficientFeatures")
+                            }
+                        }
+                    }
                 }
-                guard allValid, isTrackingAvailable else {
-                    // A pinned corner projected behind the camera (or
-                    // produced a non-finite screen point), OR ARKit's own
-                    // tracking state is `.notAvailable` (truly lost, not
-                    // merely `.limited`) -- abandon this frame rather than
-                    // publish a garbage/dishonest overlay, falling back to
-                    // the same not-tracked payload as the `else` branch
-                    // below.
-                    if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG ARKit invalid projection or non-normal tracking, tracking=false") }
-                    self.channelHandler.sendAlignment(
-                        corners: [], tracking: false, frameWidth: 0, frameHeight: 0,
-                        trackingState: trackingStateStr, limitedReason: limitedReasonStr
-                    )
-                    return
-                }
-                if !self.wasTracked { self.wasTracked = true; NSLog("AR_DBG ARKit tracking=true (pinned)") }
-                self.frameCounter += 1
-                if self.frameCounter == 1 || self.frameCounter % 60 == 0 {
-                    NSLog("AR_DBG ARKit pinned corners=%@", out.description)
-                }
-                self.channelHandler.sendAlignment(
-                    corners: out, tracking: true, frameWidth: fw, frameHeight: fh,
-                    trackingState: trackingStateStr, limitedReason: limitedReasonStr
-                )
+
+            // ── Not tracking ──
             } else {
-                // EXISTING not-tracked path -- unchanged.
-                if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG ARKit tracking=false") }
-                self.channelHandler.sendAlignment(
-                    corners: [], tracking: false, frameWidth: 0, frameHeight: 0,
-                    trackingState: trackingStateStr, limitedReason: limitedReasonStr
-                )
+                if self.wasTracked { self.wasTracked = false; NSLog("AR_DBG tracking=false (notAvailable)") }
+                self._lastGoodCorners = nil
+                self._weakFrameCount = 0
+                self.channelHandler.sendAlignment(corners: [], tracking: false, frameWidth: 0, frameHeight: 0, trackingState: trackingStateStr, limitedReason: limitedReasonStr)
             }
         }
     }

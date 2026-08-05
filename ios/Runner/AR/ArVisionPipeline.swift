@@ -87,6 +87,18 @@ final class ArVisionPipeline {
         return true
     }
 
+    /// Loads the reference topo photo from an already-decoded `CGImage`
+    /// (e.g. the upright reference `ArPlatformView.startSession` already
+    /// decoded for ARKit), instead of re-reading it from disk. Mirrors
+    /// `loadReference(path:refWidth:refHeight:)` -- sets the same private
+    /// state -- so both overloads behave identically to `processLiveFrame`.
+    func loadReference(cgImage: CGImage, refSize: CGSize) -> Bool {
+        referenceCGImage = cgImage
+        referenceSize = refSize
+        frameCounter = 0
+        return true
+    }
+
     func reset() {
         frameCounter = 0
     }

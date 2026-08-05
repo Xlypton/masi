@@ -16,6 +16,8 @@ protocol ArSessionControlling: AnyObject {
         refWidth: Int,
         refHeight: Int,
         routesJson: String,
+        engine: ArPlacementEngineKind,
+        rockQuadPercent: [Double],
         completion: @escaping (Bool, [Double]?, RockMask?) -> Void
     )
     func stopSession()
@@ -116,11 +118,39 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
             // tolerate its absence rather than requiring it, to avoid
             // changing the `ArSessionControlling.startSession` signature.
             let routesJson = args["routesJson"] as? String ?? ""
+            // `engine` (added for the pluggable placement-engine A/B --
+            // see `RockRegistrationEngine`): a wire string matching
+            // `ArPlacementEngineKind`'s raw values ('arkit'|'vision'|
+            // 'opencv'). Absent/unrecognized defaults to 'arkit' -- the
+            // untouched baseline path -- rather than failing the call, so
+            // older Dart builds that don't send it yet keep working exactly
+            // as before.
+            let engineRaw = args["engine"] as? String ?? "arkit"
+            let engine = ArPlacementEngineKind(rawValue: engineRaw) ?? .arkit
+            // `rockQuad` (added alongside `engine`): 8 normalized [0..1]
+            // doubles, TL,TR,BR,BL of the rock region within the oriented
+            // reference photo; absent/malformed defaults to `[]` ("whole
+            // image" -- see `RockRegistrationEngine.loadReference`'s doc).
+            // Named distinctly from the completion closure's own
+            // `rockQuadPercent` param below (a DIFFERENT value -- the
+            // segmentation-derived quad `startSession` hands back to Dart --
+            // to avoid the two being confused despite the shared name in
+            // that inner scope).
+            let rockQuadArg: [Double]
+            if let doubles = args["rockQuad"] as? [Double] {
+                rockQuadArg = doubles
+            } else if let numbers = args["rockQuad"] as? [NSNumber] {
+                rockQuadArg = numbers.map { $0.doubleValue }
+            } else {
+                rockQuadArg = []
+            }
             sessionController?.startSession(
                 referenceImagePath: referenceImagePath,
                 refWidth: refWidth,
                 refHeight: refHeight,
-                routesJson: routesJson
+                routesJson: routesJson,
+                engine: engine,
+                rockQuadPercent: rockQuadArg
             ) { success, rockQuadPercent, rockMask in
                 var payload: [String: Any] = ["success": success]
                 if let rockQuadPercent { payload["rockQuadPercent"] = rockQuadPercent }
@@ -224,13 +254,21 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
     /// raw ARKit reason token ("excessiveMotion" | "insufficientFeatures" |
     /// "initializing" | "relocalizing"); the Dart layer owns the user-facing
     /// copy. Only meaningful (and only sent) when `trackingState == "limited"`.
+    /// `confidence` (added for the pluggable placement-engine A/B -- see
+    /// `RockRegistrationEngine`) is the engine's own 0..1 graded match
+    /// score, only meaningful for the non-ARKit engines; the ARKit path
+    /// never passes it, so it defaults to `0` and -- per the existing
+    /// "only added when meaningful" convention every other optional field
+    /// here follows -- is only added to the payload when non-zero, leaving
+    /// the ARKit payload byte-for-byte unchanged.
     func sendAlignment(
         corners: [Double],
         tracking: Bool,
         frameWidth: Int,
         frameHeight: Int,
         trackingState: String,
-        limitedReason: String? = nil
+        limitedReason: String? = nil,
+        confidence: Double = 0
     ) {
         var payload: [String: Any] = ["tracking": tracking, "trackingState": trackingState]
         if let limitedReason { payload["limitedReason"] = limitedReason }
@@ -239,6 +277,7 @@ final class ArChannelHandler: NSObject, FlutterStreamHandler {
             payload["frameWidth"] = frameWidth
             payload["frameHeight"] = frameHeight
         }
+        if confidence != 0 { payload["confidence"] = confidence }
         eventSink?(payload)
     }
 }

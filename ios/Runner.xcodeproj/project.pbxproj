@@ -24,6 +24,8 @@
 		D364CD7A8890A03935FDA68A /* ArPlatformView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3D56CB40909A50D2F9337503 /* ArPlatformView.swift */; };
 		E4E6E178A162FD3D39045072 /* ArViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCCF5AF57F263533738FB8B7 /* ArViewFactory.swift */; };
 		E9BB2E955FA41D5A317A9D66 /* ArChannelHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA29ED418D1619F5857DBE70 /* ArChannelHandler.swift */; };
+		6F5FF9785ACF680621BD82BC /* RockRegistrationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = BF8A32510D11F6F876F6DDD7 /* RockRegistrationEngine.swift */; };
+		EBC999EE22C3C562F1A8B918 /* VisionRegistrationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F3A23F274AB01AECD80950E /* VisionRegistrationEngine.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -74,6 +76,8 @@
 		C5B4A3928170F6E5D4C3B2A1 /* ArSegmentationChannelHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArSegmentationChannelHandler.swift; sourceTree = "<group>"; };
 		EDB87454FC78A714DE279DF3 /* ArVisionPipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArVisionPipeline.swift; sourceTree = "<group>"; };
 		FCCF5AF57F263533738FB8B7 /* ArViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ArViewFactory.swift; sourceTree = "<group>"; };
+		BF8A32510D11F6F876F6DDD7 /* RockRegistrationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RockRegistrationEngine.swift; sourceTree = "<group>"; };
+		5F3A23F274AB01AECD80950E /* VisionRegistrationEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VisionRegistrationEngine.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -154,6 +158,8 @@
 				BA29ED418D1619F5857DBE70 /* ArChannelHandler.swift */,
 				950B9FDBE968C3E94588C277 /* ArRockSegmentation.swift */,
 				C5B4A3928170F6E5D4C3B2A1 /* ArSegmentationChannelHandler.swift */,
+				BF8A32510D11F6F876F6DDD7 /* RockRegistrationEngine.swift */,
+				5F3A23F274AB01AECD80950E /* VisionRegistrationEngine.swift */,
 			);
 			path = AR;
 			sourceTree = "<group>";
@@ -322,6 +328,8 @@
 				E9BB2E955FA41D5A317A9D66 /* ArChannelHandler.swift in Sources */,
 				4298565AE588814D37626765 /* ArRockSegmentation.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* ArSegmentationChannelHandler.swift in Sources */,
+				6F5FF9785ACF680621BD82BC /* RockRegistrationEngine.swift in Sources */,
+				EBC999EE22C3C562F1A8B918 /* VisionRegistrationEngine.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
