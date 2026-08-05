@@ -19,7 +19,9 @@ piece, and a pile of small gates:
 3. **Native-feel / responsive UI** (moderate): the app is mobile-first with a bottom tab bar and touch-only canvas gestures; a desktop-width browser needs adaptive layout + a pointer/mouse interaction model for the canvas.
 4. **Small gates**: AR grayed-out, `image_picker` camera UX, `connectivity_plus` wifi/cellular, web auth redirect. Mostly mechanical.
 
-**Prerequisite (zero-risk, must be first):** there is **no `web/` directory at all** — `flutter create --platforms=web .` has never been run. No web scaffolding, no PWA manifest, no service worker.
+**Prerequisite — DONE, superseding the paragraph below at time of writing:** `web/` now exists and the port is live at https://climb-masi.pages.dev (Cloudflare Pages, wasm build). The original prerequisite is preserved verbatim for historical planning context; see `CLAUDE.md`'s "Web port" / "Web offline stack" sections for current status.
+
+> *As originally written (2026-07-20):* there is no `web/` directory at all — `flutter create --platforms=web .` has never been run. No web scaffolding, no PWA manifest, no service worker.
 
 **One hard rule the codebase already respects:** `kIsWeb` appears in exactly one file today (`ar_screen.dart`). Everything else assumes native. The idiomatic fix for the two big pieces is **conditional imports** (`dart.library.io` vs `dart.library.js_interop`), not runtime `kIsWeb` branches, so `dart:io` never enters the web bundle.
 
@@ -50,7 +52,7 @@ Resolved versions from `pubspec.lock`. Status: **OK** = supports web · **PARTIA
 | http | 1.6.0 | OK | Uses browser fetch on web (CORS applies). |
 | url_launcher | 6.3.2 | OK | Opens tab on web. |
 | supabase_flutter | 2.16.0 | OK | Auth/postgrest/realtime/storage all work on web; redirect config differs. |
-| flutter_map | 8.3.1 | OK | Works on web; tile fetch is plain http (CORS on tile host). On-disk tile cache (`BuiltInMapCachingProvider`) needs `DisabledMapCachingProvider` on web (already used in this repo's tests). |
+| flutter_map | 8.3.1 | OK | Works on web; tile fetch is plain http (CORS on tile host). **Shipped, superseding the plan below:** a real IndexedDB-backed `MapCachingProvider` (`lib/core/map/masi_tile_caching_provider.dart`) now backs the web tile cache — see `CLAUDE.md`'s "Web offline stack". *As originally planned:* on-disk tile cache (`BuiltInMapCachingProvider`) needs `DisabledMapCachingProvider` on web (already used in this repo's tests). |
 | connectivity_plus | 7.2.0 | PARTIAL | Online/offline only — **can't distinguish wifi/cellular** in a browser. Breaks the `wifiOnly` upload gate. |
 | geolocator | 14.0.3 | PARTIAL | `geolocator_web` uses browser Geolocation API; HTTPS-only, foreground-only, different permission UX. `LocationService` already "never throws, returns null on failure" → degrades gracefully. |
 | image_picker | 1.2.2 | PARTIAL | `image_picker_for_web` auto-handles web, but `ImageSource.camera` → browser file dialog (no true capture on most browsers), and returns an `XFile` backed by a **blob URL, not a file path** → breaks every downstream `File(xfile.path)`. |
@@ -198,7 +200,7 @@ LazyDatabase _openConnection() => LazyDatabase(() async {
 - Backend real: `supabase/schema.sql` (8 tables, Storage RLS on `topo-photos` incl. a `shared/`-prefix path for cross-user reads). Row-level sync (`sync_remote.dart`) pushes/pulls 8 tables in FK order; `fetchSharedTopos()` vs `fetchOwnRows()` (ascents excluded from shared). Auto-sync (`sync_orchestrator.dart`): debounced push-on-write (2s), pull-on-sign-in, push-on-background.
 - **supabase_flutter works on web** (it's an HTTP/realtime client). Session persistence: default storage → `window.localStorage` on web (no `flutter_secure_storage` used) → **not a blocker**.
 - **Web auth gap:** magic-link redirect is a native custom scheme `io.supabase.climbtopo://login-callback/` (`auth_repository.dart:89`), registered in `Info.plist`/`AndroidManifest.xml`. **No web equivalent** — web needs an `https://` redirect + `detectSessionInUrl` handling. Config task, not architectural.
-- **Maps:** `flutter_map` + OSM raster tiles via a `RetryClient`-wrapped http client (`community_screen.dart`). Works on web; watch tile-host CORS; swap on-disk tile cache → `DisabledMapCachingProvider` on web. Map marker thumbnails hit the §4 photo pipeline.
+- **Maps:** `flutter_map` + OSM raster tiles via a `RetryClient`-wrapped http client (`community_screen.dart`). Works on web; watch tile-host CORS. **Shipped, superseding "swap on-disk tile cache → `DisabledMapCachingProvider` on web" as originally planned here:** a real IndexedDB-backed `MapCachingProvider` (`lib/core/map/masi_tile_caching_provider.dart`) — see `CLAUDE.md`'s "Web offline stack". Map marker thumbnails hit the §4 photo pipeline.
 
 ---
 

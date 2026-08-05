@@ -70,6 +70,64 @@ ls build/screenshots/ && # then Read each PNG to inspect
 - Same native-picker gap as iOS: photo pick/camera is a native chooser `integration_test` can't drive →
   override the picker provider / seed state to reach photo flows (seam pending, post-2C).
 
+## Web offline stack
+
+The web build has a full offline story now, not just a wasm-compilable one — this is easy to miss because
+none of it shows up in a `grep -i dart:io`. Read this before touching sync, the map, or photo storage on web.
+
+- **`reachabilityProvider`** (`lib/features/backup/application/reachability_providers.dart`) — three states
+  (`unknown`/`online`/`offline`), **probe-on-demand**, not `ConnectivityService.statusChanges()`. Two reasons:
+  `navigator.onLine`/interface state reports "connected" behind a captive portal, and a transition-only stream
+  never gives a first answer to a page that loaded already-offline. Callers `ref.read(...notifier).refresh()`
+  at the moment the answer is about to render (screen mount, an empty-looking read, pull-to-refresh) — nothing
+  here polls in the background. Read `isKnownOffline`/`isKnownOnline`, never `!= online` (that silently treats
+  `unknown` as offline for one frame on every cold start).
+- **`SyncBanner` / `SyncBannerKind`** (`lib/shared/presentation/sync_banner.dart`) — public (Community Feed is
+  a separate library from Library and can't reach a library-private widget), and rendered **unconditionally
+  above the list** on both the Library and Community Feed screens — not gated on the list being empty. That
+  used to be the bug: the user WITH topos, offline at a crag, saw a list quietly fail to refresh with zero
+  signal and no way to tell "stale cache" from "your work is gone."
+- **Map tile cache** (`lib/core/map/masi_tile_caching_provider.dart`) — flutter_map's on-disk
+  `BuiltInMapCachingProvider` is a documented no-op on web (`DisabledMapCachingProvider`), so the Map tab used
+  to render blank tiles offline. `MasiTileCachingProvider` replaces it there only: `kTileCacheMaxBytes` (40 MB,
+  `:30`), `kTileFreshnessWindow` (30 days, `:39`, overriding the tile server's own `Cache-Control` so a stale
+  tile still renders offline instead of getting evicted), LRU eviction, and a quota-shaped write failure clears
+  the store once and disables it for the rest of the session (tiles are redownloadable, so they hand back space
+  to photos rather than compete for it). Lives in a **separate IndexedDB database** from photos —
+  `masi-map-tiles` (`tile_cache_store.dart:77`) vs `climbtopo-photos` (`photo_byte_store.dart:44`) — so tiles
+  can never starve photo bytes. Native is bit-identical: only the `true` branch of the `isWeb` ternary in
+  `buildResilientTileProvider` (`community_map_screen.dart:103-114`, called from `community_map_screen.dart:652`
+  and `set_location_picker.dart:421`) changed.
+- **`PublicPhotoPruner`** (`lib/features/topo/data/public_photo_pruner.dart`) — pure, import-free eviction
+  *policy* for cached PUBLIC photo bytes. Keep-by-default: an unknown owner, an unknown signed-in identity
+  (`ownUid == null`), or any ambiguous input all resolve to "keep." Evicts **only** rows it can positively
+  prove foreign.
+- **`PublicPhotoPruneService`** (`lib/features/topo/data/public_photo_prune_service.dart`) — the I/O half.
+  Triggers only strictly above a 0.75 origin-quota watermark, sweeps down to 0.60 (hysteresis, so a device
+  parked at the line doesn't churn one delete per pull), batches of 10, capped at 50 deletions per pass, and
+  always protects the 20 newest foreign photos (`kPruneKeepNewestForeign`) so the feed the user is actively
+  browsing doesn't go blank underneath them. Never throws — a housekeeping sweep must never be able to fail a
+  sync pull. **Known terminal case:** immediately after one pull from cold, the evictable set is provably
+  empty, because `kSharedPhotoByteBudgetPerPull == kPruneKeepNewestForeign` (`sync_service.dart:35`) — the pull
+  only ever fetches as many foreign photos as the floor already protects. The pruner correctly reports
+  `PublicPhotoPruneReason.nothingPrunable` in that state; that is a correct "nothing to do," not a bug.
+- **Geocoding degrades gracefully offline**: `lib/core/location/geocoding_service.dart:73-118` — 8s timeout, a
+  blanket `catch`, returns `const []`. A dead Nominatim lookup shows an empty result list, never an error.
+
+**Standing decisions (load-bearing, don't re-litigate):**
+- **Own photos are NEVER evicted.** They stay at **full resolution** and a quota failure **fails loudly**
+  (`PhotoWriteException`/`PhotoWriteFailure.quotaExceeded`, `photo_write_exception.dart`) rather than silently
+  downscaling the user's photo — decision D-5. This does not extend to *cached copies of other people's*
+  photos, which the pruner above is free to evict; only the user's own data gets the full-resolution/never-lose
+  guarantee.
+- **Conflict policy on push is client-side last-writer-wins, local winning ties** (`shouldPushLww`,
+  `sync_remote.dart:303-315`): a local row is skipped only when a remote row exists AND is *strictly* newer.
+  Local wins on a tie because local is the side being pushed.
+- **No outbox** (decision D-4, already stated at the top of this file) is why the sections above can all be
+  "best-effort, never throws, heals on the next pull" — the engine re-reading and re-sending its own rows on
+  every pull is what makes a lossy prune/quota/offline event self-correcting instead of something that needs
+  its own retry queue.
+
 ## Fast checks (unit + widget)
 
 ```bash
