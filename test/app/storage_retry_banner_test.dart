@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/app/nav_shell.dart';
+import 'package:masi/app/page_reload.dart';
+import 'package:masi/app/storage_retry_banner.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
@@ -50,6 +52,7 @@ void main() {
 
   ({ProviderContainer container, int Function() opens}) makeContainer({
     StorageRetryStatus? retryStatus,
+    void Function()? onReload,
   }) {
     var opens = 0;
     final container = ProviderContainer(
@@ -58,6 +61,14 @@ void main() {
           storageRetryProvider.overrideWith(
             () => _PinnedStorageRetryController(retryStatus),
           ),
+        // Overriding this rather than calling through to the real
+        // `page_reload.dart` seam is the whole point of injecting it via a
+        // provider (see `storage_retry_banner.dart`'s doc): a widget test
+        // must be able to observe the escalated action firing without a real
+        // reload (which is a no-op off web anyway, but observing that a
+        // no-op ran is not the same assertion as observing the SEAM was
+        // called).
+        if (onReload != null) pageReloadProvider.overrideWithValue(onReload),
         appDatabaseProvider.overrideWith((ref) {
           opens++;
           final db = AppDatabase(NativeDatabase.memory());
@@ -107,6 +118,14 @@ void main() {
         reason: '"add this to your home screen" is absurd advice while the app '
             "cannot open its own storage — and two sibling SafeAreas would "
             'open a status-bar-height gap between them',
+      );
+      expect(
+        find.byKey(const Key('storage-retry-banner-reload')),
+        findsNothing,
+        reason: 'Step 3: at `idle` (a failure reported directly, no retry '
+            'attempted yet) the escalated reload action must NOT appear — '
+            'the nuclear option is not the first thing a merely-unlucky-once '
+            'user should see',
       );
     },
   );
@@ -213,6 +232,101 @@ void main() {
         reason: 'a second tap during a slow web re-open would be a no-op the '
             'user reads as a dead button',
       );
+      expect(
+        find.byKey(const Key('storage-retry-banner-reload')),
+        findsNothing,
+        reason: 'Step 3: at `retrying` the escalated action must NOT appear '
+            'either — an attempt is genuinely in flight and has not been '
+            'given the chance to fail yet',
+      );
     },
   );
+
+  group('Step 3 — the escalated reload action, offered only after a retry '
+      'has already failed', () {
+    testWidgets(
+      'a FAILED retry shows the reload action, with copy that does not lie',
+      (tester) async {
+        final (container: container, opens: _) = makeContainer(
+          retryStatus: StorageRetryStatus.failed,
+        );
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.unavailable('dead'));
+
+        await tester.pumpWidget(wrap(container));
+        await tester.pump();
+
+        expect(find.byKey(const Key('storage-retry-banner')), findsOneWidget);
+        // The ordinary action stays present and enabled at `failed` too — a
+        // retry that failed once is still worth trying again; the reload is
+        // an ESCALATION, not a replacement.
+        expect(
+          find.byKey(const Key('storage-retry-banner-action')),
+          findsOneWidget,
+        );
+        expect(find.text('Try again'), findsOneWidget);
+        expect(
+          find.byKey(const Key('storage-retry-banner-reload')),
+          findsOneWidget,
+        );
+        expect(
+          find.textContaining(
+            'Reloading restarts the app. Nothing saved is deleted, and '
+            "nothing that hasn't saved yet can be saved while storage isn't "
+            'responding.',
+          ),
+          findsOneWidget,
+          reason: 'both halves of the honest copy have to be there: nothing '
+              'saved is lost, AND nothing unsaved can be saved while storage '
+              "isn't responding",
+        );
+      },
+    );
+
+    testWidgets(
+      'tapping the reload action calls the injected seam exactly once',
+      (tester) async {
+        var reloadCalls = 0;
+        final (container: container, opens: _) = makeContainer(
+          retryStatus: StorageRetryStatus.failed,
+          onReload: () => reloadCalls++,
+        );
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.unavailable('dead'));
+
+        await tester.pumpWidget(wrap(container));
+        await tester.pump();
+
+        await tester.tap(find.byKey(const Key('storage-retry-banner-reload')));
+        await tester.pump();
+
+        expect(
+          reloadCalls,
+          1,
+          reason: 'the widget must go through `pageReloadProvider`, never '
+              'call `reloadPage()` directly — this is the only way a test '
+              'can observe the escalated action firing at all',
+        );
+      },
+    );
+  });
+
+  group('Step 3 — page_reload.dart seam', () {
+    test(
+      'REGRESSION GUARD: the stub resolved under `flutter test` (no '
+      '`dart.library.js_interop`) is a no-op that returns normally',
+      () {
+        // `flutter test` runs on the VM, so `page_reload.dart`'s conditional
+        // export always resolves to `page_reload_stub.dart` here — this is
+        // the only way this branch is ever exercised outside a browser.
+        // Reverting the stub to something that throws or never returns would
+        // turn the one working recovery into a crash (or a second hang) on
+        // every platform except a real browser, silently, because nothing
+        // else in this suite ever reaches it.
+        expect(reloadPage, returnsNormally);
+      },
+    );
+  });
 }

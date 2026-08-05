@@ -3,7 +3,19 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/db/storage_retry_provider.dart';
 import '../shared/presentation/masi_icon.dart';
+import 'page_reload.dart';
 import 'theme.dart';
+
+/// Injects [reloadPage] behind a provider rather than letting the widget call
+/// the seam directly, so a widget test can observe the escalated action being
+/// invoked (override this, not `page_reload.dart`) without a real browser
+/// reload tearing down the test runner mid-assertion.
+///
+/// Lives here rather than in `storage_retry_provider.dart`: `lib/core` has no
+/// existing dependency on `lib/app` (the direction runs the other way — this
+/// file already imports `core/db/storage_retry_provider.dart`), and this
+/// provider has exactly one consumer, [StorageRetryBanner] itself.
+final pageReloadProvider = Provider<void Function()>((ref) => reloadPage);
 
 /// A compact, non-dismissible notice with a working "Try again" button, shown
 /// at the top of the [NavShell] body whenever the local database could not be
@@ -41,8 +53,14 @@ class StorageRetryBanner extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
-    final retrying =
-        ref.watch(storageRetryProvider) == StorageRetryStatus.retrying;
+    final status = ref.watch(storageRetryProvider);
+    final retrying = status == StorageRetryStatus.retrying;
+    // Deliberately NOT shown at `idle`: a user whose database is merely slow
+    // has not tried anything yet, and handing them "reload the app" as the
+    // FIRST offer would be the nuclear option before the ordinary one has
+    // even been attempted. It appears only once a retry has genuinely failed
+    // — see `StorageRetryStatus.failed`'s doc.
+    final failed = status == StorageRetryStatus.failed;
 
     return SafeArea(
       // Topmost widget in the shell body (there is no AppBar), so it owns
@@ -118,6 +136,43 @@ class StorageRetryBanner extends ConsumerWidget {
                         ),
                       ),
                     ),
+                    if (failed) ...[
+                      const SizedBox(height: MasiSpacing.xs),
+                      Semantics(
+                        liveRegion: true,
+                        child: Text(
+                          "Reloading restarts the app. Nothing saved is "
+                          "deleted, and nothing that hasn't saved yet can be "
+                          "saved while storage isn't responding.",
+                          key: const Key('storage-retry-banner-reload-message'),
+                          style: textTheme.bodySmall?.copyWith(
+                            color: colors.ink2,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: MasiSpacing.xs),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          key: const Key('storage-retry-banner-reload'),
+                          // Not gated on `retrying`: this button only exists
+                          // at `failed`, and `retry()` cannot be mid-flight
+                          // and `failed` at once (`retry()` always leaves
+                          // `retrying` before it can settle into `failed`).
+                          onPressed: () => ref.read(pageReloadProvider)(),
+                          style: TextButton.styleFrom(
+                            padding: EdgeInsets.zero,
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          ),
+                          child: const Text(
+                            'Reload page',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
                   ],
                 ),
               ),

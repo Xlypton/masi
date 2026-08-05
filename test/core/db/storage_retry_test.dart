@@ -206,7 +206,12 @@ void main() {
         container.read(storageRetryProvider.notifier).retry(),
         completes,
       );
-      expect(container.read(storageRetryProvider), StorageRetryStatus.idle);
+      // Step 3: a re-open that genuinely fails is exactly the "probe reports
+      // failure" branch `StorageRetryStatus.failed` exists for — the button
+      // must still be re-enabled (not stuck at `retrying`), but it must not
+      // silently resettle to `idle` as if nothing had happened, because that
+      // is what used to make the escalated reload action unreachable.
+      expect(container.read(storageRetryProvider), StorageRetryStatus.failed);
     });
 
     group('a retry whose probe NEVER answers still resolves (B3)', () {
@@ -258,10 +263,19 @@ void main() {
           );
           expect(
             container.read(storageRetryProvider),
-            StorageRetryStatus.idle,
+            // Step 3: NOT `idle` — a timeout is one of the two branches
+            // `StorageRetryStatus.failed` exists for. It is still NOT
+            // `retrying`, which is the actual property this test guards: the
+            // banner's "Try again" `onPressed` is null only while `retrying`,
+            // so `failed` re-enables it exactly as `idle` used to, while also
+            // making the escalated reload action (`storage-retry-banner-reload`)
+            // available — the thing a wedged worker actually needs.
+            StorageRetryStatus.failed,
             reason: 'the banner\'s onPressed is null while retrying — leaving '
                 'this at `retrying` disables the only recovery control the app '
-                'has, permanently',
+                'has, permanently. `failed` re-enables it and offers the '
+                'escalated reload action instead of quietly forgetting the '
+                'attempt happened.',
           );
         },
       );

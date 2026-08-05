@@ -7,8 +7,19 @@ import 'database_provider.dart';
 import 'storage_durability_provider.dart';
 
 /// Whether a storage retry is currently in flight — the banner's button reads
-/// this to show progress and to refuse a second concurrent attempt.
-enum StorageRetryStatus { idle, retrying }
+/// this to show progress and to refuse a second concurrent attempt — or has
+/// already failed once.
+///
+/// [failed] is purely additive (added for the escalated-reload follow-up in
+/// `storage_retry_banner.dart`): every existing caller only ever compared
+/// against `== retrying`, so adding a third value changes nothing for them.
+/// [StorageRetryController.retry] sets it in the two failure branches it
+/// already computes — a timeout and a reported probe failure — rather than
+/// falling back to [idle], because "Try again" genuinely cannot fix a wedged
+/// web storage worker (see the class doc below): once it has failed, the
+/// banner should say so and offer the one recovery that can, a page reload,
+/// not silently reset to looking exactly like it did before anyone tried.
+enum StorageRetryStatus { idle, retrying, failed }
 
 /// How long [StorageRetryController.retry] waits for the re-opened database to
 /// answer before calling the attempt failed.
@@ -135,8 +146,13 @@ class StorageRetryController extends Notifier<StorageRetryStatus> {
       }
     } finally {
       // Reached even when the probe never answered, which is the whole point of
-      // the bound above: the button goes back to being tappable instead of
-      // sitting on "Trying…" forever.
+      // the bound above: the button goes back to being TAPPABLE instead of
+      // sitting on "Trying…" forever — but tappable at [StorageRetryStatus.failed]
+      // now, not silently back at [StorageRetryStatus.idle], when the attempt
+      // genuinely failed. `failed` is exactly the local bool already set by the
+      // timeout branch above and by the `report:` callback into
+      // [probeDatabaseUsable] — this does not add a new way to fail, it just
+      // stops discarding the fact that one happened.
       //
       // Be honest about what that does NOT fix. The abandoned probe future is
       // still out there, and a web worker wedged on the sqlite3 OPFS VFS's
@@ -144,11 +160,15 @@ class StorageRetryController extends Notifier<StorageRetryStatus> {
       // unblocked from Dart at all — it cannot even process a `close()`. So a
       // second tap will very likely wedge and time out again; what the user gets
       // back is an accurate verdict and a live control, not a repaired
-      // database. Only a page reload discards the wedged worker. (If the
-      // abandoned probe DOES eventually resolve with a real error, its report
-      // lands then and replaces this timeout verdict, which is strictly more
-      // accurate — a later verdict is a newer fact.)
-      if (ref.mounted) state = StorageRetryStatus.idle;
+      // database. Only a page reload discards the wedged worker — which is why
+      // [StorageRetryBanner] offers that as a second, escalated action exactly
+      // when `state == StorageRetryStatus.failed`. (If the abandoned probe DOES
+      // eventually resolve with a real error, its report lands then and
+      // replaces this timeout verdict, which is strictly more accurate — a
+      // later verdict is a newer fact.)
+      if (ref.mounted) {
+        state = failed ? StorageRetryStatus.failed : StorageRetryStatus.idle;
+      }
     }
   }
 }
