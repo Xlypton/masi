@@ -614,7 +614,41 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// (must NOT be stomped by a resize) — see the viewport-changed branch of
   /// [_reframeIfNeeded]. An image change always reframes unconditionally
   /// regardless of this, matching the pre-existing (M5) behavior.
+  ///
+  /// Written SYNCHRONOUSLY the moment a reframe is decided (still during
+  /// `build`), one full frame BEFORE it's actually written into
+  /// [TopoCanvas.transformationController] (see [_autoFrameWritePending] for
+  /// why that gap matters, and why comparing the controller's live value
+  /// against this field alone is not enough to tell "our own write hasn't
+  /// landed yet" apart from "the user panned").
   Matrix4? _lastAutoFrameMatrix;
+
+  /// True from the instant [_reframeIfNeeded] decides on a fresh
+  /// [_lastAutoFrameMatrix] until the post-frame callback that actually
+  /// writes it into [TopoCanvas.transformationController] runs — i.e. exactly
+  /// the one-frame gap described on [_lastAutoFrameMatrix]'s doc.
+  ///
+  /// This is what fixes the "stale auto-fit sticks forever" bug: if
+  /// [LayoutBuilder] runs a SECOND pass with a newer viewport size before
+  /// that post-frame write lands, the controller's live value still holds
+  /// the OLDER matrix — indistinguishable, by value alone, from a genuine
+  /// user pan away from [_lastAutoFrameMatrix]. Without this flag,
+  /// [_reframeIfNeeded]'s `stillAutoFramed` check reads that as "the user
+  /// touched it" and bails, permanently committing the fit for the STALE
+  /// viewport while the real one has already moved on. With it,
+  /// `stillAutoFramed` also accepts "there is a pending write of OUR OWN
+  /// that just hasn't landed yet" as still-auto-framed, so the second pass's
+  /// fresh fit proceeds and simply supersedes the first — see
+  /// [_reframeIfNeeded]'s post-frame callback for how a superseded (stale)
+  /// callback then detects that and skips writing its now-outdated matrix,
+  /// rather than clobbering the newer one that landed (or is about to).
+  ///
+  /// Cleared back to `false` the instant the write for the CURRENT
+  /// [_lastAutoFrameMatrix] actually lands. A genuine user pan/zoom, in
+  /// contrast, only ever happens once this flag is already `false` (nothing
+  /// of ours is still in flight to confuse it with), so that detection is
+  /// untouched by this fix — see [_reframeIfNeeded]'s `stillAutoFramed` doc.
+  bool _autoFrameWritePending = false;
 
   /// True once [_reframeIfNeeded]'s auto-fit transform for the CURRENT image
   /// has actually been written into [widget.transformationController] — which
@@ -832,9 +866,21 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // drifted away from the matrix WE last wrote. A stale auto-frame
       // must never block a later, larger viewport's fit; a genuine user
       // adjustment must never be stomped by a resize.
+      //
+      // `_autoFrameWritePending` is the other half of that detection (see
+      // its own doc): the controller's live value can ALSO differ from
+      // `_lastAutoFrameMatrix` for a reason that is NOT a user pan — our
+      // own previous reframe's post-frame write for that matrix simply
+      // hasn't run yet (this same [LayoutBuilder] got a second pass, with
+      // a newer viewport, before that one frame elapsed). Treating that as
+      // "still auto-framed" lets THIS pass's fresh fit proceed and
+      // supersede the still-pending one, rather than mistaking our own
+      // lag for a manual pan and permanently committing the stale
+      // viewport's fit — the "auto-fit sticks after a fast resize" bug.
       final stillAutoFramed =
           _lastAutoFrameMatrix != null &&
-          widget.transformationController.value == _lastAutoFrameMatrix;
+          (widget.transformationController.value == _lastAutoFrameMatrix ||
+              _autoFrameWritePending);
       if (!stillAutoFramed) return;
     } else if (!_hasFramed &&
         widget.transformationController.value != Matrix4.identity()) {
@@ -845,6 +891,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       _framedImagePath = widget.imagePath;
       _framedViewportSize = viewportSize;
       _lastAutoFrameMatrix = null;
+      _autoFrameWritePending = false;
       // Pre-seeded controller already holds a valid transform — nothing to
       // hide, so reveal immediately.
       _autoFrameApplied = true;
@@ -859,6 +906,12 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     final matrix = _fitMatrix(viewportSize);
 
     _lastAutoFrameMatrix = matrix;
+    // A write for THIS matrix is now in flight — see
+    // `_autoFrameWritePending`'s doc. Stays true across however many further
+    // reframes supersede this one before the callback below actually runs;
+    // only the callback that matches the CURRENT `_lastAutoFrameMatrix` ever
+    // clears it.
+    _autoFrameWritePending = true;
 
     if (isContentReframe) {
       // Hide the photo for the single pre-fit frame: until the callback below
@@ -871,7 +924,18 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+      if (_lastAutoFrameMatrix != matrix) {
+        // Superseded: a LATER reframe (decided before this callback got its
+        // turn) has already replaced `_lastAutoFrameMatrix` with a fresher
+        // matrix for a fresher viewport, and scheduled its OWN callback to
+        // write that one. Writing this stale `matrix` now would clobber
+        // that newer, still-pending write (or a write that already landed)
+        // with an outdated fit — skip it entirely and let the superseding
+        // reframe's own callback be the one that actually lands.
+        return;
+      }
       widget.transformationController.value = matrix;
+      _autoFrameWritePending = false;
       if (!_autoFrameApplied) {
         setState(() => _autoFrameApplied = true);
       }
