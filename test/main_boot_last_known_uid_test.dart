@@ -102,16 +102,21 @@ void main() {
       int lineOf(String needle) =>
           lines.indexWhere((line) => line.contains(needle));
 
-      // The `Future.wait` is no longer awaited DIRECTLY: it is handed to
+      // The pre-frame work is no longer awaited DIRECTLY: it is handed to
       // `awaitBootWork`, which is what is awaited. That indirection is the
-      // ship-blocker fix — awaiting the wait bare hangs boot forever when
-      // drift's unbounded web open never answers (see
+      // ship-blocker fix — awaiting it bare hangs boot forever when drift's
+      // unbounded web open never answers (see
       // `test/main_boot_timeout_test.dart`). The ordering this test exists to
-      // pin is unchanged and now checked as a full chain: hydrate sits inside
-      // the Future.wait, which sits inside the awaited boot gate, which
-      // precedes runApp.
+      // pin is unchanged and is checked as a full chain: hydrate sits inside a
+      // `BootTask` in the list passed to the awaited boot gate, which precedes
+      // runApp.
+      //
+      // The list used to be a bare `Future.wait([...])`, which the gate could
+      // only observe as one yes/no — so a stalled Supabase init was reported as
+      // dead local storage. Each future is now a NAMED `BootTask` carrying
+      // whether a stall in it is evidence about storage, hence the needle.
       final gateLine = lineOf('await awaitBootWork(');
-      final waitLine = lineOf('Future.wait(');
+      final waitLine = lineOf('BootTask(');
       // Anchored on the CALL, not the bare token: `bootApp`'s own doc comment
       // legitimately names `LastKnownUid.hydrate()` to explain why the entry
       // is awaited, and a looser needle matches that comment instead. Same
@@ -125,7 +130,7 @@ void main() {
         isNonNegative,
         reason: 'boot no longer goes through the bounded awaitBootWork gate',
       );
-      expect(waitLine, isNonNegative, reason: 'no Future.wait found');
+      expect(waitLine, isNonNegative, reason: 'no BootTask list found');
       expect(
         hydrateLine,
         isNonNegative,
@@ -138,8 +143,9 @@ void main() {
             waitLine < hydrateLine &&
             hydrateLine < runAppLine,
         isTrue,
-        reason: 'the hydrate call must sit inside the Future.wait (line '
-            '$waitLine) passed to the awaited awaitBootWork (line $gateLine), '
+        reason: 'the hydrate call must sit inside the BootTask list (first '
+            'entry at line $waitLine) passed to the awaited awaitBootWork '
+            '(line $gateLine), '
             'and therefore before runApp (line $runAppLine); found hydrate at '
             'line $hydrateLine',
       );

@@ -30,15 +30,27 @@
 // Timing is driven by `testWidgets`' FakeAsync clock (`tester.pump(d)`), so
 // these run against the REAL production deadlines without ever sleeping.
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/core/db/storage_durability_provider.dart';
 import 'package:masi/main.dart'
-    show awaitBootWork, kBootFirstFrameDeadline, kBootStorageDeadline;
+    show BootTask, awaitBootWork, kBootFirstFrameDeadline, kBootStorageDeadline;
 
 /// A little past a deadline, so `tester.pump` lands strictly after the timer.
 const _tick = Duration(seconds: 1);
+
+/// A stand-in for the two boot tasks that really are the local database
+/// (`hydrate()` and `verifyDatabaseUsable`), i.e. the ones a stall may be
+/// blamed on. See [_cloudTask] for the other half.
+BootTask _storageTask(Future<void> future) =>
+    BootTask("the local database's first query", future, blamesStorage: true);
+
+/// A stand-in for boot work that is NOT the local database — the Supabase
+/// network round trip, or `warmDocsPath()`.
+BootTask _cloudTask(Future<void> future) =>
+    BootTask('the cloud sign-in', future, blamesStorage: false);
 
 ProviderContainer _container() {
   final container = ProviderContainer();
@@ -58,8 +70,9 @@ void main() {
 
       var returned = false;
       unawaited(
-        awaitBootWork(container, Future<void>.value())
-            .then((_) => returned = true),
+        awaitBootWork(container, [
+          _storageTask(Future<void>.value()),
+        ]).then((_) => returned = true),
       );
       await tester.pump();
 
@@ -80,7 +93,9 @@ void main() {
 
       var returned = false;
       unawaited(
-        awaitBootWork(container, hung.future).then((_) => returned = true),
+        awaitBootWork(container, [
+          _storageTask(hung.future),
+        ]).then((_) => returned = true),
       );
 
       await tester.pump(kBootFirstFrameDeadline - _tick);
@@ -116,7 +131,7 @@ void main() {
       // timer. Completing it anyway keeps the hang from outliving the test.
       addTearDown(hung.complete);
 
-      unawaited(awaitBootWork(container, hung.future));
+      unawaited(awaitBootWork(container, [_storageTask(hung.future)]));
 
       await tester.pump(kBootStorageDeadline - _tick);
       expect(
@@ -132,7 +147,8 @@ void main() {
       expect(
         verdict.isEphemeral,
         isTrue,
-        reason: 'topos_screen renders _StorageWarningBanner and disables both '
+        reason:
+            'topos_screen renders _StorageWarningBanner and disables both '
             'create affordances on exactly this flag',
       );
       expect(verdict.unavailableReason, contains('did not answer'));
@@ -151,7 +167,9 @@ void main() {
       final container = _container();
       // What the deployed site really reports, measured three times in
       // `tool/drive_web_write_order.sh` (see `connection_web.dart`).
-      container.read(storageDurabilityProvider.notifier).report(
+      container
+          .read(storageDurabilityProvider.notifier)
+          .report(
             const StorageDurability(
               backend: StorageBackend.opfsLocks,
               missingFeatures: {
@@ -162,7 +180,7 @@ void main() {
       final hung = Completer<void>();
       addTearDown(hung.complete);
 
-      unawaited(awaitBootWork(container, hung.future));
+      unawaited(awaitBootWork(container, [_storageTask(hung.future)]));
       await tester.pump(kBootStorageDeadline + _tick);
 
       final verdict = container.read(storageDurabilityProvider);
@@ -170,21 +188,153 @@ void main() {
       expect(
         verdict.measuredBackend,
         StorageBackend.opfsLocks,
-        reason: 'the stall verdict used to zero this, so the UI could no longer '
+        reason:
+            'the stall verdict used to zero this, so the UI could no longer '
             'say which backend the browser had actually reached',
       );
       expect(
         verdict.missingFeatures,
         {StorageMissingFeature.dedicatedWorkersInSharedWorkers},
-        reason: 'THE field-report assertion: this set is the `· missing: …` '
+        reason:
+            'THE field-report assertion: this set is the `· missing: …` '
             'segment both storage banners render, and it came back absent from '
             'a real report because the overlay zeroed it',
       );
       expect(
         verdict.backend,
         isNull,
-        reason: 'nothing is in effect; the banners must still say "unavailable"',
+        reason:
+            'nothing is in effect; the banners must still say "unavailable"',
       );
+    },
+  );
+
+  testWidgets(
+    'B1 — THE misdiagnosis assertion: a hung Supabase init is NEVER reported '
+    'as a storage failure, even though it stalls boot for just as long',
+    (tester) async {
+      final container = _container();
+      container
+          .read(storageDurabilityProvider.notifier)
+          .report(const StorageDurability(backend: StorageBackend.opfsLocks));
+      final hungNetwork = Completer<void>();
+      addTearDown(hungNetwork.complete);
+
+      unawaited(
+        awaitBootWork(container, [
+          _storageTask(Future<void>.value()),
+          _cloudTask(hungNetwork.future),
+        ]),
+      );
+      await tester.pump(kBootStorageDeadline + _tick);
+
+      final verdict = container.read(storageDurabilityProvider);
+      expect(
+        verdict.unavailable,
+        isFalse,
+        reason:
+            'a network round trip that never came back says NOTHING about '
+            'local storage — reporting it as dead storage disables topo '
+            'creation on a healthy database and sends the user to fix their '
+            "browser's storage settings",
+      );
+      expect(verdict.backend, StorageBackend.opfsLocks);
+      expect(verdict.isEphemeral, isFalse, reason: 'creation stays enabled');
+      expect(
+        storageRetryNotice(verdict),
+        isNull,
+        reason: 'and no "storage isn\'t responding" banner either',
+      );
+    },
+  );
+
+  testWidgets(
+    'B1: a stall in EVERY task still blames storage — but says out loud that '
+    'the other work had not finished either',
+    (tester) async {
+      final container = _container();
+      final hungDb = Completer<void>();
+      final hungNetwork = Completer<void>();
+      addTearDown(hungDb.complete);
+      addTearDown(hungNetwork.complete);
+
+      unawaited(
+        awaitBootWork(container, [
+          _storageTask(hungDb.future),
+          _cloudTask(hungNetwork.future),
+        ]),
+      );
+      await tester.pump(kBootStorageDeadline + _tick);
+
+      final verdict = container.read(storageDurabilityProvider);
+      expect(verdict.unavailable, isTrue);
+      expect(
+        verdict.unavailableReason,
+        contains('the local database did not answer'),
+        reason:
+            'the database IS among the stalled tasks, so the banner is '
+            'right to be about it',
+      );
+      expect(
+        verdict.unavailableReason,
+        contains('the cloud sign-in'),
+        reason:
+            'two subsystems wedged at once usually share one cause (a '
+            'suspended tab, a killed worker); the field report must keep that '
+            'evidence',
+      );
+    },
+  );
+
+  testWidgets(
+    'B1: when only the database stalls, the reason does not drag in work that '
+    'finished perfectly well',
+    (tester) async {
+      final container = _container();
+      final hungDb = Completer<void>();
+      addTearDown(hungDb.complete);
+
+      unawaited(
+        awaitBootWork(container, [
+          _storageTask(hungDb.future),
+          _cloudTask(Future<void>.value()),
+        ]),
+      );
+      await tester.pump(kBootStorageDeadline + _tick);
+
+      final verdict = container.read(storageDurabilityProvider);
+      expect(verdict.unavailable, isTrue);
+      expect(
+        verdict.unavailableReason,
+        isNot(contains('the cloud sign-in')),
+        reason: 'it answered; naming it would be a guess dressed as a fact',
+      );
+    },
+  );
+
+  testWidgets(
+    'B1: a non-storage task that stalls PAST the first frame and then answers '
+    'before the storage deadline leaves no trace at all',
+    (tester) async {
+      final container = _container();
+      container
+          .read(storageDurabilityProvider.notifier)
+          .report(const StorageDurability(backend: StorageBackend.nativeFile));
+      final slowNetwork = Completer<void>();
+
+      unawaited(
+        awaitBootWork(container, [
+          _storageTask(Future<void>.value()),
+          _cloudTask(slowNetwork.future),
+        ]),
+      );
+      await tester.pump(kBootFirstFrameDeadline + _tick);
+      slowNetwork.complete();
+      await tester.pump(kBootStorageDeadline);
+
+      final verdict = container.read(storageDurabilityProvider);
+      expect(verdict.unavailable, isFalse);
+      expect(verdict.backend, StorageBackend.nativeFile);
     },
   );
 
@@ -200,7 +350,9 @@ void main() {
 
       var returned = false;
       unawaited(
-        awaitBootWork(container, slow.future).then((_) => returned = true),
+        awaitBootWork(container, [
+          _storageTask(slow.future),
+        ]).then((_) => returned = true),
       );
 
       await tester.pump(kBootFirstFrameDeadline + _tick);
@@ -213,7 +365,8 @@ void main() {
       expect(
         verdict.unavailable,
         isFalse,
-        reason: 'a merely-slow first migration must never be reported as dead '
+        reason:
+            'a merely-slow first migration must never be reported as dead '
             'storage — that would disable topo creation for the whole session',
       );
       expect(verdict.backend, StorageBackend.nativeFile);
@@ -231,7 +384,7 @@ void main() {
           .report(const StorageDurability(backend: StorageBackend.opfsLocks));
       final verySlow = Completer<void>();
 
-      unawaited(awaitBootWork(container, verySlow.future));
+      unawaited(awaitBootWork(container, [_storageTask(verySlow.future)]));
 
       await tester.pump(kBootStorageDeadline + _tick);
       expect(container.read(storageDurabilityProvider).unavailable, isTrue);
@@ -243,7 +396,8 @@ void main() {
       expect(
         verdict.unavailable,
         isFalse,
-        reason: 'the database proved itself; the timeout was wrong and must '
+        reason:
+            'the database proved itself; the timeout was wrong and must '
             'be undone rather than left blocking creation forever',
       );
       expect(verdict.backend, StorageBackend.opfsLocks);
@@ -261,16 +415,16 @@ void main() {
           .report(const StorageDurability(backend: StorageBackend.opfsLocks));
       final verySlow = Completer<void>();
 
-      unawaited(awaitBootWork(container, verySlow.future));
+      unawaited(awaitBootWork(container, [_storageTask(verySlow.future)]));
 
       await tester.pump(kBootStorageDeadline + _tick);
       expect(container.read(storageDurabilityProvider).unavailable, isTrue);
 
       // The connection layer finally reports for real — this is newer than
       // anything the boot gate snapshotted.
-      container.read(storageDurabilityProvider.notifier).report(
-            const StorageDurability(backend: StorageBackend.inMemory),
-          );
+      container
+          .read(storageDurabilityProvider.notifier)
+          .report(const StorageDurability(backend: StorageBackend.inMemory));
       verySlow.complete();
       await tester.pump();
 
@@ -290,10 +444,9 @@ void main() {
 
       var returned = false;
       unawaited(
-        awaitBootWork(
-          container,
-          Future<void>.error(StateError('boot-boom')),
-        ).then((_) => returned = true),
+        awaitBootWork(container, [
+          _storageTask(Future<void>.error(StateError('boot-boom'))),
+        ]).then((_) => returned = true),
       );
       await tester.pump();
 
@@ -301,18 +454,66 @@ void main() {
       expect(
         container.read(storageDurabilityProvider).isProbing,
         isTrue,
-        reason: 'a throw is already handled by the individual boot futures; '
+        reason:
+            'a throw is already handled by the individual boot futures; '
             'the gate only has to stop it reaching main()',
       );
     },
   );
 
-  test('the two deadlines are ordered and generous enough for a cold start', () {
-    expect(kBootFirstFrameDeadline < kBootStorageDeadline, isTrue);
-    expect(
-      kBootFirstFrameDeadline >= const Duration(seconds: 5),
-      isTrue,
-      reason: 'must comfortably outlast a real cold open + one-time migration',
-    );
+  // REGRESSION GUARD, not proof: `bootApp` cannot be called from a plain
+  // `flutter test` (real `path_provider`, real `Supabase.initialize`, real
+  // `runApp`), so the four real tasks' `blamesStorage` values are asserted at
+  // the source level — the same shape as `main_boot_cloud_init_test.dart`. What
+  // those values MEAN is covered behaviourally by the B1 tests above.
+  test('boot marks only the local-database tasks as storage-blaming', () {
+    // Comment-stripped, like `connection_seam_source_test.dart`'s gates:
+    // `bootApp`'s doc block legitimately names `warmDocsPath()` and
+    // `_initSupabase()` in prose long before the task list, and a raw grep
+    // matches the prose instead of the code.
+    final source = File('lib/main.dart')
+        .readAsLinesSync()
+        .where((line) => !line.trimLeft().startsWith('//'))
+        .join('\n');
+
+    for (final entry in const {
+      '_initSupabase(container)': false,
+      'warmDocsPath()': false,
+      '.notifier).hydrate()': true,
+      'verifyDatabaseUsable(container)': true,
+    }.entries) {
+      final at = source.indexOf(entry.key);
+      expect(at, isNonNegative, reason: 'boot no longer runs ${entry.key}');
+      // The `blamesStorage:` argument that follows this future — and it must
+      // arrive before the NEXT `BootTask(` starts, or it belongs to that one.
+      final flag = source.indexOf('blamesStorage: ${entry.value}', at);
+      final nextTask = source.indexOf('BootTask(', at);
+      expect(
+        flag,
+        isNonNegative,
+        reason: '${entry.key} must declare blamesStorage: ${entry.value}',
+      );
+      expect(
+        nextTask == -1 || flag < nextTask,
+        isTrue,
+        reason:
+            '${entry.key} must be the future carrying '
+            'blamesStorage: ${entry.value} — a network stall answered with a '
+            'storage failure is the exact bug this pins',
+      );
+    }
   });
+
+  test(
+    'the two deadlines are ordered and generous enough for a cold start',
+    () {
+      expect(kBootFirstFrameDeadline < kBootStorageDeadline, isTrue);
+      expect(
+        kBootFirstFrameDeadline >= const Duration(seconds: 5),
+        isTrue,
+        reason:
+            'must comfortably outlast a real cold open + one-time migration',
+      );
+    },
+  );
 }

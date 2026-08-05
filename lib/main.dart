@@ -108,15 +108,44 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
   // timeout anywhere on that path (see [awaitBootWork]'s doc for the four
   // unbounded awaits). Awaiting it bare is a boot-time hang: no frame, no
   // error, no retry, no way in.
-  await awaitBootWork(
-    container,
-    Future.wait([
+  //
+  // Each one is NAMED and individually tracked ([BootTask]) rather than merged
+  // into one `Future.wait` the gate can only observe as a single yes/no. The
+  // gate used to see exactly that, and when it did not settle it published
+  // "the local database did not answer its first query" — unconditionally. Only
+  // two of these four are the local database. A `Supabase.initialize` that
+  // never came back on flaky mobile data was therefore reported to the user as
+  // DEAD STORAGE, with the create-topo interlock turned on and a banner telling
+  // them their device could not save topos. `blamesStorage` is what stops a
+  // network stall being answerable with a storage verdict.
+  await awaitBootWork(container, <BootTask>[
+    // A network round trip (session restore/token refresh). It bounds itself
+    // at `kCloudInitTimeout` and records the outcome on `cloudInitProvider`,
+    // so a stall here has its OWN honest report and needs none from storage.
+    BootTask(
+      'the cloud sign-in',
       _initSupabase(container),
+      blamesStorage: false,
+    ),
+    // A `path_provider` lookup on native, inert on web. Not the database.
+    BootTask(
+      'the photo folder lookup',
       container.read(photoFilesProvider).warmDocsPath(),
+      blamesStorage: false,
+    ),
+    // The first REAL query against the local database — this is what forces
+    // drift to open it, so a stall here IS evidence about storage.
+    BootTask(
+      "the local database's first query",
       container.read(lastKnownUidProvider.notifier).hydrate(),
+      blamesStorage: true,
+    ),
+    BootTask(
+      'the local database probe',
       verifyDatabaseUsable(container),
-    ]),
-  );
+      blamesStorage: true,
+    ),
+  ]);
   runApp(
     UncontrolledProviderScope(
       container: container,
@@ -144,6 +173,51 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
   requestPersistentStorageAtBoot(container);
 }
 
+/// One NAMED unit of [bootApp]'s pre-first-frame work, and whether a stall in
+/// it says anything about local storage.
+///
+/// [awaitBootWork] used to receive a single `Future.wait` over four unrelated
+/// futures — a Supabase network round trip, a `path_provider` lookup, the
+/// database's first query and the database probe — and could observe only
+/// whether that ONE future had settled. When it had not, it published "the
+/// local database did not answer its first query within Ns". Two of the four
+/// are not the database at all, and the loudest of them is a network call, so a
+/// `Supabase.initialize` that never came back on flaky mobile data was reported
+/// to the user as dead storage: create-topo disabled, a banner saying this
+/// device could not save their topos, and a diagnosis pointing at the one
+/// subsystem that was fine.
+///
+/// Naming the futures is the whole fix. The gate tracks each one separately,
+/// says which ones did not settle, and only reaches for a storage verdict when
+/// a [blamesStorage] task is among them.
+@immutable
+class BootTask {
+  const BootTask(this.name, this.future, {required this.blamesStorage});
+
+  /// Short label, phrased so it can be dropped into a user-visible sentence
+  /// and a log line unchanged (e.g. "the cloud sign-in").
+  final String name;
+
+  final Future<void> future;
+
+  /// Whether a stall in this task is EVIDENCE ABOUT LOCAL STORAGE.
+  ///
+  /// True only for work that actually queries the local database. Everything
+  /// else must report its own failure through its own provider
+  /// (`cloudInitProvider` for the Supabase init) rather than borrowing
+  /// storage's verdict, because a message that names the wrong subsystem sends
+  /// the user to fix the wrong thing — and, on the storage path specifically,
+  /// disables topo creation for a database that was never broken.
+  final bool blamesStorage;
+
+  @override
+  String toString() => 'BootTask($name, blamesStorage: $blamesStorage)';
+}
+
+/// [tasks]' names, sorted, for a log line or a reason string.
+String _taskNames(Iterable<BootTask> tasks) =>
+    (tasks.map((task) => task.name).toList()..sort()).join(', ');
+
 /// How long [bootApp] blocks the FIRST FRAME on its pre-`runApp` work.
 ///
 /// Sized to comfortably outlast every LEGITIMATE cold start:
@@ -165,16 +239,22 @@ Future<void> bootApp({List<Override> overrides = const []}) async {
 /// `lastKnownUidProvider` and every uid-scoped query rebuilds off it.
 const Duration kBootFirstFrameDeadline = Duration(seconds: 8);
 
-/// How long [bootApp] waits for that same work before publishing
-/// [StorageDurability.unavailable].
+/// How long [bootApp] waits for a [BootTask.blamesStorage] task before
+/// publishing [StorageDurability.unavailable].
 ///
 /// Nothing legitimate takes this long; only drift's unbounded awaits do (see
 /// [awaitBootWork]). Deliberately far beyond [kBootFirstFrameDeadline] so a
 /// merely-slow migration is never mistaken for a dead database — and even
 /// then the verdict is REVERSIBLE, see [awaitBootWork].
+///
+/// It is also deliberately LONGER than every per-subsystem bound that feeds it
+/// (`kStorageOpenTimeout` 20s in `connection/storage_durability.dart`,
+/// `kCloudInitTimeout` 15s in `core/config/supabase_init_provider.dart`), so a
+/// subsystem that can name its own failure always gets to do so first and this
+/// generic "did not answer" verdict is the last resort it is meant to be.
 const Duration kBootStorageDeadline = Duration(seconds: 30);
 
-/// Awaits [work] — [bootApp]'s pre-first-frame futures — but never lets it
+/// Awaits [tasks] — [bootApp]'s pre-first-frame work — but never lets it
 /// hold the first frame hostage, and never lets it reach `main()` as an
 /// error. Booting always terminates in a usable or an EXPLAINED state.
 ///
@@ -204,52 +284,65 @@ const Duration kBootStorageDeadline = Duration(seconds: 30);
 ///  - at [kBootFirstFrameDeadline] this returns so `runApp` happens. The open
 ///    is NOT abandoned — it keeps running, and a late `hydrate()` still
 ///    restores the uid through the normal provider graph.
-///  - at [kBootStorageDeadline], if it is STILL unanswered, the verdict is
-///    published as [StorageDurability.unavailable] so `topos_screen`'s
-///    existing `_StorageWarningBanner` explains it and the create-topo
-///    interlock stops writes into a store that may never land. No parallel
-///    error UI is invented for this.
+///  - at [kBootStorageDeadline], if a [BootTask.blamesStorage] task is STILL
+///    unanswered, the verdict is published as [StorageDurability.unavailable]
+///    so `topos_screen`'s existing `_StorageWarningBanner` explains it and the
+///    create-topo interlock stops writes into a store that may never land. No
+///    parallel error UI is invented for this.
 ///  - if the open eventually completes after all, that pessimism is UNDONE
 ///    (unless a newer verdict arrived meanwhile, which always wins). A
 ///    timeout that permanently declared a merely-slow database dead would be
 ///    its own bug.
+///
+/// ATTRIBUTION IS PART OF THE BOUND. Each task is tracked on its own, so a
+/// stall in a task that is not the local database gets a truthful log line and
+/// NO storage verdict — see [BootTask] for the misdiagnosis this replaces.
 Future<void> awaitBootWork(
   ProviderContainer container,
-  Future<void> work, {
+  List<BootTask> tasks, {
   Duration firstFrameDeadline = kBootFirstFrameDeadline,
   Duration storageDeadline = kBootStorageDeadline,
 }) async {
-  var settled = false;
-  // Errors are absorbed HERE rather than left to `Future.wait`'s
+  // Shared, mutated as each task settles, and read by the second stage — which
+  // is how the stall report can name the tasks that are STILL outstanding at
+  // `storageDeadline` rather than the ones that were outstanding at the first
+  // frame.
+  final pending = <BootTask>{...tasks};
+  // Errors are absorbed PER TASK rather than left to `Future.wait`'s
   // all-or-nothing rejection: every individual boot future already degrades
   // internally (`_initSupabase`, `PhotoFiles.warmDocsPath` and
   // `LastKnownUid.hydrate` each catch their own failures), so anything that
   // still escapes is unforeseen — and an unforeseen throw out of `bootApp`
   // means `runApp` is never called, i.e. the same blank page the deadlines
-  // below exist to prevent.
-  final guarded = work
-      .then<void>(
-        (_) {},
-        onError: (Object error, StackTrace stackTrace) {
-          debugPrint('masi/boot: pre-first-frame work failed: $error\n'
-              '$stackTrace');
-        },
-      )
-      .whenComplete(() => settled = true);
+  // below exist to prevent. Per-task also means one task's throw cannot mask
+  // which OTHER tasks were still running, which the merged version did.
+  final guarded = Future.wait(<Future<void>>[
+    for (final task in tasks)
+      task.future
+          .then<void>(
+            (_) {},
+            onError: (Object error, StackTrace stackTrace) {
+              debugPrint(
+                'masi/boot: ${task.name} failed before the first frame: '
+                '$error\n$stackTrace',
+              );
+            },
+          )
+          .whenComplete(() => pending.remove(task)),
+  ]).then<void>((_) {});
 
   await guarded.timeout(firstFrameDeadline, onTimeout: () {});
-  if (settled) return;
+  if (pending.isEmpty) return;
 
   debugPrint(
-    'masi/boot: pre-first-frame work did not finish within '
-    '${firstFrameDeadline.inSeconds}s — showing the app anyway; the local '
-    'database is still opening',
+    'masi/boot: did not finish within ${firstFrameDeadline.inSeconds}s: '
+    '${_taskNames(pending)} — showing the app anyway',
   );
   unawaited(
     _reportStalledStorageAtBoot(
       container,
       guarded,
-      isSettled: () => settled,
+      pending: pending,
       remaining: storageDeadline - firstFrameDeadline,
       total: storageDeadline,
     ),
@@ -261,18 +354,40 @@ Future<void> awaitBootWork(
 /// injectable deadlines in `test/main_boot_timeout_test.dart`.
 ///
 /// Runs entirely AFTER the first frame. Publishes
-/// [StorageDurability.unavailable] if [work] is still unanswered [remaining]
-/// later, then keeps waiting and reverts to the snapshot it replaced if the
-/// database proves itself after all.
+/// [StorageDurability.unavailable] if a [BootTask.blamesStorage] task is still
+/// unanswered [remaining] later, then keeps waiting and reverts to the snapshot
+/// it replaced if the database proves itself after all.
+///
+/// [pending] is live: [awaitBootWork] removes each task from it as that task
+/// settles, so an empty set here means everything answered in the meantime.
 Future<void> _reportStalledStorageAtBoot(
   ProviderContainer container,
   Future<void> work, {
-  required bool Function() isSettled,
+  required Set<BootTask> pending,
   required Duration remaining,
   required Duration total,
 }) async {
   await work.timeout(remaining, onTimeout: () {});
-  if (isSettled()) return;
+  final stalled = pending.toList();
+  if (stalled.isEmpty) return;
+
+  if (!stalled.any((task) => task.blamesStorage)) {
+    // THE B1 FIX. A stalled `Supabase.initialize` on flaky mobile data used to
+    // land here and be published as "the local database did not answer its
+    // first query" — a message that is simply false, that disables topo
+    // creation on a healthy database, and that sends the user to look at their
+    // browser's storage settings. Nothing about local storage is known at this
+    // point, so nothing about local storage is claimed: the offending
+    // subsystems are named in the log, and each already reports its own failure
+    // through its own provider (`cloudInitProvider` for the cloud, which bounds
+    // itself at `kCloudInitTimeout`).
+    debugPrint(
+      'masi/boot: ${_taskNames(stalled)} did not finish within '
+      '${total.inSeconds}s — none of these touches the local database, so the '
+      'storage verdict is left exactly as the connection layer reported it',
+    );
+    return;
+  }
 
   // Everything below runs tens of seconds after boot, so the container can in
   // principle be gone by then (a hot restart tears one down mid-flight).
@@ -294,23 +409,43 @@ Future<void> _reportStalledStorageAtBoot(
     // `· missing: …` segment for exactly that reason. The overlay carries the
     // measurement forward verbatim and stays null/empty when the probe had not
     // answered yet.
-    final stalled = StorageDurability.unavailableOver(
+    final verdict = StorageDurability.unavailableOver(
       replaced,
-      'the local database did not answer its first query within '
-      '${total.inSeconds}s',
+      _stalledStorageReason(stalled, total),
     );
-    container.read(storageDurabilityProvider.notifier).report(stalled);
+    container.read(storageDurabilityProvider.notifier).report(verdict);
 
     await work;
     // Only revert what is still ours. A verdict reported after the timeout is
     // fresher than the snapshot and must survive.
-    if (container.read(storageDurabilityProvider) == stalled) {
+    if (container.read(storageDurabilityProvider) == verdict) {
       container.read(storageDurabilityProvider.notifier).report(replaced);
     }
   } catch (error, stackTrace) {
-    debugPrint('masi/boot: stalled-storage report abandoned: $error\n'
-        '$stackTrace');
+    debugPrint(
+      'masi/boot: stalled-storage report abandoned: $error\n'
+      '$stackTrace',
+    );
   }
+}
+
+/// The [StorageDurability.unavailableReason] for a boot stall that DID include
+/// the local database.
+///
+/// Leads with the database, because that is the news the banner is about and
+/// the fact the create-topo interlock acts on. But when other boot work is
+/// hanging too, that is said out loud rather than hidden: two subsystems wedged
+/// at once usually means one common cause (a suspended tab, a killed worker),
+/// and the field report that has to explain it should not have had half its
+/// evidence rounded away. Only tasks the caller marked
+/// [BootTask.blamesStorage] contribute to the leading claim.
+String _stalledStorageReason(List<BootTask> stalled, Duration total) {
+  final reason =
+      'the local database did not answer its first query within '
+      '${total.inSeconds}s';
+  final others = stalled.where((task) => !task.blamesStorage);
+  if (others.isEmpty) return reason;
+  return '$reason (${_taskNames(others)} had not finished either)';
 }
 
 /// Starts boot's one-shot persistent-storage request against [container] and

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -105,6 +107,27 @@ Future<void> initializeSupabase() => Supabase.initialize(
   ),
 );
 
+/// How long [CloudInitController.initialize] waits for `Supabase.initialize`
+/// before RECORDING a failure — while still letting the attempt finish.
+///
+/// 15 seconds. `Supabase.initialize` is one HTTPS round trip (session restore /
+/// token refresh); 15s is generous for that even on bad mobile data, where the
+/// realistic failure is a connection that never establishes rather than one
+/// that is merely slow. Two ceilings matter more than the exact number:
+///
+///  * it must be under `main.dart`'s `kBootStorageDeadline` (30s), so a stalled
+///    cloud init has settled — as a `failed` state with its own honest message —
+///    before boot's storage deadline runs. Boot no longer blames storage for a
+///    network stall either way (see `BootTask.blamesStorage`), but a subsystem
+///    that can name its own failure should always do so first;
+///  * unbounded is the one value that cannot be right. A hung init used to stay
+///    [CloudInitStatus.pending] forever, and `pending` is deliberately treated
+///    as "not broken" everywhere downstream — so `SyncOrchestrator` reported a
+///    healthy, synced app whose topos existed on exactly one device. That is
+///    the invisible-no-op bug this file was written to end, reappearing through
+///    a stall instead of a throw.
+const Duration kCloudInitTimeout = Duration(seconds: 15);
+
 /// Owns [CloudInitState] and is the ONLY place `Supabase.initialize` is
 /// called from — boot (`main.dart`) and every retry share one code path, so
 /// the two can never drift into different init arguments or different
@@ -132,8 +155,46 @@ class CloudInitController extends Notifier<CloudInitState> {
   /// fallback it swapped in — both would keep serving the dead values for the
   /// rest of the app run, so recovering from a boot-time outage would still
   /// require an app restart.
-  Future<bool> initialize() async {
+  /// Bounded by [timeout], because `Supabase.initialize` is a network round
+  /// trip with no timeout of its own. A stall used to leave this
+  /// [CloudInitStatus.pending] for the rest of the run, and `pending` means
+  /// "not broken" to every downstream reader — so a cloud that never came up
+  /// was presented as a healthy, synced app. A timeout is the only way a stall
+  /// becomes SAYABLE.
+  ///
+  /// The attempt is BOUNDED, NOT ABANDONED. On timeout this records the failure
+  /// and returns, while the underlying `Supabase.initialize` keeps running; if
+  /// it succeeds afterwards, [_recordAttempt] flips the state to
+  /// [CloudInitStatus.ready] and invalidates the cloud providers exactly as a
+  /// manual retry would. Marking a merely-slow init permanently dead — when
+  /// `Supabase.instance.client` had in fact come up — would be its own bug.
+  Future<bool> initialize({Duration timeout = kCloudInitTimeout}) async {
     if (state.status == CloudInitStatus.ready) return true;
+    final attempt = _recordAttempt();
+    // `null` distinguishes "the attempt answered" (true/false) from "the clock
+    // ran out first", which is a different fact and needs a different message.
+    final settled = await attempt
+        .then<bool?>((usable) => usable)
+        .timeout(timeout, onTimeout: () => null);
+    if (settled != null) return settled;
+
+    final error = TimeoutException(
+      'Supabase.initialize did not answer',
+      timeout,
+    );
+    debugPrint(
+      'masi/cloud: Supabase.initialize has not answered within '
+      '${timeout.inSeconds}s; the app keeps working locally and nothing will '
+      'sync until it does. Still waiting in the background: $error',
+    );
+    if (ref.mounted) state = CloudInitState.failed(error);
+    return false;
+  }
+
+  /// The attempt itself. Never throws (see [initialize]'s contract) and records
+  /// its outcome on [state] WHENEVER it lands — including after [initialize]
+  /// has already given up on it and reported a timeout.
+  Future<bool> _recordAttempt() async {
     final wasFailed = state.isFailed;
     try {
       await ref.read(supabaseInitializerProvider)();
@@ -150,8 +211,13 @@ class CloudInitController extends Notifier<CloudInitState> {
       return false;
     }
     if (!ref.mounted) return true;
+    // `state.isFailed` is re-read HERE, after the await, rather than relying on
+    // `wasFailed` alone: `initialize`'s timeout may have published a failure
+    // while this attempt was still in flight, and a late success has to clear
+    // exactly the same cached-dead-client providers a retry after a throw does.
+    final recovering = wasFailed || state.isFailed;
     state = const CloudInitState.ready();
-    if (wasFailed) _invalidateCloudProviders();
+    if (recovering) _invalidateCloudProviders();
     return true;
   }
 

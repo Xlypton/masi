@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/core/config/supabase_init_provider.dart';
@@ -165,6 +167,121 @@ void main() {
         );
       },
     );
+
+    group('a HUNG init is bounded (B1)', () {
+      // `Supabase.initialize` is a network round trip with no timeout of its
+      // own. A stall left this `pending` for the rest of the run, and `pending`
+      // deliberately means "not broken" downstream — `SyncOrchestrator` reads
+      // it as fine — so a cloud that never came up was presented to the user as
+      // a healthy, synced app whose topos existed on exactly one device.
+      //
+      // A container whose initializer never completes. `tiny` keeps the wait
+      // deterministic (the initializer NEVER completes, so the timeout always
+      // wins) without a real 15s sleep.
+      const tiny = Duration(milliseconds: 20);
+
+      ({ProviderContainer container, Completer<void> init}) makeHung() {
+        final init = Completer<void>();
+        final container = ProviderContainer(
+          overrides: [
+            supabaseInitializerProvider.overrideWithValue(() => init.future),
+            authRepositoryProvider.overrideWith(
+              (ref) => _StubAuthRepository(),
+            ),
+          ],
+        );
+        addTearDown(() {
+          if (!init.isCompleted) init.complete();
+          container.dispose();
+        });
+        return (container: container, init: init);
+      }
+
+      test(
+        'it RESOLVES instead of hanging boot, and records a failure the sync '
+        'layer can actually see',
+        () async {
+          final (container: container, init: _) = makeHung();
+
+          expect(
+            await container
+                .read(cloudInitProvider.notifier)
+                .initialize(timeout: tiny),
+            isFalse,
+            reason: 'unbounded, this await never returned at all',
+          );
+
+          final state = container.read(cloudInitProvider);
+          expect(
+            state.isFailed,
+            isTrue,
+            reason: 'THE fix: `pending` is treated as "not broken" everywhere '
+                'downstream, so a stall used to be invisible',
+          );
+          expect(state.error, isA<TimeoutException>());
+          expect(
+            cloudUnavailableMessage(state),
+            contains("couldn't connect to the cloud"),
+            reason: 'and the user is told, in the existing sync-banner words',
+          );
+        },
+      );
+
+      test(
+        'the attempt is BOUNDED, not abandoned: a late success still recovers '
+        'the cloud rather than leaving it dead for the run',
+        () async {
+          var authBuilds = 0;
+          final init = Completer<void>();
+          final container = ProviderContainer(
+            overrides: [
+              supabaseInitializerProvider.overrideWithValue(() => init.future),
+              authRepositoryProvider.overrideWith((ref) {
+                authBuilds++;
+                return _StubAuthRepository();
+              }),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await container
+              .read(cloudInitProvider.notifier)
+              .initialize(timeout: tiny);
+          expect(container.read(cloudInitProvider).isFailed, isTrue);
+          container.read(authRepositoryProvider);
+          expect(authBuilds, 1);
+
+          // The round trip finally lands, seconds after we gave up on it.
+          init.complete();
+          await Future<void>.delayed(Duration.zero);
+
+          expect(
+            container.read(cloudInitProvider).status,
+            CloudInitStatus.ready,
+            reason: 'a merely-SLOW init must not be branded permanently dead — '
+                '`Supabase.instance.client` really does exist now',
+          );
+          container.read(authRepositoryProvider);
+          expect(
+            authBuilds,
+            2,
+            reason: 'and the providers that cached a cloud-less fallback have '
+                'to be dropped, exactly as after a manual retry',
+          );
+        },
+      );
+
+      test('the bound is under boot\'s storage deadline, so the cloud names '
+          'its own failure first', () {
+        expect(kCloudInitTimeout < const Duration(seconds: 30), isTrue);
+        expect(
+          kCloudInitTimeout >= const Duration(seconds: 10),
+          isTrue,
+          reason: 'one HTTPS round trip on bad mobile data must not be called '
+              'broken',
+        );
+      });
+    });
 
     test('a first-attempt success does NOT invalidate anything', () async {
       var authBuilds = 0;
