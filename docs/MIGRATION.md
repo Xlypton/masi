@@ -58,18 +58,46 @@ Green at handoff: `flutter analyze` **0 issues**, `flutter test` **2330 passing*
 Live at <https://climb-masi.pages.dev>.
 
 ### Blocked on a physical device (cannot be closed from a desktop)
-- **PWA hit-test offset** — *fixed and deployed*, awaiting confirmation only. Two
-  hacks added for the cosmetic #74 hairline were displacing every touch target in
-  the installed home-screen PWA: a `defineProperty` override of
-  `document.documentElement.clientWidth/clientHeight`, and `flutter-view { top: -2px }`
-  under `display-mode: standalone`. On iOS the engine reads `clientHeight`
-  *deliberately* (a WebKit rotation workaround) and hit-tests pointer events against
-  that same `<flutter-view>` box, so overriding it offset touch from paint. Removed in
-  `6be3959`; confirmed absent from production. **To close: open the home-screen PWA
-  and tap directly on "Continue with Google".** If it is still dead, the new watchdog
-  in `oauth_redirect_web.dart` now reports a real error naming the step and host.
+- **iOS PWA viewport / hit-test family** — root-caused and fixed in `2350756`, live in
+  production, **awaiting the device check**. Read that commit message before touching
+  `web/index.html`; three separate point-fixes were shipped and reverted here first.
+
+  The cause: `full_page_embedding_strategy.dart` **removes every
+  `<meta name="viewport">` on the page — unconditionally, in release too — and appends
+  its own** without `viewport-fit=cover`, *after* the browser has laid the page out with
+  ours. Since ours carried `cover`, the swap flipped viewport-fit a beat after boot. On
+  iOS the engine's only geometry input is `documentElement.clientWidth/clientHeight`
+  (the **layout** viewport, `full_page_dimensions_provider.dart:71-84`) while the only
+  resize it subscribes to is the **visual** viewport (`:29-36`) — so it cannot observe a
+  layout-viewport-only change and has no path to invalidate one. Fix: ship the engine's
+  viewport string byte-for-byte, so the swap is a no-op. Pinned by
+  `test/web_geometry_source_test.dart`, which compares our meta against the installed
+  SDK's string and so also fails on an SDK upgrade.
+
+  **Device check:** cold-launch from the home screen; it must look identical at 0.3s and
+  2s, and **rotating must now be a no-op**. Rotation being a *fix* was the symptom — it
+  is the only thing that forces WebKit to re-resolve the viewport. If rotation still
+  changes anything, WebKit is reacting to the element removal itself rather than the
+  argument change, and the next lever is `apple-mobile-web-app-status-bar-style`
+  (`black-translucent` → `default`), which costs an opaque non-theme-aware status strip
+  and #74's seam as a hard edge — decide it on measurements, not another guess.
+
+  Facts worth not re-deriving: **`MediaQuery.viewPadding`/`padding` are a const zero on
+  Flutter web** (`window.dart:97`), so every `SafeArea(top:)` in this app contributes
+  nothing and the notch clearance comes from the engine's own viewport. The bottom nav
+  clears the home indicator via an explicit 32px floor in `nav_shell.dart:79-84` — an
+  unaudited magic number, calibrated under a status-bar style we no longer use, and
+  applied to Android PWAs too where nothing needs it. **Custom-element (`hostElement`)
+  embedding is evaluated and rejected**: it would avoid the meta rewrite entirely, but
+  its `computeKeyboardInsets` returns hardcoded zero
+  (`custom_element_dimensions_provider.dart:93-96`), killing `viewInsets.bottom` and
+  breaking keyboard avoidance in every bottom sheet.
 - **Post-commit flush on real iOS Safari** — the fix is pinned by
   `test/core/db/post_commit_flush_test.dart`; the device leg is unverified.
+- **The canvas bottom cluster sits inside the home-indicator band** on a standalone PWA:
+  `topo_canvas_screen.dart:1483-1497` has `SafeArea(top: false)` + 12px and no standalone
+  floor, and that screen is a root route with no `bottomNavigationBar`, so
+  `padding.bottom` is 0 there. Pre-existing, found while tracing the above, not fixed.
 
 ### Closed as a dead end — do not retry as specified
 - **In-page Google sign-in (GIS + `signInWithIdToken`) for the standalone PWA.**
@@ -82,16 +110,30 @@ Live at <https://climb-masi.pages.dev>.
   `/auth.html` on the same origin, complicated by Cloudflare `_headers` append
   semantics.
 
-### Genuinely remaining
-- **Stage 3 offline reads.** The acceptance criteria live in
-  `docs/superpowers/specs/2026-07-30-web-offline-reliability-design.md` (§"Stage 3 —
-  Offline reads": four deliverables, three assertions). The map-tile half shipped
-  (`lib/core/map/masi_tile_caching_provider.dart`). **The T1–T14 task breakdown was
-  never written to disk and is gone** — re-measure against the design doc, not
-  against any T-numbers you find referenced elsewhere.
-- **Proactive storage-nearly-full warning** with an explicitly consented "clear
-  cached community photos" action — the only path permitted to touch the protected
-  floor of newest foreign photos.
+### Closed since this file was written
+- **Stage 3 offline reads — DONE.** Acceptance criteria are in
+  `docs/superpowers/specs/2026-07-30-web-offline-reliability-design.md`. Most of it had
+  already shipped; the three real gaps were closed in `bcac977` (docs), `e9c6eb6` (a
+  real-browser tile-cache proof) and `ece5f05` (offline empty states). **The T1–T14 task
+  breakdown was never written to disk and is gone** — if you see T-numbers referenced
+  anywhere, re-measure against the design doc instead.
+- **Proactive storage-nearly-full warning — DONE**, `89d4004` + `b235693`.
+- **Canvas geometry — DONE.** `ac9c67d` reconciles the overlay/hit-test box against the
+  real *decoded* photo size: the box used `PhotoRef`'s persisted dimensions while the
+  photo itself was `BoxFit.contain`-ed and centred inside it, so an EXIF-orientation
+  disagreement gave a permanent, per-photo, purely **vertical** touch offset (X is
+  scale-invariant under the fill-width fit rule). `5666248` stops a pending auto-fit
+  write being mistaken for a user pan, which could leave a fit stale indefinitely.
+  Note the decoded-size probe must never become an error/latching state — a previous
+  decode probe blanked the canvas permanently on any hiccup; see
+  `topo_canvas_missing_bytes_test.dart`.
+
+### Still open
+- The two device-blocked items above, plus the canvas bottom-cluster inset.
+- **Beware tautological positional tests.** The canvas's original fit tests computed the
+  tap point as `MatrixUtils.transformPoint(controller.value, …)` and then asserted
+  `toScene(M · p) == p` — true for any `M`. They proved arithmetic, not geometry. New
+  tests hand-compute expected values; keep it that way.
 
 ### Standing decisions that constrain all of the above
 Offline scope is all four (create end-to-end, read own topos, read previously-seen
