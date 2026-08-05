@@ -285,7 +285,17 @@ Future<void> _reportStalledStorageAtBoot(
     // before the first query), and that is precisely the value worth
     // restoring.
     final replaced = container.read(storageDurabilityProvider);
-    final stalled = StorageDurability.unavailable(
+    // `unavailableOver`, NOT `StorageDurability.unavailable`: the plain
+    // constructor hard-zeroes `measuredBackend` and `missingFeatures`, so this
+    // overlay used to DESTROY the connection layer's real report — the one
+    // production measures as `opfsLocks / {dedicatedWorkersInSharedWorkers}`
+    // seconds earlier, and the only field-diagnosable fact the app ever learns
+    // about a browser's storage. A field report's banner came back with no
+    // `· missing: …` segment for exactly that reason. The overlay carries the
+    // measurement forward verbatim and stays null/empty when the probe had not
+    // answered yet.
+    final stalled = StorageDurability.unavailableOver(
+      replaced,
       'the local database did not answer its first query within '
       '${total.inSeconds}s',
     );

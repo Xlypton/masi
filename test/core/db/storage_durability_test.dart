@@ -96,6 +96,135 @@ void main() {
       expect(unavailable, isNot(const StorageDurability.unavailable('other')));
     });
 
+    group('unavailableOver preserves the connection layer\'s measurements', () {
+      // B2. `StorageDurability.unavailable` hard-zeroes `measuredBackend` and
+      // `missingFeatures`, and boot's stall verdict OVERWRITES the connection
+      // layer's real report with it. Production measures
+      // `opfsLocks / {dedicatedWorkersInSharedWorkers}` seconds earlier, so a
+      // stall destroyed the only field-diagnosable facts the app ever learns —
+      // which is why a real field report's banner had no `· missing: …`
+      // segment.
+      const measured = StorageDurability(
+        backend: StorageBackend.opfsLocks,
+        missingFeatures: {
+          StorageMissingFeature.dedicatedWorkersInSharedWorkers,
+        },
+      );
+
+      test('carries the measured backend and missing features forward', () {
+        final stalled = StorageDurability.unavailableOver(measured, 'stalled');
+
+        expect(stalled.measuredBackend, StorageBackend.opfsLocks);
+        expect(
+          stalled.missingFeatures,
+          {StorageMissingFeature.dedicatedWorkersInSharedWorkers},
+          reason: 'this set IS the `· missing: …` segment both storage banners '
+              'render; zeroing it is what made the field report unanswerable',
+        );
+        expect(stalled.unavailableReason, 'stalled');
+      });
+
+      test('is still a full unavailable verdict — the interlock must not '
+          'soften just because a backend is remembered', () {
+        final stalled = StorageDurability.unavailableOver(measured, 'stalled');
+
+        expect(stalled.unavailable, isTrue);
+        expect(stalled.isEphemeral, isTrue);
+        expect(stalled.isDurable, isFalse);
+        expect(stalled.isProbing, isFalse);
+        expect(stalled.unavailableCause, StorageUnavailableCause.failed);
+        expect(
+          stalled.backend,
+          isNull,
+          reason: 'no backend is IN EFFECT for an unreachable database — three '
+              'render sites read `backend?.name ?? "unavailable"` and must '
+              'keep saying "unavailable"',
+        );
+      });
+
+      test('invents nothing when nothing was measured yet', () {
+        final stalled = StorageDurability.unavailableOver(
+          const StorageDurability.probing(),
+          'stalled while still probing',
+        );
+
+        expect(stalled.measuredBackend, isNull);
+        expect(stalled.missingFeatures, isEmpty);
+        expect(stalled.unavailable, isTrue);
+      });
+
+      test('an overlay on an earlier failure keeps that failure\'s '
+          'measurements, so a retry cannot erase them', () {
+        final first = StorageDurability.unavailableOver(measured, 'first');
+        final second = StorageDurability.unavailableOver(first, 'second');
+
+        expect(second.measuredBackend, StorageBackend.opfsLocks);
+        expect(second.missingFeatures, isNotEmpty);
+        expect(second.unavailableReason, 'second');
+      });
+
+      test('cause is carried, so an L7 downgrade overlay is still an L7 '
+          'downgrade', () {
+        final stalled = StorageDurability.unavailableOver(
+          measured,
+          'db is newer',
+          cause: StorageUnavailableCause.schemaDowngrade,
+        );
+
+        expect(stalled.unavailableCause, StorageUnavailableCause.schemaDowngrade);
+        expect(storageRetryNotice(stalled), isNull);
+      });
+
+      test('equality distinguishes two overlays that measured different '
+          'backends', () {
+        expect(
+          StorageDurability.unavailableOver(measured, 'x'),
+          StorageDurability.unavailableOver(measured, 'x'),
+        );
+        expect(
+          StorageDurability.unavailableOver(measured, 'x').hashCode,
+          StorageDurability.unavailableOver(measured, 'x').hashCode,
+        );
+        expect(
+          StorageDurability.unavailableOver(measured, 'x'),
+          isNot(const StorageDurability.unavailable('x')),
+          reason: 'a verdict that remembers opfsLocks is NOT the same value as '
+              'one that remembers nothing — main.dart reverts on exactly this '
+              'equality',
+        );
+      });
+
+      test('the preserved measurement reaches the release log line', () {
+        final lines = _captureDebugPrint(() {
+          logStorageDurability(
+            StorageDurability.unavailableOver(measured, 'did not answer'),
+          );
+        });
+
+        expect(lines.single, contains('backend=unavailable'));
+        expect(
+          lines.single,
+          contains('measured=opfsLocks'),
+          reason: 'the console line is the only artifact a web field report '
+              'can ever carry',
+        );
+        expect(
+          lines.single,
+          contains('dedicatedWorkersInSharedWorkers'),
+        );
+      });
+
+      test('a plain verdict does not repeat itself in the log', () {
+        final lines = _captureDebugPrint(() {
+          logStorageDurability(
+            const StorageDurability(backend: StorageBackend.opfsLocks),
+          );
+        });
+
+        expect(lines.single, isNot(contains('measured=')));
+      });
+    });
+
     test('equality covers the missing-feature set, not just the backend', () {
       const a = StorageDurability(
         backend: StorageBackend.inMemory,

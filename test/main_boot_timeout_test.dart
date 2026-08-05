@@ -144,6 +144,51 @@ void main() {
   );
 
   testWidgets(
+    'B2: the stall verdict PRESERVES whatever the connection layer already '
+    'measured — a field report must not lose the backend and the '
+    'missing-feature set',
+    (tester) async {
+      final container = _container();
+      // What the deployed site really reports, measured three times in
+      // `tool/drive_web_write_order.sh` (see `connection_web.dart`).
+      container.read(storageDurabilityProvider.notifier).report(
+            const StorageDurability(
+              backend: StorageBackend.opfsLocks,
+              missingFeatures: {
+                StorageMissingFeature.dedicatedWorkersInSharedWorkers,
+              },
+            ),
+          );
+      final hung = Completer<void>();
+      addTearDown(hung.complete);
+
+      unawaited(awaitBootWork(container, hung.future));
+      await tester.pump(kBootStorageDeadline + _tick);
+
+      final verdict = container.read(storageDurabilityProvider);
+      expect(verdict.unavailable, isTrue, reason: 'still a stall verdict');
+      expect(
+        verdict.measuredBackend,
+        StorageBackend.opfsLocks,
+        reason: 'the stall verdict used to zero this, so the UI could no longer '
+            'say which backend the browser had actually reached',
+      );
+      expect(
+        verdict.missingFeatures,
+        {StorageMissingFeature.dedicatedWorkersInSharedWorkers},
+        reason: 'THE field-report assertion: this set is the `· missing: …` '
+            'segment both storage banners render, and it came back absent from '
+            'a real report because the overlay zeroed it',
+      );
+      expect(
+        verdict.backend,
+        isNull,
+        reason: 'nothing is in effect; the banners must still say "unavailable"',
+      );
+    },
+  );
+
+  testWidgets(
     'SLOW is not HUNG: work that lands after the first frame but before the '
     'storage deadline is never declared unavailable',
     (tester) async {

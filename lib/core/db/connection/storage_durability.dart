@@ -102,7 +102,8 @@ class StorageDurability {
   const StorageDurability({
     required this.backend,
     this.missingFeatures = const {},
-  })  : unavailable = false,
+  })  : measuredBackend = backend,
+        unavailable = false,
         unavailableReason = null,
         unavailableCause = null;
 
@@ -121,6 +122,7 @@ class StorageDurability {
   /// runs `openConnection`).
   const StorageDurability.probing()
       : backend = null,
+        measuredBackend = null,
         missingFeatures = const {},
         unavailable = false,
         unavailableReason = null,
@@ -141,14 +143,65 @@ class StorageDurability {
     this.unavailableReason, {
     StorageUnavailableCause cause = StorageUnavailableCause.failed,
   })  : backend = null,
+        measuredBackend = null,
         missingFeatures = const {},
+        unavailable = true,
+        unavailableCause = cause;
+
+  /// An [unavailable] verdict OVERLAID on a verdict the connection layer had
+  /// already MEASURED — for a failure discovered by something other than the
+  /// open itself (boot's storage deadline in `main.dart`, a timed-out retry in
+  /// `storage_retry_provider.dart`).
+  ///
+  /// Exists because [StorageDurability.unavailable] hard-zeroes
+  /// [measuredBackend] and [missingFeatures], and those two fields are the ONLY
+  /// field-diagnosable facts this app ever learns about a browser's storage.
+  /// Production measures `backend: opfsLocks, missingFeatures:
+  /// {dedicatedWorkersInSharedWorkers}` (see `connection_web.dart`) seconds
+  /// before a stall verdict can exist — so overwriting with the zeroed
+  /// constructor DESTROYED the report and left the banner's diagnostic line
+  /// with no `· missing: …` segment at all, which is exactly what a real field
+  /// report came back missing. Use this whenever a PREVIOUS verdict exists.
+  ///
+  /// Invents nothing: it copies [measured]'s measurements verbatim and leaves
+  /// them null/empty when nothing was measured yet (a stall during
+  /// [StorageDurability.probing], i.e. before `WasmDatabase.open`'s feature
+  /// probe resolved — the honest answer there is "we never found out").
+  ///
+  /// [backend] itself stays `null`, deliberately: it means "the backend
+  /// currently IN EFFECT", three UI/log sites render `backend?.name ??
+  /// (unavailable ? 'unavailable' : 'probing')`, and a database that cannot be
+  /// reached has no backend in effect no matter what was once probed. The
+  /// preserved value lives on [measuredBackend].
+  StorageDurability.unavailableOver(
+    StorageDurability measured,
+    this.unavailableReason, {
+    StorageUnavailableCause cause = StorageUnavailableCause.failed,
+  })  : backend = null,
+        measuredBackend = measured.measuredBackend,
+        missingFeatures = measured.missingFeatures,
         unavailable = true,
         unavailableCause = cause;
 
   /// `null` while [isProbing] or [unavailable] — nothing was ever chosen.
   final StorageBackend? backend;
 
+  /// The backend the connection layer actually measured, which SURVIVES an
+  /// [unavailableOver] overlay — unlike [backend], which is about what is in
+  /// effect now. Equal to [backend] for every other shape, and `null` when no
+  /// probe ever answered.
+  ///
+  /// This is the single most useful fact in a "my topos are gone" report: it
+  /// says whether the browser had reached OPFS, been pushed down to IndexedDB,
+  /// or never got a backend at all.
+  final StorageBackend? measuredBackend;
+
   /// Empty on native and whenever drift found everything it looked for.
+  ///
+  /// Deliberately survives an [unavailableOver] overlay — see that
+  /// constructor. Rendered by `topos_storage_banner.dart` and
+  /// `topos_screen.dart` as the `· missing: …` segment, and by
+  /// [logStorageDurability].
   final Set<StorageMissingFeature> missingFeatures;
 
   /// True when the connection layer's open call itself threw before any
@@ -185,6 +238,7 @@ class StorageDurability {
       identical(this, other) ||
       (other is StorageDurability &&
           other.backend == backend &&
+          other.measuredBackend == measuredBackend &&
           setEquals(other.missingFeatures, missingFeatures) &&
           other.unavailable == unavailable &&
           other.unavailableReason == unavailableReason &&
@@ -193,6 +247,7 @@ class StorageDurability {
   @override
   int get hashCode => Object.hash(
         backend,
+        measuredBackend,
         Object.hashAllUnordered(missingFeatures),
         unavailable,
         unavailableReason,
@@ -202,6 +257,7 @@ class StorageDurability {
   @override
   String toString() =>
       'StorageDurability(backend: $backend, durable: $isDurable, '
+      '${measuredBackend == backend ? '' : 'measuredBackend: $measuredBackend, '}'
       'missingFeatures: $missingFeatures, unavailable: $unavailable'
       '${unavailableReason == null ? '' : ', unavailableReason: $unavailableReason'}'
       '${unavailableCause == null ? '' : ', unavailableCause: ${unavailableCause!.name}'})';
@@ -299,8 +355,16 @@ void logStorageDurability(StorageDurability durability) {
   final reasonSuffix = durability.unavailable
       ? ' reason=${durability.unavailableReason}'
       : '';
+  // Only when it ADDS information: for every non-overlaid shape
+  // `measuredBackend` is just `backend` again, and repeating it would bury the
+  // one case that matters — an `unavailable` verdict that still remembers the
+  // backend a real browser had reached (`StorageDurability.unavailableOver`).
+  final measuredSuffix =
+      durability.measuredBackend == durability.backend
+          ? ''
+          : ' measured=${durability.measuredBackend?.name ?? 'none'}';
   debugPrint(
-    'masi/storage: backend=$backendLabel '
+    'masi/storage: backend=$backendLabel$measuredSuffix '
     'durable=${durability.isDurable} '
     'missingFeatures=${missing.join(',')}'
     '$reasonSuffix',
