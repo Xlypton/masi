@@ -4,9 +4,11 @@ import 'package:go_router/go_router.dart';
 
 import '../core/db/storage_durability_provider.dart';
 import '../features/account/application/pwa_install_providers.dart';
+import '../features/backup/application/sync_orchestrator.dart';
 import '../features/topo/presentation/canvas_chrome.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'install_banner.dart';
+import 'storage_pressure_banner.dart';
 import 'storage_retry_banner.dart';
 import 'theme.dart';
 
@@ -198,6 +200,12 @@ class _NavTab extends StatelessWidget {
 /// and because "add this app to your home screen" is absurd advice while the
 /// app cannot open its own storage — suppressing the install prompt on that
 /// path is the right call regardless of the layout constraint above.
+/// [StoragePressureBanner] (task #51) ranks next, above the install prompt,
+/// for the same "suppressing the install prompt is still correct" reasoning
+/// one step down in severity: storage being NEARLY full is a real,
+/// near-term risk to the user's own unsaved work (the very next own-photo
+/// import can throw on quota), just not the immediate one an unopenable
+/// database already is.
 class ShellNotices extends ConsumerWidget {
   const ShellNotices({super.key});
 
@@ -211,6 +219,18 @@ class ShellNotices extends ConsumerWidget {
     // function's doc.
     final notice = storageRetryNotice(ref.watch(storageDurabilityProvider));
     if (notice != null) return StorageRetryBanner(notice: notice);
+
+    // #51: the proactive "storage is nearly full" warning. Reuses #49 P1's
+    // existing signal (`SyncOrchestratorState.lastPublicPhotoPruneOutcome`,
+    // already refreshed on every successful pull) rather than inventing a
+    // second one — see `PublicPhotoPruneOutcome.automaticReliefExhausted`'s
+    // doc for exactly which two prune reasons mean "nothing further this app
+    // can do on its own."
+    final pruneOutcome = ref.watch(syncOrchestratorProvider).lastPublicPhotoPruneOutcome;
+    if (pruneOutcome != null && pruneOutcome.automaticReliefExhausted) {
+      return const StoragePressureBanner();
+    }
+
     return const InstallBanner();
   }
 }
