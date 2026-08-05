@@ -206,6 +206,21 @@ for weight in Regular Medium Bold; do
   echo "    ok: $FONT_FILE present and non-empty"
 done
 
+echo "==> e2e-entrypoint leak gate"
+# `lib/main_e2e.dart` boots the app with auth bypassed (fake signed-in session,
+# web auth wall off). It is reachable only via an explicit `-t`, so a normal
+# build cannot include it — but "cannot" is worth verifying rather than
+# assuming, because the failure mode is shipping an auth bypass to production.
+# `e2e@masi.test` is a string literal in that file and survives into the
+# emitted bundle whenever it is compiled in.
+if grep -rq "e2e@masi\.test" build/web; then
+  echo "FAIL: build/web contains the e2e marker 'e2e@masi.test' — this bundle" >&2
+  echo "      was built from lib/main_e2e.dart, which bypasses authentication." >&2
+  echo "      NEVER deploy this. Rebuild with the default entrypoint." >&2
+  exit 1
+fi
+echo "    ok: no e2e entrypoint in the bundle"
+
 echo "==> service-worker precache manifest"
 # Rewrites the two BUILD STAMP lines in build/web/sw.js (which `flutter build
 # web` copied verbatim from web/sw.js) with this build's precache list and a
