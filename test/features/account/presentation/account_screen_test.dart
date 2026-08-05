@@ -1381,6 +1381,51 @@ void main() {
     });
   });
 
+  group(
+    'googleSignInErrorMessage: STAGE 1 diagnostic rendering — pure '
+    'classification',
+    () {
+      test(
+        'an AuthException with a message renders that message verbatim '
+        '(the STAGE-1 diagnostic path — which step, which host)',
+        () {
+          expect(
+            googleSignInErrorMessage(
+              const AuthException(
+                'Could not open the Google sign-in page. '
+                '(redirect to test.supabase.co did not leave the page)',
+              ),
+            ),
+            'Could not open the Google sign-in page. '
+            '(redirect to test.supabase.co did not leave the page)',
+          );
+        },
+      );
+
+      test(
+        'an AuthException with an empty message falls back to the generic '
+        'message rather than rendering nothing',
+        () {
+          expect(
+            googleSignInErrorMessage(const AuthException('')),
+            'Google sign-in failed. Please try again.',
+          );
+        },
+      );
+
+      test(
+        'a non-AuthException error (e.g. a plain network failure) falls '
+        'back to the generic message, unchanged from before STAGE 1',
+        () {
+          expect(
+            googleSignInErrorMessage(Exception('boom')),
+            'Google sign-in failed. Please try again.',
+          );
+        },
+      );
+    },
+  );
+
   group('#54 (approved-login UX): the not-approved OTP error message', () {
     testWidgets(
       'sendMagicLink throwing the disabled-signup AuthException shows the '

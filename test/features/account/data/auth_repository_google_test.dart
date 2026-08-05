@@ -142,6 +142,37 @@ void main() {
         );
       },
     );
+
+    test(
+      'STAGE 1: the refusal message names the host it tried to redirect to, '
+      'but never the query string (which carries the PKCE code_challenge)',
+      () async {
+        final repository = SupabaseAuthRepository(
+          client,
+          canRedirectTopLevel: () => true,
+          redirectTopLevel: (url) async => false,
+        );
+
+        try {
+          await repository.signInWithGoogle();
+          fail('expected an AuthException');
+        } catch (e) {
+          expect(e, isA<AuthException>());
+          final message = (e as AuthException).message;
+          expect(
+            message,
+            contains(authority),
+            reason: 'must name which host the redirect targeted',
+          );
+          expect(
+            message,
+            isNot(contains('code_challenge')),
+            reason: 'must never leak the PKCE query string into a rendered '
+                'error message',
+          );
+        }
+      },
+    );
   });
 
   group('signInWithGoogle — native (no top-level redirect)', () {

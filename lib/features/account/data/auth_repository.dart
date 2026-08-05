@@ -179,10 +179,26 @@ class SupabaseAuthRepository implements AuthRepository {
   /// Message for the "control was never handed to the provider" failure, on
   /// either platform. Reported as an [AuthException] — the same type every
   /// other auth failure in this class surfaces (they all bubble up from
-  /// gotrue) — so `account_screen.dart`'s existing `catch` renders its
-  /// "Google sign-in failed" message instead of the user seeing nothing.
+  /// gotrue) — so `account_screen.dart`'s `catch` can render it instead of
+  /// the user seeing nothing.
   static const String _oauthHandoffFailed =
       'Could not open the Google sign-in page.';
+
+  /// STAGE-1 diagnostic wrapper around [_oauthHandoffFailed]: names the step
+  /// that was reached (the top-level redirect attempt) and the HOST ONLY of
+  /// the URL handed to [_redirectTopLevel] — never the full URL, which carries
+  /// the PKCE `code_challenge`/`redirect_to` query parameters. Exists so a
+  /// failure reported from an iOS home-screen standalone PWA (which cannot be
+  /// attached to a debugger) is discriminable from a screenshot alone,
+  /// instead of the bare, stepless [_oauthHandoffFailed].
+  ///
+  /// TRIMMABLE: once the standalone-PWA cause is confirmed fixed on-device,
+  /// this can collapse back to plain [_oauthHandoffFailed].
+  static String _oauthHandoffFailedDiagnostic(String attemptedUrl) {
+    final host = Uri.tryParse(attemptedUrl)?.host;
+    final where = (host == null || host.isEmpty) ? 'unknown host' : host;
+    return '$_oauthHandoffFailed (redirect to $where did not leave the page)';
+  }
 
   /// Must match the `CFBundleURLTypes` scheme registered in
   /// `ios/Runner/Info.plist` and the intent-filter scheme/host registered in
@@ -276,7 +292,9 @@ class SupabaseAuthRepository implements AuthRepository {
         redirectTo: redirectTo,
       );
       final redirected = await _redirectTopLevel(response.url);
-      if (!redirected) throw const AuthException(_oauthHandoffFailed);
+      if (!redirected) {
+        throw AuthException(_oauthHandoffFailedDiagnostic(response.url));
+      }
       return;
     }
 

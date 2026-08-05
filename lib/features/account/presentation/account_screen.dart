@@ -192,7 +192,7 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       await ref.read(authRepositoryProvider).signInWithGoogle();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _error = 'Google sign-in failed. Please try again.');
+      setState(() => _error = googleSignInErrorMessage(e));
     } finally {
       if (mounted) {
         setState(() => _sending = false);
@@ -1025,6 +1025,29 @@ bool isNotApprovedAuthError(Object error) {
       message.contains('otp_disabled') ||
       message.contains('signup_disabled') ||
       message.contains('user not found');
+}
+
+/// Message shown for a failed [AuthRepository.signInWithGoogle] call.
+///
+/// STAGE 1: `signInWithGoogle`'s web path now throws a diagnostic
+/// [AuthException] naming which step was reached and the host it tried to
+/// redirect to (see `auth_repository.dart`'s `_oauthHandoffFailedDiagnostic`)
+/// when an iOS home-screen standalone PWA silently ignores the top-level
+/// navigation — a failure that otherwise renders as nothing at all on a
+/// device with no attached debugger. Rendering that message verbatim (rather
+/// than the previous blanket "Google sign-in failed") is what makes the
+/// failure discriminable from a screenshot. Any other error (network failure,
+/// a plain non-[AuthException] throw, etc.) falls back to the generic
+/// message, unchanged from before.
+///
+/// TRIMMABLE: once the standalone-PWA cause is confirmed fixed on-device,
+/// this can collapse back to always returning the generic message.
+@visibleForTesting
+String googleSignInErrorMessage(Object error) {
+  if (error is AuthException && error.message.isNotEmpty) {
+    return error.message;
+  }
+  return 'Google sign-in failed. Please try again.';
 }
 
 /// The local-part of [email] (everything before the first `@`), used as the
