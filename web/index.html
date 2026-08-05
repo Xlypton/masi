@@ -20,8 +20,33 @@
   <meta content="IE=Edge" http-equiv="X-UA-Compatible">
   <meta name="description" content="Masi — visual-first climbing route topo editor. Document walls, sectors, and routes with photo-based topos.">
 
-  <!-- Mobile-first viewport: notch/home-indicator-safe (iPhone) via viewport-fit=cover. -->
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+  <!-- MUST stay byte-identical to the string Flutter's web engine installs, at
+       full_page_embedding_strategy.dart:87-92. The engine's embedding-strategy
+       constructor unconditionally REMOVES every <meta name="viewport"> on the
+       page (the `viewportMeta.remove()` at :86 is outside the assert, so it
+       happens in release too) and appends its own -- after the browser has
+       already laid the page out with ours.
+       Any difference between the two therefore becomes a mid-life viewport
+       change. That matters more here than on most Flutter web apps: on iOS the
+       engine takes its ONE geometry input from
+       `document.documentElement.clientWidth/clientHeight` -- the LAYOUT
+       viewport (full_page_dimensions_provider.dart:71-84) -- while the only
+       resize it subscribes to is the VISUAL viewport (:29-36), so it cannot
+       observe a layout-viewport-only change and has no path to invalidate it.
+       Ours used to carry `viewport-fit=cover`, which made the swap flip
+       viewport-fit cover->contain a beat after boot: the whole view translated
+       and its bottom clipped, and touches landed off painted content until a
+       real rotation forced WebKit to re-resolve. Matching the engine's string
+       makes the swap a no-op instead.
+       `viewport-fit=cover` also bought this app nothing: web reports
+       MediaQuery.viewPadding/padding as a const zero (window.dart:97,
+       platform_dispatcher.dart:1782-1784), so no safe-area inset can reach a
+       widget, and nothing here reads env(safe-area-inset-*). The app's notch
+       clearance comes precisely FROM the engine's non-cover viewport, which is
+       why matching it is the safe direction and keeping `cover` was not.
+       Pinned by test/web_geometry_source_test.dart, which compares this string
+       against the installed SDK's. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <meta name="theme-color" media="(prefers-color-scheme: light)" content="#F3F1F9">
   <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#100D17">
 
@@ -33,9 +58,15 @@
        below) paints right through it — seamless in both themes. `default`
        reserves an opaque, non-theme-aware strip that meets the app background
        below it, showing a hairline seam at the top in both light and dark
-       (bug #74). Content stays clear of the notch because viewport-fit=cover
-       feeds the top safe-area inset into Flutter's MediaQuery (same mechanism
-       that lifts the bottom nav off the home indicator, #63). -->
+       (bug #74). That seam fix depends ONLY on this style plus the root
+       background — not on the viewport meta.
+       Content stays clear of the notch because the engine's own replacement
+       viewport meta omits viewport-fit, so iOS starts the layout viewport
+       below the status bar. It is NOT because an inset reaches MediaQuery:
+       on web viewPadding/padding are a const zero, so every SafeArea(top:)
+       in this app contributes exactly nothing. The bottom nav clears the home
+       indicator via an explicit 32px floor in nav_shell.dart, also not an
+       inset. -->
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Masi">
   <link rel="apple-touch-icon" href="icons/Icon-192.png">
@@ -79,13 +110,17 @@
       }
     }
 
-    /* Dynamic viewport height so the app fills the screen as mobile browser
-       chrome expands/collapses (falls back to height:100% where unsupported). */
-    @supports (height: 100dvh) {
-      html, body {
-        height: 100dvh;
-      }
-    }
+    /* No `height: 100dvh` override here, deliberately. `height: 100%` above
+       resolves against the initial containing block — i.e. the viewport — so
+       <body>'s box cannot diverge from the `position: fixed; inset: 0` the
+       engine applies to it (full_page_embedding_strategy.dart:50-58). `100dvh`
+       CAN diverge from the viewport, and combined with the engine's
+       top:0/bottom:0 it over-constrains that fixed box (CSS resolves the
+       conflict by ignoring `bottom`), leaving <body> a different height from
+       the viewport for no benefit. It never helped the collapsing-browser-
+       chrome case it was added for either: the root element's clientHeight is
+       the viewport height regardless of <html>'s own height, so this rule was
+       never in the engine's measurement path. */
 
     /* #74's cosmetic 1px hairline fix (this comment marks where it lived —
        a standalone-only rule that set flutter-view's `top` offset to
@@ -183,60 +218,10 @@
       var splash = document.getElementById('splash');
       if (!splash) return;
 
-      function hide() {
-        splash.classList.add('splash-hidden');
-        setTimeout(function () {
-          splash.remove();
-        }, 300);
-      }
-
-      // On a COLD-LAUNCHED installed iOS PWA the layout viewport is briefly
-      // missing its viewport-fit=cover safe-area adjustment, so the top inset
-      // arrives a beat after the first frame. When it lands, everything bound
-      // to it moves down by the full inset (47-59px on a notched iPhone) --
-      // the top pill, the photo strip, the bottom cluster -- while the
-      // deliberately inset-blind full-bleed topo canvas does not move at all.
-      // The result reads as "the controls are shifted away from the photo".
-      //
-      // This does NOT fake any geometry (an earlier fix aliased
-      // documentElement.clientHeight to window.innerHeight and broke touch
-      // input app-wide -- see the REMOVED comments above and
-      // test/web_geometry_source_test.dart). It only READS the viewport and
-      // keeps the branded splash up across the reflow, so the settle happens
-      // behind it instead of in front of the climber.
-      //
-      // Hard-capped: if the viewport never goes quiet we hide anyway, so the
-      // worst case is the visible jump we have today, never a stuck splash.
-      var standalone =
-        (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) ||
-        window.navigator.standalone === true;
-      if (!standalone) {
-        hide();
-        return;
-      }
-
-      var root = document.documentElement;
-      var lastH = root.clientHeight;
-      var lastW = root.clientWidth;
-      var quietFrames = 0;
-      var deadline = performance.now() + 700;
-      (function settle() {
-        var h = root.clientHeight;
-        var w = root.clientWidth;
-        if (h !== lastH || w !== lastW) {
-          lastH = h;
-          lastW = w;
-          quietFrames = 0;
-        } else {
-          quietFrames++;
-        }
-        // Three consecutive unchanged frames (~50ms) means WebKit has settled.
-        if (quietFrames >= 3 || performance.now() >= deadline) {
-          hide();
-          return;
-        }
-        requestAnimationFrame(settle);
-      })();
+      splash.classList.add('splash-hidden');
+      setTimeout(function () {
+        splash.remove();
+      }, 300);
     });
 
     // --- Offline shell (design doc §2b) ---------------------------------
@@ -295,64 +280,6 @@
         console.warn('masi/sw: warm failed:', error);
       });
     });
-
-    // --- Engine re-measure nudge (iOS layout-viewport gap) ---------------
-    // Verified in the installed SDK (3.44.2), not inferred:
-    //
-    //  * On iOS the engine sizes the view from
-    //    `documentElement.clientWidth/clientHeight` — the LAYOUT viewport —
-    //    deliberately, to dodge a WebKit rotation bug
-    //    (full_page_dimensions_provider.dart:65-94, branched on
-    //    `operatingSystem == iOs`).
-    //  * But the only resize it subscribes to is on the VISUAL viewport:
-    //    `domWindow.visualViewport ?? domWindow` (same file, :25-37). Since
-    //    visualViewport always exists on modern iOS, it never listens to
-    //    `window`'s resize, and there is no ResizeObserver, no
-    //    `orientationchange` listener and no DPR listener in full-page mode.
-    //  * `_handleBrowserResize` is the only non-disposal path to
-    //    `invokeOnMetricsChanged` (window.dart:325), and `_physicalSize` is a
-    //    `??=` cache that is never invalidated (window.dart:170 — its
-    //    "cleared at the end of the frame" doc comment is stale).
-    //
-    // So a change that moves the LAYOUT viewport without changing the visual
-    // viewport's CSS dimensions notifies nobody, and the framework keeps
-    // laying out at the launch-time size indefinitely. The engine causes
-    // exactly such a change itself: it deletes this page's
-    // `<meta name="viewport">` and substitutes one WITHOUT viewport-fit=cover
-    // (full_page_embedding_strategy.dart:70-98) after the browser has already
-    // laid the page out.
-    //
-    // Consequence, and why the offset persisted rather than self-correcting:
-    // `<flutter-view>` keeps a stale inline height at origin 0,0, so a tap
-    // outside it lands on `<body>`; `event.target != rootElement` then takes
-    // the `clientY - getBoundingClientRect().y` branch of
-    // computeEventOffsetToTarget (event_position_helper.dart:30-64), which
-    // mixes WebKit's visual-viewport-relative clientY with a
-    // layout-viewport-relative rect. Nothing recomputes that away — only a
-    // real visualViewport resize does (rotate the device, or focus a text
-    // field).
-    //
-    // The nudge: re-dispatch a plain `resize` ON visualViewport for the events
-    // the engine forgot to listen to. This overrides no property and fakes no
-    // geometry — it makes the engine re-run its OWN measurement through its
-    // own handler. A redundant notify is harmless (it recomputes and compares).
-    (function () {
-      var vv = window.visualViewport;
-      if (!vv) return; // engine already listens on window in this case.
-      function remeasure() {
-        try {
-          vv.dispatchEvent(new Event('resize'));
-        } catch (_) {}
-      }
-      window.addEventListener('resize', remeasure);
-      window.addEventListener('orientationchange', remeasure);
-      // Cover the boot settle, including the engine's own meta swap above.
-      window.addEventListener('flutter-first-frame', function () {
-        remeasure();
-        setTimeout(remeasure, 120);
-        setTimeout(remeasure, 600);
-      });
-    })();
 
     // Long-press / right-click context menu must never interrupt canvas
     // interaction on web.

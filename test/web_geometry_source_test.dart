@@ -110,29 +110,104 @@ void main() {
       );
     });
 
-    // The splash is held across the cold-launch viewport settle on standalone
-    // iOS (the top safe-area inset lands a beat after the first frame, and
-    // everything bound to it jumps down while the inset-blind full-bleed topo
-    // canvas does not). That hold reads the viewport instead of faking it —
-    // the safe mechanism — but a hold with no ceiling would be indistinguish-
-    // able from the boot hang that #19 had to grow a retry affordance for.
-    // So: pin that the settle loop always has an escape hatch. Asserted as a
-    // property (any `performance.now()` deadline comparison or a setTimeout
-    // fallback), not as the exact expression, so a rephrase still counts.
-    test('the standalone splash hold is bounded, never open-ended', () {
-      final source = _read('web/index.html');
-      final settle = RegExp(
-        r'requestAnimationFrame\s*\(\s*settle\s*\)',
-      ).hasMatch(source);
-      if (!settle) return; // hold removed entirely — nothing to bound.
+    // THE INVARIANT, not another "don't do the thing we already thought of".
+    //
+    // The engine's embedding-strategy constructor removes EVERY
+    // `meta[name="viewport"]` on the page — unconditionally, the `remove()`
+    // sits outside the assert so it happens in release too — and appends its
+    // own, AFTER the browser has already laid the page out with ours
+    // (full_page_embedding_strategy.dart). Any difference between the two
+    // strings is therefore a mid-life viewport change.
+    //
+    // On iOS that is not cosmetic. The engine's ONE geometry input there is
+    // `documentElement.clientWidth/clientHeight` — the LAYOUT viewport — and
+    // the only resize it subscribes to is the VISUAL viewport, so it cannot
+    // observe a layout-viewport-only change and has no path to invalidate it.
+    // Shipping `viewport-fit=cover` here (which the engine's string omits)
+    // flipped viewport-fit a beat after boot: the view translated, its bottom
+    // clipped, and touch landed off painted content until a real rotation
+    // forced WebKit to re-resolve. Device-confirmed: rotating fixed it, a
+    // synthetic visualViewport resize did not.
+    //
+    // Compared as a PARSED ARGUMENT MAP, so formatting/order/whitespace
+    // differences don't fail it and a real semantic divergence does. This also
+    // fails on an SDK UPGRADE that changes the engine's string — which is the
+    // point: without it, this fix silently rots.
+    test('our viewport meta matches the one the engine will install', () {
+      Map<String, String> parseViewport(String content) {
+        return {
+          for (final part in content.split(','))
+            if (part.trim().isNotEmpty)
+              part.split('=').first.trim(): part.contains('=')
+                  ? part.split('=').sublist(1).join('=').trim()
+                  : '',
+        };
+      }
+
+      final ours = RegExp(
+        r'<meta\s+name="viewport"\s+content="([^"]*)"',
+      ).firstMatch(_read('web/index.html'));
+      expect(ours, isNotNull, reason: 'no viewport meta in web/index.html');
+
+      // Locate the web engine sources by ASCENDING from the test executable
+      // until a directory contains `flutter_web_sdk`, rather than assuming a
+      // fixed depth. Under `flutter test` the executable is
+      // <flutter>/bin/cache/artifacts/engine/<host>/flutter_tester — NOT
+      // .../dart-sdk/bin/dart — so a hardcoded parent count silently skips
+      // this test instead of running it, which is worse than failing.
+      const relative =
+          'flutter_web_sdk/lib/_engine/engine/view_embedder/'
+          'embedding_strategy/full_page_embedding_strategy.dart';
+      File? found;
+      var dir = File(Platform.resolvedExecutable).parent;
+      for (var i = 0; i < 10; i++) {
+        final candidate = File(p.join(dir.path, relative));
+        if (candidate.existsSync()) {
+          found = candidate;
+          break;
+        }
+        if (dir.parent.path == dir.path) break; // hit the filesystem root
+        dir = dir.parent;
+      }
+      final engineFile = found ?? File(relative);
+      if (!engineFile.existsSync()) {
+        // Skip rather than fail: a differently-laid-out SDK must not turn this
+        // guard into a red herring. It still runs on this machine and in CI.
+        markTestSkipped('engine source not found at ${engineFile.path}');
+        return;
+      }
+
+      // `..content =` is followed by one or more adjacent Dart string literals.
+      final assignment = RegExp(
+        r'\.\.content\s*=\s*((?:\s*'
+        "'[^']*'"
+        r')+)\s*;',
+      ).firstMatch(engineFile.readAsStringSync());
       expect(
-        RegExp(r'performance\.now\s*\(\s*\)\s*>=|setTimeout').hasMatch(source),
-        isTrue,
-        reason: 'the splash-hold loop in web/index.html recurses through '
-            'requestAnimationFrame with no deadline or timeout in sight. If '
-            'the viewport never goes quiet, the branded splash stays up '
-            'forever and the app looks hung with no retry affordance — the '
-            'exact failure mode #19 had to be fixed for. Keep the hard cap.',
+        assignment,
+        isNotNull,
+        reason: 'could not find the engine\'s `..content =` viewport '
+            'assignment in ${engineFile.path} — the engine may have been '
+            'restructured; re-read it and update this guard rather than '
+            'deleting it.',
+      );
+      final theirs = RegExp("'([^']*)'")
+          .allMatches(assignment!.group(1)!)
+          .map((m) => m.group(1)!)
+          .join();
+
+      expect(
+        parseViewport(ours!.group(1)!),
+        equals(parseViewport(theirs)),
+        reason: 'web/index.html\'s viewport meta disagrees with the string '
+            'the engine installs at runtime ("$theirs"). The engine removes '
+            'ours and appends its own after first layout, so any difference '
+            'becomes a viewport change mid-boot — and on iOS the layout '
+            'viewport is the engine\'s only geometry input, with no way to '
+            'observe or invalidate a change to it. This exact divergence '
+            '(`viewport-fit=cover`) shipped a visible shift plus offset touch '
+            'that only a device rotation cleared. If the SDK changed its '
+            'string, match the new one here; do not weaken this test.',
       );
     });
   });
