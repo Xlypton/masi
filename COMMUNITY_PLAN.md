@@ -136,6 +136,8 @@ forever. Design the escape hatch now, even if it ships later:
 ### C-5 — Suggested edits
 
 > Anyone can suggest an edit to a published topo. The owner approves or rejects it.
+> **DECIDED (2026-08-06): suggestions may edit route geometry, not just metadata.**
+> **DECIDED (2026-08-06): an owner's approval is final — no admin re-review.**
 
 Non-owners currently have **zero** write access to any content table, so this needs a new one:
 `topo_edit_suggestions`.
@@ -143,20 +145,53 @@ Non-owners currently have **zero** write access to any content table, so this ne
 - INSERT: any authenticated user, `WITH CHECK (authorId = auth.uid()::text)`.
 - SELECT: author, the target wall's owner, or an admin.
 - UPDATE: **target wall's owner only** (to set status) — plus admins.
-- The payload is a **proposed patch**, not a whole topo: `{field: newValue}` for scalar metadata
-  (name, description, grade, style tags, stars, coordinates) and a structured form for route
-  geometry.
+- The payload is a **proposed patch**, not a whole topo.
 
 **Why a patch and not a fork.** When the owner accepts, their own client applies the patch to
 their own rows and syncs normally. The entire apply-path stays inside the existing
 owner-writes-own-rows model — no new write authority, no change to the sync engine, no merge
-algorithm. That is worth a lot.
+algorithm. That is worth a lot, and geometry does not change it: an accepted line is still just
+the owner's client writing the owner's own `routes` row.
+
+#### C-5a — Suggestion kinds
+
+| Kind | Payload |
+|---|---|
+| `topo.metadata` | `{field: newValue}` over wall name / description / coordinates |
+| `route.metadata` | target `routeId` + `{field: newValue}` over name, grade, style tags, stars, description, beta URL |
+| `route.geometry` | target `routeId` + proposed `points` / `symbols` |
+| `route.add` | a whole proposed route (points, symbols, metadata) |
+| `route.delete` | target `routeId` + reason |
+
+#### C-5b — What geometry suggestions need that metadata ones do not
+
+Four things, all of which fall out of how routes are actually stored:
+
+1. **Pin to a photo.** `Routes.photoId` is a required FK and points are stored in **percent
+   space, normalized to the image** (`topo_route.dart:46`). A line drawn against photo A is
+   meaningless against photo B. Every geometry suggestion stores the `photoId` it was drawn on,
+   and is shown as stale if the topo's primary photo has changed since.
+2. **Use the database id, not the domain id.** `TopoRoute.id` is an `int` the repository
+   **reassigns 1..n on every load** (`route_mapper.dart:91-93`) — it is not stable and never was.
+   A payload referencing it would silently point at a different route after any reload. Target
+   `Routes.id` (the text uuid) exclusively.
+3. **A visual diff, not a JSON diff.** Nobody can review a line by reading coordinates. The owner
+   sees the proposed line overlaid on the current one on the real photo — current in its normal
+   colour, proposed highlighted. The existing `TopoPainter` already draws a list of routes, so
+   this is mostly a matter of handing it two sets with different styling rather than new
+   rendering work.
+4. **A propose-mode canvas.** The suggester opens the topo in an editing surface that writes to a
+   suggestion payload instead of to `routes`. `DrawController` already produces exactly the shape
+   needed; the change is where the result is sent, not how it is captured. **This is the single
+   largest piece of UI work in the whole plan** — budget for it accordingly and treat metadata
+   suggestions as the shippable first slice.
 
 **Guardrails.**
 - Rate-limit suggestions per author per day, and per author per topo. Suggestion spam is the
   cheapest possible griefing vector: it costs the troll one tap and the owner one notification.
 - A suggestion targets a **specific version** (C-8). If the topo changed underneath it, show the
-  owner that it was written against an older version rather than applying it blind.
+  owner that it was written against an older version rather than applying it blind. This matters
+  far more for geometry than for a typo fix.
 - An owner who ignores suggestions is not a bug, but a topo with many accepted-elsewhere
   suggestions and an absent owner is a signal — surface it to admins (C-11).
 - Attribution: accepted suggestions credit their author. This is most of the reward for
@@ -189,6 +224,28 @@ Proposal, in order of cost:
    - **This one is genuinely arguable and it is your call** — see Open Question 3.
 4. **Merge suggestion.** "This is the same boulder as X" as a report reason, resolved by an admin
    who can link them as alternates rather than deleting either.
+
+### C-5c — What now carries the weight, given no re-review
+
+Approval is a **one-time gate**. Once a topo is published, the owner — and anyone whose
+suggestion the owner accepts — can change anything about it, forever, with no admin in the loop.
+
+That is a defensible choice and it is how most UGC platforms work. But it should be made with
+eyes open, because it moves the load:
+
+- **The review queue does much less than it appears to.** It stops bad *submissions*. It does
+  nothing about a good submission that becomes bad later, and it is fully bypassable by the
+  obvious route: submit something clean, get approved, then replace the content.
+- **C-7 (reporting) and C-8 (version history) become load-bearing**, not "nice additions". With
+  no re-review they are the *only* thing standing between an approved topo and vandalism. If
+  either is cut, the answer to "what stops someone wrecking a topo everyone relies on" is
+  genuinely "nothing". I would not ship community editing without both.
+
+**C-5d — Material-change signal.** The cheap middle ground, and my recommendation: a change to a
+published topo that is *structural* — geometry replaced, routes deleted, primary photo swapped —
+**posts a notice to the admin queue without blocking anything**. Publication is instant, exactly
+as decided; an admin simply gets to see that a topo changed shape. It costs the owner nothing, it
+catches bait-and-switch, and it is a row insert rather than a workflow.
 
 ### C-7 — Reporting
 
@@ -325,10 +382,18 @@ Each phase is independently shippable and leaves the app in a coherent state.
    the point of no return for the feed: fix W-1 here or not at all.
 3. **Withdrawal cooldown + delete protection** (C-3). Needs the per-row push-error isolation
    noted above; verify that first.
-4. **Version history** (C-8) — before edits, so edits are reversible from day one.
-5. **Suggested edits** (C-5) + attribution.
-6. **Reports** (C-7) + trust levels (C-4).
-7. **Duplicates & ranking** (C-6), **last-verified** (C-10).
+4. **Version history** (C-8) — before edits, so edits are reversible from day one. Not optional
+   now that owner approval is final (C-5c).
+5. **Reports** (C-7) — moved ahead of edits for the same reason: with no admin re-review, these
+   two are the whole safety net, and shipping the edit path before them leaves a window with no
+   recourse at all.
+6. **Metadata suggestions** (C-5, kinds `topo.metadata` / `route.metadata`) + attribution +
+   the material-change notice (C-5d). Proves the propose → review → apply loop end to end on the
+   cheap payloads.
+7. **Geometry suggestions** (C-5, kinds `route.geometry` / `route.add` / `route.delete`) — the
+   propose-a-line canvas and the overlay diff. Largest single piece of UI in the plan; it reuses
+   `DrawController` and `TopoPainter` but earns its own phase.
+8. **Trust levels** (C-4), **duplicates & ranking** (C-6), **last-verified** (C-10).
 
 ---
 
@@ -337,17 +402,17 @@ Each phase is independently shippable and leaves the app in a coherent state.
 1. **Is review per-topo or per-account?** Reviewing every submission forever does not scale past
    your own free evenings. My recommendation: review the first *N* submissions per account, then
    auto-approve with spot checks. Which *N*?
-2. **What exactly can a suggestion change?** Metadata only (cheap, ships fast, covers most real
-   corrections) or route geometry too (much more useful, much harder UI — you need a
-   propose-a-line editor and a visual diff)?
+2. ~~**What exactly can a suggestion change?**~~ **DECIDED 2026-08-06: geometry too.** See C-5a
+   and C-5b. Ship metadata suggestions first; the propose-a-line canvas is the largest single
+   piece of UI in this plan and should not gate the rest.
 3. **Topo rating: new star scale, or rank by existing signals?** I lean strongly toward ranking
    (§C-6.3) because route `stars` already exist and mean something different. But if you want
    users to be able to *say* "this topo is better", a thumbs-up is clearer than a second star.
 4. **What happens to comments, likes and ascents on a withdrawn topo?** People logged real climbs
    against it. My instinct: ascents survive the topo — they are the user's own record.
-5. **Does an approved topo need re-review after an edit?** If not, approval is a one-time gate
-   anyone can walk through and then change everything behind. If yes, every typo fix queues.
-   Probably: re-review only structural changes.
+5. ~~**Does an approved topo need re-review after an edit?**~~ **DECIDED 2026-08-06: no —
+   the owner's approval is final.** See C-5c for what that shifts onto reporting and version
+   history, and C-5d for the non-blocking admin notice I would add to cover bait-and-switch.
 6. **How public is the moderation?** Is a rejection reason private to the owner, or is the queue
    itself visible? Transparent moderation builds trust and costs you the ability to act quietly.
 
