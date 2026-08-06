@@ -325,7 +325,164 @@ rather than after.
 
 ---
 
-## 3. Existing weaknesses this plan has to fix anyway
+## 3. Prior art
+
+Researched 2026-08-06. Sources at the end of this document. Every platform below solves the
+same problem we are solving, most of them for a decade or more, and several arrived at answers
+that contradict things in this plan.
+
+### 3.1 What everyone actually does
+
+| Platform | Gate on edits | How it scales | Deletion |
+|---|---|---|---|
+| **theCrag** | Karma thresholds per action, **scaled by how developed the crag is** | 10 000 karma ⇒ standard updates almost anywhere; 100 000 ⇒ regions. Below that, "Request Permission", assessed manually, ~24 h | **Cannot delete routes.** Merge instead |
+| **Mountain Project** | Regional admins (volunteers) review new areas/routes/photos | Geographic split — each admin owns a region | Admin-mediated |
+| **UKClimbing** | Volunteer crag moderators | Geographic | Moderator-mediated |
+| **Wikipedia** (pending changes) | Public sees the last **accepted** revision; logged-in users see pending | Autoconfirmed editors bypass review entirely | Revert, not delete — history is permanent |
+| **Stack Overflow** | Anyone (even anonymous) may suggest; **2 000 rep** to review | Reputation. +2 rep per accepted edit, capped at 1 000 | Rollback |
+| **Waze** | Rank 1–6; editable area = where you actually drove | L1–L3 automatic by edit count, **L4+ by community deliberation**. Area Manager = a permanent granted area | Rank-gated |
+| **Google Maps** | Multi-signal trust: auto-accept, queue, request evidence, or revert | Editor history + acceptance rate + Local Guide tier | Algorithmic + human |
+| **Discourse** | TL0–TL4 | Explicit stated goal: *sandbox new users so they cannot hurt themselves or others; grant experienced users rights over time so they help moderate* | TL3 flags can auto-hide |
+
+**Not one of them gates edits on the original contributor's approval.** They all gate on
+*earned trust*, usually scoped to a geographic area. That is the finding worth sitting with.
+
+### 3.2 The thing that challenges our model: "nobody owns a route"
+
+This is the settled position in the climbing world, not a fringe view:
+
+- First-ascensionist rights are **a tradition of courtesy**, not ownership — the FA names and
+  grades the route by convention, and that is the extent of it.
+- The **EFF/OpenBeta vs Mountain Project** dispute settled the data question publicly: *facts,
+  like the names and locations of climbing routes, cannot be copyrighted.* MP claimed it "owns
+  all rights and interests in the user-generated work" and filed a DMCA takedown; the EFF pointed
+  out MP's own terms simultaneously said "you own Your Content". Route descriptions may be
+  copyrightable as prose; the route's existence, name, grade and location are not.
+
+**So what does the Masi topo owner actually own?** Their photograph, their drawn lines, and their
+words. Not the route. Not its grade. Not whether it is currently closed or has a loose block.
+
+That distinction is not pedantry — it resolves the tension directly:
+
+> **Owner-approval is right for the artefact and wrong for the facts.**
+>
+> The topo — photo, geometry, description — is a creative work with an author. Requiring the
+> author's approval to change it is correct, defensible, and matches how they'd feel about someone
+> redrawing their lines.
+>
+> But "this route is 7a not 6c", "there's a loose block at the third bolt", "the landowner has
+> closed this crag", "I climbed here last week and it's accurate" are **facts about the world**.
+> Gating those behind one person's inbox means a topo can be knowably wrong, with the correction
+> written and waiting, because someone stopped opening the app.
+
+**Recommended revision (R-1): split the data model along that line.**
+
+| Layer | Who can change it | Gate |
+|---|---|---|
+| **Artefact** — photo, route geometry, name, description | Owner only | Owner approves suggestions (as decided) |
+| **Community facts** — grade opinions, conditions, hazard notes, access status, "still accurate" | Anyone signed in | None, or trust-gated. Aggregated and displayed alongside the owner's values, never overwriting them |
+
+The owner's grade stays the owner's grade; the community's consensus grade appears next to it,
+the way every climbing platform already shows a "community grade" beside the guidebook grade. No
+approval queue, no bottleneck, no argument about who is right — both numbers are visible.
+
+This subsumes C-10 (last-verified) and much of C-7 (reporting) into one coherent mechanism, and
+it is the single change I would most strongly recommend to the plan as it stands.
+
+### 3.3 Never delete — merge
+
+theCrag: *"There is only a very limited delete functionality on theCrag because routes may be
+referenced elsewhere or climbers might have logged ascents against the route, all information that
+should not be lost."* Duplicates are **merged**; the rare unmergeable case goes to a "purgatory"
+area rather than being destroyed.
+
+This validates C-8 and, more usefully, **answers Open Question 4** (what happens to ascents on a
+withdrawn topo). The domain's answer is unambiguous: *the logged ascents are the reason you do
+not delete in the first place.* Someone's send of a hard project is their record, not the topo
+owner's to revoke. Ascents must outlive the topo.
+
+### 3.4 Duplicates: flag for a human, never auto-resolve
+
+OSM conflation's core principle: the tooling *"does not remove anything from the collected data;
+instead it adds custom tags on what it finds"*, so a human decides. Probable duplicates are
+surfaced, never silently merged.
+
+Confirms C-6's approach and rules out any automatic same-place deduplication.
+
+### 3.5 The reviewer backlog is the known way this dies
+
+- Wikipedia's pending-changes backlog currently runs 1–2 days, and the documented primary
+  criticism of the whole mechanism is **reviewer burden**.
+- Research on volunteer moderators is blunt about the failure mode: *"a neverending queue of
+  posts to review"*, burnout, attrition.
+- The sharpest framing found: **a moderation queue is not a backlog problem, it is a routing
+  problem.** If content does not land at the right review tier immediately, adding reviewers
+  does not fix throughput.
+
+**This settles Open Question 1.** Trust levels are not an optimisation to add later — they are
+the load-bearing mechanism, and every single platform in §3.1 has them. Reviewing every
+submission by hand is a design that works until the app succeeds, and then stops.
+
+Concretely, adopting the shape they converge on (Discourse's rationale, theCrag's scaling,
+Waze's automatic-then-deliberated split):
+
+| Level | Reached by | Can |
+|---|---|---|
+| **New** | signing up | Draft freely; submit topos (reviewed); suggest edits (rate-limited) |
+| **Contributor** | 1 approved topo, or *N* accepted suggestions | Publish with spot-check review rather than full review |
+| **Trusted** | several approved topos, no upheld reports | Publish immediately; flag content for admin attention |
+| **Moderator** | granted by an admin | Review queue, merge duplicates, revert, act on reports |
+
+theCrag's extra twist is worth stealing: **permission difficulty scales with how developed the
+area already is.** Editing a bare new crag is easy; editing a thoroughly documented one needs
+more standing. That maps neatly onto our C-6 place-clustering.
+
+### 3.6 Access and closure is a first-class field, not a report reason
+
+theCrag treats this as core infrastructure, and my plan had it as a mere report category — that
+is a real gap. What they do:
+
+- A `Closed` tag plus an `Access` field explaining why, rather than a free-text warning.
+- **Warnings inherit down the hierarchy**: a warning at crag level shows on every sector and route
+  beneath it. Our Area → Sector → Wall tree gives us this for free.
+- Visibility of topos, photos and descriptions can be **restricted entirely** for sensitive
+  locations (raptor nesting, private land, culturally significant sites — the Grampians closures
+  are the well-known case).
+- Their stated philosophy: *model reality* — tell climbers a crag is explicitly closed rather than
+  hiding it, because otherwise they go exploring.
+
+**Recommended addition (R-2): `access` state on Areas/Sectors/Walls** — `open` / `restricted` /
+`closed` / `sensitive`, with a reason, inheriting downward, and a `sensitive` mode that suppresses
+public visibility of the topo entirely. Admin-settable; community-reportable. For a climbing app
+this is arguably higher-value than half of the edit workflow, and it is much cheaper to build.
+
+### 3.7 Reputation is the reward loop
+
+Stack Overflow pays +2 reputation per accepted edit (capped at 1 000). theCrag pays karma for
+every contribution, and that karma *is* the permission system. People do not suggest edits out of
+altruism at scale — they do it because it visibly counts for something, and because it unlocks
+things.
+
+Our C-5 attribution line ("accepted suggestions credit their author") is the seed of this, but it
+should be wired to the trust levels in §3.5 rather than left as a display string.
+
+### 3.8 Liability: the disclaimers all say the same thing
+
+Guidebook disclaimers converge on: users assume all risk; no warranty of accuracy; **not all
+routes have been checked recently**; holds fall off and protection deteriorates, which can change
+the grade or seriousness. There is active legal scholarship on route-developer liability, with
+the policy argument running toward *limiting* it — because liability would discourage people from
+equipping routes at all.
+
+Two implications for us, beyond C-12:
+- The staleness point is in every disclaimer, which is independent support for R-1's
+  "still accurate" signal and for showing a last-verified date.
+- Whatever disclaimer ships should say the same things these do. That is a lawyer's job, not
+  mine, but the shape is well-established and worth copying rather than inventing.
+
+---
+
+## 4. Existing weaknesses this plan has to fix anyway
 
 Found while reading the code for the above. All three block community editing at any real scale.
 
@@ -349,7 +506,7 @@ same reason.)
 
 ---
 
-## 4. Data model sketch
+## 5. Data model sketch
 
 New tables, none of them in `syncTableNames`, none client-writable except where stated:
 
@@ -372,7 +529,7 @@ pushing it.
 
 ---
 
-## 5. Suggested phasing
+## 6. Suggested phasing
 
 Each phase is independently shippable and leaves the app in a coherent state.
 
@@ -393,32 +550,54 @@ Each phase is independently shippable and leaves the app in a coherent state.
 7. **Geometry suggestions** (C-5, kinds `route.geometry` / `route.add` / `route.delete`) — the
    propose-a-line canvas and the overlay diff. Largest single piece of UI in the plan; it reuses
    `DrawController` and `TopoPainter` but earns its own phase.
-8. **Trust levels** (C-4), **duplicates & ranking** (C-6), **last-verified** (C-10).
+8. **Trust levels** (C-4, §3.5), **duplicates & merging** (C-6, §3.4), **community facts layer**
+   (R-1, §3.2 — subsumes last-verified/C-10).
+
+Two items the research moved **earlier** than I originally had them, and one that is new:
+
+- **Access/closure (R-2, §3.6)** can ship at any point — it depends on nothing else here, it is a
+  field plus inheritance plus a banner, and for a climbing app it may be worth more than the
+  entire edit workflow. Consider shipping it before phase 1.
+- **Trust levels (§3.5)** were phase 8 as "an optimisation". They are not. They are what keeps
+  phase 2 from becoming your second job. Bring the *plumbing* forward into phase 2 even if the
+  thresholds start at "everything is reviewed".
+- **Merge, never delete (§3.3)** is a constraint on every phase, not a phase of its own.
 
 ---
 
-## 6. Open questions — these need your call
+## 7. Open questions — these need your call
 
-1. **Is review per-topo or per-account?** Reviewing every submission forever does not scale past
-   your own free evenings. My recommendation: review the first *N* submissions per account, then
-   auto-approve with spot checks. Which *N*?
+1. ~~**Is review per-topo or per-account?**~~ **Effectively settled by §3.5** — every platform
+   researched gates on earned trust, and reviewer backlog is the documented way this feature
+   dies. Adopt trust levels. The remaining call is only the *thresholds* (how many approved
+   topos before spot-check-only, before immediate publish), and those are tunable at runtime
+   rather than baked in.
 2. ~~**What exactly can a suggestion change?**~~ **DECIDED 2026-08-06: geometry too.** See C-5a
    and C-5b. Ship metadata suggestions first; the propose-a-line canvas is the largest single
    piece of UI in this plan and should not gate the rest.
 3. **Topo rating: new star scale, or rank by existing signals?** I lean strongly toward ranking
    (§C-6.3) because route `stars` already exist and mean something different. But if you want
    users to be able to *say* "this topo is better", a thumbs-up is clearer than a second star.
-4. **What happens to comments, likes and ascents on a withdrawn topo?** People logged real climbs
-   against it. My instinct: ascents survive the topo — they are the user's own record.
+   §3.7 adds a reason to decide soon: whatever the signal is, it should feed trust levels.
+4. ~~**What happens to comments, likes and ascents on a withdrawn topo?**~~ **Answered by §3.3.**
+   theCrag's stated reason for having almost no delete functionality is precisely that climbers
+   have logged ascents against routes and *"all information that should not be lost"*. Ascents
+   outlive the topo. Someone's send is their record, not the topo owner's to revoke.
 5. ~~**Does an approved topo need re-review after an edit?**~~ **DECIDED 2026-08-06: no —
    the owner's approval is final.** See C-5c for what that shifts onto reporting and version
    history, and C-5d for the non-blocking admin notice I would add to cover bait-and-switch.
 6. **How public is the moderation?** Is a rejection reason private to the owner, or is the queue
    itself visible? Transparent moderation builds trust and costs you the ability to act quietly.
+7. **NEW — do you accept R-1 (§3.2), splitting artefact from facts?** This is the biggest open
+   item after the research, and it partly reopens your owner-approval decision: not to overturn
+   it for the topo itself, but to carve grade opinions, conditions, hazards and access out from
+   under it. My recommendation is yes, and the phasing below assumes it.
+8. **NEW — do you accept R-2 (§3.6), access/closure as a first-class inheriting field?** Cheap to
+   build, high value for a climbing app, and currently missing entirely.
 
 ---
 
-## 7. What I would not build
+## 8. What I would not build
 
 - **Wiki-style open editing** (anyone edits directly, revert on abuse). It is the wrong default
   for safety-critical content, and it fights the ownership model the whole sync engine is built
@@ -428,3 +607,55 @@ Each phase is independently shippable and leaves the app in a coherent state.
   entirely, and that is a feature.
 - **A second rating scale**, unless Open Question 3 says otherwise.
 - **Moderation logic in Dart.** See G-2. Anything the app enforces alone is a suggestion.
+- **A delete button on published content.** §3.3 — the domain's own platforms concluded this over
+  a decade of operation. Merge, withdraw, or revert; never destroy something other people have
+  logged ascents against.
+- **Automatic duplicate merging.** §3.4 — flag for a human, always.
+- **Claiming ownership of contributed route data.** §3.2 — Mountain Project tried exactly this
+  and it went badly and publicly. Users own their photos and prose; nobody owns the route.
+
+---
+
+## Sources
+
+Climbing platforms
+- [theCrag — User permissions](https://www.thecrag.com/en/article/indexpermissions)
+- [theCrag — Karma](https://www.thecrag.com/en/article/cragkarma)
+- [theCrag — Adding and Editing Routes](https://www.thecrag.com/en/article/updatingdescriptions)
+- [theCrag — Merging and deleting](https://www.thecrag.com/en/article/merging)
+- [theCrag — Private, sensitive and closed crags](https://www.thecrag.com/en/article/sensitivecrags)
+- [theCrag — Warnings](https://www.thecrag.com/en/article/warnings)
+- [Mountain Project — Regional Admins](https://www.mountainproject.com/help/14/regional-admins)
+- [Mountain Project — Adding New Climbing Areas & Routes](https://www.mountainproject.com/help/12/adding-new-climbing-areas-routes)
+- [UKClimbing — Logbook moderators help](https://www.ukclimbing.com/logbook/help2.php)
+
+Ownership and data rights
+- [EFF — Rock Climber's Open Data Project Threatened by Bogus Copyright Claims](https://www.eff.org/deeplinks/2021/03/free-climbing-rock-climbers-open-data-project-threatened-bogus-copyright-claims)
+- [Mountain Project forum — To What Extent Does a First Ascensionist Own Her/His Route?](https://www.mountainproject.com/forum/topic/119732104/to-what-extent-does-a-first-ascensionist-own-herhis-route)
+- [UKC forum — The 'rights' of the first ascensionist](https://www.ukclimbing.com/forums/rock_talk/the_'rights'_of_the_first_ascensionist-643708)
+
+Edit review and trust models
+- [Wikipedia — Pending changes](https://en.wikipedia.org/wiki/Wikipedia:Pending_changes)
+- [Wikipedia — Protection policy](https://en.wikipedia.org/wiki/Wikipedia:Protection_policy)
+- [Stack Overflow Blog — Suggested Edits and Edit Review](https://stackoverflow.blog/2011/02/05/suggested-edits-and-edit-review/)
+- [Discourse — Understanding Discourse Trust Levels](https://blog.discourse.org/2018/06/understanding-discourse-trust-levels/)
+- [Discourse Meta — Trust Level Permissions Reference](https://meta.discourse.org/t/trust-level-permissions-reference/224824)
+- [Wazeopedia — Ranks](https://www.waze.com/wiki/EAC/Ranks)
+- [Google Local Guides — Why is my edit status "Pending" or "Not Applied"?](https://www.localguidesconnect.com/t5/Help-Desk/Why-is-my-edit-status-Pending-or-Not-Applied/ba-p/1079069)
+- [iNaturalist — Data Quality Assessment / Research Grade](https://help.inaturalist.org/en/support/solutions/articles/151000169936-what-is-the-data-quality-assessment-and-how-do-observations-qualify-to-become-research-grade-)
+
+Geodata versioning, reverts and duplicates
+- [OSM Wiki — Change rollback](https://wiki.openstreetmap.org/wiki/Change_rollback)
+- [OSM Wiki — Vandalism detection](https://wiki.openstreetmap.org/wiki/Detect_Vandalism)
+- [OSM Wiki — Conflation](https://wiki.openstreetmap.org/wiki/Conflation)
+- [HOT OSM — Data conflation](https://hotosm.github.io/osm-fieldwork/about/conflation/)
+- [Attention-Based Vandalism Detection in OpenStreetMap (ACM)](https://dl.acm.org/doi/fullHtml/10.1145/3485447.3512224)
+
+Moderation at scale
+- [Why do volunteer content moderators quit? Burnout, conflict, and harmful behaviors (New Media & Society)](https://journals.sagepub.com/doi/full/10.1177/14614448221138529)
+- ["Think about it like you're a firefighter": Understanding How Reddit Moderators Use the Modqueue (arXiv)](https://arxiv.org/html/2509.07314v2)
+
+Liability
+- [Arizona State Law Journal — Sport Climbing and Assumption of Risk](https://arizonastatelawjournal.org/2025/10/19/sport-climbing-and-assumption-of-risk-liability-for-climbing-on-private-bolts-and-land/)
+- [VDiff — Disclaimer](https://www.vdiffclimbing.com/disclaimer/)
+- [Idaho: A Climbing Guide — Disclaimer](https://www.idahoaclimbingguide.com/disclaimer/)
