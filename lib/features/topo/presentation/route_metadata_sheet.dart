@@ -355,6 +355,9 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
                       child: _StyleChip(
                         key: Key('topo-meta-style-$value'),
                         label: label,
+                        // The one place the chip is deliberately stretched:
+                        // three equal `Expanded` segments across the row.
+                        expands: true,
                         selected: _style == value,
                         // Re-tapping the already-selected style deselects it
                         // (toggles back to unset), matching how the
@@ -766,15 +769,39 @@ class _StyleChip extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onPressed,
+    this.expands = false,
   });
 
   final String label;
   final bool selected;
   final VoidCallback onPressed;
 
+  /// Whether this chip should FILL the width it is given (its label centred),
+  /// or hug its own label.
+  ///
+  /// This distinction is the fix for a real bug, not a style preference. The
+  /// chip's body used to be an unconditional [Center], which is an [Align]
+  /// with a null `widthFactor` — i.e. it expands to the maximum width its
+  /// constraints allow. That is exactly right in the Sport/Trad/Boulder
+  /// [Row], where each chip sits in an [Expanded] and shares the width three
+  /// ways. But a [Wrap] hands its children LOOSE constraints whose `maxWidth`
+  /// is the whole row, so the same [Center] made every style tag a
+  /// full-width bar and the 18-tag list rendered as 18 stacked rows instead
+  /// of a compact wrapped cloud. Default `false`, so a chip hugs its label
+  /// unless a call site explicitly asks to be stretched.
+  final bool expands;
+
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
+    final label = Text(
+      this.label,
+      style: TextStyle(
+        fontSize: 15,
+        fontWeight: FontWeight.w500,
+        color: selected ? colors.accent : colors.ink2,
+      ),
+    );
     return Material(
       color: selected ? colors.accent.withValues(alpha: 0.16) : colors.surface2,
       borderRadius: BorderRadius.circular(MasiRadii.control),
@@ -782,17 +809,17 @@ class _StyleChip extends StatelessWidget {
         borderRadius: BorderRadius.circular(MasiRadii.control),
         onTap: onPressed,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: MasiSpacing.md),
-          child: Center(
-            child: Text(
-              label,
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w500,
-                color: selected ? colors.accent : colors.ink2,
-              ),
-            ),
-          ),
+          // A hugging chip needs horizontal padding of its own (the stretched
+          // one gets its breathing room from the width it is handed); the
+          // vertical padding is tightened to `sm` to match `FilterChoiceChip`,
+          // the same chip look used by every filter sheet.
+          padding: expands
+              ? const EdgeInsets.symmetric(vertical: MasiSpacing.md)
+              : const EdgeInsets.symmetric(
+                  horizontal: MasiSpacing.md,
+                  vertical: MasiSpacing.sm,
+                ),
+          child: expands ? Center(child: label) : label,
         ),
       ),
     );
