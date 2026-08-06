@@ -7357,6 +7357,567 @@ class AppSettingsCompanion extends UpdateCompanion<AppSettingRow> {
   }
 }
 
+class $WallModerationRowsTable extends WallModerationRows
+    with TableInfo<$WallModerationRowsTable, WallModerationRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $WallModerationRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
+  @override
+  late final GeneratedColumn<String> wallId = GeneratedColumn<String>(
+    'wall_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _stateMeta = const VerificationMeta('state');
+  @override
+  late final GeneratedColumn<String> state = GeneratedColumn<String>(
+    'state',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _submittedAtMeta = const VerificationMeta(
+    'submittedAt',
+  );
+  @override
+  late final GeneratedColumn<int> submittedAt = GeneratedColumn<int>(
+    'submitted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _reviewedAtMeta = const VerificationMeta(
+    'reviewedAt',
+  );
+  @override
+  late final GeneratedColumn<int> reviewedAt = GeneratedColumn<int>(
+    'reviewed_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _reviewerIdMeta = const VerificationMeta(
+    'reviewerId',
+  );
+  @override
+  late final GeneratedColumn<String> reviewerId = GeneratedColumn<String>(
+    'reviewer_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _rejectionReasonMeta = const VerificationMeta(
+    'rejectionReason',
+  );
+  @override
+  late final GeneratedColumn<String> rejectionReason = GeneratedColumn<String>(
+    'rejection_reason',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _withdrawRequestedAtMeta =
+      const VerificationMeta('withdrawRequestedAt');
+  @override
+  late final GeneratedColumn<int> withdrawRequestedAt = GeneratedColumn<int>(
+    'withdraw_requested_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    wallId,
+    state,
+    submittedAt,
+    reviewedAt,
+    reviewerId,
+    rejectionReason,
+    withdrawRequestedAt,
+    updatedAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'wall_moderation_rows';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<WallModerationRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('wall_id')) {
+      context.handle(
+        _wallIdMeta,
+        wallId.isAcceptableOrUnknown(data['wall_id']!, _wallIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_wallIdMeta);
+    }
+    if (data.containsKey('state')) {
+      context.handle(
+        _stateMeta,
+        state.isAcceptableOrUnknown(data['state']!, _stateMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_stateMeta);
+    }
+    if (data.containsKey('submitted_at')) {
+      context.handle(
+        _submittedAtMeta,
+        submittedAt.isAcceptableOrUnknown(
+          data['submitted_at']!,
+          _submittedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('reviewed_at')) {
+      context.handle(
+        _reviewedAtMeta,
+        reviewedAt.isAcceptableOrUnknown(data['reviewed_at']!, _reviewedAtMeta),
+      );
+    }
+    if (data.containsKey('reviewer_id')) {
+      context.handle(
+        _reviewerIdMeta,
+        reviewerId.isAcceptableOrUnknown(data['reviewer_id']!, _reviewerIdMeta),
+      );
+    }
+    if (data.containsKey('rejection_reason')) {
+      context.handle(
+        _rejectionReasonMeta,
+        rejectionReason.isAcceptableOrUnknown(
+          data['rejection_reason']!,
+          _rejectionReasonMeta,
+        ),
+      );
+    }
+    if (data.containsKey('withdraw_requested_at')) {
+      context.handle(
+        _withdrawRequestedAtMeta,
+        withdrawRequestedAt.isAcceptableOrUnknown(
+          data['withdraw_requested_at']!,
+          _withdrawRequestedAtMeta,
+        ),
+      );
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {wallId};
+  @override
+  WallModerationRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return WallModerationRow(
+      wallId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}wall_id'],
+      )!,
+      state: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}state'],
+      )!,
+      submittedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}submitted_at'],
+      ),
+      reviewedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}reviewed_at'],
+      ),
+      reviewerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}reviewer_id'],
+      ),
+      rejectionReason: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}rejection_reason'],
+      ),
+      withdrawRequestedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}withdraw_requested_at'],
+      ),
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+    );
+  }
+
+  @override
+  $WallModerationRowsTable createAlias(String alias) {
+    return $WallModerationRowsTable(attachedDatabase, alias);
+  }
+}
+
+class WallModerationRow extends DataClass
+    implements Insertable<WallModerationRow> {
+  /// The moderated wall's id. Not a Drift `references(Walls, #id)` FK: rows
+  /// arrive from the server pull, and a moderation row can legitimately land
+  /// for a wall this device has not pulled yet (or has since dropped), which
+  /// a real FK with `PRAGMA foreign_keys = ON` would reject outright.
+  final String wallId;
+
+  /// `draft` | `pending` | `published` | `rejected` | `withdrawn` | `removed`.
+  /// Stored as the raw server string and parsed at the edge (see
+  /// `ModerationState.fromWire`) so an unknown future state degrades to a
+  /// safe default instead of throwing on read.
+  final String state;
+  final int? submittedAt;
+  final int? reviewedAt;
+  final String? reviewerId;
+
+  /// Why a submission was rejected, shown to the owner. A silent rejection
+  /// teaches nobody anything.
+  final String? rejectionReason;
+
+  /// When the owner asked to withdraw, or null. The topo stays visible for
+  /// 10 days from this instant (C-3) — a window the SERVER evaluates inside
+  /// its visibility predicate, so this column is for showing the countdown,
+  /// never for deciding visibility.
+  final int? withdrawRequestedAt;
+  final int updatedAt;
+  const WallModerationRow({
+    required this.wallId,
+    required this.state,
+    this.submittedAt,
+    this.reviewedAt,
+    this.reviewerId,
+    this.rejectionReason,
+    this.withdrawRequestedAt,
+    required this.updatedAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['wall_id'] = Variable<String>(wallId);
+    map['state'] = Variable<String>(state);
+    if (!nullToAbsent || submittedAt != null) {
+      map['submitted_at'] = Variable<int>(submittedAt);
+    }
+    if (!nullToAbsent || reviewedAt != null) {
+      map['reviewed_at'] = Variable<int>(reviewedAt);
+    }
+    if (!nullToAbsent || reviewerId != null) {
+      map['reviewer_id'] = Variable<String>(reviewerId);
+    }
+    if (!nullToAbsent || rejectionReason != null) {
+      map['rejection_reason'] = Variable<String>(rejectionReason);
+    }
+    if (!nullToAbsent || withdrawRequestedAt != null) {
+      map['withdraw_requested_at'] = Variable<int>(withdrawRequestedAt);
+    }
+    map['updated_at'] = Variable<int>(updatedAt);
+    return map;
+  }
+
+  WallModerationRowsCompanion toCompanion(bool nullToAbsent) {
+    return WallModerationRowsCompanion(
+      wallId: Value(wallId),
+      state: Value(state),
+      submittedAt: submittedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(submittedAt),
+      reviewedAt: reviewedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reviewedAt),
+      reviewerId: reviewerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(reviewerId),
+      rejectionReason: rejectionReason == null && nullToAbsent
+          ? const Value.absent()
+          : Value(rejectionReason),
+      withdrawRequestedAt: withdrawRequestedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(withdrawRequestedAt),
+      updatedAt: Value(updatedAt),
+    );
+  }
+
+  factory WallModerationRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return WallModerationRow(
+      wallId: serializer.fromJson<String>(json['wallId']),
+      state: serializer.fromJson<String>(json['state']),
+      submittedAt: serializer.fromJson<int?>(json['submittedAt']),
+      reviewedAt: serializer.fromJson<int?>(json['reviewedAt']),
+      reviewerId: serializer.fromJson<String?>(json['reviewerId']),
+      rejectionReason: serializer.fromJson<String?>(json['rejectionReason']),
+      withdrawRequestedAt: serializer.fromJson<int?>(
+        json['withdrawRequestedAt'],
+      ),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'wallId': serializer.toJson<String>(wallId),
+      'state': serializer.toJson<String>(state),
+      'submittedAt': serializer.toJson<int?>(submittedAt),
+      'reviewedAt': serializer.toJson<int?>(reviewedAt),
+      'reviewerId': serializer.toJson<String?>(reviewerId),
+      'rejectionReason': serializer.toJson<String?>(rejectionReason),
+      'withdrawRequestedAt': serializer.toJson<int?>(withdrawRequestedAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+    };
+  }
+
+  WallModerationRow copyWith({
+    String? wallId,
+    String? state,
+    Value<int?> submittedAt = const Value.absent(),
+    Value<int?> reviewedAt = const Value.absent(),
+    Value<String?> reviewerId = const Value.absent(),
+    Value<String?> rejectionReason = const Value.absent(),
+    Value<int?> withdrawRequestedAt = const Value.absent(),
+    int? updatedAt,
+  }) => WallModerationRow(
+    wallId: wallId ?? this.wallId,
+    state: state ?? this.state,
+    submittedAt: submittedAt.present ? submittedAt.value : this.submittedAt,
+    reviewedAt: reviewedAt.present ? reviewedAt.value : this.reviewedAt,
+    reviewerId: reviewerId.present ? reviewerId.value : this.reviewerId,
+    rejectionReason: rejectionReason.present
+        ? rejectionReason.value
+        : this.rejectionReason,
+    withdrawRequestedAt: withdrawRequestedAt.present
+        ? withdrawRequestedAt.value
+        : this.withdrawRequestedAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
+  WallModerationRow copyWithCompanion(WallModerationRowsCompanion data) {
+    return WallModerationRow(
+      wallId: data.wallId.present ? data.wallId.value : this.wallId,
+      state: data.state.present ? data.state.value : this.state,
+      submittedAt: data.submittedAt.present
+          ? data.submittedAt.value
+          : this.submittedAt,
+      reviewedAt: data.reviewedAt.present
+          ? data.reviewedAt.value
+          : this.reviewedAt,
+      reviewerId: data.reviewerId.present
+          ? data.reviewerId.value
+          : this.reviewerId,
+      rejectionReason: data.rejectionReason.present
+          ? data.rejectionReason.value
+          : this.rejectionReason,
+      withdrawRequestedAt: data.withdrawRequestedAt.present
+          ? data.withdrawRequestedAt.value
+          : this.withdrawRequestedAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WallModerationRow(')
+          ..write('wallId: $wallId, ')
+          ..write('state: $state, ')
+          ..write('submittedAt: $submittedAt, ')
+          ..write('reviewedAt: $reviewedAt, ')
+          ..write('reviewerId: $reviewerId, ')
+          ..write('rejectionReason: $rejectionReason, ')
+          ..write('withdrawRequestedAt: $withdrawRequestedAt, ')
+          ..write('updatedAt: $updatedAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    wallId,
+    state,
+    submittedAt,
+    reviewedAt,
+    reviewerId,
+    rejectionReason,
+    withdrawRequestedAt,
+    updatedAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is WallModerationRow &&
+          other.wallId == this.wallId &&
+          other.state == this.state &&
+          other.submittedAt == this.submittedAt &&
+          other.reviewedAt == this.reviewedAt &&
+          other.reviewerId == this.reviewerId &&
+          other.rejectionReason == this.rejectionReason &&
+          other.withdrawRequestedAt == this.withdrawRequestedAt &&
+          other.updatedAt == this.updatedAt);
+}
+
+class WallModerationRowsCompanion extends UpdateCompanion<WallModerationRow> {
+  final Value<String> wallId;
+  final Value<String> state;
+  final Value<int?> submittedAt;
+  final Value<int?> reviewedAt;
+  final Value<String?> reviewerId;
+  final Value<String?> rejectionReason;
+  final Value<int?> withdrawRequestedAt;
+  final Value<int> updatedAt;
+  final Value<int> rowid;
+  const WallModerationRowsCompanion({
+    this.wallId = const Value.absent(),
+    this.state = const Value.absent(),
+    this.submittedAt = const Value.absent(),
+    this.reviewedAt = const Value.absent(),
+    this.reviewerId = const Value.absent(),
+    this.rejectionReason = const Value.absent(),
+    this.withdrawRequestedAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  WallModerationRowsCompanion.insert({
+    required String wallId,
+    required String state,
+    this.submittedAt = const Value.absent(),
+    this.reviewedAt = const Value.absent(),
+    this.reviewerId = const Value.absent(),
+    this.rejectionReason = const Value.absent(),
+    this.withdrawRequestedAt = const Value.absent(),
+    required int updatedAt,
+    this.rowid = const Value.absent(),
+  }) : wallId = Value(wallId),
+       state = Value(state),
+       updatedAt = Value(updatedAt);
+  static Insertable<WallModerationRow> custom({
+    Expression<String>? wallId,
+    Expression<String>? state,
+    Expression<int>? submittedAt,
+    Expression<int>? reviewedAt,
+    Expression<String>? reviewerId,
+    Expression<String>? rejectionReason,
+    Expression<int>? withdrawRequestedAt,
+    Expression<int>? updatedAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (wallId != null) 'wall_id': wallId,
+      if (state != null) 'state': state,
+      if (submittedAt != null) 'submitted_at': submittedAt,
+      if (reviewedAt != null) 'reviewed_at': reviewedAt,
+      if (reviewerId != null) 'reviewer_id': reviewerId,
+      if (rejectionReason != null) 'rejection_reason': rejectionReason,
+      if (withdrawRequestedAt != null)
+        'withdraw_requested_at': withdrawRequestedAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  WallModerationRowsCompanion copyWith({
+    Value<String>? wallId,
+    Value<String>? state,
+    Value<int?>? submittedAt,
+    Value<int?>? reviewedAt,
+    Value<String?>? reviewerId,
+    Value<String?>? rejectionReason,
+    Value<int?>? withdrawRequestedAt,
+    Value<int>? updatedAt,
+    Value<int>? rowid,
+  }) {
+    return WallModerationRowsCompanion(
+      wallId: wallId ?? this.wallId,
+      state: state ?? this.state,
+      submittedAt: submittedAt ?? this.submittedAt,
+      reviewedAt: reviewedAt ?? this.reviewedAt,
+      reviewerId: reviewerId ?? this.reviewerId,
+      rejectionReason: rejectionReason ?? this.rejectionReason,
+      withdrawRequestedAt: withdrawRequestedAt ?? this.withdrawRequestedAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (wallId.present) {
+      map['wall_id'] = Variable<String>(wallId.value);
+    }
+    if (state.present) {
+      map['state'] = Variable<String>(state.value);
+    }
+    if (submittedAt.present) {
+      map['submitted_at'] = Variable<int>(submittedAt.value);
+    }
+    if (reviewedAt.present) {
+      map['reviewed_at'] = Variable<int>(reviewedAt.value);
+    }
+    if (reviewerId.present) {
+      map['reviewer_id'] = Variable<String>(reviewerId.value);
+    }
+    if (rejectionReason.present) {
+      map['rejection_reason'] = Variable<String>(rejectionReason.value);
+    }
+    if (withdrawRequestedAt.present) {
+      map['withdraw_requested_at'] = Variable<int>(withdrawRequestedAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('WallModerationRowsCompanion(')
+          ..write('wallId: $wallId, ')
+          ..write('state: $state, ')
+          ..write('submittedAt: $submittedAt, ')
+          ..write('reviewedAt: $reviewedAt, ')
+          ..write('reviewerId: $reviewerId, ')
+          ..write('rejectionReason: $rejectionReason, ')
+          ..write('withdrawRequestedAt: $withdrawRequestedAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -7370,6 +7931,8 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $LikesTable likes = $LikesTable(this);
   late final $ProfilesTable profiles = $ProfilesTable(this);
   late final $AppSettingsTable appSettings = $AppSettingsTable(this);
+  late final $WallModerationRowsTable wallModerationRows =
+      $WallModerationRowsTable(this);
   late final Index idxSectorsAreaLive = Index(
     'idx_sectors_area_live',
     'CREATE INDEX idx_sectors_area_live ON sectors (area_id) WHERE deleted_at IS NULL',
@@ -7433,6 +7996,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     likes,
     profiles,
     appSettings,
+    wallModerationRows,
     idxSectorsAreaLive,
     idxWallsSectorLive,
     idxPhotosWallLive,
@@ -13070,6 +13634,286 @@ typedef $$AppSettingsTableProcessedTableManager =
       AppSettingRow,
       PrefetchHooks Function()
     >;
+typedef $$WallModerationRowsTableCreateCompanionBuilder =
+    WallModerationRowsCompanion Function({
+      required String wallId,
+      required String state,
+      Value<int?> submittedAt,
+      Value<int?> reviewedAt,
+      Value<String?> reviewerId,
+      Value<String?> rejectionReason,
+      Value<int?> withdrawRequestedAt,
+      required int updatedAt,
+      Value<int> rowid,
+    });
+typedef $$WallModerationRowsTableUpdateCompanionBuilder =
+    WallModerationRowsCompanion Function({
+      Value<String> wallId,
+      Value<String> state,
+      Value<int?> submittedAt,
+      Value<int?> reviewedAt,
+      Value<String?> reviewerId,
+      Value<String?> rejectionReason,
+      Value<int?> withdrawRequestedAt,
+      Value<int> updatedAt,
+      Value<int> rowid,
+    });
+
+class $$WallModerationRowsTableFilterComposer
+    extends Composer<_$AppDatabase, $WallModerationRowsTable> {
+  $$WallModerationRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get wallId => $composableBuilder(
+    column: $table.wallId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get state => $composableBuilder(
+    column: $table.state,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get submittedAt => $composableBuilder(
+    column: $table.submittedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get reviewedAt => $composableBuilder(
+    column: $table.reviewedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get reviewerId => $composableBuilder(
+    column: $table.reviewerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get rejectionReason => $composableBuilder(
+    column: $table.rejectionReason,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get withdrawRequestedAt => $composableBuilder(
+    column: $table.withdrawRequestedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$WallModerationRowsTableOrderingComposer
+    extends Composer<_$AppDatabase, $WallModerationRowsTable> {
+  $$WallModerationRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get wallId => $composableBuilder(
+    column: $table.wallId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get state => $composableBuilder(
+    column: $table.state,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get submittedAt => $composableBuilder(
+    column: $table.submittedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get reviewedAt => $composableBuilder(
+    column: $table.reviewedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get reviewerId => $composableBuilder(
+    column: $table.reviewerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get rejectionReason => $composableBuilder(
+    column: $table.rejectionReason,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get withdrawRequestedAt => $composableBuilder(
+    column: $table.withdrawRequestedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$WallModerationRowsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $WallModerationRowsTable> {
+  $$WallModerationRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get wallId =>
+      $composableBuilder(column: $table.wallId, builder: (column) => column);
+
+  GeneratedColumn<String> get state =>
+      $composableBuilder(column: $table.state, builder: (column) => column);
+
+  GeneratedColumn<int> get submittedAt => $composableBuilder(
+    column: $table.submittedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get reviewedAt => $composableBuilder(
+    column: $table.reviewedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get reviewerId => $composableBuilder(
+    column: $table.reviewerId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get rejectionReason => $composableBuilder(
+    column: $table.rejectionReason,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get withdrawRequestedAt => $composableBuilder(
+    column: $table.withdrawRequestedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+}
+
+class $$WallModerationRowsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $WallModerationRowsTable,
+          WallModerationRow,
+          $$WallModerationRowsTableFilterComposer,
+          $$WallModerationRowsTableOrderingComposer,
+          $$WallModerationRowsTableAnnotationComposer,
+          $$WallModerationRowsTableCreateCompanionBuilder,
+          $$WallModerationRowsTableUpdateCompanionBuilder,
+          (
+            WallModerationRow,
+            BaseReferences<
+              _$AppDatabase,
+              $WallModerationRowsTable,
+              WallModerationRow
+            >,
+          ),
+          WallModerationRow,
+          PrefetchHooks Function()
+        > {
+  $$WallModerationRowsTableTableManager(
+    _$AppDatabase db,
+    $WallModerationRowsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$WallModerationRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$WallModerationRowsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$WallModerationRowsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> wallId = const Value.absent(),
+                Value<String> state = const Value.absent(),
+                Value<int?> submittedAt = const Value.absent(),
+                Value<int?> reviewedAt = const Value.absent(),
+                Value<String?> reviewerId = const Value.absent(),
+                Value<String?> rejectionReason = const Value.absent(),
+                Value<int?> withdrawRequestedAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => WallModerationRowsCompanion(
+                wallId: wallId,
+                state: state,
+                submittedAt: submittedAt,
+                reviewedAt: reviewedAt,
+                reviewerId: reviewerId,
+                rejectionReason: rejectionReason,
+                withdrawRequestedAt: withdrawRequestedAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String wallId,
+                required String state,
+                Value<int?> submittedAt = const Value.absent(),
+                Value<int?> reviewedAt = const Value.absent(),
+                Value<String?> reviewerId = const Value.absent(),
+                Value<String?> rejectionReason = const Value.absent(),
+                Value<int?> withdrawRequestedAt = const Value.absent(),
+                required int updatedAt,
+                Value<int> rowid = const Value.absent(),
+              }) => WallModerationRowsCompanion.insert(
+                wallId: wallId,
+                state: state,
+                submittedAt: submittedAt,
+                reviewedAt: reviewedAt,
+                reviewerId: reviewerId,
+                rejectionReason: rejectionReason,
+                withdrawRequestedAt: withdrawRequestedAt,
+                updatedAt: updatedAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$WallModerationRowsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $WallModerationRowsTable,
+      WallModerationRow,
+      $$WallModerationRowsTableFilterComposer,
+      $$WallModerationRowsTableOrderingComposer,
+      $$WallModerationRowsTableAnnotationComposer,
+      $$WallModerationRowsTableCreateCompanionBuilder,
+      $$WallModerationRowsTableUpdateCompanionBuilder,
+      (
+        WallModerationRow,
+        BaseReferences<
+          _$AppDatabase,
+          $WallModerationRowsTable,
+          WallModerationRow
+        >,
+      ),
+      WallModerationRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -13094,4 +13938,6 @@ class $AppDatabaseManager {
       $$ProfilesTableTableManager(_db, _db.profiles);
   $$AppSettingsTableTableManager get appSettings =>
       $$AppSettingsTableTableManager(_db, _db.appSettings);
+  $$WallModerationRowsTableTableManager get wallModerationRows =>
+      $$WallModerationRowsTableTableManager(_db, _db.wallModerationRows);
 }

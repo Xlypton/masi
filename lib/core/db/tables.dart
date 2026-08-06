@@ -54,6 +54,62 @@ class AppSettings extends Table {
   Set<Column> get primaryKey => {settingKey};
 }
 
+/// Local, PULL-ONLY mirror of the server's `public.wall_moderation` — the
+/// moderation state of a published topo (community editing, phase 1).
+///
+/// Deliberately NOT a [SyncColumns] table and deliberately NOT in
+/// `syncTableNames`, and that is the whole point rather than an oversight.
+/// The sync engine re-reads and re-pushes WHOLE rows with client-side
+/// last-writer-wins where local wins ties (`shouldPushLww`), and it has no
+/// outbox (decision D-4). So a moderation column on a synced table would be
+/// silently reverted by the owner's very next push: a moderator approves a
+/// topo, the owner's client re-sends its own stale copy of that row, and the
+/// decision is gone. Not maliciously — that is simply what the engine does.
+/// See COMMUNITY_PLAN.md §0 (guardrail G-1).
+///
+/// Consequently this table has exactly one direction of travel: pulled from
+/// the server, written locally, never sent back. The server enforces the same
+/// thing from its side — `public.wall_moderation` has a SELECT policy and no
+/// write policy at all, so a client attempting to push is refused by RLS
+/// regardless of what any local code does.
+///
+/// It is mirrored locally (rather than read live) so a moderation banner
+/// renders from cold and offline, exactly like every other read in this
+/// local-first app.
+@DataClassName('WallModerationRow')
+class WallModerationRows extends Table {
+  /// The moderated wall's id. Not a Drift `references(Walls, #id)` FK: rows
+  /// arrive from the server pull, and a moderation row can legitimately land
+  /// for a wall this device has not pulled yet (or has since dropped), which
+  /// a real FK with `PRAGMA foreign_keys = ON` would reject outright.
+  TextColumn get wallId => text()();
+
+  /// `draft` | `pending` | `published` | `rejected` | `withdrawn` | `removed`.
+  /// Stored as the raw server string and parsed at the edge (see
+  /// `ModerationState.fromWire`) so an unknown future state degrades to a
+  /// safe default instead of throwing on read.
+  TextColumn get state => text()();
+
+  IntColumn get submittedAt => integer().nullable()();
+  IntColumn get reviewedAt => integer().nullable()();
+  TextColumn get reviewerId => text().nullable()();
+
+  /// Why a submission was rejected, shown to the owner. A silent rejection
+  /// teaches nobody anything.
+  TextColumn get rejectionReason => text().nullable()();
+
+  /// When the owner asked to withdraw, or null. The topo stays visible for
+  /// 10 days from this instant (C-3) — a window the SERVER evaluates inside
+  /// its visibility predicate, so this column is for showing the countdown,
+  /// never for deciding visibility.
+  IntColumn get withdrawRequestedAt => integer().nullable()();
+
+  IntColumn get updatedAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {wallId};
+}
+
 /// A signed-in user's editable, synced display name (#18).
 ///
 /// Unlike every other [SyncColumns] table, [id] here is NOT a caller-

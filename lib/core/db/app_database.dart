@@ -28,6 +28,7 @@ part 'app_database.g.dart';
     Ascents,
     Profiles,
     AppSettings,
+    WallModerationRows,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -46,7 +47,7 @@ class AppDatabase extends _$AppDatabase {
   final bool _flushAfterCommit;
 
   @override
-  int get schemaVersion => 11;
+  int get schemaVersion => 12;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -324,6 +325,18 @@ class AppDatabase extends _$AppDatabase {
         if (!hasAvatarUrl) {
           await m.addColumn(profiles, profiles.avatarUrl);
         }
+      }
+      // v11 -> v12: `WallModerationRows` — the local, pull-only mirror of the
+      // server's `wall_moderation` (community editing, phase 1). Same shape as
+      // the v7 -> v8 `Profiles` and v8 -> v9 `AppSettings` additions: a
+      // brand-new table unrelated to any existing row or column, so a plain
+      // `createTable` with nothing to backfill and no existing data touched.
+      //
+      // NOT a SyncColumns table and NOT in `syncTableNames` — see the table's
+      // own doc in `tables.dart` for why moderation state must never travel
+      // back up through the sync engine.
+      if (from < 12) {
+        await m.createTable(wallModerationRows);
       }
     },
     beforeOpen: (details) async {

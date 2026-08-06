@@ -1817,6 +1817,7 @@ void main() {
           'ascents',
           'profiles',
           'app_settings',
+          'wall_moderation_rows',
         },
         reason: 'onCreate must build every table declared on AppDatabase',
       );
@@ -2351,6 +2352,99 @@ void main() {
 
         await expectLater(db.customSelect('SELECT 1').get(), completes);
         expect(await profileColumns(db), contains('avatar_url'));
+      },
+    );
+  });
+
+  group('v11 -> v12 migration (WallModerationRows, community editing)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('masi_v12_migration_');
+      dbFile = File(p.join(tempDir.path, 'v11.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    Future<List<String>> tableNames(AppDatabase db) => db
+        .customSelect(
+          "SELECT name FROM sqlite_master WHERE type = 'table' "
+          "AND name NOT LIKE 'sqlite_%'",
+        )
+        .map((row) => row.read<String>('name'))
+        .get();
+
+    test(
+      'creates wall_moderation_rows on an existing v11 database without '
+      'losing rows',
+      () async {
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh
+            .into(fresh.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-v11',
+                createdAt: 100,
+                updatedAt: 100,
+                name: 'Pre-v12 Area',
+              ),
+            );
+        await fresh.close();
+
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute(
+          'DROP TABLE wall_moderation_rows; PRAGMA user_version = 11;',
+        );
+        expect(raw.select('PRAGMA user_version;').first.values.first, 11);
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        final area = await (db.select(db.areas)
+              ..where((t) => t.id.equals('area-v11')))
+            .getSingle();
+        expect(
+          area.name,
+          'Pre-v12 Area',
+          reason: 'pre-existing row must survive the v11 -> v12 migration',
+        );
+        expect(await tableNames(db), contains('wall_moderation_rows'));
+
+        // Usable immediately after the migration.
+        await db
+            .into(db.wallModerationRows)
+            .insert(
+              const WallModerationRowsCompanion(
+                wallId: Value('w1'),
+                state: Value('published'),
+                updatedAt: Value(1),
+              ),
+            );
+        final row = await db.select(db.wallModerationRows).getSingle();
+        expect(row.state, 'published');
+      },
+    );
+
+    test(
+      'the mirror carries NO SyncColumns — it must be structurally impossible '
+      'for a dirty-scoped push to pick it up (COMMUNITY_PLAN.md G-1)',
+      () async {
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        final columns = await db
+            .customSelect("PRAGMA table_info('wall_moderation_rows')")
+            .map((row) => row.read<String>('name'))
+            .get();
+
+        expect(columns, isNot(contains('dirty')));
+        expect(columns, isNot(contains('owner_id')));
+        expect(columns, isNot(contains('remote_id')));
+        expect(columns, isNot(contains('deleted_at')));
       },
     );
   });
