@@ -204,51 +204,44 @@ class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
 
     return Scaffold(
       key: const Key('community-map-screen'),
-      appBar: AppBar(
-        title: Text(
-          'Map',
-          style: Theme.of(context).textTheme.displaySmall,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
-        centerTitle: false,
-      ),
-      // `bottom: false` (#48, now shared by every branch since #51): this
-      // screen's `_MapView` draws full-bleed behind `NavShell`'s translucent
-      // bar (that Scaffold sets `extendBody: true` unconditionally — see its
-      // doc), so the bottom device safe-area inset must NOT be consumed/
-      // padded away here. If it were, the map would stop short at the
-      // safe-area edge -- the SAME footprint as before extendBody -- rather
-      // than truly extending behind the bar. `_MapView` reads that still-live
-      // `MediaQuery.padding.bottom` itself (`bottomChromeInset`) to keep its
-      // OWN bottom-anchored overlay controls floating above the bar instead.
-      body: SafeArea(
-        bottom: false,
-        child: MasiAsyncView<List<SharedTopo>>(
-          value: asyncSharedTopos,
-          errorMessage: "Couldn't load the community map",
-          // See `community_feed_screen.dart`'s identical decision: the raw
-          // Drift error object is not a sentence for a climber, and the
-          // actionable pull failure has its own surface.
-          showErrorDetail: false,
-          onRetry: () => _retry(),
-          // A SPINNER, not a skeleton — the one place in this feature where
-          // that is the honest answer. A skeleton works by matching the shape
-          // of what is coming; what is coming here is a photographic tile
-          // canvas with pins scattered over it, and the only placeholder that
-          // "matches" it is a full-screen shimmering rectangle, which reads as
-          // a broken image rather than as a map on its way. So: say what is
-          // being waited on and nothing more. The gate still means a fast local
-          // read paints no spinner at all.
-          skeleton: (context) =>
-              const MasiLoadingIndicator.standalone(label: 'Loading topos'),
-          data: (context, topos) => _MapView(
-            topos: topos,
-            tileProvider: widget.tileProvider,
-            focusWallId: widget.focusWallId,
-            controller: widget.mapController,
-            tileHttpClientFactory: widget.tileHttpClientFactory,
-          ),
+      // NO AppBar and NO SafeArea, deliberately (user request, 2026-08-06):
+      // the map is the content, so it draws edge-to-edge on ALL four sides —
+      // behind the status bar/notch at the top exactly as it already drew
+      // behind `NavShell`'s translucent bar at the bottom. A "Map" title bar
+      // over a map labels something the user is already looking at while
+      // costing a fifth of a phone screen; the floating search pill below is
+      // the only top chrome, and it insets ITSELF (see `_MapView`'s
+      // `topChromeInset`).
+      //
+      // Consuming neither inset here is what keeps both of `_MapView`'s
+      // reads live: `MediaQuery.padding.top` for the search pill, and
+      // `padding.bottom` (#48/#51 — the REAL measured bottom-bar height
+      // under `Scaffold.extendBody`, see `NavShell`'s doc) for the
+      // find-me/refresh column and the legend/attribution pills.
+      body: MasiAsyncView<List<SharedTopo>>(
+        value: asyncSharedTopos,
+        errorMessage: "Couldn't load the community map",
+        // See `community_feed_screen.dart`'s identical decision: the raw
+        // Drift error object is not a sentence for a climber, and the
+        // actionable pull failure has its own surface.
+        showErrorDetail: false,
+        onRetry: () => _retry(),
+        // A SPINNER, not a skeleton — the one place in this feature where
+        // that is the honest answer. A skeleton works by matching the shape
+        // of what is coming; what is coming here is a photographic tile
+        // canvas with pins scattered over it, and the only placeholder that
+        // "matches" it is a full-screen shimmering rectangle, which reads as
+        // a broken image rather than as a map on its way. So: say what is
+        // being waited on and nothing more. The gate still means a fast local
+        // read paints no spinner at all.
+        skeleton: (context) =>
+            const MasiLoadingIndicator.standalone(label: 'Loading topos'),
+        data: (context, topos) => _MapView(
+          topos: topos,
+          tileProvider: widget.tileProvider,
+          focusWallId: widget.focusWallId,
+          controller: widget.mapController,
+          tileHttpClientFactory: widget.tileHttpClientFactory,
         ),
       ),
     );
@@ -720,6 +713,12 @@ class _MapViewState extends ConsumerState<_MapView> {
     // changes.
     final bottomChromeInset = MediaQuery.of(context).padding.bottom;
 
+    // The mirror image of `bottomChromeInset`, now that `CommunityMapScreen`
+    // has no AppBar and no `SafeArea` (see its `build`): the map itself runs
+    // under the status bar/notch, so the ONLY top chrome — the search pill —
+    // has to clear it on its own or it renders under the clock.
+    final topChromeInset = MediaQuery.of(context).padding.top;
+
     // The unified map search's local-content half (B2): reactively watched
     // (rather than one-shot `ref.read`) so results stay correct even if the
     // underlying located-topo/route/sector/area streams hadn't emitted their
@@ -1115,7 +1114,7 @@ class _MapViewState extends ConsumerState<_MapView> {
         // `flutterMap` — unlike the marker layers above, this is fixed
         // screen chrome, not something that should pan/zoom with the map).
         Positioned(
-          top: MasiSpacing.sm,
+          top: MasiSpacing.sm + topChromeInset,
           left: MasiSpacing.lg,
           right: MasiSpacing.lg,
           child: Column(
