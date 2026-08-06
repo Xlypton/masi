@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/db/storage_durability_provider.dart';
+import '../../../core/grades/grade_system.dart';
 import '../../../core/routes/route_styles.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
@@ -17,9 +18,11 @@ import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../moderation/application/community_facts_providers.dart';
 import '../../moderation/application/moderation_providers.dart';
 import '../../moderation/presentation/access_banner.dart';
+import '../../moderation/presentation/grade_consensus_view.dart';
 import '../../moderation/presentation/hazard_banner.dart';
 import '../../moderation/presentation/hazard_list_sheet.dart';
 import '../../moderation/presentation/hazard_reporter.dart';
+import '../../moderation/presentation/verification_tile.dart';
 import '../../topo/domain/topo_route.dart';
 import '../../topo/presentation/canvas_chrome.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
@@ -351,6 +354,40 @@ class _CommunityTopoDetailScreenState
     await showHazardList(context, wallId: wallId, wallOwnerId: owner);
   }
 
+  /// Lets the reader say what they think a route goes at.
+  ///
+  /// Never touches the route. The opinion lands in `route_grade_opinions`,
+  /// beside the author's grade rather than over it — which is what makes it
+  /// safe to leave ungated (R-1).
+  Future<void> _suggestGrade(RouteEntry entry) async {
+    final route = entry.route;
+    final system = route.gradeSystem ?? GradeSystem.french;
+    final mine = ref.read(myGradeOpinionProvider(entry.dbId)).asData?.value;
+
+    final picked = await showGradeOpinionPicker(
+      context,
+      system: system,
+      routeLabel: _routeNameLabel(route),
+      authorGrade: route.gradeRaw,
+      currentOpinion: mine?.raw,
+    );
+    if (picked == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref
+          .read(communityFactsServiceProvider)
+          .stateGrade(routeId: entry.dbId, system: system, raw: picked);
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Noted — you think it is $picked.')),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not record that. $error')),
+      );
+    }
+  }
+
   /// Files a hazard report against this topo.
   Future<void> _reportHazard(String wallId) async {
     final name = ref.read(wallNameProvider(wallId)).value ?? 'this topo';
@@ -668,6 +705,13 @@ class _CommunityTopoDetailScreenState
                   const SizedBox(height: MasiSpacing.sm),
                   const Divider(),
                   const SizedBox(height: MasiSpacing.xs),
+                  // Always shown, unlike the two banners above: a topo nobody
+                  // has confirmed yet is exactly the one where the prompt is
+                  // most useful.
+                  VerificationTile(wallId: wallId),
+                  const SizedBox(height: MasiSpacing.xs),
+                  const Divider(),
+                  const SizedBox(height: MasiSpacing.xs),
                   Text(
                     'Comments',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -948,10 +992,37 @@ class _CommunityTopoDetailScreenState
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          if (grade != null) ...[
-            _GradeBadge(grade: grade),
-            const SizedBox(width: MasiSpacing.sm),
-          ],
+          // Tapping the grade is how you comment on the grade. A dedicated
+          // "suggest a grade" button would be a third control in a row that
+          // already carries beta-video and Log ascent; this adds no chrome and
+          // puts the affordance exactly where the subject is.
+          // Flexible so the grade cluster yields before the row overflows: the
+          // badge plus a consensus chip is wider than the badge alone, and at
+          // a large text scale the two together tipped the row over its budget
+          // by a hair.
+          Flexible(
+            child: GestureDetector(
+              key: Key('route-grade-tap-${entry.dbId}'),
+              onTap: () => _suggestGrade(entry),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  if (grade != null) ...[
+                    _GradeBadge(grade: grade),
+                    const SizedBox(width: MasiSpacing.xs),
+                  ],
+                  // The community's median, BESIDE the author's grade and
+                  // never instead of it (R-1). Nothing below three opinions.
+                  GradeConsensusChip(
+                    routeId: entry.dbId,
+                    system: route.gradeSystem ?? GradeSystem.french,
+                    authorGrade: grade,
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: MasiSpacing.sm),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

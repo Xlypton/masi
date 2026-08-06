@@ -351,6 +351,13 @@ void main() {
     // the still-disabled button from the PREVIOUS build (a no-op), so the
     // comment is silently never submitted.
     await tester.pump();
+    // Scroll it into view first: the screen carries community-fact controls
+    // (verification tile, hazard banner) above the comment box, so the submit
+    // button no longer fits the test viewport by default.
+    await tester.ensureVisible(
+      find.byKey(const Key('community-comment-submit')),
+    );
+    await tester.pumpAndSettle();
     await tester.tap(find.byKey(const Key('community-comment-submit')));
     await tester.pumpAndSettle();
 
@@ -484,6 +491,13 @@ void main() {
       // the submit button needs a pumped frame to pick up the now-enabled
       // `onPressed` before it can be usefully tapped.
       await tester.pump();
+      // See the note in the "comment empty state" test: the community-fact
+      // controls above the comment box push the submit button off the test
+      // viewport, so it has to be scrolled to before it can be tapped.
+      await tester.ensureVisible(
+        find.byKey(const Key('community-comment-submit')),
+      );
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('community-comment-submit')));
       await tester.pumpAndSettle();
 
@@ -523,6 +537,18 @@ void main() {
       await tester.pumpAndSettle();
 
       final ascentButtonKey = Key('community-log-ascent-${seeded.routeDbId}');
+      // `scrollUntilVisible`, not `ensureVisible`: the routes list lives in a
+      // lazily-built sliver, and the community-fact controls added above it
+      // push this button past the build window, so on first pump the element
+      // does not exist at all and `ensureVisible` throws "No element". Scroll
+      // until it is built, THEN centre it — landing flush against the pinned
+      // header makes the tap miss.
+      await tester.scrollUntilVisible(
+        find.byKey(ascentButtonKey),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.byKey(ascentButtonKey));
       await tester.pumpAndSettle();
       expect(find.byKey(ascentButtonKey), findsOneWidget);
@@ -569,6 +595,18 @@ void main() {
       await tester.pumpAndSettle();
 
       final ascentButtonKey = Key('community-log-ascent-${seeded.routeDbId}');
+      // `scrollUntilVisible`, not `ensureVisible`: the routes list lives in a
+      // lazily-built sliver, and the community-fact controls added above it
+      // push this button past the build window, so on first pump the element
+      // does not exist at all and `ensureVisible` throws "No element". Scroll
+      // until it is built, THEN centre it — landing flush against the pinned
+      // header makes the tap miss.
+      await tester.scrollUntilVisible(
+        find.byKey(ascentButtonKey),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.byKey(ascentButtonKey));
       await tester.pumpAndSettle();
 
