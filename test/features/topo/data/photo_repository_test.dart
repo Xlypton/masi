@@ -127,7 +127,7 @@ void main() {
 
           expect(
             loaded!.localPath,
-            p.join(docsDir.path, 'photos/$originalPhotoId.jpg'),
+            p.join(docsDir.path, 'photos', '$originalPhotoId.jpg'),
           );
 
           final raw = await (db.select(

@@ -46,7 +46,10 @@ class PhotoFiles {
     final ext = p.extension(xfile.name).isNotEmpty
         ? p.extension(xfile.name)
         : '.jpg';
-    final key = p.join('photos', '$photoId$ext');
+    // Literal `/`, not `p.join` — see [thumbKeyFor]: this is a storage key
+    // that gets persisted and synced, so its separator belongs to the format,
+    // not to whatever platform is running the code.
+    final key = 'photos/$photoId$ext';
     try {
       final bytes = await xfile.readAsBytes();
       await _store.writeBytes(key, bytes);
@@ -91,7 +94,7 @@ class PhotoFiles {
     String ext,
     List<int> bytes,
   ) async {
-    final key = p.join('photos', '$photoId$ext');
+    final key = 'photos/$photoId$ext';
     final byteData = Uint8List.fromList(bytes);
     try {
       await _store.writeBytes(key, byteData);

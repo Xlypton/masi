@@ -33,7 +33,17 @@ class PhotoPathResolution {
 /// key (`thumbs/<id>.jpg`) — pure string manipulation, platform-agnostic, so
 /// both the native and web `PhotoFiles` backends can share the exact same
 /// naming convention without duplicating it.
+///
+/// The `/` is written literally rather than via `p.join`, because this is a
+/// STORAGE KEY, not a host filesystem path: it is persisted into `photos.
+/// localPath`, synced to Supabase, and used verbatim as an IndexedDB key by
+/// the web backend. `p.join` picks the separator of whatever platform the
+/// code happens to be running on, which would emit `thumbs\<id>.jpg` on a
+/// Windows host — a different key for the same photo, and one iOS/web could
+/// never resolve. The separator has to be a property of the format, not of
+/// the machine. Callers on native re-join this against the documents
+/// directory with `p.join`, which is where platform-correctness belongs.
 String thumbKeyFor(String storedOriginal) {
   final id = p.basenameWithoutExtension(storedOriginal);
-  return p.join('thumbs', '$id.jpg');
+  return 'thumbs/$id.jpg';
 }

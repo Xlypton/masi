@@ -312,7 +312,7 @@ void main() {
         'heal', () async {
       final resolution = await photoFiles.resolvePhotoPath('photos/abc123.jpg');
 
-      expect(resolution.path, p.join(docsDir.path, 'photos/abc123.jpg'));
+      expect(resolution.path, p.join(photosDirPath(), 'abc123.jpg'));
       expect(resolution.healedRelativePath, isNull);
     });
 
@@ -403,7 +403,11 @@ void main() {
 
       final result = await photoFiles.canonicalStoredPath(absolute);
 
-      expect(result, p.join('photos', 'abc123.jpg'));
+      // Literal, not `p.join`: the canonical stored form is a `/`-separated
+      // storage key on every platform, so a host-derived expectation here
+      // would assert `photos\abc123.jpg` on Windows and hide the real
+      // contract (see `thumbKeyFor`).
+      expect(result, 'photos/abc123.jpg');
     });
 
     test('an absolute input OUTSIDE <currentDocsDir>/photos/ (a foreign path '
@@ -447,7 +451,7 @@ void main() {
       await photoFiles.warmDocsPath();
 
       final resolution = photoFiles.resolvePhotoPathSync('photos/abc123.jpg');
-      expect(resolution.path, p.join(docsDir.path, 'photos/abc123.jpg'));
+      expect(resolution.path, p.join(photosDirPath(), 'abc123.jpg'));
       expect(resolution.healedRelativePath, isNull);
     });
 
@@ -485,7 +489,7 @@ void main() {
 
       final resolution = photoFiles.resolvePhotoPathSync(staleAbsolute);
       expect(resolution.path, p.join(photosDirPath(), 'here.jpg'));
-      expect(resolution.healedRelativePath, p.join('photos', 'here.jpg'));
+      expect(resolution.healedRelativePath, 'photos/here.jpg');
     });
 
     test('warmDocsPath with no path_provider is a swallowed no-op', () async {

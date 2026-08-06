@@ -101,7 +101,13 @@ class PhotoFiles {
     final ext = p.extension(xfile.name).isNotEmpty
         ? p.extension(xfile.name)
         : '.jpg';
-    final relativeDest = p.join(_photosDirName, '$photoId$ext');
+    // Literal `/`, not `p.join` — see [thumbKeyFor]. The RELATIVE form is a
+    // storage key: it is persisted into `photos.localPath` and synced, so its
+    // separator must be a property of the format rather than of the host. The
+    // ABSOLUTE paths below keep `p.join`, which is where platform-correctness
+    // genuinely belongs. On iOS/Android this is byte-identical either way
+    // (`p.join` is posix there); it only diverges on a Windows host.
+    final relativeDest = '$_photosDirName/$photoId$ext';
     final source = File(xfile.path);
     if (!await source.exists()) return relativeDest;
     try {
@@ -159,7 +165,7 @@ class PhotoFiles {
     final dir = await _photosDir();
     final dest = p.join(dir.path, '$photoId$ext');
     await File(dest).writeAsBytes(bytes, flush: true);
-    return p.join(_photosDirName, '$photoId$ext');
+    return '$_photosDirName/$photoId$ext';
   }
 
   /// Reads the bytes of the photo stored at [stored] (resolved via
@@ -217,14 +223,14 @@ class PhotoFiles {
     try {
       if (p.isRelative(stored)) {
         final docsPath = await _resolveDocsPath();
-        return PhotoPathResolution(path: p.join(docsPath, stored));
+        return PhotoPathResolution(path: _absoluteFor(docsPath, stored));
       }
       if (File(stored).existsSync()) {
         return PhotoPathResolution(path: stored);
       }
-      final relativeCandidate = p.join(_photosDirName, p.basename(stored));
+      final relativeCandidate = '$_photosDirName/${p.basename(stored)}';
       final docsPath = await _resolveDocsPath();
-      final candidateAbsolute = p.join(docsPath, relativeCandidate);
+      final candidateAbsolute = _absoluteFor(docsPath, relativeCandidate);
       final candidateExists = File(candidateAbsolute).existsSync();
       return PhotoPathResolution(
         path: candidateAbsolute,
@@ -256,7 +262,10 @@ class PhotoFiles {
       final docsPath = await _resolveDocsPath();
       final photosDirAbsolute = p.join(docsPath, _photosDirName);
       if (!p.isWithin(photosDirAbsolute, maybePath)) return maybePath;
-      return p.relative(maybePath, from: docsPath);
+      // Split with the host's semantics, rejoin with the key format's: the
+      // return value is persisted and synced, so it must be `/`-separated
+      // whatever platform derived it (see [thumbKeyFor]).
+      return p.url.joinAll(p.split(p.relative(maybePath, from: docsPath)));
     } catch (_) {
       return maybePath;
     }
@@ -294,13 +303,13 @@ class PhotoFiles {
         return PhotoPathResolution(path: stored);
       }
       if (p.isRelative(stored)) {
-        return PhotoPathResolution(path: p.join(docsPath, stored));
+        return PhotoPathResolution(path: _absoluteFor(docsPath, stored));
       }
       if (File(stored).existsSync()) {
         return PhotoPathResolution(path: stored);
       }
-      final relativeCandidate = p.join(_photosDirName, p.basename(stored));
-      final candidateAbsolute = p.join(docsPath, relativeCandidate);
+      final relativeCandidate = '$_photosDirName/${p.basename(stored)}';
+      final candidateAbsolute = _absoluteFor(docsPath, relativeCandidate);
       final candidateExists = File(candidateAbsolute).existsSync();
       return PhotoPathResolution(
         path: candidateAbsolute,
@@ -347,7 +356,7 @@ class PhotoFiles {
       // Best-effort — never throws.
     }
     try {
-      final thumbFile = File(p.join(docsPath, thumbKeyFor(stored)));
+      final thumbFile = File(_absoluteFor(docsPath, thumbKeyFor(stored)));
       if (await thumbFile.exists()) await thumbFile.delete();
     } catch (_) {
       // Best-effort — never throws.
@@ -399,6 +408,18 @@ class PhotoFiles {
     _cachedDocsPath = docs.path;
     return docs.path;
   }
+
+  /// Resolves a `/`-separated storage [key] against [docsPath] into a path in
+  /// the HOST's own form — the single boundary where the key format becomes a
+  /// real filesystem path.
+  ///
+  /// Storage keys are always url-style (see [thumbKeyFor]); `File` wants the
+  /// platform style. A bare `p.join` would leave the key's `/` untouched and
+  /// produce a mixed `C:\docs\photos/x.jpg` on a Windows host, so the key is
+  /// split with url semantics and rejoined with the platform's. On iOS and
+  /// Android both styles are posix, making this byte-identical to `p.join`.
+  static String _absoluteFor(String docsPath, String key) =>
+      p.joinAll([docsPath, ...p.url.split(key)]);
 
   /// The `<appDocuments>/photos` directory, created if it does not yet exist.
   Future<Directory> _photosDir() async {
