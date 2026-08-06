@@ -26,7 +26,13 @@ CREATE TABLE IF NOT EXISTS public.areas (
   "name" TEXT NOT NULL,
   "description" TEXT,
   "latitude" DOUBLE PRECISION,
-  "longitude" DOUBLE PRECISION
+  "longitude" DOUBLE PRECISION,
+  -- Community editing phase 2 / R-2 (applied live 2026-08-06; delta in
+  -- supabase/migrations/2026-08-06_community_phase2_access.sql). Access and
+  -- closure state, inheriting down Area -> Sector -> Wall. See AccessColumns
+  -- in lib/core/db/tables.dart.
+  "accessState" TEXT,
+  "accessNote" TEXT
 );
 
 CREATE TABLE IF NOT EXISTS public.sectors (
@@ -39,7 +45,9 @@ CREATE TABLE IF NOT EXISTS public.sectors (
   "ownerId" TEXT,
   "areaId" TEXT NOT NULL,
   "name" TEXT NOT NULL,
-  "sortOrder" INTEGER NOT NULL DEFAULT 0
+  "sortOrder" INTEGER NOT NULL DEFAULT 0,
+  "accessState" TEXT,
+  "accessNote" TEXT
 );
 
 CREATE TABLE IF NOT EXISTS public.walls (
@@ -62,7 +70,9 @@ CREATE TABLE IF NOT EXISTS public.walls (
   -- like every other column, so no sync-payload code change was needed —
   -- only this schema addition.
   "latitude" DOUBLE PRECISION,
-  "longitude" DOUBLE PRECISION
+  "longitude" DOUBLE PRECISION,
+  "accessState" TEXT,
+  "accessNote" TEXT
 );
 
 -- ---------- LIVE-DATABASE MIGRATION (P0 backend already applied) ----------

@@ -85,6 +85,28 @@ class $AreasTable extends Areas with TableInfo<$AreasTable, Area> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _accessStateMeta = const VerificationMeta(
+    'accessState',
+  );
+  @override
+  late final GeneratedColumn<String> accessState = GeneratedColumn<String>(
+    'access_state',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _accessNoteMeta = const VerificationMeta(
+    'accessNote',
+  );
+  @override
+  late final GeneratedColumn<String> accessNote = GeneratedColumn<String>(
+    'access_note',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _nameMeta = const VerificationMeta('name');
   @override
   late final GeneratedColumn<String> name = GeneratedColumn<String>(
@@ -136,6 +158,8 @@ class $AreasTable extends Areas with TableInfo<$AreasTable, Area> {
     remoteId,
     dirty,
     ownerId,
+    accessState,
+    accessNote,
     name,
     description,
     latitude,
@@ -196,6 +220,21 @@ class $AreasTable extends Areas with TableInfo<$AreasTable, Area> {
       context.handle(
         _ownerIdMeta,
         ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
+    if (data.containsKey('access_state')) {
+      context.handle(
+        _accessStateMeta,
+        accessState.isAcceptableOrUnknown(
+          data['access_state']!,
+          _accessStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('access_note')) {
+      context.handle(
+        _accessNoteMeta,
+        accessNote.isAcceptableOrUnknown(data['access_note']!, _accessNoteMeta),
       );
     }
     if (data.containsKey('name')) {
@@ -264,6 +303,14 @@ class $AreasTable extends Areas with TableInfo<$AreasTable, Area> {
         DriftSqlType.string,
         data['${effectivePrefix}owner_id'],
       ),
+      accessState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}access_state'],
+      ),
+      accessNote: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}access_note'],
+      ),
       name: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}name'],
@@ -297,6 +344,12 @@ class Area extends DataClass implements Insertable<Area> {
   final String? remoteId;
   final bool dirty;
   final String? ownerId;
+  final String? accessState;
+
+  /// Free text explaining the restriction ("Peregrine nesting until 31 Jul",
+  /// "Private land, ask at the farmhouse"). theCrag's model: state the reason,
+  /// because a bare "closed" with no explanation gets ignored.
+  final String? accessNote;
   final String name;
   final String? description;
   final double? latitude;
@@ -309,6 +362,8 @@ class Area extends DataClass implements Insertable<Area> {
     this.remoteId,
     required this.dirty,
     this.ownerId,
+    this.accessState,
+    this.accessNote,
     required this.name,
     this.description,
     this.latitude,
@@ -329,6 +384,12 @@ class Area extends DataClass implements Insertable<Area> {
     map['dirty'] = Variable<bool>(dirty);
     if (!nullToAbsent || ownerId != null) {
       map['owner_id'] = Variable<String>(ownerId);
+    }
+    if (!nullToAbsent || accessState != null) {
+      map['access_state'] = Variable<String>(accessState);
+    }
+    if (!nullToAbsent || accessNote != null) {
+      map['access_note'] = Variable<String>(accessNote);
     }
     map['name'] = Variable<String>(name);
     if (!nullToAbsent || description != null) {
@@ -358,6 +419,12 @@ class Area extends DataClass implements Insertable<Area> {
       ownerId: ownerId == null && nullToAbsent
           ? const Value.absent()
           : Value(ownerId),
+      accessState: accessState == null && nullToAbsent
+          ? const Value.absent()
+          : Value(accessState),
+      accessNote: accessNote == null && nullToAbsent
+          ? const Value.absent()
+          : Value(accessNote),
       name: Value(name),
       description: description == null && nullToAbsent
           ? const Value.absent()
@@ -384,6 +451,8 @@ class Area extends DataClass implements Insertable<Area> {
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       dirty: serializer.fromJson<bool>(json['dirty']),
       ownerId: serializer.fromJson<String?>(json['ownerId']),
+      accessState: serializer.fromJson<String?>(json['accessState']),
+      accessNote: serializer.fromJson<String?>(json['accessNote']),
       name: serializer.fromJson<String>(json['name']),
       description: serializer.fromJson<String?>(json['description']),
       latitude: serializer.fromJson<double?>(json['latitude']),
@@ -401,6 +470,8 @@ class Area extends DataClass implements Insertable<Area> {
       'remoteId': serializer.toJson<String?>(remoteId),
       'dirty': serializer.toJson<bool>(dirty),
       'ownerId': serializer.toJson<String?>(ownerId),
+      'accessState': serializer.toJson<String?>(accessState),
+      'accessNote': serializer.toJson<String?>(accessNote),
       'name': serializer.toJson<String>(name),
       'description': serializer.toJson<String?>(description),
       'latitude': serializer.toJson<double?>(latitude),
@@ -416,6 +487,8 @@ class Area extends DataClass implements Insertable<Area> {
     Value<String?> remoteId = const Value.absent(),
     bool? dirty,
     Value<String?> ownerId = const Value.absent(),
+    Value<String?> accessState = const Value.absent(),
+    Value<String?> accessNote = const Value.absent(),
     String? name,
     Value<String?> description = const Value.absent(),
     Value<double?> latitude = const Value.absent(),
@@ -428,6 +501,8 @@ class Area extends DataClass implements Insertable<Area> {
     remoteId: remoteId.present ? remoteId.value : this.remoteId,
     dirty: dirty ?? this.dirty,
     ownerId: ownerId.present ? ownerId.value : this.ownerId,
+    accessState: accessState.present ? accessState.value : this.accessState,
+    accessNote: accessNote.present ? accessNote.value : this.accessNote,
     name: name ?? this.name,
     description: description.present ? description.value : this.description,
     latitude: latitude.present ? latitude.value : this.latitude,
@@ -442,6 +517,12 @@ class Area extends DataClass implements Insertable<Area> {
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
       ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      accessState: data.accessState.present
+          ? data.accessState.value
+          : this.accessState,
+      accessNote: data.accessNote.present
+          ? data.accessNote.value
+          : this.accessNote,
       name: data.name.present ? data.name.value : this.name,
       description: data.description.present
           ? data.description.value
@@ -461,6 +542,8 @@ class Area extends DataClass implements Insertable<Area> {
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
           ..write('ownerId: $ownerId, ')
+          ..write('accessState: $accessState, ')
+          ..write('accessNote: $accessNote, ')
           ..write('name: $name, ')
           ..write('description: $description, ')
           ..write('latitude: $latitude, ')
@@ -478,6 +561,8 @@ class Area extends DataClass implements Insertable<Area> {
     remoteId,
     dirty,
     ownerId,
+    accessState,
+    accessNote,
     name,
     description,
     latitude,
@@ -494,6 +579,8 @@ class Area extends DataClass implements Insertable<Area> {
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
           other.ownerId == this.ownerId &&
+          other.accessState == this.accessState &&
+          other.accessNote == this.accessNote &&
           other.name == this.name &&
           other.description == this.description &&
           other.latitude == this.latitude &&
@@ -508,6 +595,8 @@ class AreasCompanion extends UpdateCompanion<Area> {
   final Value<String?> remoteId;
   final Value<bool> dirty;
   final Value<String?> ownerId;
+  final Value<String?> accessState;
+  final Value<String?> accessNote;
   final Value<String> name;
   final Value<String?> description;
   final Value<double?> latitude;
@@ -521,6 +610,8 @@ class AreasCompanion extends UpdateCompanion<Area> {
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
     this.ownerId = const Value.absent(),
+    this.accessState = const Value.absent(),
+    this.accessNote = const Value.absent(),
     this.name = const Value.absent(),
     this.description = const Value.absent(),
     this.latitude = const Value.absent(),
@@ -535,6 +626,8 @@ class AreasCompanion extends UpdateCompanion<Area> {
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
     this.ownerId = const Value.absent(),
+    this.accessState = const Value.absent(),
+    this.accessNote = const Value.absent(),
     required String name,
     this.description = const Value.absent(),
     this.latitude = const Value.absent(),
@@ -552,6 +645,8 @@ class AreasCompanion extends UpdateCompanion<Area> {
     Expression<String>? remoteId,
     Expression<bool>? dirty,
     Expression<String>? ownerId,
+    Expression<String>? accessState,
+    Expression<String>? accessNote,
     Expression<String>? name,
     Expression<String>? description,
     Expression<double>? latitude,
@@ -566,6 +661,8 @@ class AreasCompanion extends UpdateCompanion<Area> {
       if (remoteId != null) 'remote_id': remoteId,
       if (dirty != null) 'dirty': dirty,
       if (ownerId != null) 'owner_id': ownerId,
+      if (accessState != null) 'access_state': accessState,
+      if (accessNote != null) 'access_note': accessNote,
       if (name != null) 'name': name,
       if (description != null) 'description': description,
       if (latitude != null) 'latitude': latitude,
@@ -582,6 +679,8 @@ class AreasCompanion extends UpdateCompanion<Area> {
     Value<String?>? remoteId,
     Value<bool>? dirty,
     Value<String?>? ownerId,
+    Value<String?>? accessState,
+    Value<String?>? accessNote,
     Value<String>? name,
     Value<String?>? description,
     Value<double?>? latitude,
@@ -596,6 +695,8 @@ class AreasCompanion extends UpdateCompanion<Area> {
       remoteId: remoteId ?? this.remoteId,
       dirty: dirty ?? this.dirty,
       ownerId: ownerId ?? this.ownerId,
+      accessState: accessState ?? this.accessState,
+      accessNote: accessNote ?? this.accessNote,
       name: name ?? this.name,
       description: description ?? this.description,
       latitude: latitude ?? this.latitude,
@@ -628,6 +729,12 @@ class AreasCompanion extends UpdateCompanion<Area> {
     if (ownerId.present) {
       map['owner_id'] = Variable<String>(ownerId.value);
     }
+    if (accessState.present) {
+      map['access_state'] = Variable<String>(accessState.value);
+    }
+    if (accessNote.present) {
+      map['access_note'] = Variable<String>(accessNote.value);
+    }
     if (name.present) {
       map['name'] = Variable<String>(name.value);
     }
@@ -656,6 +763,8 @@ class AreasCompanion extends UpdateCompanion<Area> {
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
           ..write('ownerId: $ownerId, ')
+          ..write('accessState: $accessState, ')
+          ..write('accessNote: $accessNote, ')
           ..write('name: $name, ')
           ..write('description: $description, ')
           ..write('latitude: $latitude, ')
@@ -748,6 +857,28 @@ class $SectorsTable extends Sectors with TableInfo<$SectorsTable, Sector> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _accessStateMeta = const VerificationMeta(
+    'accessState',
+  );
+  @override
+  late final GeneratedColumn<String> accessState = GeneratedColumn<String>(
+    'access_state',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _accessNoteMeta = const VerificationMeta(
+    'accessNote',
+  );
+  @override
+  late final GeneratedColumn<String> accessNote = GeneratedColumn<String>(
+    'access_note',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _areaIdMeta = const VerificationMeta('areaId');
   @override
   late final GeneratedColumn<String> areaId = GeneratedColumn<String>(
@@ -789,6 +920,8 @@ class $SectorsTable extends Sectors with TableInfo<$SectorsTable, Sector> {
     remoteId,
     dirty,
     ownerId,
+    accessState,
+    accessNote,
     areaId,
     name,
     sortOrder,
@@ -848,6 +981,21 @@ class $SectorsTable extends Sectors with TableInfo<$SectorsTable, Sector> {
       context.handle(
         _ownerIdMeta,
         ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
+    if (data.containsKey('access_state')) {
+      context.handle(
+        _accessStateMeta,
+        accessState.isAcceptableOrUnknown(
+          data['access_state']!,
+          _accessStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('access_note')) {
+      context.handle(
+        _accessNoteMeta,
+        accessNote.isAcceptableOrUnknown(data['access_note']!, _accessNoteMeta),
       );
     }
     if (data.containsKey('area_id')) {
@@ -911,6 +1059,14 @@ class $SectorsTable extends Sectors with TableInfo<$SectorsTable, Sector> {
         DriftSqlType.string,
         data['${effectivePrefix}owner_id'],
       ),
+      accessState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}access_state'],
+      ),
+      accessNote: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}access_note'],
+      ),
       areaId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}area_id'],
@@ -940,6 +1096,12 @@ class Sector extends DataClass implements Insertable<Sector> {
   final String? remoteId;
   final bool dirty;
   final String? ownerId;
+  final String? accessState;
+
+  /// Free text explaining the restriction ("Peregrine nesting until 31 Jul",
+  /// "Private land, ask at the farmhouse"). theCrag's model: state the reason,
+  /// because a bare "closed" with no explanation gets ignored.
+  final String? accessNote;
   final String areaId;
   final String name;
   final int sortOrder;
@@ -951,6 +1113,8 @@ class Sector extends DataClass implements Insertable<Sector> {
     this.remoteId,
     required this.dirty,
     this.ownerId,
+    this.accessState,
+    this.accessNote,
     required this.areaId,
     required this.name,
     required this.sortOrder,
@@ -970,6 +1134,12 @@ class Sector extends DataClass implements Insertable<Sector> {
     map['dirty'] = Variable<bool>(dirty);
     if (!nullToAbsent || ownerId != null) {
       map['owner_id'] = Variable<String>(ownerId);
+    }
+    if (!nullToAbsent || accessState != null) {
+      map['access_state'] = Variable<String>(accessState);
+    }
+    if (!nullToAbsent || accessNote != null) {
+      map['access_note'] = Variable<String>(accessNote);
     }
     map['area_id'] = Variable<String>(areaId);
     map['name'] = Variable<String>(name);
@@ -992,6 +1162,12 @@ class Sector extends DataClass implements Insertable<Sector> {
       ownerId: ownerId == null && nullToAbsent
           ? const Value.absent()
           : Value(ownerId),
+      accessState: accessState == null && nullToAbsent
+          ? const Value.absent()
+          : Value(accessState),
+      accessNote: accessNote == null && nullToAbsent
+          ? const Value.absent()
+          : Value(accessNote),
       areaId: Value(areaId),
       name: Value(name),
       sortOrder: Value(sortOrder),
@@ -1011,6 +1187,8 @@ class Sector extends DataClass implements Insertable<Sector> {
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       dirty: serializer.fromJson<bool>(json['dirty']),
       ownerId: serializer.fromJson<String?>(json['ownerId']),
+      accessState: serializer.fromJson<String?>(json['accessState']),
+      accessNote: serializer.fromJson<String?>(json['accessNote']),
       areaId: serializer.fromJson<String>(json['areaId']),
       name: serializer.fromJson<String>(json['name']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
@@ -1027,6 +1205,8 @@ class Sector extends DataClass implements Insertable<Sector> {
       'remoteId': serializer.toJson<String?>(remoteId),
       'dirty': serializer.toJson<bool>(dirty),
       'ownerId': serializer.toJson<String?>(ownerId),
+      'accessState': serializer.toJson<String?>(accessState),
+      'accessNote': serializer.toJson<String?>(accessNote),
       'areaId': serializer.toJson<String>(areaId),
       'name': serializer.toJson<String>(name),
       'sortOrder': serializer.toJson<int>(sortOrder),
@@ -1041,6 +1221,8 @@ class Sector extends DataClass implements Insertable<Sector> {
     Value<String?> remoteId = const Value.absent(),
     bool? dirty,
     Value<String?> ownerId = const Value.absent(),
+    Value<String?> accessState = const Value.absent(),
+    Value<String?> accessNote = const Value.absent(),
     String? areaId,
     String? name,
     int? sortOrder,
@@ -1052,6 +1234,8 @@ class Sector extends DataClass implements Insertable<Sector> {
     remoteId: remoteId.present ? remoteId.value : this.remoteId,
     dirty: dirty ?? this.dirty,
     ownerId: ownerId.present ? ownerId.value : this.ownerId,
+    accessState: accessState.present ? accessState.value : this.accessState,
+    accessNote: accessNote.present ? accessNote.value : this.accessNote,
     areaId: areaId ?? this.areaId,
     name: name ?? this.name,
     sortOrder: sortOrder ?? this.sortOrder,
@@ -1065,6 +1249,12 @@ class Sector extends DataClass implements Insertable<Sector> {
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
       ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      accessState: data.accessState.present
+          ? data.accessState.value
+          : this.accessState,
+      accessNote: data.accessNote.present
+          ? data.accessNote.value
+          : this.accessNote,
       areaId: data.areaId.present ? data.areaId.value : this.areaId,
       name: data.name.present ? data.name.value : this.name,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
@@ -1081,6 +1271,8 @@ class Sector extends DataClass implements Insertable<Sector> {
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
           ..write('ownerId: $ownerId, ')
+          ..write('accessState: $accessState, ')
+          ..write('accessNote: $accessNote, ')
           ..write('areaId: $areaId, ')
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder')
@@ -1097,6 +1289,8 @@ class Sector extends DataClass implements Insertable<Sector> {
     remoteId,
     dirty,
     ownerId,
+    accessState,
+    accessNote,
     areaId,
     name,
     sortOrder,
@@ -1112,6 +1306,8 @@ class Sector extends DataClass implements Insertable<Sector> {
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
           other.ownerId == this.ownerId &&
+          other.accessState == this.accessState &&
+          other.accessNote == this.accessNote &&
           other.areaId == this.areaId &&
           other.name == this.name &&
           other.sortOrder == this.sortOrder);
@@ -1125,6 +1321,8 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
   final Value<String?> remoteId;
   final Value<bool> dirty;
   final Value<String?> ownerId;
+  final Value<String?> accessState;
+  final Value<String?> accessNote;
   final Value<String> areaId;
   final Value<String> name;
   final Value<int> sortOrder;
@@ -1137,6 +1335,8 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
     this.ownerId = const Value.absent(),
+    this.accessState = const Value.absent(),
+    this.accessNote = const Value.absent(),
     this.areaId = const Value.absent(),
     this.name = const Value.absent(),
     this.sortOrder = const Value.absent(),
@@ -1150,6 +1350,8 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
     this.ownerId = const Value.absent(),
+    this.accessState = const Value.absent(),
+    this.accessNote = const Value.absent(),
     required String areaId,
     required String name,
     required int sortOrder,
@@ -1168,6 +1370,8 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     Expression<String>? remoteId,
     Expression<bool>? dirty,
     Expression<String>? ownerId,
+    Expression<String>? accessState,
+    Expression<String>? accessNote,
     Expression<String>? areaId,
     Expression<String>? name,
     Expression<int>? sortOrder,
@@ -1181,6 +1385,8 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
       if (remoteId != null) 'remote_id': remoteId,
       if (dirty != null) 'dirty': dirty,
       if (ownerId != null) 'owner_id': ownerId,
+      if (accessState != null) 'access_state': accessState,
+      if (accessNote != null) 'access_note': accessNote,
       if (areaId != null) 'area_id': areaId,
       if (name != null) 'name': name,
       if (sortOrder != null) 'sort_order': sortOrder,
@@ -1196,6 +1402,8 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     Value<String?>? remoteId,
     Value<bool>? dirty,
     Value<String?>? ownerId,
+    Value<String?>? accessState,
+    Value<String?>? accessNote,
     Value<String>? areaId,
     Value<String>? name,
     Value<int>? sortOrder,
@@ -1209,6 +1417,8 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
       remoteId: remoteId ?? this.remoteId,
       dirty: dirty ?? this.dirty,
       ownerId: ownerId ?? this.ownerId,
+      accessState: accessState ?? this.accessState,
+      accessNote: accessNote ?? this.accessNote,
       areaId: areaId ?? this.areaId,
       name: name ?? this.name,
       sortOrder: sortOrder ?? this.sortOrder,
@@ -1240,6 +1450,12 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
     if (ownerId.present) {
       map['owner_id'] = Variable<String>(ownerId.value);
     }
+    if (accessState.present) {
+      map['access_state'] = Variable<String>(accessState.value);
+    }
+    if (accessNote.present) {
+      map['access_note'] = Variable<String>(accessNote.value);
+    }
     if (areaId.present) {
       map['area_id'] = Variable<String>(areaId.value);
     }
@@ -1265,6 +1481,8 @@ class SectorsCompanion extends UpdateCompanion<Sector> {
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
           ..write('ownerId: $ownerId, ')
+          ..write('accessState: $accessState, ')
+          ..write('accessNote: $accessNote, ')
           ..write('areaId: $areaId, ')
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder, ')
@@ -1356,6 +1574,28 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _accessStateMeta = const VerificationMeta(
+    'accessState',
+  );
+  @override
+  late final GeneratedColumn<String> accessState = GeneratedColumn<String>(
+    'access_state',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _accessNoteMeta = const VerificationMeta(
+    'accessNote',
+  );
+  @override
+  late final GeneratedColumn<String> accessNote = GeneratedColumn<String>(
+    'access_note',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   static const VerificationMeta _sectorIdMeta = const VerificationMeta(
     'sectorId',
   );
@@ -1433,6 +1673,8 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     remoteId,
     dirty,
     ownerId,
+    accessState,
+    accessNote,
     sectorId,
     name,
     sortOrder,
@@ -1495,6 +1737,21 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
       context.handle(
         _ownerIdMeta,
         ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
+    if (data.containsKey('access_state')) {
+      context.handle(
+        _accessStateMeta,
+        accessState.isAcceptableOrUnknown(
+          data['access_state']!,
+          _accessStateMeta,
+        ),
+      );
+    }
+    if (data.containsKey('access_note')) {
+      context.handle(
+        _accessNoteMeta,
+        accessNote.isAcceptableOrUnknown(data['access_note']!, _accessNoteMeta),
       );
     }
     if (data.containsKey('sector_id')) {
@@ -1576,6 +1833,14 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
         DriftSqlType.string,
         data['${effectivePrefix}owner_id'],
       ),
+      accessState: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}access_state'],
+      ),
+      accessNote: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}access_note'],
+      ),
       sectorId: attachedDatabase.typeMapping.read(
         DriftSqlType.string,
         data['${effectivePrefix}sector_id'],
@@ -1617,6 +1882,12 @@ class Wall extends DataClass implements Insertable<Wall> {
   final String? remoteId;
   final bool dirty;
   final String? ownerId;
+  final String? accessState;
+
+  /// Free text explaining the restriction ("Peregrine nesting until 31 Jul",
+  /// "Private land, ask at the farmhouse"). theCrag's model: state the reason,
+  /// because a bare "closed" with no explanation gets ignored.
+  final String? accessNote;
   final String sectorId;
   final String name;
   final int sortOrder;
@@ -1645,6 +1916,8 @@ class Wall extends DataClass implements Insertable<Wall> {
     this.remoteId,
     required this.dirty,
     this.ownerId,
+    this.accessState,
+    this.accessNote,
     required this.sectorId,
     required this.name,
     required this.sortOrder,
@@ -1667,6 +1940,12 @@ class Wall extends DataClass implements Insertable<Wall> {
     map['dirty'] = Variable<bool>(dirty);
     if (!nullToAbsent || ownerId != null) {
       map['owner_id'] = Variable<String>(ownerId);
+    }
+    if (!nullToAbsent || accessState != null) {
+      map['access_state'] = Variable<String>(accessState);
+    }
+    if (!nullToAbsent || accessNote != null) {
+      map['access_note'] = Variable<String>(accessNote);
     }
     map['sector_id'] = Variable<String>(sectorId);
     map['name'] = Variable<String>(name);
@@ -1696,6 +1975,12 @@ class Wall extends DataClass implements Insertable<Wall> {
       ownerId: ownerId == null && nullToAbsent
           ? const Value.absent()
           : Value(ownerId),
+      accessState: accessState == null && nullToAbsent
+          ? const Value.absent()
+          : Value(accessState),
+      accessNote: accessNote == null && nullToAbsent
+          ? const Value.absent()
+          : Value(accessNote),
       sectorId: Value(sectorId),
       name: Value(name),
       sortOrder: Value(sortOrder),
@@ -1722,6 +2007,8 @@ class Wall extends DataClass implements Insertable<Wall> {
       remoteId: serializer.fromJson<String?>(json['remoteId']),
       dirty: serializer.fromJson<bool>(json['dirty']),
       ownerId: serializer.fromJson<String?>(json['ownerId']),
+      accessState: serializer.fromJson<String?>(json['accessState']),
+      accessNote: serializer.fromJson<String?>(json['accessNote']),
       sectorId: serializer.fromJson<String>(json['sectorId']),
       name: serializer.fromJson<String>(json['name']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
@@ -1741,6 +2028,8 @@ class Wall extends DataClass implements Insertable<Wall> {
       'remoteId': serializer.toJson<String?>(remoteId),
       'dirty': serializer.toJson<bool>(dirty),
       'ownerId': serializer.toJson<String?>(ownerId),
+      'accessState': serializer.toJson<String?>(accessState),
+      'accessNote': serializer.toJson<String?>(accessNote),
       'sectorId': serializer.toJson<String>(sectorId),
       'name': serializer.toJson<String>(name),
       'sortOrder': serializer.toJson<int>(sortOrder),
@@ -1758,6 +2047,8 @@ class Wall extends DataClass implements Insertable<Wall> {
     Value<String?> remoteId = const Value.absent(),
     bool? dirty,
     Value<String?> ownerId = const Value.absent(),
+    Value<String?> accessState = const Value.absent(),
+    Value<String?> accessNote = const Value.absent(),
     String? sectorId,
     String? name,
     int? sortOrder,
@@ -1772,6 +2063,8 @@ class Wall extends DataClass implements Insertable<Wall> {
     remoteId: remoteId.present ? remoteId.value : this.remoteId,
     dirty: dirty ?? this.dirty,
     ownerId: ownerId.present ? ownerId.value : this.ownerId,
+    accessState: accessState.present ? accessState.value : this.accessState,
+    accessNote: accessNote.present ? accessNote.value : this.accessNote,
     sectorId: sectorId ?? this.sectorId,
     name: name ?? this.name,
     sortOrder: sortOrder ?? this.sortOrder,
@@ -1788,6 +2081,12 @@ class Wall extends DataClass implements Insertable<Wall> {
       remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
       dirty: data.dirty.present ? data.dirty.value : this.dirty,
       ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      accessState: data.accessState.present
+          ? data.accessState.value
+          : this.accessState,
+      accessNote: data.accessNote.present
+          ? data.accessNote.value
+          : this.accessNote,
       sectorId: data.sectorId.present ? data.sectorId.value : this.sectorId,
       name: data.name.present ? data.name.value : this.name,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
@@ -1809,6 +2108,8 @@ class Wall extends DataClass implements Insertable<Wall> {
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
           ..write('ownerId: $ownerId, ')
+          ..write('accessState: $accessState, ')
+          ..write('accessNote: $accessNote, ')
           ..write('sectorId: $sectorId, ')
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder, ')
@@ -1828,6 +2129,8 @@ class Wall extends DataClass implements Insertable<Wall> {
     remoteId,
     dirty,
     ownerId,
+    accessState,
+    accessNote,
     sectorId,
     name,
     sortOrder,
@@ -1846,6 +2149,8 @@ class Wall extends DataClass implements Insertable<Wall> {
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
           other.ownerId == this.ownerId &&
+          other.accessState == this.accessState &&
+          other.accessNote == this.accessNote &&
           other.sectorId == this.sectorId &&
           other.name == this.name &&
           other.sortOrder == this.sortOrder &&
@@ -1862,6 +2167,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
   final Value<String?> remoteId;
   final Value<bool> dirty;
   final Value<String?> ownerId;
+  final Value<String?> accessState;
+  final Value<String?> accessNote;
   final Value<String> sectorId;
   final Value<String> name;
   final Value<int> sortOrder;
@@ -1877,6 +2184,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
     this.ownerId = const Value.absent(),
+    this.accessState = const Value.absent(),
+    this.accessNote = const Value.absent(),
     this.sectorId = const Value.absent(),
     this.name = const Value.absent(),
     this.sortOrder = const Value.absent(),
@@ -1893,6 +2202,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     this.remoteId = const Value.absent(),
     this.dirty = const Value.absent(),
     this.ownerId = const Value.absent(),
+    this.accessState = const Value.absent(),
+    this.accessNote = const Value.absent(),
     required String sectorId,
     required String name,
     required int sortOrder,
@@ -1914,6 +2225,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     Expression<String>? remoteId,
     Expression<bool>? dirty,
     Expression<String>? ownerId,
+    Expression<String>? accessState,
+    Expression<String>? accessNote,
     Expression<String>? sectorId,
     Expression<String>? name,
     Expression<int>? sortOrder,
@@ -1930,6 +2243,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
       if (remoteId != null) 'remote_id': remoteId,
       if (dirty != null) 'dirty': dirty,
       if (ownerId != null) 'owner_id': ownerId,
+      if (accessState != null) 'access_state': accessState,
+      if (accessNote != null) 'access_note': accessNote,
       if (sectorId != null) 'sector_id': sectorId,
       if (name != null) 'name': name,
       if (sortOrder != null) 'sort_order': sortOrder,
@@ -1948,6 +2263,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     Value<String?>? remoteId,
     Value<bool>? dirty,
     Value<String?>? ownerId,
+    Value<String?>? accessState,
+    Value<String?>? accessNote,
     Value<String>? sectorId,
     Value<String>? name,
     Value<int>? sortOrder,
@@ -1964,6 +2281,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
       remoteId: remoteId ?? this.remoteId,
       dirty: dirty ?? this.dirty,
       ownerId: ownerId ?? this.ownerId,
+      accessState: accessState ?? this.accessState,
+      accessNote: accessNote ?? this.accessNote,
       sectorId: sectorId ?? this.sectorId,
       name: name ?? this.name,
       sortOrder: sortOrder ?? this.sortOrder,
@@ -1997,6 +2316,12 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     }
     if (ownerId.present) {
       map['owner_id'] = Variable<String>(ownerId.value);
+    }
+    if (accessState.present) {
+      map['access_state'] = Variable<String>(accessState.value);
+    }
+    if (accessNote.present) {
+      map['access_note'] = Variable<String>(accessNote.value);
     }
     if (sectorId.present) {
       map['sector_id'] = Variable<String>(sectorId.value);
@@ -2032,6 +2357,8 @@ class WallsCompanion extends UpdateCompanion<Wall> {
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
           ..write('ownerId: $ownerId, ')
+          ..write('accessState: $accessState, ')
+          ..write('accessNote: $accessNote, ')
           ..write('sectorId: $sectorId, ')
           ..write('name: $name, ')
           ..write('sortOrder: $sortOrder, ')
@@ -8021,6 +8348,8 @@ typedef $$AreasTableCreateCompanionBuilder =
       Value<String?> remoteId,
       Value<bool> dirty,
       Value<String?> ownerId,
+      Value<String?> accessState,
+      Value<String?> accessNote,
       required String name,
       Value<String?> description,
       Value<double?> latitude,
@@ -8036,6 +8365,8 @@ typedef $$AreasTableUpdateCompanionBuilder =
       Value<String?> remoteId,
       Value<bool> dirty,
       Value<String?> ownerId,
+      Value<String?> accessState,
+      Value<String?> accessNote,
       Value<String> name,
       Value<String?> description,
       Value<double?> latitude,
@@ -8107,6 +8438,16 @@ class $$AreasTableFilterComposer extends Composer<_$AppDatabase, $AreasTable> {
 
   ColumnFilters<String> get ownerId => $composableBuilder(
     column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -8200,6 +8541,16 @@ class $$AreasTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get name => $composableBuilder(
     column: $table.name,
     builder: (column) => ColumnOrderings(column),
@@ -8250,6 +8601,16 @@ class $$AreasTableAnnotationComposer
 
   GeneratedColumn<String> get ownerId =>
       $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  GeneratedColumn<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
@@ -8326,6 +8687,8 @@ class $$AreasTableTableManager
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> ownerId = const Value.absent(),
+                Value<String?> accessState = const Value.absent(),
+                Value<String?> accessNote = const Value.absent(),
                 Value<String> name = const Value.absent(),
                 Value<String?> description = const Value.absent(),
                 Value<double?> latitude = const Value.absent(),
@@ -8339,6 +8702,8 @@ class $$AreasTableTableManager
                 remoteId: remoteId,
                 dirty: dirty,
                 ownerId: ownerId,
+                accessState: accessState,
+                accessNote: accessNote,
                 name: name,
                 description: description,
                 latitude: latitude,
@@ -8354,6 +8719,8 @@ class $$AreasTableTableManager
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> ownerId = const Value.absent(),
+                Value<String?> accessState = const Value.absent(),
+                Value<String?> accessNote = const Value.absent(),
                 required String name,
                 Value<String?> description = const Value.absent(),
                 Value<double?> latitude = const Value.absent(),
@@ -8367,6 +8734,8 @@ class $$AreasTableTableManager
                 remoteId: remoteId,
                 dirty: dirty,
                 ownerId: ownerId,
+                accessState: accessState,
+                accessNote: accessNote,
                 name: name,
                 description: description,
                 latitude: latitude,
@@ -8429,6 +8798,8 @@ typedef $$SectorsTableCreateCompanionBuilder =
       Value<String?> remoteId,
       Value<bool> dirty,
       Value<String?> ownerId,
+      Value<String?> accessState,
+      Value<String?> accessNote,
       required String areaId,
       required String name,
       required int sortOrder,
@@ -8443,6 +8814,8 @@ typedef $$SectorsTableUpdateCompanionBuilder =
       Value<String?> remoteId,
       Value<bool> dirty,
       Value<String?> ownerId,
+      Value<String?> accessState,
+      Value<String?> accessNote,
       Value<String> areaId,
       Value<String> name,
       Value<int> sortOrder,
@@ -8531,6 +8904,16 @@ class $$SectorsTableFilterComposer
 
   ColumnFilters<String> get ownerId => $composableBuilder(
     column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -8637,6 +9020,16 @@ class $$SectorsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get name => $composableBuilder(
     column: $table.name,
     builder: (column) => ColumnOrderings(column),
@@ -8700,6 +9093,16 @@ class $$SectorsTableAnnotationComposer
 
   GeneratedColumn<String> get ownerId =>
       $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  GeneratedColumn<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
@@ -8791,6 +9194,8 @@ class $$SectorsTableTableManager
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> ownerId = const Value.absent(),
+                Value<String?> accessState = const Value.absent(),
+                Value<String?> accessNote = const Value.absent(),
                 Value<String> areaId = const Value.absent(),
                 Value<String> name = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
@@ -8803,6 +9208,8 @@ class $$SectorsTableTableManager
                 remoteId: remoteId,
                 dirty: dirty,
                 ownerId: ownerId,
+                accessState: accessState,
+                accessNote: accessNote,
                 areaId: areaId,
                 name: name,
                 sortOrder: sortOrder,
@@ -8817,6 +9224,8 @@ class $$SectorsTableTableManager
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> ownerId = const Value.absent(),
+                Value<String?> accessState = const Value.absent(),
+                Value<String?> accessNote = const Value.absent(),
                 required String areaId,
                 required String name,
                 required int sortOrder,
@@ -8829,6 +9238,8 @@ class $$SectorsTableTableManager
                 remoteId: remoteId,
                 dirty: dirty,
                 ownerId: ownerId,
+                accessState: accessState,
+                accessNote: accessNote,
                 areaId: areaId,
                 name: name,
                 sortOrder: sortOrder,
@@ -8923,6 +9334,8 @@ typedef $$WallsTableCreateCompanionBuilder =
       Value<String?> remoteId,
       Value<bool> dirty,
       Value<String?> ownerId,
+      Value<String?> accessState,
+      Value<String?> accessNote,
       required String sectorId,
       required String name,
       required int sortOrder,
@@ -8940,6 +9353,8 @@ typedef $$WallsTableUpdateCompanionBuilder =
       Value<String?> remoteId,
       Value<bool> dirty,
       Value<String?> ownerId,
+      Value<String?> accessState,
+      Value<String?> accessNote,
       Value<String> sectorId,
       Value<String> name,
       Value<int> sortOrder,
@@ -9106,6 +9521,16 @@ class $$WallsTableFilterComposer extends Composer<_$AppDatabase, $WallsTable> {
 
   ColumnFilters<String> get ownerId => $composableBuilder(
     column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -9327,6 +9752,16 @@ class $$WallsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   ColumnOrderings<String> get name => $composableBuilder(
     column: $table.name,
     builder: (column) => ColumnOrderings(column),
@@ -9405,6 +9840,16 @@ class $$WallsTableAnnotationComposer
 
   GeneratedColumn<String> get ownerId =>
       $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  GeneratedColumn<String> get accessState => $composableBuilder(
+    column: $table.accessState,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get accessNote => $composableBuilder(
+    column: $table.accessNote,
+    builder: (column) => column,
+  );
 
   GeneratedColumn<String> get name =>
       $composableBuilder(column: $table.name, builder: (column) => column);
@@ -9614,6 +10059,8 @@ class $$WallsTableTableManager
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> ownerId = const Value.absent(),
+                Value<String?> accessState = const Value.absent(),
+                Value<String?> accessNote = const Value.absent(),
                 Value<String> sectorId = const Value.absent(),
                 Value<String> name = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
@@ -9629,6 +10076,8 @@ class $$WallsTableTableManager
                 remoteId: remoteId,
                 dirty: dirty,
                 ownerId: ownerId,
+                accessState: accessState,
+                accessNote: accessNote,
                 sectorId: sectorId,
                 name: name,
                 sortOrder: sortOrder,
@@ -9646,6 +10095,8 @@ class $$WallsTableTableManager
                 Value<String?> remoteId = const Value.absent(),
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> ownerId = const Value.absent(),
+                Value<String?> accessState = const Value.absent(),
+                Value<String?> accessNote = const Value.absent(),
                 required String sectorId,
                 required String name,
                 required int sortOrder,
@@ -9661,6 +10112,8 @@ class $$WallsTableTableManager
                 remoteId: remoteId,
                 dirty: dirty,
                 ownerId: ownerId,
+                accessState: accessState,
+                accessNote: accessNote,
                 sectorId: sectorId,
                 name: name,
                 sortOrder: sortOrder,

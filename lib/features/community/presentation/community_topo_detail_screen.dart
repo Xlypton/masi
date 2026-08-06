@@ -12,6 +12,7 @@ import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../account/application/auth_providers.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
+import '../../moderation/presentation/access_banner.dart';
 import '../../topo/domain/topo_route.dart';
 import '../../topo/presentation/canvas_chrome.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
@@ -505,6 +506,15 @@ class _CommunityTopoDetailScreenState
                 ],
               ),
             ),
+            // Access/closure notice, ABOVE everything else in the body and
+            // outside the horizontal padding (it carries its own margin, and
+            // a full-bleed-ish warning reads as chrome rather than as content).
+            //
+            // First thing under the photo on purpose: if a crag is closed,
+            // that is the single most important fact on the page, and a
+            // climber who has scrolled past it to the route list has already
+            // decided to go. Renders to nothing when there is nothing to say.
+            SliverToBoxAdapter(child: AccessBanner(wallId: wallId)),
             SliverPadding(
               padding: const EdgeInsets.all(MasiSpacing.lg),
               sliver: SliverList(

@@ -1,5 +1,8 @@
+import 'package:drift/drift.dart';
+
 
 import '../../../core/db/app_database.dart' as db;
+import '../domain/access_state.dart';
 import '../domain/moderation_state.dart';
 
 /// Local reads and pull-side writes over `WallModerationRows`, the on-device
@@ -74,6 +77,73 @@ class ModerationRepository {
       }
     });
     return written;
+  }
+
+  /// The effective access state for [wallId], after walking Wall → Sector →
+  /// Area and taking the most restrictive level (community editing phase 2 /
+  /// R-2).
+  ///
+  /// A raw [customSelect] rather than a Drift join because the three levels
+  /// are LEFT joins whose columns all share names (`accessState` on each), and
+  /// aliasing them explicitly here is clearer than unpicking a joined-row API.
+  /// `readsFrom` is set to all three tables so the stream re-emits when a
+  /// closure is set at ANY level — the whole point of inheritance is that a
+  /// write on the Area repaints every topo beneath it.
+  ///
+  /// Resolution (most-restrictive-wins, ties to the most specific level) lives
+  /// in [ResolvedAccess.resolve] rather than in SQL, so it is testable without
+  /// a database and cannot drift from the enum's own severity ordering.
+  Stream<ResolvedAccess> watchAccess(String wallId) {
+    const sql = '''
+      SELECT
+        w.name             AS wall_name,
+        w.access_state     AS wall_access_state,
+        w.access_note      AS wall_access_note,
+        s.name             AS sector_name,
+        s.access_state     AS sector_access_state,
+        s.access_note      AS sector_access_note,
+        a.name             AS area_name,
+        a.access_state     AS area_access_state,
+        a.access_note      AS area_access_note
+      FROM walls w
+      LEFT JOIN sectors s ON s.id = w.sector_id
+      LEFT JOIN areas   a ON a.id = s.area_id
+      WHERE w.id = ?
+    ''';
+    return _db
+        .customSelect(
+          sql,
+          variables: [Variable<String>(wallId)],
+          readsFrom: {_db.walls, _db.sectors, _db.areas},
+        )
+        .watchSingleOrNull()
+        .map((row) {
+          if (row == null) return ResolvedAccess.none;
+          return ResolvedAccess.resolve([
+            // Most specific FIRST: ties resolve to the wall's own note.
+            AccessLevel(
+              state: AccessState.fromWire(
+                row.readNullable<String>('wall_access_state'),
+              ),
+              note: row.readNullable<String>('wall_access_note'),
+              sourceLabel: row.readNullable<String>('wall_name') ?? 'This topo',
+            ),
+            AccessLevel(
+              state: AccessState.fromWire(
+                row.readNullable<String>('sector_access_state'),
+              ),
+              note: row.readNullable<String>('sector_access_note'),
+              sourceLabel: row.readNullable<String>('sector_name') ?? 'Sector',
+            ),
+            AccessLevel(
+              state: AccessState.fromWire(
+                row.readNullable<String>('area_access_state'),
+              ),
+              note: row.readNullable<String>('area_access_note'),
+              sourceLabel: row.readNullable<String>('area_name') ?? 'Area',
+            ),
+          ]);
+        });
   }
 
   /// Drops every locally-mirrored row. Called on sign-out, so a second

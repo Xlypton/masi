@@ -47,7 +47,7 @@ class AppDatabase extends _$AppDatabase {
   final bool _flushAfterCommit;
 
   @override
-  int get schemaVersion => 12;
+  int get schemaVersion => 13;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -337,6 +337,45 @@ class AppDatabase extends _$AppDatabase {
       // back up through the sync engine.
       if (from < 12) {
         await m.createTable(wallModerationRows);
+      }
+      // v12 -> v13: `accessState`/`accessNote` on Areas, Sectors and Walls —
+      // access and closure as a first-class, inheriting field (community
+      // editing phase 2 / R-2; see `AccessColumns` in `tables.dart`).
+      //
+      // Six plain nullable ADD COLUMNs, so every pre-existing row comes back
+      // with both null ("nothing stated"). Unlike moderation state these are
+      // on SYNCED tables and are owner-writable, so they need no sync-engine
+      // change: `toJson()`/`fromJson()` round-trip them like every other
+      // column. The matching live-Supabase columns are in
+      // `supabase/migrations/2026-08-06_community_phase2_access.sql` and must
+      // be applied BEFORE a build carrying v13 ships.
+      //
+      // Each add is guarded on the column not already existing, for the same
+      // reason the v10 -> v11 branch is: SQLite has no
+      // `ADD COLUMN IF NOT EXISTS`, a duplicate add is a hard error, and both
+      // a re-run and any harness that synthesizes an "old" database via
+      // `createAll` before stamping an old `user_version` reach this branch
+      // with the columns already present.
+      if (from < 13) {
+        Future<void> addIfMissing(
+          TableInfo<Table, dynamic> table,
+          GeneratedColumn<Object> column,
+        ) async {
+          final existing = await customSelect(
+            "PRAGMA table_info('${table.actualTableName}')",
+          ).get();
+          final present = existing.any(
+            (row) => row.read<String>('name') == column.name,
+          );
+          if (!present) await m.addColumn(table, column);
+        }
+
+        await addIfMissing(areas, areas.accessState);
+        await addIfMissing(areas, areas.accessNote);
+        await addIfMissing(sectors, sectors.accessState);
+        await addIfMissing(sectors, sectors.accessNote);
+        await addIfMissing(walls, walls.accessState);
+        await addIfMissing(walls, walls.accessNote);
       }
     },
     beforeOpen: (details) async {

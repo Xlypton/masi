@@ -5,6 +5,7 @@ import '../../../core/db/database_provider.dart';
 import '../../../core/config/supabase_providers.dart';
 import '../data/moderation_remote.dart';
 import '../data/moderation_repository.dart';
+import '../domain/access_state.dart';
 import '../domain/moderation_state.dart';
 
 /// The cloud read seam for moderation state. Overridden in tests with an
@@ -40,6 +41,18 @@ final wallModerationStateProvider = StreamProvider.autoDispose
 final wallModerationRowProvider = StreamProvider.autoDispose
     .family<db.WallModerationRow?, String>(
       (ref, wallId) => ref.watch(moderationRepositoryProvider).watchRow(wallId),
+    );
+
+/// The effective access/closure state for one topo, after inheritance up the
+/// Wall → Sector → Area chain (community editing phase 2 / R-2).
+///
+/// Reads local Drift only — access state rides the ordinary sync engine on
+/// synced, owner-writable columns, so it is already on the device and works
+/// offline like every other read in this app. Nothing here needs the network.
+final wallAccessProvider = StreamProvider.autoDispose
+    .family<ResolvedAccess, String>(
+      (ref, wallId) =>
+          ref.watch(moderationRepositoryProvider).watchAccess(wallId),
     );
 
 /// Pulls moderation state for [wallIds] and writes it to the local mirror.

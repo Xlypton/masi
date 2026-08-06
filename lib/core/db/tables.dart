@@ -147,7 +147,34 @@ class Profiles extends Table with SyncColumns {
   Set<Column> get primaryKey => {id};
 }
 
-class Areas extends Table with SyncColumns {
+/// Access/closure state, shared by [Areas], [Sectors] and [Walls] (community
+/// editing, phase 2 / R-2).
+///
+/// `null` (nothing stated) | `open` | `restricted` | `closed` | `sensitive`.
+/// Stored as a raw string rather than a Drift enum so a value written by a
+/// newer client round-trips instead of throwing on read; parsing happens at
+/// the edge in `AccessState.fromWire`.
+///
+/// These columns are on SYNCED tables and are owner-writable, unlike
+/// moderation state. That is deliberate: whether a crag is closed is a fact
+/// about the world that the community maintains, not the topo author's
+/// creative work (COMMUNITY_PLAN.md §3.2, R-1). Putting "this crag is closed"
+/// behind a review queue would be actively harmful.
+///
+/// The state INHERITS downward — a closure set on an Area applies to every
+/// sector and wall beneath it — resolved at read time rather than
+/// denormalised, so closing a crag is one write. See
+/// `ResolvedAccess.resolve`.
+mixin AccessColumns on Table {
+  TextColumn get accessState => text().nullable()();
+
+  /// Free text explaining the restriction ("Peregrine nesting until 31 Jul",
+  /// "Private land, ask at the farmhouse"). theCrag's model: state the reason,
+  /// because a bare "closed" with no explanation gets ignored.
+  TextColumn get accessNote => text().nullable()();
+}
+
+class Areas extends Table with SyncColumns, AccessColumns {
   TextColumn get name => text()();
   TextColumn get description => text().nullable()();
   RealColumn get latitude => real().nullable()();
@@ -166,7 +193,7 @@ class Areas extends Table with SyncColumns {
   'CREATE INDEX idx_sectors_area_live ON sectors (area_id) '
   'WHERE deleted_at IS NULL',
 )
-class Sectors extends Table with SyncColumns {
+class Sectors extends Table with SyncColumns, AccessColumns {
   TextColumn get areaId => text().references(Areas, #id)();
   TextColumn get name => text()();
   IntColumn get sortOrder => integer()();
@@ -179,7 +206,7 @@ class Sectors extends Table with SyncColumns {
   'CREATE INDEX idx_walls_sector_live ON walls (sector_id) '
   'WHERE deleted_at IS NULL',
 )
-class Walls extends Table with SyncColumns {
+class Walls extends Table with SyncColumns, AccessColumns {
   TextColumn get sectorId => text().references(Sectors, #id)();
   TextColumn get name => text()();
   IntColumn get sortOrder => integer()();
