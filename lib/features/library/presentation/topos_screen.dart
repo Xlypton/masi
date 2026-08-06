@@ -14,6 +14,7 @@ import '../../../core/grades/grade_system.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/min_stars_filter_chips.dart';
+import '../../moderation/presentation/access_editor.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/filtering/style_tag_filter_chips.dart';
 import '../../account/application/auth_providers.dart';

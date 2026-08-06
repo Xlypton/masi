@@ -711,6 +711,106 @@ class LibraryCrudRepository {
   /// in from `topos_screen.dart`'s `_handleNewTopo` and
   /// `topo_canvas_screen.dart`'s `captureWallGpsFromPhoto`) — never called
   /// directly by any UI as of this feature.
+  /// Records the access/closure state of an Area, Sector or Wall (community
+  /// editing phase 2 / R-2).
+  ///
+  /// [state] is a raw wire value (`open`/`restricted`/`closed`/`sensitive`)
+  /// or `null` to clear back to "nothing stated"; [note] is the reason shown
+  /// alongside it. Both are written together, because a state without its
+  /// reason is the thing theCrag's model exists to avoid — a bare "closed"
+  /// with no explanation gets ignored.
+  ///
+  /// Access lives on the SYNCED tables and is owner-writable on purpose: it
+  /// is a fact about the world the community maintains, not the topo author's
+  /// creative work (COMMUNITY_PLAN.md §3.2, R-1). It therefore goes through
+  /// the same `_guardedWrite` ownership discipline as every other mutation
+  /// here — you may state the access of crags you own, not of anyone else's.
+  ///
+  /// Setting it on an AREA is the high-value case: the state inherits down to
+  /// every sector and wall beneath it (resolved at read time by
+  /// `ModerationRepository.watchAccess`), so closing a whole crag is one
+  /// write rather than a sweep.
+  Future<void> setAreaAccess(String areaId, String? state, String? note) {
+    final now = nowMs();
+    return _guardedWrite(
+      operation: 'setAreaAccess',
+      id: areaId,
+      table: _db.areas,
+      idColumn: _db.areas.id,
+      ownerColumn: _db.areas.ownerId,
+      deletedAtColumn: _db.areas.deletedAt,
+      write: (_db.update(_db.areas)..where(
+            (t) =>
+                t.id.equals(areaId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.AreasCompanion(
+              accessState: Value(state),
+              accessNote: Value(note),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          ),
+    );
+  }
+
+  /// See [setAreaAccess]. Applies to this sector and every wall under it.
+  Future<void> setSectorAccess(String sectorId, String? state, String? note) {
+    final now = nowMs();
+    return _guardedWrite(
+      operation: 'setSectorAccess',
+      id: sectorId,
+      table: _db.sectors,
+      idColumn: _db.sectors.id,
+      ownerColumn: _db.sectors.ownerId,
+      deletedAtColumn: _db.sectors.deletedAt,
+      write: (_db.update(_db.sectors)..where(
+            (t) =>
+                t.id.equals(sectorId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.SectorsCompanion(
+              accessState: Value(state),
+              accessNote: Value(note),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          ),
+    );
+  }
+
+  /// See [setAreaAccess]. Applies to this one topo only — an inherited
+  /// restriction from its sector or area still wins if it is more severe.
+  Future<void> setWallAccess(String wallId, String? state, String? note) {
+    final now = nowMs();
+    return _guardedWrite(
+      operation: 'setWallAccess',
+      id: wallId,
+      table: _db.walls,
+      idColumn: _db.walls.id,
+      ownerColumn: _db.walls.ownerId,
+      deletedAtColumn: _db.walls.deletedAt,
+      write: (_db.update(_db.walls)..where(
+            (t) =>
+                t.id.equals(wallId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.WallsCompanion(
+              accessState: Value(state),
+              accessNote: Value(note),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          ),
+    );
+  }
+
   Future<void> setWallCoordinates(
     String wallId,
     double latitude,

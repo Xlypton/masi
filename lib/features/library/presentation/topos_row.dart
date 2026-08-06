@@ -394,6 +394,12 @@ class _TopoRowState extends ConsumerState<_TopoRow>
           label: isShared ? 'Unpublish' : 'Submit to Community',
           value: isShared ? 'unpublish' : 'publish',
         ),
+        MasiSheetAction(
+          key: Key('topo-access-${topo.wallId}'),
+          label: 'Access…',
+          value: 'access',
+          subtitle: 'Closed, restricted, not listed',
+        ),
         // Enabled only when the wall actually has coordinates (from
         // EXIF/device GPS capture at photo-attach time — see
         // `setWallCoordinates`); a located topo pushes straight into
@@ -435,6 +441,8 @@ class _TopoRowState extends ConsumerState<_TopoRow>
         await _handlePublish(context, ref, topo, reportBusy);
       case 'unpublish':
         await _handleUnpublish(context, ref, topo, reportBusy);
+      case 'access':
+        await _handleAccess(context, ref, topo, reportBusy);
       case 'show-on-map':
         _handleShowOnMap(context, topo);
       case 'set-location':
@@ -620,6 +628,31 @@ class _TopoRowState extends ConsumerState<_TopoRow>
         () => ref.read(libraryCrudRepositoryProvider).publishTopo(topo.wallId),
       );
     }
+  }
+
+  /// States this topo's own access/closure (community editing phase 2 / R-2).
+  ///
+  /// Wall-level only. A restriction inherited from the sector or area still
+  /// wins if it is more severe (see `ResolvedAccess.resolve`), so this cannot
+  /// be used to reopen a crag somebody closed above it — which is the point.
+  Future<void> _handleAccess(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+    MasiBusyReporter reportBusy,
+  ) async {
+    final edit = await showAccessEditor(context, targetLabel: topo.name);
+    // `null` means they backed out; an AccessEdit with a null state means
+    // "clear it". Conflating those would make cancel erase a closure.
+    if (edit == null || !context.mounted) return;
+    reportBusy(true);
+    await _runGuarded(
+      context,
+      "Couldn't save the access state — please try again",
+      () => ref
+          .read(libraryCrudRepositoryProvider)
+          .setWallAccess(topo.wallId, edit.state?.wire, edit.note),
+    );
   }
 
   Future<void> _handleUnpublish(
