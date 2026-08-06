@@ -436,6 +436,28 @@ abstract final class MasiTheme {
         titleTextStyle: textTheme.titleLarge?.copyWith(color: colors.ink),
         contentTextStyle: textTheme.bodyMedium?.copyWith(color: colors.ink2),
       ),
+      // Form-sized modals (filters, the move picker, route metadata, log
+      // ascent) stay Material bottom sheets — they are scrollable forms, not
+      // action lists, so they are the one modal family `masi_dialogs.dart`
+      // deliberately does NOT absorb. What they lacked was a shared skin:
+      // three of them hand-rolled `colors.surface` + a `MasiRadii.large` top
+      // radius in their own `BoxDecoration`, while the Logbook and Community
+      // filter sheets had no decoration at all and so fell back to Material's
+      // seed-generated `surfaceContainerLow` with the default 28px corner —
+      // a visibly different sheet for the same job. This makes the
+      // hand-rolled look the DEFAULT; those three are now merely redundant
+      // with it rather than the only ones that got it right.
+      bottomSheetTheme: BottomSheetThemeData(
+        backgroundColor: colors.surface,
+        surfaceTintColor: Colors.transparent,
+        modalBackgroundColor: colors.surface,
+        shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(
+            top: Radius.circular(MasiRadii.large),
+          ),
+        ),
+        clipBehavior: Clip.antiAlias,
+      ),
       listTileTheme: ListTileThemeData(
         tileColor: colors.surface,
         textColor: colors.ink,

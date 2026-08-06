@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../features/topo/application/community_photo_clear_controller.dart';
+import '../shared/presentation/masi_dialogs.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'theme.dart';
 
@@ -187,27 +188,16 @@ class StoragePressureBanner extends ConsumerWidget {
   /// or `null`, e.g. a barrier tap or the back gesture) returns without ever
   /// touching the controller, so no bytes are deleted.
   Future<void> _confirmAndClear(BuildContext context, WidgetRef ref) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        key: const Key('storage-pressure-clear-dialog'),
-        title: const Text('Clear cached community photos?'),
-        content: const Text(confirmBody),
-        actions: [
-          TextButton(
-            key: const Key('storage-pressure-clear-cancel'),
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          TextButton(
-            key: const Key('storage-pressure-clear-confirm'),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Clear'),
-          ),
-        ],
-      ),
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Clear cached community photos?',
+      message: confirmBody,
+      confirmLabel: 'Clear',
+      confirmKey: const Key('storage-pressure-clear-confirm'),
+      cancelKey: const Key('storage-pressure-clear-cancel'),
+      sheetKey: const Key('storage-pressure-clear-dialog'),
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
 
     final controller = ref.read(communityPhotoClearProvider.notifier);
     await controller.clear();

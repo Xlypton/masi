@@ -354,111 +354,71 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     );
   }
 
-  /// The `topo-menu-<wallId>` row action sheet -- an iOS-style
-  /// [CupertinoActionSheet] (mirrors `crud_list_scaffold.dart`'s delete
-  /// confirm sheet idiom) rather than a Material [PopupMenuButton], per
-  /// DESIGN.md's iOS-idiom bar. Every action keeps its PRE-EXISTING key
-  /// (`topo-rename-<wallId>`, `topo-move-<wallId>`, etc.) so this is a pure
-  /// presentation swap -- no test-facing key/behavior changed other than
-  /// the surface itself.
+  /// The `topo-menu-<wallId>` row action sheet, via the shared
+  /// [showMasiActionSheet]. Every action keeps its PRE-EXISTING key
+  /// (`topo-rename-<wallId>`, `topo-move-<wallId>`, etc.).
   ///
-  /// "Show on map" stays visually muted (and its `onPressed` a no-op)
-  /// rather than omitted when [topo] has no coordinates, exactly like the
-  /// old `PopupMenuItem`'s `enabled: false` did -- [CupertinoActionSheetAction]
-  /// has no built-in disabled state (`onPressed` is non-nullable), so the
-  /// muted style + no-op callback recreate it. "Set location"/"Edit
-  /// location" stays always-enabled either way (see its own doc below).
+  /// "Show on map" stays visually muted rather than omitted when [topo] has
+  /// no coordinates, so a user isn't left wondering why the action is
+  /// missing — that is [MasiSheetAction.enabled] plus its [subtitle], which
+  /// exists precisely for this case. "Set location"/"Edit location" stays
+  /// always-enabled either way (see its own doc below).
   Future<void> _showMenu(
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
     MasiBusyReporter reportBusy,
   ) async {
-    final colors = MasiColors.of(context);
-    final textTheme = Theme.of(context).textTheme;
     final isShared = topo.visibility == 'shared';
     final hasCoords = topo.latitude != null && topo.longitude != null;
 
-    final action = await showCupertinoModalPopup<String>(
-      context: context,
-      // See `crud_list_scaffold.dart`'s identical `_handleDelete` comment:
-      // the default barrier is too weak to fully obscure this screen's own
-      // bottom-pinned accent-filled add button bleeding through the gap
-      // between the action group and the Cancel button.
-      barrierColor: Colors.black45,
-      builder: (sheetContext) => CupertinoActionSheet(
-        actions: [
-          CupertinoActionSheetAction(
-            key: Key('topo-rename-${topo.wallId}'),
-            onPressed: () => Navigator.of(sheetContext).pop('rename'),
-            child: const Text('Rename'),
-          ),
-          CupertinoActionSheetAction(
-            key: Key('topo-move-${topo.wallId}'),
-            onPressed: () => Navigator.of(sheetContext).pop('move'),
-            child: const Text('Move to…'),
-          ),
-          CupertinoActionSheetAction(
-            key: Key('topo-publish-${topo.wallId}'),
-            onPressed: () => Navigator.of(
-              sheetContext,
-            ).pop(isShared ? 'unpublish' : 'publish'),
-            child: Text(isShared ? 'Unpublish' : 'Publish'),
-          ),
-          // Enabled only when the wall actually has coordinates (from
-          // EXIF/device GPS capture at photo-attach time — see
-          // `setWallCoordinates`); a located topo pushes straight into
-          // `/community`'s Map tab, focused on this wall (see
-          // `_handleShowOnMap`). Rather than omitting the action entirely
-          // when unlocated, it stays visible but muted with a "No location
-          // set" hint and a no-op `onPressed`, so a user isn't left
-          // wondering why the action is missing.
-          CupertinoActionSheetAction(
-            key: Key('topo-show-on-map-${topo.wallId}'),
-            onPressed: hasCoords
-                ? () => Navigator.of(sheetContext).pop('show-on-map')
-                : () {},
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'Show on map',
-                  style: hasCoords
-                      ? null
-                      : TextStyle(color: colors.ink3),
-                ),
-                if (!hasCoords)
-                  Text(
-                    'No location set',
-                    style: textTheme.labelSmall?.copyWith(
-                      color: colors.ink3,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          // Always enabled -- unlike "Show on map" above, a topo can be
-          // GIVEN a location whether or not it has one already, so this
-          // action is never muted; the label just flips to "Edit location"
-          // once coordinates exist, so the menu reads as "add" vs "change"
-          // appropriately.
-          CupertinoActionSheetAction(
-            key: Key('topo-set-location-${topo.wallId}'),
-            onPressed: () => Navigator.of(sheetContext).pop('set-location'),
-            child: Text(hasCoords ? 'Edit location' : 'Set location'),
-          ),
-          CupertinoActionSheetAction(
-            key: Key('topo-delete-${topo.wallId}'),
-            isDestructiveAction: true,
-            onPressed: () => Navigator.of(sheetContext).pop('delete'),
-            child: Text('Delete', style: TextStyle(color: colors.gradeHard)),
-          ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.of(sheetContext).pop(),
-          child: const Text('Cancel'),
+    final action = await showMasiActionSheet<String>(
+      context,
+      actions: [
+        MasiSheetAction(
+          key: Key('topo-rename-${topo.wallId}'),
+          label: 'Rename',
+          value: 'rename',
         ),
-      ),
+        MasiSheetAction(
+          key: Key('topo-move-${topo.wallId}'),
+          label: 'Move to…',
+          value: 'move',
+        ),
+        MasiSheetAction(
+          key: Key('topo-publish-${topo.wallId}'),
+          label: isShared ? 'Unpublish' : 'Publish',
+          value: isShared ? 'unpublish' : 'publish',
+        ),
+        // Enabled only when the wall actually has coordinates (from
+        // EXIF/device GPS capture at photo-attach time — see
+        // `setWallCoordinates`); a located topo pushes straight into
+        // `/community`'s Map tab, focused on this wall (see
+        // `_handleShowOnMap`).
+        MasiSheetAction(
+          key: Key('topo-show-on-map-${topo.wallId}'),
+          label: 'Show on map',
+          value: 'show-on-map',
+          enabled: hasCoords,
+          subtitle: hasCoords ? null : 'No location set',
+        ),
+        // Always enabled -- unlike "Show on map" above, a topo can be
+        // GIVEN a location whether or not it has one already, so this
+        // action is never muted; the label just flips to "Edit location"
+        // once coordinates exist, so the menu reads as "add" vs "change"
+        // appropriately.
+        MasiSheetAction(
+          key: Key('topo-set-location-${topo.wallId}'),
+          label: hasCoords ? 'Edit location' : 'Set location',
+          value: 'set-location',
+        ),
+        MasiSheetAction(
+          key: Key('topo-delete-${topo.wallId}'),
+          label: 'Delete',
+          value: 'delete',
+          isDestructive: true,
+        ),
+      ],
     );
 
     if (!context.mounted || action == null) return;
@@ -505,9 +465,13 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     TopoRef topo,
     MasiBusyReporter reportBusy,
   ) async {
-    final newName = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) => _TopoNameDialog(initialValue: topo.name),
+    final newName = await showMasiTextPrompt(
+      context,
+      title: 'Rename topo',
+      submitLabel: 'Save',
+      initialValue: topo.name,
+      fieldKey: const Key('crud-name-field'),
+      submitKey: const Key('crud-name-submit'),
     );
     if (newName == null) return;
     if (!context.mounted) return;
@@ -617,38 +581,25 @@ class _TopoRowState extends ConsumerState<_TopoRow>
   /// firing straight off the menu tap). [_handleUnpublish] (the reverse
   /// direction) needs no such confirmation.
   ///
-  /// An iOS-style [CupertinoActionSheet] (mirrors `crud_list_scaffold.dart`'s
-  /// delete-confirm idiom and this row's own [_handleDelete] below) rather
-  /// than a Material [AlertDialog], per DESIGN.md's iOS-idiom bar.
+  /// Uses the shared [showMasiConfirm] surface, with `isDestructive: false` —
+  /// publishing is consequential enough to confirm, but it is not a deletion
+  /// and should not be dressed in the destructive red.
   Future<void> _handlePublish(
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
     MasiBusyReporter reportBusy,
   ) async {
-    final confirmed = await showCupertinoModalPopup<bool>(
-      context: context,
-      barrierColor: Colors.black45,
-      builder: (sheetContext) => CupertinoActionSheet(
-        title: const Text('Publish to Community?'),
-        message: Text(
-          '"${topo.name}" will become visible to everyone in Community. '
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Publish to Community?',
+      message: '"${topo.name}" will become visible to everyone in Community. '
           'You can unpublish it again at any time.',
-        ),
-        actions: [
-          CupertinoActionSheetAction(
-            key: Key('topo-publish-confirm-${topo.wallId}'),
-            onPressed: () => Navigator.of(sheetContext).pop(true),
-            child: const Text('Publish'),
-          ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.of(sheetContext).pop(false),
-          child: const Text('Cancel'),
-        ),
-      ),
+      confirmLabel: 'Publish',
+      confirmKey: Key('topo-publish-confirm-${topo.wallId}'),
+      isDestructive: false,
     );
-    if (confirmed == true) {
+    if (confirmed) {
       if (!context.mounted) return;
       reportBusy(true);
       await _runGuarded(
@@ -733,39 +684,24 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     ).showSnackBar(const SnackBar(content: Text('Location saved')));
   }
 
-  /// An iOS-style [CupertinoActionSheet] confirm (mirrors
-  /// `crud_list_scaffold.dart`'s identical delete-confirm sheet: a single
-  /// destructive action rendered in `MasiColors.gradeHard`, per DESIGN.md's
-  /// Buttons spec, plus a Cancel button) rather than a Material
-  /// [AlertDialog].
+  /// Title/message wording is now byte-identical to `crud_list_scaffold.dart`'s
+  /// delete confirm. It used to read title "Delete?" over message 'Delete
+  /// "X"? This cannot be undone.' — asking the same question twice, once
+  /// without the name that makes it answerable.
   Future<void> _handleDelete(
     BuildContext context,
     WidgetRef ref,
     TopoRef topo,
     MasiBusyReporter reportBusy,
   ) async {
-    final colors = MasiColors.of(context);
-    final confirmed = await showCupertinoModalPopup<bool>(
-      context: context,
-      barrierColor: Colors.black45,
-      builder: (sheetContext) => CupertinoActionSheet(
-        title: const Text('Delete?'),
-        message: Text('Delete "${topo.name}"? This cannot be undone.'),
-        actions: [
-          CupertinoActionSheetAction(
-            key: Key('topo-delete-confirm-${topo.wallId}'),
-            isDestructiveAction: true,
-            onPressed: () => Navigator.of(sheetContext).pop(true),
-            child: Text('Delete', style: TextStyle(color: colors.gradeHard)),
-          ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.of(sheetContext).pop(false),
-          child: const Text('Cancel'),
-        ),
-      ),
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Delete "${topo.name}"?',
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      confirmKey: Key('topo-delete-confirm-${topo.wallId}'),
     );
-    if (confirmed == true) {
+    if (confirmed) {
       if (!context.mounted) return;
       reportBusy(true);
       await _runGuarded(

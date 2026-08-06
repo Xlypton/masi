@@ -1,4 +1,3 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -9,6 +8,7 @@ import '../../../shared/filtering/ascent_type_filter_chips.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/presentation/masi_async_view.dart';
+import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
@@ -416,28 +416,17 @@ class _LogbookRowState extends ConsumerState<_LogbookRow> {
   /// guarded by this class's own `mounted`.
   Future<void> _handleDelete(LogbookEntry entry) async {
     if (_deleting) return;
-    final colors = MasiColors.of(context);
-    final confirmed = await showCupertinoDialog<bool>(
-      context: context,
-      builder: (dialogContext) => CupertinoAlertDialog(
-        title: const Text('Delete ascent?'),
-        content: const Text('This cannot be undone.'),
-        actions: [
-          CupertinoDialogAction(
-            onPressed: () => Navigator.of(dialogContext).pop(false),
-            child: const Text('Cancel'),
-          ),
-          CupertinoDialogAction(
-            key: Key('logbook-entry-delete-confirm-${entry.ascentId}'),
-            isDestructiveAction: true,
-            textStyle: TextStyle(color: colors.gradeHard),
-            onPressed: () => Navigator.of(dialogContext).pop(true),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
+    // Was the app's ONLY `CupertinoAlertDialog` — a third look for what is
+    // the same decision as deleting a topo or a photo. Now the shared
+    // confirm sheet, so all three match.
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Delete ascent?',
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      confirmKey: Key('logbook-entry-delete-confirm-${entry.ascentId}'),
     );
-    if (confirmed != true) return;
+    if (!confirmed) return;
     // `mounted` and not `context.mounted`: the row itself can be gone by the
     // time the dialog closes (the list rebuilds on any ascent change).
     if (!mounted) return;

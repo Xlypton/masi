@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../../../app/web_back_button.dart';
 import '../../../shared/presentation/masi_async_view.dart';
+import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_pending_icon_button.dart';
@@ -371,38 +372,14 @@ class CrudListScaffold<T> extends StatelessWidget {
     MasiBusyReporter reportBusy,
   ) async {
     final id = idOf(item);
-    final colors = MasiColors.of(context);
-    final confirmed = await showCupertinoModalPopup<bool>(
-      context: context,
-      // The default `kCupertinoModalBarrierColor` is only ~20% black in
-      // light mode, which is too weak to fully obscure whatever is behind
-      // the sheet: the action-sheet group and the cancel button render as
-      // two separate rounded groups with a transparent gap between them,
-      // and the bottom-pinned filled "New X" button (`colors.accent`,
-      // built above in `build()`) bleeds through that gap. A materially
-      // darker (>=45%) barrier hides it.
-      barrierColor: Colors.black45,
-      builder: (sheetContext) => CupertinoActionSheet(
-        title: Text('Delete "${nameOf(item)}"?'),
-        message: const Text('This cannot be undone.'),
-        actions: [
-          CupertinoActionSheetAction(
-            key: Key('$entityKey-delete-confirm-$id'),
-            isDestructiveAction: true,
-            onPressed: () => Navigator.of(sheetContext).pop(true),
-            child: Text(
-              'Delete',
-              style: TextStyle(color: colors.gradeHard),
-            ),
-          ),
-        ],
-        cancelButton: CupertinoActionSheetAction(
-          onPressed: () => Navigator.of(sheetContext).pop(false),
-          child: const Text('Cancel'),
-        ),
-      ),
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Delete "${nameOf(item)}"?',
+      message: 'This cannot be undone.',
+      confirmLabel: 'Delete',
+      confirmKey: Key('$entityKey-delete-confirm-$id'),
     );
-    if (confirmed == true) {
+    if (confirmed) {
       if (!context.mounted) return;
       // The sheet is dismissed; the cascade behind it is ours to explain.
       reportBusy(true);
@@ -419,10 +396,13 @@ class CrudListScaffold<T> extends StatelessWidget {
     required String title,
     String? initialValue,
   }) {
-    return showDialog<String>(
-      context: context,
-      builder: (dialogContext) =>
-          _NameDialog(title: title, initialValue: initialValue ?? ''),
+    return showMasiTextPrompt(
+      context,
+      title: title,
+      submitLabel: 'Save',
+      initialValue: initialValue ?? '',
+      fieldKey: const Key('crud-name-field'),
+      submitKey: const Key('crud-name-submit'),
     );
   }
 }
@@ -691,100 +671,6 @@ class _EmptyState extends StatelessWidget {
         ),
         textAlign: TextAlign.center,
       ),
-    );
-  }
-}
-
-class _NameDialog extends StatefulWidget {
-  const _NameDialog({required this.title, required this.initialValue});
-
-  final String title;
-  final String initialValue;
-
-  @override
-  State<_NameDialog> createState() => _NameDialogState();
-}
-
-class _NameDialogState extends State<_NameDialog> {
-  // The controller is owned by this State and disposed in [dispose], which
-  // Flutter only calls once this element is actually unmounted (i.e. after
-  // the dialog route's exit transition finishes). Disposing it any earlier
-  // (e.g. via `showDialog(...).whenComplete(controller.dispose)`, which
-  // fires as soon as `Navigator.pop()` runs) races the still-animating
-  // dialog, which keeps rendering frames that reference the now-disposed
-  // controller and throws "A TextEditingController was used after being
-  // disposed" — corrupting the widget tree for the rest of the test run.
-  late final TextEditingController _controller = TextEditingController(
-    text: widget.initialValue,
-  );
-  late bool _canSubmit = _controller.text.trim().isNotEmpty;
-
-  @override
-  void initState() {
-    super.initState();
-    _controller.addListener(_onChanged);
-  }
-
-  void _onChanged() {
-    final canSubmit = _controller.text.trim().isNotEmpty;
-    if (canSubmit != _canSubmit) {
-      setState(() => _canSubmit = canSubmit);
-    }
-  }
-
-  @override
-  void dispose() {
-    _controller.removeListener(_onChanged);
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _submit() {
-    final name = _controller.text.trim();
-    if (name.isEmpty) return;
-    FocusManager.instance.primaryFocus?.unfocus();
-    Navigator.of(context).pop(name);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    final textTheme = Theme.of(context).textTheme;
-    // The dialog's chrome (background, corner radius, title/content text
-    // style) already comes from `theme.dart`'s `DialogThemeData`
-    // (`MasiRadii.large`, `colors.surface`) and the ambient
-    // `InputDecorationTheme` (`MasiRadii.control`, `colors.surface2`) — no
-    // need to fight those with hardcoded decoration here. Only the actions
-    // get an explicit MASI tint, since bare `TextButton`s would otherwise
-    // just take Material's default styling.
-    return AlertDialog(
-      title: Text(widget.title, style: textTheme.titleLarge),
-      content: TextField(
-        key: const Key('crud-name-field'),
-        controller: _controller,
-        autofocus: true,
-        decoration: const InputDecoration(hintText: 'Name'),
-        onSubmitted: (_) => _submit(),
-      ),
-      actions: [
-        TextButton(
-          style: TextButton.styleFrom(foregroundColor: colors.accent),
-          onPressed: () {
-            FocusManager.instance.primaryFocus?.unfocus();
-            Navigator.of(context).pop();
-          },
-          child: const Text('Cancel'),
-        ),
-        TextButton(
-          key: const Key('crud-name-submit'),
-          style: TextButton.styleFrom(
-            foregroundColor: colors.accent,
-            disabledForegroundColor: colors.ink3,
-          ),
-          onPressed: _canSubmit ? _submit : null,
-          child: const Text('Save'),
-        ),
-      ],
     );
   }
 }

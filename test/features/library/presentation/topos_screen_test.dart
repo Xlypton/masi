@@ -28,6 +28,7 @@ import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:masi/shared/presentation/sync_banner.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1948,7 +1949,10 @@ void main() {
         await tester.tap(find.byKey(Key('topo-delete-$wallId')));
         await tester.pumpAndSettle();
 
-        expect(find.text('Delete?'), findsOneWidget);
+        // Was the bare 'Delete?' title over a message that asked the same
+        // question again WITH the name; the confirm now names the topo once,
+        // matching `crud_list_scaffold.dart` word for word.
+        expect(find.text('Delete "Roof Wall"?'), findsOneWidget);
 
         await tester.tap(find.byKey(Key('topo-delete-confirm-$wallId')));
         await _drain(tester);
@@ -3056,7 +3060,7 @@ void main() {
         // The dialog must be up, prefilled, and NOTHING created yet.
         expect(find.byKey(const Key('topo-name-field')), findsOneWidget);
         expect(find.byKey(const Key('topo-name-submit')), findsOneWidget);
-        final field = tester.widget<TextField>(
+        final field = tester.widget<CupertinoTextField>(
           find.byKey(const Key('topo-name-field')),
         );
         expect(field.controller!.text, 'Topo 1');
@@ -3197,7 +3201,7 @@ void main() {
         );
         await tester.pump();
 
-        final submitButton = tester.widget<TextButton>(
+        final submitButton = tester.widget<CupertinoDialogAction>(
           find.byKey(const Key('topo-name-submit')),
         );
         expect(

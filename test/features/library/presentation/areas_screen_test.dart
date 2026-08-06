@@ -11,6 +11,7 @@ import 'package:masi/features/library/presentation/sectors_screen.dart';
 import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:masi/shared/presentation/masi_skeleton.dart';
 import 'package:drift/native.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -167,7 +168,7 @@ void main() {
         await tester.tap(find.byKey(const Key('area-add-fab')));
         await _drain(tester);
 
-        final submitButton = tester.widget<TextButton>(
+        final submitButton = tester.widget<CupertinoDialogAction>(
           find.byKey(const Key('crud-name-submit')),
         );
         expect(
@@ -182,7 +183,7 @@ void main() {
         );
         await tester.pump();
 
-        final submitAfterWhitespace = tester.widget<TextButton>(
+        final submitAfterWhitespace = tester.widget<CupertinoDialogAction>(
           find.byKey(const Key('crud-name-submit')),
         );
         expect(

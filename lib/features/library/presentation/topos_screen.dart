@@ -33,6 +33,7 @@ import '../application/library_providers.dart';
 import '../application/proximity_topos_provider.dart';
 import '../data/library_crud_repository.dart';
 import '../../../shared/presentation/masi_async_view.dart';
+import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
@@ -45,7 +46,7 @@ import 'set_location_picker.dart';
 
 // This screen's supporting private widgets/helpers are split across sibling
 // `part` files by cohesion (row rendering, badges, filter bar/sheet, empty
-// states, name dialogs) purely for file-size/readability — `part`/`part of`
+// states) purely for file-size/readability — `part`/`part of`
 // keeps them all in this ONE library, so every `_Foo` below stays exactly as
 // library-private as it always was; nothing here is a public-API change.
 // [ToposScreen] itself (the only symbol anything outside this library
@@ -54,7 +55,6 @@ part 'topos_row.dart';
 part 'topos_badges.dart';
 part 'topos_filter.dart';
 part 'topos_empty_states.dart';
-part 'topos_dialogs.dart';
 part 'topos_storage_banner.dart';
 
 /// The new flat "photo-first" home (see DESIGN.md "Topos home"): every
@@ -681,7 +681,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
 
   /// Photo-first "New topo" creation flow: pick a source, pick a photo,
   /// decode its pixel size, prompt for the new topo's name (see
-  /// [_NewTopoNameDialog], prefilled with the `'Topo ${count + 1}'`
+  /// [showMasiTextPrompt], prefilled with the `'Topo ${count + 1}'`
   /// default), create a wall with that name, attach the photo to it, then
   /// navigate straight into the canvas.
   ///
@@ -783,15 +783,18 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       // early with zero cleanup required: no wall, no photo, no orphan
       // state.
       if (!mounted) return;
-      final enteredName = await showDialog<String>(
-        context: context,
-        builder: (dialogContext) =>
-            _NewTopoNameDialog(initialValue: defaultName),
+      final enteredName = await showMasiTextPrompt(
+        context,
+        title: 'Name this topo',
+        submitLabel: 'Create',
+        initialValue: defaultName,
+        fieldKey: const Key('topo-name-field'),
+        submitKey: const Key('topo-name-submit'),
       );
       if (enteredName == null) return;
       final trimmedName = enteredName.trim();
       // The dialog itself already disables its submit action while empty/
-      // whitespace-only (see `_NewTopoNameDialog`'s `_canSubmit`), so this
+      // whitespace-only (see `showMasiTextPrompt`'s `_canSubmit`), so this
       // is belt-and-suspenders: a non-null result should already be
       // non-empty, but fall back to the default rather than ever creating
       // a blank-named topo if that invariant is somehow violated.

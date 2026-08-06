@@ -9,6 +9,7 @@ import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/presentation/photo_image.dart';
 import 'package:masi/features/topo/presentation/photo_loading_fill.dart';
+import 'package:masi/shared/presentation/masi_dialogs.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:masi/shared/presentation/masi_loading_gate.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
@@ -290,7 +291,7 @@ class _PhotoStripItem extends StatelessWidget {
       onTap: onTap,
       onLongPress: readOnly
           ? null
-          : () => _showManageSheet(context, photo, colors, onSetCover, onDelete),
+          : () => _showManageSheet(context, photo, onSetCover, onDelete),
       child: Container(
         width: _size,
         height: _size,
@@ -414,73 +415,59 @@ class _AddPhotoTile extends StatelessWidget {
 
 /// The long-press manage menu for a strip thumbnail (U4): "Set as cover"
 /// (hidden for the already-primary photo — nothing to promote) and "Delete
-/// photo" (behind its own confirm [AlertDialog], since it's destructive and
+/// photo" (behind its own [showMasiConfirm], since it's destructive and
 /// cascades that photo's routes — see
 /// `PhotoRepository.deleteOriginalPhoto`'s doc).
 ///
-/// Both entries pop this sheet BEFORE running their action, unchanged: the
-/// sheet is a menu, and holding it open over a write would make its own
+/// Both entries resolve this sheet BEFORE running their action, unchanged:
+/// the sheet is a menu, and holding it open over a write would make its own
 /// dismissal feel broken. What the action does show is the busy cue on the
 /// tile it is about — see [_PhotoStripState._busyPhotoId], which is what
 /// [onSetCover]/[onDelete] are wired through here.
+///
+/// Was the app's one Material `showModalBottomSheet` + `ListTile` menu, with
+/// a Material `AlertDialog` confirm behind it — i.e. two surfaces that
+/// existed nowhere else. Both now go through `masi_dialogs.dart`, so this
+/// menu matches the topo-row menu and this confirm matches every other
+/// delete in the app. Keys are unchanged.
 Future<void> _showManageSheet(
   BuildContext context,
   PhotoRef photo,
-  MasiColors colors,
   void Function(PhotoRef photo)? onSetCover,
   void Function(PhotoRef photo)? onDelete,
 ) async {
-  await showModalBottomSheet<void>(
-    context: context,
-    builder: (sheetContext) => SafeArea(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          if (!photo.isPrimary && onSetCover != null)
-            ListTile(
-              key: Key('photo-manage-setcover-${photo.id}'),
-              leading: MasiIcon('star_fill', color: colors.accent),
-              title: const Text('Set as cover'),
-              onTap: () {
-                Navigator.of(sheetContext).pop();
-                onSetCover(photo);
-              },
-            ),
-          if (onDelete != null)
-            ListTile(
-              key: Key('photo-manage-delete-${photo.id}'),
-              leading: MasiIcon('delete', color: colors.gradeHard),
-              title: const Text('Delete photo'),
-              onTap: () async {
-                Navigator.of(sheetContext).pop();
-                final confirmed = await showDialog<bool>(
-                  context: context,
-                  builder: (dialogContext) => AlertDialog(
-                    key: const Key('photo-manage-delete-dialog'),
-                    title: const Text('Delete this photo?'),
-                    content: const Text(
-                      "This removes the photo and every route drawn on "
-                      'it. This cannot be undone.',
-                    ),
-                    actions: [
-                      TextButton(
-                        onPressed: () =>
-                            Navigator.of(dialogContext).pop(false),
-                        child: const Text('Cancel'),
-                      ),
-                      TextButton(
-                        key: const Key('photo-manage-delete-confirm'),
-                        onPressed: () => Navigator.of(dialogContext).pop(true),
-                        child: const Text('Delete'),
-                      ),
-                    ],
-                  ),
-                );
-                if (confirmed == true) onDelete(photo);
-              },
-            ),
-        ],
-      ),
-    ),
+  final action = await showMasiActionSheet<String>(
+    context,
+    actions: [
+      if (!photo.isPrimary && onSetCover != null)
+        MasiSheetAction(
+          key: Key('photo-manage-setcover-${photo.id}'),
+          label: 'Set as cover',
+          value: 'set-cover',
+        ),
+      if (onDelete != null)
+        MasiSheetAction(
+          key: Key('photo-manage-delete-${photo.id}'),
+          label: 'Delete photo',
+          value: 'delete',
+          isDestructive: true,
+        ),
+    ],
   );
+  if (!context.mounted || action == null) return;
+
+  switch (action) {
+    case 'set-cover':
+      onSetCover!(photo);
+    case 'delete':
+      final confirmed = await showMasiConfirm(
+        context,
+        title: 'Delete this photo?',
+        message: 'This removes the photo and every route drawn on it. '
+            'This cannot be undone.',
+        confirmLabel: 'Delete',
+        confirmKey: const Key('photo-manage-delete-confirm'),
+      );
+      if (confirmed) onDelete!(photo);
+  }
 }

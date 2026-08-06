@@ -19,6 +19,7 @@ import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show PlatformException, SystemChannels;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -1203,7 +1204,9 @@ void main() {
         await tester.tap(find.byKey(const Key('account-install-hint')));
         await tester.pumpAndSettle();
 
-        expect(find.byType(AlertDialog), findsOneWidget);
+        // A `CupertinoAlertDialog` since the popup unification — every modal
+        // in the app is now a Cupertino surface (see `masi_dialogs.dart`).
+        expect(find.byType(CupertinoAlertDialog), findsOneWidget);
         expect(find.textContaining('Add to Home Screen'), findsWidgets);
       },
     );

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -19,6 +21,7 @@ import '../application/email_initials.dart';
 import '../application/profile_providers.dart';
 import '../application/pwa_install.dart';
 import '../application/pwa_install_providers.dart';
+import 'add_to_home_screen_alert.dart';
 import '../application/pwa_install_types.dart';
 import '../data/auth_repository.dart';
 
@@ -979,25 +982,8 @@ class _InstallSection extends ConsumerWidget {
     }
   }
 
-  /// The iOS fallback: Safari has no programmatic install API, so the best
-  /// this app can do is explain the manual Share-sheet steps.
   void _showAddToHomeScreenDialog(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Add to Home Screen'),
-        content: const Text(
-          'To install: tap the Share button in your browser, then choose '
-          "'Add to Home Screen'.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
+    unawaited(showAddToHomeScreenAlert(context));
   }
 }
 

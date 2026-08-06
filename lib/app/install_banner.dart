@@ -1,7 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../features/account/application/pwa_install.dart';
+import '../features/account/presentation/add_to_home_screen_alert.dart';
 import '../features/account/application/pwa_install_providers.dart';
 import '../features/account/application/pwa_install_types.dart';
 import '../features/topo/presentation/canvas_chrome.dart' show kMasiAmbientShadow;
@@ -25,8 +28,8 @@ import 'theme.dart';
 /// `!isStandalone && (canPrompt || platform == ios)`; its single action
 /// button either fires the browser's real deferred install prompt
 /// ([pwaPromptInstall], Chromium/Android's `beforeinstallprompt`) or, on iOS
-/// Safari (no programmatic install API), opens an [AlertDialog] explaining
-/// the manual Share-sheet steps.
+/// Safari (no programmatic install API), opens [showAddToHomeScreenAlert]
+/// explaining the manual Share-sheet steps.
 class InstallBanner extends ConsumerStatefulWidget {
   const InstallBanner({super.key});
 
@@ -143,25 +146,7 @@ class _InstallBannerState extends ConsumerState<InstallBanner> {
     }
   }
 
-  /// The iOS fallback: Safari has no programmatic install API, so the best
-  /// this app can do is explain the manual Share-sheet steps (copied from
-  /// `_InstallSection._showAddToHomeScreenDialog`).
   void _showAddToHomeScreenDialog(BuildContext context) {
-    showDialog<void>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        title: const Text('Add to Home Screen'),
-        content: const Text(
-          'To install: tap the Share button in your browser, then choose '
-          "'Add to Home Screen'.",
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dialogContext).pop(),
-            child: const Text('OK'),
-          ),
-        ],
-      ),
-    );
+    unawaited(showAddToHomeScreenAlert(context));
   }
 }
