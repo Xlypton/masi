@@ -58,9 +58,24 @@ skills-lock.json
 # of one integration-test run. It lives un-bundled in test_fixtures/ so it
 # never ships in a production build — never commit it back under assets/.
 /assets/test/
-# Symlink into the gitignored .agents/ skill cache -- tracking it would leave a
-# dangling link in a fresh clone. Real, self-contained skills stay versioned.
+# Symlinks into the gitignored .agents/ skill cache -- tracking one would leave a
+# dangling link in a fresh clone. Real, self-contained skills (deploy-web) stay
+# versioned. Re-created by `npx skills add <repo>` (NOT `--global`, which every
+# skill rejects with "PromptScript does not support global skill installation").
 .claude/skills/supabase-server
+.claude/skills/supabase
+.claude/skills/supabase-postgres-best-practices
+.claude/skills/agents-sdk
+.claude/skills/cloudflare
+.claude/skills/cloudflare-email-service
+.claude/skills/cloudflare-one
+.claude/skills/cloudflare-one-migrations
+.claude/skills/durable-objects
+.claude/skills/sandbox-sdk
+.claude/skills/turnstile-spin
+.claude/skills/web-perf
+.claude/skills/workers-best-practices
+.claude/skills/wrangler
 
 # Local wrangler/Cloudflare build + deploy cache.
 .wrangler/

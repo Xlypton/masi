@@ -398,3 +398,46 @@ which executes arbitrary SQL and returns JSON (`[]` for DDL success, rows for SE
   `pg_policies` to confirm what actually landed, then update `supabase/schema.sql` (and the
   `supabase/migrations/*.sql` delta) to the shape that is *really* live — and fix any comment in those files
   claiming an apply state that turns out to be false.
+
+## MCP servers + agent skills (added 2026-08-06)
+
+`.mcp.json` (project root, committed) registers **six remote MCP servers** — `supabase` (scoped to
+project_ref `mnaipcqbkqzffgvxpato`) plus Cloudflare's `cloudflare` / `cloudflare-docs` /
+`cloudflare-bindings` / `cloudflare-builds` / `cloudflare-observability`. Agent skills live in
+`.agents/skills/` (gitignored) and are symlinked into `.claude/skills/`: 11 Cloudflare skills
+(`cloudflare`, `wrangler`, `workers-best-practices`, `web-perf`, `durable-objects`, …) + 2 Supabase
+(`supabase`, `supabase-postgres-best-practices`).
+
+- **They require an app RESTART to load, then an interactive OAuth per server** (`/mcp` → select the
+  server → Authenticate). `cloudflare-docs` is the only one that needs no auth. Until that is done the
+  servers are configured but unusable — every endpoint answers `401`, which is "alive, awaiting auth",
+  not a misconfiguration.
+- **`claude mcp add` / `claude plugin install` do NOT work on this machine.** There is no standalone
+  `claude` CLI here (desktop app, nothing on PATH), so both vendors' documented install commands fail.
+  Writing `.mcp.json` by hand is the equivalent and is what was actually done.
+- **`npx skills add --global` fails for every skill** (`PromptScript does not support global skill
+  installation`), Cloudflare's docs notwithstanding. Install project-scoped, without `--global`.
+- Deliberately NOT added to the global `~/.claude.json`: that file is ~37 KB and holds `oauthAccount`
+  and app state, so round-tripping it through a JSON serializer to add five lines risks corrupting the
+  Claude Code install. Project scope gets the same result with none of that risk.
+
+### Supabase access — the Management API remains the working path
+The `~/.config/climbtopo-mgmt-token` + `POST /v1/projects/{ref}/database/query` recipe documented above
+is still the ONLY verified way to inspect/edit the live schema, and it needs no MCP, no OAuth and no
+restart. **Re-verified 2026-08-06:** returned all 10 live tables (`areas`, `ascents`, `backups`,
+`comments`, `likes`, `photos`, `profiles`, `routes`, `sectors`, `walls`) with `relrowsecurity` true on
+all 10. Prefer it over the MCP server for schema work — it is proven, scriptable, and already covered
+by a settings allow rule.
+
+### Cloudflare access — token, and the account-ID trap
+- **Node is a portable install at `C:\tools\nodejs`** and is NOT on PATH (`winget install` hangs forever
+  on an invisible UAC elevation prompt; the official zip works). Prefix commands with
+  `export PATH="/c/tools/nodejs:$PATH"`, or call `C:\tools\nodejs\npx.cmd` directly.
+- **A Pages-scoped API token lives at `~/.config/cf-pages-token`** — read it into `CLOUDFLARE_API_TOKEN`,
+  never print it. This replaces `wrangler login`, whose OAuth flow times out in well under the time it
+  takes to reach a remote-controlled desktop (it failed twice that way).
+- **A `Pages:Edit`-only token cannot resolve its own account.** `wrangler whoami` fails with "Failed to
+  automatically retrieve account IDs", and `/accounts`, `/memberships`, `/user` all come back empty or
+  unauthorized — the token is valid, it just cannot enumerate. So **`CLOUDFLARE_ACCOUNT_ID` must be set
+  explicitly** for any `wrangler pages deploy`. Either store the account ID alongside the token or add
+  `account:read` to the token. This is the single thing that blocks an otherwise-headless deploy.
