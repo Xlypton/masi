@@ -79,3 +79,8 @@ skills-lock.json
 
 # Local wrangler/Cloudflare build + deploy cache.
 .wrangler/
+
+# Golden-test diff artifacts, written by flutter_test on a mismatch. On this
+# Windows box two goldens fail permanently (they were generated on macOS, and
+# font rasterization differs), so these regenerate on every run.
+**/failures/

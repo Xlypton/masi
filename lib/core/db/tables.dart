@@ -71,6 +71,22 @@ class Profiles extends Table with SyncColumns {
   /// comments, ascent logs, ...). `null` until the user sets one.
   TextColumn get displayName => text().nullable()();
 
+  /// The user's profile picture, or `null` for "no picture" (callers fall
+  /// back to the initials chip). Two shapes are valid and both render:
+  ///
+  ///  - an `https://` URL — what an OAuth provider hands over in the
+  ///    session's user metadata (Google's `avatar_url`/`picture`). Not
+  ///    stored here by the app; it is read live off the session and only
+  ///    used when this column is null, so it can never go stale.
+  ///  - a `data:image/...;base64,...` URL — a picture the user chose
+  ///    themselves. Stored inline rather than uploaded to Supabase Storage
+  ///    because that needs no bucket, no storage RLS and no second failure
+  ///    mode: the picture is downscaled to at most 512px and rides the
+  ///    profile row through the EXISTING sync engine, so it works offline
+  ///    (write now, push on the next pull, per decision D-4's no-outbox
+  ///    model) and arrives with any other user's profile for free.
+  TextColumn get avatarUrl => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }

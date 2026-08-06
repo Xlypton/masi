@@ -2235,4 +2235,123 @@ void main() {
       );
     });
   });
+
+  group('v10 -> v11 migration (Profiles.avatarUrl)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('masi_v11_migration_');
+      dbFile = File(p.join(tempDir.path, 'v10.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    Future<List<String>> profileColumns(AppDatabase db) => db
+        .customSelect("PRAGMA table_info('profiles')")
+        .map((row) => row.read<String>('name'))
+        .get();
+
+    test(
+      'ADD COLUMN migration adds avatarUrl to profiles without losing '
+      'pre-existing rows: it comes back null for a pre-migration profile, '
+      'and a post-migration profile can set/read it',
+      () async {
+        // Build a real current-schema file, seed a profile, then rewind it to
+        // the pre-v11 shape on disk (drop the column, stamp user_version = 10)
+        // — forcing drift down the onUpgrade(m, 10, 11) path.
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh
+            .into(fresh.profiles)
+            .insert(
+              ProfilesCompanion.insert(
+                id: 'uid-v10',
+                createdAt: 100,
+                updatedAt: 100,
+                displayName: const Value('Pre-v11 Peter'),
+              ),
+            );
+        await fresh.close();
+
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute(
+          'ALTER TABLE profiles DROP COLUMN avatar_url; '
+          'PRAGMA user_version = 10;',
+        );
+        expect(raw.select('PRAGMA user_version;').first.values.first, 10);
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        final profile = await (db.select(db.profiles)
+              ..where((t) => t.id.equals('uid-v10')))
+            .getSingle();
+        expect(
+          profile.displayName,
+          'Pre-v11 Peter',
+          reason: 'pre-existing row must survive the v10 -> v11 migration',
+        );
+        expect(
+          profile.avatarUrl,
+          isNull,
+          reason: 'a pre-migration profile simply has no picture yet',
+        );
+        expect(await profileColumns(db), contains('avatar_url'));
+
+        // Usable immediately after the migration.
+        await (db.update(db.profiles)
+              ..where((t) => t.id.equals('uid-v10')))
+            .write(const ProfilesCompanion(avatarUrl: Value('data:image/jpeg;base64,AAAA')));
+        final updated = await (db.select(db.profiles)
+              ..where((t) => t.id.equals('uid-v10')))
+            .getSingle();
+        expect(updated.avatarUrl, 'data:image/jpeg;base64,AAAA');
+      },
+    );
+
+    test(
+      'is re-runnable: a v10 stamp on a database that ALREADY has the column '
+      'does not fail — SQLite has no ADD COLUMN IF NOT EXISTS, so a '
+      'duplicate add would be a hard error',
+      () async {
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh.customSelect('SELECT 1').get();
+        await fresh.close();
+
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        // Column deliberately LEFT IN PLACE; only the version is rewound.
+        raw.execute('PRAGMA user_version = 10;');
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        await expectLater(db.customSelect('SELECT 1').get(), completes);
+        expect(await profileColumns(db), contains('avatar_url'));
+      },
+    );
+
+    test(
+      'a device coming from BEFORE v8 (no profiles table at all) gets the '
+      'column from createTable rather than a second, failing ADD COLUMN',
+      () async {
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh.customSelect('SELECT 1').get();
+        await fresh.close();
+
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute('DROP TABLE profiles; PRAGMA user_version = 7;');
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        await expectLater(db.customSelect('SELECT 1').get(), completes);
+        expect(await profileColumns(db), contains('avatar_url'));
+      },
+    );
+  });
 }

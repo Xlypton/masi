@@ -74,6 +74,52 @@ class ProfileRepository {
     }
   }
 
+  /// Upserts the signed-in user's own profile picture — see
+  /// [db.Profiles.avatarUrl] for the two accepted shapes. Passing `null`
+  /// CLEARS it, which is how "Remove photo" works; the UI then falls back to
+  /// the OAuth provider's avatar and finally to the initials chip.
+  ///
+  /// Same upsert/dirty/`createdAt`-preserving semantics as
+  /// [setMyDisplayName], and the same signed-out no-op — deliberately a
+  /// separate method rather than optional parameters on that one, so setting
+  /// a picture can never blank a display name (or vice versa) by omission.
+  Future<void> setMyAvatarUrl(String? avatarUrl) async {
+    final uid = currentUid();
+    if (uid == null) return;
+
+    final now = nowMs();
+    final existing = await (_db.select(
+      _db.profiles,
+    )..where((t) => t.id.equals(uid))).getSingleOrNull();
+
+    if (existing == null) {
+      await _db
+          .into(_db.profiles)
+          .insert(
+            db.ProfilesCompanion.insert(
+              id: uid,
+              createdAt: now,
+              updatedAt: now,
+              dirty: const Value(true),
+              ownerId: Value(uid),
+              avatarUrl: Value(avatarUrl),
+            ),
+          );
+    } else {
+      await (_db.update(
+        _db.profiles,
+      )..where((t) => t.id.equals(uid))).write(
+        db.ProfilesCompanion(
+          updatedAt: Value(now),
+          dirty: const Value(true),
+          // `Value(null)` (not `Value.absent()`) — clearing is a real write
+          // here, not "leave it alone".
+          avatarUrl: Value(avatarUrl),
+        ),
+      );
+    }
+  }
+
   /// Reactive display name for the profile row keyed by [uid] (any user, not
   /// just the signed-in one — this is how a shared topo's author name is
   /// resolved). Emits `null` when no row exists yet, the row has no
@@ -82,5 +128,15 @@ class ProfileRepository {
     final query = _db.select(_db.profiles)
       ..where((t) => t.id.equals(uid) & t.deletedAt.isNull());
     return query.watchSingleOrNull().map((row) => row?.displayName);
+  }
+
+  /// Reactive profile picture for the profile row keyed by [uid] (any user,
+  /// same as [watchDisplayName]). Emits `null` when no row exists, the row
+  /// has no picture set, or the row is soft-deleted — every one of which
+  /// means "fall back", never "error".
+  Stream<String?> watchAvatarUrl(String uid) {
+    final query = _db.select(_db.profiles)
+      ..where((t) => t.id.equals(uid) & t.deletedAt.isNull());
+    return query.watchSingleOrNull().map((row) => row?.avatarUrl);
   }
 }

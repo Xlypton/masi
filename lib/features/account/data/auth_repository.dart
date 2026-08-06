@@ -49,11 +49,15 @@ class AuthSessionState {
   const AuthSessionState.signedOut({AuthSignOutCause? cause})
     : email = null,
       uid = null,
+      providerAvatarUrl = null,
       signOutCause = cause;
 
-  const AuthSessionState.signedIn(String signedInEmail, {this.uid})
-    : email = signedInEmail,
-      signOutCause = null;
+  const AuthSessionState.signedIn(
+    String signedInEmail, {
+    this.uid,
+    this.providerAvatarUrl,
+  }) : email = signedInEmail,
+       signOutCause = null;
 
   /// The signed-in user's email, or `null` when signed out.
   final String? email;
@@ -78,6 +82,20 @@ class AuthSessionState {
   /// assertions are unaffected.
   final AuthSignOutCause? signOutCause;
 
+  /// The identity provider's own profile picture for this session (Google's
+  /// `avatar_url`, falling back to the standard OIDC `picture` claim), or
+  /// `null` when signed out or signed in by a route that carries none —
+  /// magic link and emailed OTP both do.
+  ///
+  /// Read LIVE off the session rather than copied into the local `profiles`
+  /// row, so a user who changes their Google picture sees the new one on the
+  /// next sign-in instead of a stale snapshot. It is only the FALLBACK: a
+  /// picture the user set inside this app ([db.Profiles.avatarUrl]) wins.
+  ///
+  /// Like [uid] and [signOutCause], deliberately NOT part of
+  /// [operator ==]/[hashCode] — equality stays keyed on [email] alone.
+  final String? providerAvatarUrl;
+
   bool get isSignedIn => email != null;
 
   @override
@@ -90,6 +108,7 @@ class AuthSessionState {
   @override
   String toString() =>
       'AuthSessionState(email: $email, uid: $uid, '
+      'providerAvatarUrl: $providerAvatarUrl, '
       'signOutCause: $signOutCause)';
 }
 
@@ -330,6 +349,28 @@ class SupabaseAuthRepository implements AuthRepository {
     final email = session?.user.email;
     return (email == null || email.isEmpty)
         ? AuthSessionState.signedOut(cause: authSignOutCauseFrom(reason))
-        : AuthSessionState.signedIn(email, uid: session?.user.id);
+        : AuthSessionState.signedIn(
+            email,
+            uid: session?.user.id,
+            providerAvatarUrl: _providerAvatarUrl(session?.user.userMetadata),
+          );
+  }
+
+  /// Pulls the identity provider's avatar out of a session's
+  /// `user_metadata`, or `null` if there isn't one.
+  ///
+  /// Two keys, checked in order: Supabase's GoTrue copies Google's picture to
+  /// `avatar_url`, and the raw OIDC `picture` claim is also carried through.
+  /// Anything that is not a non-empty `String` — a missing key, a null, a
+  /// number some other provider put there — resolves to `null` rather than
+  /// throwing, because a malformed metadata blob must degrade to "no
+  /// picture", never break sign-in.
+  static String? _providerAvatarUrl(Map<String, dynamic>? metadata) {
+    if (metadata == null) return null;
+    for (final key in const ['avatar_url', 'picture']) {
+      final value = metadata[key];
+      if (value is String && value.isNotEmpty) return value;
+    }
+    return null;
   }
 }

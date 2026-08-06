@@ -46,7 +46,7 @@ class AppDatabase extends _$AppDatabase {
   final bool _flushAfterCommit;
 
   @override
-  int get schemaVersion => 10;
+  int get schemaVersion => 11;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -291,6 +291,38 @@ class AppDatabase extends _$AppDatabase {
         ];
         for (final statement in liveFkIndexes) {
           await customStatement(statement);
+        }
+      }
+      // v10 -> v11: `Profiles.avatarUrl` — the user's profile picture, either
+      // an OAuth provider's `https://` avatar or an inline `data:` URL for a
+      // picture they picked themselves (see `tables.dart`'s doc for why it is
+      // stored inline rather than in Supabase Storage).
+      //
+      // Nullable with no default, so every existing profile row simply reads
+      // back `null` ("no picture yet") and nothing needs backfilling. The
+      // matching live-Supabase column is `supabase/migrations/
+      // 2026-08-06_profiles_avatar_url.sql`; pushing a row with an unknown
+      // column is what schema drift looks like here (bugs #64/#65/#72), so
+      // that migration must be applied BEFORE a build carrying this ships.
+      //
+      // Guarded on the column not already being there, because SQLite has no
+      // `ADD COLUMN IF NOT EXISTS` and a duplicate add is a hard error, not a
+      // no-op. Two real paths reach this branch with the column already
+      // present: the v7 -> v8 branch above, whose `m.createTable(profiles)`
+      // builds the table from its CURRENT definition; and any harness that
+      // synthesizes an "old" database via `createAll` and then stamps an old
+      // `user_version` (which is exactly what `app_database_migration_test`
+      // does). Same re-runnability discipline as the v9 -> v10 index branch's
+      // `IF NOT EXISTS`.
+      if (from < 11) {
+        final columns = await customSelect(
+          "PRAGMA table_info('profiles')",
+        ).get();
+        final hasAvatarUrl = columns.any(
+          (row) => row.read<String>('name') == 'avatar_url',
+        );
+        if (!hasAvatarUrl) {
+          await m.addColumn(profiles, profiles.avatarUrl);
         }
       }
     },

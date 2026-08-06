@@ -1940,6 +1940,13 @@ void main() {
         await tester.pumpWidget(_wrap(container, const AccountScreen()));
         await tester.pumpAndSettle();
 
+        // The signed-in card grew when the initials chip became an editable
+        // profile picture, so on this viewport the diagnostics row sits below
+        // the fold — scroll it in rather than tapping empty space.
+        await tester.ensureVisible(
+          find.byKey(const Key('account-storage-refresh')),
+        );
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(const Key('account-storage-refresh')));
         await tester.pump();
 

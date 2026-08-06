@@ -346,7 +346,12 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   "remoteId" TEXT,
   "dirty" BOOLEAN NOT NULL DEFAULT false,
   "ownerId" TEXT,
-  "displayName" TEXT
+  "displayName" TEXT,
+  -- Applied live 2026-08-06; delta in
+  -- supabase/migrations/2026-08-06_profiles_avatar_url.sql. Either an
+  -- https:// avatar URL or an inline data:image/...;base64 URL — see
+  -- `tables.dart`'s Profiles.avatarUrl.
+  "avatarUrl" TEXT
 );
 
 -- ---------- PRIVILEGES (RLS still restricts WHICH rows) ----------

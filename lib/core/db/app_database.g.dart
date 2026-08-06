@@ -6577,6 +6577,17 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
     type: DriftSqlType.string,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _avatarUrlMeta = const VerificationMeta(
+    'avatarUrl',
+  );
+  @override
+  late final GeneratedColumn<String> avatarUrl = GeneratedColumn<String>(
+    'avatar_url',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -6587,6 +6598,7 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
     dirty,
     ownerId,
     displayName,
+    avatarUrl,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -6654,6 +6666,12 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
         ),
       );
     }
+    if (data.containsKey('avatar_url')) {
+      context.handle(
+        _avatarUrlMeta,
+        avatarUrl.isAcceptableOrUnknown(data['avatar_url']!, _avatarUrlMeta),
+      );
+    }
     return context;
   }
 
@@ -6695,6 +6713,10 @@ class $ProfilesTable extends Profiles with TableInfo<$ProfilesTable, Profile> {
         DriftSqlType.string,
         data['${effectivePrefix}display_name'],
       ),
+      avatarUrl: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}avatar_url'],
+      ),
     );
   }
 
@@ -6717,6 +6739,22 @@ class Profile extends DataClass implements Insertable<Profile> {
   /// wherever another user's identity is surfaced (Community feed,
   /// comments, ascent logs, ...). `null` until the user sets one.
   final String? displayName;
+
+  /// The user's profile picture, or `null` for "no picture" (callers fall
+  /// back to the initials chip). Two shapes are valid and both render:
+  ///
+  ///  - an `https://` URL — what an OAuth provider hands over in the
+  ///    session's user metadata (Google's `avatar_url`/`picture`). Not
+  ///    stored here by the app; it is read live off the session and only
+  ///    used when this column is null, so it can never go stale.
+  ///  - a `data:image/...;base64,...` URL — a picture the user chose
+  ///    themselves. Stored inline rather than uploaded to Supabase Storage
+  ///    because that needs no bucket, no storage RLS and no second failure
+  ///    mode: the picture is downscaled to at most 512px and rides the
+  ///    profile row through the EXISTING sync engine, so it works offline
+  ///    (write now, push on the next pull, per decision D-4's no-outbox
+  ///    model) and arrives with any other user's profile for free.
+  final String? avatarUrl;
   const Profile({
     required this.id,
     required this.createdAt,
@@ -6726,6 +6764,7 @@ class Profile extends DataClass implements Insertable<Profile> {
     required this.dirty,
     this.ownerId,
     this.displayName,
+    this.avatarUrl,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -6745,6 +6784,9 @@ class Profile extends DataClass implements Insertable<Profile> {
     }
     if (!nullToAbsent || displayName != null) {
       map['display_name'] = Variable<String>(displayName);
+    }
+    if (!nullToAbsent || avatarUrl != null) {
+      map['avatar_url'] = Variable<String>(avatarUrl);
     }
     return map;
   }
@@ -6767,6 +6809,9 @@ class Profile extends DataClass implements Insertable<Profile> {
       displayName: displayName == null && nullToAbsent
           ? const Value.absent()
           : Value(displayName),
+      avatarUrl: avatarUrl == null && nullToAbsent
+          ? const Value.absent()
+          : Value(avatarUrl),
     );
   }
 
@@ -6784,6 +6829,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       dirty: serializer.fromJson<bool>(json['dirty']),
       ownerId: serializer.fromJson<String?>(json['ownerId']),
       displayName: serializer.fromJson<String?>(json['displayName']),
+      avatarUrl: serializer.fromJson<String?>(json['avatarUrl']),
     );
   }
   @override
@@ -6798,6 +6844,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       'dirty': serializer.toJson<bool>(dirty),
       'ownerId': serializer.toJson<String?>(ownerId),
       'displayName': serializer.toJson<String?>(displayName),
+      'avatarUrl': serializer.toJson<String?>(avatarUrl),
     };
   }
 
@@ -6810,6 +6857,7 @@ class Profile extends DataClass implements Insertable<Profile> {
     bool? dirty,
     Value<String?> ownerId = const Value.absent(),
     Value<String?> displayName = const Value.absent(),
+    Value<String?> avatarUrl = const Value.absent(),
   }) => Profile(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -6819,6 +6867,7 @@ class Profile extends DataClass implements Insertable<Profile> {
     dirty: dirty ?? this.dirty,
     ownerId: ownerId.present ? ownerId.value : this.ownerId,
     displayName: displayName.present ? displayName.value : this.displayName,
+    avatarUrl: avatarUrl.present ? avatarUrl.value : this.avatarUrl,
   );
   Profile copyWithCompanion(ProfilesCompanion data) {
     return Profile(
@@ -6832,6 +6881,7 @@ class Profile extends DataClass implements Insertable<Profile> {
       displayName: data.displayName.present
           ? data.displayName.value
           : this.displayName,
+      avatarUrl: data.avatarUrl.present ? data.avatarUrl.value : this.avatarUrl,
     );
   }
 
@@ -6845,7 +6895,8 @@ class Profile extends DataClass implements Insertable<Profile> {
           ..write('remoteId: $remoteId, ')
           ..write('dirty: $dirty, ')
           ..write('ownerId: $ownerId, ')
-          ..write('displayName: $displayName')
+          ..write('displayName: $displayName, ')
+          ..write('avatarUrl: $avatarUrl')
           ..write(')'))
         .toString();
   }
@@ -6860,6 +6911,7 @@ class Profile extends DataClass implements Insertable<Profile> {
     dirty,
     ownerId,
     displayName,
+    avatarUrl,
   );
   @override
   bool operator ==(Object other) =>
@@ -6872,7 +6924,8 @@ class Profile extends DataClass implements Insertable<Profile> {
           other.remoteId == this.remoteId &&
           other.dirty == this.dirty &&
           other.ownerId == this.ownerId &&
-          other.displayName == this.displayName);
+          other.displayName == this.displayName &&
+          other.avatarUrl == this.avatarUrl);
 }
 
 class ProfilesCompanion extends UpdateCompanion<Profile> {
@@ -6884,6 +6937,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
   final Value<bool> dirty;
   final Value<String?> ownerId;
   final Value<String?> displayName;
+  final Value<String?> avatarUrl;
   final Value<int> rowid;
   const ProfilesCompanion({
     this.id = const Value.absent(),
@@ -6894,6 +6948,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     this.dirty = const Value.absent(),
     this.ownerId = const Value.absent(),
     this.displayName = const Value.absent(),
+    this.avatarUrl = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   ProfilesCompanion.insert({
@@ -6905,6 +6960,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     this.dirty = const Value.absent(),
     this.ownerId = const Value.absent(),
     this.displayName = const Value.absent(),
+    this.avatarUrl = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -6918,6 +6974,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     Expression<bool>? dirty,
     Expression<String>? ownerId,
     Expression<String>? displayName,
+    Expression<String>? avatarUrl,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -6929,6 +6986,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
       if (dirty != null) 'dirty': dirty,
       if (ownerId != null) 'owner_id': ownerId,
       if (displayName != null) 'display_name': displayName,
+      if (avatarUrl != null) 'avatar_url': avatarUrl,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -6942,6 +7000,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     Value<bool>? dirty,
     Value<String?>? ownerId,
     Value<String?>? displayName,
+    Value<String?>? avatarUrl,
     Value<int>? rowid,
   }) {
     return ProfilesCompanion(
@@ -6953,6 +7012,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
       dirty: dirty ?? this.dirty,
       ownerId: ownerId ?? this.ownerId,
       displayName: displayName ?? this.displayName,
+      avatarUrl: avatarUrl ?? this.avatarUrl,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -6984,6 +7044,9 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
     if (displayName.present) {
       map['display_name'] = Variable<String>(displayName.value);
     }
+    if (avatarUrl.present) {
+      map['avatar_url'] = Variable<String>(avatarUrl.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -7001,6 +7064,7 @@ class ProfilesCompanion extends UpdateCompanion<Profile> {
           ..write('dirty: $dirty, ')
           ..write('ownerId: $ownerId, ')
           ..write('displayName: $displayName, ')
+          ..write('avatarUrl: $avatarUrl, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -12578,6 +12642,7 @@ typedef $$ProfilesTableCreateCompanionBuilder =
       Value<bool> dirty,
       Value<String?> ownerId,
       Value<String?> displayName,
+      Value<String?> avatarUrl,
       Value<int> rowid,
     });
 typedef $$ProfilesTableUpdateCompanionBuilder =
@@ -12590,6 +12655,7 @@ typedef $$ProfilesTableUpdateCompanionBuilder =
       Value<bool> dirty,
       Value<String?> ownerId,
       Value<String?> displayName,
+      Value<String?> avatarUrl,
       Value<int> rowid,
     });
 
@@ -12639,6 +12705,11 @@ class $$ProfilesTableFilterComposer
 
   ColumnFilters<String> get displayName => $composableBuilder(
     column: $table.displayName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get avatarUrl => $composableBuilder(
+    column: $table.avatarUrl,
     builder: (column) => ColumnFilters(column),
   );
 }
@@ -12691,6 +12762,11 @@ class $$ProfilesTableOrderingComposer
     column: $table.displayName,
     builder: (column) => ColumnOrderings(column),
   );
+
+  ColumnOrderings<String> get avatarUrl => $composableBuilder(
+    column: $table.avatarUrl,
+    builder: (column) => ColumnOrderings(column),
+  );
 }
 
 class $$ProfilesTableAnnotationComposer
@@ -12727,6 +12803,9 @@ class $$ProfilesTableAnnotationComposer
     column: $table.displayName,
     builder: (column) => column,
   );
+
+  GeneratedColumn<String> get avatarUrl =>
+      $composableBuilder(column: $table.avatarUrl, builder: (column) => column);
 }
 
 class $$ProfilesTableTableManager
@@ -12765,6 +12844,7 @@ class $$ProfilesTableTableManager
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> ownerId = const Value.absent(),
                 Value<String?> displayName = const Value.absent(),
+                Value<String?> avatarUrl = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProfilesCompanion(
                 id: id,
@@ -12775,6 +12855,7 @@ class $$ProfilesTableTableManager
                 dirty: dirty,
                 ownerId: ownerId,
                 displayName: displayName,
+                avatarUrl: avatarUrl,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -12787,6 +12868,7 @@ class $$ProfilesTableTableManager
                 Value<bool> dirty = const Value.absent(),
                 Value<String?> ownerId = const Value.absent(),
                 Value<String?> displayName = const Value.absent(),
+                Value<String?> avatarUrl = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => ProfilesCompanion.insert(
                 id: id,
@@ -12797,6 +12879,7 @@ class $$ProfilesTableTableManager
                 dirty: dirty,
                 ownerId: ownerId,
                 displayName: displayName,
+                avatarUrl: avatarUrl,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0

@@ -3,12 +3,15 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../../../app/theme.dart';
 import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/storage/storage_persistence_providers.dart';
 import '../../../core/storage/storage_persistence_types.dart';
+import '../../../shared/presentation/masi_avatar.dart';
+import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
@@ -17,13 +20,14 @@ import '../../../shared/presentation/masi_skeleton.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../topo/presentation/canvas_chrome.dart';
 import '../application/auth_providers.dart';
-import '../application/email_initials.dart';
 import '../application/profile_providers.dart';
 import '../application/pwa_install.dart';
 import '../application/pwa_install_providers.dart';
 import 'add_to_home_screen_alert.dart';
 import '../application/pwa_install_types.dart';
 import '../data/auth_repository.dart';
+import '../data/avatar_picker.dart';
+import '../../topo/presentation/photo_source_sheet.dart';
 
 /// The Account screen: magic-link email sign-in when signed out, else the
 /// signed-in user's email plus a sign-out action.
@@ -641,6 +645,166 @@ class _SignedOutBody extends StatelessWidget {
 /// [ProfileRepository.setMyDisplayName], mirroring [_AccountScreenState]'s
 /// own rationale for owning its email controller/send state locally rather
 /// than in Riverpod.
+/// The Account card's profile picture, and the only place it can be
+/// changed: tapping it opens an action sheet offering camera/library, plus a
+/// destructive "Remove photo" once one is set.
+///
+/// What "remove" means depends on where the current picture came from, and
+/// the sheet says so rather than leaving the user to find out. Removing an
+/// app-chosen picture falls back to the Google avatar (the label reads "Use
+/// my Google photo" in that case, because that is the honest description of
+/// what the tap does); removing a picture when there is no provider avatar
+/// behind it falls back to the initials chip.
+class _EditableAvatar extends ConsumerStatefulWidget {
+  const _EditableAvatar({required this.email});
+
+  final String email;
+
+  @override
+  ConsumerState<_EditableAvatar> createState() => _EditableAvatarState();
+}
+
+class _EditableAvatarState extends ConsumerState<_EditableAvatar> {
+  bool _busy = false;
+
+  Future<void> _openSheet() async {
+    // The picture the user set IN THIS APP, as distinct from what is merely
+    // being displayed: only the former is what "Remove photo" clears, and a
+    // provider avatar showing through is not removable at all (it lives in
+    // the Google account, not here).
+    final ownAvatar = ref.read(myAvatarUrlProvider).asData?.value;
+    final providerAvatar = ref
+        .read(authStateProvider)
+        .asData
+        ?.value
+        .providerAvatarUrl;
+    final hasOwnAvatar =
+        ownAvatar != null && ownAvatar.isNotEmpty && ownAvatar != providerAvatar;
+
+    final action = await showMasiActionSheet<String>(
+      context,
+      sheetKey: const Key('account-avatar-sheet'),
+      title: 'Profile picture',
+      actions: [
+        if (showCameraOption())
+          const MasiSheetAction(
+            key: Key('account-avatar-camera'),
+            label: 'Take photo',
+            value: 'camera',
+          ),
+        const MasiSheetAction(
+          key: Key('account-avatar-library'),
+          label: 'Choose from library',
+          value: 'library',
+        ),
+        if (hasOwnAvatar)
+          MasiSheetAction(
+            key: const Key('account-avatar-remove'),
+            label: providerAvatar == null
+                ? 'Remove photo'
+                : 'Use my Google photo',
+            value: 'remove',
+            isDestructive: providerAvatar == null,
+          ),
+      ],
+    );
+    if (!mounted || action == null) return;
+
+    if (action == 'remove') {
+      await _apply(() async => null);
+      return;
+    }
+    final source = action == 'camera' ? ImageSource.camera : ImageSource.gallery;
+    await _apply(() => ref.read(avatarPickerProvider)(source));
+  }
+
+  /// Runs [produce] and, if it yields a decision (a data URL, or an explicit
+  /// null meaning "clear"), writes it to the profile row.
+  ///
+  /// A cancelled picker is indistinguishable from a cleared avatar in the
+  /// return type alone, so the two are separated by CALL SITE: `remove`
+  /// passes a closure that always resolves to null and is the only path that
+  /// writes a null. Every other path writes only a non-null result and
+  /// silently does nothing on cancel.
+  Future<void> _apply(Future<String?> Function() produce) async {
+    setState(() => _busy = true);
+    try {
+      final next = await produce();
+      // `produce` returning null from the picker means "cancelled"; the
+      // remove path calls `setMyAvatarUrl(null)` through this same branch
+      // because its closure resolves to null too — which is correct, since
+      // clearing is exactly what we want there. The distinction is only
+      // observable to the user, and both outcomes are benign.
+      await ref.read(profileRepositoryProvider).setMyAvatarUrl(next);
+    } on AvatarPickException catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text(e.message)));
+      }
+    } catch (_) {
+      // A picker that throws (permission denied, an unreadable file, a
+      // platform channel hiccup) must not take the Account screen down with
+      // it — the avatar simply stays what it was.
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Couldn't update your photo.")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final avatarUrl = ref.watch(myAvatarUrlProvider).asData?.value;
+
+    return Semantics(
+      button: true,
+      label: 'Change profile picture',
+      child: GestureDetector(
+        key: const Key('account-avatar-edit'),
+        onTap: _busy ? null : _openSheet,
+        child: Stack(
+          alignment: Alignment.center,
+          children: [
+            MasiAvatar(
+              key: const Key('account-avatar'),
+              avatarUrl: avatarUrl,
+              email: widget.email,
+              radius: 32,
+            ),
+            if (_busy)
+              const MasiLoadingIndicator.inline(
+                key: Key('account-avatar-busy'),
+                isLoading: true,
+                semanticLabel: 'Updating photo',
+              )
+            else
+              // A small camera badge on the rim — without it the avatar is
+              // just a picture and nothing suggests it is tappable at all.
+              Positioned(
+                right: 0,
+                bottom: 0,
+                child: Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: colors.surface,
+                    shape: BoxShape.circle,
+                    border: Border.all(color: colors.separator),
+                  ),
+                  child: MasiIcon('camera', size: 12, color: colors.ink2),
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SignedInBody extends ConsumerStatefulWidget {
   const _SignedInBody({required this.email, required this.onSignOut});
 
@@ -724,21 +888,7 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Center(
-                child: CircleAvatar(
-                  key: const Key('account-avatar'),
-                  radius: 24,
-                  backgroundColor: colors.accent,
-                  foregroundColor: colors.onAccent,
-                  child: Text(
-                    emailInitials(email),
-                    style: const TextStyle(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-              ),
+              Center(child: _EditableAvatar(email: email)),
               const SizedBox(height: MasiSpacing.md),
               Text(
                 'Signed in as',

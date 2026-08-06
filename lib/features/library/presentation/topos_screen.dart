@@ -17,7 +17,7 @@ import '../../../shared/filtering/min_stars_filter_chips.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/filtering/style_tag_filter_chips.dart';
 import '../../account/application/auth_providers.dart';
-import '../../account/application/email_initials.dart';
+import '../../account/application/profile_providers.dart';
 import '../../backup/application/offline_banner_dismissal.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
@@ -35,6 +35,7 @@ import '../application/library_providers.dart';
 import '../application/proximity_topos_provider.dart';
 import '../data/library_crud_repository.dart';
 import '../../../shared/presentation/masi_async_view.dart';
+import '../../../shared/presentation/masi_avatar.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
@@ -397,18 +398,11 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
           IconButton(
             key: const Key('topos-account-button'),
             icon: signedInEmail != null
-                ? CircleAvatar(
+                ? MasiAvatar(
                     key: const Key('topos-account-avatar'),
+                    avatarUrl: ref.watch(myAvatarUrlProvider).asData?.value,
+                    email: signedInEmail,
                     radius: 14,
-                    backgroundColor: colors.accent,
-                    foregroundColor: colors.onAccent,
-                    child: Text(
-                      emailInitials(signedInEmail),
-                      style: const TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
                   )
                 : MasiIcon('person', color: colors.accent),
             tooltip: 'Account',
