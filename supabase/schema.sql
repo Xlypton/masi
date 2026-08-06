@@ -485,3 +485,45 @@ CREATE INDEX IF NOT EXISTS idx_photos_wall   ON public.photos   ("wallId");
 CREATE INDEX IF NOT EXISTS idx_routes_wall   ON public.routes   ("wallId");
 CREATE INDEX IF NOT EXISTS idx_comments_wall ON public.comments ("wallId");
 CREATE INDEX IF NOT EXISTS idx_likes_wall    ON public.likes    ("wallId");
+
+-- ===========================================================================
+-- COMMUNITY EDITING, PHASE 1 (applied live 2026-08-06; delta in
+-- supabase/migrations/2026-08-06_community_phase1_foundations.sql).
+--
+-- See COMMUNITY_PLAN.md §0 for why moderation state must NOT be a column on
+-- `walls`: the sync engine re-pushes whole rows with local-wins-ties LWW and
+-- no outbox (D-4), so the owner's next push would silently revert a
+-- moderator's decision. These tables are readable by the client and writable
+-- only through the Management API / SECURITY DEFINER RPCs.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS public.admins (
+  "userId"    TEXT PRIMARY KEY NOT NULL,
+  role        TEXT NOT NULL DEFAULT 'admin',
+  "createdAt" BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.wall_moderation (
+  "wallId"              TEXT PRIMARY KEY NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
+  state                 TEXT NOT NULL,  -- draft|pending|published|rejected|withdrawn|removed
+  "submittedAt"         BIGINT,
+  "reviewedAt"          BIGINT,
+  "reviewerId"          TEXT,
+  "rejectionReason"     TEXT,
+  "withdrawRequestedAt" BIGINT,
+  "updatedAt"           BIGINT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS public.moderation_log (
+  id           TEXT PRIMARY KEY NOT NULL,
+  "actorId"    TEXT NOT NULL,
+  action       TEXT NOT NULL,
+  "targetType" TEXT NOT NULL,
+  "targetId"   TEXT NOT NULL,
+  reason       TEXT,
+  "createdAt"  BIGINT NOT NULL
+);
+
+-- `is_admin()` and `is_wall_public(text)` plus the RLS policy swap live in the
+-- migration file; every `*_shared_select` policy now reads through
+-- `is_wall_public(...)` rather than a bare `visibility = 'shared'` check.
