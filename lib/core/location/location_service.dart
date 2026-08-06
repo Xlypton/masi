@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 
@@ -36,6 +37,13 @@ abstract class GeolocatorBoundary {
   Future<Position> getCurrentPosition();
 }
 
+/// How long a single position fix is given before [LocationService.
+/// currentLocation] gives up and reports "unavailable". A cold GPS fix on a
+/// real phone is genuinely slow (the previous 10s cut off legitimate fixes
+/// outdoors), and on web this clock also covers the browser's own permission
+/// prompt, which the user may take several seconds to answer.
+const Duration _fixTimeout = Duration(seconds: 15);
+
 /// The real [GeolocatorBoundary], delegating to `package:geolocator`'s
 /// static `Geolocator` methods.
 class _RealGeolocatorBoundary implements GeolocatorBoundary {
@@ -50,9 +58,33 @@ class _RealGeolocatorBoundary implements GeolocatorBoundary {
   Future<LocationPermission> requestPermission() =>
       Geolocator.requestPermission();
 
+  /// Asks for the most precise fix the platform can give.
+  ///
+  /// [LocationAccuracy.best] is stated EXPLICITLY rather than relying on
+  /// `LocationSettings`' default, because on web it is the only thing that
+  /// sets `PositionOptions.enableHighAccuracy` — `geolocator_web` maps
+  /// `lowest`/`low`/`medium`/`reduced` (and a null accuracy) to `false`, and
+  /// a low-accuracy browser fix is Wi-Fi/IP-derived, i.e. the middle of your
+  /// city rather than the crag you are standing at.
+  ///
+  /// [WebSettings] (rather than a plain [LocationSettings]) on web for one
+  /// reason: `geolocator_web` only forwards `maximumAge` to
+  /// `navigator.geolocation.getCurrentPosition` when the settings object is
+  /// literally a `WebSettings`. `Duration.zero` forbids the browser from
+  /// handing back a cached position — which matters because the permission
+  /// prompt itself can leave a coarse one sitting in that cache.
   @override
   Future<Position> getCurrentPosition() => Geolocator.getCurrentPosition(
-    locationSettings: const LocationSettings(timeLimit: Duration(seconds: 10)),
+    locationSettings: kIsWeb
+        ? WebSettings(
+            accuracy: LocationAccuracy.best,
+            maximumAge: Duration.zero,
+            timeLimit: _fixTimeout,
+          )
+        : const LocationSettings(
+            accuracy: LocationAccuracy.best,
+            timeLimit: _fixTimeout,
+          ),
   );
 }
 
@@ -68,10 +100,41 @@ class _RealGeolocatorBoundary implements GeolocatorBoundary {
 /// [GeolocatorBoundary.getCurrentPosition]. Any `false`/denied/
 /// deniedForever/exception at any step short-circuits to `null`.
 class GeolocatorLocationService implements LocationService {
-  GeolocatorLocationService({GeolocatorBoundary? boundary})
-    : _boundary = boundary ?? _RealGeolocatorBoundary();
+  GeolocatorLocationService({
+    GeolocatorBoundary? boundary,
+    bool? requestsPermissionUpFront,
+  }) : _boundary = boundary ?? _RealGeolocatorBoundary(),
+       // Defaults to "native yes, web no" — see the field's doc. Injectable
+       // so both branches are unit-testable off their real platform.
+       _requestsPermissionUpFront = requestsPermissionUpFront ?? !kIsWeb;
 
   final GeolocatorBoundary _boundary;
+
+  /// Whether a [LocationPermission.denied] verdict from
+  /// [GeolocatorBoundary.checkPermission] should be answered with an
+  /// explicit [GeolocatorBoundary.requestPermission] call before reading a
+  /// position. True on native, false on web — and the difference is not
+  /// cosmetic.
+  ///
+  /// On web, `denied` does not mean denied. `geolocator_web` maps the
+  /// Permissions API's `'prompt'` state (i.e. "the user has not been asked
+  /// yet", the normal first-run state) onto `LocationPermission.denied`, and
+  /// implements `requestPermission()` as a bare
+  /// `navigator.geolocation.getCurrentPosition()` with NO `PositionOptions`
+  /// — so `enableHighAccuracy` defaults to `false`. That call is what
+  /// actually raises the browser's permission prompt, and the fix it
+  /// resolves with is a coarse, Wi-Fi/IP-derived one, thrown away for its
+  /// permission verdict alone. It is also, on iOS Safari, what made both
+  /// the map's auto-center and the find-me button land in the middle of the
+  /// user's city instead of on the user.
+  ///
+  /// Skipping it on web loses nothing: [getCurrentPosition] raises the same
+  /// prompt itself, at high accuracy, and a refusal surfaces as a
+  /// `PermissionDeniedException` that [currentLocation]'s `catch` already
+  /// turns into the same `null`. A genuinely blocked site still
+  /// short-circuits earlier, since the browser reports that as
+  /// [LocationPermission.deniedForever].
+  final bool _requestsPermissionUpFront;
 
   @override
   Future<DeviceLocation?> currentLocation() async {
@@ -80,20 +143,31 @@ class GeolocatorLocationService implements LocationService {
       if (!serviceEnabled) return null;
 
       var permission = await _boundary.checkPermission();
-      if (permission == LocationPermission.denied) {
+      if (permission == LocationPermission.denied &&
+          _requestsPermissionUpFront) {
         permission = await _boundary.requestPermission();
       }
-      if (permission == LocationPermission.denied ||
-          permission == LocationPermission.deniedForever) {
+      if (permission == LocationPermission.deniedForever ||
+          (permission == LocationPermission.denied &&
+              _requestsPermissionUpFront)) {
         return null;
       }
 
-      final position = await _boundary.getCurrentPosition();
+      // A SECOND, outer deadline on top of the `timeLimit` handed to the
+      // platform, because on web that one does not work: `geolocator_web`
+      // passes `timeLimit.inMicroseconds` into `PositionOptions.timeout`,
+      // which is a MILLISECONDS field — so a 15s limit reaches the browser
+      // as ~4 hours and an unanswered permission prompt would hang this
+      // future (and the find-me button's spinner) indefinitely.
+      final position = await _boundary.getCurrentPosition().timeout(
+        _fixTimeout + const Duration(seconds: 5),
+      );
       return (latitude: position.latitude, longitude: position.longitude);
     } catch (_) {
-      // Best-effort: a timeout, a disabled-service exception raised instead
-      // of surfacing through isLocationServiceEnabled, or any other
-      // platform-channel error must never propagate to callers.
+      // Best-effort: a timeout, a refused browser permission prompt, a
+      // disabled-service exception raised instead of surfacing through
+      // isLocationServiceEnabled, or any other platform-channel error must
+      // never propagate to callers.
       return null;
     }
   }
