@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -12,7 +14,12 @@ import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../account/application/auth_providers.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
+import '../../moderation/application/community_facts_providers.dart';
+import '../../moderation/application/moderation_providers.dart';
 import '../../moderation/presentation/access_banner.dart';
+import '../../moderation/presentation/hazard_banner.dart';
+import '../../moderation/presentation/hazard_list_sheet.dart';
+import '../../moderation/presentation/hazard_reporter.dart';
 import '../../topo/domain/topo_route.dart';
 import '../../topo/presentation/canvas_chrome.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
@@ -83,6 +90,59 @@ class _CommunityTopoDetailScreenState
   void initState() {
     super.initState();
     _scrollController.addListener(_onScroll);
+    // Pull moderation state and community facts for THIS topo the moment the
+    // screen mounts. Both mirrors are pull-only and nothing else populates
+    // them, so without this the hazard and moderation banners would render
+    // from whatever a previous session happened to leave behind — which on a
+    // fresh install is nothing at all.
+    //
+    // On mount rather than on a timer, matching how `reachabilityProvider` is
+    // probed at the moment the answer is about to be rendered. Both calls are
+    // best-effort and neither throws.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _refreshCommunityState();
+    });
+  }
+
+  /// Pulls both mirrors for this topo, swallowing everything.
+  ///
+  /// The try/catch covers the provider READS as well as the pulls themselves,
+  /// which is the part that is easy to get wrong: `pullWallModeration` and
+  /// `pullCommunityFacts` never throw by contract, but constructing their
+  /// remotes reaches `supabaseClientProvider`, and that throws outright when
+  /// Supabase was never initialised. A banner refresh must not be able to take
+  /// the screen down with it, and this screen renders perfectly well from the
+  /// local mirror alone.
+  ///
+  /// Uses the collaborator-explicit halves rather than the `Ref` convenience
+  /// wrappers: a widget has a `WidgetRef`, which is not a `Ref`. That split
+  /// exists for exactly this call site.
+  void _refreshCommunityState() {
+    final wallId = widget.wallId;
+    try {
+      unawaited(
+        pullWallModeration(
+          remote: ref.read(moderationRemoteProvider),
+          repository: ref.read(moderationRepositoryProvider),
+          wallIds: {wallId},
+        ),
+      );
+    } catch (_) {
+      // Signed out, offline, or no Supabase at all. All mean "no fresher
+      // moderation state than what is already on the device".
+    }
+    try {
+      unawaited(
+        pullCommunityFacts(
+          remote: ref.read(communityFactsRemoteProvider),
+          repository: ref.read(communityFactsRepositoryProvider),
+          wallIds: {wallId},
+        ),
+      );
+    } catch (_) {
+      // Same. The hazard banner falls back to the local mirror.
+    }
   }
 
   /// Flips [_headerCollapsed] once the header has scrolled (approximately)
@@ -276,6 +336,48 @@ class _CommunityTopoDetailScreenState
         ),
       ),
     );
+  }
+
+  /// Opens the full hazard list, live and resolved (community editing phase 4
+  /// / R-1).
+  ///
+  /// The owner is passed in so the sheet can offer a Resolve control to the
+  /// right people. It never offers a delete to anyone but the report's own
+  /// author — the topo owner marking a hazard resolved is recorded, and the
+  /// report survives it (C-12).
+  Future<void> _openHazards(String wallId) async {
+    final owner = ref.read(wallOwnerProvider(wallId)).asData?.value;
+    if (!mounted) return;
+    await showHazardList(context, wallId: wallId, wallOwnerId: owner);
+  }
+
+  /// Files a hazard report against this topo.
+  Future<void> _reportHazard(String wallId) async {
+    final name = ref.read(wallNameProvider(wallId)).value ?? 'this topo';
+    final draft = await showHazardReporter(context, targetLabel: name);
+    if (draft == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref
+          .read(communityFactsServiceProvider)
+          .reportHazard(
+            wallId: wallId,
+            severity: draft.severity,
+            body: draft.body,
+          );
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('Reported. Thanks — that helps.')),
+      );
+    } catch (error) {
+      // Loud, not silent. There is no outbox behind this (decision D-4), so a
+      // failure means nothing was recorded anywhere. A hazard report that sat
+      // quietly on the device while somebody climbed past the loose block
+      // would be far worse than an error message.
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not file that report. $error')),
+      );
+    }
   }
 
   @override
@@ -515,6 +617,17 @@ class _CommunityTopoDetailScreenState
             // climber who has scrolled past it to the route list has already
             // decided to go. Renders to nothing when there is nothing to say.
             SliverToBoxAdapter(child: AccessBanner(wallId: wallId)),
+            // Reported hazards, immediately under the access notice and above
+            // the social surface. Same argument as the banner above it: a
+            // spinning bolt is worth more than a like count, and a climber who
+            // has scrolled past it has already decided to get on the route.
+            // Renders to nothing when there is no OUTSTANDING hazard.
+            SliverToBoxAdapter(
+              child: HazardBanner(
+                wallId: wallId,
+                onTap: () => _openHazards(wallId),
+              ),
+            ),
             SliverPadding(
               padding: const EdgeInsets.all(MasiSpacing.lg),
               sliver: SliverList(
@@ -533,6 +646,22 @@ class _CommunityTopoDetailScreenState
                         '$likeCount',
                         key: const Key('community-like-count'),
                         style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const Spacer(),
+                      // Open to ANY signed-in reader, not just the owner, and
+                      // with no approval step between filing and appearing —
+                      // that asymmetry is the whole point of R-1. The topo is
+                      // the author's work; whether there is a loose block over
+                      // the belay is not.
+                      TextButton.icon(
+                        key: const Key('community-report-hazard'),
+                        onPressed: () => _reportHazard(wallId),
+                        icon: MasiIcon(
+                          'warning',
+                          size: 16,
+                          color: colors.ink2,
+                        ),
+                        label: const Text('Report a hazard'),
                       ),
                     ],
                   ),

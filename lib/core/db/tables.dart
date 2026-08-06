@@ -110,6 +110,106 @@ class WallModerationRows extends Table {
   Set<Column> get primaryKey => {wallId};
 }
 
+/// Local mirror of community facts (community editing, phase 4 / R-1).
+///
+/// The three tables below — grade opinions, verifications, hazards — share
+/// one design, so it is stated once here.
+///
+/// Like [WallModerationRows] these are NOT [SyncColumns] tables and are NOT in
+/// `syncTableNames`, for a related but distinct reason. Moderation state must
+/// not travel up because the server owns it. These CAN be written by any
+/// signed-in user — but they are written by going DIRECTLY to Supabase, not
+/// through the sync engine, and the local row is only ever a cache of what the
+/// server confirmed.
+///
+/// That is a deliberate consequence of having no outbox (decision D-4). The
+/// sync engine's re-read-and-re-push loop is what makes it loss-proof for the
+/// user's OWN hierarchy, but it is scoped to `ownerId = auth.uid()` rows, and
+/// these tables are full of other people's statements. Routing them through it
+/// would mean either re-pushing rows the client does not own (which RLS
+/// refuses) or building the retry queue D-4 exists to avoid. So a write here
+/// is online-only and fails loudly when it cannot reach the server, rather
+/// than being silently queued and forgotten — the honest behaviour for
+/// something a stranger is relying on for safety information.
+///
+/// Reads are mirrored locally so a hazard warning still renders from cold and
+/// offline, exactly like every other read in this local-first app. None of
+/// these carry a Drift FK to [Walls]/[Routes] for the same reason
+/// [WallModerationRows] does not: rows arrive from a server pull and can
+/// legitimately reference a wall this device has never pulled.
+@DataClassName('GradeOpinionRow')
+class GradeOpinionRows extends Table {
+  TextColumn get id => text()();
+  TextColumn get routeId => text()();
+  TextColumn get authorId => text()();
+
+  /// `french` | `uiaa`, as the raw server string. Parsed at the edge so an
+  /// unknown future system degrades instead of throwing on read.
+  TextColumn get gradeSystem => text()();
+  TextColumn get gradeRaw => text()();
+
+  /// Position on the shared cross-system scale. Stored rather than recomputed
+  /// so a French and a UIAA opinion on one route stay directly comparable
+  /// without the reader knowing either ladder.
+  RealColumn get gradeSortKey => real().nullable()();
+
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// See [GradeOpinionRows] for the shared design note.
+@DataClassName('TopoVerificationRow')
+class TopoVerificationRows extends Table {
+  TextColumn get id => text()();
+  TextColumn get wallId => text()();
+  TextColumn get authorId => text()();
+
+  /// Whether this person says the topo matches the rock.
+  BoolColumn get accurate => boolean()();
+
+  TextColumn get note => text().nullable()();
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// See [GradeOpinionRows] for the shared design note.
+@DataClassName('TopoHazardRow')
+class TopoHazardRows extends Table {
+  TextColumn get id => text()();
+  TextColumn get wallId => text()();
+
+  /// `null` for a hazard about the whole topo — the approach, the descent,
+  /// the belay — rather than one specific line.
+  TextColumn get routeId => text().nullable()();
+
+  TextColumn get authorId => text()();
+
+  /// `note` | `caution` | `danger`, as the raw server string. Parsed by
+  /// `HazardSeverity.fromWire`, which resolves an unknown value to `danger` —
+  /// the opposite direction to moderation state, because a safety warning
+  /// must fail loud rather than be quietly demoted.
+  TextColumn get severity => text()();
+
+  TextColumn get body => text()();
+
+  /// When somebody marked this dealt with, or null. The report itself is
+  /// never deleted by the topo owner — that is the point of the split (C-12).
+  IntColumn get resolvedAt => integer().nullable()();
+
+  /// Who resolved it. The reporter withdrawing their own report and the topo
+  /// owner saying it is fixed are very different claims.
+  TextColumn get resolvedBy => text().nullable()();
+
+  IntColumn get createdAt => integer()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
 /// A signed-in user's editable, synced display name (#18).
 ///
 /// Unlike every other [SyncColumns] table, [id] here is NOT a caller-

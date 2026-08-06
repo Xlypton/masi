@@ -29,6 +29,9 @@ part 'app_database.g.dart';
     Profiles,
     AppSettings,
     WallModerationRows,
+    GradeOpinionRows,
+    TopoVerificationRows,
+    TopoHazardRows,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -47,7 +50,7 @@ class AppDatabase extends _$AppDatabase {
   final bool _flushAfterCommit;
 
   @override
-  int get schemaVersion => 13;
+  int get schemaVersion => 14;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -376,6 +379,22 @@ class AppDatabase extends _$AppDatabase {
         await addIfMissing(sectors, sectors.accessNote);
         await addIfMissing(walls, walls.accessState);
         await addIfMissing(walls, walls.accessNote);
+      }
+      // v13 -> v14: the local mirror of community facts — grade opinions,
+      // verifications and hazards (community editing phase 4 / R-1). Three
+      // brand-new tables with nothing to backfill, so the same plain
+      // `createTable` shape as the v11 -> v12 `WallModerationRows` addition.
+      //
+      // None of them is a SyncColumns table and none is in `syncTableNames`:
+      // they are written by going directly to Supabase and mirrored back, not
+      // pushed by the sync engine. See `GradeOpinionRows` in `tables.dart` for
+      // why. The matching live tables are in
+      // `supabase/migrations/2026-08-06_community_phase4_facts.sql` and must be
+      // applied BEFORE a build carrying v14 ships.
+      if (from < 14) {
+        await m.createTable(gradeOpinionRows);
+        await m.createTable(topoVerificationRows);
+        await m.createTable(topoHazardRows);
       }
     },
     beforeOpen: (details) async {

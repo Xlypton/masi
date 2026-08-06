@@ -537,3 +537,60 @@ CREATE TABLE IF NOT EXISTS public.moderation_log (
 -- `is_admin()` and `is_wall_public(text)` plus the RLS policy swap live in the
 -- migration file; every `*_shared_select` policy now reads through
 -- `is_wall_public(...)` rather than a bare `visibility = 'shared'` check.
+
+-- ===========================================================================
+-- COMMUNITY EDITING, PHASE 4 — community facts (applied live 2026-08-06;
+-- delta in supabase/migrations/2026-08-06_community_phase4_facts.sql).
+--
+-- The layer that is deliberately NOT gated behind the owner's approval, nor
+-- behind the admin queue (R-1, COMMUNITY_PLAN.md §3.2): the topo is the
+-- author's work, but the grade, whether the drawing matches the rock, and
+-- whether there is a loose block over the belay are facts about the world.
+--
+-- Anyone signed in may write, but only in their own name, and only the AUTHOR
+-- of a statement (plus admins) may edit or delete it. In particular the topo
+-- owner CANNOT delete a hazard report on their own topo — they can mark it
+-- resolved via the `resolve_hazard` RPC, which is recorded rather than erased
+-- (C-12). RLS is row-level only, which is why resolution needs an RPC instead
+-- of a policy: there is no way to permit one column and forbid another.
+--
+-- Mirrored locally in Drift (schemaVersion 14) as a pull-only cache; writes go
+-- straight to PostgREST, never through the sync engine, so none of these is in
+-- `syncTableNames`.
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS public.route_grade_opinions (
+  id             TEXT PRIMARY KEY NOT NULL,
+  "routeId"      TEXT NOT NULL REFERENCES public.routes(id) ON DELETE CASCADE,
+  "authorId"     TEXT NOT NULL,
+  "gradeSystem"  TEXT NOT NULL,
+  "gradeRaw"     TEXT NOT NULL,
+  "gradeSortKey" DOUBLE PRECISION,
+  "createdAt"    BIGINT NOT NULL,
+  UNIQUE ("routeId", "authorId")
+);
+
+CREATE TABLE IF NOT EXISTS public.topo_verifications (
+  id          TEXT PRIMARY KEY NOT NULL,
+  "wallId"    TEXT NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
+  "authorId"  TEXT NOT NULL,
+  accurate    BOOLEAN NOT NULL,
+  note        TEXT,
+  "createdAt" BIGINT NOT NULL,
+  UNIQUE ("wallId", "authorId")
+);
+
+CREATE TABLE IF NOT EXISTS public.topo_hazards (
+  id           TEXT PRIMARY KEY NOT NULL,
+  "wallId"     TEXT NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
+  "routeId"    TEXT REFERENCES public.routes(id) ON DELETE CASCADE,
+  "authorId"   TEXT NOT NULL,
+  severity     TEXT NOT NULL,
+  body         TEXT NOT NULL,
+  "resolvedAt" BIGINT,
+  "resolvedBy" TEXT,
+  "createdAt"  BIGINT NOT NULL
+);
+
+-- `is_route_public(text)`, the twelve RLS policies and the `resolve_hazard`
+-- RPC live in the migration file.

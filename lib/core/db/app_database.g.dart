@@ -8245,6 +8245,1477 @@ class WallModerationRowsCompanion extends UpdateCompanion<WallModerationRow> {
   }
 }
 
+class $GradeOpinionRowsTable extends GradeOpinionRows
+    with TableInfo<$GradeOpinionRowsTable, GradeOpinionRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $GradeOpinionRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _routeIdMeta = const VerificationMeta(
+    'routeId',
+  );
+  @override
+  late final GeneratedColumn<String> routeId = GeneratedColumn<String>(
+    'route_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _authorIdMeta = const VerificationMeta(
+    'authorId',
+  );
+  @override
+  late final GeneratedColumn<String> authorId = GeneratedColumn<String>(
+    'author_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _gradeSystemMeta = const VerificationMeta(
+    'gradeSystem',
+  );
+  @override
+  late final GeneratedColumn<String> gradeSystem = GeneratedColumn<String>(
+    'grade_system',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _gradeRawMeta = const VerificationMeta(
+    'gradeRaw',
+  );
+  @override
+  late final GeneratedColumn<String> gradeRaw = GeneratedColumn<String>(
+    'grade_raw',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _gradeSortKeyMeta = const VerificationMeta(
+    'gradeSortKey',
+  );
+  @override
+  late final GeneratedColumn<double> gradeSortKey = GeneratedColumn<double>(
+    'grade_sort_key',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    routeId,
+    authorId,
+    gradeSystem,
+    gradeRaw,
+    gradeSortKey,
+    createdAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'grade_opinion_rows';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<GradeOpinionRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('route_id')) {
+      context.handle(
+        _routeIdMeta,
+        routeId.isAcceptableOrUnknown(data['route_id']!, _routeIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_routeIdMeta);
+    }
+    if (data.containsKey('author_id')) {
+      context.handle(
+        _authorIdMeta,
+        authorId.isAcceptableOrUnknown(data['author_id']!, _authorIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_authorIdMeta);
+    }
+    if (data.containsKey('grade_system')) {
+      context.handle(
+        _gradeSystemMeta,
+        gradeSystem.isAcceptableOrUnknown(
+          data['grade_system']!,
+          _gradeSystemMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_gradeSystemMeta);
+    }
+    if (data.containsKey('grade_raw')) {
+      context.handle(
+        _gradeRawMeta,
+        gradeRaw.isAcceptableOrUnknown(data['grade_raw']!, _gradeRawMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_gradeRawMeta);
+    }
+    if (data.containsKey('grade_sort_key')) {
+      context.handle(
+        _gradeSortKeyMeta,
+        gradeSortKey.isAcceptableOrUnknown(
+          data['grade_sort_key']!,
+          _gradeSortKeyMeta,
+        ),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  GradeOpinionRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return GradeOpinionRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      routeId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}route_id'],
+      )!,
+      authorId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}author_id'],
+      )!,
+      gradeSystem: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}grade_system'],
+      )!,
+      gradeRaw: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}grade_raw'],
+      )!,
+      gradeSortKey: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}grade_sort_key'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $GradeOpinionRowsTable createAlias(String alias) {
+    return $GradeOpinionRowsTable(attachedDatabase, alias);
+  }
+}
+
+class GradeOpinionRow extends DataClass implements Insertable<GradeOpinionRow> {
+  final String id;
+  final String routeId;
+  final String authorId;
+
+  /// `french` | `uiaa`, as the raw server string. Parsed at the edge so an
+  /// unknown future system degrades instead of throwing on read.
+  final String gradeSystem;
+  final String gradeRaw;
+
+  /// Position on the shared cross-system scale. Stored rather than recomputed
+  /// so a French and a UIAA opinion on one route stay directly comparable
+  /// without the reader knowing either ladder.
+  final double? gradeSortKey;
+  final int createdAt;
+  const GradeOpinionRow({
+    required this.id,
+    required this.routeId,
+    required this.authorId,
+    required this.gradeSystem,
+    required this.gradeRaw,
+    this.gradeSortKey,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['route_id'] = Variable<String>(routeId);
+    map['author_id'] = Variable<String>(authorId);
+    map['grade_system'] = Variable<String>(gradeSystem);
+    map['grade_raw'] = Variable<String>(gradeRaw);
+    if (!nullToAbsent || gradeSortKey != null) {
+      map['grade_sort_key'] = Variable<double>(gradeSortKey);
+    }
+    map['created_at'] = Variable<int>(createdAt);
+    return map;
+  }
+
+  GradeOpinionRowsCompanion toCompanion(bool nullToAbsent) {
+    return GradeOpinionRowsCompanion(
+      id: Value(id),
+      routeId: Value(routeId),
+      authorId: Value(authorId),
+      gradeSystem: Value(gradeSystem),
+      gradeRaw: Value(gradeRaw),
+      gradeSortKey: gradeSortKey == null && nullToAbsent
+          ? const Value.absent()
+          : Value(gradeSortKey),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory GradeOpinionRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return GradeOpinionRow(
+      id: serializer.fromJson<String>(json['id']),
+      routeId: serializer.fromJson<String>(json['routeId']),
+      authorId: serializer.fromJson<String>(json['authorId']),
+      gradeSystem: serializer.fromJson<String>(json['gradeSystem']),
+      gradeRaw: serializer.fromJson<String>(json['gradeRaw']),
+      gradeSortKey: serializer.fromJson<double?>(json['gradeSortKey']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'routeId': serializer.toJson<String>(routeId),
+      'authorId': serializer.toJson<String>(authorId),
+      'gradeSystem': serializer.toJson<String>(gradeSystem),
+      'gradeRaw': serializer.toJson<String>(gradeRaw),
+      'gradeSortKey': serializer.toJson<double?>(gradeSortKey),
+      'createdAt': serializer.toJson<int>(createdAt),
+    };
+  }
+
+  GradeOpinionRow copyWith({
+    String? id,
+    String? routeId,
+    String? authorId,
+    String? gradeSystem,
+    String? gradeRaw,
+    Value<double?> gradeSortKey = const Value.absent(),
+    int? createdAt,
+  }) => GradeOpinionRow(
+    id: id ?? this.id,
+    routeId: routeId ?? this.routeId,
+    authorId: authorId ?? this.authorId,
+    gradeSystem: gradeSystem ?? this.gradeSystem,
+    gradeRaw: gradeRaw ?? this.gradeRaw,
+    gradeSortKey: gradeSortKey.present ? gradeSortKey.value : this.gradeSortKey,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  GradeOpinionRow copyWithCompanion(GradeOpinionRowsCompanion data) {
+    return GradeOpinionRow(
+      id: data.id.present ? data.id.value : this.id,
+      routeId: data.routeId.present ? data.routeId.value : this.routeId,
+      authorId: data.authorId.present ? data.authorId.value : this.authorId,
+      gradeSystem: data.gradeSystem.present
+          ? data.gradeSystem.value
+          : this.gradeSystem,
+      gradeRaw: data.gradeRaw.present ? data.gradeRaw.value : this.gradeRaw,
+      gradeSortKey: data.gradeSortKey.present
+          ? data.gradeSortKey.value
+          : this.gradeSortKey,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GradeOpinionRow(')
+          ..write('id: $id, ')
+          ..write('routeId: $routeId, ')
+          ..write('authorId: $authorId, ')
+          ..write('gradeSystem: $gradeSystem, ')
+          ..write('gradeRaw: $gradeRaw, ')
+          ..write('gradeSortKey: $gradeSortKey, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    routeId,
+    authorId,
+    gradeSystem,
+    gradeRaw,
+    gradeSortKey,
+    createdAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is GradeOpinionRow &&
+          other.id == this.id &&
+          other.routeId == this.routeId &&
+          other.authorId == this.authorId &&
+          other.gradeSystem == this.gradeSystem &&
+          other.gradeRaw == this.gradeRaw &&
+          other.gradeSortKey == this.gradeSortKey &&
+          other.createdAt == this.createdAt);
+}
+
+class GradeOpinionRowsCompanion extends UpdateCompanion<GradeOpinionRow> {
+  final Value<String> id;
+  final Value<String> routeId;
+  final Value<String> authorId;
+  final Value<String> gradeSystem;
+  final Value<String> gradeRaw;
+  final Value<double?> gradeSortKey;
+  final Value<int> createdAt;
+  final Value<int> rowid;
+  const GradeOpinionRowsCompanion({
+    this.id = const Value.absent(),
+    this.routeId = const Value.absent(),
+    this.authorId = const Value.absent(),
+    this.gradeSystem = const Value.absent(),
+    this.gradeRaw = const Value.absent(),
+    this.gradeSortKey = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  GradeOpinionRowsCompanion.insert({
+    required String id,
+    required String routeId,
+    required String authorId,
+    required String gradeSystem,
+    required String gradeRaw,
+    this.gradeSortKey = const Value.absent(),
+    required int createdAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       routeId = Value(routeId),
+       authorId = Value(authorId),
+       gradeSystem = Value(gradeSystem),
+       gradeRaw = Value(gradeRaw),
+       createdAt = Value(createdAt);
+  static Insertable<GradeOpinionRow> custom({
+    Expression<String>? id,
+    Expression<String>? routeId,
+    Expression<String>? authorId,
+    Expression<String>? gradeSystem,
+    Expression<String>? gradeRaw,
+    Expression<double>? gradeSortKey,
+    Expression<int>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (routeId != null) 'route_id': routeId,
+      if (authorId != null) 'author_id': authorId,
+      if (gradeSystem != null) 'grade_system': gradeSystem,
+      if (gradeRaw != null) 'grade_raw': gradeRaw,
+      if (gradeSortKey != null) 'grade_sort_key': gradeSortKey,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  GradeOpinionRowsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? routeId,
+    Value<String>? authorId,
+    Value<String>? gradeSystem,
+    Value<String>? gradeRaw,
+    Value<double?>? gradeSortKey,
+    Value<int>? createdAt,
+    Value<int>? rowid,
+  }) {
+    return GradeOpinionRowsCompanion(
+      id: id ?? this.id,
+      routeId: routeId ?? this.routeId,
+      authorId: authorId ?? this.authorId,
+      gradeSystem: gradeSystem ?? this.gradeSystem,
+      gradeRaw: gradeRaw ?? this.gradeRaw,
+      gradeSortKey: gradeSortKey ?? this.gradeSortKey,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (routeId.present) {
+      map['route_id'] = Variable<String>(routeId.value);
+    }
+    if (authorId.present) {
+      map['author_id'] = Variable<String>(authorId.value);
+    }
+    if (gradeSystem.present) {
+      map['grade_system'] = Variable<String>(gradeSystem.value);
+    }
+    if (gradeRaw.present) {
+      map['grade_raw'] = Variable<String>(gradeRaw.value);
+    }
+    if (gradeSortKey.present) {
+      map['grade_sort_key'] = Variable<double>(gradeSortKey.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('GradeOpinionRowsCompanion(')
+          ..write('id: $id, ')
+          ..write('routeId: $routeId, ')
+          ..write('authorId: $authorId, ')
+          ..write('gradeSystem: $gradeSystem, ')
+          ..write('gradeRaw: $gradeRaw, ')
+          ..write('gradeSortKey: $gradeSortKey, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $TopoVerificationRowsTable extends TopoVerificationRows
+    with TableInfo<$TopoVerificationRowsTable, TopoVerificationRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TopoVerificationRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
+  @override
+  late final GeneratedColumn<String> wallId = GeneratedColumn<String>(
+    'wall_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _authorIdMeta = const VerificationMeta(
+    'authorId',
+  );
+  @override
+  late final GeneratedColumn<String> authorId = GeneratedColumn<String>(
+    'author_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _accurateMeta = const VerificationMeta(
+    'accurate',
+  );
+  @override
+  late final GeneratedColumn<bool> accurate = GeneratedColumn<bool>(
+    'accurate',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("accurate" IN (0, 1))',
+    ),
+  );
+  static const VerificationMeta _noteMeta = const VerificationMeta('note');
+  @override
+  late final GeneratedColumn<String> note = GeneratedColumn<String>(
+    'note',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    wallId,
+    authorId,
+    accurate,
+    note,
+    createdAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'topo_verification_rows';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TopoVerificationRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('wall_id')) {
+      context.handle(
+        _wallIdMeta,
+        wallId.isAcceptableOrUnknown(data['wall_id']!, _wallIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_wallIdMeta);
+    }
+    if (data.containsKey('author_id')) {
+      context.handle(
+        _authorIdMeta,
+        authorId.isAcceptableOrUnknown(data['author_id']!, _authorIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_authorIdMeta);
+    }
+    if (data.containsKey('accurate')) {
+      context.handle(
+        _accurateMeta,
+        accurate.isAcceptableOrUnknown(data['accurate']!, _accurateMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_accurateMeta);
+    }
+    if (data.containsKey('note')) {
+      context.handle(
+        _noteMeta,
+        note.isAcceptableOrUnknown(data['note']!, _noteMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TopoVerificationRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TopoVerificationRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      wallId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}wall_id'],
+      )!,
+      authorId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}author_id'],
+      )!,
+      accurate: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}accurate'],
+      )!,
+      note: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}note'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $TopoVerificationRowsTable createAlias(String alias) {
+    return $TopoVerificationRowsTable(attachedDatabase, alias);
+  }
+}
+
+class TopoVerificationRow extends DataClass
+    implements Insertable<TopoVerificationRow> {
+  final String id;
+  final String wallId;
+  final String authorId;
+
+  /// Whether this person says the topo matches the rock.
+  final bool accurate;
+  final String? note;
+  final int createdAt;
+  const TopoVerificationRow({
+    required this.id,
+    required this.wallId,
+    required this.authorId,
+    required this.accurate,
+    this.note,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['wall_id'] = Variable<String>(wallId);
+    map['author_id'] = Variable<String>(authorId);
+    map['accurate'] = Variable<bool>(accurate);
+    if (!nullToAbsent || note != null) {
+      map['note'] = Variable<String>(note);
+    }
+    map['created_at'] = Variable<int>(createdAt);
+    return map;
+  }
+
+  TopoVerificationRowsCompanion toCompanion(bool nullToAbsent) {
+    return TopoVerificationRowsCompanion(
+      id: Value(id),
+      wallId: Value(wallId),
+      authorId: Value(authorId),
+      accurate: Value(accurate),
+      note: note == null && nullToAbsent ? const Value.absent() : Value(note),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory TopoVerificationRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TopoVerificationRow(
+      id: serializer.fromJson<String>(json['id']),
+      wallId: serializer.fromJson<String>(json['wallId']),
+      authorId: serializer.fromJson<String>(json['authorId']),
+      accurate: serializer.fromJson<bool>(json['accurate']),
+      note: serializer.fromJson<String?>(json['note']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'wallId': serializer.toJson<String>(wallId),
+      'authorId': serializer.toJson<String>(authorId),
+      'accurate': serializer.toJson<bool>(accurate),
+      'note': serializer.toJson<String?>(note),
+      'createdAt': serializer.toJson<int>(createdAt),
+    };
+  }
+
+  TopoVerificationRow copyWith({
+    String? id,
+    String? wallId,
+    String? authorId,
+    bool? accurate,
+    Value<String?> note = const Value.absent(),
+    int? createdAt,
+  }) => TopoVerificationRow(
+    id: id ?? this.id,
+    wallId: wallId ?? this.wallId,
+    authorId: authorId ?? this.authorId,
+    accurate: accurate ?? this.accurate,
+    note: note.present ? note.value : this.note,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  TopoVerificationRow copyWithCompanion(TopoVerificationRowsCompanion data) {
+    return TopoVerificationRow(
+      id: data.id.present ? data.id.value : this.id,
+      wallId: data.wallId.present ? data.wallId.value : this.wallId,
+      authorId: data.authorId.present ? data.authorId.value : this.authorId,
+      accurate: data.accurate.present ? data.accurate.value : this.accurate,
+      note: data.note.present ? data.note.value : this.note,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TopoVerificationRow(')
+          ..write('id: $id, ')
+          ..write('wallId: $wallId, ')
+          ..write('authorId: $authorId, ')
+          ..write('accurate: $accurate, ')
+          ..write('note: $note, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode =>
+      Object.hash(id, wallId, authorId, accurate, note, createdAt);
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TopoVerificationRow &&
+          other.id == this.id &&
+          other.wallId == this.wallId &&
+          other.authorId == this.authorId &&
+          other.accurate == this.accurate &&
+          other.note == this.note &&
+          other.createdAt == this.createdAt);
+}
+
+class TopoVerificationRowsCompanion
+    extends UpdateCompanion<TopoVerificationRow> {
+  final Value<String> id;
+  final Value<String> wallId;
+  final Value<String> authorId;
+  final Value<bool> accurate;
+  final Value<String?> note;
+  final Value<int> createdAt;
+  final Value<int> rowid;
+  const TopoVerificationRowsCompanion({
+    this.id = const Value.absent(),
+    this.wallId = const Value.absent(),
+    this.authorId = const Value.absent(),
+    this.accurate = const Value.absent(),
+    this.note = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TopoVerificationRowsCompanion.insert({
+    required String id,
+    required String wallId,
+    required String authorId,
+    required bool accurate,
+    this.note = const Value.absent(),
+    required int createdAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       wallId = Value(wallId),
+       authorId = Value(authorId),
+       accurate = Value(accurate),
+       createdAt = Value(createdAt);
+  static Insertable<TopoVerificationRow> custom({
+    Expression<String>? id,
+    Expression<String>? wallId,
+    Expression<String>? authorId,
+    Expression<bool>? accurate,
+    Expression<String>? note,
+    Expression<int>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (wallId != null) 'wall_id': wallId,
+      if (authorId != null) 'author_id': authorId,
+      if (accurate != null) 'accurate': accurate,
+      if (note != null) 'note': note,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TopoVerificationRowsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? wallId,
+    Value<String>? authorId,
+    Value<bool>? accurate,
+    Value<String?>? note,
+    Value<int>? createdAt,
+    Value<int>? rowid,
+  }) {
+    return TopoVerificationRowsCompanion(
+      id: id ?? this.id,
+      wallId: wallId ?? this.wallId,
+      authorId: authorId ?? this.authorId,
+      accurate: accurate ?? this.accurate,
+      note: note ?? this.note,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (wallId.present) {
+      map['wall_id'] = Variable<String>(wallId.value);
+    }
+    if (authorId.present) {
+      map['author_id'] = Variable<String>(authorId.value);
+    }
+    if (accurate.present) {
+      map['accurate'] = Variable<bool>(accurate.value);
+    }
+    if (note.present) {
+      map['note'] = Variable<String>(note.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TopoVerificationRowsCompanion(')
+          ..write('id: $id, ')
+          ..write('wallId: $wallId, ')
+          ..write('authorId: $authorId, ')
+          ..write('accurate: $accurate, ')
+          ..write('note: $note, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $TopoHazardRowsTable extends TopoHazardRows
+    with TableInfo<$TopoHazardRowsTable, TopoHazardRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $TopoHazardRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
+  @override
+  late final GeneratedColumn<String> wallId = GeneratedColumn<String>(
+    'wall_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _routeIdMeta = const VerificationMeta(
+    'routeId',
+  );
+  @override
+  late final GeneratedColumn<String> routeId = GeneratedColumn<String>(
+    'route_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _authorIdMeta = const VerificationMeta(
+    'authorId',
+  );
+  @override
+  late final GeneratedColumn<String> authorId = GeneratedColumn<String>(
+    'author_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _severityMeta = const VerificationMeta(
+    'severity',
+  );
+  @override
+  late final GeneratedColumn<String> severity = GeneratedColumn<String>(
+    'severity',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _bodyMeta = const VerificationMeta('body');
+  @override
+  late final GeneratedColumn<String> body = GeneratedColumn<String>(
+    'body',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _resolvedAtMeta = const VerificationMeta(
+    'resolvedAt',
+  );
+  @override
+  late final GeneratedColumn<int> resolvedAt = GeneratedColumn<int>(
+    'resolved_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _resolvedByMeta = const VerificationMeta(
+    'resolvedBy',
+  );
+  @override
+  late final GeneratedColumn<String> resolvedBy = GeneratedColumn<String>(
+    'resolved_by',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    wallId,
+    routeId,
+    authorId,
+    severity,
+    body,
+    resolvedAt,
+    resolvedBy,
+    createdAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'topo_hazard_rows';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<TopoHazardRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('wall_id')) {
+      context.handle(
+        _wallIdMeta,
+        wallId.isAcceptableOrUnknown(data['wall_id']!, _wallIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_wallIdMeta);
+    }
+    if (data.containsKey('route_id')) {
+      context.handle(
+        _routeIdMeta,
+        routeId.isAcceptableOrUnknown(data['route_id']!, _routeIdMeta),
+      );
+    }
+    if (data.containsKey('author_id')) {
+      context.handle(
+        _authorIdMeta,
+        authorId.isAcceptableOrUnknown(data['author_id']!, _authorIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_authorIdMeta);
+    }
+    if (data.containsKey('severity')) {
+      context.handle(
+        _severityMeta,
+        severity.isAcceptableOrUnknown(data['severity']!, _severityMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_severityMeta);
+    }
+    if (data.containsKey('body')) {
+      context.handle(
+        _bodyMeta,
+        body.isAcceptableOrUnknown(data['body']!, _bodyMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_bodyMeta);
+    }
+    if (data.containsKey('resolved_at')) {
+      context.handle(
+        _resolvedAtMeta,
+        resolvedAt.isAcceptableOrUnknown(data['resolved_at']!, _resolvedAtMeta),
+      );
+    }
+    if (data.containsKey('resolved_by')) {
+      context.handle(
+        _resolvedByMeta,
+        resolvedBy.isAcceptableOrUnknown(data['resolved_by']!, _resolvedByMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  TopoHazardRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return TopoHazardRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      wallId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}wall_id'],
+      )!,
+      routeId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}route_id'],
+      ),
+      authorId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}author_id'],
+      )!,
+      severity: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}severity'],
+      )!,
+      body: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}body'],
+      )!,
+      resolvedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}resolved_at'],
+      ),
+      resolvedBy: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}resolved_by'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+    );
+  }
+
+  @override
+  $TopoHazardRowsTable createAlias(String alias) {
+    return $TopoHazardRowsTable(attachedDatabase, alias);
+  }
+}
+
+class TopoHazardRow extends DataClass implements Insertable<TopoHazardRow> {
+  final String id;
+  final String wallId;
+
+  /// `null` for a hazard about the whole topo — the approach, the descent,
+  /// the belay — rather than one specific line.
+  final String? routeId;
+  final String authorId;
+
+  /// `note` | `caution` | `danger`, as the raw server string. Parsed by
+  /// `HazardSeverity.fromWire`, which resolves an unknown value to `danger` —
+  /// the opposite direction to moderation state, because a safety warning
+  /// must fail loud rather than be quietly demoted.
+  final String severity;
+  final String body;
+
+  /// When somebody marked this dealt with, or null. The report itself is
+  /// never deleted by the topo owner — that is the point of the split (C-12).
+  final int? resolvedAt;
+
+  /// Who resolved it. The reporter withdrawing their own report and the topo
+  /// owner saying it is fixed are very different claims.
+  final String? resolvedBy;
+  final int createdAt;
+  const TopoHazardRow({
+    required this.id,
+    required this.wallId,
+    this.routeId,
+    required this.authorId,
+    required this.severity,
+    required this.body,
+    this.resolvedAt,
+    this.resolvedBy,
+    required this.createdAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['wall_id'] = Variable<String>(wallId);
+    if (!nullToAbsent || routeId != null) {
+      map['route_id'] = Variable<String>(routeId);
+    }
+    map['author_id'] = Variable<String>(authorId);
+    map['severity'] = Variable<String>(severity);
+    map['body'] = Variable<String>(body);
+    if (!nullToAbsent || resolvedAt != null) {
+      map['resolved_at'] = Variable<int>(resolvedAt);
+    }
+    if (!nullToAbsent || resolvedBy != null) {
+      map['resolved_by'] = Variable<String>(resolvedBy);
+    }
+    map['created_at'] = Variable<int>(createdAt);
+    return map;
+  }
+
+  TopoHazardRowsCompanion toCompanion(bool nullToAbsent) {
+    return TopoHazardRowsCompanion(
+      id: Value(id),
+      wallId: Value(wallId),
+      routeId: routeId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(routeId),
+      authorId: Value(authorId),
+      severity: Value(severity),
+      body: Value(body),
+      resolvedAt: resolvedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(resolvedAt),
+      resolvedBy: resolvedBy == null && nullToAbsent
+          ? const Value.absent()
+          : Value(resolvedBy),
+      createdAt: Value(createdAt),
+    );
+  }
+
+  factory TopoHazardRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return TopoHazardRow(
+      id: serializer.fromJson<String>(json['id']),
+      wallId: serializer.fromJson<String>(json['wallId']),
+      routeId: serializer.fromJson<String?>(json['routeId']),
+      authorId: serializer.fromJson<String>(json['authorId']),
+      severity: serializer.fromJson<String>(json['severity']),
+      body: serializer.fromJson<String>(json['body']),
+      resolvedAt: serializer.fromJson<int?>(json['resolvedAt']),
+      resolvedBy: serializer.fromJson<String?>(json['resolvedBy']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'wallId': serializer.toJson<String>(wallId),
+      'routeId': serializer.toJson<String?>(routeId),
+      'authorId': serializer.toJson<String>(authorId),
+      'severity': serializer.toJson<String>(severity),
+      'body': serializer.toJson<String>(body),
+      'resolvedAt': serializer.toJson<int?>(resolvedAt),
+      'resolvedBy': serializer.toJson<String?>(resolvedBy),
+      'createdAt': serializer.toJson<int>(createdAt),
+    };
+  }
+
+  TopoHazardRow copyWith({
+    String? id,
+    String? wallId,
+    Value<String?> routeId = const Value.absent(),
+    String? authorId,
+    String? severity,
+    String? body,
+    Value<int?> resolvedAt = const Value.absent(),
+    Value<String?> resolvedBy = const Value.absent(),
+    int? createdAt,
+  }) => TopoHazardRow(
+    id: id ?? this.id,
+    wallId: wallId ?? this.wallId,
+    routeId: routeId.present ? routeId.value : this.routeId,
+    authorId: authorId ?? this.authorId,
+    severity: severity ?? this.severity,
+    body: body ?? this.body,
+    resolvedAt: resolvedAt.present ? resolvedAt.value : this.resolvedAt,
+    resolvedBy: resolvedBy.present ? resolvedBy.value : this.resolvedBy,
+    createdAt: createdAt ?? this.createdAt,
+  );
+  TopoHazardRow copyWithCompanion(TopoHazardRowsCompanion data) {
+    return TopoHazardRow(
+      id: data.id.present ? data.id.value : this.id,
+      wallId: data.wallId.present ? data.wallId.value : this.wallId,
+      routeId: data.routeId.present ? data.routeId.value : this.routeId,
+      authorId: data.authorId.present ? data.authorId.value : this.authorId,
+      severity: data.severity.present ? data.severity.value : this.severity,
+      body: data.body.present ? data.body.value : this.body,
+      resolvedAt: data.resolvedAt.present
+          ? data.resolvedAt.value
+          : this.resolvedAt,
+      resolvedBy: data.resolvedBy.present
+          ? data.resolvedBy.value
+          : this.resolvedBy,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TopoHazardRow(')
+          ..write('id: $id, ')
+          ..write('wallId: $wallId, ')
+          ..write('routeId: $routeId, ')
+          ..write('authorId: $authorId, ')
+          ..write('severity: $severity, ')
+          ..write('body: $body, ')
+          ..write('resolvedAt: $resolvedAt, ')
+          ..write('resolvedBy: $resolvedBy, ')
+          ..write('createdAt: $createdAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    wallId,
+    routeId,
+    authorId,
+    severity,
+    body,
+    resolvedAt,
+    resolvedBy,
+    createdAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is TopoHazardRow &&
+          other.id == this.id &&
+          other.wallId == this.wallId &&
+          other.routeId == this.routeId &&
+          other.authorId == this.authorId &&
+          other.severity == this.severity &&
+          other.body == this.body &&
+          other.resolvedAt == this.resolvedAt &&
+          other.resolvedBy == this.resolvedBy &&
+          other.createdAt == this.createdAt);
+}
+
+class TopoHazardRowsCompanion extends UpdateCompanion<TopoHazardRow> {
+  final Value<String> id;
+  final Value<String> wallId;
+  final Value<String?> routeId;
+  final Value<String> authorId;
+  final Value<String> severity;
+  final Value<String> body;
+  final Value<int?> resolvedAt;
+  final Value<String?> resolvedBy;
+  final Value<int> createdAt;
+  final Value<int> rowid;
+  const TopoHazardRowsCompanion({
+    this.id = const Value.absent(),
+    this.wallId = const Value.absent(),
+    this.routeId = const Value.absent(),
+    this.authorId = const Value.absent(),
+    this.severity = const Value.absent(),
+    this.body = const Value.absent(),
+    this.resolvedAt = const Value.absent(),
+    this.resolvedBy = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  TopoHazardRowsCompanion.insert({
+    required String id,
+    required String wallId,
+    this.routeId = const Value.absent(),
+    required String authorId,
+    required String severity,
+    required String body,
+    this.resolvedAt = const Value.absent(),
+    this.resolvedBy = const Value.absent(),
+    required int createdAt,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       wallId = Value(wallId),
+       authorId = Value(authorId),
+       severity = Value(severity),
+       body = Value(body),
+       createdAt = Value(createdAt);
+  static Insertable<TopoHazardRow> custom({
+    Expression<String>? id,
+    Expression<String>? wallId,
+    Expression<String>? routeId,
+    Expression<String>? authorId,
+    Expression<String>? severity,
+    Expression<String>? body,
+    Expression<int>? resolvedAt,
+    Expression<String>? resolvedBy,
+    Expression<int>? createdAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (wallId != null) 'wall_id': wallId,
+      if (routeId != null) 'route_id': routeId,
+      if (authorId != null) 'author_id': authorId,
+      if (severity != null) 'severity': severity,
+      if (body != null) 'body': body,
+      if (resolvedAt != null) 'resolved_at': resolvedAt,
+      if (resolvedBy != null) 'resolved_by': resolvedBy,
+      if (createdAt != null) 'created_at': createdAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  TopoHazardRowsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? wallId,
+    Value<String?>? routeId,
+    Value<String>? authorId,
+    Value<String>? severity,
+    Value<String>? body,
+    Value<int?>? resolvedAt,
+    Value<String?>? resolvedBy,
+    Value<int>? createdAt,
+    Value<int>? rowid,
+  }) {
+    return TopoHazardRowsCompanion(
+      id: id ?? this.id,
+      wallId: wallId ?? this.wallId,
+      routeId: routeId ?? this.routeId,
+      authorId: authorId ?? this.authorId,
+      severity: severity ?? this.severity,
+      body: body ?? this.body,
+      resolvedAt: resolvedAt ?? this.resolvedAt,
+      resolvedBy: resolvedBy ?? this.resolvedBy,
+      createdAt: createdAt ?? this.createdAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (wallId.present) {
+      map['wall_id'] = Variable<String>(wallId.value);
+    }
+    if (routeId.present) {
+      map['route_id'] = Variable<String>(routeId.value);
+    }
+    if (authorId.present) {
+      map['author_id'] = Variable<String>(authorId.value);
+    }
+    if (severity.present) {
+      map['severity'] = Variable<String>(severity.value);
+    }
+    if (body.present) {
+      map['body'] = Variable<String>(body.value);
+    }
+    if (resolvedAt.present) {
+      map['resolved_at'] = Variable<int>(resolvedAt.value);
+    }
+    if (resolvedBy.present) {
+      map['resolved_by'] = Variable<String>(resolvedBy.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('TopoHazardRowsCompanion(')
+          ..write('id: $id, ')
+          ..write('wallId: $wallId, ')
+          ..write('routeId: $routeId, ')
+          ..write('authorId: $authorId, ')
+          ..write('severity: $severity, ')
+          ..write('body: $body, ')
+          ..write('resolvedAt: $resolvedAt, ')
+          ..write('resolvedBy: $resolvedBy, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -8260,6 +9731,12 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $AppSettingsTable appSettings = $AppSettingsTable(this);
   late final $WallModerationRowsTable wallModerationRows =
       $WallModerationRowsTable(this);
+  late final $GradeOpinionRowsTable gradeOpinionRows = $GradeOpinionRowsTable(
+    this,
+  );
+  late final $TopoVerificationRowsTable topoVerificationRows =
+      $TopoVerificationRowsTable(this);
+  late final $TopoHazardRowsTable topoHazardRows = $TopoHazardRowsTable(this);
   late final Index idxSectorsAreaLive = Index(
     'idx_sectors_area_live',
     'CREATE INDEX idx_sectors_area_live ON sectors (area_id) WHERE deleted_at IS NULL',
@@ -8324,6 +9801,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     profiles,
     appSettings,
     wallModerationRows,
+    gradeOpinionRows,
+    topoVerificationRows,
+    topoHazardRows,
     idxSectorsAreaLive,
     idxWallsSectorLive,
     idxPhotosWallLive,
@@ -14367,6 +15847,771 @@ typedef $$WallModerationRowsTableProcessedTableManager =
       WallModerationRow,
       PrefetchHooks Function()
     >;
+typedef $$GradeOpinionRowsTableCreateCompanionBuilder =
+    GradeOpinionRowsCompanion Function({
+      required String id,
+      required String routeId,
+      required String authorId,
+      required String gradeSystem,
+      required String gradeRaw,
+      Value<double?> gradeSortKey,
+      required int createdAt,
+      Value<int> rowid,
+    });
+typedef $$GradeOpinionRowsTableUpdateCompanionBuilder =
+    GradeOpinionRowsCompanion Function({
+      Value<String> id,
+      Value<String> routeId,
+      Value<String> authorId,
+      Value<String> gradeSystem,
+      Value<String> gradeRaw,
+      Value<double?> gradeSortKey,
+      Value<int> createdAt,
+      Value<int> rowid,
+    });
+
+class $$GradeOpinionRowsTableFilterComposer
+    extends Composer<_$AppDatabase, $GradeOpinionRowsTable> {
+  $$GradeOpinionRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get routeId => $composableBuilder(
+    column: $table.routeId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get authorId => $composableBuilder(
+    column: $table.authorId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get gradeSystem => $composableBuilder(
+    column: $table.gradeSystem,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get gradeRaw => $composableBuilder(
+    column: $table.gradeRaw,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get gradeSortKey => $composableBuilder(
+    column: $table.gradeSortKey,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$GradeOpinionRowsTableOrderingComposer
+    extends Composer<_$AppDatabase, $GradeOpinionRowsTable> {
+  $$GradeOpinionRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get routeId => $composableBuilder(
+    column: $table.routeId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get authorId => $composableBuilder(
+    column: $table.authorId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get gradeSystem => $composableBuilder(
+    column: $table.gradeSystem,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get gradeRaw => $composableBuilder(
+    column: $table.gradeRaw,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get gradeSortKey => $composableBuilder(
+    column: $table.gradeSortKey,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$GradeOpinionRowsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $GradeOpinionRowsTable> {
+  $$GradeOpinionRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get routeId =>
+      $composableBuilder(column: $table.routeId, builder: (column) => column);
+
+  GeneratedColumn<String> get authorId =>
+      $composableBuilder(column: $table.authorId, builder: (column) => column);
+
+  GeneratedColumn<String> get gradeSystem => $composableBuilder(
+    column: $table.gradeSystem,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get gradeRaw =>
+      $composableBuilder(column: $table.gradeRaw, builder: (column) => column);
+
+  GeneratedColumn<double> get gradeSortKey => $composableBuilder(
+    column: $table.gradeSortKey,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$GradeOpinionRowsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $GradeOpinionRowsTable,
+          GradeOpinionRow,
+          $$GradeOpinionRowsTableFilterComposer,
+          $$GradeOpinionRowsTableOrderingComposer,
+          $$GradeOpinionRowsTableAnnotationComposer,
+          $$GradeOpinionRowsTableCreateCompanionBuilder,
+          $$GradeOpinionRowsTableUpdateCompanionBuilder,
+          (
+            GradeOpinionRow,
+            BaseReferences<
+              _$AppDatabase,
+              $GradeOpinionRowsTable,
+              GradeOpinionRow
+            >,
+          ),
+          GradeOpinionRow,
+          PrefetchHooks Function()
+        > {
+  $$GradeOpinionRowsTableTableManager(
+    _$AppDatabase db,
+    $GradeOpinionRowsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$GradeOpinionRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$GradeOpinionRowsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$GradeOpinionRowsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> routeId = const Value.absent(),
+                Value<String> authorId = const Value.absent(),
+                Value<String> gradeSystem = const Value.absent(),
+                Value<String> gradeRaw = const Value.absent(),
+                Value<double?> gradeSortKey = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => GradeOpinionRowsCompanion(
+                id: id,
+                routeId: routeId,
+                authorId: authorId,
+                gradeSystem: gradeSystem,
+                gradeRaw: gradeRaw,
+                gradeSortKey: gradeSortKey,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String routeId,
+                required String authorId,
+                required String gradeSystem,
+                required String gradeRaw,
+                Value<double?> gradeSortKey = const Value.absent(),
+                required int createdAt,
+                Value<int> rowid = const Value.absent(),
+              }) => GradeOpinionRowsCompanion.insert(
+                id: id,
+                routeId: routeId,
+                authorId: authorId,
+                gradeSystem: gradeSystem,
+                gradeRaw: gradeRaw,
+                gradeSortKey: gradeSortKey,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$GradeOpinionRowsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $GradeOpinionRowsTable,
+      GradeOpinionRow,
+      $$GradeOpinionRowsTableFilterComposer,
+      $$GradeOpinionRowsTableOrderingComposer,
+      $$GradeOpinionRowsTableAnnotationComposer,
+      $$GradeOpinionRowsTableCreateCompanionBuilder,
+      $$GradeOpinionRowsTableUpdateCompanionBuilder,
+      (
+        GradeOpinionRow,
+        BaseReferences<_$AppDatabase, $GradeOpinionRowsTable, GradeOpinionRow>,
+      ),
+      GradeOpinionRow,
+      PrefetchHooks Function()
+    >;
+typedef $$TopoVerificationRowsTableCreateCompanionBuilder =
+    TopoVerificationRowsCompanion Function({
+      required String id,
+      required String wallId,
+      required String authorId,
+      required bool accurate,
+      Value<String?> note,
+      required int createdAt,
+      Value<int> rowid,
+    });
+typedef $$TopoVerificationRowsTableUpdateCompanionBuilder =
+    TopoVerificationRowsCompanion Function({
+      Value<String> id,
+      Value<String> wallId,
+      Value<String> authorId,
+      Value<bool> accurate,
+      Value<String?> note,
+      Value<int> createdAt,
+      Value<int> rowid,
+    });
+
+class $$TopoVerificationRowsTableFilterComposer
+    extends Composer<_$AppDatabase, $TopoVerificationRowsTable> {
+  $$TopoVerificationRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get wallId => $composableBuilder(
+    column: $table.wallId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get authorId => $composableBuilder(
+    column: $table.authorId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get accurate => $composableBuilder(
+    column: $table.accurate,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get note => $composableBuilder(
+    column: $table.note,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$TopoVerificationRowsTableOrderingComposer
+    extends Composer<_$AppDatabase, $TopoVerificationRowsTable> {
+  $$TopoVerificationRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get wallId => $composableBuilder(
+    column: $table.wallId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get authorId => $composableBuilder(
+    column: $table.authorId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get accurate => $composableBuilder(
+    column: $table.accurate,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get note => $composableBuilder(
+    column: $table.note,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$TopoVerificationRowsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TopoVerificationRowsTable> {
+  $$TopoVerificationRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get wallId =>
+      $composableBuilder(column: $table.wallId, builder: (column) => column);
+
+  GeneratedColumn<String> get authorId =>
+      $composableBuilder(column: $table.authorId, builder: (column) => column);
+
+  GeneratedColumn<bool> get accurate =>
+      $composableBuilder(column: $table.accurate, builder: (column) => column);
+
+  GeneratedColumn<String> get note =>
+      $composableBuilder(column: $table.note, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$TopoVerificationRowsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $TopoVerificationRowsTable,
+          TopoVerificationRow,
+          $$TopoVerificationRowsTableFilterComposer,
+          $$TopoVerificationRowsTableOrderingComposer,
+          $$TopoVerificationRowsTableAnnotationComposer,
+          $$TopoVerificationRowsTableCreateCompanionBuilder,
+          $$TopoVerificationRowsTableUpdateCompanionBuilder,
+          (
+            TopoVerificationRow,
+            BaseReferences<
+              _$AppDatabase,
+              $TopoVerificationRowsTable,
+              TopoVerificationRow
+            >,
+          ),
+          TopoVerificationRow,
+          PrefetchHooks Function()
+        > {
+  $$TopoVerificationRowsTableTableManager(
+    _$AppDatabase db,
+    $TopoVerificationRowsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TopoVerificationRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TopoVerificationRowsTableOrderingComposer(
+                $db: db,
+                $table: table,
+              ),
+          createComputedFieldComposer: () =>
+              $$TopoVerificationRowsTableAnnotationComposer(
+                $db: db,
+                $table: table,
+              ),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> wallId = const Value.absent(),
+                Value<String> authorId = const Value.absent(),
+                Value<bool> accurate = const Value.absent(),
+                Value<String?> note = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TopoVerificationRowsCompanion(
+                id: id,
+                wallId: wallId,
+                authorId: authorId,
+                accurate: accurate,
+                note: note,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String wallId,
+                required String authorId,
+                required bool accurate,
+                Value<String?> note = const Value.absent(),
+                required int createdAt,
+                Value<int> rowid = const Value.absent(),
+              }) => TopoVerificationRowsCompanion.insert(
+                id: id,
+                wallId: wallId,
+                authorId: authorId,
+                accurate: accurate,
+                note: note,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$TopoVerificationRowsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $TopoVerificationRowsTable,
+      TopoVerificationRow,
+      $$TopoVerificationRowsTableFilterComposer,
+      $$TopoVerificationRowsTableOrderingComposer,
+      $$TopoVerificationRowsTableAnnotationComposer,
+      $$TopoVerificationRowsTableCreateCompanionBuilder,
+      $$TopoVerificationRowsTableUpdateCompanionBuilder,
+      (
+        TopoVerificationRow,
+        BaseReferences<
+          _$AppDatabase,
+          $TopoVerificationRowsTable,
+          TopoVerificationRow
+        >,
+      ),
+      TopoVerificationRow,
+      PrefetchHooks Function()
+    >;
+typedef $$TopoHazardRowsTableCreateCompanionBuilder =
+    TopoHazardRowsCompanion Function({
+      required String id,
+      required String wallId,
+      Value<String?> routeId,
+      required String authorId,
+      required String severity,
+      required String body,
+      Value<int?> resolvedAt,
+      Value<String?> resolvedBy,
+      required int createdAt,
+      Value<int> rowid,
+    });
+typedef $$TopoHazardRowsTableUpdateCompanionBuilder =
+    TopoHazardRowsCompanion Function({
+      Value<String> id,
+      Value<String> wallId,
+      Value<String?> routeId,
+      Value<String> authorId,
+      Value<String> severity,
+      Value<String> body,
+      Value<int?> resolvedAt,
+      Value<String?> resolvedBy,
+      Value<int> createdAt,
+      Value<int> rowid,
+    });
+
+class $$TopoHazardRowsTableFilterComposer
+    extends Composer<_$AppDatabase, $TopoHazardRowsTable> {
+  $$TopoHazardRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get wallId => $composableBuilder(
+    column: $table.wallId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get routeId => $composableBuilder(
+    column: $table.routeId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get authorId => $composableBuilder(
+    column: $table.authorId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get severity => $composableBuilder(
+    column: $table.severity,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get resolvedAt => $composableBuilder(
+    column: $table.resolvedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get resolvedBy => $composableBuilder(
+    column: $table.resolvedBy,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$TopoHazardRowsTableOrderingComposer
+    extends Composer<_$AppDatabase, $TopoHazardRowsTable> {
+  $$TopoHazardRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get wallId => $composableBuilder(
+    column: $table.wallId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get routeId => $composableBuilder(
+    column: $table.routeId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get authorId => $composableBuilder(
+    column: $table.authorId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get severity => $composableBuilder(
+    column: $table.severity,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get body => $composableBuilder(
+    column: $table.body,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get resolvedAt => $composableBuilder(
+    column: $table.resolvedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get resolvedBy => $composableBuilder(
+    column: $table.resolvedBy,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$TopoHazardRowsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $TopoHazardRowsTable> {
+  $$TopoHazardRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get wallId =>
+      $composableBuilder(column: $table.wallId, builder: (column) => column);
+
+  GeneratedColumn<String> get routeId =>
+      $composableBuilder(column: $table.routeId, builder: (column) => column);
+
+  GeneratedColumn<String> get authorId =>
+      $composableBuilder(column: $table.authorId, builder: (column) => column);
+
+  GeneratedColumn<String> get severity =>
+      $composableBuilder(column: $table.severity, builder: (column) => column);
+
+  GeneratedColumn<String> get body =>
+      $composableBuilder(column: $table.body, builder: (column) => column);
+
+  GeneratedColumn<int> get resolvedAt => $composableBuilder(
+    column: $table.resolvedAt,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get resolvedBy => $composableBuilder(
+    column: $table.resolvedBy,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+}
+
+class $$TopoHazardRowsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $TopoHazardRowsTable,
+          TopoHazardRow,
+          $$TopoHazardRowsTableFilterComposer,
+          $$TopoHazardRowsTableOrderingComposer,
+          $$TopoHazardRowsTableAnnotationComposer,
+          $$TopoHazardRowsTableCreateCompanionBuilder,
+          $$TopoHazardRowsTableUpdateCompanionBuilder,
+          (
+            TopoHazardRow,
+            BaseReferences<_$AppDatabase, $TopoHazardRowsTable, TopoHazardRow>,
+          ),
+          TopoHazardRow,
+          PrefetchHooks Function()
+        > {
+  $$TopoHazardRowsTableTableManager(
+    _$AppDatabase db,
+    $TopoHazardRowsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$TopoHazardRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$TopoHazardRowsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$TopoHazardRowsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> wallId = const Value.absent(),
+                Value<String?> routeId = const Value.absent(),
+                Value<String> authorId = const Value.absent(),
+                Value<String> severity = const Value.absent(),
+                Value<String> body = const Value.absent(),
+                Value<int?> resolvedAt = const Value.absent(),
+                Value<String?> resolvedBy = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => TopoHazardRowsCompanion(
+                id: id,
+                wallId: wallId,
+                routeId: routeId,
+                authorId: authorId,
+                severity: severity,
+                body: body,
+                resolvedAt: resolvedAt,
+                resolvedBy: resolvedBy,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String wallId,
+                Value<String?> routeId = const Value.absent(),
+                required String authorId,
+                required String severity,
+                required String body,
+                Value<int?> resolvedAt = const Value.absent(),
+                Value<String?> resolvedBy = const Value.absent(),
+                required int createdAt,
+                Value<int> rowid = const Value.absent(),
+              }) => TopoHazardRowsCompanion.insert(
+                id: id,
+                wallId: wallId,
+                routeId: routeId,
+                authorId: authorId,
+                severity: severity,
+                body: body,
+                resolvedAt: resolvedAt,
+                resolvedBy: resolvedBy,
+                createdAt: createdAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$TopoHazardRowsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $TopoHazardRowsTable,
+      TopoHazardRow,
+      $$TopoHazardRowsTableFilterComposer,
+      $$TopoHazardRowsTableOrderingComposer,
+      $$TopoHazardRowsTableAnnotationComposer,
+      $$TopoHazardRowsTableCreateCompanionBuilder,
+      $$TopoHazardRowsTableUpdateCompanionBuilder,
+      (
+        TopoHazardRow,
+        BaseReferences<_$AppDatabase, $TopoHazardRowsTable, TopoHazardRow>,
+      ),
+      TopoHazardRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -14393,4 +16638,10 @@ class $AppDatabaseManager {
       $$AppSettingsTableTableManager(_db, _db.appSettings);
   $$WallModerationRowsTableTableManager get wallModerationRows =>
       $$WallModerationRowsTableTableManager(_db, _db.wallModerationRows);
+  $$GradeOpinionRowsTableTableManager get gradeOpinionRows =>
+      $$GradeOpinionRowsTableTableManager(_db, _db.gradeOpinionRows);
+  $$TopoVerificationRowsTableTableManager get topoVerificationRows =>
+      $$TopoVerificationRowsTableTableManager(_db, _db.topoVerificationRows);
+  $$TopoHazardRowsTableTableManager get topoHazardRows =>
+      $$TopoHazardRowsTableTableManager(_db, _db.topoHazardRows);
 }

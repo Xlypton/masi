@@ -1818,6 +1818,12 @@ void main() {
           'profiles',
           'app_settings',
           'wall_moderation_rows',
+          // Community facts (v14). Local mirrors, not synced tables — see
+          // `GradeOpinionRows` in `tables.dart` for why they carry no
+          // SyncColumns.
+          'grade_opinion_rows',
+          'topo_verification_rows',
+          'topo_hazard_rows',
         },
         reason: 'onCreate must build every table declared on AppDatabase',
       );
@@ -2445,6 +2451,115 @@ void main() {
         expect(columns, isNot(contains('owner_id')));
         expect(columns, isNot(contains('remote_id')));
         expect(columns, isNot(contains('deleted_at')));
+      },
+    );
+  });
+
+  group('v13 -> v14 migration (community facts, phase 4)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('masi_v14_migration_');
+      dbFile = File(p.join(tempDir.path, 'v13.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    Future<List<String>> tableNames(AppDatabase db) => db
+        .customSelect(
+          "SELECT name FROM sqlite_master WHERE type = 'table' "
+          "AND name NOT LIKE 'sqlite_%'",
+        )
+        .map((row) => row.read<String>('name'))
+        .get();
+
+    test(
+      'creates all three fact tables on an existing v13 database without '
+      'losing rows',
+      () async {
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh
+            .into(fresh.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-v13',
+                createdAt: 100,
+                updatedAt: 100,
+                name: 'Pre-v14 Area',
+              ),
+            );
+        await fresh.close();
+
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute(
+          'DROP TABLE grade_opinion_rows; '
+          'DROP TABLE topo_verification_rows; '
+          'DROP TABLE topo_hazard_rows; '
+          'PRAGMA user_version = 13;',
+        );
+        expect(raw.select('PRAGMA user_version;').first.values.first, 13);
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        final area = await (db.select(db.areas)
+              ..where((t) => t.id.equals('area-v13')))
+            .getSingle();
+        expect(
+          area.name,
+          'Pre-v14 Area',
+          reason: 'pre-existing row must survive the v13 -> v14 migration',
+        );
+
+        final tables = await tableNames(db);
+        expect(tables, contains('grade_opinion_rows'));
+        expect(tables, contains('topo_verification_rows'));
+        expect(tables, contains('topo_hazard_rows'));
+
+        // Usable immediately after the migration.
+        await db
+            .into(db.topoHazardRows)
+            .insert(
+              const TopoHazardRowsCompanion(
+                id: Value('h1'),
+                wallId: Value('w1'),
+                authorId: Value('a'),
+                severity: Value('danger'),
+                body: Value('Bolt 2 spins'),
+                createdAt: Value(1),
+              ),
+            );
+        expect((await db.select(db.topoHazardRows).getSingle()).body, 'Bolt 2 spins');
+      },
+    );
+
+    test(
+      'none of the three carries SyncColumns — a community fact must be '
+      'structurally unable to ride the dirty-scoped push (G-1, and D-4: these '
+      'are written straight to Supabase, never queued)',
+      () async {
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        for (final table in const [
+          'grade_opinion_rows',
+          'topo_verification_rows',
+          'topo_hazard_rows',
+        ]) {
+          final columns = await db
+              .customSelect("PRAGMA table_info('$table')")
+              .map((row) => row.read<String>('name'))
+              .get();
+
+          expect(columns, isNot(contains('dirty')), reason: table);
+          expect(columns, isNot(contains('owner_id')), reason: table);
+          expect(columns, isNot(contains('remote_id')), reason: table);
+          expect(columns, isNot(contains('deleted_at')), reason: table);
+        }
       },
     );
   });
