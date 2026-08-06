@@ -145,25 +145,42 @@ class _ToposFilterBar extends StatelessWidget {
 
 /// Opens the Topos-home Filters sheet (see [_ToposFiltersSheet]) from the
 /// `topos-filter-button` app-bar action.
+///
+/// `useSafeArea: true` wraps the sheet in `SafeArea(bottom: false)` — it
+/// keeps the sheet's TOP clear of the status bar/notch once the content is
+/// tall enough to fill the screen, while deliberately leaving the BOTTOM
+/// inset unconsumed so [_ToposFiltersSheet] can paint its surface all the
+/// way to the screen edge (under `NavShell`'s floating bar) and pad only its
+/// content away from it. See that widget's `bottomInset`.
 Future<void> _showToposFiltersSheet(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
+    useSafeArea: true,
     backgroundColor: Colors.transparent,
     builder: (context) => const _ToposFiltersSheet(),
   );
 }
 
-/// The Topos-home Filters sheet: a [GradeRangePicker], a visibility
-/// segmented control (All/Shared/Private), and an area multi-select (every
-/// real area from [areasProvider] plus an explicit "Unfiled" option mapping
-/// to [ToposFilter.unfiledAreaId]), with a Clear action that resets
+/// The Topos-home Filters sheet: a [GradeRangePicker], a minimum-rating
+/// chip row ([MinStarsFilterChips]), a style-tag multi-select
+/// ([StyleTagFilterChips] — the same widget and the same OR semantics the
+/// Community filter uses), a visibility segmented control
+/// (All/Shared/Private), and an area multi-select (every real area from
+/// [areasProvider] plus an explicit "Unfiled" option mapping to
+/// [ToposFilter.unfiledAreaId]), with a Clear action that resets
 /// [toposFilterProvider] back to its default (inactive) value.
 ///
 /// Purely a thin view over [toposFilterProvider]: every interaction writes
 /// straight through to the shared [ToposFilterController], so the
 /// underlying Topos list (watched by [ToposScreen], which stays mounted
 /// underneath this modal sheet) updates live while the sheet is still open.
+///
+/// Layout: the grab handle and the title/Clear row are PINNED and only the
+/// facets scroll, so Clear stays reachable no matter how far down the area
+/// list the user has scrolled. The whole thing is a `mainAxisSize.min`
+/// column with the scroll view in a [Flexible], so a sheet with two areas
+/// is still short and only a genuinely tall one grows to fill the screen.
 class _ToposFiltersSheet extends ConsumerWidget {
   const _ToposFiltersSheet();
 
@@ -175,88 +192,162 @@ class _ToposFiltersSheet extends ConsumerWidget {
     final controller = ref.read(toposFilterProvider.notifier);
     final areas = ref.watch(areasProvider).asData?.value ?? const <AreaRef>[];
 
-    return SafeArea(
-      child: Container(
-        padding: const EdgeInsets.all(MasiSpacing.lg),
-        decoration: BoxDecoration(
-          color: colors.surface,
-          // `MasiRadii.large` (not `.card`) per DESIGN.md's radius token
-          // table: a full-screen modal sheet's top corners use the larger
-          // radius, `.card` is reserved for in-list row surfaces.
-          borderRadius: const BorderRadius.vertical(
-            top: Radius.circular(MasiRadii.large),
-          ),
+    // NOT a `SafeArea` wrapper (which is what this used to be, and was the
+    // bug): a SafeArea puts the inset OUTSIDE the decorated box, so the
+    // sheet's surface stopped short and the dimmed list plus `NavShell`'s
+    // floating bar showed through beneath it. Under `Scaffold.extendBody`
+    // this value is the REAL measured bottom-bar height (see `NavShell`'s
+    // doc), so folding it into the SCROLL VIEW's padding instead keeps the
+    // last chip clear of the bar while the surface itself runs to the
+    // screen edge.
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: colors.surface,
+        // `MasiRadii.large` (not `.card`) per DESIGN.md's radius token
+        // table: a full-screen modal sheet's top corners use the larger
+        // radius, `.card` is reserved for in-list row surfaces.
+        borderRadius: const BorderRadius.vertical(
+          top: Radius.circular(MasiRadii.large),
         ),
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Text(
-                      'Filters',
-                      style: textTheme.titleLarge,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          // iOS grab handle. Cosmetic, but it's the affordance that tells a
+          // user this surface is draggable-to-dismiss at all.
+          Center(
+            child: Container(
+              width: 36,
+              height: 5,
+              margin: const EdgeInsets.only(
+                top: MasiSpacing.sm,
+                bottom: MasiSpacing.xs,
+              ),
+              decoration: BoxDecoration(
+                color: colors.separator,
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              MasiSpacing.lg,
+              MasiSpacing.xs,
+              MasiSpacing.sm,
+              0,
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Expanded(
+                  child: Text(
+                    'Filters',
+                    style: textTheme.titleLarge,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
                   ),
-                  TextButton(
-                    key: const Key('topos-filter-clear'),
-                    onPressed: controller.clear,
-                    child: const Text('Clear'),
+                ),
+                TextButton(
+                  key: const Key('topos-filter-clear'),
+                  onPressed: controller.clear,
+                  child: const Text('Clear'),
+                ),
+              ],
+            ),
+          ),
+          Flexible(
+            child: SingleChildScrollView(
+              padding: EdgeInsets.fromLTRB(
+                MasiSpacing.lg,
+                MasiSpacing.sm,
+                MasiSpacing.lg,
+                MasiSpacing.lg + bottomInset,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  GradeRangePicker(
+                    value: filter.grade,
+                    onChanged: controller.setGrade,
+                  ),
+                  _FilterSectionLabel('Rating', colors: colors),
+                  MinStarsFilterChips(
+                    selected: filter.minStars,
+                    onChanged: controller.setMinStars,
+                  ),
+                  _FilterSectionLabel('Visibility', colors: colors),
+                  _VisibilitySegmented(
+                    value: filter.visibility,
+                    onChanged: controller.setVisibility,
+                  ),
+                  _FilterSectionLabel('Area', colors: colors),
+                  Wrap(
+                    spacing: MasiSpacing.sm,
+                    runSpacing: MasiSpacing.sm,
+                    children: [
+                      FilterChoiceChip(
+                        key: const Key('topos-filter-area-unfiled'),
+                        label: 'Unfiled',
+                        selected: filter.areaIds.contains(
+                          ToposFilter.unfiledAreaId,
+                        ),
+                        onPressed: () =>
+                            controller.toggleArea(ToposFilter.unfiledAreaId),
+                      ),
+                      for (final area in areas)
+                        FilterChoiceChip(
+                          key: Key('topos-filter-area-${area.id}'),
+                          label: area.name,
+                          selected: filter.areaIds.contains(area.id),
+                          onPressed: () => controller.toggleArea(area.id),
+                        ),
+                    ],
+                  ),
+                  // Style LAST, deliberately: it is 18 curated chips, five or
+                  // six wrapped rows on a phone, so putting it anywhere above
+                  // Visibility/Area pushes both of those below the fold on a
+                  // small screen for the facet climbers reach for least.
+                  _FilterSectionLabel('Style', colors: colors),
+                  StyleTagFilterChips(
+                    selected: filter.styleTags,
+                    onChanged: controller.setStyleTags,
                   ),
                 ],
               ),
-              const SizedBox(height: MasiSpacing.md),
-              GradeRangePicker(
-                value: filter.grade,
-                onChanged: controller.setGrade,
-              ),
-              const SizedBox(height: MasiSpacing.md),
-              Text(
-                'Visibility',
-                style: textTheme.titleSmall?.copyWith(color: colors.ink2),
-              ),
-              const SizedBox(height: MasiSpacing.xs),
-              _VisibilitySegmented(
-                value: filter.visibility,
-                onChanged: controller.setVisibility,
-              ),
-              const SizedBox(height: MasiSpacing.md),
-              Text(
-                'Area',
-                style: textTheme.titleSmall?.copyWith(color: colors.ink2),
-              ),
-              const SizedBox(height: MasiSpacing.xs),
-              Wrap(
-                spacing: MasiSpacing.sm,
-                runSpacing: MasiSpacing.sm,
-                children: [
-                  FilterChoiceChip(
-                    key: const Key('topos-filter-area-unfiled'),
-                    label: 'Unfiled',
-                    selected: filter.areaIds.contains(
-                      ToposFilter.unfiledAreaId,
-                    ),
-                    onPressed: () =>
-                        controller.toggleArea(ToposFilter.unfiledAreaId),
-                  ),
-                  for (final area in areas)
-                    FilterChoiceChip(
-                      key: Key('topos-filter-area-${area.id}'),
-                      label: area.name,
-                      selected: filter.areaIds.contains(area.id),
-                      onPressed: () => controller.toggleArea(area.id),
-                    ),
-                ],
-              ),
-              const SizedBox(height: MasiSpacing.lg),
-            ],
+            ),
           ),
-        ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A section heading inside [_ToposFiltersSheet], carrying its own leading
+/// gap so the facet list reads as evenly-spaced groups rather than as one
+/// run-on column — five hand-written `SizedBox`/`Text` pairs is exactly how
+/// the spacing drifted between sections before.
+class _FilterSectionLabel extends StatelessWidget {
+  const _FilterSectionLabel(this.label, {required this.colors});
+
+  final String label;
+  final MasiColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(
+        top: MasiSpacing.lg,
+        bottom: MasiSpacing.sm,
+      ),
+      child: Text(
+        label,
+        style: Theme.of(
+          context,
+        ).textTheme.titleSmall?.copyWith(color: colors.ink2),
       ),
     );
   }

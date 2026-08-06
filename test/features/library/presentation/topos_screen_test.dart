@@ -5023,6 +5023,120 @@ void main() {
     );
   });
 
+  group('E5: rating + style facets filter the list live', () {
+    ProviderContainer buildContainer() {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          toposProvider.overrideWith(
+            (ref) => Stream.value(const [
+              TopoRef(
+                wallId: 'w-classic',
+                name: 'Three Star Dyno',
+                thumbnailPath: null,
+                routeCount: 1,
+                createdAt: 1000,
+                routeStars: [3],
+                routeStyleTags: ['dyno'],
+              ),
+              TopoRef(
+                wallId: 'w-choss',
+                name: 'One Star Slab',
+                thumbnailPath: null,
+                routeCount: 1,
+                createdAt: 900,
+                routeStars: [1],
+                routeStyleTags: ['slabby'],
+              ),
+              TopoRef(
+                wallId: 'w-unrated',
+                name: 'Unrated Untagged',
+                thumbnailPath: null,
+                routeCount: 1,
+                createdAt: 800,
+              ),
+            ]),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    testWidgets(
+      'picking a 2+ star minimum keeps only the well-rated topo, and drops '
+      'the UNRATED one too; re-tapping the same chip clears the facet',
+      (tester) async {
+        final container = buildContainer();
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-filter-button')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('filter-minstars-2')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Three Star Dyno'), findsOneWidget);
+        expect(find.text('One Star Slab'), findsNothing);
+        expect(find.text('Unrated Untagged'), findsNothing);
+        expect(
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
+          findsOneWidget,
+        );
+
+        // Tapping the ACTIVE chip clears rather than re-applying — otherwise
+        // the only way back to "any rating" is the separate Any chip.
+        await tester.tap(find.byKey(const Key('filter-minstars-2')));
+        await tester.pumpAndSettle();
+
+        expect(find.text('One Star Slab'), findsOneWidget);
+        expect(find.text('Unrated Untagged'), findsOneWidget);
+        expect(container.read(toposFilterProvider).minStars, isNull);
+      },
+    );
+
+    testWidgets(
+      'selecting a style tag keeps only topos carrying it; Clear resets '
+      'BOTH new facets at once',
+      (tester) async {
+        final container = buildContainer();
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('topos-filter-button')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('filter-minstars-1')));
+        await tester.pumpAndSettle();
+
+        // Style sits below Area in the sheet (18 chips — see the sheet's own
+        // comment), so on this viewport it needs scrolling into view first.
+        await tester.ensureVisible(find.byKey(const Key('filter-styletag-dyno')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('filter-styletag-dyno')));
+        await tester.pumpAndSettle();
+
+        expect(container.read(toposFilterProvider).styleTags, {'dyno'});
+        expect(find.text('Three Star Dyno'), findsOneWidget);
+        expect(find.text('One Star Slab'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('topos-filter-clear')));
+        await tester.pumpAndSettle();
+
+        expect(container.read(toposFilterProvider), const ToposFilter());
+        expect(find.text('Three Star Dyno'), findsOneWidget);
+        expect(find.text('One Star Slab'), findsOneWidget);
+        expect(find.text('Unrated Untagged'), findsOneWidget);
+      },
+    );
+  });
+
   group('layout overflow regression: Filters sheet', () {
     /// Wraps [screen] in the same minimal [GoRouter] as [_wrap], plus a
     /// [MediaQuery] override so `textScaler` can be forced to a large value

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/core/routes/route_styles.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
@@ -1117,6 +1118,8 @@ void main() {
         String id, {
         int number = 1,
         String? gradeRaw,
+        int? stars,
+        List<String>? styleTags,
       }) {
         return db
             .into(db.routes)
@@ -1137,6 +1140,10 @@ void main() {
                   gradeRaw == null
                       ? null
                       : gradeSortKey(GradeSystem.french, gradeRaw),
+                ),
+                stars: Value(stars),
+                styleTagsJson: Value(
+                  styleTags == null ? null : encodeStyleTags(styleTags),
                 ),
               ),
             )
@@ -1238,6 +1245,101 @@ void main() {
 
           final bareRef = topos.firstWhere((t) => t.wallId == bareWall.id);
           expect(bareRef.routeGradeKeys, isEmpty);
+        },
+      );
+
+      test(
+        'routeStars/routeStyleTags aggregate every live route, deduplicated '
+        'and sorted, and omit unrated/untagged/soft-deleted routes',
+        () async {
+          final area = await repo.createArea('Area');
+          final sector = await repo.createSector(area.id, 'Sector');
+          final wall = await repo.createWall(sector.id, 'Wall');
+          final bareWall = await repo.createWall(sector.id, 'Bare Wall');
+          final photoId = await repo.attachPhotoToWall(
+            wall.id,
+            XFile('/tmp/p.jpg'),
+            1,
+            1,
+          );
+
+          await insertRoute(
+            wall.id,
+            photoId,
+            'route-3star',
+            number: 1,
+            stars: 3,
+            styleTags: ['dyno', 'crimpy'],
+          );
+          // Same rating on a second route must dedupe; its tag list overlaps
+          // the first one's, which must also dedupe in the union.
+          await insertRoute(
+            wall.id,
+            photoId,
+            'route-3star-dup',
+            number: 2,
+            stars: 3,
+            styleTags: ['crimpy', 'slabby'],
+          );
+          // An explicit ZERO-star rating is a real value, not "unrated".
+          await insertRoute(wall.id, photoId, 'route-0star', number: 3, stars: 0);
+          // Unrated + untagged: contributes to neither aggregate.
+          await insertRoute(wall.id, photoId, 'route-plain', number: 4);
+          // Soft-deleted: contributes to neither either.
+          final deletedRouteId = await insertRoute(
+            wall.id,
+            photoId,
+            'route-deleted',
+            number: 5,
+            stars: 2,
+            styleTags: ['mantle'],
+          );
+          await (db.update(
+            db.routes,
+          )..where((t) => t.id.equals(deletedRouteId))).write(
+            const RoutesCompanion(deletedAt: Value(2000)),
+          );
+
+          final topos = await repo.watchTopos().first;
+
+          final ref = topos.firstWhere((t) => t.wallId == wall.id);
+          expect(ref.routeStars, [0, 3]);
+          expect(ref.routeStyleTags, ['crimpy', 'dyno', 'slabby']);
+
+          final bareRef = topos.firstWhere((t) => t.wallId == bareWall.id);
+          expect(bareRef.routeStars, isEmpty);
+          expect(bareRef.routeStyleTags, isEmpty);
+        },
+      );
+
+      test(
+        'a custom tag containing the JSON-hostile characters that ruled out '
+        'a comma/pipe/space separator still round-trips whole',
+        () async {
+          final area = await repo.createArea('Area');
+          final sector = await repo.createSector(area.id, 'Sector');
+          final wall = await repo.createWall(sector.id, 'Wall');
+          final photoId = await repo.attachPhotoToWall(
+            wall.id,
+            XFile('/tmp/p.jpg'),
+            1,
+            1,
+          );
+
+          await insertRoute(
+            wall.id,
+            photoId,
+            'route-custom',
+            styleTags: ['sandbagged, obviously', 'a|b', 'two words'],
+          );
+
+          final topos = await repo.watchTopos().first;
+          final ref = topos.firstWhere((t) => t.wallId == wall.id);
+          expect(ref.routeStyleTags, [
+            'a|b',
+            'sandbagged, obviously',
+            'two words',
+          ]);
         },
       );
 

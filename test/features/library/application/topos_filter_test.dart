@@ -15,6 +15,8 @@ TopoRef _topo({
   String? areaId,
   String visibility = 'private',
   List<double> routeGradeKeys = const [],
+  List<int> routeStars = const [],
+  List<String> routeStyleTags = const [],
 }) {
   return TopoRef(
     wallId: wallId,
@@ -26,6 +28,8 @@ TopoRef _topo({
     areaId: areaId,
     areaName: areaId == null ? null : 'Area $areaId',
     routeGradeKeys: routeGradeKeys,
+    routeStars: routeStars,
+    routeStyleTags: routeStyleTags,
   );
 }
 
@@ -340,10 +344,150 @@ void main() {
       notifier.setGrade(const GradeRange(minToken: '6a'));
       notifier.setVisibility(ToposVisibilityFilter.shared);
       notifier.toggleArea('area-1');
+      notifier.setMinStars(2);
+      notifier.setStyleTags({'dyno'});
 
       notifier.clear();
 
       expect(container.read(toposFilterProvider), const ToposFilter());
+    });
+  });
+
+  group('minStars facet', () {
+    test('isActive is true for any non-null minimum, false for null', () {
+      expect(const ToposFilter(minStars: 1).isActive, isTrue);
+      expect(const ToposFilter().isActive, isFalse);
+    });
+
+    test('matches a topo with ANY route at or above the minimum', () {
+      const filter = ToposFilter(minStars: 2);
+      expect(filter.matches(_topo(wallId: 'a', routeStars: [0, 3])), isTrue);
+      expect(filter.matches(_topo(wallId: 'b', routeStars: [2])), isTrue);
+      expect(filter.matches(_topo(wallId: 'c', routeStars: [0, 1])), isFalse);
+    });
+
+    test(
+      'excludes an UNRATED topo, exactly as an active grade filter excludes '
+      'an ungraded one -- an empty routeStars is "nobody rated this", not '
+      '"everything here is zero stars"',
+      () {
+        expect(
+          const ToposFilter(minStars: 1).matches(_topo(wallId: 'a')),
+          isFalse,
+        );
+        // ...and the inactive filter still takes it.
+        expect(const ToposFilter().matches(_topo(wallId: 'a')), isTrue);
+      },
+    );
+
+    test(
+      'setMinStars(null) CLEARS the facet -- the reason copyWith takes a '
+      'record here rather than a bare int?',
+      () {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final notifier = container.read(toposFilterProvider.notifier);
+
+        notifier.setMinStars(3);
+        expect(container.read(toposFilterProvider).minStars, 3);
+
+        notifier.setMinStars(null);
+        expect(container.read(toposFilterProvider).minStars, isNull);
+        expect(container.read(toposFilterProvider).isActive, isFalse);
+      },
+    );
+
+    test('copyWith leaves minStars untouched when the argument is omitted', () {
+      const filter = ToposFilter(minStars: 2);
+      expect(filter.copyWith(visibility: ToposVisibilityFilter.shared).minStars, 2);
+    });
+  });
+
+  group('styleTags facet', () {
+    test('empty set is inactive and matches everything', () {
+      expect(const ToposFilter(styleTags: {}).isActive, isFalse);
+      expect(
+        const ToposFilter().matches(_topo(wallId: 'a', routeStyleTags: ['dyno'])),
+        isTrue,
+      );
+    });
+
+    test('ORs across selected tags, like CommunityFilter.styleTags', () {
+      const filter = ToposFilter(styleTags: {'dyno', 'slabby'});
+      expect(
+        filter.matches(_topo(wallId: 'a', routeStyleTags: ['crimpy', 'dyno'])),
+        isTrue,
+      );
+      expect(
+        filter.matches(_topo(wallId: 'b', routeStyleTags: ['slabby'])),
+        isTrue,
+      );
+      expect(
+        filter.matches(_topo(wallId: 'c', routeStyleTags: ['crimpy'])),
+        isFalse,
+      );
+      expect(filter.matches(_topo(wallId: 'd')), isFalse);
+    });
+  });
+
+  group('facets AND together', () {
+    test(
+      'a topo must satisfy rating AND style AND visibility at once, not any '
+      'one of them',
+      () {
+        const filter = ToposFilter(
+          minStars: 2,
+          styleTags: {'dyno'},
+          visibility: ToposVisibilityFilter.shared,
+        );
+        expect(
+          filter.matches(
+            _topo(
+              wallId: 'all-three',
+              visibility: 'shared',
+              routeStars: [3],
+              routeStyleTags: ['dyno'],
+            ),
+          ),
+          isTrue,
+        );
+        // Right rating and style, wrong visibility.
+        expect(
+          filter.matches(
+            _topo(wallId: 'private', routeStars: [3], routeStyleTags: ['dyno']),
+          ),
+          isFalse,
+        );
+        // Right visibility and style, rating too low.
+        expect(
+          filter.matches(
+            _topo(
+              wallId: 'one-star',
+              visibility: 'shared',
+              routeStars: [1],
+              routeStyleTags: ['dyno'],
+            ),
+          ),
+          isFalse,
+        );
+      },
+    );
+  });
+
+  group('equality covers the new facets', () {
+    test('two filters differing only in minStars are not equal', () {
+      expect(const ToposFilter(minStars: 1), isNot(const ToposFilter(minStars: 2)));
+    });
+
+    test('styleTags equality is set-wise, not order-sensitive', () {
+      expect(
+        const ToposFilter(styleTags: {'dyno', 'slabby'}),
+        const ToposFilter(styleTags: {'slabby', 'dyno'}),
+      );
+      expect(
+        const ToposFilter(styleTags: {'dyno', 'slabby'}).hashCode,
+        const ToposFilter(styleTags: {'slabby', 'dyno'}).hashCode,
+      );
     });
   });
 }

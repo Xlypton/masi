@@ -134,6 +134,8 @@ class ToposFilter {
     this.grade = const GradeRange(),
     this.visibility = ToposVisibilityFilter.all,
     this.areaIds = const {},
+    this.minStars,
+    this.styleTags = const {},
   });
 
   /// Pseudo area-id in [areaIds] that matches a topo with `areaId == null`
@@ -144,12 +146,29 @@ class ToposFilter {
   final ToposVisibilityFilter visibility;
   final Set<String> areaIds;
 
+  /// Minimum quality rating (1-3 stars) a topo must have on at least one of
+  /// its routes, or `null` for "any rating" (the inactive default). Only
+  /// 1..3 are offered by the sheet: a `minStars` of 0 would be satisfied by
+  /// every explicitly-rated route and so could not narrow anything a user
+  /// would recognise as a filter, while still excluding every UNRATED topo
+  /// — a confusing no-op-shaped restriction. See [TopoRef.routeStars].
+  final int? minStars;
+
+  /// Curated style-tag keys (see [kCuratedRouteStyles]) to restrict to, OR'd
+  /// together — a topo matches when ANY of its [TopoRef.routeStyleTags] is
+  /// selected. Empty means "any style" (inactive). Same OR semantics as
+  /// `CommunityFilter.styleTags`, so the two filter sheets can't disagree
+  /// about what selecting two tags means.
+  final Set<String> styleTags;
+
   /// Whether any facet of this filter actually restricts the list — when
   /// `false`, [matches] accepts every topo.
   bool get isActive =>
       grade.isActive ||
       visibility != ToposVisibilityFilter.all ||
-      areaIds.isNotEmpty;
+      areaIds.isNotEmpty ||
+      minStars != null ||
+      styleTags.isNotEmpty;
 
   /// Whether [topo] satisfies every ACTIVE facet of this filter (AND across
   /// facets — an inactive facet never excludes anything):
@@ -160,6 +179,11 @@ class ToposFilter {
   ///   only checked when [visibility] isn't [ToposVisibilityFilter.all].
   /// - area: [TopoRef.areaId] (or [unfiledAreaId] when `null`) is a member
   ///   of [areaIds], only checked when [areaIds] is non-empty.
+  /// - rating: at least one of [TopoRef.routeStars] is >= [minStars] (only
+  ///   checked when [minStars] isn't null; a topo with no rated routes is
+  ///   excluded by an active rating filter, mirroring grade).
+  /// - style: at least one of [TopoRef.routeStyleTags] is in [styleTags],
+  ///   only checked when [styleTags] is non-empty.
   bool matches(TopoRef topo) {
     if (grade.isActive && !topo.routeGradeKeys.any(grade.matchesSortKey)) {
       return false;
@@ -171,18 +195,37 @@ class ToposFilter {
     if (areaIds.isNotEmpty && !areaIds.contains(topo.areaId ?? unfiledAreaId)) {
       return false;
     }
+    final wantedStars = minStars;
+    if (wantedStars != null &&
+        !topo.routeStars.any((stars) => stars >= wantedStars)) {
+      return false;
+    }
+    if (styleTags.isNotEmpty && !topo.routeStyleTags.any(styleTags.contains)) {
+      return false;
+    }
     return true;
   }
 
+  /// Returns a copy with the given facets replaced.
+  ///
+  /// [minStars] takes a `({int? value})` record rather than a bare `int?`
+  /// because `null` is a MEANINGFUL value for that facet ("any rating"), so
+  /// the usual `minStars ?? this.minStars` idiom could never clear it — the
+  /// same reason [ToposFilterController.setMinStars] exists as its own
+  /// method. Omitting the argument leaves the current value untouched.
   ToposFilter copyWith({
     GradeRange? grade,
     ToposVisibilityFilter? visibility,
     Set<String>? areaIds,
+    ({int? value})? minStars,
+    Set<String>? styleTags,
   }) {
     return ToposFilter(
       grade: grade ?? this.grade,
       visibility: visibility ?? this.visibility,
       areaIds: areaIds ?? this.areaIds,
+      minStars: minStars == null ? this.minStars : minStars.value,
+      styleTags: styleTags ?? this.styleTags,
     );
   }
 
@@ -192,16 +235,23 @@ class ToposFilter {
       (other is ToposFilter &&
           other.grade == grade &&
           other.visibility == visibility &&
-          setEquals(other.areaIds, areaIds));
+          setEquals(other.areaIds, areaIds) &&
+          other.minStars == minStars &&
+          setEquals(other.styleTags, styleTags));
 
   @override
-  int get hashCode =>
-      Object.hash(grade, visibility, Object.hashAllUnordered(areaIds));
+  int get hashCode => Object.hash(
+    grade,
+    visibility,
+    Object.hashAllUnordered(areaIds),
+    minStars,
+    Object.hashAllUnordered(styleTags),
+  );
 
   @override
   String toString() =>
       'ToposFilter(grade: $grade, visibility: $visibility, '
-      'areaIds: $areaIds)';
+      'areaIds: $areaIds, minStars: $minStars, styleTags: $styleTags)';
 }
 
 /// Filters [topos] down to those matching every active facet of [filter]
@@ -233,6 +283,21 @@ class ToposFilterController extends Notifier<ToposFilter> {
     final next = Set<String>.from(state.areaIds);
     if (!next.remove(areaId)) next.add(areaId);
     state = state.copyWith(areaIds: next);
+  }
+
+  /// Sets the minimum-rating facet, where `null` means "any rating" — see
+  /// [ToposFilter.minStars]. A dedicated setter (rather than reusing
+  /// [ToposFilter.copyWith]'s optional-argument shape) because `null` here
+  /// is a real value to STORE, not "leave unchanged".
+  void setMinStars(int? minStars) {
+    state = state.copyWith(minStars: (value: minStars));
+  }
+
+  /// Replaces the selected curated style-tag set wholesale — matching
+  /// `StyleTagFilterChips`' controlled contract, which hands back the full
+  /// new set on every tap rather than the single key that changed.
+  void setStyleTags(Set<String> styleTags) {
+    state = state.copyWith(styleTags: styleTags);
   }
 
   /// Resets every facet back to the default (inactive) filter.

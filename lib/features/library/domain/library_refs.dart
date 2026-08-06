@@ -103,6 +103,8 @@ class TopoRef {
     this.areaId,
     this.areaName,
     this.routeGradeKeys = const [],
+    this.routeStars = const [],
+    this.routeStyleTags = const [],
     this.latitude,
     this.longitude,
   });
@@ -149,6 +151,23 @@ class TopoRef {
   /// ANY of its route grade keys falls in range.
   final List<double> routeGradeKeys;
 
+  /// The `stars` quality rating (0-3) of every live, RATED route on this
+  /// wall, deduplicated and sorted ascending -- parsed from [watchTopos]'s
+  /// `route_stars` column. Empty when no route on the wall has been rated
+  /// at all, which is NOT the same as every route being rated 0 stars (see
+  /// [db.Routes.stars]: `null` means unrated, `0` is an explicit "0 stars")
+  /// — an active minimum-rating filter excludes an unrated wall, exactly
+  /// like an active grade filter excludes an ungraded one.
+  final List<int> routeStars;
+
+  /// Every distinct style tag carried by any live route on this wall (the
+  /// union of their decoded [db.Routes.styleTagsJson] lists), sorted for
+  /// deterministic equality. Includes custom, non-curated tags — the Topos
+  /// filter only ever offers the curated set (see [kCuratedRouteStyles]),
+  /// but a wall's own tags are kept whole rather than pre-filtered so a
+  /// future "custom tag" facet needs no data-layer change.
+  final List<String> routeStyleTags;
+
   /// Coordinates captured directly on this wall (see [db.Walls.latitude]/
   /// [db.Walls.longitude], populated automatically from a freshly-picked
   /// photo's EXIF GPS tags via [LibraryCrudRepository.setWallCoordinates]),
@@ -172,6 +191,8 @@ class TopoRef {
       other.areaId == areaId &&
       other.areaName == areaName &&
       _listEquals(other.routeGradeKeys, routeGradeKeys) &&
+      _listEquals(other.routeStars, routeStars) &&
+      _listEquals(other.routeStyleTags, routeStyleTags) &&
       other.latitude == latitude &&
       other.longitude == longitude;
 
@@ -188,6 +209,8 @@ class TopoRef {
     areaId,
     areaName,
     Object.hashAll(routeGradeKeys),
+    Object.hashAll(routeStars),
+    Object.hashAll(routeStyleTags),
     Object.hash(latitude, longitude),
   );
 
@@ -197,17 +220,19 @@ class TopoRef {
       'routeCount: $routeCount, createdAt: $createdAt, '
       'topGradeLabel: $topGradeLabel, topGradeBand: $topGradeBand, '
       'visibility: $visibility, areaId: $areaId, areaName: $areaName, '
-      'routeGradeKeys: $routeGradeKeys, latitude: $latitude, '
+      'routeGradeKeys: $routeGradeKeys, routeStars: $routeStars, '
+      'routeStyleTags: $routeStyleTags, latitude: $latitude, '
       'longitude: $longitude)';
 }
 
-/// Order-sensitive element-wise equality for [TopoRef.routeGradeKeys] (a
-/// plain `List<double>` doesn't override `==` to mean "same elements");
-/// safe to compare positionally since [_parseGradeKeys] sorts its output,
-/// keeping repeated parses of the same underlying data deterministic.
-/// Mirrors `CommunityRepository`'s analogous `SharedTopo.routeGradeKeys`
-/// helper.
-bool _listEquals(List<double> a, List<double> b) {
+/// Order-sensitive element-wise equality for [TopoRef]'s list-valued facets
+/// — [TopoRef.routeGradeKeys], [TopoRef.routeStars], [TopoRef.routeStyleTags]
+/// (a plain `List` doesn't override `==` to mean "same elements"); safe to
+/// compare positionally since every one of those is produced SORTED by the
+/// repository, keeping repeated parses of the same underlying data
+/// deterministic. Mirrors `CommunityRepository`'s analogous
+/// `SharedTopo.routeGradeKeys` helper.
+bool _listEquals<T>(List<T> a, List<T> b) {
   if (identical(a, b)) return true;
   if (a.length != b.length) return false;
   for (var i = 0; i < a.length; i++) {

@@ -4,6 +4,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart' as db;
 import '../../../core/grades/grade_system.dart';
+import '../../../core/routes/route_styles.dart';
 import '../../topo/data/photo_files.dart';
 import '../domain/library_refs.dart';
 
@@ -32,6 +33,49 @@ List<double> _parseGradeKeys(String? raw) {
           .toList()
         ..sort();
   return keys;
+}
+
+/// Parses a `group_concat(DISTINCT r.stars)` column value (e.g. `'0,2,3'`)
+/// into a sorted `List<int>`, silently skipping any malformed token.
+/// Returns an empty list for `null`/empty (a wall with no live, RATED
+/// route -- `stars IS NULL` is filtered out in SQL, so an empty result
+/// means "nobody has rated anything here", never "everything is 0 stars").
+/// See [TopoRef.routeStars].
+List<int> _parseStars(String? raw) {
+  if (raw == null || raw.isEmpty) return const [];
+  final stars =
+      raw
+          .split(',')
+          .map((token) => int.tryParse(token.trim()))
+          .whereType<int>()
+          .toList()
+        ..sort();
+  return stars;
+}
+
+/// Separator used to join each live route's raw `style_tags_json` into the
+/// single `route_style_tags` column [_parseStyleTags] splits back apart.
+///
+/// ASCII RECORD SEPARATOR (U+001E), emitted in SQL via `char(30)`, because
+/// `group_concat` can only take a custom separator in its NON-`DISTINCT`
+/// form and every plausible printable separator (`,`, `|`, a space) can
+/// legitimately occur INSIDE a JSON array of user-typed custom tags. A raw
+/// U+001E cannot: `jsonEncode` escapes it to ``, so it never survives
+/// into a stored value and can never split one chunk into two.
+const String _styleTagsSeparator = '';
+
+/// Parses the joined `style_tags_json` column produced by [watchTopos] (see
+/// [_styleTagsSeparator]) into the flat, deduplicated, sorted union of every
+/// tag on the wall. Each chunk is decoded by the same [decodeStyleTags] the
+/// rest of the app uses, so a malformed chunk contributes nothing rather
+/// than throwing. See [TopoRef.routeStyleTags].
+List<String> _parseStyleTags(String? raw) {
+  if (raw == null || raw.isEmpty) return const [];
+  final tags = <String>{};
+  for (final chunk in raw.split(_styleTagsSeparator)) {
+    tags.addAll(decodeStyleTags(chunk));
+  }
+  return tags.toList()..sort();
 }
 
 /// Sentinel default value for [LibraryCrudRepository.watchTopos]'s optional
@@ -1049,8 +1093,10 @@ class LibraryCrudRepository {
   /// `null` if the wall has no graded routes) —, its ancestor Area's id/name
   /// (`null`/`null` for a wall filed under the hidden `__default__`
   /// sentinel, or with no area at all -- see [TopoRef.areaId]'s doc), and
-  /// every live graded route's `gradeSortKey` ([TopoRef.routeGradeKeys],
-  /// used by the Topos-home grade filter), and the wall's own
+  /// every live graded route's `gradeSortKey` ([TopoRef.routeGradeKeys]),
+  /// every live rated route's `stars` ([TopoRef.routeStars]) and the union
+  /// of their style tags ([TopoRef.routeStyleTags]) — the three facets the
+  /// Topos-home filter sheet offers beyond visibility/area —, and the wall's own
   /// latitude/longitude ([TopoRef.latitude]/[TopoRef.longitude], `null` until
   /// set via [setWallCoordinates] — backs the Community map's "own topos"
   /// markers) — ordered by wall `createdAt` DESC (newest topo first).
@@ -1142,6 +1188,12 @@ class LibraryCrudRepository {
         (SELECT group_concat(DISTINCT r.grade_sort_key) FROM routes r
            WHERE r.wall_id = w.id AND r.deleted_at IS NULL
              AND r.grade_sort_key IS NOT NULL) AS route_grade_keys,
+        (SELECT group_concat(DISTINCT r.stars) FROM routes r
+           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+             AND r.stars IS NOT NULL) AS route_stars,
+        (SELECT group_concat(r.style_tags_json, char(30)) FROM routes r
+           WHERE r.wall_id = w.id AND r.deleted_at IS NULL
+             AND r.style_tags_json IS NOT NULL) AS route_style_tags,
         CASE WHEN a.name = '$_defaultAreaName' THEN NULL ELSE a.id END AS area_id,
         CASE WHEN a.name = '$_defaultAreaName' THEN NULL ELSE a.name END AS area_name
       FROM walls w
@@ -1198,6 +1250,12 @@ class LibraryCrudRepository {
                 areaName: row.readNullable<String>('area_name'),
                 routeGradeKeys: _parseGradeKeys(
                   row.readNullable<String>('route_grade_keys'),
+                ),
+                routeStars: _parseStars(
+                  row.readNullable<String>('route_stars'),
+                ),
+                routeStyleTags: _parseStyleTags(
+                  row.readNullable<String>('route_style_tags'),
                 ),
                 latitude: row.readNullable<double>('wall_latitude'),
                 longitude: row.readNullable<double>('wall_longitude'),
