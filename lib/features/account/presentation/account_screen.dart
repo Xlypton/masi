@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
@@ -18,6 +19,7 @@ import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../backup/application/sync_orchestrator.dart';
+import '../../moderation/application/moderation_providers.dart';
 import '../../topo/presentation/canvas_chrome.dart';
 import '../application/auth_providers.dart';
 import '../application/profile_providers.dart';
@@ -1028,6 +1030,7 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                 onPressed: widget.onSignOut,
                 child: const Text('Sign out'),
               ),
+              const AccountAdminEntryPoint(),
               const _InstallSection(),
               const _StorageDiagnosticsSection(),
             ],
@@ -1056,6 +1059,71 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
 /// already true (already installed — nothing left to offer) or on any other
 /// platform/browser combination that can neither prompt nor be walked
 /// through manually.
+/// The way into the review queue, for moderators only.
+///
+/// Until this existed `/admin` was reachable only by typing the URL, which
+/// made the whole review surface effectively invisible in the installed app.
+///
+/// Renders nothing for everyone else — and `isAdminProvider` resolves `false`
+/// while loading and on any failure, so this fails closed: a moderator whose
+/// session has expired loses the shortcut rather than a non-admin gaining one.
+/// That is only a convenience guarantee, not a security one. The route itself
+/// is deliberately not redirect-guarded, and every action behind it is
+/// re-checked server-side by a SECURITY DEFINER RPC, so seeing (or reaching)
+/// this grants nothing on its own.
+class AccountAdminEntryPoint extends ConsumerWidget {
+  const AccountAdminEntryPoint({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isAdmin = ref.watch(isAdminProvider).asData?.value ?? false;
+    if (!isAdmin) return const SizedBox.shrink();
+
+    final colors = MasiColors.of(context);
+    // The count comes from the same queue read the screen itself uses, so the
+    // badge can never claim work the queue would not show. Absent while it
+    // loads or if it fails, rather than showing a confident "0".
+    final pending = ref.watch(moderationQueueProvider).asData?.value.length;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: MasiSpacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          MasiPendingButton.text(
+            key: const Key('account-open-admin-queue'),
+            style: TextButton.styleFrom(
+              backgroundColor: colors.surface2,
+              foregroundColor: colors.ink,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(13),
+              ),
+            ),
+            onPressed: () => context.push('/admin'),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MasiIcon('send_check', size: 18, color: colors.ink2),
+                const SizedBox(width: MasiSpacing.sm),
+                Flexible(
+                  child: Text(
+                    pending == null || pending == 0
+                        ? 'Review queue'
+                        : 'Review queue · $pending waiting',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _InstallSection extends ConsumerWidget {
   const _InstallSection();
 
