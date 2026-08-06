@@ -4060,7 +4060,7 @@ void main() {
 
   group('D5d: publish/unpublish menu action', () {
     testWidgets(
-      'the menu shows "Publish" for a private topo; tapping it opens a '
+      'the menu shows "Submit to Community" for a private topo; tapping it opens a '
       'confirm dialog; cancelling leaves the wall private and un-dirty',
       (tester) async {
         final container = _makeContainer();
@@ -4088,13 +4088,13 @@ void main() {
         await tester.pumpAndSettle();
 
         expect(find.byKey(Key('topo-publish-$wallId')), findsOneWidget);
-        expect(find.text('Publish'), findsOneWidget);
+        expect(find.text('Submit to Community'), findsOneWidget);
         expect(find.text('Unpublish'), findsNothing);
 
         await tester.tap(find.byKey(Key('topo-publish-$wallId')));
         await tester.pumpAndSettle();
 
-        expect(find.text('Publish to Community?'), findsOneWidget);
+        expect(find.text('Submit to Community?'), findsOneWidget);
         expect(
           find.byKey(Key('topo-publish-confirm-$wallId')),
           findsOneWidget,

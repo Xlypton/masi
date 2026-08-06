@@ -387,7 +387,11 @@ class _TopoRowState extends ConsumerState<_TopoRow>
         ),
         MasiSheetAction(
           key: Key('topo-publish-${topo.wallId}'),
-          label: isShared ? 'Unpublish' : 'Publish',
+          // "Submit", not "Publish" — see `_handlePublish`. `isShared` is the
+          // owner's own `visibility` flag and still means "I have shared
+          // this", so it remains the right thing to key the reverse action
+          // on even though sharing no longer implies being visible.
+          label: isShared ? 'Unpublish' : 'Submit to Community',
           value: isShared ? 'unpublish' : 'publish',
         ),
         // Enabled only when the wall actually has coordinates (from
@@ -590,12 +594,20 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     TopoRef topo,
     MasiBusyReporter reportBusy,
   ) async {
+    // Wording changed with community editing phase 3: sharing is now a
+    // SUBMISSION, not a publication. Saying "will become visible to everyone"
+    // would be a straightforward lie — the server puts it in `pending` and
+    // nobody but the owner and a moderator can see it until it is approved.
+    // The old copy also promised "you can unpublish it again at any time",
+    // which the phase 5 withdrawal cooldown will make untrue; it is dropped
+    // now rather than left to expire.
     final confirmed = await showMasiConfirm(
       context,
-      title: 'Publish to Community?',
-      message: '"${topo.name}" will become visible to everyone in Community. '
-          'You can unpublish it again at any time.',
-      confirmLabel: 'Publish',
+      title: 'Submit to Community?',
+      message:
+          '"${topo.name}" goes to a moderator for review. Once approved, '
+          'other climbers can see it and rely on it.',
+      confirmLabel: 'Submit',
       confirmKey: Key('topo-publish-confirm-${topo.wallId}'),
       isDestructive: false,
     );

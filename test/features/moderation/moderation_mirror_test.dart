@@ -30,6 +30,25 @@ class _FakeModerationRemote implements ModerationRemote {
         .where((r) => wallIds.contains(r['wallId'] as String))
         .toList();
   }
+
+  // Phase 3 surface. Unused by this file's assertions — it covers the mirror,
+  // not the review flow — but required to satisfy the interface.
+  @override
+  Future<bool> isAdmin() async => false;
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchQueue({int limit = 50}) async =>
+      const [];
+
+  @override
+  Future<String> reviewTopo({
+    required String wallId,
+    required bool approve,
+    String? reason,
+  }) async => approve ? 'published' : 'rejected';
+
+  @override
+  Future<void> removeTopo({required String wallId, String? reason}) async {}
 }
 
 Map<String, dynamic> _row(

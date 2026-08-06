@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/db/app_database.dart' as db;
 import '../../../core/db/database_provider.dart';
 import '../../../core/config/supabase_providers.dart';
+import '../../account/application/auth_providers.dart';
 import '../data/moderation_remote.dart';
 import '../data/moderation_repository.dart';
 import '../domain/access_state.dart';
@@ -42,6 +43,72 @@ final wallModerationRowProvider = StreamProvider.autoDispose
     .family<db.WallModerationRow?, String>(
       (ref, wallId) => ref.watch(moderationRepositoryProvider).watchRow(wallId),
     );
+
+/// Whether the signed-in user may see the admin surface.
+///
+/// A UI hint only — every admin RPC re-checks membership server-side, so this
+/// deciding wrongly costs a wasted tap and an error, never access. Resolves to
+/// `false` while loading and on any failure, so the surface fails closed.
+///
+/// Keyed on the current uid so signing in as a different account re-resolves
+/// rather than carrying the previous answer.
+final isAdminProvider = FutureProvider<bool>((ref) async {
+  final uid = ref.watch(effectiveUidProvider);
+  if (uid == null) return false;
+  return ref.watch(moderationRemoteProvider).isAdmin();
+});
+
+/// One pending submission awaiting review.
+class ModerationQueueEntry {
+  const ModerationQueueEntry({
+    required this.wallId,
+    required this.wallName,
+    required this.ownerId,
+    required this.submittedAt,
+    required this.routeCount,
+    required this.areaName,
+  });
+
+  final String wallId;
+  final String wallName;
+  final String? ownerId;
+  final int? submittedAt;
+  final int routeCount;
+
+  /// `null` for a topo filed under the hidden `__default__` sentinel Area —
+  /// mapped here rather than surfaced raw, the same way
+  /// `LibraryCrudRepository.watchTopos` maps it, so the sentinel never
+  /// reaches a screen.
+  final String? areaName;
+
+  static const String _sentinelAreaName = '__default__';
+
+  factory ModerationQueueEntry.fromRow(Map<String, dynamic> row) {
+    final area = row['areaName'] as String?;
+    return ModerationQueueEntry(
+      wallId: row['wallId'] as String? ?? '',
+      wallName: (row['wallName'] as String?)?.trim().isNotEmpty == true
+          ? row['wallName'] as String
+          : 'Untitled topo',
+      ownerId: row['ownerId'] as String?,
+      submittedAt: (row['submittedAt'] as num?)?.toInt(),
+      routeCount: (row['routeCount'] as num?)?.toInt() ?? 0,
+      areaName: (area == null || area == _sentinelAreaName) ? null : area,
+    );
+  }
+}
+
+/// The admin review queue: pending submissions, oldest first.
+///
+/// Deliberately NOT best-effort. An error here surfaces as an error, because
+/// a queue that silently renders empty for an admin whose session expired
+/// says "nothing to review" when the truth is "we could not ask".
+final moderationQueueProvider = FutureProvider.autoDispose<
+  List<ModerationQueueEntry>
+>((ref) async {
+  final rows = await ref.watch(moderationRemoteProvider).fetchQueue();
+  return [for (final row in rows) ModerationQueueEntry.fromRow(row)];
+});
 
 /// The effective access/closure state for one topo, after inheritance up the
 /// Wall → Sector → Area chain (community editing phase 2 / R-2).

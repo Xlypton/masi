@@ -17,6 +17,7 @@ import '../features/library/presentation/areas_screen.dart';
 import '../features/library/presentation/sectors_screen.dart';
 import '../features/library/presentation/topos_screen.dart';
 import '../features/library/presentation/walls_screen.dart';
+import '../features/moderation/presentation/admin_queue_screen.dart';
 import '../features/logbook/presentation/logbook_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
 
@@ -299,6 +300,19 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/logbook',
       builder: (context, state) => const LogbookScreen(),
+    ),
+    // Admin review queue (community editing phase 3). A top-level sibling of
+    // the shell, like every other focused full-screen task.
+    //
+    // NOT redirect-guarded on admin status: the check is asynchronous and a
+    // redirect that has to await one either blocks every navigation or races
+    // it. The screen renders its own "this area is for moderators" state
+    // instead, and — the part that actually matters — every action it offers
+    // is re-checked server-side by a SECURITY DEFINER RPC, so reaching this
+    // route grants nothing.
+    GoRoute(
+      path: '/admin',
+      builder: (context, state) => const AdminQueueScreen(),
     ),
     GoRoute(path: '/areas', builder: (context, state) => const AreasScreen()),
     GoRoute(
