@@ -82,7 +82,11 @@ cd "$(dirname "$0")/.."
 
 TARGET="${1:-integration_test/web_harness_check_test.dart}"
 DRIVER_PORT="${2:-4444}"
-CHROMEDRIVER_LOG="$(mktemp -t chromedriver_log)"
+# Full template rather than `mktemp -t PREFIX`: the -t shorthand treats its
+# argument as a prefix on BSD/macOS, but GNU coreutils (Git Bash on Windows)
+# reads it as a template and refuses anything with fewer than three X's —
+# "too few X's in template", which killed every one of these scripts there.
+CHROMEDRIVER_LOG="$(mktemp "${TMPDIR:-/tmp}/chromedriver_log.XXXXXX")"
 DRIVE_TIMEOUT_SECS="${DRIVE_TIMEOUT_SECS:-300}"
 PREFLIGHT_ONLY="${DRIVE_WEB_PREFLIGHT_ONLY:-0}"
 

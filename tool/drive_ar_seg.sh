@@ -86,7 +86,7 @@ if grep -qF "$ASSET_LINE" "$PUBSPEC"; then
   exit 2
 fi
 
-PUBSPEC_BACKUP="$(mktemp -t masi_pubspec)"
+PUBSPEC_BACKUP="$(mktemp "${TMPDIR:-/tmp}/masi_pubspec.XXXXXX")"
 cp "$PUBSPEC" "$PUBSPEC_BACKUP"
 
 restore() {
@@ -107,7 +107,7 @@ mkdir -p "$STAGE_DIR"
 cp "$FIXTURE_SRC" "$STAGE_DEST"
 
 echo "==> adding a temporary '$ASSET_LINE' entry to $PUBSPEC"
-STAGED_PUBSPEC="$(mktemp -t masi_pubspec_staged)"
+STAGED_PUBSPEC="$(mktemp "${TMPDIR:-/tmp}/masi_pubspec_staged.XXXXXX")"
 awk -v anchor="$ANCHOR" -v line="$ASSET_LINE" '
   { print }
   $0 == anchor && !done { print line; done = 1 }

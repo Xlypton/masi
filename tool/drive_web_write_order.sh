@@ -85,7 +85,7 @@ if [[ "$TEARDOWN" != "kill" && "$TEARDOWN" != "unload" ]]; then
   echo "FAIL: TEARDOWN must be 'kill' or 'unload', got '$TEARDOWN'." >&2
   exit 2
 fi
-PROFILE_DIR="$(mktemp -d -t masi_order_profile)"
+PROFILE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/masi_order_profile.XXXXXX")"
 RESULTS="build/integration_response_data.json"
 SEED_RESULTS="build/write_order_seed_report.json"
 VERIFY_RESULTS="build/write_order_verify_report.json"

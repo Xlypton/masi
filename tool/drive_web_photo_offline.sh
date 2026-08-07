@@ -61,7 +61,7 @@ STAMP="$(date +%s)"
 # from a SharedWorker — so this window decides whether the row is on disk
 # when the browser is killed. Override to measure the boundary.
 SETTLE_SECONDS="${SETTLE_SECONDS:-15}"
-PROFILE_DIR="$(mktemp -d -t masi_photo_profile)"
+PROFILE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/masi_photo_profile.XXXXXX")"
 RESULTS="build/integration_response_data.json"
 SEED_RESULTS="build/photo_offline_seed_report.json"
 
