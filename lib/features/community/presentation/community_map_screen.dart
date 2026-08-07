@@ -10,8 +10,10 @@ import 'package:http/retry.dart' show RetryClient;
 import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/db/database_provider.dart';
 import '../../../core/map/masi_tile_caching_provider.dart';
 import '../../../shared/presentation/masi_async_view.dart';
+import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../../shared/presentation/masi_pending_icon_button.dart';
@@ -26,6 +28,7 @@ import '../application/community_providers.dart';
 import '../application/map_search_providers.dart';
 import '../data/community_repository.dart';
 import '../data/map_search.dart';
+import '../domain/topo_group.dart';
 
 /// Builds the `RetryClient`-wrapped [http.Client] used by
 /// [buildResilientTileProvider] — split out into its own top-level function
@@ -792,6 +795,30 @@ class _MapViewState extends ConsumerState<_MapView> {
         .where((t) => !ownWallIds.contains(t.wallId))
         .toList();
 
+    // Duplicates of one place collapse to ONE pin (phase 8b / C-6.2), the same
+    // grouping the feed applies. It matters more here than in the feed: four
+    // topos of one boulder are four pins metres apart, which at any real zoom
+    // is a single unclickable smudge — the reader cannot even tell there is
+    // more than one, let alone pick between them.
+    //
+    // Grouping runs AFTER the own-topo dedupe above, so a place where one of
+    // the alternates is the user's own still renders their "Yours" pin
+    // separately and unchanged. That is deliberate: the own marker is a
+    // personal reference point, not a community listing, and folding it into a
+    // group would make the user's own crag disappear behind somebody else's
+    // photo of it.
+    //
+    // Best-effort, exactly as in the feed: no links (offline, or not yet
+    // fetched) means one pin per topo, which is what the map did before.
+    final links =
+        ref.watch(alternateGroupsProvider).asData?.value ??
+        const AlternateGroups.empty();
+    final communityGroups = groupTopos(
+      communityWithCoords,
+      links,
+      nowMs: ref.watch(nowMsProvider)(),
+    );
+
     // Best-effort device position (see myLocationProvider's doc): loading,
     // error, and denied/unavailable (a `null` AsyncData) all collapse to
     // "no marker" here — the map and every topo marker render exactly the
@@ -948,8 +975,12 @@ class _MapViewState extends ConsumerState<_MapView> {
         ),
         MarkerLayer(
           markers: [
-            for (final topo in communityWithCoords)
-              Marker(
+            // `if (… case final topo)` purely to bind `group.head` to a name:
+            // it is read four times below and `group.head.latitude!` repeated
+            // is worse. The pattern always matches.
+            for (final group in communityGroups)
+              if (group.head case final topo)
+                Marker(
                 point: LatLng(topo.latitude!, topo.longitude!),
                 width: 40,
                 height: _BoulderMarker.totalHeight,
@@ -958,6 +989,15 @@ class _MapViewState extends ConsumerState<_MapView> {
                   key: Key('community-map-marker-${topo.wallId}'),
                   onTap: () {
                     FocusManager.instance.primaryFocus?.unfocus();
+                    if (group.isGrouped) {
+                      // More than one topo of this boulder: ask which, rather
+                      // than silently opening the best-ranked one. Picking for
+                      // the reader is the thing §C-6 is at pains to avoid —
+                      // the second photo is often the better one, and only
+                      // they can tell.
+                      _showPlacePicker(context, group);
+                      return;
+                    }
                     // Read-only topo canvas (wall photo + drawn routes), NOT
                     // the social/likes-first CommunityTopoDetailScreen -- that
                     // view stays reserved for the Feed (see the OWN marker
@@ -969,7 +1009,10 @@ class _MapViewState extends ConsumerState<_MapView> {
                   // -- the feed only ever contains `visibility == 'shared'`
                   // rows), so this marker always renders at full opacity
                   // (the public look).
-                  child: _BoulderMarker(isPublic: true),
+                  child: _BoulderMarker(
+                    isPublic: true,
+                    placeCount: group.count,
+                  ),
                 ),
               ),
           ],
@@ -1595,10 +1638,50 @@ String _labelForSearchKind(MapSearchKind kind) {
 /// glance — see this class's fix history), not opacity alone. Shared with
 /// [_MapLegend]/[_MapLegendRow] so the legend's swatches always match the
 /// marker exactly.
+/// Asks which topo of a place the reader wants (community editing phase 8b /
+/// C-6.2).
+///
+/// Ordered by rank, best first — the same order the feed's card uses, so the
+/// two surfaces cannot disagree about which drawing of a boulder leads. The
+/// subtitle is the concrete stuff a climber picks on (how many lines, how many
+/// people liked it), not a score: the ranking decides the ORDER, and exposing
+/// its arithmetic would invite arguing with it (see `TopoRank`, and Open
+/// Question 3 on why there is no rating widget here).
+Future<void> _showPlacePicker(BuildContext context, TopoGroup group) async {
+  final picked = await showMasiActionSheet<String>(
+    context,
+    sheetKey: const Key('map-place-picker-sheet'),
+    title: '${group.count} topos of this boulder',
+    message: 'Different photos, different angles. Best first.',
+    actions: [
+      for (final topo in group.all)
+        MasiSheetAction(
+          key: Key('map-place-option-${topo.wallId}'),
+          label: topo.name,
+          value: topo.wallId,
+          subtitle:
+              '${topo.routeCount} route${topo.routeCount == 1 ? '' : 's'}'
+              '${topo.likeCount > 0 ? ' · ♥ ${topo.likeCount}' : ''}',
+        ),
+    ],
+  );
+  if (picked == null || !context.mounted) return;
+  context.push('/walls/$picked?readonly=1');
+}
+
 class _BoulderMarker extends StatelessWidget {
-  const _BoulderMarker({required this.isPublic});
+  const _BoulderMarker({required this.isPublic, this.placeCount = 1});
 
   final bool isPublic;
+
+  /// How many topos of the SAME PLACE this pin stands for (community editing
+  /// phase 8b / C-6.2). 1 — the overwhelming majority — draws the bare glyph
+  /// exactly as before; more adds a small count badge.
+  ///
+  /// Without this the map was the one surface where duplicates still looked
+  /// like separate crags: four topos of one boulder are four pins within a few
+  /// metres, which at any real zoom is one smudge that cannot be tapped apart.
+  final int placeCount;
 
   /// Total height of the enclosing [Marker] box. This widget's own drawn
   /// content (see [_iconSize]) is deliberately SMALLER than this —
@@ -1642,14 +1725,61 @@ class _BoulderMarker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const glyph = MasiIcon('boulder_logo', tinted: false, size: _iconSize);
+    final Widget marker = isPublic
+        ? glyph
+        : const Opacity(
+            opacity: _privateMuteOpacity,
+            child: ColorFiltered(colorFilter: greyscale, child: glyph),
+          );
     return Align(
       alignment: Alignment.bottomCenter,
-      child: isPublic
-          ? glyph
-          : const Opacity(
-              opacity: _privateMuteOpacity,
-              child: ColorFiltered(colorFilter: greyscale, child: glyph),
+      child: placeCount <= 1
+          ? marker
+          : Stack(
+              clipBehavior: Clip.none,
+              alignment: Alignment.bottomCenter,
+              children: [
+                marker,
+                // Offset up-and-right of the glyph rather than centred on it,
+                // so the badge never covers the boulder shape that tells a
+                // reader what the pin IS.
+                Positioned(
+                  top: -2,
+                  right: -6,
+                  child: _PlaceCountBadge(count: placeCount),
+                ),
+              ],
             ),
+    );
+  }
+}
+
+/// "3" on a map pin that stands for three topos of one boulder.
+class _PlaceCountBadge extends StatelessWidget {
+  const _PlaceCountBadge({required this.count});
+
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+      constraints: const BoxConstraints(minWidth: 16),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: colors.separator),
+      ),
+      child: Text(
+        '$count',
+        textAlign: TextAlign.center,
+        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+          color: colors.ink,
+          fontWeight: FontWeight.w700,
+          height: 1.1,
+        ),
+      ),
     );
   }
 }
