@@ -116,6 +116,51 @@ Future<_FakeVersions> _pumpSheet(
   return remote;
 }
 
+/// Opens the sheet through the REAL `showModalBottomSheet` path, so its
+/// measured size is the one a user actually gets. [_pumpSheet] mounts the
+/// widget directly, which is fine for content assertions and useless for
+/// anything about how the sheet sits on the display.
+Future<_FakeVersions> _pumpSheetInModal(
+  WidgetTester tester, {
+  required List<Map<String, dynamic>> rows,
+  bool admin = false,
+  bool listThrows = false,
+  bool settle = true,
+}) async {
+  final remote = _FakeVersions(rows, listThrows: listThrows);
+  await tester.pumpWidget(
+    ProviderScope(
+      overrides: [
+        topoVersionsRemoteProvider.overrideWithValue(remote),
+        moderationRemoteProvider.overrideWithValue(
+          _FakeModeration(admin: admin),
+        ),
+        effectiveUidProvider.overrideWithValue('me'),
+      ],
+      child: MaterialApp(
+        theme: MasiTheme.light,
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: ElevatedButton(
+                onPressed: () => showTopoHistory(context, wallId: 'w1'),
+                child: const Text('open'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+  await tester.tap(find.text('open'));
+  if (settle) {
+    await tester.pumpAndSettle();
+  } else {
+    await tester.pump();
+  }
+  return remote;
+}
+
 void main() {
   group('what a version says it changed', () {
     test('routes added since the version before it', () {
@@ -348,6 +393,55 @@ void main() {
       await _pumpSheet(tester, rows: const []);
       expect(find.byKey(const Key('topo-history-empty')), findsOne);
       expect(find.textContaining('when a topo is published'), findsOne);
+    });
+
+    testWidgets(
+      'the sheet SHRINKS TO ITS CONTENT rather than filling the display. '
+      'It used to delegate its three states to MasiAsyncView, which puts its '
+      'content in an Expanded — correct on a screen, but here it made the '
+      'sheet cover the whole viewport, so there was no scrim left to tap and '
+      'the sheet could not be dismissed at all. Every test in this file '
+      'passed while that was true, because a widget test never tries to tap '
+      'outside a sheet; a browser found it in one gesture',
+      (tester) async {
+        await _pumpSheetInModal(tester, rows: [_row('v2'), _row('v1')]);
+
+        final sheet = tester.getRect(
+          find.byKey(const Key('topo-history-sheet')),
+        );
+        final screen = tester.getRect(find.byType(MaterialApp));
+        expect(
+          sheet.height,
+          lessThan(screen.height * 0.7),
+          reason: 'two rows should not need most of the display',
+        );
+        expect(
+          sheet.top,
+          greaterThan(0),
+          reason: 'there must be scrim above the sheet to tap',
+        );
+      },
+    );
+
+    testWidgets('a LOADING sheet is short too — not a full-screen spinner', (
+      tester,
+    ) async {
+      await _pumpSheetInModal(tester, rows: const [], settle: false);
+      // Pumped, not settled: this is the state while the fetch is in flight.
+      await tester.pump(const Duration(milliseconds: 400));
+
+      final sheet = tester.getRect(find.byKey(const Key('topo-history-sheet')));
+      final screen = tester.getRect(find.byType(MaterialApp));
+      expect(sheet.height, lessThan(screen.height * 0.7));
+    });
+
+    testWidgets('an ERROR sheet is short too', (tester) async {
+      await _pumpSheetInModal(tester, rows: const [], listThrows: true);
+
+      expect(find.byKey(const Key('topo-history-error')), findsOne);
+      final sheet = tester.getRect(find.byKey(const Key('topo-history-sheet')));
+      final screen = tester.getRect(find.byType(MaterialApp));
+      expect(sheet.height, lessThan(screen.height * 0.7));
     });
   });
 }

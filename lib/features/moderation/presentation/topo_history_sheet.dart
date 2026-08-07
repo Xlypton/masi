@@ -4,7 +4,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
-import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../application/moderation_providers.dart';
 import '../application/topo_version_providers.dart';
@@ -79,26 +78,22 @@ class TopoHistorySheet extends ConsumerWidget {
               ],
             ),
           ),
+          // The three states written out rather than delegated to
+          // `MasiAsyncView`. That widget puts its content in an `Expanded`,
+          // which is right on a screen and wrong in a bottom sheet: it made
+          // this sheet fill the display edge to edge, leaving no scrim to tap
+          // and no way to dismiss it at all. (Found by opening it in a
+          // browser; every widget test passed, because a test never tries to
+          // tap outside a sheet.)
+          //
+          // What is kept from that widget is the part that matters here: a
+          // FAILED fetch shows an error, never an empty list. An empty history
+          // is a CLAIM — "nothing has ever changed here" — so rendering one
+          // because the request failed would state something false about the
+          // exact thing the reader opened this sheet to check.
           Flexible(
-            // A real async view rather than `.asData?.value ?? []`, unlike the
-            // hazard sheet next door. An empty history list is a CLAIM —
-            // "nothing has ever changed here" — so a failed fetch that
-            // rendered as empty would state something false about the exact
-            // thing the reader opened this sheet to check.
-            child: MasiAsyncView<List<TopoVersion>>(
-              value: versions,
-              errorMessage: "Couldn't load this topo's history",
-              onRetry: () => ref.invalidate(topoVersionsProvider(wallId)),
-              // A spinner rather than a shaped skeleton: the row count is
-              // genuinely unknown here (one version or fifty), so placeholder
-              // rows would be guessing at the answer.
-              skeleton: (context) => const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(MasiSpacing.xxl),
-                  child: MasiLoadingIndicator.standalone(),
-                ),
-              ),
-              data: (context, list) => list.isEmpty
+            child: switch (versions) {
+              AsyncValue(hasValue: true, value: final list?) => list.isEmpty
                   ? Padding(
                       key: const Key('topo-history-empty'),
                       padding: EdgeInsets.fromLTRB(
@@ -137,7 +132,36 @@ class TopoHistorySheet extends ConsumerWidget {
                             : null,
                       ),
                     ),
-            ),
+              AsyncValue(hasError: true) => Padding(
+                key: const Key('topo-history-error'),
+                padding: EdgeInsets.fromLTRB(
+                  MasiSpacing.lg,
+                  MasiSpacing.md,
+                  MasiSpacing.lg,
+                  MasiSpacing.lg + bottomInset,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      "Couldn't load this topo's history",
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                    TextButton(
+                      key: const Key('topo-history-retry'),
+                      onPressed: () =>
+                          ref.invalidate(topoVersionsProvider(wallId)),
+                      child: const Text('Try again'),
+                    ),
+                  ],
+                ),
+              ),
+              _ => const Padding(
+                padding: EdgeInsets.all(MasiSpacing.xxl),
+                child: Center(child: MasiLoadingIndicator.standalone()),
+              ),
+            },
           ),
         ],
       ),
