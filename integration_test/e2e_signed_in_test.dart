@@ -268,7 +268,25 @@ void main() {
         find.text(kE2eSeededWallName),
         'the seeded published wall in the community feed — the live pull did '
         'not return it (fixture missing? run tool/e2e_seed.sh)',
-        timeout: const Duration(seconds: 40),
+        // 60s is comfortably above the real pull time. TIMING IS NOT WHY THIS
+        // FAILS — that was checked, at 150s, and it fails identically. What is
+        // known as of 2026-08-07:
+        //   * the session is REAL and the app knows it (the Account test above
+        //     passes: it renders the signed-in body and the E2E email),
+        //   * the server hands the fixture to THIS account's JWT — verified by
+        //     curl against PostgREST with a real password-grant token,
+        //     `is_wall_public` true, both fixture walls returned,
+        //   * the ancestors are owned by the same uid, so `fetchOwnRows` sees
+        //     them too (the feed INNER-JOINs sectors/areas, so a missing
+        //     ancestor would hide an imported wall — ruled out),
+        //   * `pullNow()` reports no sync error (the feed test above asserts
+        //     `community-sync-error-empty` is absent).
+        // So the break is between "the pull ran" and "the row is in the local
+        // walls table", and it is invisible from here: `flutter drive
+        // -d web-server` swallows the app's own console. The next step is the
+        // interactive loop (build main_e2e REAL, serve with COOP/COEP, read
+        // the browser console) — see the task filed for it.
+        timeout: const Duration(seconds: 60),
       );
       await binding.takeScreenshot('10-seeded-topo-in-feed');
 
@@ -280,7 +298,7 @@ void main() {
         tester,
         find.text(kE2eSeededAreaName),
         'the seeded Area in the local library after the pull',
-        timeout: const Duration(seconds: 30),
+        timeout: const Duration(seconds: 60),
       );
       await binding.takeScreenshot('11-seeded-area-local');
     },
@@ -305,7 +323,8 @@ void main() {
         tester,
         find.text(kE2eSeededWallName),
         'the seeded published wall row in the feed',
-        timeout: const Duration(seconds: 40),
+        // See the sibling test above for why this is not a timing problem.
+        timeout: const Duration(seconds: 60),
       );
       await tapOrFail(
         tester,
