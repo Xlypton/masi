@@ -67,6 +67,7 @@ class _FakeSuggestions implements SuggestionsRemote {
     required Map<String, Object?> patch,
     String? note,
     String? routeId,
+    String? photoId,
   }) async {
     filed.add((wallId, kind, patch));
     return 'new';

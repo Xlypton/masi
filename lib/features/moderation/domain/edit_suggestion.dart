@@ -1,22 +1,30 @@
-/// Suggested edits to a published topo (community editing phase 7a / C-5).
+/// Suggested edits to a published topo (community editing phases 7a and 7b /
+/// C-5).
 ///
-/// **Metadata only.** Geometry suggestions need four things this does not have
-/// — a photo to pin the line to, the database id rather than the domain id
-/// that `route_mapper` reassigns 1..n on every load, a visual diff, and a
-/// propose-mode canvas — and that last is the largest single piece of UI in
-/// the whole plan (§C-5b). It gets its own phase.
+/// Two shapes, and they are not variations on each other. A METADATA
+/// suggestion is `{field: newValue}` and reads as a sentence — the owner can
+/// decide from the text alone. A GEOMETRY suggestion is a line in percent
+/// space, and nobody can review a line by reading coordinates (§C-5b), so it
+/// carries the photo it was drawn on and is decided from a picture.
 library;
+
+import 'geometry_proposal.dart';
 
 enum SuggestionKind {
   topoMetadata,
-  routeMetadata;
+  routeMetadata,
+  routeGeometry;
 
-  String get wire =>
-      this == SuggestionKind.topoMetadata ? 'topo.metadata' : 'route.metadata';
+  String get wire => switch (this) {
+    SuggestionKind.topoMetadata => 'topo.metadata',
+    SuggestionKind.routeMetadata => 'route.metadata',
+    SuggestionKind.routeGeometry => 'route.geometry',
+  };
 
   static SuggestionKind? fromWire(String? raw) => switch (raw) {
     'topo.metadata' => SuggestionKind.topoMetadata,
     'route.metadata' => SuggestionKind.routeMetadata,
+    'route.geometry' => SuggestionKind.routeGeometry,
     _ => null,
   };
 
@@ -37,6 +45,10 @@ enum SuggestionKind {
       SuggestableField.description,
       SuggestableField.betaVideoUrl,
     ],
+    // Empty on purpose, and not an oversight: a line is not a value anybody
+    // types. Geometry never goes through the field picker — it is drawn on a
+    // canvas and reviewed as a picture.
+    SuggestionKind.routeGeometry => const [],
   };
 }
 
@@ -87,6 +99,7 @@ enum SuggestableField {
 const Map<String, List<String>> kSuggestableFields = {
   'topo.metadata': ['name', 'latitude', 'longitude'],
   'route.metadata': ['name', 'description', 'betaVideoUrl', 'style', 'styleTagsJson'],
+  'route.geometry': ['points', 'symbols'],
 };
 
 /// One suggestion, as its target's owner sees it.
@@ -101,6 +114,7 @@ class EditSuggestion {
     required this.isStale,
     this.routeId,
     this.routeName,
+    this.photoId,
     this.authorId,
     this.authorName,
     this.note,
@@ -128,6 +142,14 @@ class EditSuggestion {
 
   final String? routeId;
   final String? routeName;
+
+  /// The photo a geometry proposal was drawn on (§C-5b), and null for every
+  /// metadata suggestion. Points are percent-space fractions of THIS image,
+  /// so rendering or applying them against any other one is nonsense — the
+  /// server refuses a geometry suggestion that does not name a live photo of
+  /// the same topo.
+  final String? photoId;
+
   final String? authorId;
   final String? authorName;
   final String? note;
@@ -141,14 +163,36 @@ class EditSuggestion {
 
   DateTime get at => DateTime.fromMillisecondsSinceEpoch(createdAt);
 
+  /// The proposed line, or null for a metadata suggestion.
+  ///
+  /// Recomputed on read rather than cached: a suggestion is decided once and
+  /// then gone, so nothing here is on a path hot enough to trade clarity for.
+  GeometryProposal? get geometry => kind == SuggestionKind.routeGeometry
+      ? GeometryProposal.fromPatch(patch)
+      : null;
+
+  /// Whether this proposes a line that does not exist yet, rather than
+  /// replacing one that does. Both are geometry; only one is destructive if
+  /// the owner accepts it without looking.
+  bool get isNewLine =>
+      kind == SuggestionKind.routeGeometry && routeId == null;
+
   /// A one-line "field: old → new" summary is impossible from this row alone —
   /// the patch carries the proposed value, not the current one — so this
   /// renders only what was proposed. The owner is looking at their own topo
   /// and knows what it says now.
-  List<({String label, String value})> get changes => [
-    for (final entry in patch.entries)
-      (label: _labelFor(entry.key), value: '${entry.value}'),
-  ];
+  ///
+  /// EMPTY for geometry, which is the point of §C-5b's third requirement:
+  /// "nobody can review a line by reading coordinates". Printing
+  /// `points: [Offset(0.41, 0.72), …]` would technically render the patch and
+  /// tell the owner nothing they could decide on. The inbox draws it instead.
+  List<({String label, String value})> get changes =>
+      kind == SuggestionKind.routeGeometry
+      ? const []
+      : [
+          for (final entry in patch.entries)
+            (label: _labelFor(entry.key), value: '${entry.value}'),
+        ];
 
   String _labelFor(String wire) {
     for (final field in kind.fields) {
@@ -177,6 +221,16 @@ class EditSuggestion {
     // A patch with nothing applicable left is not a suggestion, it is noise.
     if (cleaned.isEmpty) return null;
 
+    final photoId = row['photoId'] as String?;
+    if (kind == SuggestionKind.routeGeometry) {
+      // Both halves have to be there for the owner to see anything. A line
+      // with no photo cannot be positioned, and a line that will not decode
+      // cannot be drawn — either way the row would render as an Apply button
+      // over blank space, which is the one thing worse than not showing it.
+      if (photoId == null) return null;
+      if (GeometryProposal.fromPatch(cleaned) == null) return null;
+    }
+
     return EditSuggestion(
       id: id,
       wallId: wallId,
@@ -193,6 +247,7 @@ class EditSuggestion {
       isStale: row['isStale'] == true,
       routeId: row['routeId'] as String?,
       routeName: row['routeName'] as String?,
+      photoId: photoId,
       authorId: row['authorId'] as String?,
       authorName: (row['authorName'] as String?)?.trim().isNotEmpty == true
           ? row['authorName'] as String

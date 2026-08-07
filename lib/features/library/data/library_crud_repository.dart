@@ -1,3 +1,5 @@
+import 'dart:ui' show Offset;
+
 import 'package:drift/drift.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:uuid/uuid.dart';
@@ -6,6 +8,8 @@ import '../../../core/db/app_database.dart' as db;
 import '../../../core/grades/grade_system.dart';
 import '../../../core/routes/route_styles.dart';
 import '../../topo/data/photo_files.dart';
+import '../../topo/data/route_mapper.dart';
+import '../../topo/domain/topo_route.dart';
 import '../domain/library_refs.dart';
 
 // Split out of this god-file (pure refactor, zero behavior change): the
@@ -752,6 +756,138 @@ class LibraryCrudRepository {
             ),
           ),
     );
+  }
+
+  /// Applies an accepted GEOMETRY suggestion (community editing phase 7b /
+  /// C-5b): either replaces one route's line, or adds a line the topo did not
+  /// have.
+  ///
+  /// [routeId] is the route table's own text uuid, never [TopoRoute.id] —
+  /// that one is an int the loader reassigns 1..n on every read, so a payload
+  /// carrying it would point at a different route after any reload (§C-5b,
+  /// requirement 2). A null [routeId] means "this line is missing", which is
+  /// the more common contribution, and inserts rather than updates.
+  ///
+  /// [points] and [symbols] are in percent space, normalised to [photoId]'s
+  /// image. Writing them against any other photo is meaningless, so the row is
+  /// pinned to that photo on both the insert and the update paths — an
+  /// accepted proposal cannot silently move a route onto a different picture.
+  ///
+  /// Same contract as [applyWallSuggestion] in every other respect: guarded by
+  /// ownership, marks the row dirty for the sync engine, and writes NOTHING
+  /// when there is nothing usable to write.
+  Future<void> applyRouteGeometry({
+    required String wallId,
+    required String photoId,
+    required List<Offset> points,
+    List<TopoSymbol>? symbols,
+    String? routeId,
+  }) async {
+    // Two points make a line; the server refuses fewer, and so does this, so
+    // a hand-built call cannot write a route that renders as a dot.
+    if (points.length < 2) return;
+
+    final now = nowMs();
+    final pointsJson = encodePoints(points);
+    // A NULL [symbols] means the proposal said nothing about markers, and the
+    // route keeps the ones it has. Collapsing that to `[]` would make
+    // accepting a corrected LINE silently delete every bolt and anchor on the
+    // route — a destructive edit nobody asked for or reviewed.
+    final symbolsJson = symbols == null ? null : encodeSymbols(symbols);
+
+    if (routeId != null) {
+      // The photo check runs BEFORE the guarded write, not as another
+      // predicate inside it. `_guardedWrite` treats "matched zero rows" as an
+      // anomaly worth throwing over — that is the whole point of it — and a
+      // deliberate refusal folded into the WHERE clause would be indis-
+      // tinguishable from the silent data loss it exists to catch.
+      final target =
+          await (_db.select(_db.routes)
+                ..where((t) => t.id.equals(routeId) & t.deletedAt.isNull()))
+              .getSingleOrNull();
+      // Refused, and quietly: the server will not file a proposal whose route
+      // and photo disagree, so arriving here means the topo changed underneath
+      // an old suggestion. Nothing to write and nothing to shout about — the
+      // same treatment phase 7a gives a route suggestion whose target is gone.
+      if (target == null ||
+          target.wallId != wallId ||
+          target.photoId != photoId) {
+        return;
+      }
+
+      await _guardedWrite(
+        operation: 'applyRouteGeometry',
+        id: routeId,
+        table: _db.routes,
+        idColumn: _db.routes.id,
+        ownerColumn: _db.routes.ownerId,
+        deletedAtColumn: _db.routes.deletedAt,
+        write: (_db.update(_db.routes)..where(
+              (t) =>
+                  t.id.equals(routeId) &
+                  t.deletedAt.isNull() &
+                  _ownOrUnowned(t.ownerId),
+            ))
+            .write(
+              db.RoutesCompanion(
+                pointsJson: Value(pointsJson),
+                symbolsJson: symbolsJson == null
+                    ? const Value.absent()
+                    : Value(symbolsJson),
+                updatedAt: Value(now),
+                dirty: const Value(true),
+              ),
+            ),
+      );
+      return;
+    }
+
+    // A NEW line. Numbering is per-photo (see `RouteRepository`'s class doc:
+    // a wall with three photos can have three route 1s), so the next number
+    // comes from this photo's live routes and not the wall's.
+    final existing =
+        await (_db.select(_db.routes)..where(
+              (t) =>
+                  t.wallId.equals(wallId) &
+                  t.photoId.equals(photoId) &
+                  t.deletedAt.isNull(),
+            ))
+            .get();
+    // Guard the wall itself before inserting: the insert below carries no
+    // ownership predicate of its own, so without this a suggestion could add
+    // a route to a topo this device does not own.
+    if (!await _guardedCascadeAllowed(
+      operation: 'applyRouteGeometry',
+      id: wallId,
+      table: _db.walls,
+      idColumn: _db.walls.id,
+      ownerColumn: _db.walls.ownerId,
+      deletedAtColumn: _db.walls.deletedAt,
+    )) {
+      return;
+    }
+
+    final number = existing.fold<int>(0, (max, r) => r.number > max ? r.number : max) + 1;
+    await _db
+        .into(_db.routes)
+        .insert(
+          db.RoutesCompanion.insert(
+            id: _uuid.v4(),
+            createdAt: now,
+            updatedAt: now,
+            wallId: wallId,
+            photoId: photoId,
+            number: number,
+            colorIndex: routeColorIndexFor(number),
+            pointsJson: pointsJson,
+            // A brand-new route has no markers to preserve, so the absent
+            // case is genuinely an empty list here.
+            symbolsJson: symbolsJson ?? '[]',
+            sortOrder: number,
+            ownerId: Value(currentUid()),
+            dirty: const Value(true),
+          ),
+        );
   }
 
   static double? _asDouble(Object? value) => switch (value) {

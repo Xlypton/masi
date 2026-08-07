@@ -6,8 +6,10 @@ import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
+import '../application/geometry_providers.dart';
 import '../application/suggestion_providers.dart';
 import '../domain/edit_suggestion.dart';
+import 'topo_line_view.dart';
 
 /// The owner's inbox of suggested edits (community editing phase 7a / C-5).
 ///
@@ -99,6 +101,90 @@ class _InboxList extends StatelessWidget {
   );
 }
 
+/// The proposed line drawn over the topo it is proposed for (§C-5b,
+/// requirement 3).
+///
+/// Bounded to a row-sized box on purpose. This is the "is this worth looking
+/// at" view, not the decision surface — "Open" is right there for the full
+/// canvas — and an inbox where every unanswered suggestion is a full-bleed
+/// photo is an inbox nobody scrolls to the bottom of.
+class _GeometryDiff extends StatelessWidget {
+  const _GeometryDiff({required this.suggestion, required this.geometry});
+
+  final EditSuggestion suggestion;
+  final AsyncValue<TopoGeometry?> geometry;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final proposal = suggestion.geometry;
+
+    return SizedBox(
+      height: 180,
+      child: switch (geometry) {
+        AsyncValue(hasValue: true, value: final TopoGeometry data)
+            when proposal != null =>
+          Align(
+            alignment: Alignment.centerLeft,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(MasiRadii.control),
+              child: TopoLineView(
+                key: Key('suggestion-diff-${suggestion.id}'),
+                photo: data.photo,
+                routes: data.routes,
+                proposedPoints: proposal.points,
+                proposedSymbols: proposal.symbols ?? const [],
+                // The line being replaced is dropped from the underlay: what
+                // is on screen is what accepting would produce. See
+                // `TopoLineView.replacedRouteNumber`.
+                replacedRouteNumber: _replacedNumber(data),
+              ),
+            ),
+          ),
+        // The photo this was drawn on is not on this device — usually because
+        // the owner deleted it. Says so rather than showing an empty frame,
+        // and the Apply button is disabled alongside (see the row's
+        // `canApply`), because a line nobody can see is a line nobody can
+        // judge.
+        AsyncValue(hasValue: true) => Center(
+          child: Text(
+            'That photo is no longer on this topo',
+            key: Key('suggestion-diff-missing-${suggestion.id}'),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: colors.ink2),
+          ),
+        ),
+        AsyncValue(hasError: true) => Center(
+          child: Text(
+            "Couldn't draw this suggestion",
+            key: Key('suggestion-diff-error-${suggestion.id}'),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: colors.ink2),
+          ),
+        ),
+        _ => const Center(child: CircularProgressIndicator()),
+      },
+    );
+  }
+
+  /// Maps the suggestion's target route (a database uuid) back to the local
+  /// [TopoRoute.number] the painter draws by.
+  ///
+  /// This direction, not the other: the uuid is the stable identity and the
+  /// number is the local one, so the lookup has to start from the uuid. Doing
+  /// it the other way is exactly the §C-5b requirement-2 bug.
+  int? _replacedNumber(TopoGeometry data) {
+    final routeId = suggestion.routeId;
+    if (routeId == null) return null;
+    for (final entry in data.routeIdsByNumber.entries) {
+      if (entry.value == routeId) return entry.key;
+    }
+    return null;
+  }
+}
+
 class _SuggestionRow extends ConsumerStatefulWidget {
   const _SuggestionRow({required this.suggestion});
 
@@ -153,6 +239,17 @@ class _SuggestionRowState extends ConsumerState<_SuggestionRow> {
     final textTheme = Theme.of(context).textTheme;
     final s = widget.suggestion;
 
+    // A geometry proposal is decided from a picture, so the picture has to be
+    // resolvable before Apply means anything. This watches the same local rows
+    // the diff draws from: no photo row, no diff, no Apply — an owner tapping
+    // Apply on a blank box would be approving something they never saw.
+    final geometry = s.kind == SuggestionKind.routeGeometry
+        ? ref.watch(
+            topoGeometryProvider((wallId: s.wallId, photoId: s.photoId)),
+          )
+        : null;
+    final canApply = geometry == null || geometry.value != null;
+
     return Container(
       key: Key('suggestion-row-${s.id}'),
       margin: const EdgeInsets.fromLTRB(
@@ -177,6 +274,21 @@ class _SuggestionRowState extends ConsumerState<_SuggestionRow> {
             overflow: TextOverflow.ellipsis,
           ),
           const SizedBox(height: MasiSpacing.xs),
+          // A proposed LINE is shown, not described (§C-5b, requirement 3).
+          // "points: [Offset(0.41, 0.72), …]" renders the patch faithfully and
+          // tells the owner nothing they could decide on.
+          if (s.kind == SuggestionKind.routeGeometry) ...[
+            Text(
+              s.isNewLine
+                  ? 'A line this topo does not have'
+                  : 'A different shape for ${s.targetLabel}',
+              key: Key('suggestion-geometry-summary-${s.id}'),
+              style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+            ),
+            const SizedBox(height: MasiSpacing.xs),
+            _GeometryDiff(suggestion: s, geometry: geometry!),
+            const SizedBox(height: MasiSpacing.xs),
+          ],
           // What is actually proposed, spelled out. An owner deciding from
           // "someone suggested an edit" is deciding on nothing.
           for (final change in s.changes)
@@ -256,7 +368,7 @@ class _SuggestionRowState extends ConsumerState<_SuggestionRow> {
               const SizedBox(width: MasiSpacing.xs),
               MasiPendingButton.filled(
                 key: Key('suggestion-accept-${s.id}'),
-                onPressed: _accept,
+                onPressed: canApply ? _accept : null,
                 child: const Text('Apply'),
               ),
             ],

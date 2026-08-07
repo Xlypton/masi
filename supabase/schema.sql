@@ -710,8 +710,12 @@ CREATE TABLE IF NOT EXISTS public.topo_edit_suggestions (
   id              TEXT PRIMARY KEY,
   "wallId"        TEXT NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
   "routeId"       TEXT REFERENCES public.routes(id) ON DELETE CASCADE,
+  -- Phase 7b: the photo a proposed LINE was drawn on. NULL for every metadata
+  -- suggestion, required for `route.geometry` — points are percent-space
+  -- fractions of one specific image, so a line with no photo names nothing.
+  "photoId"       TEXT REFERENCES public.photos(id) ON DELETE CASCADE,
   "authorId"      TEXT NOT NULL,
-  kind            TEXT NOT NULL,   -- topo.metadata | route.metadata
+  kind            TEXT NOT NULL,   -- topo.metadata | route.metadata | route.geometry
   patch           JSONB NOT NULL,
   note            TEXT,
   "baseVersionId" TEXT REFERENCES public.topo_versions(id) ON DELETE SET NULL,
@@ -776,3 +780,48 @@ CREATE TABLE IF NOT EXISTS public.topo_edit_suggestions (
 -- `ensure_wall_moderation` is rewritten once more (phases 1b, 3, 5, 8a): a
 -- trusted owner's share lands in `published` with `reviewedAt` stamped and
 -- `reviewerId` NULL; everyone else still lands in `pending`.
+
+-- ---------------------------------------------------------------------------
+-- Community editing, Phase 7b — GEOMETRY suggestions (C-5b)
+-- See supabase/migrations/2026-08-07_community_phase7b_geometry.sql
+-- ---------------------------------------------------------------------------
+--
+-- Adds the `route.geometry` kind (fields `points` and `symbols`) and the
+-- `"photoId"` column above. Three of §C-5b's four requirements are enforced
+-- here; the fourth (a propose-mode canvas and a visual diff) is client-side.
+--
+--  * PINNED TO A PHOTO. `suggest_edit` refuses a geometry proposal unless
+--    `photo_id` is a LIVE photo of the same wall, and — when a route is also
+--    named — unless that route lives on that same photo. Replacing a line
+--    pinned to photo A with points drawn on photo B is the meaningless case
+--    §C-5b opens with, and it looks correct until the owner accepts it.
+--  * THE DATABASE ID, NEVER THE DOMAIN ID. `"routeId"` is `routes.id`, the
+--    text uuid. `TopoRoute.id` is an int the client reassigns 1..n on every
+--    load and never crosses the wire. A NULL `"routeId"` means "here is a
+--    line this topo does not have", which is the more common contribution.
+--  * BOUNDS. `geometry_patch_error(patch)` returns NULL or the reason: 2..200
+--    points, ≤64 markers, every coordinate inside [0,1]. It checks that a
+--    marker's `type` is a STRING and deliberately does NOT check it against a
+--    vocabulary — the client owns that list and already drops what it does not
+--    recognise, so duplicating the enum here would block a new marker type
+--    behind a migration for no safety gained.
+--
+-- `suggest_edit` was DROPPED and recreated rather than replaced: adding a
+-- defaulted parameter creates an overload, and the 5-argument call every
+-- existing client makes would then match both signatures and be refused as
+-- ambiguous (42725). `suggestions_for_me` likewise, because CREATE OR REPLACE
+-- cannot change a function's OUT parameters.
+--
+-- `suggestions_for_me` gains a THIRD staleness test. Phase 7a's two both ask
+-- "has the topo changed since this was written"; geometry adds a question they
+-- cannot answer — is the thing this line was drawn ON still there? A proposal
+-- pinned to a deleted photo, or targeting a deleted route, is not merely stale:
+-- it cannot be rendered or applied at all. Note this is NOT the "primary photo
+-- changed" test §C-5b's wording suggests. A topo can carry several photos, each
+-- with its own independent routes, so a line on the second photo is perfectly
+-- current while the first is primary; what matters is whether the PINNED photo
+-- is still live.
+--
+-- What this deliberately does not add: a way to propose DELETING a route. A
+-- suggestion is an offer of help the owner may accept in one tap, and "accept"
+-- must never be the gesture that removes work.

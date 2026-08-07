@@ -46,12 +46,14 @@ class SuggestionService {
     required Map<String, Object?> patch,
     String? note,
     String? routeId,
+    String? photoId,
   }) => _ref.read(suggestionsRemoteProvider).suggest(
     wallId: wallId,
     kind: kind,
     patch: patch,
     note: note,
     routeId: routeId,
+    photoId: photoId,
   );
 
   /// Accepts a suggestion: APPLIES IT FIRST, then records the decision.
@@ -79,6 +81,22 @@ class SuggestionService {
         // nothing to keep asking about.
         if (routeId != null) {
           await repo.applyRouteSuggestion(routeId, suggestion.patch);
+        }
+      case SuggestionKind.routeGeometry:
+        final proposal = suggestion.geometry;
+        final photoId = suggestion.photoId;
+        // Both are guaranteed present by `EditSuggestion.fromRow`, which drops
+        // a geometry row missing either — so reaching this with a null is a
+        // bug rather than a user-facing case, and the right response is to
+        // resolve it out of the inbox rather than write half a line.
+        if (proposal != null && photoId != null) {
+          await repo.applyRouteGeometry(
+            wallId: suggestion.wallId,
+            photoId: photoId,
+            points: proposal.points,
+            symbols: proposal.symbols,
+            routeId: suggestion.routeId,
+          );
         }
     }
     await _ref

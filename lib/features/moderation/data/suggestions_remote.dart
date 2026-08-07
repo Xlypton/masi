@@ -13,12 +13,19 @@ abstract class SuggestionsRemote {
   /// whole patch is refused rather than partly applied, because a suggestion
   /// that silently drops half of what its author wrote is worse than one that
   /// is turned down.
+  ///
+  /// [photoId] is REQUIRED for `route.geometry` and refused for anything else
+  /// (§C-5b): points are percent-space fractions of one specific image, so a
+  /// line with no photo names nothing. The server checks the photo is a live
+  /// photo of the same topo, and — when [routeId] is also given — that the
+  /// route being replaced lives on that same photo.
   Future<String> suggest({
     required String wallId,
     required SuggestionKind kind,
     required Map<String, Object?> patch,
     String? note,
     String? routeId,
+    String? photoId,
   });
 
   /// Open suggestions on topos the signed-in user OWNS, oldest first.
@@ -50,6 +57,7 @@ class SupabaseSuggestionsRemote implements SuggestionsRemote {
     required Map<String, Object?> patch,
     String? note,
     String? routeId,
+    String? photoId,
   }) async {
     final result = await _client.rpc<dynamic>(
       'suggest_edit',
@@ -59,6 +67,7 @@ class SupabaseSuggestionsRemote implements SuggestionsRemote {
         'patch': patch,
         'note': note,
         'route_id': routeId,
+        'photo_id': photoId,
       },
     );
     return result is String ? result : '';

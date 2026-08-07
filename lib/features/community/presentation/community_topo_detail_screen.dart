@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../../app/theme.dart';
@@ -443,6 +444,15 @@ class _CommunityTopoDetailScreenState
           value: 'suggest',
           subtitle: 'Wrong name or location — the owner decides',
         ),
+        // Separate from "Suggest a fix", not folded into it. A typo is typed
+        // and a line is drawn — they share a destination and nothing else,
+        // and one of them opens a canvas.
+        MasiSheetAction(
+          key: Key('community-detail-suggest-line'),
+          label: 'Suggest a line',
+          value: 'suggest-line',
+          subtitle: 'Draw a route this topo is missing, or fix one',
+        ),
         MasiSheetAction(
           key: Key('community-detail-report'),
           label: 'Report this topo',
@@ -458,6 +468,11 @@ class _CommunityTopoDetailScreenState
         await showTopoHistory(context, wallId: wallId);
       case 'suggest':
         await _suggestEdit(wallId);
+      case 'suggest-line':
+        await context.push(
+          '/walls/$wallId/propose-line',
+          extra: ref.read(wallNameProvider(wallId)).value,
+        );
       case 'report':
         await _reportTopo(wallId);
     }

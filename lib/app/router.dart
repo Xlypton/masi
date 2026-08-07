@@ -18,6 +18,7 @@ import '../features/library/presentation/sectors_screen.dart';
 import '../features/library/presentation/topos_screen.dart';
 import '../features/library/presentation/walls_screen.dart';
 import '../features/moderation/presentation/admin_queue_screen.dart';
+import '../features/moderation/presentation/propose_line_screen.dart';
 import '../features/moderation/presentation/suggestions_inbox_screen.dart';
 import '../features/logbook/presentation/logbook_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
@@ -322,6 +323,18 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/suggestions',
       builder: (context, state) => const SuggestionsInboxScreen(),
+    ),
+    // Drawing a line on somebody else's published topo (community editing
+    // phase 7b). Unguarded for the same reason as the two routes above:
+    // nothing here writes to any content table. The screen produces a row in
+    // `topo_edit_suggestions` and `suggest_edit` refuses a topo that is not
+    // public, so reaching this route by hand achieves nothing a tap could not.
+    GoRoute(
+      path: '/walls/:wallId/propose-line',
+      builder: (context, state) => ProposeLineScreen(
+        wallId: state.pathParameters['wallId']!,
+        topoName: state.extra as String?,
+      ),
     ),
     GoRoute(path: '/areas', builder: (context, state) => const AreasScreen()),
     GoRoute(
