@@ -207,18 +207,27 @@ for weight in Regular Medium Bold; do
 done
 
 echo "==> e2e-entrypoint leak gate"
-# `lib/main_e2e.dart` boots the app with auth bypassed (fake signed-in session,
-# web auth wall off). It is reachable only via an explicit `-t`, so a normal
-# build cannot include it — but "cannot" is worth verifying rather than
-# assuming, because the failure mode is shipping an auth bypass to production.
-# `e2e@masi.test` is a string literal in that file and survives into the
-# emitted bundle whenever it is compiled in.
-if grep -rq "e2e@masi\.test" build/web; then
-  echo "FAIL: build/web contains the e2e marker 'e2e@masi.test' — this bundle" >&2
-  echo "      was built from lib/main_e2e.dart, which bypasses authentication." >&2
-  echo "      NEVER deploy this. Rebuild with the default entrypoint." >&2
-  exit 1
-fi
+# `lib/main_e2e.dart` boots the app with the product's sign-in bypassed — in
+# FAKE mode with a synthetic signed-in session and the web auth wall off, in
+# REAL mode with an `E2E_PASSWORD` baked into the bundle. It is reachable only
+# via an explicit `-t`, so a normal build cannot include it — but "cannot" is
+# worth verifying rather than assuming, because the failure mode is shipping an
+# auth bypass (and, in REAL mode, a live credential) to production.
+#
+# TWO markers, because one is not enough. `e2e@masi.test` only exists on the
+# FAKE path: a REAL-mode build references neither `E2eSignedInAuthRepository`
+# nor that constant, so a tree-shaking compiler may legitimately drop it and
+# this gate would pass on a bundle that DOES bypass sign-in.
+# `masi-e2e-entrypoint-do-not-deploy` is `debugPrint`ed by `e2eBoot()` on every
+# boot in BOTH modes, so it cannot be shaken out. Keep both checks.
+for MARKER in "e2e@masi\.test" "masi-e2e-entrypoint-do-not-deploy"; do
+  if grep -rq "$MARKER" build/web; then
+    echo "FAIL: build/web contains the e2e marker '$MARKER' — this bundle" >&2
+    echo "      was built from lib/main_e2e.dart, which bypasses the product's" >&2
+    echo "      sign-in. NEVER deploy this. Rebuild with the default entrypoint." >&2
+    exit 1
+  fi
+done
 echo "    ok: no e2e entrypoint in the bundle"
 
 echo "==> service-worker precache manifest"
