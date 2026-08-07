@@ -692,15 +692,25 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     // would be a straightforward lie — the server puts it in `pending` and
     // nobody but the owner and a moderator can see it until it is approved.
     // The old copy also promised "you can unpublish it again at any time",
-    // which the phase 5 withdrawal cooldown will make untrue; it is dropped
-    // now rather than left to expire.
+    // which the phase 5 withdrawal cooldown made untrue.
+    //
+    // Phase 8a made it conditionally true again: a trusted account's topo
+    // publishes immediately. So the sheet has to ask which case this is rather
+    // than assert one — a person told "a moderator will review this" whose
+    // topo is public thirty seconds later has been misled, and one told "this
+    // goes live now" who then waits three days for a moderator has been misled
+    // worse.
+    final trusted =
+        ref.read(myTrustProvider).asData?.value.isTrusted ?? false;
     final confirmed = await showMasiConfirm(
       context,
-      title: 'Submit to Community?',
-      message:
-          '"${topo.name}" goes to a moderator for review. Once approved, '
-          'other climbers can see it and rely on it.',
-      confirmLabel: 'Submit',
+      title: trusted ? 'Publish to Community?' : 'Submit to Community?',
+      message: trusted
+          ? '"${topo.name}" becomes visible to other climbers straight away. '
+                'They can rely on it, so it is worth a last look first.'
+          : '"${topo.name}" goes to a moderator for review. Once approved, '
+                'other climbers can see it and rely on it.',
+      confirmLabel: trusted ? 'Publish' : 'Submit',
       confirmKey: Key('topo-publish-confirm-${topo.wallId}'),
       isDestructive: false,
     );

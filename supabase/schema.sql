@@ -750,3 +750,29 @@ CREATE TABLE IF NOT EXISTS public.topo_edit_suggestions (
 -- current version in place, so its id stays newest while its contents change
 -- underneath the suggestion. The second test — was the pinned version touched
 -- after the suggestion was filed — closes that.
+
+-- ---------------------------------------------------------------------------
+-- Community editing, Phase 8a — trust levels (C-4)
+-- See supabase/migrations/2026-08-07_community_phase8_trust.sql
+-- ---------------------------------------------------------------------------
+--
+-- No new tables. `trust_level(uid)` is COMPUTED from rows that already exist,
+-- so there is no counter to drift and nothing to backfill.
+--
+-- Two levels: 0 = everything goes to the queue, 1 = publishes immediately.
+-- Earned at three approvals; lost entirely by ONE upheld report. The asymmetry
+-- is deliberate — wrongly trusting somebody costs unreviewed bad content on a
+-- climbing topo, wrongly distrusting them costs a moderator one read.
+--
+-- THE CRITERION IS `reviewerId IS NOT NULL`, NOT `reviewedAt`. Phase 1b's
+-- trigger stamped `reviewedAt` on every wall it promoted during the
+-- behaviour-neutral backfill, so eight live topos carry a review timestamp no
+-- moderator ever produced; a live query with the `reviewedAt` criterion read
+-- the project owner as fully trusted on the strength of them. `reviewerId` is
+-- set by exactly one thing — `review_topo`, to the admin who pressed the
+-- button — and is deliberately left NULL by auto-approval, so nothing an
+-- account publishes on its own recognisance feeds back into its own standing.
+--
+-- `ensure_wall_moderation` is rewritten once more (phases 1b, 3, 5, 8a): a
+-- trusted owner's share lands in `published` with `reviewedAt` stamped and
+-- `reviewerId` NULL; everyone else still lands in `pending`.

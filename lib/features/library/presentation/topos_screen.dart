@@ -15,6 +15,7 @@ import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/min_stars_filter_chips.dart';
 import '../../moderation/application/moderation_providers.dart';
+import '../../moderation/application/trust_providers.dart';
 import '../../moderation/domain/moderation_state.dart';
 import '../../moderation/presentation/access_editor.dart';
 import '../../moderation/presentation/topo_history_sheet.dart';

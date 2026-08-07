@@ -50,9 +50,9 @@ Map<String, dynamic> _row(
 };
 
 class _FakeSuggestions implements SuggestionsRemote {
-  _FakeSuggestions([this.rows = const []]);
+  _FakeSuggestions();
 
-  final List<Map<String, dynamic>> rows;
+  final List<Map<String, dynamic>> rows = const [];
   final filed = <(String, SuggestionKind, Map<String, Object?>)>[];
   final resolved = <(String, bool)>[];
   Object? resolveError;
