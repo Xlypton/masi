@@ -7,48 +7,76 @@ import '../../../shared/presentation/masi_icon.dart';
 import '../application/moderation_providers.dart';
 import '../domain/moderation_state.dart';
 
-/// The OWNER's view of where their topo stands in review (community editing
-/// phase 3).
+/// Where a topo stands in review, and whether it is on its way out
+/// (community editing phases 3 and 5).
 ///
-/// Renders nothing for a draft or a published topo — the two states where
-/// there is nothing to say. Sharing a topo and then seeing no acknowledgement
-/// anywhere is the failure this exists to prevent: without it, submitting
-/// looks identical to publishing right up until the owner notices nobody can
-/// see it.
+/// Renders nothing for a draft or a healthy published topo — the two states
+/// where there is nothing to say. Sharing a topo and then seeing no
+/// acknowledgement anywhere is the failure this exists to prevent: without it,
+/// submitting looks identical to publishing right up until the owner notices
+/// nobody can see it.
 ///
-/// Shown only to the owner, because [wallModerationRowProvider] can only
-/// resolve a non-published row for them (RLS on `wall_moderation` returns a
-/// pending row to its owner and to admins, nobody else).
+/// [isOwner] switches audience, not just wording. Every non-published state is
+/// the owner's business alone, and RLS enforces that — `wall_moderation`
+/// returns a pending or rejected row to its owner and to admins, nobody else.
+/// The one thing a READER is entitled to know is that a topo they may be
+/// planning around is being withdrawn (C-3): that notice is the reason the
+/// ten days exist at all, so it renders for everyone, and says nothing about
+/// cancelling because a reader cannot.
 class ModerationBanner extends ConsumerWidget {
-  const ModerationBanner({super.key, required this.wallId});
+  const ModerationBanner({
+    super.key,
+    required this.wallId,
+    this.isOwner = true,
+  });
 
   final String wallId;
+  final bool isOwner;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final row = ref.watch(wallModerationRowProvider(wallId)).asData?.value;
     if (row == null) return const SizedBox.shrink();
-    return ModerationNotice(row: row);
+    return ModerationNotice(row: row, isOwner: isOwner);
   }
 }
 
 /// The presentational half of [ModerationBanner], taking the row directly so
 /// it can be exercised without a database.
 class ModerationNotice extends StatelessWidget {
-  const ModerationNotice({super.key, required this.row});
+  const ModerationNotice({
+    super.key,
+    required this.row,
+    this.isOwner = true,
+    this.now,
+  });
 
   final db.WallModerationRow row;
+  final bool isOwner;
+
+  /// Injected so the countdown's boundary cases are testable without waiting
+  /// ten days. Defaults to the wall clock.
+  final DateTime? now;
 
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    final state = ModerationState.fromWire(row.state);
-    final copy = _copyFor(state, row);
+    final view = ModerationView.fromRow(
+      state: row.state,
+      withdrawRequestedAt: row.withdrawRequestedAt,
+      rejectionReason: row.rejectionReason,
+      now: now,
+    );
+    final copy = _copyFor(view, isOwner: isOwner);
     if (copy == null) return const SizedBox.shrink();
 
+    // `withdrawing` is its own key rather than `published`: it is stored as
+    // published, but a test (or a reader) asking "is the withdrawal notice up"
+    // must not have to match the state of a perfectly healthy topo.
+    final slug = view.isWithdrawing ? 'withdrawing' : view.effectiveState.wire;
     final tint = copy.isProblem ? colors.gradeHard : colors.accent;
     return Container(
-      key: Key('moderation-notice-${state.wire}'),
+      key: Key('moderation-notice-$slug'),
       margin: const EdgeInsets.symmetric(
         horizontal: MasiSpacing.lg,
         vertical: MasiSpacing.sm,
@@ -91,8 +119,33 @@ class ModerationNotice extends StatelessWidget {
     );
   }
 
-  static _NoticeCopy? _copyFor(ModerationState state, db.WallModerationRow row) {
-    switch (state) {
+  static _NoticeCopy? _copyFor(ModerationView view, {required bool isOwner}) {
+    // The withdrawal notice comes FIRST and is the only thing a non-owner ever
+    // sees. It is checked ahead of the state switch because a withdrawing topo
+    // is still stored as `published`, which the switch below correctly treats
+    // as "nothing to say".
+    if (view.isWithdrawing) {
+      // Always at least 1: `daysRemaining` rounds UP and `isWithdrawing` is
+      // false once the deadline passes, so the final partial day reads "in 1
+      // day" and there is deliberately no "today" branch — it would be
+      // unreachable, and unreachable copy is copy nobody ever proofreads.
+      final days = view.daysRemaining ?? 1;
+      final when = 'in $days day${days == 1 ? '' : 's'}';
+      return _NoticeCopy(
+        icon: 'warning',
+        headline: 'Being withdrawn',
+        body: isOwner
+            ? 'This topo stops being public $when. You can cancel until then.'
+            : 'The owner is withdrawing this topo. It stops being public '
+                  '$when.',
+        isProblem: true,
+      );
+    }
+
+    // Everything below is between the owner and the moderators.
+    if (!isOwner) return null;
+
+    switch (view.effectiveState) {
       case ModerationState.pending:
         return const _NoticeCopy(
           icon: 'sync',
@@ -103,7 +156,7 @@ class ModerationNotice extends StatelessWidget {
           isProblem: false,
         );
       case ModerationState.rejected:
-        final reason = row.rejectionReason?.trim();
+        final reason = view.rejectionReason?.trim();
         return _NoticeCopy(
           icon: 'warning',
           headline: 'Not approved',
@@ -127,27 +180,16 @@ class ModerationNotice extends StatelessWidget {
         return const _NoticeCopy(
           icon: 'eye_off',
           headline: 'Withdrawn',
-          body: 'This topo is no longer shared. You can submit it again.',
+          body:
+              'This topo is no longer public. You can submit it again, and it '
+              'goes back through review.',
           isProblem: false,
         );
+      // A healthy published topo says nothing — "your topo is fine" is not
+      // news. The withdrawing case never reaches here; it is handled above,
+      // before this switch, precisely because it is still stored as
+      // `published`.
       case ModerationState.published:
-        // A published topo with a withdrawal running gets a countdown, and
-        // otherwise says nothing — "your topo is fine" is not news.
-        final requestedAt = row.withdrawRequestedAt;
-        if (requestedAt == null) return null;
-        final goesAt = DateTime.fromMillisecondsSinceEpoch(
-          requestedAt,
-        ).add(kWithdrawalCooldown);
-        final daysLeft = goesAt.difference(DateTime.now()).inDays;
-        return _NoticeCopy(
-          icon: 'warning',
-          headline: 'Being withdrawn',
-          body: daysLeft <= 0
-              ? 'This topo stops being public today.'
-              : 'This topo stops being public in $daysLeft '
-                    'day${daysLeft == 1 ? '' : 's'}. You can cancel until then.',
-          isProblem: true,
-        );
       case ModerationState.draft:
         return null;
     }

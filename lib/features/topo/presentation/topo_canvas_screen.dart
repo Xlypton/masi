@@ -17,6 +17,8 @@ import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/logbook/presentation/log_ascent_sheet.dart';
+import 'package:masi/features/moderation/application/moderation_providers.dart';
+import 'package:masi/features/moderation/presentation/moderation_banner.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/application/rock_highlight_controller.dart';
 import 'package:masi/features/topo/data/image_dimensions.dart';
@@ -323,6 +325,16 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // whatever the previously-viewed wall was doing.
       _resetToViewMode();
       _loadInitialPhotoForWall(widget.wallId);
+      // Fill the moderation mirror for this wall so the banner above the
+      // canvas has something to say. `wall_moderation` is pull-only and
+      // nothing else on this route fetches it, so without this the banner is
+      // permanently blank on a deep link or a cold start — which is
+      // indistinguishable from "your topo is fine".
+      //
+      // Fire-and-forget, and guarded all the way down to the provider reads —
+      // see `refreshWallModerationFrom`. A canvas that failed to open because
+      // a banner could not fetch its data would be a spectacularly bad trade.
+      refreshWallModerationFrom(ref, {widget.wallId});
     });
   }
 
@@ -1470,6 +1482,25 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                             ),
                           ],
                         ),
+                      ),
+                      // Where the topo stands in review, and the withdrawal
+                      // countdown (community editing phases 3 and 5).
+                      //
+                      // This is the screen an owner actually opens after
+                      // submitting, so it is where "Waiting for review" has to
+                      // appear — without it, submitting a topo produces no
+                      // acknowledgement anywhere in the app and the owner
+                      // learns something happened only when they notice nobody
+                      // can see it. Renders to nothing for a draft or a
+                      // healthy published topo, which is the overwhelmingly
+                      // common case, so it costs an idle canvas nothing.
+                      //
+                      // `isOwner: !readOnly` — the same screen serves community
+                      // readers at `/walls/<id>?readonly=1`, and they get only
+                      // the withdrawal warning, never the owner's review state.
+                      ModerationBanner(
+                        wallId: widget.wallId,
+                        isOwner: !widget.readOnly,
                       ),
                       if (showSymbolPalette) ...[
                         const SizedBox(height: MasiSpacing.sm),

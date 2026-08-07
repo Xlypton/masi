@@ -63,6 +63,25 @@ abstract class ModerationRemote {
   /// Takes down an already-published topo. Admin-only. The content is
   /// retained, not destroyed (COMMUNITY_PLAN.md §3.3), so this is reversible.
   Future<void> removeTopo({required String wallId, String? reason});
+
+  /// Starts the ten-day withdrawal clock on a published topo (C-3). Returns
+  /// the epoch-ms instant the clock started from — which for a second call is
+  /// the ORIGINAL one, not a fresh one: asking twice must not silently cost
+  /// the owner ten more days.
+  ///
+  /// Owner-or-admin, enforced server-side. Throws if the topo is not
+  /// published, because a client showing a countdown for something that was
+  /// never public is worse than an error.
+  Future<int?> requestWithdrawal(String wallId);
+
+  /// Stops the clock, and returns the resulting state.
+  ///
+  /// Two outcomes, decided by the server rather than here: cancelling a
+  /// running withdrawal returns `published` (nothing happened), while
+  /// cancelling one whose ten days already elapsed is a RE-SUBMISSION and
+  /// returns `pending`. The topo left public view; coming back goes through
+  /// review again.
+  Future<String> cancelWithdrawal(String wallId);
 }
 
 /// The real [ModerationRemote], backed by the anon/publishable Supabase
@@ -150,5 +169,31 @@ class SupabaseModerationRemote implements ModerationRemote {
       'remove_topo',
       params: {'wall_id': wallId, 'reason': reason},
     );
+  }
+
+  @override
+  Future<int?> requestWithdrawal(String wallId) async {
+    final result = await _client.rpc<dynamic>(
+      'request_withdrawal',
+      params: {'wall_id': wallId},
+    );
+    return switch (result) {
+      final int v => v,
+      final num v => v.toInt(),
+      final String v => int.tryParse(v),
+      _ => null,
+    };
+  }
+
+  @override
+  Future<String> cancelWithdrawal(String wallId) async {
+    final result = await _client.rpc<dynamic>(
+      'cancel_withdrawal',
+      params: {'wall_id': wallId},
+    );
+    // Falling back to `published` rather than to something alarming: the RPC
+    // only ever returns from the happy path, and the common cancellation is
+    // the one that leaves the topo exactly as public as it was.
+    return result is String ? result : 'published';
   }
 }

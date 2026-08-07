@@ -14,6 +14,8 @@ import '../../../core/grades/grade_system.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/min_stars_filter_chips.dart';
+import '../../moderation/application/moderation_providers.dart';
+import '../../moderation/domain/moderation_state.dart';
 import '../../moderation/presentation/access_editor.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
 import '../../../shared/filtering/style_tag_filter_chips.dart';
@@ -247,6 +249,37 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     if (query != _query) {
       setState(() => _query = query);
     }
+  }
+
+  /// Wall ids whose moderation state this screen has already asked the server
+  /// about, so the pull below runs once per topo per screen mount rather than
+  /// on every rebuild (and this list rebuilds on every keystroke in the search
+  /// field).
+  final _moderationPulled = <String>{};
+
+  /// Fills the moderation mirror for the user's own SHARED topos.
+  ///
+  /// Without this the library is the one place that never learns what happened
+  /// to a submission: `wall_moderation` is pull-only and nothing else on this
+  /// screen fetches it, so a topo waiting in the review queue would keep
+  /// showing the plain "Published" badge it had before it was ever submitted.
+  /// Only shared topos are asked about — a draft has no server-side moderation
+  /// story worth a round trip.
+  ///
+  /// Fire-and-forget by design: [refreshWallModeration] is documented never to
+  /// throw, and a badge that fails to sharpen must not be able to break the
+  /// list it sits in.
+  void _pullModerationFor(List<ProximityTopoEntry> entries) {
+    final wanted = <String>{
+      for (final entry in entries)
+        if (entry.ownTopo?.visibility == 'shared') entry.wallId,
+    }..removeAll(_moderationPulled);
+    if (wanted.isEmpty) return;
+    _moderationPulled.addAll(wanted);
+    // The WidgetRef half, guarded down to the provider reads themselves — see
+    // `refreshWallModerationFrom`. Deferred by a microtask because this is
+    // called from `build`.
+    Future.microtask(() => refreshWallModerationFrom(ref, wanted));
   }
 
   /// [_OfflineEmptyState]'s Retry: re-probes `reachabilityProvider` first
@@ -562,6 +595,12 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                       if (filtered.isEmpty) {
                         return const _FilteredEmptyState();
                       }
+                      // Ask about the SEARCHED/FILTERED set, not the whole
+                      // library: the point is to be right about what is on
+                      // screen, and a user with hundreds of topos should not
+                      // pay a round trip for every one of them to render a
+                      // badge on ten.
+                      _pullModerationFor(filtered);
                       return _ToposList(
                         entries: filtered,
                         // The list now runs full-bleed behind the floating

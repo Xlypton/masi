@@ -21,6 +21,7 @@ import '../../moderation/presentation/access_banner.dart';
 import '../../moderation/presentation/grade_consensus_view.dart';
 import '../../moderation/presentation/hazard_banner.dart';
 import '../../moderation/presentation/hazard_list_sheet.dart';
+import '../../moderation/presentation/moderation_banner.dart';
 import '../../moderation/presentation/hazard_reporter.dart';
 import '../../moderation/presentation/verification_tile.dart';
 import '../../topo/domain/topo_route.dart';
@@ -654,6 +655,16 @@ class _CommunityTopoDetailScreenState
             // climber who has scrolled past it to the route list has already
             // decided to go. Renders to nothing when there is nothing to say.
             SliverToBoxAdapter(child: AccessBanner(wallId: wallId)),
+            // "The owner is withdrawing this topo" (C-3), above the social
+            // surface for the same reason the access notice is: someone
+            // reading this page may be planning a trip around it, and the
+            // warning is the entire reason the topo stays visible for ten days
+            // instead of vanishing. `isOwner: false` — this is the reader's
+            // view, so it never offers to cancel and never leaks a pending or
+            // rejected state (which RLS would not return here anyway).
+            SliverToBoxAdapter(
+              child: ModerationBanner(wallId: wallId, isOwner: false),
+            ),
             // Reported hazards, immediately under the access notice and above
             // the social surface. Same argument as the banner above it: a
             // spinning bolt is worth more than a like count, and a climber who

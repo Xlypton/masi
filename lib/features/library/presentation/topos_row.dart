@@ -371,6 +371,21 @@ class _TopoRowState extends ConsumerState<_TopoRow>
   ) async {
     final isShared = topo.visibility == 'shared';
     final hasCoords = topo.latitude != null && topo.longitude != null;
+    // Read, not watch: the sheet is a snapshot taken at open time and does not
+    // rebuild. `.value` (rather than awaiting `.future`) so an un-pulled
+    // mirror yields null and the menu degrades to its pre-phase-5 shape
+    // instead of blocking the sheet on a network round trip — the server
+    // trigger is still there to catch anything the client gets wrong.
+    final view = ref.read(wallModerationViewProvider(topo.wallId)).value;
+    final isProtected = view?.isDeleteProtected ?? false;
+    final isWithdrawing = view?.isWithdrawing ?? false;
+    // A topo whose ten days ran out: still `visibility = 'shared'`, still
+    // stored as `published`, and invisible to everyone. Without an explicit
+    // way back the owner is stuck — the menu would offer "Unpublish" on
+    // something nobody can see, and re-sharing an already-shared topo is not
+    // an action the UI can express.
+    final isWithdrawn =
+        isShared && view?.effectiveState == ModerationState.withdrawn;
 
     final action = await showMasiActionSheet<String>(
       context,
@@ -385,15 +400,51 @@ class _TopoRowState extends ConsumerState<_TopoRow>
           label: 'Move to…',
           value: 'move',
         ),
-        MasiSheetAction(
-          key: Key('topo-publish-${topo.wallId}'),
-          // "Submit", not "Publish" — see `_handlePublish`. `isShared` is the
-          // owner's own `visibility` flag and still means "I have shared
-          // this", so it remains the right thing to key the reverse action
-          // on even though sharing no longer implies being visible.
-          label: isShared ? 'Unpublish' : 'Submit to Community',
-          value: isShared ? 'unpublish' : 'publish',
-        ),
+        // Three shapes, decided by how public the topo actually is:
+        //
+        //   not shared            → "Submit to Community"
+        //   shared, not published → "Unpublish" (immediate, as it always was —
+        //                           nothing anyone else can see is at stake)
+        //   published             → "Withdraw…", the ten-day flow (C-3)
+        //
+        // The last is the client-side half of the guard. The server would
+        // silently revert a plain unpublish here (it CANNOT raise — see the
+        // phase 5 migration), so without this the owner would tap Unpublish,
+        // watch it appear to work, and find the topo still public tomorrow.
+        if (isWithdrawing)
+          MasiSheetAction(
+            key: Key('topo-cancel-withdraw-${topo.wallId}'),
+            label: 'Cancel withdrawal',
+            value: 'cancel-withdraw',
+            subtitle: _withdrawalSubtitle(view),
+          )
+        else if (isWithdrawn)
+          // Same RPC as Cancel, because on the server they are the same act —
+          // "stop the withdrawal". Only the outcome differs, and the server
+          // decides it: in time it stays published, afterwards it goes back
+          // in the queue. Two labels for one call, rather than two calls that
+          // could disagree about where the boundary is.
+          MasiSheetAction(
+            key: Key('topo-resubmit-${topo.wallId}'),
+            label: 'Submit for review again',
+            value: 'cancel-withdraw',
+            subtitle: 'Withdrawn — not public',
+          )
+        else
+          MasiSheetAction(
+            key: Key('topo-publish-${topo.wallId}'),
+            // "Submit", not "Publish" — see `_handlePublish`. `isShared` is the
+            // owner's own `visibility` flag and still means "I have shared
+            // this", so it remains the right thing to key the reverse action
+            // on even though sharing no longer implies being visible.
+            label: isShared
+                ? (isProtected ? 'Withdraw from Community…' : 'Unpublish')
+                : 'Submit to Community',
+            value: isShared
+                ? (isProtected ? 'withdraw' : 'unpublish')
+                : 'publish',
+            subtitle: isProtected ? 'Stays visible for 10 days' : null,
+          ),
         MasiSheetAction(
           key: Key('topo-access-${topo.wallId}'),
           label: 'Access…',
@@ -447,27 +498,47 @@ class _TopoRowState extends ConsumerState<_TopoRow>
         _handleShowOnMap(context, topo);
       case 'set-location':
         await _handleSetLocation(context, ref, topo, reportBusy);
+      case 'withdraw':
+        await _handleWithdraw(context, ref, topo, reportBusy);
+      case 'cancel-withdraw':
+        await _handleCancelWithdraw(context, ref, topo, isWithdrawn, reportBusy);
       case 'delete':
-        await _handleDelete(context, ref, topo, reportBusy);
+        await _handleDelete(context, ref, topo, reportBusy, isProtected);
     }
+  }
+
+  /// "Stops being public in 3 days" for the Cancel action's subtitle, or null
+  /// when nothing is running. Never reads "0 days": this is only shown while
+  /// the withdrawal is live, and [ModerationView.daysRemaining] rounds up, so
+  /// the floor is 1.
+  static String? _withdrawalSubtitle(ModerationView? view) {
+    final days = view?.daysRemaining;
+    if (days == null) return null;
+    return 'Stops being public in $days day${days == 1 ? '' : 's'}';
   }
 
   /// See `crud_list_scaffold.dart`'s identical helper: a guarded mutation
   /// that could not be applied now throws (row-count verification, audit
   /// L4), and the user must be told rather than shown a dismissed sheet.
-  Future<void> _runGuarded(
+  ///
+  /// Returns the action's value, or null when it threw — so a caller that
+  /// needs to report WHAT happened (the withdrawal RPCs, whose answer differs
+  /// depending on whether the window had elapsed) can tell success from
+  /// failure without a second try/catch of its own.
+  Future<T?> _runGuarded<T>(
     BuildContext context,
     String failureMessage,
-    Future<void> Function() action,
+    Future<T> Function() action,
   ) async {
     try {
-      await action();
+      return await action();
     } catch (e, st) {
       debugPrint('Topo write failed: $e\n$st');
-      if (!context.mounted) return;
+      if (!context.mounted) return null;
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text(failureMessage)));
+      return null;
     }
   }
 
@@ -655,6 +726,87 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     );
   }
 
+  /// Starts the ten-day withdrawal clock (C-3).
+  ///
+  /// Confirmed rather than fired straight off the menu, and the confirmation
+  /// says the two things the owner cannot guess: that the topo stays visible
+  /// meanwhile, and that everyone will be told. Both are deliberate — people
+  /// who planned a trip around this crag get warning, and the notice is what
+  /// makes a spiteful withdrawal socially expensive.
+  Future<void> _handleWithdraw(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+    MasiBusyReporter reportBusy,
+  ) async {
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Withdraw "${topo.name}"?',
+      message:
+          'It stays visible for 10 more days, with a notice telling people '
+          'it is being withdrawn, and then stops being public. You can cancel '
+          'any time before then.',
+      confirmLabel: 'Withdraw',
+      confirmKey: Key('topo-withdraw-confirm-${topo.wallId}'),
+      isDestructive: true,
+    );
+    if (!confirmed || !context.mounted) return;
+    reportBusy(true);
+    await _runGuarded(
+      context,
+      "Couldn't withdraw — please try again",
+      () => ref.read(withdrawalServiceProvider).request(topo.wallId),
+    );
+  }
+
+  /// Stops the clock.
+  ///
+  /// Reads as two different actions depending on whether the ten days already
+  /// ran out, because it IS two different actions — the server decides which,
+  /// and returns the resulting state. Cancelling in time changes nothing;
+  /// coming back afterwards is a fresh submission that goes through review
+  /// again, and saying so up front is the difference between an owner
+  /// understanding the rule and feeling ambushed by it.
+  Future<void> _handleCancelWithdraw(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+    bool hasMatured,
+    MasiBusyReporter reportBusy,
+  ) async {
+    final confirmed = await showMasiConfirm(
+      context,
+      title: hasMatured
+          ? 'Submit "${topo.name}" again?'
+          : 'Keep "${topo.name}" public?',
+      message: hasMatured
+          ? 'The withdrawal window has closed, so this goes back to a '
+                'moderator for review before it becomes public again.'
+          : 'The withdrawal is cancelled and the topo stays public. Nothing '
+                'else changes.',
+      confirmLabel: hasMatured ? 'Submit' : 'Keep it public',
+      confirmKey: Key('topo-cancel-withdraw-confirm-${topo.wallId}'),
+      isDestructive: false,
+    );
+    if (!confirmed || !context.mounted) return;
+    reportBusy(true);
+    final state = await _runGuarded(
+      context,
+      "Couldn't cancel — please try again",
+      () => ref.read(withdrawalServiceProvider).cancel(topo.wallId),
+    );
+    if (state == null || !context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          state == 'pending'
+              ? 'Sent back for review'
+              : 'Still public — withdrawal cancelled',
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleUnpublish(
     BuildContext context,
     WidgetRef ref,
@@ -738,7 +890,31 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     WidgetRef ref,
     TopoRef topo,
     MasiBusyReporter reportBusy,
+    bool isProtected,
   ) async {
+    // Deleting is the OTHER way to make a published topo vanish instantly, and
+    // leaving it open would make the withdrawal cooldown theatre — `deletedAt
+    // = now` achieves in one tap exactly what the ten days exist to slow down
+    // (COMMUNITY_PLAN.md C-3). The server reverts it either way; this is what
+    // stops the owner watching a delete appear to succeed and silently undo
+    // itself, and it offers the flow that does work.
+    if (isProtected) {
+      final withdraw = await showMasiConfirm(
+        context,
+        title: 'Withdraw "${topo.name}" first',
+        message:
+            'Other climbers can see this topo and may be relying on it, so it '
+            'cannot be deleted straight away. Withdrawing keeps it visible for '
+            '10 days with a notice, and after that you can delete it.',
+        confirmLabel: 'Withdraw',
+        confirmKey: Key('topo-delete-blocked-${topo.wallId}'),
+        isDestructive: true,
+      );
+      if (!withdraw || !context.mounted) return;
+      await _handleWithdraw(context, ref, topo, reportBusy);
+      return;
+    }
+
     final confirmed = await showMasiConfirm(
       context,
       title: 'Delete "${topo.name}"?',

@@ -44,6 +44,30 @@ final wallModerationRowProvider = StreamProvider.autoDispose
       (ref, wallId) => ref.watch(moderationRepositoryProvider).watchRow(wallId),
     );
 
+/// One topo's moderation status as a reader experiences it, including the
+/// withdrawal countdown (community editing phase 5 / C-3).
+///
+/// Prefer this over [wallModerationRowProvider] anywhere the answer is shown
+/// to a person: it is the only place that reconciles a stored `published`
+/// with an elapsed ten-day window, which the server deliberately never writes
+/// back (COMMUNITY_IMPL.md §0.2).
+///
+/// Resolves to a draft view when nothing is mirrored locally — the same
+/// fail-closed direction [ModerationRepository.watchState] takes.
+final wallModerationViewProvider = StreamProvider.autoDispose
+    .family<ModerationView, String>(
+      (ref, wallId) => ref
+          .watch(moderationRepositoryProvider)
+          .watchRow(wallId)
+          .map(
+            (row) => ModerationView.fromRow(
+              state: row?.state,
+              withdrawRequestedAt: row?.withdrawRequestedAt,
+              rejectionReason: row?.rejectionReason,
+            ),
+          ),
+    );
+
 /// Whether the signed-in user may see the admin surface.
 ///
 /// A UI hint only — every admin RPC re-checks membership server-side, so this
@@ -122,6 +146,45 @@ final wallAccessProvider = StreamProvider.autoDispose
           ref.watch(moderationRepositoryProvider).watchAccess(wallId),
     );
 
+/// The write side of the withdrawal flow (community editing phase 5 / C-3).
+///
+/// Deliberately NOT part of [ModerationRepository]: that class mirrors what
+/// the server says and has no method that originates a moderation change,
+/// which is a property worth keeping. A withdrawal is an RPC call followed by
+/// a re-pull, so it belongs here, next to the other things that talk to the
+/// cloud and then refresh the mirror.
+///
+/// Both methods re-pull the affected wall before returning, so the countdown
+/// banner is correct the moment the sheet closes rather than after the next
+/// unrelated sync. They let the RPC's own errors propagate — unlike the
+/// best-effort reads, a withdrawal that silently failed would leave the owner
+/// believing a ten-day clock is running when it is not.
+class WithdrawalService {
+  const WithdrawalService(this._ref);
+
+  final Ref _ref;
+
+  /// Starts the clock. Returns the epoch-ms instant it started from.
+  Future<int?> request(String wallId) async {
+    final at = await _ref.read(moderationRemoteProvider).requestWithdrawal(wallId);
+    await refreshWallModeration(_ref, {wallId});
+    return at;
+  }
+
+  /// Stops the clock. Returns the resulting state — `published` for a normal
+  /// cancellation, `pending` when the window had already elapsed and this was
+  /// therefore a re-submission.
+  Future<String> cancel(String wallId) async {
+    final state = await _ref.read(moderationRemoteProvider).cancelWithdrawal(wallId);
+    await refreshWallModeration(_ref, {wallId});
+    return state;
+  }
+}
+
+final withdrawalServiceProvider = Provider<WithdrawalService>(
+  WithdrawalService.new,
+);
+
 /// Pulls moderation state for [wallIds] and writes it to the local mirror.
 ///
 /// Best-effort and never throws: [ModerationRemote.fetchWallModeration]
@@ -138,6 +201,32 @@ Future<int> refreshWallModeration(Ref ref, Set<String> wallIds) =>
       repository: ref.read(moderationRepositoryProvider),
       wallIds: wallIds,
     );
+
+/// [refreshWallModeration] for a widget, which holds a [WidgetRef] rather than
+/// a [Ref] — and which must not be able to take its screen down.
+///
+/// The try/catch covers the PROVIDER READS, not just the pull. That is the
+/// part that actually throws: `moderationRemoteProvider` builds a
+/// `SupabaseModerationRemote` from `supabaseClientProvider`, which raises
+/// `'_instance._isInitialized'` if Supabase has not been initialised — during
+/// early boot, after a failed init, and in every widget test that does not
+/// stand up a fake client. A banner quietly declining to refresh is the
+/// correct outcome in all three; a topo canvas that fails to open because a
+/// decoration could not load is not.
+Future<int> refreshWallModerationFrom(
+  WidgetRef ref,
+  Set<String> wallIds,
+) async {
+  try {
+    return await pullWallModeration(
+      remote: ref.read(moderationRemoteProvider),
+      repository: ref.read(moderationRepositoryProvider),
+      wallIds: wallIds,
+    );
+  } catch (_) {
+    return 0;
+  }
+}
 
 /// The collaborator-explicit half of [refreshWallModeration].
 ///

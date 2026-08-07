@@ -57,6 +57,12 @@ class _FakeRemote implements ModerationRemote {
   Future<List<Map<String, dynamic>>> fetchWallModeration(
     Set<String> wallIds,
   ) async => const [];
+
+  @override
+  Future<int?> requestWithdrawal(String wallId) async => null;
+
+  @override
+  Future<String> cancelWithdrawal(String wallId) async => 'published';
 }
 
 Map<String, dynamic> _queueRow(
@@ -332,7 +338,15 @@ void main() {
       );
 
       expect(find.text('Being withdrawn'), findsOneWidget);
-      expect(find.textContaining('in 6 days'), findsOneWidget);
+      // Seven, not six. This test used to assert "in 6 days", because the old
+      // implementation took `Duration.inDays`, which truncates: three days
+      // into a ten-day window leaves 6.9999… days once a few microseconds of
+      // wall clock have passed, and truncation reported that as 6. The banner
+      // therefore under-stated the remaining time by a day for the ENTIRE
+      // window, and on the last day would have read "in 0 days" on a topo that
+      // was still public. Phase 5 rounds up instead — see
+      // `ModerationView.daysRemaining`.
+      expect(find.textContaining('in 7 days'), findsOneWidget);
     });
 
     testWidgets('an UNKNOWN state falls back to draft and says nothing', (

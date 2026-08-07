@@ -49,6 +49,12 @@ class _FakeModerationRemote implements ModerationRemote {
 
   @override
   Future<void> removeTopo({required String wallId, String? reason}) async {}
+
+  @override
+  Future<int?> requestWithdrawal(String wallId) async => null;
+
+  @override
+  Future<String> cancelWithdrawal(String wallId) async => 'published';
 }
 
 Map<String, dynamic> _row(

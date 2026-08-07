@@ -99,26 +99,46 @@ class _GradeBandDots extends StatelessWidget {
 /// them at large text scales instead of widening the [Row] and risking the
 /// overflow this row was JUST fixed for; text stays a single short word
 /// with a matching icon, never flexible.
-class _VisibilityBadge extends StatelessWidget {
+class _VisibilityBadge extends ConsumerWidget {
   const _VisibilityBadge({required this.wallId, required this.isShared});
 
   final String wallId;
+
+  /// The owner's own `visibility` flag — "I have shared this" — which since
+  /// community editing phase 3 is no longer the same thing as "people can see
+  /// this". [isShared] decides whether to consult moderation at all; the
+  /// moderation state decides what the badge then says.
   final bool isShared;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
-    final label = isShared ? 'Published' : 'Private';
+
+    // Watched only for a shared topo. A private one has nothing to ask about,
+    // and a family stream per private row would be pure cost.
+    final view = isShared
+        ? ref.watch(wallModerationViewProvider(wallId)).asData?.value
+        : null;
+    final style = _VisibilityBadgeStyle.of(isShared: isShared, view: view);
+
     // `ink2` (not `ink3`) for the Private variant: `ink3` read as
     // low-contrast against `surface2` (DESIGN.md review) -- `ink2` is the
     // same tone every other secondary-metadata piece in this row (route
     // count, distance) already uses.
-    final foreground = isShared ? colors.onAccent : colors.ink2;
-    final background = isShared ? colors.accent : colors.surface2;
+    final foreground = switch (style.tone) {
+      _BadgeTone.live => colors.onAccent,
+      _BadgeTone.problem => colors.onAccent,
+      _BadgeTone.quiet => colors.ink2,
+    };
+    final background = switch (style.tone) {
+      _BadgeTone.live => colors.accent,
+      _BadgeTone.problem => colors.gradeHard,
+      _BadgeTone.quiet => colors.surface2,
+    };
 
     return Semantics(
-      label: isShared ? 'Published to Community' : 'Private, not shared',
+      label: style.semantics,
       child: Container(
         key: Key('topo-visibility-badge-$wallId'),
         padding: const EdgeInsets.symmetric(
@@ -132,11 +152,7 @@ class _VisibilityBadge extends StatelessWidget {
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            MasiIcon(
-              isShared ? 'globe' : 'lock',
-              size: 12,
-              color: foreground,
-            ),
+            MasiIcon(style.icon, size: 12, color: foreground),
             const SizedBox(width: 2),
             // `Flexible` (not a bare `Text`) is required here: a `Row`
             // gives non-flexible children an UNBOUNDED main-axis
@@ -146,7 +162,7 @@ class _VisibilityBadge extends StatelessWidget {
             // action + _TopoRow" test this badge sits alongside).
             Flexible(
               child: Text(
-                label,
+                style.label,
                 style: textTheme.labelSmall?.copyWith(
                   color: foreground,
                   fontWeight: FontWeight.w600,
@@ -159,6 +175,97 @@ class _VisibilityBadge extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+enum _BadgeTone { live, problem, quiet }
+
+/// What [_VisibilityBadge] says, split out from the widget so the mapping from
+/// moderation state to words is testable on its own and cannot drift from the
+/// enum it switches over.
+class _VisibilityBadgeStyle {
+  const _VisibilityBadgeStyle({
+    required this.label,
+    required this.icon,
+    required this.tone,
+    required this.semantics,
+  });
+
+  final String label;
+  final String icon;
+  final _BadgeTone tone;
+  final String semantics;
+
+  /// Deliberate default when [view] is null or its state is unknown: keep
+  /// saying "Published" for a shared topo, exactly as this badge did before
+  /// moderation existed.
+  ///
+  /// The moderation mirror is a pull-only cache and can legitimately be empty
+  /// — a cold start, an offline session, a topo whose row this account is not
+  /// allowed to read. Rendering "In review" or "Withdrawn" off missing
+  /// information would tell the owner something alarming and false about their
+  /// own topo. Under-reporting a transitional state for a few seconds is the
+  /// cheap failure; inventing one is not. Note this is the opposite direction
+  /// from `ModerationState.fromWire`'s fail-closed default, and for the same
+  /// underlying reason: there, the risk is exposing unreviewed content, so the
+  /// safe answer is the least public one; here, nothing is exposed either way
+  /// and the risk is purely misinforming the owner.
+  factory _VisibilityBadgeStyle.of({
+    required bool isShared,
+    required ModerationView? view,
+  }) {
+    if (!isShared) {
+      return const _VisibilityBadgeStyle(
+        label: 'Private',
+        icon: 'lock',
+        tone: _BadgeTone.quiet,
+        semantics: 'Private, not shared',
+      );
+    }
+    if (view != null && view.isWithdrawing) {
+      final days = view.daysRemaining;
+      return _VisibilityBadgeStyle(
+        label: 'Withdrawing',
+        icon: 'warning',
+        tone: _BadgeTone.problem,
+        semantics: days == null
+            ? 'Being withdrawn from Community'
+            : 'Being withdrawn from Community in $days '
+                  'day${days == 1 ? '' : 's'}',
+      );
+    }
+    return switch (view?.effectiveState) {
+      ModerationState.pending => const _VisibilityBadgeStyle(
+        label: 'In review',
+        icon: 'sync',
+        tone: _BadgeTone.quiet,
+        semantics: 'Submitted, waiting for review',
+      ),
+      ModerationState.rejected => const _VisibilityBadgeStyle(
+        label: 'Not approved',
+        icon: 'warning',
+        tone: _BadgeTone.problem,
+        semantics: 'Not approved by a moderator',
+      ),
+      ModerationState.withdrawn => const _VisibilityBadgeStyle(
+        label: 'Withdrawn',
+        icon: 'eye_off',
+        tone: _BadgeTone.quiet,
+        semantics: 'Withdrawn from Community',
+      ),
+      ModerationState.removed => const _VisibilityBadgeStyle(
+        label: 'Removed',
+        icon: 'warning',
+        tone: _BadgeTone.problem,
+        semantics: 'Removed from Community by a moderator',
+      ),
+      _ => const _VisibilityBadgeStyle(
+        label: 'Published',
+        icon: 'globe',
+        tone: _BadgeTone.live,
+        semantics: 'Published to Community',
+      ),
+    };
   }
 }
 

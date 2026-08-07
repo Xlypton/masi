@@ -594,3 +594,28 @@ CREATE TABLE IF NOT EXISTS public.topo_hazards (
 
 -- `is_route_public(text)`, the twelve RLS policies and the `resolve_hazard`
 -- RPC live in the migration file.
+
+-- ---------------------------------------------------------------------------
+-- Community editing, Phase 5 — withdrawal cooldown & delete protection (C-3)
+-- See supabase/migrations/2026-08-06_community_phase5_withdrawal.sql
+-- ---------------------------------------------------------------------------
+--
+-- No new tables: the cooldown rides `wall_moderation."withdrawRequestedAt"`,
+-- which has existed since Phase 1 and was already being read by
+-- `is_wall_public()`. Phase 5 added the two ends that were missing — the RPCs
+-- that can SET it (`request_withdrawal`, `cancel_withdrawal`) and the triggers
+-- that stop an owner reaching the same outcome by a route the visibility
+-- predicate does not guard.
+--
+-- Three routes had to be closed, not one. All reach the same end state on a
+-- published topo, and an owner had all three:
+--   visibility  → 'private'
+--   deletedAt   → now
+--   accessState → 'sensitive'   (also on the SECTOR or AREA above it, since
+--                                Phase 2 made suppression inherit downward)
+--
+-- The triggers REVERT rather than raise, and bump `updatedAt` past the client's
+-- value so the next pull's LWW settles it. That is forced by the sync engine:
+-- `upsertOwnRows` batches per table with one try/catch each, so a RAISE on one
+-- wall row would fail the whole `walls` push and the client would retry the
+-- same poisoned batch forever. The migration file carries the full argument.
