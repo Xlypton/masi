@@ -466,7 +466,10 @@ class _FeedView extends ConsumerWidget {
                     separatorBuilder: (context, index) =>
                         const SizedBox(height: MasiSpacing.sm),
                     itemBuilder: (context, index) => switch (filtered[index]) {
-                      TopoFeedItem(:final topo) => _FeedRow(topo: topo),
+                      TopoFeedItem(:final topo, :final alternates) => _FeedRow(
+                        topo: topo,
+                        alternates: alternates,
+                      ),
                       AscentFeedItem(:final entry) => _AscentFeedRow(
                         entry: entry,
                       ),
@@ -752,9 +755,13 @@ class _OfflineEmptyState extends ConsumerWidget {
 /// when [topo.ownerId] matches it — the row must rebuild live on sign-in/out,
 /// not just render once with a stale uid.
 class _FeedRow extends ConsumerWidget {
-  const _FeedRow({required this.topo});
+  const _FeedRow({required this.topo, this.alternates = const []});
 
   final SharedTopo topo;
+
+  /// Other topos of the same PLACE (community editing phase 8b / C-6.2).
+  /// Empty for almost every row.
+  final List<SharedTopo> alternates;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -827,6 +834,11 @@ class _FeedRow extends ConsumerWidget {
                           overflow: TextOverflow.ellipsis,
                         ),
                         if (isMine) _OwnBadge(wallId: wallId),
+                        if (alternates.isNotEmpty)
+                          _PlaceBadge(
+                            wallId: wallId,
+                            count: alternates.length + 1,
+                          ),
                       ],
                     ),
                     const SizedBox(height: 2),
@@ -1174,6 +1186,52 @@ class _OwnBadge extends StatelessWidget {
           'Yours',
           style: textTheme.labelSmall?.copyWith(
             color: colors.onAccent,
+            fontWeight: FontWeight.w600,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ),
+    );
+  }
+}
+
+/// "3 topos" — this card stands for a PLACE with more than one topo of it
+/// (community editing phase 8b / C-6.2).
+///
+/// Muted rather than accented, and it does not compete with "Yours": several
+/// people having drawn the same boulder is context, not an alert. The feed
+/// collapsed them into one card so the reader is not scrolling past four
+/// near-identical rows; this badge is the affordance that says the other three
+/// are still there and reachable.
+class _PlaceBadge extends StatelessWidget {
+  const _PlaceBadge({required this.wallId, required this.count});
+
+  final String wallId;
+  final int count;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+
+    return Semantics(
+      label: '$count topos of this place',
+      child: Container(
+        key: Key('community-place-badge-$wallId'),
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.xs,
+          vertical: 2,
+        ),
+        decoration: BoxDecoration(
+          color: colors.surface2,
+          borderRadius: BorderRadius.circular(MasiRadii.control),
+          border: Border.all(color: colors.separator),
+        ),
+        child: Text(
+          '$count topos',
+          style: textTheme.labelSmall?.copyWith(
+            color: colors.ink2,
             fontWeight: FontWeight.w600,
           ),
           maxLines: 1,

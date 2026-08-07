@@ -5,7 +5,9 @@ import '../../../core/location/location_service.dart';
 import '../../../shared/filtering/grade_range.dart';
 import '../../logbook/application/ascents_providers.dart';
 import '../../logbook/data/ascents_repository.dart';
+import '../../moderation/application/duplicate_providers.dart';
 import '../data/community_repository.dart';
+import '../domain/topo_group.dart';
 
 /// The [CommunityRepository] wired to the shared [appDatabaseProvider] /
 /// [photoFilesProvider], matching the pattern used by
@@ -45,19 +47,36 @@ sealed class FeedItem {
 /// A [FeedItem] wrapping a shared topo — renders as the existing `_FeedRow`
 /// in `community_screen.dart`, completely unchanged.
 class TopoFeedItem extends FeedItem {
-  const TopoFeedItem(this.topo);
+  const TopoFeedItem(this.topo, {this.alternates = const []});
 
   final SharedTopo topo;
+
+  /// Other topos of the SAME PLACE, best first (community editing phase 8b /
+  /// C-6.2). Empty for almost every row.
+  ///
+  /// [topo] is the group's HEAD — the best-ranked member, not necessarily the
+  /// canonical one an admin linked to. See `groupTopos`.
+  final List<SharedTopo> alternates;
 
   @override
   int get sortKeyMs => topo.createdAt;
 
   @override
   bool operator ==(Object other) =>
-      other is TopoFeedItem && other.topo == topo;
+      other is TopoFeedItem &&
+      other.topo == topo &&
+      other.alternates.length == alternates.length &&
+      _sameOrder(other.alternates, alternates);
 
   @override
-  int get hashCode => topo.hashCode;
+  int get hashCode => Object.hash(topo, Object.hashAll(alternates));
+
+  static bool _sameOrder(List<SharedTopo> a, List<SharedTopo> b) {
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 }
 
 /// A [FeedItem] wrapping a shared ascent-log entry — renders as
@@ -115,12 +134,43 @@ final feedItemsProvider = Provider<AsyncValue<List<FeedItem>>>((ref) {
     return const AsyncValue.loading();
   }
 
+  // Duplicates of the same place collapse to one card (phase 8b / C-6.2).
+  // `??` rather than awaiting: the links are a server read, and a feed that
+  // blocked on it would stop rendering offline — where it matters most. Until
+  // they arrive (or when they never do, at a crag with no signal) the feed
+  // shows every topo separately, which is exactly what it did before this
+  // phase. Grouping is an improvement on the view, never a precondition for it.
+  final links =
+      ref.watch(alternateGroupsProvider).asData?.value ??
+      const AlternateGroups.empty();
+  final groups = groupTopos(topos, links, nowMs: ref.watch(nowMsProvider)());
+
   final items = <FeedItem>[
-    for (final topo in topos) TopoFeedItem(topo),
+    for (final group in groups)
+      TopoFeedItem(group.head, alternates: group.alternates),
     for (final ascent in ascents) AscentFeedItem(ascent),
   ]..sort((a, b) => b.sortKeyMs.compareTo(a.sortKeyMs));
 
   return AsyncValue.data(items);
+});
+
+/// Which shared topos are alternates of which (phase 8b / C-6.2).
+///
+/// Server-only, with no local mirror — a deliberate difference from
+/// `wall_moderation`. A missing link degrades to "shown separately", which is
+/// the pre-8b feed and costs a reader nothing; a missing MODERATION row would
+/// degrade to showing something as approved that is not, which is why that one
+/// is mirrored and this one is not.
+///
+/// Scoped to the wall ids actually in the feed rather than fetched wholesale,
+/// so this stays proportional to what is on screen.
+final alternateGroupsProvider = FutureProvider<AlternateGroups>((ref) async {
+  final topos = ref.watch(sharedToposProvider).asData?.value;
+  if (topos == null || topos.isEmpty) return const AlternateGroups.empty();
+  final rows = await ref
+      .watch(duplicatesRemoteProvider)
+      .alternatesFor({for (final topo in topos) topo.wallId});
+  return AlternateGroups.fromRows(rows);
 });
 
 /// The Community feed/map's grade-range + style filter, held independently

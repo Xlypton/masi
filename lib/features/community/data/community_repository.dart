@@ -24,6 +24,8 @@ class SharedTopo {
     this.routeStyles = const {},
     this.routeStyleTags = const {},
     this.createdAt = 0,
+    this.ascentCount = 0,
+    this.lastVerifiedAt,
   });
 
   final String wallId;
@@ -95,6 +97,23 @@ class SharedTopo {
   /// sorting.
   final int createdAt;
 
+  /// Live ascents logged against this wall, as far as THIS DEVICE knows
+  /// (community editing phase 8c / C-6.3).
+  ///
+  /// A floor, never a total: the local `ascents` table holds this account's own
+  /// ascents plus other people's opt-in-`shared` ones, so the real number is
+  /// always ≥ this. Good enough to ORDER by, since the undercount runs in the
+  /// same direction for every topo — and deliberately not rendered anywhere as
+  /// a count, because displaying it would be a claim it cannot support.
+  final int ascentCount;
+
+  /// When somebody last said this topo matches the rock (phase 4's
+  /// `topo_verifications`), or null if nobody has. Only accurate=true
+  /// verifications count: "this is wrong" is a useful signal but not a
+  /// freshness one, and folding the two together would let a topo look
+  /// recently-confirmed because somebody just disputed it.
+  final int? lastVerifiedAt;
+
   /// Whether this topo has known coordinates and can be placed on the
   /// Community map. The map view must omit — not crash on — any topo where
   /// this is `false`.
@@ -117,7 +136,9 @@ class SharedTopo {
       _listEquals(other.routeGradeKeys, routeGradeKeys) &&
       _setEquals(other.routeStyles, routeStyles) &&
       _setEquals(other.routeStyleTags, routeStyleTags) &&
-      other.createdAt == createdAt;
+      other.createdAt == createdAt &&
+      other.ascentCount == ascentCount &&
+      other.lastVerifiedAt == lastVerifiedAt;
 
   @override
   int get hashCode => Object.hash(
@@ -135,6 +156,8 @@ class SharedTopo {
     Object.hashAllUnordered(routeStyles),
     Object.hashAllUnordered(routeStyleTags),
     createdAt,
+    ascentCount,
+    lastVerifiedAt,
   );
 
   @override
@@ -145,7 +168,8 @@ class SharedTopo {
       'commentCount: $commentCount, ownerId: $ownerId, latitude: $latitude, '
       'longitude: $longitude, routeGradeKeys: $routeGradeKeys, '
       'routeStyles: $routeStyles, routeStyleTags: $routeStyleTags, '
-      'createdAt: $createdAt)';
+      'createdAt: $createdAt, ascentCount: $ascentCount, '
+      'lastVerifiedAt: $lastVerifiedAt)';
 }
 
 /// Order-sensitive element-wise equality for [SharedTopo.routeGradeKeys]
@@ -320,6 +344,10 @@ class CommunityRepository {
            WHERE l.wall_id = w.id AND l.deleted_at IS NULL) AS like_count,
         (SELECT COUNT(*) FROM comments c
            WHERE c.wall_id = w.id AND c.deleted_at IS NULL) AS comment_count,
+        (SELECT COUNT(*) FROM ascents asc_
+           WHERE asc_.wall_id = w.id AND asc_.deleted_at IS NULL) AS ascent_count,
+        (SELECT MAX(v.created_at) FROM topo_verification_rows v
+           WHERE v.wall_id = w.id AND v.accurate = 1) AS last_verified_at,
         (SELECT group_concat(DISTINCT r.grade_sort_key) FROM routes r
            WHERE r.photo_id = $_kPrimaryPhotoIdSubquery
              AND r.deleted_at IS NULL
@@ -349,6 +377,11 @@ class CommunityRepository {
             _db.routes,
             _db.likes,
             _db.comments,
+            // Phase 8c: both feed the rank, and both must re-emit — logging an
+            // ascent or confirming a topo has to move it under `FeedSort.top`
+            // without a restart.
+            _db.ascents,
+            _db.topoVerificationRows,
           },
         )
         .watch()
@@ -388,6 +421,8 @@ class CommunityRepository {
                   row.readNullable<String>('route_style_tags_json'),
                 ),
                 createdAt: row.read<int>('created_at'),
+                ascentCount: row.read<int>('ascent_count'),
+                lastVerifiedAt: row.readNullable<int>('last_verified_at'),
               ),
           ];
         });
