@@ -87,52 +87,36 @@ exercise the app signed-in in a real browser before calling the work done.** Ana
 catch layout breakage, dead buttons, broken navigation, or a screen that renders empty because a provider
 threw. Looking at the running app does.
 
-### Why a fake identity, and not a real account
+> **Use the `e2e-verify` skill.** It is the third gate — after `flutter analyze` and `flutter test`,
+> before declaring done and before any deploy — and it carries the whole runbook: live-data safety,
+> the seeded fixture, the scripted and interactive loops, the traps, what the harness structurally
+> cannot prove, and the current known-red baseline. The rest of this section is background on *why*
+> the harness is shaped the way it is; the skill is the procedure.
+
+### Why a seam is needed at all
 Web sign-in is a hard wall (`webAuthGateEnabledProvider` defaults to `kIsWeb` → `_webAuthGateRedirect`
-bounces every route to `/account`). **There is no password login.** All three real routes in — magic link,
-emailed OTP, Google OAuth — need a mailbox or a consent screen no agent can drive. So the signed-in surface
-of the app is unreachable to automation without a seam.
+bounces every route to `/account`), and **the three sign-in routes the app OFFERS** — magic link, emailed
+OTP, Google OAuth — all need a mailbox or a consent screen no agent can drive. So the signed-in surface
+is unreachable to automation without a seam.
 
 The seam is `bootApp(overrides:)` in `lib/main.dart` (it exists for exactly this). `lib/main_e2e.dart`
 uses it to boot the **real** app — real router, real widgets, real drift-on-OPFS, real photo pipeline —
-with only two overrides: auth wall off, and a fake signed-in `AuthRepository`.
+turning off only the auth wall. It has **two identity modes**, and the difference decides what a run may
+claim:
 
-- Identity: **`e2e@masi.test`** (RFC 2606 reserved TLD — can never be a real mailbox) /
-  uid **`00000000-0000-4000-8000-000000000e2e`**.
-- The uid is **fixed on purpose**: it is an ownership key. `effectiveUidProvider` feeds every owner-scoped
-  query and `PhotoFiles`' per-user path prefix, so a random uid would orphan the previous run's library
-  and nothing would ever persist across runs.
-- **What this does NOT test:** real Supabase auth, JWT issuance, and anything gated on server-side RLS
-  (`auth.uid()` is null under the anon key, so live push/pull is rejected). Never report those as verified
-  from this harness — they need a real session, human-in-the-loop.
+- **Real session (the default, and what `tool/drive_e2e.sh` uses).** Three dedicated accounts under
+  `.test` sign in through the ordinary **password grant** against the anon key — the same credential the
+  app itself carries. `auth.uid()` is real, so RLS, the review RPCs, trust and live push/pull are all
+  genuinely exercised. Provisioned by `tool/e2e_accounts.sh ensure`.
+- **Fake session (`--fake`).** A stub `AuthRepository` with uid `00000000-0000-4000-8000-000000000e2e`.
+  No JWT, so `auth.uid()` is null and **every server-gated call is rejected** — repeated `401`s are
+  expected, and are also what makes this mode unable to touch the backend. The fixed uid is an ownership
+  key (`effectiveUidProvider` feeds every owner-scoped query and `PhotoFiles`' path prefix), so it must
+  stay fixed or each run orphans the last one's library. **Never report RLS, sync, or moderation as
+  verified from a `--fake` run.**
 
-### Interactive loop (this is the one to reach for)
-```bash
-flutter build web --wasm --no-web-resources-cdn --pwa-strategy=none \
-  -t lib/main_e2e.dart -o build/web_e2e
-dart run tool/serve_web.dart build/web_e2e 8099   # COOP/COEP-correct static server
-```
-Then drive `http://localhost:8099` with the browser tools: `navigate` → `computer{action:"screenshot"}` →
-click by coordinate/ref → screenshot again. Read the PNGs. Also check
-`read_console_messages` for thrown exceptions — a Flutter widget error shows there while the canvas still
-looks plausible.
-
-**The server must send COOP/COEP** (`same-origin` / `require-corp`) or drift silently falls off OPFS onto
-the IndexedDB VFS, whose `xSync` is a no-op — you would be testing a different, weaker storage backend than
-production. Confirm with `self.crossOriginIsolated === true` and a
-`masi/storage: backend=opfsLocks` console line. `python tool/serve_web_isolated.py` does the same job where
-Python is installed.
-
-### Scripted regression loop
-`integration_test/e2e_signed_in_test.dart` boots via the same `e2eOverrides()`, so hand-driven and scripted
-runs can't disagree about a bug. Unlike `web_smoke_test.dart`, it is **assertion-heavy on purpose** — it
-fails when a step is unreachable instead of `if (tester.any(...))`-skipping past it.
-```bash
-flutter drive --driver=test_driver/integration_test.dart \
-  --target=integration_test/e2e_signed_in_test.dart \
-  -d web-server --browser-name=chrome --driver-port=4444 --headless \
-  --no-web-resources-cdn --timeout=600     # needs chromedriver already listening on 4444
-```
+Procedure for both — setup, seeding, the scripted and interactive loops, teardown, and the traps — lives
+in the **`e2e-verify` skill**. Don't duplicate it here.
 
 ### Traps that WILL cost you an hour (all hit for real on 2026-08-05)
 - **A stale service worker serves the PREVIOUS build and you will debug a ghost.** The SW from an earlier
@@ -322,6 +306,10 @@ The AR/camera path can ONLY be verified on the physical device, and the usual `f
   plan-with-assertions → implementer subagents → **independent clean-context verify gate**. The agent that
   wrote code never verifies it; verification re-runs assertions + the integration-test loop above.
 - Keep whole-project `flutter analyze` at 0 and `flutter test` green on every change.
+- **Three gates, not two.** `flutter analyze` (0 issues) → `flutter test` (green) → the **`e2e-verify`
+  skill**, signed in against a real session. The third is required before declaring done and before any
+  deploy whenever the change touched app behaviour, UI, routing, the data layer, or anything server-gated;
+  skip it only for pure refactors, docs, or tooling — and say which case you decided.
 
 ## Version control — commit automatically
 

@@ -28,6 +28,12 @@ export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutte
 compare it to the previous known-good count — a *drop* with everything still "green" means tests
 stopped being collected, which reads identically to success.
 
+**Then run the `e2e-verify` skill** unless the change is docs/tooling only. Analyze and unit tests
+pass happily on a build with a dead button, a route that no longer resolves, or a screen that renders
+empty because a provider threw — and steps 4 and 5 below only prove the *server* is serving the right
+bytes. Deploying a build that was never exercised signed-in is how a total sign-in lockout shipped
+once already (see §5b). If you skip it, say so in the report and say why.
+
 Two traps:
 
 - **Gate the commit you are about to ship.** If the work lives on a branch or in a git worktree,
