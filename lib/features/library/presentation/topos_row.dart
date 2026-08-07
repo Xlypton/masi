@@ -473,6 +473,18 @@ class _TopoRowState extends ConsumerState<_TopoRow>
           label: hasCoords ? 'Edit location' : 'Set location',
           value: 'set-location',
         ),
+        // Offered only for a topo that HAS a history. Versions are recorded
+        // for published topos only (a draft is the owner's scratch space and
+        // snapshotting every keystroke of it would be the most expensive thing
+        // in the schema), so on anything else this would open an empty sheet
+        // and teach the owner the feature does not work.
+        if (isShared)
+          MasiSheetAction(
+            key: Key('topo-history-${topo.wallId}'),
+            label: 'History',
+            value: 'history',
+            subtitle: 'What changed, and when',
+          ),
         MasiSheetAction(
           key: Key('topo-delete-${topo.wallId}'),
           label: 'Delete',
@@ -498,6 +510,8 @@ class _TopoRowState extends ConsumerState<_TopoRow>
         _handleShowOnMap(context, topo);
       case 'set-location':
         await _handleSetLocation(context, ref, topo, reportBusy);
+      case 'history':
+        await showTopoHistory(context, wallId: topo.wallId);
       case 'withdraw':
         await _handleWithdraw(context, ref, topo, reportBusy);
       case 'cancel-withdraw':

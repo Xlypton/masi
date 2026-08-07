@@ -22,6 +22,7 @@ import '../../moderation/presentation/grade_consensus_view.dart';
 import '../../moderation/presentation/hazard_banner.dart';
 import '../../moderation/presentation/hazard_list_sheet.dart';
 import '../../moderation/presentation/moderation_banner.dart';
+import '../../moderation/presentation/topo_history_sheet.dart';
 import '../../moderation/presentation/hazard_reporter.dart';
 import '../../moderation/presentation/verification_tile.dart';
 import '../../topo/domain/topo_route.dart';
@@ -515,6 +516,20 @@ class _CommunityTopoDetailScreenState
                 color: colors.accent,
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
+              actions: [
+                // "What changed here since I last climbed" (C-8). Built for
+                // moderation — an admin restores from the same list — but the
+                // reader-facing half is the one that earns its place in the
+                // AppBar: a topo with no freshness signal is trusted exactly
+                // as much on day 900 as on day 1.
+                IconButton(
+                  key: const Key('community-detail-history-button'),
+                  icon: MasiIcon('edit_note'),
+                  tooltip: 'History',
+                  color: colors.accent,
+                  onPressed: () => showTopoHistory(context, wallId: wallId),
+                ),
+              ],
               // D2 fix: the tap target used to live INSIDE
               // `FlexibleSpaceBar.background` itself (an opaque
               // GestureDetector wrapping the IgnorePointer'd canvas) — that

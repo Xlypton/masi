@@ -619,3 +619,46 @@ CREATE TABLE IF NOT EXISTS public.topo_hazards (
 -- `upsertOwnRows` batches per table with one try/catch each, so a RAISE on one
 -- wall row would fail the whole `walls` push and the client would retry the
 -- same poisoned batch forever. The migration file carries the full argument.
+
+-- ---------------------------------------------------------------------------
+-- Community editing, Phase 6a — version history (C-8)
+-- See supabase/migrations/2026-08-07_community_phase6a_versions.sql
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.topo_versions (
+  id           TEXT PRIMARY KEY,
+  "wallId"     TEXT NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
+  "actorId"    TEXT,
+  payload      JSONB NOT NULL,
+  "routeCount" INT NOT NULL DEFAULT 0,
+  "createdAt"  BIGINT NOT NULL,
+  "updatedAt"  BIGINT NOT NULL
+);
+
+-- `payload` holds the wall + its routes and photo METADATA as JSON. Never
+-- photo bytes — which is what keeps the storage cost of this negligible (the
+-- live snapshots measure 2-3 KB each).
+--
+-- Written only by `snapshot_topo()`, called from six statement-level triggers
+-- (one per table per event; Postgres refuses a transition table on a trigger
+-- with more than one event). Statement-level, not row-level, so a batched sync
+-- push produces one snapshot attempt per table rather than one per row.
+--
+-- Three rules make the history actually usable, and all three are load-bearing:
+--
+--   * A draft is never snapshotted. Private topos are the owner's scratch
+--     space and recording every keystroke of them would be the most expensive
+--     thing in this schema (C-1).
+--   * An UNCHANGED payload writes nothing. There is no outbox (D-4), so an
+--     ordinary background sync re-UPDATEs every owned row even when the user
+--     has touched nothing; without this a phone left open would push the last
+--     real edit past the fifty-version cap within hours.
+--   * A burst by the SAME actor within five minutes extends its version in
+--     place; a DIFFERENT actor always opens a new one. That second half is
+--     what guarantees a vandal cannot overwrite the payload recording how the
+--     topo looked before they arrived.
+--
+-- `revert_topo(wall, version)` is admin-only, snapshots the current state
+-- first (so a revert is itself revertible), soft-deletes routes created since
+-- the snapshot, and bumps every `updatedAt` to GREATEST(local, now) + 1 so the
+-- owner's client pulls the revert instead of re-pushing its vandalised copy.
