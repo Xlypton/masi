@@ -1,14 +1,19 @@
 // Signed-in E2E regression flow, driven headless in Chrome.
 //
-//   tool/drive_web.sh integration_test/e2e_signed_in_test.dart      (macOS)
-//   flutter drive --driver=test_driver/integration_test.dart \      (Windows)
+// FAKE mode (no dart-defines) — what this file has always been:
+//   flutter drive --driver=test_driver/integration_test.dart \
 //     --target=integration_test/e2e_signed_in_test.dart \
 //     -d web-server --browser-name=chrome --driver-port=4444 \
 //     --headless --no-web-resources-cdn --timeout=600
 //
-// Boots through `e2eOverrides()` from `lib/main_e2e.dart` — the SAME wiring
-// the interactive browser build uses — so a bug found by hand in Chrome and a
-// bug found here cannot be artifacts of two different harnesses.
+// REAL mode — a genuine Supabase session, RLS enforced, sync live:
+//   tool/e2e_accounts.sh ensure && tool/e2e_seed.sh
+//   flutter drive … $(tool/e2e_accounts.sh env owner)
+// or just `tool/drive_e2e.sh owner`.
+//
+// Boots through `e2eBoot()` from `lib/main_e2e.dart` — the SAME entry the
+// interactive browser build uses — so a bug found by hand in Chrome and a bug
+// found here cannot be artifacts of two different harnesses.
 //
 // DELIBERATELY ASSERTION-HEAVY. `web_smoke_test.dart` guards every interaction
 // behind `if (tester.any(...))` and contains zero `expect()` calls, so it
@@ -16,39 +21,33 @@
 // "worked" (CLAUDE.md says as much). This file instead FAILS when a step is
 // unreachable, which is the only way an autonomous run can catch a regression
 // rather than silently skipping past it.
+//
+// WHAT EACH MODE PROVES, so nothing here is over-claimed:
+//   FAKE — the app's own behavior for a signed-in user: routing, layout, local
+//   drift/OPFS reads and writes. `auth.uid()` is null, so nothing server-gated
+//   is exercised and 401s in the console are expected.
+//   REAL — all of that, plus that the production auth wall admits a real
+//   session, that the sync PULL brings the seeded fixture down through live
+//   RLS, and that the community surfaces render server data.
+//
+// WHAT NEITHER MODE CAN DRIVE: the photo picker (`image_picker`) is a native
+// OS dialog outside Flutter, so "New topo" is unreachable from any
+// integration_test on any platform. Every flow below that needs a photo
+// reaches it through the SEEDED fixture instead (`tool/e2e_seed.sh`), never by
+// pretending the picker worked.
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
 import 'package:masi/app/router.dart' show appRouter;
-import 'package:masi/main.dart' show bootApp;
-import 'package:masi/main_e2e.dart' show e2eOverrides, e2eTestEmail;
+import 'package:masi/main_e2e.dart'
+    show e2eActiveEmail, e2eBoot, e2eRealSessionRequested;
 
-/// Shimmer-safe replacement for `pumpAndSettle`.
-///
-/// `MasiShimmer` (and any perpetual animation) never reaches a settled frame,
-/// so `pumpAndSettle` against a screen using one hangs until its timeout —
-/// a documented trap in `docs/DEV_SETUP.md` §10. Pumping a fixed budget of
-/// frames is immune to that and still lets async work land.
-Future<void> settle(
-  WidgetTester tester, {
-  int frames = 40,
-  Duration step = const Duration(milliseconds: 100),
-}) async {
-  for (var i = 0; i < frames; i++) {
-    await tester.pump(step);
-  }
-}
+import 'e2e_support.dart';
 
-/// Taps [finder], failing with [what] if it never appeared.
-Future<void> tapOrFail(
-  WidgetTester tester,
-  Finder finder,
-  String what,
-) async {
-  expect(finder, findsWidgets, reason: 'expected to find $what');
-  await tester.tap(finder.first);
-  await settle(tester);
-}
+/// The seeded fixture's ids. Must match `tool/e2e_common.sh` — they are
+/// deterministic precisely so this file can name them.
+const String kE2eSeededWallName = 'E2E Published Wall';
+const String kE2eSeededAreaName = 'E2E Test Area';
 
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
@@ -63,18 +62,22 @@ void main() {
     final sectorName = 'E2E Sector $stamp';
     final wallName = 'E2E Wall $stamp';
 
-    bootApp(overrides: e2eOverrides());
-    await settle(tester, frames: 60);
+    await e2eBoot();
+    await settleNetwork(tester, budget: const Duration(seconds: 8));
     await binding.takeScreenshot('01-signed-in-home');
 
-    // The auth wall must NOT have bounced us to the sign-in view. If the
-    // gate override ever regresses, every later step would fail with a
-    // confusing "can't find the FAB" — assert the real cause here instead.
+    // The auth wall must NOT have bounced us to the sign-in view. In FAKE mode
+    // that would mean the gate override regressed; in REAL mode it would mean
+    // the password sign-in failed and `e2eBoot` booted signed out. Either way
+    // every later step would fail with a confusing "can't find the FAB" —
+    // assert the real cause here instead.
     expect(
       find.byKey(const Key('account-send-link')),
       findsNothing,
-      reason: 'auth wall redirected to the sign-in view despite a '
-          'signed-in session — webAuthGateEnabledProvider override broke',
+      reason: 'the auth wall redirected to the sign-in view — in REAL mode '
+          'that means signInWithPassword failed (check the console for '
+          '"masi/e2e: REAL sign-in FAILED"); in FAKE mode it means the '
+          'webAuthGateEnabledProvider override broke',
     );
 
     // --- Areas ---
@@ -170,8 +173,8 @@ void main() {
   testWidgets('signed-in: the Account screen reports the session', (
     tester,
   ) async {
-    bootApp(overrides: e2eOverrides());
-    await settle(tester, frames: 60);
+    await e2eBoot();
+    await settleNetwork(tester, budget: const Duration(seconds: 8));
 
     // `/account` is a top-level sibling of the bottom-nav shell (see
     // `webAuthGateSignInPath`), not one of its tabs, so drive the module-level
@@ -188,7 +191,7 @@ void main() {
       reason: 'Account screen did not render the signed-in body',
     );
     expect(
-      find.textContaining(e2eTestEmail),
+      find.textContaining(e2eActiveEmail),
       findsWidgets,
       reason: 'Account screen did not report the signed-in session email',
     );
@@ -198,4 +201,140 @@ void main() {
       reason: 'Account screen showed the magic-link form for a signed-in user',
     );
   });
+
+  testWidgets('signed-in: the community feed renders and its refresh runs', (
+    tester,
+  ) async {
+    await e2eBoot();
+    await settleNetwork(tester, budget: const Duration(seconds: 8));
+
+    appRouter.go('/feed');
+    await settle(tester, frames: 40);
+    await waitFor(
+      tester,
+      find.byKey(const Key('community-feed-screen')),
+      'the community feed screen',
+    );
+    await binding.takeScreenshot('08-community-feed');
+
+    // The refresh button IS the pull trigger (`SyncOrchestrator.pullNow`).
+    // Tapping it is what makes this test meaningful in REAL mode: nothing else
+    // on a cold boot with an ALREADY-signed-in session fires a pull, because
+    // the orchestrator's automatic pull is on the signed-out -> signed-in EDGE
+    // and `e2eBoot` signs in before the app starts.
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('community-feed-refresh')),
+      'the community feed refresh button',
+    );
+    await settleNetwork(tester, budget: const Duration(seconds: 10));
+    await binding.takeScreenshot('09-community-feed-refreshed');
+
+    // The feed must not be sitting on an error state after a live pull.
+    expect(
+      find.byKey(const Key('community-sync-error-empty')),
+      findsNothing,
+      reason: 'the feed reported a sync error after pullNow — check the '
+          'console for the SyncOrchestrator message',
+    );
+  });
+
+  // ---------------------------------------------------------------------
+  // REAL-mode only. These assert on data the SERVER has to hand back, so
+  // they are meaningless without a JWT — and a skip that says why is more
+  // honest than an `if (…) return` that reports a pass.
+  // ---------------------------------------------------------------------
+  testWidgets(
+    'real session: the seeded fixture arrives through a live sync pull',
+    (tester) async {
+      await e2eBoot();
+      await settleNetwork(tester, budget: const Duration(seconds: 8));
+
+      // Force the pull through the feed's own refresh affordance.
+      appRouter.go('/feed');
+      await settle(tester, frames: 30);
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('community-feed-refresh')),
+        'the community feed refresh button',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 12));
+
+      // The published fixture is OWNED by this account, so it must come down
+      // through `fetchOwnRows` — this is the assertion that the JWT is real
+      // and that RLS let the row through.
+      await waitFor(
+        tester,
+        find.text(kE2eSeededWallName),
+        'the seeded published wall in the community feed — the live pull did '
+        'not return it (fixture missing? run tool/e2e_seed.sh)',
+        timeout: const Duration(seconds: 40),
+      );
+      await binding.takeScreenshot('10-seeded-topo-in-feed');
+
+      // …and it must also have landed in the LOCAL library, which is the half
+      // that proves the pull imported rather than merely fetched.
+      appRouter.go('/areas');
+      await settle(tester, frames: 30);
+      await waitFor(
+        tester,
+        find.text(kE2eSeededAreaName),
+        'the seeded Area in the local library after the pull',
+        timeout: const Duration(seconds: 30),
+      );
+      await binding.takeScreenshot('11-seeded-area-local');
+    },
+    skip: !e2eRealSessionRequested,
+  );
+
+  testWidgets(
+    'real session: version history renders server-side versions',
+    (tester) async {
+      await e2eBoot();
+      await settleNetwork(tester, budget: const Duration(seconds: 8));
+
+      appRouter.go('/feed');
+      await settle(tester, frames: 30);
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('community-feed-refresh')),
+        'the community feed refresh button',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 12));
+      await tapOrFail(
+        tester,
+        find.text(kE2eSeededWallName),
+        'the seeded published wall row in the feed',
+        timeout: const Duration(seconds: 40),
+      );
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('community-detail-more-button')),
+        'the topo detail overflow button',
+      );
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('community-detail-history')),
+        'the History entry in the overflow sheet',
+      );
+      await waitFor(
+        tester,
+        find.byKey(const Key('topo-history-sheet')),
+        'the version-history sheet',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 8));
+      await binding.takeScreenshot('12-topo-history');
+
+      // `topo_version_list` is a SECURITY DEFINER RPC. An error state here is
+      // a real finding (RLS, a missing grant, a schema drift) — an empty list
+      // is not, since a freshly seeded topo may have no snapshot yet.
+      expect(
+        find.byKey(const Key('topo-history-error')),
+        findsNothing,
+        reason: 'topo_version_list errored for a real session — the history '
+            'RPC is not answering under live RLS',
+      );
+    },
+    skip: !e2eRealSessionRequested,
+  );
 }

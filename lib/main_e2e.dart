@@ -112,11 +112,30 @@ const String e2eEntrypointMarker = 'masi-e2e-entrypoint-do-not-deploy';
 /// uid to every consumer that parses one.
 const String e2eTestUid = '00000000-0000-4000-8000-000000000e2e';
 
-/// The real E2E account's email, or `''` when REAL mode was not requested.
+/// The three dedicated E2E accounts, provisioned by `tool/e2e_accounts.sh`.
 ///
-/// Supplied as `--dart-define=E2E_EMAIL=…`. Get the flags from
+/// Public constants, not defines: an address is not a secret, and having them
+/// in the source is what lets ONE build switch identity at runtime
+/// ([e2eSignInAs]) instead of needing a separate `--dart-define` build per
+/// role. Only the shared password is a define.
+const String e2eOwnerEmail = 'e2e-owner@masi.test';
+
+/// Files reports and suggestions against [e2eOwnerEmail]'s published topo.
+const String e2eReaderEmail = 'e2e-reader@masi.test';
+
+/// Present in `public.admins`, so `is_admin()` is true and the review queue,
+/// the reports tab and `review_topo`/`resolve_report`/`revert_topo` all answer.
+const String e2eAdminEmail = 'e2e-admin@masi.test';
+
+/// The real E2E account this build boots as.
+///
+/// Supplied as `--dart-define=E2E_EMAIL=…`; defaults to [e2eOwnerEmail] when
+/// only the password was given, which is the common case. Get the flags from
 /// `tool/e2e_accounts.sh env owner|reader|admin`.
-const String e2eRealEmail = String.fromEnvironment('E2E_EMAIL');
+const String e2eRealEmail = String.fromEnvironment(
+  'E2E_EMAIL',
+  defaultValue: e2eOwnerEmail,
+);
 
 /// The real E2E account's password, or `''` when REAL mode was not requested.
 ///
@@ -127,9 +146,46 @@ const String e2eRealEmail = String.fromEnvironment('E2E_EMAIL');
 /// bundle only ever goes to `build/web_e2e` and is never deployed.
 const String e2eRealPassword = String.fromEnvironment('E2E_PASSWORD');
 
-/// Whether REAL mode was requested (both defines present and non-empty).
+/// Whether REAL mode was requested.
+///
+/// Keyed on the PASSWORD alone, because that is the only define that carries
+/// information the build cannot otherwise have — [e2eRealEmail] has a sensible
+/// default. Supplying `E2E_EMAIL` without `E2E_PASSWORD` therefore stays in
+/// FAKE mode rather than half-booting a real session it cannot complete.
 bool get e2eRealSessionRequested =>
     e2eRealEmail.isNotEmpty && e2eRealPassword.isNotEmpty;
+
+/// Signs the running app in as [email], one of the three E2E accounts, using
+/// the password this build was compiled with. REAL mode only.
+///
+/// Exists so a scripted run can cross an OWNERSHIP BOUNDARY — file a report as
+/// the reader against the owner's topo, then approve it as the admin — inside a
+/// single build. `--dart-define` is compile-time, so without this every role
+/// would need its own full rebuild.
+///
+/// This is a REAL account switch, not a shim: gotrue issues a new JWT, and
+/// `effectiveUidProvider` therefore starts resolving to a different uid, which
+/// re-scopes every owner-filtered local drift query and `PhotoFiles`' path
+/// prefix. That is exactly what a user switching accounts on one browser
+/// experiences — including that the previous role's local library goes out of
+/// view. Await this and let the app settle before asserting anything.
+///
+/// Throws in FAKE mode rather than silently doing nothing: a test that asks to
+/// become the admin and quietly stays the fake user would then assert against
+/// the wrong identity and report a pass.
+Future<void> e2eSignInAs(String email) async {
+  if (!e2eRealSessionRequested) {
+    throw StateError(
+      'e2eSignInAs($email) needs REAL mode — rebuild with '
+      '--dart-define=E2E_PASSWORD=… (tool/e2e_accounts.sh env)',
+    );
+  }
+  await Supabase.instance.client.auth.signOut();
+  await Supabase.instance.client.auth.signInWithPassword(
+    email: email,
+    password: e2eRealPassword,
+  );
+}
 
 /// The email this run is signed in as, whichever mode is active.
 ///
