@@ -1,5 +1,6 @@
 import 'dart:io';
 
+import 'package:masi/features/backup/domain/shared_topo_scope.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
@@ -109,19 +110,74 @@ class FakeSyncRemote implements SyncRemote {
     };
   }
 
+  /// The scope the last [fetchSharedTopos] was called with, so a test can
+  /// assert what the service ASKED for and not only what it got back.
+  SharedTopoScope? lastSharedScope;
+
+  /// Applies [scope] the way `SupabaseSyncRemote` does server-side (W-1): a
+  /// bounding box on the coordinates, a cap, and a SEPARATE small budget for
+  /// rows with no coordinates so they cannot silently vanish.
+  ///
+  /// Reproduced here rather than stubbed out because "the scope was passed" and
+  /// "the scope did anything" are different claims, and a fake that ignores it
+  /// can only ever prove the first.
+  List<Map<String, dynamic>> _applyScope(
+    List<Map<String, dynamic>> walls,
+    SharedTopoScope scope,
+  ) {
+    if (scope.isUnbounded) return walls;
+    int byNewest(Map<String, dynamic> a, Map<String, dynamic> b) =>
+        ((b['updatedAt'] as int?) ?? 0).compareTo((a['updatedAt'] as int?) ?? 0);
+
+    final box = scope.boundingBox;
+    if (box == null) {
+      final all = [...walls]..sort(byNewest);
+      return scope.limit > 0 ? all.take(scope.limit).toList() : all;
+    }
+
+    final within = <Map<String, dynamic>>[];
+    final uncoordinated = <Map<String, dynamic>>[];
+    for (final wall in walls) {
+      final lat = (wall['latitude'] as num?)?.toDouble();
+      final lng = (wall['longitude'] as num?)?.toDouble();
+      if (lat == null || lng == null) {
+        uncoordinated.add(wall);
+      } else if (lat >= box.minLatitude &&
+          lat <= box.maxLatitude &&
+          lng >= box.minLongitude &&
+          lng <= box.maxLongitude) {
+        within.add(wall);
+      }
+    }
+    within.sort(byNewest);
+    uncoordinated.sort(byNewest);
+    return [
+      ...(scope.limit > 0 ? within.take(scope.limit) : within),
+      ...(scope.uncoordinatedLimit > 0
+          ? uncoordinated.take(scope.uncoordinatedLimit)
+          : uncoordinated),
+    ];
+  }
+
   @override
-  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos({
+    SharedTopoScope scope = const SharedTopoScope.unbounded(),
+  }) async {
+    lastSharedScope = scope;
     // Mirrors SupabaseSyncRemote.fetchSharedTopos's row-validity guard (P0
     // fix, #72): a malformed wall row (missing id/sectorId) is skipped
     // rather than throwing on the `as String` casts below, so a test can
     // seed one directly into `_rows['walls']` to exercise the fix.
-    final sharedWalls = filterValidSyncRows(
-      [
-        for (final wall in _rows['walls']!.values)
-          if (wall['visibility'] == 'shared') Map<String, dynamic>.from(wall),
-      ],
-      const ['id', 'sectorId'],
-      debugLabel: 'shared wall',
+    final sharedWalls = _applyScope(
+      filterValidSyncRows(
+        [
+          for (final wall in _rows['walls']!.values)
+            if (wall['visibility'] == 'shared') Map<String, dynamic>.from(wall),
+        ],
+        const ['id', 'sectorId'],
+        debugLabel: 'shared wall',
+      ),
+      scope,
     );
     final wallIds = {for (final w in sharedWalls) w['id'] as String};
     final sectorIds = {for (final w in sharedWalls) w['sectorId'] as String};
@@ -337,7 +393,9 @@ class FakeSyncRemote implements SyncRemote {
 /// and in total isolation from every shared sub-fetch).
 class ThrowingFetchSharedToposRemote extends FakeSyncRemote {
   @override
-  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos({
+    SharedTopoScope scope = const SharedTopoScope.unbounded(),
+  }) async {
     throw Exception('shared topos fetch failed: simulated cloud error');
   }
 }
@@ -4541,6 +4599,226 @@ void main() {
         expect(pullResult.outcome, SyncPullOutcome.skippedSignedOut);
       },
     );
+  });
+
+  // --- W-1: the shared pull must be bounded ------------------------------
+  //
+  // `.eq('visibility','shared')` with no limit, no geo scope and no paging,
+  // then every row imported locally. The fix is a scope the SERVICE computes
+  // (only it knows where the user climbs) and the REMOTE applies.
+
+  group('W-1: scoping the shared pull', () {
+    /// Gives the signed-in user one own wall at [lat]/[lng] — the thing that
+    /// anchors the pull.
+    Future<void> ownWallAt(
+      AppDatabase db,
+      double lat,
+      double lng, {
+      String suffix = '',
+      int updatedAt = 100,
+    }) async {
+      await seedWallHierarchy(
+        db,
+        ownerId: _uidU1,
+        areaId: 'own-area$suffix',
+        sectorId: 'own-sector$suffix',
+        wallId: 'own-wall$suffix',
+        photoId: 'own-photo$suffix',
+        routeId: 'own-route$suffix',
+        updatedAt: updatedAt,
+      );
+      await (db.update(db.walls)
+            ..where((w) => w.id.equals('own-wall$suffix')))
+          .write(
+            WallsCompanion(
+              latitude: Value(lat),
+              longitude: Value(lng),
+              updatedAt: Value(updatedAt),
+            ),
+          );
+    }
+
+    /// A shared wall owned by somebody ELSE, at [lat]/[lng] or nowhere.
+    ///
+    /// Seeded the way every other cross-owner test in this file does it — by
+    /// pushing from a SECOND container signed in as u2 — so the rows land in
+    /// the fake remote through the same code path a real second device would
+    /// use, rather than being hand-written into its maps.
+    Future<void> foreignWall(
+      FakeSyncRemote remote,
+      String id, {
+      double? lat,
+      double? lng,
+      int updatedAt = 100,
+    }) async {
+      final u2 = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU2),
+      );
+      addTearDown(() => u2.db.close());
+      await seedWallHierarchy(
+        u2.db,
+        ownerId: _uidU2,
+        visibility: 'shared',
+        areaId: 'area-$id',
+        sectorId: 'sector-$id',
+        wallId: id,
+        photoId: 'photo-$id',
+        routeId: 'route-$id',
+        localPath: writeFile(u2.srcDir, '$id.jpg').path,
+        updatedAt: updatedAt,
+      );
+      if (lat != null && lng != null) {
+        await (u2.db.update(u2.db.walls)..where((w) => w.id.equals(id))).write(
+          WallsCompanion(
+            latitude: Value(lat),
+            longitude: Value(lng),
+            updatedAt: Value(updatedAt),
+          ),
+        );
+      }
+      await u2.service.pushOwn();
+    }
+
+    test(
+      'a user with a placed topo pulls the shared topos NEAR it and not the '
+      'ones on another continent — this is the whole of W-1',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await ownWallAt(c.db, 45.92, 6.87); // Chamonix
+        await foreignWall(remote, 'near', lat: 45.6, lng: 7.1);
+        await foreignWall(remote, 'far', lat: -33.9, lng: 151.2); // Sydney
+
+        await c.service.pullOwnAndShared();
+
+        final ids = {for (final w in await c.db.select(c.db.walls).get()) w.id};
+        expect(ids, contains('near'));
+        expect(
+          ids,
+          isNot(contains('far')),
+          reason: 'Sydney is not within 250 km of Chamonix',
+        );
+      },
+    );
+
+    test(
+      'a shared topo with NO coordinates is still pulled. It cannot satisfy a '
+      'coordinate filter, so without its own budget it would be invisible '
+      'forever — a worse bug than the unbounded fetch',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await ownWallAt(c.db, 45.92, 6.87);
+        await foreignWall(remote, 'nowhere');
+
+        await c.service.pullOwnAndShared();
+
+        final ids = {for (final w in await c.db.select(c.db.walls).get()) w.id};
+        expect(ids, contains('nowhere'));
+      },
+    );
+
+    test(
+      'a user who has placed NOTHING gets no anchor but is still CAPPED — the '
+      'ceiling is what protects the device, and it applies with or without '
+      'geography',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await foreignWall(remote, 'anywhere', lat: -33.9, lng: 151.2);
+
+        await c.service.pullOwnAndShared();
+
+        final scope = remote.lastSharedScope!;
+        expect(scope.anchor, isNull);
+        expect(scope.limit, kSharedTopoLimit);
+        expect(scope.isUnbounded, isFalse);
+        // No anchor means no geography, so the far one legitimately arrives.
+        final ids = {for (final w in await c.db.select(c.db.walls).get()) w.id};
+        expect(ids, contains('anywhere'));
+      },
+    );
+
+    test(
+      'the anchor FOLLOWS the user: placing a topo in a new region re-aims the '
+      'next pull, because the scope is recomputed from local rows every time',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        await ownWallAt(c.db, 45.92, 6.87);
+        await c.service.pullOwnAndShared();
+        expect(remote.lastSharedScope!.anchor!.latitude, closeTo(45.92, 0.001));
+
+        await ownWallAt(c.db, -33.9, 151.2, suffix: '-2', updatedAt: 900);
+        await c.service.pullOwnAndShared();
+        expect(remote.lastSharedScope!.anchor!.latitude, closeTo(-33.9, 0.001));
+      },
+    );
+
+    test(
+      'a topo pulled under an earlier, WIDER scope stays on the device. The '
+      'pull is an idempotent upsert that never deletes (D-4), so narrowing the '
+      'scope must not look like losing data',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+
+        // No own topos yet, so no anchor: the far one arrives.
+        await foreignWall(remote, 'far', lat: -33.9, lng: 151.2);
+        await c.service.pullOwnAndShared();
+        expect(
+          {for (final w in await c.db.select(c.db.walls).get()) w.id},
+          contains('far'),
+        );
+
+        // Placing a topo in the Alps narrows every later pull.
+        await ownWallAt(c.db, 45.92, 6.87);
+        await c.service.pullOwnAndShared();
+
+        expect(
+          {for (final w in await c.db.select(c.db.walls).get()) w.id},
+          contains('far'),
+          reason: 'the earlier row must survive a narrower scope',
+        );
+      },
+    );
+
+    test('signed out asks for nothing at all', () async {
+      final remote = FakeSyncRemote();
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedOut),
+      );
+      addTearDown(() => c.db.close());
+
+      await c.service.pullOwnAndShared();
+      expect(remote.lastSharedScope, isNull);
+    });
   });
 }
 

@@ -5,6 +5,7 @@ import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/data/auth_repository.dart';
 import '../../topo/data/photo_files.dart';
+import '../domain/shared_topo_scope.dart';
 import '../data/sync_remote.dart';
 import '../data/sync_service.dart';
 import 'backup_providers.dart';
@@ -82,8 +83,9 @@ class _UnavailableSyncRemote implements SyncRemote {
       _unavailable();
 
   @override
-  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() =>
-      _unavailable();
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos({
+    SharedTopoScope scope = const SharedTopoScope.unbounded(),
+  }) => _unavailable();
 
   @override
   Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents() =>

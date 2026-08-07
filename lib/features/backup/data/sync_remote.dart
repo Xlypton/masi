@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../domain/shared_topo_scope.dart';
 import 'storage_pagination.dart';
 
 /// The nine row-level tables this app syncs, in FK dependency order
@@ -186,7 +187,13 @@ abstract class SyncRemote {
   /// whether any ascent logged against it has opted in to being shared
   /// itself (see [fetchSharedAscents], the separate call for that). Callers
   /// must not add an `'ascents'` key to the returned map.
-  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos();
+  /// [scope] bounds how much of the shared world one pull carries (W-1).
+  /// Defaults to unbounded so every existing caller and fake keeps its old
+  /// behaviour until it opts in — the scoping decision belongs to
+  /// `SyncService`, which is the only thing that knows where the user climbs.
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos({
+    SharedTopoScope scope = const SharedTopoScope.unbounded(),
+  });
 
   /// Every Ascent (any owner) with `visibility == 'shared'` (Feature #12,
   /// public opt-in ascent logs) — the source for a cross-owner public feed
@@ -620,7 +627,9 @@ class SupabaseSyncRemote implements SyncRemote {
   }
 
   @override
-  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos({
+    SharedTopoScope scope = const SharedTopoScope.unbounded(),
+  }) async {
     // TODO(P0 backend): this is still a client-side join (walls -> sectors ->
     // areas, plus photos/routes/comments/likes by wallId), the shape this
     // phase's fake mirrors. It is now issued in dependency WAVES rather than
@@ -631,7 +640,7 @@ class SupabaseSyncRemote implements SyncRemote {
     // "ancestor of a shared wall" the same way this client-side code does,
     // e.g. via a security-definer function.
     final rawWalls = <Map<String, dynamic>>[
-      for (final row in await _client.from('walls').select().eq('visibility', 'shared'))
+      for (final row in await _fetchScopedWalls(scope))
         Map<String, dynamic>.from(row),
     ];
     // `id`/`sectorId` are both used below to derive follow-up queries (and
@@ -720,6 +729,71 @@ class SupabaseSyncRemote implements SyncRemote {
       'likes': likeRows,
       // NOTE: deliberately no 'ascents' key — see [fetchSharedTopos] doc.
     };
+  }
+
+  /// The published walls one pull should carry, per [scope] (W-1).
+  ///
+  /// Two queries rather than one when a bounding box applies, because a topo
+  /// with NO coordinates cannot satisfy a coordinate filter and would otherwise
+  /// vanish from every scoped pull forever — a worse bug than the unbounded
+  /// fetch this replaces. They get their own small budget
+  /// ([SharedTopoScope.uncoordinatedLimit]) so they can neither disappear nor
+  /// crowd out the geographic result.
+  ///
+  /// Ordered by `updatedAt` descending wherever a limit applies: when something
+  /// has to be dropped, the freshest topos are the ones worth keeping, and a
+  /// deterministic order also stops two consecutive pulls from disagreeing
+  /// about which half of a dense region the device holds.
+  Future<List<Map<String, dynamic>>> _fetchScopedWalls(SharedTopoScope scope) async {
+    List<Map<String, dynamic>> shape(Iterable<dynamic> rows) =>
+        [for (final row in rows) Map<String, dynamic>.from(row as Map)];
+
+    if (scope.isUnbounded) {
+      return shape(
+        await _client.from('walls').select().eq('visibility', 'shared'),
+      );
+    }
+
+    final box = scope.boundingBox;
+    if (box == null) {
+      // No anchor (or a window that wraps the antimeridian): fall back to the
+      // cap alone. Still bounded, just not geographic.
+      final query = _client
+          .from('walls')
+          .select()
+          .eq('visibility', 'shared')
+          .order('updatedAt', ascending: false);
+      return shape(await (scope.limit > 0 ? query.limit(scope.limit) : query));
+    }
+
+    final within = _client
+        .from('walls')
+        .select()
+        .eq('visibility', 'shared')
+        .gte('latitude', box.minLatitude)
+        .lte('latitude', box.maxLatitude)
+        .gte('longitude', box.minLongitude)
+        .lte('longitude', box.maxLongitude)
+        .order('updatedAt', ascending: false);
+
+    final uncoordinated = _client
+        .from('walls')
+        .select()
+        .eq('visibility', 'shared')
+        .isFilter('latitude', null)
+        .order('updatedAt', ascending: false);
+
+    final results = await Future.wait([
+      scope.limit > 0 ? within.limit(scope.limit) : within,
+      scope.uncoordinatedLimit > 0
+          ? uncoordinated.limit(scope.uncoordinatedLimit)
+          : uncoordinated,
+    ]);
+
+    // Concatenated, not merged by id: the two queries are disjoint by
+    // construction (one requires a latitude, the other requires none), and the
+    // import is an idempotent per-id upsert regardless.
+    return [...shape(results[0]), ...shape(results[1])];
   }
 
   @override

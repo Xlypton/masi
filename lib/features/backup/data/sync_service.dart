@@ -10,6 +10,7 @@ import '../../account/data/auth_repository.dart';
 import '../../topo/data/photo_files.dart';
 import '../../topo/data/public_photo_prune_service.dart'
     show kPruneKeepNewestForeign, kPrunePressureHighWatermark;
+import '../domain/shared_topo_scope.dart';
 import 'backup_repository.dart';
 import 'connectivity_service.dart';
 import 'published_photo_metadata.dart';
@@ -1375,7 +1376,9 @@ class SyncService {
     var sharedHadError = false;
 
     try {
-      sharedTables.addAll(await _remote.fetchSharedTopos());
+      sharedTables.addAll(
+        await _remote.fetchSharedTopos(scope: await _sharedTopoScope()),
+      );
     } catch (e) {
       sharedHadError = true;
       errors.add('shared topos fetch failed: $e');
@@ -1807,4 +1810,48 @@ class SyncService {
   /// `photo_files.dart`), so it resolves to the ORIGINAL's id; an original
   /// (`parentPhotoId` null) resolves to its own id.
   String _canonicalPhotoId(db.Photo photo) => photo.parentPhotoId ?? photo.id;
+
+  /// How much of the shared world the next pull should carry (W-1).
+  ///
+  /// Anchored on the user's own most-recently-updated wall that has
+  /// coordinates — see [anchorFromOwnWalls] for why that beats a centroid. A
+  /// user with no placed topos yet gets no anchor, which
+  /// [SharedTopoScope.boundingBox] treats as "no geographic preference": still
+  /// capped, just not narrowed.
+  ///
+  /// Reads LOCAL rows, not the cloud, so it costs no round trip and works
+  /// offline. It is also self-correcting: the anchor follows the user as they
+  /// place topos in a new region, and because the pull is an idempotent
+  /// per-id upsert that never deletes (decision D-4), a topo fetched under an
+  /// older, wider scope simply stays on the device.
+  Future<SharedTopoScope> _sharedTopoScope() async {
+    final uid = _authRepository.currentSession.uid;
+    if (uid == null) return const SharedTopoScope.unbounded();
+    try {
+      final own =
+          await (_db.select(_db.walls)..where(
+                (w) =>
+                    w.ownerId.equals(uid) &
+                    w.deletedAt.isNull() &
+                    w.latitude.isNotNull() &
+                    w.longitude.isNotNull(),
+              ))
+              .get();
+      return SharedTopoScope(
+        anchor: anchorFromOwnWalls([
+          for (final wall in own)
+            (
+              updatedAt: wall.updatedAt,
+              latitude: wall.latitude,
+              longitude: wall.longitude,
+            ),
+        ]),
+      );
+    } catch (_) {
+      // A scope we could not compute must not lose the pull. Falling back to
+      // the capped-but-unanchored scope keeps W-1's ceiling in force, which is
+      // the part that actually protects the device.
+      return const SharedTopoScope();
+    }
+  }
 }

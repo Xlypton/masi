@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:masi/features/backup/domain/shared_topo_scope.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
@@ -58,7 +59,9 @@ class _CountingSyncRemote implements SyncRemote {
   }
 
   @override
-  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos({
+    SharedTopoScope scope = const SharedTopoScope.unbounded(),
+  }) async {
     return {
       for (final t in syncTableNames)
         if (t != 'ascents') t: <Map<String, dynamic>>[],
@@ -125,7 +128,9 @@ class _CountingSyncRemote implements SyncRemote {
 /// surfaced in `PullResult.errors` rather than aborting the whole pull.
 class _ThrowingSharedToposSyncRemote extends _CountingSyncRemote {
   @override
-  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos() async {
+  Future<Map<String, List<Map<String, dynamic>>>> fetchSharedTopos({
+    SharedTopoScope scope = const SharedTopoScope.unbounded(),
+  }) async {
     throw Exception('shared-topos-boom');
   }
 }
