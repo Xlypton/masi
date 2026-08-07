@@ -652,6 +652,115 @@ class LibraryCrudRepository {
     );
   }
 
+  /// Applies an accepted metadata suggestion to the owner's own rows
+  /// (community editing phase 7a / C-5).
+  ///
+  /// This is the entire reason a suggestion is a PATCH rather than a fork.
+  /// Non-owners have zero write access to any content table and are not being
+  /// given any: when the owner accepts, their own client writes their own
+  /// rows, marks them dirty, and syncs exactly as if they had typed the change
+  /// themselves. No new write authority, no change to the sync engine, no
+  /// merge algorithm.
+  ///
+  /// [patch] keys are WIRE column names. Anything not on the whitelist is
+  /// ignored rather than written — the server already refuses to store an
+  /// off-list field, so reaching this method with one means something is
+  /// wrong, and the safe response is to change nothing rather than to guess.
+  ///
+  /// Idempotent by construction: applying the same values twice writes the
+  /// same values. That is what makes the client-applies-then-marks-accepted
+  /// ordering safe — if the mark fails, the owner sees the suggestion again
+  /// and accepting a second time costs nothing.
+  Future<void> applyWallSuggestion(
+    String wallId,
+    Map<String, Object?> patch,
+  ) async {
+    final now = nowMs();
+    final raw = patch['name'];
+    final name = raw is String && raw.trim().isNotEmpty ? raw.trim() : null;
+    final latitude = _asDouble(patch['latitude']);
+    final longitude = _asDouble(patch['longitude']);
+
+    // Nothing recognised: return without a write rather than bumping
+    // `updatedAt` and pushing a row that says nothing changed.
+    if (name == null && latitude == null && longitude == null) return;
+
+    final companion = db.WallsCompanion(
+      name: name == null ? const Value.absent() : Value(name),
+      latitude: latitude == null ? const Value.absent() : Value(latitude),
+      longitude: longitude == null ? const Value.absent() : Value(longitude),
+      updatedAt: Value(now),
+      dirty: const Value(true),
+    );
+    await _guardedWrite(
+      operation: 'applyWallSuggestion',
+      id: wallId,
+      table: _db.walls,
+      idColumn: _db.walls.id,
+      ownerColumn: _db.walls.ownerId,
+      deletedAtColumn: _db.walls.deletedAt,
+      write: (_db.update(_db.walls)..where(
+            (t) =>
+                t.id.equals(wallId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(companion),
+    );
+  }
+
+  /// [applyWallSuggestion]'s route half. Same contract in every respect.
+  Future<void> applyRouteSuggestion(
+    String routeId,
+    Map<String, Object?> patch,
+  ) async {
+    final now = nowMs();
+    final name = patch['name'];
+    final description = patch['description'];
+    final beta = patch['betaVideoUrl'];
+    if (name is! String && description is! String && beta is! String) return;
+
+    await _guardedWrite(
+      operation: 'applyRouteSuggestion',
+      id: routeId,
+      table: _db.routes,
+      idColumn: _db.routes.id,
+      ownerColumn: _db.routes.ownerId,
+      deletedAtColumn: _db.routes.deletedAt,
+      write: (_db.update(_db.routes)..where(
+            (t) =>
+                t.id.equals(routeId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.RoutesCompanion(
+              name: name is String && name.trim().isNotEmpty
+                  ? Value(name.trim())
+                  : const Value.absent(),
+              // An EMPTY string is a real value here, unlike for a name:
+              // "delete this wrong description" is a legitimate suggestion,
+              // and collapsing it to absent would silently drop it.
+              description: description is String
+                  ? Value(description.trim().isEmpty ? null : description.trim())
+                  : const Value.absent(),
+              betaVideoUrl: beta is String
+                  ? Value(beta.trim().isEmpty ? null : beta.trim())
+                  : const Value.absent(),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          ),
+    );
+  }
+
+  static double? _asDouble(Object? value) => switch (value) {
+    final double v => v,
+    final num v => v.toDouble(),
+    final String v => double.tryParse(v),
+    _ => null,
+  };
+
   Future<List<WallRef>> listWalls(String sectorId) async {
     final rows = await _wallQuery(sectorId).get();
     return rows.map(_wallRefFromRow).toList();

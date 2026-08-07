@@ -20,6 +20,7 @@ import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../moderation/application/moderation_providers.dart';
+import '../../moderation/application/suggestion_providers.dart' show mySuggestionsProvider;
 import '../../topo/presentation/canvas_chrome.dart';
 import '../application/auth_providers.dart';
 import '../application/profile_providers.dart';
@@ -1030,6 +1031,7 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                 onPressed: widget.onSignOut,
                 child: const Text('Sign out'),
               ),
+              const AccountSuggestionsEntryPoint(),
               const AccountAdminEntryPoint(),
               const _InstallSection(),
               const _StorageDiagnosticsSection(),
@@ -1112,6 +1114,66 @@ class AccountAdminEntryPoint extends ConsumerWidget {
                     pending == null || pending == 0
                         ? 'Review queue'
                         : 'Review queue · $pending waiting',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The way into the owner's inbox of suggested edits (community editing
+/// phase 7a / C-5).
+///
+/// Shown ONLY when something is actually waiting, unlike the admin entry point
+/// next door. That difference is deliberate: an admin is a person who has
+/// taken on a job and wants the door visible whether or not there is work
+/// behind it, while a suggestion inbox is something almost every owner will
+/// never receive anything in. A permanently-visible "Suggested edits (0)" on
+/// every account teaches people to stop reading that part of the screen, which
+/// is exactly the wrong lesson for the one week somebody finally offers a fix.
+///
+/// Also hidden while the count is loading and if it fails — an entry point
+/// that appears and vanishes on every visit is worse than one that arrives a
+/// moment late.
+class AccountSuggestionsEntryPoint extends ConsumerWidget {
+  const AccountSuggestionsEntryPoint({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final waiting = ref.watch(mySuggestionsProvider).asData?.value.length ?? 0;
+    if (waiting == 0) return const SizedBox.shrink();
+
+    final colors = MasiColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: MasiSpacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          MasiPendingButton.text(
+            key: const Key('account-open-suggestions'),
+            style: TextButton.styleFrom(
+              backgroundColor: colors.surface2,
+              foregroundColor: colors.ink,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(13),
+              ),
+            ),
+            onPressed: () => context.push('/suggestions'),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MasiIcon('edit_note', size: 18, color: colors.ink2),
+                const SizedBox(width: MasiSpacing.sm),
+                Flexible(
+                  child: Text(
+                    'Suggested edits · $waiting waiting',
                     overflow: TextOverflow.ellipsis,
                   ),
                 ),

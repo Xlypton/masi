@@ -18,6 +18,7 @@ import '../features/library/presentation/sectors_screen.dart';
 import '../features/library/presentation/topos_screen.dart';
 import '../features/library/presentation/walls_screen.dart';
 import '../features/moderation/presentation/admin_queue_screen.dart';
+import '../features/moderation/presentation/suggestions_inbox_screen.dart';
 import '../features/logbook/presentation/logbook_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
 
@@ -313,6 +314,14 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/admin',
       builder: (context, state) => const AdminQueueScreen(),
+    ),
+    // The owner's inbox of suggested edits (community editing phase 7a).
+    // Unguarded like `/admin`, and for a stronger reason: this route shows
+    // only what `suggestions_for_me` returns, and that RPC is scoped to walls
+    // the caller owns, so reaching it as anyone else shows an empty list.
+    GoRoute(
+      path: '/suggestions',
+      builder: (context, state) => const SuggestionsInboxScreen(),
     ),
     GoRoute(path: '/areas', builder: (context, state) => const AreasScreen()),
     GoRoute(

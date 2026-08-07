@@ -700,3 +700,53 @@ CREATE TABLE IF NOT EXISTS public.content_reports (
 --
 -- `resolve_report` records upheld vs dismissed rather than a flat "closed",
 -- because phase 8's trust levels need both directions.
+
+-- ---------------------------------------------------------------------------
+-- Community editing, Phase 7a — suggested edits, METADATA slice (C-5)
+-- See supabase/migrations/2026-08-07_community_phase7_suggestions.sql
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.topo_edit_suggestions (
+  id              TEXT PRIMARY KEY,
+  "wallId"        TEXT NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
+  "routeId"       TEXT REFERENCES public.routes(id) ON DELETE CASCADE,
+  "authorId"      TEXT NOT NULL,
+  kind            TEXT NOT NULL,   -- topo.metadata | route.metadata
+  patch           JSONB NOT NULL,
+  note            TEXT,
+  "baseVersionId" TEXT REFERENCES public.topo_versions(id) ON DELETE SET NULL,
+  status          TEXT NOT NULL DEFAULT 'open',  -- open|accepted|rejected
+  "resolvedAt"    BIGINT,
+  "resolverId"    TEXT,
+  "resolution"    TEXT,
+  "createdAt"     BIGINT NOT NULL
+);
+
+-- Non-owners still have ZERO write access to any content table. A suggestion
+-- is a PATCH here; when the owner accepts, their own client applies it to
+-- their own rows and syncs normally. No new write authority, no sync-engine
+-- change, no merge algorithm.
+--
+-- SELECT is the author, the target topo's owner, and admins. The owner IS
+-- included, unlike `content_reports` — a report is a complaint about the owner
+-- and naming the reporter invites retaliation; a suggestion is an offer of
+-- help only the owner can act on, and attribution is most of the reward.
+--
+-- `suggestion_fields()` is the whitelist and it is short. GRADE is absent on
+-- purpose: phase 4 already lets anyone state a grade opinion with no approval
+-- at all and renders the consensus beside the owner's, which is strictly
+-- better than asking permission to disagree about a grade. `accessState` is
+-- absent because phase 6b's "access problem" report reaches a moderator rather
+-- than waiting on the owner who may not have noticed. `stars` is absent
+-- because a rating is an opinion, not a fact to be corrected.
+--
+-- A patch mixing an allowed and a forbidden field is refused WHOLE, never
+-- partly applied — a suggestion that silently drops half of what its author
+-- wrote is worse than one that is turned down.
+--
+-- `suggestions_for_me().isStale` needs TWO tests, not one. Comparing the
+-- pinned revision against the newest misses the common case, because
+-- `snapshot_topo` coalesces: an owner editing within five minutes extends the
+-- current version in place, so its id stays newest while its contents change
+-- underneath the suggestion. The second test — was the pinned version touched
+-- after the suggestion was filed — closes that.

@@ -24,6 +24,9 @@ import '../../moderation/presentation/hazard_banner.dart';
 import '../../moderation/presentation/hazard_list_sheet.dart';
 import '../../moderation/presentation/moderation_banner.dart';
 import '../../moderation/application/report_providers.dart';
+import '../../moderation/application/suggestion_providers.dart';
+import '../../moderation/domain/edit_suggestion.dart';
+import '../../moderation/presentation/suggestion_composer.dart';
 import '../../moderation/presentation/report_reporter.dart';
 import '../../moderation/presentation/topo_history_sheet.dart';
 import '../../moderation/presentation/hazard_reporter.dart';
@@ -435,6 +438,12 @@ class _CommunityTopoDetailScreenState
           subtitle: 'What changed, and when',
         ),
         MasiSheetAction(
+          key: Key('community-detail-suggest'),
+          label: 'Suggest a fix',
+          value: 'suggest',
+          subtitle: 'Wrong name or location — the owner decides',
+        ),
+        MasiSheetAction(
           key: Key('community-detail-report'),
           label: 'Report this topo',
           value: 'report',
@@ -447,8 +456,53 @@ class _CommunityTopoDetailScreenState
     switch (action) {
       case 'history':
         await showTopoHistory(context, wallId: wallId);
+      case 'suggest':
+        await _suggestEdit(wallId);
       case 'report':
         await _reportTopo(wallId);
+    }
+  }
+
+  /// Proposes a metadata fix to this topo (C-5).
+  ///
+  /// The third of three things a reader can do about content that is wrong,
+  /// and they are deliberately different in kind rather than three routes to
+  /// the same place:
+  ///
+  ///   hazard     — a public safety warning, visible immediately, no approval
+  ///   report     — a private complaint to a moderator, owner never sees who
+  ///   suggestion — an offer of help the OWNER decides on, author credited
+  ///
+  /// Collapsing them into one "something's wrong here" button would mean
+  /// either sending a loose block to a review queue or telling a moderator
+  /// about a typo.
+  Future<void> _suggestEdit(String wallId) async {
+    final name = ref.read(wallNameProvider(wallId)).value ?? 'this topo';
+    final draft = await showSuggestionComposer(
+      context,
+      targetLabel: name,
+      kind: SuggestionKind.topoMetadata,
+    );
+    if (draft == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref
+          .read(suggestionServiceProvider)
+          .suggest(
+            wallId: wallId,
+            kind: draft.kind,
+            patch: draft.patch,
+            note: draft.note,
+            routeId: draft.routeId,
+          );
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('Sent to the owner. Thanks.')),
+      );
+    } catch (error) {
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not send that suggestion. $error')),
+      );
     }
   }
 
