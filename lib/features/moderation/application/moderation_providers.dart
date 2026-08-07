@@ -6,6 +6,7 @@ import '../../../core/config/supabase_providers.dart';
 import '../../account/application/auth_providers.dart';
 import '../data/moderation_remote.dart';
 import '../data/moderation_repository.dart';
+import '../domain/abandoned_topo.dart';
 import '../domain/access_state.dart';
 import '../domain/moderation_state.dart';
 
@@ -133,6 +134,25 @@ final moderationQueueProvider = FutureProvider.autoDispose<
   final rows = await ref.watch(moderationRemoteProvider).fetchQueue();
   return [for (final row in rows) ModerationQueueEntry.fromRow(row)];
 });
+
+/// Published topos whose owner has stopped answering suggestions (C-11),
+/// longest-stuck first.
+///
+/// Not best-effort, for the same reason as [moderationQueueProvider]: an empty
+/// list that actually means "we could not ask" reads as "nothing is abandoned",
+/// and this is the one surface whose whole job is noticing that something has
+/// been quietly stuck for a very long time.
+///
+/// Malformed rows are dropped rather than half-built — the decision this list
+/// leads to is taking someone's topo away from them, and a row an admin cannot
+/// read is a row they should not be acting on.
+final abandonedToposProvider =
+    FutureProvider.autoDispose<List<AbandonedTopo>>((ref) async {
+      final rows = await ref.watch(moderationRemoteProvider).fetchAbandoned();
+      return [
+        for (final row in rows) ?AbandonedTopo.fromRow(row),
+      ];
+    });
 
 /// The effective access/closure state for one topo, after inheritance up the
 /// Wall → Sector → Area chain (community editing phase 2 / R-2).

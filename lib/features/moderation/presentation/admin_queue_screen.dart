@@ -8,8 +8,10 @@ import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../application/duplicate_providers.dart';
+import '../../../core/db/database_provider.dart';
 import '../application/moderation_providers.dart';
 import '../application/report_providers.dart';
+import '../domain/abandoned_topo.dart';
 import '../domain/content_report.dart';
 
 /// The admin review queue (community editing phases 3 and 6b).
@@ -53,7 +55,7 @@ class AdminQueueScreen extends ConsumerWidget {
     final urgent = reports?.any((r) => r.isUrgent) ?? false;
 
     return DefaultTabController(
-      length: 2,
+      length: 3,
       child: Scaffold(
         key: const Key('admin-queue-screen'),
         appBar: AppBar(
@@ -79,11 +81,18 @@ class AdminQueueScreen extends ConsumerWidget {
                   (final n, _) => 'Reports ($n)',
                 },
               ),
+              // No count on this one, deliberately. Submissions and reports are
+              // work that arrived and is waiting; abandonment is a slow
+              // condition that was already true yesterday and will still be
+              // true tomorrow. A badge would make it compete for the same
+              // urgency as an unsafe report, which is exactly the attention it
+              // should not take.
+              const Tab(key: Key('admin-tab-abandoned'), text: 'Stalled'),
             ],
           ),
         ),
         body: const TabBarView(
-          children: [_SubmissionsTab(), _ReportsTab()],
+          children: [_SubmissionsTab(), _ReportsTab(), _AbandonedTab()],
         ),
       ),
     );
@@ -118,6 +127,125 @@ class _SubmissionsTab extends ConsumerWidget {
                 itemCount: entries.length,
                 itemBuilder: (context, i) => _QueueRow(entry: entries[i]),
               ),
+      ),
+    );
+  }
+}
+
+/// Published topos whose owner has stopped answering suggestions (C-11).
+///
+/// Read-only on purpose. The plan's remedy — transferring ownership, or marking
+/// a topo community-maintained — is irreversible and aimed at a real person's
+/// work, and it is explicitly meant to be rare. So this surface stops at
+/// telling an admin where the problem is; it does not put a button next to it
+/// that makes taking someone's topo away the path of least resistance. Opening
+/// the topo and its suggestions is the next step, and both already exist.
+class _AbandonedTab extends ConsumerWidget {
+  const _AbandonedTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    final nowMs = ref.watch(nowMsProvider)();
+    return RefreshIndicator(
+      onRefresh: () async => ref.invalidate(abandonedToposProvider),
+      child: MasiAsyncView<List<AbandonedTopo>>(
+        value: ref.watch(abandonedToposProvider),
+        errorMessage: "Couldn't load stalled topos",
+        onRetry: () => ref.invalidate(abandonedToposProvider),
+        skeleton: (context) => const Center(
+          child: Padding(
+            padding: EdgeInsets.all(MasiSpacing.xxl),
+            child: CircularProgressIndicator(),
+          ),
+        ),
+        data: (context, topos) => topos.isEmpty
+            ? ListView(
+                padding: const EdgeInsets.symmetric(
+                  vertical: MasiSpacing.xxl * 2,
+                ),
+                children: [
+                  Center(
+                    child: Column(
+                      children: [
+                        MasiIcon('check', size: 40, color: colors.ink3),
+                        const SizedBox(height: MasiSpacing.md),
+                        Text(
+                          'Nothing stalled',
+                          key: const Key('admin-abandoned-empty'),
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(color: colors.ink2),
+                        ),
+                        const SizedBox(height: MasiSpacing.xs),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: MasiSpacing.xxl,
+                          ),
+                          child: Text(
+                            'Owners are answering their suggestions.',
+                            textAlign: TextAlign.center,
+                            style: Theme.of(context).textTheme.bodySmall
+                                ?.copyWith(color: colors.ink3),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.only(bottom: MasiSpacing.xxl),
+                itemCount: topos.length,
+                itemBuilder: (context, i) =>
+                    _AbandonedRow(topo: topos[i], nowMs: nowMs),
+              ),
+      ),
+    );
+  }
+}
+
+class _AbandonedRow extends StatelessWidget {
+  const _AbandonedRow({required this.topo, required this.nowMs});
+
+  final AbandonedTopo topo;
+  final int nowMs;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Padding(
+      key: Key('admin-abandoned-row-${topo.wallId}'),
+      padding: const EdgeInsets.symmetric(
+        horizontal: MasiSpacing.lg,
+        vertical: MasiSpacing.md,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            topo.wallName,
+            style: Theme.of(context).textTheme.titleMedium,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: MasiSpacing.xs),
+          Text(
+            '${topo.summary(nowMs)} · ${topo.ownerLabel}',
+            key: Key('admin-abandoned-summary-${topo.wallId}'),
+            style: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(color: colors.ink2),
+          ),
+          const SizedBox(height: MasiSpacing.xs),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton(
+              key: Key('admin-abandoned-open-${topo.wallId}'),
+              onPressed: () => context.push('/walls/${topo.wallId}'),
+              child: const Text('Open'),
+            ),
+          ),
+        ],
       ),
     );
   }

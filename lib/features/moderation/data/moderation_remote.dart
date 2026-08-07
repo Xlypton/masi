@@ -54,6 +54,25 @@ abstract class ModerationRemote {
   /// to review" when the truth is "we could not ask".
   Future<List<Map<String, dynamic>>> fetchQueue({int limit});
 
+  /// Published topos whose owner has stopped answering suggestions (C-11).
+  ///
+  /// An owner who abandons the app freezes their topos forever: suggestions
+  /// pile up, nothing is applied, and because owner approval is final (C-5c)
+  /// the community cannot fix an error everyone can see.
+  ///
+  /// Admin-only and throws like [fetchQueue], for the same reason: an empty
+  /// list that silently means "we could not ask" reads as "nothing is
+  /// abandoned", which is exactly the wrong conclusion.
+  ///
+  /// A topo qualifies only when its oldest pending suggestion predates
+  /// [inactiveDays] AND the owner has done nothing at all since then. That
+  /// second condition is what keeps the list meaningful — an owner who simply
+  /// disagrees with a suggestion and leaves it open is not abandoning anything.
+  Future<List<Map<String, dynamic>>> fetchAbandoned({
+    int inactiveDays,
+    int limit,
+  });
+
   /// Approves or rejects a pending topo. Admin-only, enforced server-side.
   /// Returns the resulting state. [reason] is shown to the owner on rejection.
   Future<String> reviewTopo({
@@ -183,6 +202,19 @@ class SupabaseModerationRemote implements ModerationRemote {
     final rows = await _client.rpc<dynamic>(
       'moderation_queue',
       params: {'limit_count': limit},
+    );
+    if (rows is! List) return const [];
+    return [for (final row in rows) Map<String, dynamic>.from(row as Map)];
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchAbandoned({
+    int inactiveDays = 90,
+    int limit = 50,
+  }) async {
+    final rows = await _client.rpc<dynamic>(
+      'abandoned_topos',
+      params: {'inactive_days': inactiveDays, 'limit_count': limit},
     );
     if (rows is! List) return const [];
     return [for (final row in rows) Map<String, dynamic>.from(row as Map)];

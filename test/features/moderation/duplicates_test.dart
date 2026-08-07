@@ -126,6 +126,12 @@ class _FakeModeration implements ModerationRemote {
   Future<void> removeTopo({required String wallId, String? reason}) async {}
 
   @override
+  Future<List<Map<String, dynamic>>> fetchAbandoned({
+    int inactiveDays = 90,
+    int limit = 50,
+  }) async => const [];
+
+  @override
   Future<List<String>> publishedPhotoObjects(String wallId) async => const [];
 
   @override
