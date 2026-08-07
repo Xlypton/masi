@@ -18,38 +18,24 @@
 #   of inactivity — i.e. exactly when the harness reaches for it — and schema
 #   drift between two projects is this repo's worst recurring bug class
 #   (#64/#65/#72). Isolation is by OWNERSHIP (a dedicated uid per role), not by
-#   database.
+#   database. See tool/e2e_common.sh for the invariant that makes that safe.
 #
 # SAFETY
 #   - Addresses are under `.test` (RFC 2606): they can never be a real mailbox,
 #     and `email_confirm: true` means no mail is ever sent.
 #   - The shared password lives in ~/.config/masi-e2e-password (0600) and is
-#     NEVER printed, committed, or passed on a command line that gets logged.
-#   - The `service_role` key is fetched at runtime from the Management API and
-#     used SHELL-SIDE ONLY. It must never reach a Flutter build.
-#   - This script creates users and one `public.admins` row. It never touches
-#     any row it did not create. `tool/e2e_reset.sh` is the teardown.
+#     NEVER printed by `ensure`/`show`.
+#   - The `service_role` key is fetched at runtime and used SHELL-SIDE ONLY.
+#   - This script creates users, one `public.admins` row, and three `profiles`
+#     rows. It never touches a row it did not create.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-
-REF="${SUPABASE_PROJECT_REF:-mnaipcqbkqzffgvxpato}"
-MGMT_TOKEN_FILE="${SUPABASE_MGMT_TOKEN_FILE:-$HOME/.config/climbtopo-mgmt-token}"
-PASSWORD_FILE="${MASI_E2E_PASSWORD_FILE:-$HOME/.config/masi-e2e-password}"
-SUPABASE_URL="${SUPABASE_URL:-https://${REF}.supabase.co}"
-
-# The three roles the moderation flows need. Kept in one place so the seed and
-# reset scripts can resolve the same set by email.
-E2E_OWNER_EMAIL="e2e-owner@masi.test"
-E2E_READER_EMAIL="e2e-reader@masi.test"
-E2E_ADMIN_EMAIL="e2e-admin@masi.test"
-
-command -v jq >/dev/null 2>&1 || { echo "e2e_accounts: jq is required" >&2; exit 1; }
-[[ -f "$MGMT_TOKEN_FILE" ]] || { echo "e2e_accounts: token file not found: $MGMT_TOKEN_FILE" >&2; exit 1; }
-MGMT_TOKEN="$(tr -d '[:space:]' < "$MGMT_TOKEN_FILE")"
+# shellcheck source=tool/e2e_common.sh
+source "$(dirname "$0")/e2e_common.sh"
 
 # --- password ---------------------------------------------------------------
-# Generated once, then reused forever. Re-running must not rotate it: the
+# Generated once, then reused forever. Re-running must not rotate it: a
 # `--dart-define`d value in any running build would stop working mid-session.
 ensure_password() {
   if [[ ! -s "$PASSWORD_FILE" ]]; then
@@ -65,27 +51,7 @@ ensure_password() {
     chmod 600 "$PASSWORD_FILE" 2>/dev/null || true
     echo "e2e_accounts: generated a new password at $PASSWORD_FILE (not printed)" >&2
   fi
-  E2E_PASSWORD="$(tr -d '\r\n' < "$PASSWORD_FILE")"
-}
-
-# --- management-API SQL -----------------------------------------------------
-sql() {
-  curl -sS -X POST "https://api.supabase.com/v1/projects/${REF}/database/query" \
-    -H "Authorization: Bearer ${MGMT_TOKEN}" \
-    -H "Content-Type: application/json" \
-    --data "$(jq -n --arg q "$1" '{query:$q}')"
-}
-
-# The service_role key is required for the Auth admin API (creating users).
-# Fetched fresh each run so it is never written to disk by this repo.
-service_role_key() {
-  curl -sS "https://api.supabase.com/v1/projects/${REF}/api-keys?reveal=true" \
-    -H "Authorization: Bearer ${MGMT_TOKEN}" \
-    | jq -r '.[] | select(.name=="service_role") | .api_key'
-}
-
-uid_for() {
-  sql "SELECT id::text AS id FROM auth.users WHERE email = '$1';" | jq -r '.[0].id // empty'
+  E2E_PASSWORD="$(e2e_password)"
 }
 
 # Create-or-converge one account. Idempotent by construction: an existing user
@@ -113,8 +79,7 @@ ensure_user() {
       -H "apikey: ${SERVICE_KEY}" \
       -H "Authorization: Bearer ${SERVICE_KEY}" \
       -H "Content-Type: application/json" \
-      --data "$(jq -n --arg p "$E2E_PASSWORD" \
-        '{password:$p, email_confirm:true}')" >/dev/null
+      --data "$(jq -n --arg p "$E2E_PASSWORD" '{password:$p, email_confirm:true}')" >/dev/null
     echo "e2e_accounts: converged $email -> $uid" >&2
   fi
   printf '%s' "$uid"
@@ -140,8 +105,9 @@ cmd_ensure() {
 
   # Profiles make the accounts render with a name instead of a bare uid in the
   # feed/comments. Owner-scoped rows, so they are covered by the reset filter.
+  local pair id name
   for pair in "$owner:E2E Owner" "$reader:E2E Reader" "$admin:E2E Admin"; do
-    local id="${pair%%:*}" name="${pair#*:}"
+    id="${pair%%:*}"; name="${pair#*:}"
     sql "INSERT INTO public.profiles (id, \"createdAt\", \"updatedAt\", \"ownerId\", \"displayName\", dirty)
          VALUES ('$id', $now, $now, '$id', '$name', false)
          ON CONFLICT (id) DO UPDATE SET \"displayName\" = EXCLUDED.\"displayName\";" >/dev/null
@@ -151,14 +117,11 @@ cmd_ensure() {
 }
 
 cmd_show() {
-  local owner reader admin
-  owner="$(uid_for "$E2E_OWNER_EMAIL")"
-  reader="$(uid_for "$E2E_READER_EMAIL")"
-  admin="$(uid_for "$E2E_ADMIN_EMAIL")"
+  resolve_e2e_uids
   cat <<EOF
-owner   $E2E_OWNER_EMAIL   ${owner:-<missing>}
-reader  $E2E_READER_EMAIL  ${reader:-<missing>}
-admin   $E2E_ADMIN_EMAIL   ${admin:-<missing>}
+owner   $E2E_OWNER_EMAIL   $E2E_OWNER_UID
+reader  $E2E_READER_EMAIL  $E2E_READER_UID
+admin   $E2E_ADMIN_EMAIL   $E2E_ADMIN_UID
 password file: $PASSWORD_FILE (contents never printed)
 EOF
 }
