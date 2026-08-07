@@ -447,6 +447,63 @@ class _ReportRowState extends ConsumerState<_ReportRow> {
     }
   }
 
+  /// Removes the topo from public view AND deletes its published photo bytes,
+  /// then upholds the report (W-2 / C-7).
+  ///
+  /// Confirmed first, unlike every other action on this row, because it is the
+  /// only one that destroys something: the public copies of the photos. What it
+  /// does NOT destroy — the topo record, its routes, its ascents, the owner's
+  /// own copy of the photo — is said out loud in the sheet, because an admin who
+  /// believes they are deleting a climber's work will hesitate to use the
+  /// control that exists precisely for the cases where hesitating is wrong.
+  Future<void> _takeDown() async {
+    final report = widget.report;
+    final confirmed = await showMasiConfirm(
+      context,
+      sheetKey: const Key('admin-takedown-confirm'),
+      confirmKey: const Key('admin-takedown-confirm-yes'),
+      cancelKey: const Key('admin-takedown-confirm-no'),
+      title: 'Take down this topo?',
+      message:
+          'It stops being public and its published images are deleted. The '
+          'routes, ascents and history are kept, and the owner keeps their own '
+          'copy of the photo — so this can be undone by re-publishing.',
+      confirmLabel: 'Take down',
+      isDestructive: true,
+    );
+    if (!confirmed || !mounted) return;
+
+    try {
+      final result = await ref
+          .read(takedownServiceProvider)
+          .remove(wallId: report.wallId, reason: report.reason.wire);
+      await ref
+          .read(reportServiceProvider)
+          .resolve(reportId: report.id, uphold: true);
+      if (!mounted) return;
+
+      // The counts are surfaced rather than smoothed over. A takedown that
+      // changed the state but removed none of the bytes is exactly W-2, and an
+      // unqualified "Taken down" is what let that hide.
+      final missed = result.photoObjects - result.photoBytesRemoved;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            missed == 0
+                ? 'Taken down — ${result.photoBytesRemoved} image(s) removed'
+                : 'Taken down, but $missed of ${result.photoObjects} image(s) '
+                      'could not be removed',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't take that down")),
+      );
+    }
+  }
+
   Future<void> _resolve({required bool uphold}) async {
     try {
       await ref
@@ -568,6 +625,29 @@ class _ReportRowState extends ConsumerState<_ReportRow> {
                   key: Key('admin-report-link-${report.id}'),
                   onPressed: _link,
                   child: const Text('Link'),
+                ),
+                const SizedBox(width: MasiSpacing.xs),
+              ],
+              // Only where taking the images down is the point. A duplicate or
+              // an inaccurate grade is fixed by linking or editing, and offering
+              // a destructive control next to those invites using it for
+              // problems it does not solve.
+              if (report.canTakeDown) ...[
+                // A plain TextButton, not MasiPendingButton, and for a concrete
+                // reason: this action opens a confirmation sheet first, and a
+                // pending button would sit spinning for as long as the admin
+                // takes to read it — which also hangs `pumpAndSettle` in tests.
+                // `_reject` in the submissions queue is a TextButton for the
+                // same reason.
+                TextButton(
+                  key: Key('admin-report-takedown-${report.id}'),
+                  onPressed: _takeDown,
+                  child: Text(
+                    'Take down',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: MasiSpacing.xs),
               ],

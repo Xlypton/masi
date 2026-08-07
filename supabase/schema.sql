@@ -212,6 +212,7 @@ DROP POLICY IF EXISTS "topo_photos_own_all"      ON storage.objects;
 DROP POLICY IF EXISTS "topo_photos_shared_read"  ON storage.objects;
 DROP POLICY IF EXISTS "topo_photos_shared_write" ON storage.objects;
 DROP POLICY IF EXISTS "topo_photos_shared_upd"   ON storage.objects;
+DROP POLICY IF EXISTS "topo_photos_shared_delete" ON storage.objects;
 
 CREATE POLICY "topo_photos_own_all" ON storage.objects FOR ALL TO authenticated
   USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = auth.uid()::text)
@@ -226,6 +227,32 @@ CREATE POLICY "topo_photos_shared_write" ON storage.objects FOR INSERT TO authen
 CREATE POLICY "topo_photos_shared_upd" ON storage.objects FOR UPDATE TO authenticated
   USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared')
   WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
+
+-- W-2. Without this there is NO delete path for the shared prefix at all: the
+-- three policies above cover SELECT/INSERT/UPDATE, and `topo_photos_own_all` is
+-- scoped to `foldername[1] = auth.uid()`, which never matches `shared/...`. So
+-- `SyncRemote.removeSharedPhoto` could not remove anything — and did not fail
+-- either, because a Storage delete that RLS filtered to nothing returns HTTP
+-- 200 and an empty list. Verified against the live project on 2026-08-08.
+--
+-- Deletion cannot be done server-side: Supabase's `storage.protect_delete()`
+-- trigger raises on any direct DELETE from storage.objects, so RLS on this
+-- policy is the only lever. See supabase/migrations/2026-08-08_w2_shared_photo_delete.sql.
+CREATE POLICY "topo_photos_shared_delete" ON storage.objects FOR DELETE TO authenticated
+  USING (
+    bucket_id = 'topo-photos'
+    AND (storage.foldername(name))[1] = 'shared'
+    AND (
+      public.is_admin()
+      OR EXISTS (
+        SELECT 1
+          FROM public.photos p
+          JOIN public.walls w ON w.id = p."wallId"
+         WHERE p.id = regexp_replace(storage.filename(objects.name), '\.[^.]*$', '')
+           AND w."ownerId" = (auth.uid())::text
+      )
+    )
+  );
 
 -- ============================================================================
 -- Community features: comments, likes, ascents (personal logbook, optionally

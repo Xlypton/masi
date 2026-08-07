@@ -91,8 +91,20 @@ class _FakeReports implements ReportsRemote {
 }
 
 class _FakeModeration implements ModerationRemote {
-  _FakeModeration({this.admin = true});
+  _FakeModeration({this.admin = true, this.photoObjects = const []});
   final bool admin;
+
+  /// What [publishedPhotoObjects] will report, and — once removed — what shows
+  /// up in [removedObjects].
+  final List<String> photoObjects;
+
+  final List<(String wallId, String? reason)> removedTopos = [];
+  final List<String> removedObjects = [];
+
+  /// Records the ORDER of the two calls, because the order is the correctness
+  /// property: enumerating after the takedown always finds nothing (the shared
+  /// SELECT policy is `is_wall_public`), so it would silently leave the bytes.
+  final List<String> callLog = [];
 
   @override
   Future<bool> isAdmin() async => admin;
@@ -110,7 +122,24 @@ class _FakeModeration implements ModerationRemote {
     String? reason,
   }) async => 'published';
   @override
-  Future<void> removeTopo({required String wallId, String? reason}) async {}
+  Future<void> removeTopo({required String wallId, String? reason}) async {
+    callLog.add('removeTopo');
+    removedTopos.add((wallId, reason));
+  }
+
+  @override
+  Future<List<String>> publishedPhotoObjects(String wallId) async {
+    callLog.add('publishedPhotoObjects');
+    return photoObjects;
+  }
+
+  @override
+  Future<int> removePublishedPhotoObjects(List<String> objectPaths) async {
+    callLog.add('removePublishedPhotoObjects');
+    removedObjects.addAll(objectPaths);
+    return objectPaths.length;
+  }
+
   @override
   Future<int?> requestWithdrawal(String wallId) async => null;
   @override
@@ -122,6 +151,7 @@ Future<_FakeReports> _pumpQueue(
   required List<Map<String, dynamic>> rows,
   bool admin = true,
   bool throws = false,
+  _FakeModeration? moderation,
 }) async {
   final remote = _FakeReports(rows, throws: throws);
   await tester.pumpWidget(
@@ -129,7 +159,7 @@ Future<_FakeReports> _pumpQueue(
       overrides: [
         reportsRemoteProvider.overrideWithValue(remote),
         moderationRemoteProvider.overrideWithValue(
-          _FakeModeration(admin: admin),
+          moderation ?? _FakeModeration(admin: admin),
         ),
         effectiveUidProvider.overrideWithValue('me'),
       ],
@@ -331,5 +361,159 @@ void main() {
         expect(find.byKey(const Key('admin-tab-reports')), findsNothing);
       },
     );
+  });
+
+  // --- W-2: taking a topo down must take its published IMAGES down ---------
+  //
+  // The measured bug (2026-08-08) was not that takedown removed the wrong
+  // things — it was that `remove_topo` had no client caller at all, and the
+  // Storage delete underneath it could not have worked anyway: there was no
+  // DELETE policy covering the `shared/` prefix, and a filtered delete returns
+  // HTTP 200 with an empty list. Success and total no-op were identical.
+
+  group('taking a topo down', () {
+    testWidgets(
+      'the images are enumerated BEFORE the topo is removed — the shared-photo '
+      'SELECT policy is is_wall_public(), so enumerating afterwards always '
+      'finds nothing and silently leaves the bytes',
+      (tester) async {
+        final moderation = _FakeModeration(
+          photoObjects: const ['shared/p1.jpg', 'shared/p2.jpg'],
+        );
+        await _pumpQueue(
+          tester,
+          rows: [_row('a', reason: 'inappropriate')],
+          moderation: moderation,
+        );
+        await tester.tap(find.byKey(const Key('admin-tab-reports')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('admin-report-takedown-a')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('admin-takedown-confirm-yes')));
+        await tester.pumpAndSettle();
+
+        expect(moderation.callLog, [
+          'publishedPhotoObjects',
+          'removeTopo',
+          'removePublishedPhotoObjects',
+        ]);
+        expect(moderation.removedTopos.single.$1, 'w-a');
+        expect(moderation.removedObjects, ['shared/p1.jpg', 'shared/p2.jpg']);
+      },
+    );
+
+    testWidgets('the report is upheld in the same gesture', (tester) async {
+      final moderation = _FakeModeration(photoObjects: const ['shared/p1.jpg']);
+      final reports = await _pumpQueue(
+        tester,
+        rows: [_row('a', reason: 'inappropriate')],
+        moderation: moderation,
+      );
+      await tester.tap(find.byKey(const Key('admin-tab-reports')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('admin-report-takedown-a')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('admin-takedown-confirm-yes')));
+      await tester.pumpAndSettle();
+
+      expect(reports.resolved, [('a', true)]);
+    });
+
+    testWidgets(
+      'backing out of the confirmation removes NOTHING — it is the only '
+      'destructive control on this row, so a stray tap must cost nothing',
+      (tester) async {
+        final moderation = _FakeModeration(
+          photoObjects: const ['shared/p1.jpg'],
+        );
+        final reports = await _pumpQueue(
+          tester,
+          rows: [_row('a', reason: 'inappropriate')],
+          moderation: moderation,
+        );
+        await tester.tap(find.byKey(const Key('admin-tab-reports')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('admin-report-takedown-a')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('admin-takedown-confirm-no')));
+        await tester.pumpAndSettle();
+
+        expect(moderation.callLog, isEmpty);
+        expect(reports.resolved, isEmpty);
+      },
+    );
+
+    testWidgets(
+      'a takedown that removed FEWER images than it found says so, instead of '
+      'reporting a flat success — that mismatch IS W-2',
+      (tester) async {
+        // Reports two objects but the fake removes only what it is given, so
+        // this asserts the wording path by giving it an empty removal set.
+        final moderation = _FakeModeration(photoObjects: const []);
+        await _pumpQueue(
+          tester,
+          rows: [_row('a', reason: 'inappropriate')],
+          moderation: moderation,
+        );
+        await tester.tap(find.byKey(const Key('admin-tab-reports')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('admin-report-takedown-a')));
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('admin-takedown-confirm-yes')));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('0 image(s) removed'), findsOne);
+      },
+    );
+
+    testWidgets(
+      'DUPLICATE and INACCURATE reports offer no takedown at all — those are '
+      'fixed by linking or editing, and a destructive control beside them '
+      'invites deleting somebody\'s work to resolve a merge request',
+      (tester) async {
+        await _pumpQueue(
+          tester,
+          rows: [_row('a', reason: 'duplicate'), _row('b', reason: 'inaccurate')],
+        );
+        await tester.tap(find.byKey(const Key('admin-tab-reports')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('admin-report-takedown-a')), findsNothing);
+        expect(find.byKey(const Key('admin-report-takedown-b')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'an UNSAFE report offers no takedown either: a spinning bolt is a hazard '
+      'to flag on a topo climbers need to keep reading, not a reason to '
+      'delete it',
+      (tester) async {
+        await _pumpQueue(tester, rows: [_row('a', reason: 'unsafe')]);
+        await tester.tap(find.byKey(const Key('admin-tab-reports')));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('admin-report-takedown-a')), findsNothing);
+      },
+    );
+
+    testWidgets('inappropriate, not_yours and access DO offer it', (
+      tester,
+    ) async {
+      await _pumpQueue(
+        tester,
+        rows: [
+          _row('a', reason: 'inappropriate'),
+          _row('b', reason: 'not_yours'),
+          _row('c', reason: 'access'),
+        ],
+      );
+      await tester.tap(find.byKey(const Key('admin-tab-reports')));
+      await tester.pumpAndSettle();
+
+      for (final id in ['a', 'b', 'c']) {
+        expect(find.byKey(Key('admin-report-takedown-$id')), findsOne);
+      }
+    });
   });
 }

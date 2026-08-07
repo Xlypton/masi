@@ -185,6 +185,66 @@ final withdrawalServiceProvider = Provider<WithdrawalService>(
   WithdrawalService.new,
 );
 
+/// What a takedown actually accomplished.
+///
+/// [photoObjects] vs [photoBytesRemoved] are reported separately on purpose: a
+/// takedown that changed the moderation state but removed none of the bytes is
+/// the exact failure W-2 describes, and collapsing the two into a bool is how
+/// it stayed invisible for so long.
+typedef TakedownResult = ({int photoObjects, int photoBytesRemoved});
+
+/// Takes a published topo down, and removes its PUBLIC photo bytes with it
+/// (W-2).
+///
+/// ## Why the bytes, when §3.3 says never destroy anything
+///
+/// These do not conflict, because they are about different objects. §3.3
+/// protects the topo RECORD — routes, ascents, comments, version history — and
+/// none of that is touched here. W-2 is about the world-readable COPY of the
+/// photo: a moderator taking down inappropriate imagery has to be able to take
+/// down the imagery, not just the row pointing at it.
+///
+/// The takedown also stays reversible, which is what makes deleting the public
+/// copy safe: the owner's private `<uid>/<photoId><ext>` object is never
+/// touched, and because push re-reads and re-sends its own rows every time
+/// (decision D-4, no outbox), re-publishing simply re-uploads the shared copy.
+/// The deletion is self-healing rather than terminal.
+///
+/// ## Order is not stylistic
+///
+/// The photo objects are enumerated FIRST, before the RPC. The shared-photo
+/// SELECT policy is `is_wall_public("wallId")`, which the takedown makes false —
+/// so afterwards even an admin cannot list what there was to delete. Reading
+/// after removing would always report zero and always leave the bytes.
+class TakedownService {
+  const TakedownService(this._ref);
+
+  final Ref _ref;
+
+  /// Removes [wallId] from public view and deletes its published photo bytes.
+  ///
+  /// The RPC's errors propagate — an admin who thinks they took something down
+  /// when they did not is the worst outcome here. The byte deletion does NOT
+  /// throw, but its result is returned rather than swallowed, so the caller can
+  /// say "taken down, but 2 of 3 images could not be removed" instead of a bare
+  /// success.
+  Future<TakedownResult> remove({required String wallId, String? reason}) async {
+    final remote = _ref.read(moderationRemoteProvider);
+
+    // BEFORE the RPC — see this class's doc.
+    final objects = await remote.publishedPhotoObjects(wallId);
+
+    await remote.removeTopo(wallId: wallId, reason: reason);
+
+    final removed = await remote.removePublishedPhotoObjects(objects);
+
+    await refreshWallModeration(_ref, {wallId});
+    return (photoObjects: objects.length, photoBytesRemoved: removed);
+  }
+}
+
+final takedownServiceProvider = Provider<TakedownService>(TakedownService.new);
+
 /// Pulls moderation state for [wallIds] and writes it to the local mirror.
 ///
 /// Best-effort and never throws: [ModerationRemote.fetchWallModeration]

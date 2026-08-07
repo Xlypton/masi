@@ -1,5 +1,7 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../backup/data/sync_remote.dart' show sharedPhotoPath;
+
 /// Reads moderation state from the cloud.
 ///
 /// Deliberately a SEPARATE seam from `SyncRemote` rather than another method
@@ -64,6 +66,37 @@ abstract class ModerationRemote {
   /// retained, not destroyed (COMMUNITY_PLAN.md §3.3), so this is reversible.
   Future<void> removeTopo({required String wallId, String? reason});
 
+  /// The Storage object names of [wallId]'s PUBLISHED photo copies —
+  /// `shared/<canonicalPhotoId><ext>`, one per original photo (W-2).
+  ///
+  /// **Must be called BEFORE [removeTopo].** The shared-photo SELECT policy is
+  /// `is_wall_public("wallId")`, and a takedown makes that false, so afterwards
+  /// even an admin cannot enumerate what there was to delete. Reading first is
+  /// not an optimisation; it is the only order that works.
+  ///
+  /// Slices are excluded: a slice shares its original's single on-disk file and
+  /// therefore its single Storage object, so listing it would produce a
+  /// duplicate delete of a path already covered. That mirrors the uploader's own
+  /// canonical-id rule.
+  ///
+  /// Never throws — an enumeration failure returns empty and the caller reports
+  /// having removed nothing, which is honest. It must never take down the
+  /// moderation decision itself.
+  Future<List<String>> publishedPhotoObjects(String wallId);
+
+  /// Deletes [objectPaths] from the public prefix, returning how many objects
+  /// were ACTUALLY removed.
+  ///
+  /// The count is the point, and it is why this does not reuse
+  /// `SyncRemote.removeSharedPhoto` (which returns void and swallows). A
+  /// Storage delete that RLS filtered to nothing returns HTTP 200 and an empty
+  /// list — indistinguishable from success unless you count. That exact
+  /// false-success hid W-2: there was no DELETE policy for `shared/` at all, so
+  /// every removal since the feature shipped silently removed nothing.
+  ///
+  /// Never throws; a failure reports 0.
+  Future<int> removePublishedPhotoObjects(List<String> objectPaths);
+
   /// Starts the ten-day withdrawal clock on a published topo (C-3). Returns
   /// the epoch-ms instant the clock started from — which for a second call is
   /// the ORIGINAL one, not a fresh one: asking twice must not silently cost
@@ -91,6 +124,11 @@ class SupabaseModerationRemote implements ModerationRemote {
   SupabaseModerationRemote(this._client);
 
   final SupabaseClient _client;
+
+  /// Same bucket `SyncRemote` uploads to. Duplicated rather than imported
+  /// because the two seams are deliberately independent (see this file's
+  /// header) and one shared string is not worth coupling them over.
+  static const String _photoBucket = 'topo-photos';
 
   /// Chunk size for the `IN` filter. PostgREST puts the id list in the query
   /// string, so an unbounded list eventually exceeds the URL length limit and
@@ -169,6 +207,50 @@ class SupabaseModerationRemote implements ModerationRemote {
       'remove_topo',
       params: {'wall_id': wallId, 'reason': reason},
     );
+  }
+
+  @override
+  Future<List<String>> publishedPhotoObjects(String wallId) async {
+    try {
+      final rows = await _client
+          .from('photos')
+          .select('id, localPath, parentPhotoId, deletedAt')
+          .eq('wallId', wallId);
+      final paths = <String>{};
+      for (final raw in rows) {
+        final row = Map<String, dynamic>.from(raw);
+        // A slice points at its original's file, so its object is already
+        // covered by that original's row — see [publishedPhotoObjects].
+        if (row['parentPhotoId'] != null) continue;
+        if (row['deletedAt'] != null) continue;
+        final id = row['id'];
+        final localPath = row['localPath'];
+        if (id is! String || localPath is! String) continue;
+        final dot = localPath.lastIndexOf('.');
+        // The extension is part of the object NAME, so a row without one
+        // cannot be turned into a path to delete. Skipped rather than guessed:
+        // deleting `shared/<id>` when the object is `shared/<id>.jpg` would
+        // report a success that removed nothing.
+        if (dot < 0 || dot == localPath.length - 1) continue;
+        paths.add(sharedPhotoPath(id, localPath.substring(dot)));
+      }
+      return paths.toList();
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  @override
+  Future<int> removePublishedPhotoObjects(List<String> objectPaths) async {
+    if (objectPaths.isEmpty) return 0;
+    try {
+      final removed = await _client.storage
+          .from(_photoBucket)
+          .remove(objectPaths);
+      return removed.length;
+    } catch (_) {
+      return 0;
+    }
   }
 
   @override

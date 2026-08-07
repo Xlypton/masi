@@ -88,6 +88,12 @@ class _FakeRemote implements ModerationRemote {
 
   @override
   Future<void> removeTopo({required String wallId, String? reason}) async {}
+
+  @override
+  Future<List<String>> publishedPhotoObjects(String wallId) async => const [];
+
+  @override
+  Future<int> removePublishedPhotoObjects(List<String> objectPaths) async => 0;
 }
 
 class _FakeSyncOrchestrator extends SyncOrchestrator {

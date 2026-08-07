@@ -53,6 +53,12 @@ class _FakeRemote implements ModerationRemote {
   Future<void> removeTopo({required String wallId, String? reason}) async {}
 
   @override
+  Future<List<String>> publishedPhotoObjects(String wallId) async => const [];
+
+  @override
+  Future<int> removePublishedPhotoObjects(List<String> objectPaths) async => 0;
+
+  @override
   Future<int?> requestWithdrawal(String wallId) async => null;
 
   @override

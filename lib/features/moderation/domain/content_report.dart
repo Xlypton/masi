@@ -132,6 +132,25 @@ class ContentReport {
       duplicateOfId != null &&
       !alreadyLinked;
 
+  /// Whether taking the topo down — and deleting its published images — is a
+  /// sensible resolution for this report (W-2).
+  ///
+  /// Restricted to the three reasons where the CONTENT ITSELF is the problem:
+  /// imagery that should not be public, a topo published by someone with no
+  /// right to it, and an access complaint, where the whole point is that the
+  /// listing is what is causing harm.
+  ///
+  /// Deliberately NOT offered for `duplicate` or `inaccurate`. Those are fixed
+  /// by linking or editing, and a destructive control sitting next to them
+  /// invites reaching for it on problems it does not solve — which is how a
+  /// merge request turns into someone's work disappearing. `unsafe` is excluded
+  /// for the same reason: a spinning bolt is a hazard to flag on a topo people
+  /// need to keep reading, not a reason to delete the topo.
+  bool get canTakeDown =>
+      reason == ReportReason.inappropriate ||
+      reason == ReportReason.notYours ||
+      reason == ReportReason.access;
+
   DateTime get at => DateTime.fromMillisecondsSinceEpoch(createdAt);
 
   /// What was reported: a specific route when one was named, otherwise the
