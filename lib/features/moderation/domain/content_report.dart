@@ -89,6 +89,9 @@ class ContentReport {
     this.reporterId,
     this.reporterName,
     this.body,
+    this.duplicateOfId,
+    this.duplicateOfName,
+    this.alreadyLinked = false,
   });
 
   final String id;
@@ -102,7 +105,32 @@ class ContentReport {
   final String? reporterName;
   final String? body;
 
+  /// Which topo this one duplicates, when the reporter named one (community
+  /// editing phase 8b / C-6.4).
+  ///
+  /// Optional even for [ReportReason.duplicate]: the reporter may be reporting
+  /// a duplicate of something they cannot find in the nearby list — a topo with
+  /// no coordinates, or one 200 m away across a boulder field. A report that
+  /// says only "duplicate" is still a valid complaint; it is just one an admin
+  /// has to research rather than resolve in a tap.
+  final String? duplicateOfId;
+  final String? duplicateOfName;
+
+  /// Whether the pair is ALREADY recorded as alternates, in either direction.
+  ///
+  /// Server-computed, because the client cannot see `topo_alternates` links for
+  /// pairs outside its feed. Offering "Link as alternates" on a linked pair
+  /// would be a button that appears to act and does nothing, which is how a
+  /// moderation queue stops meaning anything.
+  final bool alreadyLinked;
+
   bool get isUrgent => reason.isUrgent;
+
+  /// Whether an admin can resolve this report by linking the two topos.
+  bool get canLink =>
+      reason == ReportReason.duplicate &&
+      duplicateOfId != null &&
+      !alreadyLinked;
 
   DateTime get at => DateTime.fromMillisecondsSinceEpoch(createdAt);
 
@@ -143,6 +171,12 @@ class ContentReport {
       body: (row['body'] as String?)?.trim().isNotEmpty == true
           ? row['body'] as String
           : null,
+      duplicateOfId: row['duplicateOfId'] as String?,
+      duplicateOfName:
+          (row['duplicateOfName'] as String?)?.trim().isNotEmpty == true
+          ? row['duplicateOfName'] as String
+          : null,
+      alreadyLinked: row['alreadyLinked'] == true,
     );
   }
 

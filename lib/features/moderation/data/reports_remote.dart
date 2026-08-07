@@ -18,11 +18,18 @@ abstract class ReportsRemote {
   ///
   /// Throws when the topo is not public — you can only report what you can
   /// see — and when the reason is not one the server knows.
+  ///
+  /// [duplicateOfId] names WHICH topo this one duplicates (phase 8b / C-6.4)
+  /// and is refused for any reason other than `duplicate`, for a topo that is
+  /// not public, and for the reported topo itself. It joins the one-open-report
+  /// dedup key, so naming two different topos files two reports rather than
+  /// silently discarding the second claim.
   Future<String> report({
     required String wallId,
     required ReportReason reason,
     String? body,
     String? routeId,
+    String? duplicateOfId,
   });
 
   /// Open reports for an admin, unsafe first and then oldest first.
@@ -53,6 +60,7 @@ class SupabaseReportsRemote implements ReportsRemote {
     required ReportReason reason,
     String? body,
     String? routeId,
+    String? duplicateOfId,
   }) async {
     final result = await _client.rpc<dynamic>(
       'report_content',
@@ -61,6 +69,7 @@ class SupabaseReportsRemote implements ReportsRemote {
         'reason': reason.wire,
         'body': body,
         'route_id': routeId,
+        'duplicate_of_id': duplicateOfId,
       },
     );
     return result is String ? result : '';

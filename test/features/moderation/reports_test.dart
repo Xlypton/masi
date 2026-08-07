@@ -72,6 +72,7 @@ class _FakeReports implements ReportsRemote {
     required ReportReason reason,
     String? body,
     String? routeId,
+    String? duplicateOfId,
   }) async {
     filed.add((wallId, reason, body));
     return 'new-report';

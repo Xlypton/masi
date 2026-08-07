@@ -17,7 +17,9 @@ import '../../../shared/presentation/masi_skeleton.dart';
 import '../../account/application/auth_providers.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../moderation/application/community_facts_providers.dart';
+import '../../moderation/application/duplicate_providers.dart';
 import '../../moderation/application/moderation_providers.dart';
+import '../../moderation/domain/nearby_topo.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../moderation/presentation/access_banner.dart';
 import '../../moderation/presentation/grade_consensus_view.dart';
@@ -37,9 +39,11 @@ import '../../topo/presentation/canvas_chrome.dart';
 import '../../topo/presentation/topo_canvas_screen.dart';
 import '../../library/application/library_providers.dart';
 import '../application/comments_providers.dart';
+import '../application/community_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
 import '../data/comments_repository.dart';
+import '../data/community_repository.dart';
 
 /// Read-only detail view for a single shared ("community") topo: a
 /// collapsing header showing the wall's photo + route overlays (tap it to
@@ -531,14 +535,43 @@ class _CommunityTopoDetailScreenState
   /// the same kind of statement and should not share a flow.
   Future<void> _reportTopo(String wallId) async {
     final name = ref.read(wallNameProvider(wallId)).value ?? 'this topo';
-    final draft = await showReportReporter(context, targetLabel: name);
+    // Fetched BEFORE the sheet opens rather than lazily when "Duplicate" is
+    // picked: a spinner appearing between two steps of a modal chain is where
+    // people back out, and this costs one request against a topo the reader is
+    // already looking at. Best-effort by contract — an empty list simply means
+    // the duplicate step is skipped (phase 8b / C-6.4).
+    final topos = ref.read(sharedToposProvider).value ?? const <SharedTopo>[];
+    final here = topos.where((t) => t.wallId == wallId).firstOrNull;
+    final latitude = here?.latitude;
+    final longitude = here?.longitude;
+    final candidates = latitude == null || longitude == null
+        ? const <NearbyTopo>[]
+        : await ref.read(
+            nearbyToposProvider((
+              latitude: latitude,
+              longitude: longitude,
+              excludeWallId: wallId,
+            )).future,
+          );
+    if (!mounted) return;
+
+    final draft = await showReportReporter(
+      context,
+      targetLabel: name,
+      duplicateCandidates: candidates,
+    );
     if (draft == null || !mounted) return;
 
     final messenger = ScaffoldMessenger.maybeOf(context);
     try {
       await ref
           .read(reportServiceProvider)
-          .report(wallId: wallId, reason: draft.reason, body: draft.body);
+          .report(
+            wallId: wallId,
+            reason: draft.reason,
+            body: draft.body,
+            duplicateOfId: draft.duplicateOfId,
+          );
       messenger?.showSnackBar(
         const SnackBar(content: Text('Sent to a moderator. Thanks.')),
       );

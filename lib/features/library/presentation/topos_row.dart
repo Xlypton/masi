@@ -702,6 +702,47 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     // worse.
     final trusted =
         ref.read(myTrustProvider).asData?.value.isTrusted ?? false;
+
+    // Phase 8b / C-6.1: what is already here, BEFORE anything is submitted.
+    // Only possible when this topo has coordinates, which is most of them —
+    // they arrive automatically from photo EXIF (see `setWallCoordinates`).
+    // A topo with none simply skips the check rather than being nagged to set
+    // a location it may not have.
+    final latitude = topo.latitude;
+    final longitude = topo.longitude;
+    if (latitude != null && longitude != null) {
+      reportBusy(true);
+      final nearby = await ref.read(
+        nearbyToposProvider((
+          latitude: latitude,
+          longitude: longitude,
+          excludeWallId: topo.wallId,
+        )).future,
+      );
+      reportBusy(false);
+      if (!context.mounted) return;
+      if (nearby.isNotEmpty) {
+        final proceed = await showDuplicateWarning(
+          context,
+          nearby: nearby,
+          topoName: topo.name,
+          trusted: trusted,
+        );
+        // Backing out here ends the flow entirely rather than falling through
+        // to the publish confirm — being shown the crag you are duplicating and
+        // then asked "publish?" anyway would read as the app not listening.
+        if (!proceed || !context.mounted) return;
+        reportBusy(true);
+        await _runGuarded(
+          context,
+          "Couldn't publish — please try again",
+          () =>
+              ref.read(libraryCrudRepositoryProvider).publishTopo(topo.wallId),
+        );
+        return;
+      }
+    }
+
     final confirmed = await showMasiConfirm(
       context,
       title: trusted ? 'Publish to Community?' : 'Submit to Community?',

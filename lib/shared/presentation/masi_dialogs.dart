@@ -205,6 +205,7 @@ Future<String?> showMasiTextPrompt(
   Key? fieldKey,
   Key? submitKey,
   Key? dialogKey,
+  bool allowEmpty = false,
 }) {
   return showCupertinoDialog<String>(
     context: context,
@@ -217,6 +218,7 @@ Future<String?> showMasiTextPrompt(
       placeholder: placeholder,
       fieldKey: fieldKey,
       submitKey: submitKey,
+      allowEmpty: allowEmpty,
     ),
   );
 }
@@ -262,6 +264,7 @@ class _MasiTextPromptDialog extends StatefulWidget {
     required this.placeholder,
     this.fieldKey,
     this.submitKey,
+    this.allowEmpty = false,
   });
 
   final String title;
@@ -271,6 +274,16 @@ class _MasiTextPromptDialog extends StatefulWidget {
   final Key? fieldKey;
   final Key? submitKey;
 
+  /// Whether submitting with nothing typed is allowed, resolving to `''`.
+  ///
+  /// Off by default, and that is right for every naming prompt in the app: a
+  /// wall called "" is not a thing anyone meant. It is ON for the two prompts
+  /// whose text is genuinely optional — the note on a report and on a
+  /// suggestion — where the caller's own doc says so and the disabled button
+  /// was quietly contradicting it, forcing people to type a word to file a
+  /// complaint that a picked category already described.
+  final bool allowEmpty;
+
   @override
   State<_MasiTextPromptDialog> createState() => _MasiTextPromptDialogState();
 }
@@ -279,7 +292,8 @@ class _MasiTextPromptDialogState extends State<_MasiTextPromptDialog> {
   late final TextEditingController _controller = TextEditingController(
     text: widget.initialValue,
   );
-  late bool _canSubmit = _controller.text.trim().isNotEmpty;
+  late bool _canSubmit =
+      widget.allowEmpty || _controller.text.trim().isNotEmpty;
 
   @override
   void initState() {
@@ -288,7 +302,8 @@ class _MasiTextPromptDialogState extends State<_MasiTextPromptDialog> {
   }
 
   void _onChanged() {
-    final canSubmit = _controller.text.trim().isNotEmpty;
+    final canSubmit =
+        widget.allowEmpty || _controller.text.trim().isNotEmpty;
     if (canSubmit != _canSubmit) setState(() => _canSubmit = canSubmit);
   }
 
@@ -308,7 +323,7 @@ class _MasiTextPromptDialogState extends State<_MasiTextPromptDialog> {
 
   void _submit() {
     final name = _controller.text.trim();
-    if (name.isEmpty) return;
+    if (name.isEmpty && !widget.allowEmpty) return;
     _close(name);
   }
 

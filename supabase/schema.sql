@@ -825,3 +825,67 @@ CREATE TABLE IF NOT EXISTS public.topo_edit_suggestions (
 -- What this deliberately does not add: a way to propose DELETING a route. A
 -- suggestion is an offer of help the owner may accept in one tap, and "accept"
 -- must never be the gesture that removes work.
+
+-- ---------------------------------------------------------------------------
+-- Community editing, Phase 8b — duplicate topos (C-6)
+-- See supabase/migrations/2026-08-07_community_phase8b_duplicates.sql
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.topo_alternates (
+  "wallId"      TEXT PRIMARY KEY NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
+  "canonicalId" TEXT NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
+  "linkedBy"    TEXT NOT NULL,
+  note          TEXT,
+  "linkedAt"    BIGINT NOT NULL,
+  CONSTRAINT topo_alternates_not_self CHECK ("wallId" <> "canonicalId")
+);
+
+-- `content_reports` gains "duplicateOfId" (see the migration); the CREATE TABLE
+-- above it is IF NOT EXISTS, so the ALTER in the migration is what lands on the
+-- live database and this comment is what tells a fresh run the column exists.
+--
+-- THE WHOLE OF THIS PHASE IS ADDITIVE, and that is the property to preserve.
+-- Nothing here removes, hides, downranks or reassigns a topo. §C-6 opens by
+-- ruling out resolution-by-deletion outright — two people photographing the
+-- same boulder in different light is useful, and the second submission is often
+-- the better one. Drop `topo_alternates` entirely and every topo is exactly as
+-- public, as owned and as editable as it was.
+--
+--  * DETECT (§C-6.1). `nearby_published_topos(lat, lng, radius_m, exclude)`
+--    is shown to a submitter BEFORE they submit — "3 topos already exist here".
+--    Plain haversine over a bounding box rather than PostGIS: no geography
+--    column exists, 50 m is a tiny radius, and an extension would be the more
+--    expensive decision. `radius_m` is CLAMPED to 2000 because the parameter is
+--    caller-supplied and this is otherwise a scan of every published wall on
+--    earth; the longitude half-window floors cos(lat) at 0.01 so a topo near a
+--    pole cannot widen the box without bound. Each row is filtered through
+--    `is_wall_public`, so it can only ever return topos the caller could
+--    already find in the feed.
+--  * NAME (§C-6.4). `content_reports."duplicateOfId"` carries WHICH topo is
+--    duplicated. A report that says only "duplicate" makes an admin go and find
+--    the other one by hand, which is how a queue stops being worked. The named
+--    topo gets the same `is_wall_public` treatment as the reported one — naming
+--    a private wall id would otherwise confirm it exists. `duplicateOfId` joins
+--    the dedup key, so two reports naming two DIFFERENT topos are two claims
+--    rather than one suppressed by the other.
+--  * LINK (§C-6.4). `link_alternate(duplicate, canonical)` is admin-only and
+--    reversible by `unlink_alternate(wall)`. Alternates, never a merge that
+--    destroys a side (§3.3).
+--
+-- THE INVARIANT: a canonical is never itself an alternate. There are no chains,
+-- so a group is one `WHERE "canonicalId" = me` and the client can group a feed
+-- in one pass with no recursion. `link_alternate` maintains it in BOTH
+-- directions, because an admin can link in either order — it re-points to the
+-- canonical's own head if it has one, and adopts anything that was pointing at
+-- the topo just demoted. Linking a pair that is already linked the other way
+-- round returns the existing head rather than flipping it: the alternative is
+-- deleting a link to write its mirror image, which changes no reader's view.
+--
+-- `report_content` was DROPPED and recreated for its fifth parameter, and
+-- `moderation_reports` because CREATE OR REPLACE cannot change OUT parameters —
+-- the same trap phase 7b hit. `moderation_reports` now also returns
+-- `alreadyLinked`, so an admin is not offered a link on a pair that has one.
+--
+-- §C-6.3 (ranking) needs NO server change: every signal it uses is already
+-- collected. It is a pure client-side function — see
+-- lib/features/community/domain/topo_rank.dart, and Open Question 3.

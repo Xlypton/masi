@@ -7,6 +7,7 @@ import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
+import '../application/duplicate_providers.dart';
 import '../application/moderation_providers.dart';
 import '../application/report_providers.dart';
 import '../domain/content_report.dart';
@@ -397,6 +398,55 @@ class _ReportRowState extends ConsumerState<_ReportRow> {
 
   Future<void> _dismiss() => _resolve(uphold: false);
 
+  /// Records that the two topos are the same place, and upholds the report in
+  /// the same gesture (community editing phase 8b / C-6.4).
+  ///
+  /// One tap for both, because they are one decision: an admin who agrees these
+  /// are the same boulder has both linked them and found the complaint correct,
+  /// and making them press two buttons is how the queue ends up full of linked
+  /// pairs whose reports are still open.
+  ///
+  /// **Nothing is deleted.** Both topos stay published, owned and editable;
+  /// readers see one card for the place instead of two. That is the whole of
+  /// what "merge" means here (§3.3 — never destroy something people have logged
+  /// ascents against), and it is why this needs no confirmation step: there is
+  /// nothing to undo but a link, and `unlink_alternate` undoes it.
+  Future<void> _link() async {
+    final report = widget.report;
+    final duplicateOf = report.duplicateOfId;
+    if (duplicateOf == null) return;
+    try {
+      await ref
+          .read(alternateServiceProvider)
+          .link(
+            // The REPORTED topo becomes the alternate and the named one the
+            // canonical. That direction follows the reporter's own sentence —
+            // "this is the same boulder as X" makes X the one that was already
+            // here — and it is the direction that leaves the older listing as
+            // the group's identity.
+            duplicateId: report.wallId,
+            canonicalId: duplicateOf,
+          );
+      await ref
+          .read(reportServiceProvider)
+          .resolve(reportId: report.id, uphold: true);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Linked to ${report.duplicateOfName ?? 'the other topo'} — '
+            'both are still published',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't link those two")),
+      );
+    }
+  }
+
   Future<void> _resolve({required bool uphold}) async {
     try {
       await ref
@@ -470,6 +520,21 @@ class _ReportRowState extends ConsumerState<_ReportRow> {
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
+          // Phase 8b: WHICH topo it duplicates. Without this an admin holding a
+          // "duplicate" report has to go and find the other one by hand, which
+          // is how this half of the queue stops being worked at all.
+          if (report.duplicateOfName != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              report.alreadyLinked
+                  ? 'Already linked to ${report.duplicateOfName}'
+                  : 'Same as: ${report.duplicateOfName}',
+              key: Key('admin-report-duplicate-of-${report.id}'),
+              style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
           if (report.body != null) ...[
             const SizedBox(height: 2),
             Text(
@@ -498,6 +563,14 @@ class _ReportRowState extends ConsumerState<_ReportRow> {
                 child: const Text('Open'),
               ),
               const Spacer(),
+              if (report.canLink) ...[
+                MasiPendingButton.text(
+                  key: Key('admin-report-link-${report.id}'),
+                  onPressed: _link,
+                  child: const Text('Link'),
+                ),
+                const SizedBox(width: MasiSpacing.xs),
+              ],
               TextButton(
                 key: Key('admin-report-dismiss-${report.id}'),
                 onPressed: _dismiss,

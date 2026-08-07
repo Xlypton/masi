@@ -41,11 +41,13 @@ class ReportService {
     required ReportReason reason,
     String? body,
     String? routeId,
+    String? duplicateOfId,
   }) => _ref.read(reportsRemoteProvider).report(
     wallId: wallId,
     reason: reason,
     body: body,
     routeId: routeId,
+    duplicateOfId: duplicateOfId,
   );
 
   /// Closes a report and refreshes the queue.
