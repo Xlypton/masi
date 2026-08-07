@@ -662,3 +662,41 @@ CREATE TABLE IF NOT EXISTS public.topo_versions (
 -- first (so a revert is itself revertible), soft-deletes routes created since
 -- the snapshot, and bumps every `updatedAt` to GREATEST(local, now) + 1 so the
 -- owner's client pulls the revert instead of re-pushing its vandalised copy.
+
+-- ---------------------------------------------------------------------------
+-- Community editing, Phase 6b — reporting (C-7)
+-- See supabase/migrations/2026-08-07_community_phase6b_reports.sql
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.content_reports (
+  id           TEXT PRIMARY KEY,
+  "wallId"     TEXT NOT NULL REFERENCES public.walls(id) ON DELETE CASCADE,
+  "routeId"    TEXT REFERENCES public.routes(id) ON DELETE CASCADE,
+  "reporterId" TEXT NOT NULL,
+  reason       TEXT NOT NULL,   -- inaccurate|unsafe|duplicate|access|inappropriate|not_yours
+  body         TEXT,
+  status       TEXT NOT NULL DEFAULT 'open',   -- open|upheld|dismissed
+  "resolvedAt" BIGINT,
+  "resolverId" TEXT,
+  resolution   TEXT,
+  "createdAt"  BIGINT NOT NULL
+);
+
+-- SELECT is the reporter or an admin. NOT the topo's owner — several reasons
+-- are accusations ABOUT the owner, and handing the accused the reporter's
+-- identity is how a community learns that reporting invites retaliation. Note
+-- this is the opposite arrangement from `topo_hazards`, deliberately: a hazard
+-- is a public safety warning everyone must see, a report is a private
+-- complaint about the content.
+--
+-- No INSERT policy either, so `report_content` is the only way in and its two
+-- rate limits cannot be bypassed: one OPEN report per person per topo per
+-- reason (a second tap returns the first report's id), and twenty per person
+-- per day.
+--
+-- `moderation_reports()` sorts `reason = 'unsafe'` to the FRONT regardless of
+-- age. That is C-12's "escalated, not queued" in one ORDER BY term rather than
+-- a separate workflow.
+--
+-- `resolve_report` records upheld vs dismissed rather than a flat "closed",
+-- because phase 8's trust levels need both directions.

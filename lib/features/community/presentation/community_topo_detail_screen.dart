@@ -17,11 +17,14 @@ import '../../account/application/auth_providers.dart';
 import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../moderation/application/community_facts_providers.dart';
 import '../../moderation/application/moderation_providers.dart';
+import '../../../shared/presentation/masi_dialogs.dart';
 import '../../moderation/presentation/access_banner.dart';
 import '../../moderation/presentation/grade_consensus_view.dart';
 import '../../moderation/presentation/hazard_banner.dart';
 import '../../moderation/presentation/hazard_list_sheet.dart';
 import '../../moderation/presentation/moderation_banner.dart';
+import '../../moderation/application/report_providers.dart';
+import '../../moderation/presentation/report_reporter.dart';
 import '../../moderation/presentation/topo_history_sheet.dart';
 import '../../moderation/presentation/hazard_reporter.dart';
 import '../../moderation/presentation/verification_tile.dart';
@@ -419,6 +422,67 @@ class _CommunityTopoDetailScreenState
     }
   }
 
+  /// The AppBar overflow: history, and reporting the topo itself.
+  Future<void> _openOverflow(String wallId) async {
+    final action = await showMasiActionSheet<String>(
+      context,
+      sheetKey: const Key('community-detail-overflow'),
+      actions: const [
+        MasiSheetAction(
+          key: Key('community-detail-history'),
+          label: 'History',
+          value: 'history',
+          subtitle: 'What changed, and when',
+        ),
+        MasiSheetAction(
+          key: Key('community-detail-report'),
+          label: 'Report this topo',
+          value: 'report',
+          subtitle: 'Wrong, unsafe, duplicate, access problem',
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (action == null || !mounted) return;
+    switch (action) {
+      case 'history':
+        await showTopoHistory(context, wallId: wallId);
+      case 'report':
+        await _reportTopo(wallId);
+    }
+  }
+
+  /// Files a report against the topo itself (C-7).
+  ///
+  /// Distinct from `_reportHazard` next door, and the difference is worth
+  /// keeping straight: a HAZARD is a public safety warning that appears to
+  /// everyone immediately with no approval step, while a REPORT is a private
+  /// complaint to a moderator that the owner never sees and cannot trace back.
+  /// "There is a loose block" and "this person did not make this topo" are not
+  /// the same kind of statement and should not share a flow.
+  Future<void> _reportTopo(String wallId) async {
+    final name = ref.read(wallNameProvider(wallId)).value ?? 'this topo';
+    final draft = await showReportReporter(context, targetLabel: name);
+    if (draft == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref
+          .read(reportServiceProvider)
+          .report(wallId: wallId, reason: draft.reason, body: draft.body);
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('Sent to a moderator. Thanks.')),
+      );
+    } catch (error) {
+      // Loud. No outbox (decision D-4), so a failure means nothing was
+      // recorded — and a reporter who believes they raised an alarm that never
+      // left the device is worse off than one who was told it failed.
+      messenger?.showSnackBar(
+        SnackBar(content: Text('Could not send that report. $error')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final wallId = widget.wallId;
@@ -517,17 +581,18 @@ class _CommunityTopoDetailScreenState
                 onPressed: () => Navigator.of(context).maybePop(),
               ),
               actions: [
-                // "What changed here since I last climbed" (C-8). Built for
-                // moderation — an admin restores from the same list — but the
-                // reader-facing half is the one that earns its place in the
-                // AppBar: a topo with no freshness signal is trusted exactly
-                // as much on day 900 as on day 1.
+                // An overflow rather than two icons. "Report a hazard" already
+                // has its own button down in the body, where it belongs — it
+                // is a public safety warning and wants to be obvious. These
+                // two are different in kind: History is a lookup, and
+                // reporting the TOPO is a private complaint that should not
+                // sit next to the like button competing for taps.
                 IconButton(
-                  key: const Key('community-detail-history-button'),
-                  icon: MasiIcon('edit_note'),
-                  tooltip: 'History',
+                  key: const Key('community-detail-more-button'),
+                  icon: MasiIcon('more_horiz'),
+                  tooltip: 'More',
                   color: colors.accent,
-                  onPressed: () => showTopoHistory(context, wallId: wallId),
+                  onPressed: () => _openOverflow(wallId),
                 ),
               ],
               // D2 fix: the tap target used to live INSIDE
