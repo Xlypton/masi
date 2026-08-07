@@ -19,6 +19,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
+import '../../../support/fixture_photo.dart';
+
 /// In-memory [SyncRemote] test double: a `Map` per table (row id -> row
 /// json, camelCase keys per drift's `toJson()`) standing in for the
 /// row-level cloud tables, plus two `Map<String, List<int>>`s standing in
@@ -665,9 +667,21 @@ void main() {
   }
 
   /// Writes a real (non-empty) file the push step can read bytes from.
+  ///
+  /// These are VALID, metadata-free JPEG bytes rather than the 16 filler bytes
+  /// they used to be, because publishing now refuses to upload a container it
+  /// cannot parse (W-3 — see `published_photo_metadata.dart`). Sixteen bytes of
+  /// `0x07` is not a photo, so the old fixture made every shared-upload test
+  /// exercise the refusal path instead of the path it meant to test.
+  ///
+  /// Metadata-free is the load-bearing part: with nothing to strip, the
+  /// publish-side rewrite is a no-op that returns the input unchanged, so every
+  /// byte-identity assertion in this file still compares against exactly what
+  /// was written. [fill] still varies the bytes, so two fixtures remain
+  /// distinguishable.
   File writeFile(Directory dir, String name, [int fill = 7]) {
     final f = File(p.join(dir.path, name));
-    f.writeAsBytesSync(List<int>.filled(16, fill));
+    f.writeAsBytesSync(fixtureJpegBytes(fill));
     return f;
   }
 
@@ -1087,6 +1101,148 @@ void main() {
           remote.removedSharedPaths,
           ['shared/photo-1.jpg', 'shared/photo-1.jpg'],
         );
+      },
+    );
+
+    // --- W-3: the published copy must not carry the climber's EXIF ---------
+    //
+    // The picker asks for full metadata because that is how a wall gets its
+    // coordinates, and those same bytes were then uploaded to a world-readable
+    // bucket. The edge is specific to this app: a climber can deliberately
+    // publish an access-sensitive crag WITHOUT coordinates, and the EXIF GPS
+    // IFD hands the location over anyway.
+
+    test(
+      'the PUBLISHED copy is stripped of EXIF while the PRIVATE copy stays '
+      'byte-identical — the private one is the user\'s own photo coming back '
+      'on a restore, and decision D-5 says that one is never degraded',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => c.db.close());
+
+        final original = fixtureJpegWithExifBytes();
+        final file = File(p.join(c.srcDir.path, 'wall.jpg'))
+          ..writeAsBytesSync(original);
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          visibility: 'shared',
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        final result = await c.service.pushOwn();
+        expect(result.photosUploaded, 1);
+
+        final private = remote.privateStorage['$_uidU1/photo-1.jpg']!;
+        final shared = remote.sharedStorage['shared/photo-1.jpg']!;
+
+        expect(private, original, reason: 'the private copy must not be touched');
+        expect(
+          shared.length,
+          lessThan(private.length),
+          reason: 'the published copy should have lost its metadata',
+        );
+        for (final marker in [kFixtureGpsTagBytes, kFixtureMakeBytes]) {
+          expect(
+            _indexOfBytes(shared, marker),
+            -1,
+            reason: 'published bytes still contain $marker',
+          );
+          expect(
+            _indexOfBytes(private, marker),
+            isNot(-1),
+            reason: 'the fixture must actually carry $marker, or this test '
+                'proves nothing',
+          );
+        }
+      },
+    );
+
+    test(
+      'a photo whose container cannot be parsed is REFUSED for publication '
+      'rather than uploaded as-is — failing open here is precisely the leak',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => c.db.close());
+
+        // Not a container the stripper understands, so it cannot prove the
+        // bytes are clean.
+        final file = File(p.join(c.srcDir.path, 'wall.jpg'))
+          ..writeAsBytesSync(List<int>.filled(32, 3));
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          visibility: 'shared',
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(
+          remote.sharedStorage.containsKey('shared/photo-1.jpg'),
+          isFalse,
+          reason: 'unstripped bytes must never reach the public bucket',
+        );
+        expect(
+          remote.privateStorage.containsKey('$_uidU1/photo-1.jpg'),
+          isFalse,
+          reason: 'the refusal happens before either upload, so the private '
+              'copy is not written either — the row is withheld and retried '
+              'as a unit rather than left half-pushed',
+        );
+        expect(result.photosFailed, 1);
+        expect(
+          result.photoErrors.any((e) => e.contains('refusing to publish')),
+          isTrue,
+          reason: 'the refusal must be reported, not silent. Errors were: '
+              '${result.photoErrors}',
+        );
+      },
+    );
+
+    test(
+      'a PRIVATE wall with the same unparseable photo still pushes — the '
+      'refusal is scoped to publication and must not break ordinary backup',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(remote: remote, auth: FakeAuthRepository(_signedInU1));
+        addTearDown(() => c.db.close());
+
+        final file = File(p.join(c.srcDir.path, 'wall.jpg'))
+          ..writeAsBytesSync(List<int>.filled(32, 3));
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.photosUploaded, 1);
+        expect(result.photosFailed, 0);
+        expect(
+          remote.privateStorage['$_uidU1/photo-1.jpg'],
+          List<int>.filled(32, 3),
+          reason: 'a private backup keeps the original bytes exactly',
+        );
+        expect(remote.sharedStorage, isEmpty);
       },
     );
 
@@ -2191,7 +2347,7 @@ void main() {
         expect(photo.localPath, isNot(file.path));
         final absolutePath = p.join(containerB.docsDir.path, photo.localPath);
         expect(File(absolutePath).existsSync(), isTrue);
-        expect(File(absolutePath).readAsBytesSync(), List<int>.filled(16, 42));
+        expect(File(absolutePath).readAsBytesSync(), fixtureJpegBytes(42));
       },
     );
   });
@@ -3335,7 +3491,7 @@ void main() {
         expect(photo!.ownerId, _uidU2);
         expect(p.isRelative(photo.localPath), isTrue);
         final absolutePath = p.join(containerU1.docsDir.path, photo.localPath);
-        expect(File(absolutePath).readAsBytesSync(), List<int>.filled(16, 7));
+        expect(File(absolutePath).readAsBytesSync(), fixtureJpegBytes(7));
 
         final route = await (containerU1.db.select(
           containerU1.db.routes,
@@ -4386,4 +4542,17 @@ void main() {
       },
     );
   });
+}
+
+/// Index of [needle] in [haystack], or -1. Local to this file because the only
+/// use is asserting a byte pattern is absent from published photo bytes.
+int _indexOfBytes(List<int> haystack, List<int> needle) {
+  outer:
+  for (var i = 0; i + needle.length <= haystack.length; i++) {
+    for (var j = 0; j < needle.length; j++) {
+      if (haystack[i + j] != needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
 }

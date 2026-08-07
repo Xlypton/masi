@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:path/path.dart' as p;
@@ -10,6 +12,7 @@ import '../../topo/data/public_photo_prune_service.dart'
     show kPruneKeepNewestForeign, kPrunePressureHighWatermark;
 import 'backup_repository.dart';
 import 'connectivity_service.dart';
+import 'published_photo_metadata.dart';
 import 'sync_remote.dart';
 
 /// How many OTHER climbers' photos' BYTES one [SyncService.pullOwnAndShared]
@@ -1210,6 +1213,30 @@ class SyncService {
         continue;
       }
 
+      // The PUBLIC copy — and only it — has its identifying metadata removed
+      // (W-3). The private copy above stays byte-identical on purpose: it is
+      // the user's own photo coming back to their own device on a restore, and
+      // decision D-5 says that one is never degraded. Computed before either
+      // upload so a strip refusal cannot leave the shared object half-written.
+      Uint8List? sharedBytes;
+      if (needsShared) {
+        final strip = strippedForPublishing(bytes);
+        if (!strip.isSafeToPublish) {
+          // FAIL CLOSED. `strip.bytes` here is the original, still-identifying
+          // photo, and publishing it is the exact leak this exists to stop.
+          // Treated as an upload failure so the row is withheld and retried,
+          // which surfaces as a stuck publish — visible and recoverable, unlike
+          // GPS coordinates already cached in a world-readable bucket.
+          failedCanonicalIds.add(canonicalId);
+          errors.add(
+            'photo $canonicalId: refusing to publish — could not strip '
+            'metadata (${strip.outcome.name})',
+          );
+          continue;
+        }
+        sharedBytes = strip.bytes;
+      }
+
       try {
         if (needsPrivate) {
           await _remote.uploadPhoto(
@@ -1219,11 +1246,11 @@ class SyncService {
             bytes: bytes,
           );
         }
-        if (needsShared) {
+        if (sharedBytes != null) {
           await _remote.uploadSharedPhoto(
             photoId: canonicalId,
             ext: ext,
-            bytes: bytes,
+            bytes: sharedBytes,
           );
         }
         uploaded++;
