@@ -83,17 +83,35 @@ class _FakeRemote implements NotificationsRemote {
 
 String? _pushed;
 
-/// An in-memory mirror. The screen's list is overridden above it, but the
-/// providers underneath — the read service's local write, and
-/// `profileDisplayNameProvider`'s name lookup — go to a real database, and
-/// without one they build the app's own and leave a timer pending.
-AppDatabase? _db;
-
 /// Pumps the screen over a hand-fed list, standing in for the Drift mirror.
 ///
 /// The list and the unread count are overridden separately rather than derived
 /// from one another on purpose: the badge reads the count and the screen reads
 /// the list, and a test that fused them could not catch the two disagreeing.
+///
+/// **`UncontrolledProviderScope` over an explicitly-owned container**, not a
+/// plain `ProviderScope`, and that is load-bearing rather than stylistic.
+///
+/// A `ProviderScope` owns its container and disposes it while the WIDGET TREE
+/// is being torn down, inside `BuildOwner.finalizeTree`. Riverpod then cancels
+/// the Drift query streams underneath, and drift's
+/// `StreamQueryStore.markAsClosed` schedules a zero-duration `Timer` to do the
+/// actual close. By then the tree is gone, nothing will pump again, and
+/// flutter_test's teardown asserts "A Timer is still pending even after the
+/// widget tree was disposed."
+///
+/// That assertion does not merely fail the one test — it poisons the binding,
+/// so every test after it in the file reports "did not complete" and the file's
+/// real coverage silently collapses to whatever ran before the first failure.
+/// It cost most of an afternoon precisely because the symptom (a cascade of
+/// unrelated-looking failures) looks nothing like the cause.
+///
+/// Owning the container here moves that disposal into `addTearDown`, which runs
+/// with a live binding that can still service the timer. Registering
+/// `db.close` FIRST is deliberate: `addTearDown` is LIFO, so the container
+/// disposes before the connection it reads from closes. Every other suite in
+/// this repo (`comment_row_test`, `nav_shell_test`, `router_test`) is built the
+/// same way.
 Future<_FakeRemote> _pump(
   WidgetTester tester, {
   required List<AppNotification> list,
@@ -101,18 +119,24 @@ Future<_FakeRemote> _pump(
   Widget? home,
 }) async {
   final remote = _FakeRemote(fetchThrows: fetchThrows);
-  _db ??= AppDatabase(NativeDatabase.memory());
+  final db = AppDatabase(NativeDatabase.memory());
+  final container = ProviderContainer(
+    overrides: [
+      appDatabaseProvider.overrideWithValue(db),
+      notificationsRemoteProvider.overrideWithValue(remote),
+      effectiveUidProvider.overrideWithValue(_me),
+      notificationsProvider.overrideWith((ref) => Stream.value(list)),
+      unreadNotificationCountProvider.overrideWith(
+        (ref) => Stream.value(list.where((n) => n.isUnread).length),
+      ),
+    ],
+  );
+  addTearDown(db.close);
+  addTearDown(container.dispose);
+
   await tester.pumpWidget(
-    ProviderScope(
-      overrides: [
-        appDatabaseProvider.overrideWithValue(_db!),
-        notificationsRemoteProvider.overrideWithValue(remote),
-        effectiveUidProvider.overrideWithValue(_me),
-        notificationsProvider.overrideWith((ref) => Stream.value(list)),
-        unreadNotificationCountProvider.overrideWith(
-          (ref) => Stream.value(list.where((n) => n.isUnread).length),
-        ),
-      ],
+    UncontrolledProviderScope(
+      container: container,
       child: MaterialApp.router(
         theme: MasiTheme.light,
         routerConfig: GoRouter(
@@ -143,24 +167,11 @@ Future<_FakeRemote> _pump(
     ),
   );
   await tester.pumpAndSettle();
-  // One more zero-duration pump before handing back.
-  //
-  // The mount-time refresh settles AFTER `pumpAndSettle` returns, and its
-  // continuation leaves a zero-duration timer behind. flutter_test asserts on
-  // any timer still pending at teardown, and that assertion does not merely
-  // fail the one test — it poisons the binding, so every test after it in this
-  // file reports "did not complete" and the file's real coverage silently
-  // drops to whatever ran before it.
-  await tester.pump(const Duration(milliseconds: 1));
   return remote;
 }
 
 void main() {
   setUp(() => _pushed = null);
-  tearDown(() async {
-    await _db?.close();
-    _db = null;
-  });
 
   group('the empty inbox', () {
     testWidgets('a genuinely empty inbox says so, and says what will fill it', (
@@ -190,12 +201,6 @@ void main() {
         await _pump(tester, list: [_n('a')], fetchThrows: true);
         expect(find.byKey(const Key('notification-row-a')), findsOne);
         expect(find.byKey(const Key('notifications-empty-offline')), findsNothing);
-        // The mount-time refresh rejects, and the rejection lands after the
-        // last settle — leaving a zero-duration timer that trips
-        // flutter_test's "A Timer is still pending" teardown assertion and
-        // poisons every test after this one in the file. One more pump lets
-        // it fire.
-        await tester.pump(const Duration(milliseconds: 1));
       },
     );
   });

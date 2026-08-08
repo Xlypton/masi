@@ -52,14 +52,34 @@ void main() {
     Set<String> participantUids = const {},
     String? selfUid,
   }) async {
+    // `UncontrolledProviderScope` over a container this test owns, NOT a plain
+    // `ProviderScope`, and the difference is load-bearing.
+    //
+    // A `ProviderScope` disposes its container while the WIDGET TREE is being
+    // torn down, inside `BuildOwner.finalizeTree`. Riverpod then cancels the
+    // Drift query streams under `profileDisplayNameProvider`, and drift's
+    // `StreamQueryStore.markAsClosed` schedules a zero-duration `Timer` to do
+    // the close. The tree is gone by then, nothing pumps again, and
+    // flutter_test asserts "A Timer is still pending even after the widget tree
+    // was disposed" — which poisons the binding, so every test after it in the
+    // file reports "did not complete" and this file's coverage silently
+    // collapses to whatever ran first.
+    //
+    // Owning the container moves the disposal into `addTearDown`, where the
+    // binding is still live enough to service the timer.
+    final container = ProviderContainer(
+      overrides: [
+        appDatabaseProvider.overrideWithValue(database),
+        nowMsProvider.overrideWithValue(() => 1000),
+        // The real one reads a Supabase session, which no widget test has.
+        effectiveUidProvider.overrideWithValue(selfUid),
+      ],
+    );
+    addTearDown(container.dispose);
+
     await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          appDatabaseProvider.overrideWithValue(database),
-          nowMsProvider.overrideWithValue(() => 1000),
-          // The real one reads a Supabase session, which no widget test has.
-          effectiveUidProvider.overrideWithValue(selfUid),
-        ],
+      UncontrolledProviderScope(
+        container: container,
         child: MaterialApp(
           theme: MasiTheme.light,
           home: Scaffold(
