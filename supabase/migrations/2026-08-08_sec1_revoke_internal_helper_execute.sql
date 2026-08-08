@@ -1,0 +1,64 @@
+-- SEC-1: revoke anon/authenticated EXECUTE on unguarded SECURITY DEFINER
+-- helpers that have no caller check.
+--
+-- WHAT HAPPENED: four SECURITY DEFINER functions in this schema contain no
+-- caller check at all — no `IF actor IS NULL OR NOT public.is_admin() THEN
+-- RAISE EXCEPTION` guard, nothing. Supabase's `ALTER DEFAULT PRIVILEGES`
+-- grants EXECUTE on every newly CREATEd function to `anon` and
+-- `authenticated` automatically; for these four, that default grant was
+-- never revoked, so a fully anonymous caller holding only the publishable
+-- key shipped in the web bundle could call them directly over PostgREST.
+--
+-- Worst case, reproduced live twice before this fix: `topo_snapshot(text)`
+-- let anon read ANY topo by wall id, published or not — private drafts
+-- included, with exact GPS latitude/longitude, access notes, and every
+-- route's grade/description/line geometry.
+--
+--   * public.topo_snapshot(text)                      — anon read of any topo
+--   * public.snapshot_topo(text, text)                — anon write: forge
+--     version history for any wall, as any actor
+--   * public.note_material_change(text, text, jsonb, jsonb) — anon write:
+--     forge change notices
+--   * public.trust_level(text)                        — probe any user's
+--     trust/report status
+--
+-- None of these are meant to be called by a client at all. Every legitimate
+-- caller is itself a SECURITY DEFINER function running as the table owner
+-- (postgres) — `snapshot_touched_walls`, `revert_topo`, `ensure_wall_moderation`,
+-- `my_trust` — and revoking EXECUTE from anon/authenticated does not affect
+-- them: the function owner's own privileges are not governed by this ACL,
+-- and `CREATE OR REPLACE FUNCTION` on an existing function preserves its
+-- existing grants rather than re-running default-privilege grants, so this
+-- revoke sticks across every later `CREATE OR REPLACE` of the same function
+-- (see the C-5d re-apply of `snapshot_topo`, which needs no separate revoke).
+--
+-- Verified after applying to the live (dev) database: all four now return
+-- `42501 permission denied` to an anonymous REST caller; `my_trust` and
+-- `nearby_published_topos` still work; `topo_snapshot` still returns data
+-- when called as `postgres` (so the internal trigger/version-history path is
+-- intact).
+--
+-- THE ROLE LIST MATTERS. `REVOKE ... FROM PUBLIC` alone does NOT remove a
+-- grant made directly to `anon` or `authenticated` — those are real roles,
+-- not members reached only through the PUBLIC pseudo-role, and Supabase's
+-- default-privilege grant targets them by name. `note_material_change` in
+-- 2026-08-08_c5d_material_change_notices.sql already had a `REVOKE ... FROM
+-- public` and was still callable anonymously, which is exactly this gap.
+-- Every REVOKE below — here and in the migrations that define these
+-- functions — names `PUBLIC, anon, authenticated` explicitly.
+--
+-- REVOKE is naturally idempotent (safe to run against a database where it
+-- was already revoked), which satisfies this repo's idempotent-migration
+-- convention with no IF-guard needed.
+--
+-- GOING FORWARD: every future SECURITY DEFINER helper must either carry its
+-- own caller check (an explicit `IF ... NOT public.is_admin() THEN RAISE
+-- EXCEPTION` / auth.uid() check, the pattern already used by `revert_topo`,
+-- `material_changes`, and `resolve_material_change`) OR be revoked like this
+-- immediately after its CREATE. A SECURITY DEFINER function with neither is
+-- a hole by construction, not by accident.
+
+REVOKE ALL ON FUNCTION public.topo_snapshot(text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.snapshot_topo(text, text) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.note_material_change(text, text, jsonb, jsonb) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.trust_level(text) FROM PUBLIC, anon, authenticated;

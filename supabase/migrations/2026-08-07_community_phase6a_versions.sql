@@ -102,6 +102,16 @@ CREATE OR REPLACE FUNCTION public.topo_snapshot(wall text) RETURNS jsonb
   );
 $$;
 
+-- SEC-1 (2026-08-08): this is an internal helper with no caller check — it
+-- was reachable by a fully anonymous REST caller via Supabase's default
+-- EXECUTE grant, and let anon read ANY topo by wall id, including private
+-- drafts with exact GPS and access notes. Every legitimate caller
+-- (`snapshot_touched_walls`, `revert_topo`, the baseline backfill below) is
+-- itself SECURITY DEFINER running as postgres, which is unaffected by this
+-- revoke. `FROM PUBLIC` alone is not enough — see
+-- 2026-08-08_sec1_revoke_internal_helper_execute.sql.
+REVOKE ALL ON FUNCTION public.topo_snapshot(text) FROM PUBLIC, anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- 3. Cutting a version
 -- ---------------------------------------------------------------------------
@@ -211,6 +221,14 @@ BEGIN
      );
 END;
 $$;
+
+-- SEC-1 (2026-08-08): same gap as `topo_snapshot` above — no caller check,
+-- reachable anonymously by default, and would let anon forge version
+-- history for any wall as any actor. Its only legitimate callers
+-- (`snapshot_touched_walls`, `revert_topo`) run SECURITY DEFINER as
+-- postgres and are unaffected. `FROM PUBLIC` alone is not enough — see
+-- 2026-08-08_sec1_revoke_internal_helper_execute.sql.
+REVOKE ALL ON FUNCTION public.snapshot_topo(text, text) FROM PUBLIC, anon, authenticated;
 
 -- STATEMENT-level triggers with transition tables, not row-level ones.
 --

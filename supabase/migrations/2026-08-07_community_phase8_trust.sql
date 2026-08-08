@@ -84,6 +84,16 @@ $$;
 
 GRANT EXECUTE ON FUNCTION public.trust_level(text) TO authenticated;
 
+-- SEC-1 (2026-08-08): the GRANT above (plus Supabase's default EXECUTE grant
+-- to anon on every CREATE FUNCTION) made this callable by a fully anonymous
+-- REST caller to probe any user's trust/report status by uid — this function
+-- has no caller check of its own. Its only legitimate callers (`my_trust`,
+-- `ensure_wall_moderation`) run SECURITY DEFINER as postgres and are
+-- unaffected by this revoke. This REVOKE must stay AFTER the GRANT above so
+-- it is the statement that actually takes effect on a fresh run — see
+-- 2026-08-08_sec1_revoke_internal_helper_execute.sql.
+REVOKE ALL ON FUNCTION public.trust_level(text) FROM PUBLIC, anon, authenticated;
+
 -- What the signed-in user has earned, and what is still between them and the
 -- next level. Their OWN row only — this deliberately cannot be used to
 -- enumerate anyone else's standing.
