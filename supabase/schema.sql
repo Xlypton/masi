@@ -1044,3 +1044,71 @@ GRANT SELECT ON public.material_change_notices TO authenticated;
 DROP POLICY IF EXISTS "ascents_shared_select" ON public.ascents;
 CREATE POLICY "ascents_shared_select" ON public.ascents FOR SELECT TO authenticated
   USING ("visibility" = 'shared' AND public.is_wall_public("wallId"));
+
+-- ===========================================================================
+-- DELETING A PUBLISHED TOPO NEEDS AN ADMIN'S APPROVAL
+-- See supabase/migrations/2026-08-08_deletion_requests.sql
+-- ===========================================================================
+--
+-- Decided 2026-08-08. Before this there was no approval anywhere, and it is
+-- worth being precise about what the protection WAS, because it is easy to
+-- assume it was more: `protect_published_wall` silently reverted an owner's
+-- soft-delete of a published topo, so they had to Withdraw, wait ten days, then
+-- delete. A TIME LOCK, not a review - nobody looked at it. And the trigger
+-- returned early for admins, so an admin could delete outright unreviewed.
+--
+-- Two gates now, protecting different things, neither replacing the other:
+--   * the ten-day withdrawal protects READERS (C-3);
+--   * the approved request protects THE RECORD (§3.3 - never destroy something
+--     people have logged ascents against).
+-- A published topo is deletable only when it is no longer publicly visible AND
+-- an approved request exists. Requests can be filed at any time, so the clocks
+-- run in parallel: this adds a review, not a second wait.
+--
+-- Three things worth not undoing by accident:
+--   * `removed` (taken down) joined the protected set. A takedown moves the
+--     state off `published`, so the old early-return handed a taken-down topo
+--     back to its owner to delete at will - destroying the record the takedown
+--     existed to preserve. That was a hole from the day takedowns shipped.
+--   * Admins go through the same door. No account can destroy a published topo
+--     in one step; `remove_topo` remains the moderation tool, and it takes a
+--     topo down without destroying it.
+--   * An admin cannot approve their OWN request while another admin exists -
+--     that is the second pair of eyes the gate is for. Conditional on another
+--     admin existing, so a single-admin project cannot deadlock.
+--
+-- Drafts are untouched: freely and instantly deletable, per C-1.
+--
+-- Verified live in rolled-back transactions on 2026-08-08: matured withdrawal
+-- alone refused; admin without approval refused; self-approval refused with a
+-- second admin present and allowed by a different one; matured + approved
+-- deletes; stranger refused on request, queue and RLS.
+
+CREATE TABLE IF NOT EXISTS public.deletion_requests (
+  id            text PRIMARY KEY,
+  "wallId"      text   NOT NULL,
+  "requesterId" text   NOT NULL,
+  reason        text,
+  status        text   NOT NULL DEFAULT 'pending',
+  "createdAt"   bigint NOT NULL,
+  "resolvedAt"  bigint,
+  "reviewerId"  text,
+  resolution    text
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS deletion_requests_open_wall
+  ON public.deletion_requests ("wallId") WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS deletion_requests_created_at
+  ON public.deletion_requests ("createdAt");
+
+ALTER TABLE public.deletion_requests ENABLE ROW LEVEL SECURITY;
+
+-- The requester SHOULD see their own row, unlike a report: they are asking for
+-- something and are entitled to know whether it was granted. No write policy -
+-- every mutation goes through a SECURITY DEFINER RPC.
+DROP POLICY IF EXISTS deletion_requests_read ON public.deletion_requests;
+CREATE POLICY deletion_requests_read
+  ON public.deletion_requests FOR SELECT TO authenticated
+  USING ("requesterId" = (auth.uid())::text OR public.is_admin());
+
+GRANT SELECT ON public.deletion_requests TO authenticated;
