@@ -60,6 +60,12 @@ class _FakeModerationRemote implements ModerationRemote {
   Future<List<String>> publishedPhotoObjects(String wallId) async => const [];
 
   @override
+  Future<List<Map<String, dynamic>>> fetchMaterialChanges({
+    int limit = 50,
+  }) async => const [];
+  @override
+  Future<void> resolveMaterialChange(String noticeId) async {}
+  @override
   Future<int> removePublishedPhotoObjects(List<String> objectPaths) async => 0;
 
   @override

@@ -916,3 +916,82 @@ CREATE TABLE IF NOT EXISTS public.topo_alternates (
 -- §C-6.3 (ranking) needs NO server change: every signal it uses is already
 -- collected. It is a pure client-side function — see
 -- lib/features/community/domain/topo_rank.dart, and Open Question 3.
+
+-- ===========================================================================
+-- COMMUNITY EDITING - C-11 (stalled topos) and C-5d (material changes)
+-- See supabase/migrations/2026-08-08_c11_abandoned_topos.sql
+-- and supabase/migrations/2026-08-08_c5d_material_change_notices.sql
+-- ===========================================================================
+--
+-- C-11 adds NO table. `abandoned_topos(inactive_days, limit_count)` is a
+-- read-only admin RPC over rows that already exist: a published topo with a
+-- pending suggestion older than the cutoff whose owner has done nothing since.
+-- The second half of that sentence is the whole design - without it an owner
+-- who simply disagrees with one suggestion is indistinguishable from one who
+-- deleted the app, and an admin list that cannot tell them apart is one nobody
+-- reads. It reports and stops: no transfer of ownership, no auto-application of
+-- suggestions, because both are irreversible acts against a real person's work.
+--
+-- C-5d adds the one table below. Approval is a ONE-TIME gate (C-5c), so the
+-- review queue is bypassable by the obvious route - submit something clean, get
+-- approved, then replace the content. A structural change to a PUBLISHED topo
+-- therefore posts a notice and BLOCKS NOTHING: publication stays instant, the
+-- owner is never interrupted, an admin simply gets to see that a published topo
+-- changed shape.
+
+CREATE TABLE IF NOT EXISTS public.material_change_notices (
+  id            text PRIMARY KEY,
+  "wallId"      text NOT NULL,
+  "actorId"     text,
+  "changesJson" jsonb  NOT NULL DEFAULT '{}'::jsonb,
+  "changeCount" int    NOT NULL DEFAULT 1,
+  "firstAt"     bigint NOT NULL,
+  "lastAt"      bigint NOT NULL,
+  "resolvedAt"  bigint,
+  "resolvedBy"  text
+);
+
+-- THE ANTI-FLOOD GUARANTEE, and it is an index rather than application logic
+-- so two concurrent writes to the same wall cannot both find "no open notice".
+-- A vandal making fifty edits produces ONE row with changeCount 50, which is
+-- the difference between a queue that gets read and one that gets abandoned.
+CREATE UNIQUE INDEX IF NOT EXISTS material_change_notices_open_wall
+  ON public.material_change_notices ("wallId") WHERE "resolvedAt" IS NULL;
+CREATE INDEX IF NOT EXISTS material_change_notices_last_at
+  ON public.material_change_notices ("lastAt" DESC);
+
+ALTER TABLE public.material_change_notices ENABLE ROW LEVEL SECURITY;
+
+-- Admins only, and NO write policy at all: every write goes through a SECURITY
+-- DEFINER function so the notice and its audit-log entry cannot diverge. Owners
+-- deliberately cannot read this - a notice is a moderator's working note about a
+-- change that was already allowed to happen, and showing it to the person who
+-- made the change turns "we keep an eye on this" into "you are under suspicion".
+DROP POLICY IF EXISTS material_change_notices_admin_read
+  ON public.material_change_notices;
+CREATE POLICY material_change_notices_admin_read
+  ON public.material_change_notices FOR SELECT TO authenticated
+  USING (public.is_admin());
+
+GRANT SELECT ON public.material_change_notices TO authenticated;
+
+-- The detector lives in `snapshot_topo`, which the C-5d migration RE-APPLIES:
+-- that function already had to read the previous version's payload to decide
+-- whether anything changed at all, so C-5d costs one extra comparison on a
+-- write that was already known to have altered the topo. Two consequences are
+-- load-bearing and easy to lose in a later edit:
+--
+--   * The comparison filters to LIVE rows first. `topo_snapshot` projects
+--     `deletedAt` rather than filtering on it, so a soft-deleted route leaves
+--     the array length identical - a route-count check would report no change
+--     for the single most important case this exists to catch.
+--   * The call is wrapped in an exception block. A notice is a nice-to-have for
+--     a moderator; the write in progress is a climber's work. Verified by fault
+--     injection on 2026-08-08: with a detector that throws on every call, the
+--     edit still lands and the version history is still cut.
+--
+-- What counts as material stops deliberately short: routes removed, a line
+-- cleared, a route re-anchored to another photo, the cover photo swapped or its
+-- file replaced. Renames, grades, descriptions, added routes and nudged lines
+-- are ordinary work on a topo somebody owns. The failure mode of this feature is
+-- not "we missed one", it is "the queue filled with normal editing".

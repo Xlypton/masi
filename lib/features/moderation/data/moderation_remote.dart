@@ -73,6 +73,24 @@ abstract class ModerationRemote {
     int limit,
   });
 
+  /// Published topos that changed shape after they were approved (C-5d).
+  ///
+  /// Newest first, unlike [fetchQueue]. Nobody is waiting on these — it is a
+  /// watch list, and the topo that changed an hour ago is the one that might
+  /// still be being changed right now.
+  ///
+  /// Admin-only and throws like [fetchQueue]: an empty list that silently
+  /// means "we could not ask" reads as "nothing has been tampered with".
+  Future<List<Map<String, dynamic>>> fetchMaterialChanges({int limit});
+
+  /// Marks a material-change notice as looked at. Admin-only, idempotent.
+  ///
+  /// Deliberately has no verdict parameter. A material change is not an
+  /// accusation and nothing follows from clearing it; if the change WAS
+  /// vandalism, reverting (C-8) and taking down (C-7) are the actions that
+  /// carry a consequence, and both already exist.
+  Future<void> resolveMaterialChange(String noticeId);
+
   /// Approves or rejects a pending topo. Admin-only, enforced server-side.
   /// Returns the resulting state. [reason] is shown to the owner on rejection.
   Future<String> reviewTopo({
@@ -218,6 +236,26 @@ class SupabaseModerationRemote implements ModerationRemote {
     );
     if (rows is! List) return const [];
     return [for (final row in rows) Map<String, dynamic>.from(row as Map)];
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchMaterialChanges({
+    int limit = 50,
+  }) async {
+    final rows = await _client.rpc<dynamic>(
+      'material_changes',
+      params: {'limit_count': limit},
+    );
+    if (rows is! List) return const [];
+    return [for (final row in rows) Map<String, dynamic>.from(row as Map)];
+  }
+
+  @override
+  Future<void> resolveMaterialChange(String noticeId) async {
+    await _client.rpc<dynamic>(
+      'resolve_material_change',
+      params: {'notice_id': noticeId},
+    );
   }
 
   @override

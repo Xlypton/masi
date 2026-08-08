@@ -230,12 +230,31 @@ All of these have actually happened here.
 
 ---
 
-## 6. Known-red as of 2026-08-07 — do not report these as regressions
+## 6. Known-red as of 2026-08-08 — do not report these as regressions
 
-Two assertions in `e2e_community_test.dart` fail: the seeded fixture never reaches the community
-feed on the client. **The harness itself works** — accounts converge, the seed goes through the
-real RPC, sign-in is proven (the Account test passes and the app logs
-`REAL session as e2e-owner@masi.test … RLS applies, sync push/pull is live`), and teardown is exact.
+**One root cause, six failing assertions.** The seeded fixture never reaches the community feed on
+the client, and everything that needs the fixture to be *visible* fails behind it:
+
+- `e2e_signed_in_test.dart` — 2: `the seeded fixture arrives through a live sync pull`, and
+  `version history renders server-side versions`.
+- `e2e_community_test.dart` — 4: the reader/report test times out on the same wait, and the owner
+  inbox, admin reports and owner trust tests then fail on state that test never created.
+
+**The harness itself works** — accounts converge, the seed goes through the real RPC, sign-in is
+proven (the Account test passes and the app logs `REAL session as e2e-owner@masi.test … RLS
+applies, sync push/pull is live`), and teardown is exact.
+
+Two traps in reading a run, both hit on 2026-08-08:
+
+- **`tool/drive_e2e.sh` with no argument stops after the signed-in suite fails**, so the community
+  suite never runs and its screenshots (20+) are absent. A run that reports "only the 2 known
+  failures" has usually not executed the other four tests at all. Run `tool/drive_e2e.sh community`
+  explicitly to exercise them.
+- **Do not put a new assertion at the end of an existing community test.** Every one of them is
+  downstream of the broken feed wait, so a check parked there is never reached and silently proves
+  nothing. `admin: the Changes and Stalled tabs answer from a real admin JWT` is the model to copy:
+  its own `testWidgets`, signing in and going straight to `/admin`, depending on no fixture state —
+  which is why it passes while the four around it fail.
 
 Already ruled out, so do not re-test:
 

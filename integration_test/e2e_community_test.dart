@@ -434,6 +434,74 @@ void main() {
     timeout: const Timeout(Duration(minutes: 6)),
   );
 
+  // --- the admin-only read RPCs (C-5d, C-11) ------------------------------
+  //
+  // Its OWN test, depending on no fixture state, and that is the point. Every
+  // other test in this file needs the seeded wall to have reached the client
+  // feed first, so when that link is broken they all fail together and nothing
+  // downstream of it is exercised at all — which is exactly what happened to an
+  // earlier version of this check, buried at the end of the admin test behind
+  // an assertion about the reader's report.
+  //
+  // What it proves that a widget test cannot: `material_changes` and
+  // `abandoned_topos` are SECURITY DEFINER RPCs gated on `is_admin()` and newly
+  // granted to `authenticated`. A missing GRANT, a wrong parameter name, or a
+  // return shape the client cannot decode all look identical offline, and all
+  // of them surface HERE as the tab's error state, because both providers are
+  // deliberately not best-effort.
+  //
+  // It asserts the ABSENCE of the error rather than the presence of a row, and
+  // that is the honest assertion: whether any topo has changed shape or gone
+  // stale depends on the user's real data, so demanding a row would make this
+  // pass or fail for reasons that have nothing to do with the code.
+  testWidgets(
+    'admin: the Changes and Stalled tabs answer from a real admin JWT',
+    (tester) async {
+      await e2eBoot();
+      await settleNetwork(tester, budget: const Duration(seconds: 8));
+      await e2eSignInAs(e2eAdminEmail);
+      await settleNetwork(tester, budget: const Duration(seconds: 6));
+
+      appRouter.go('/admin');
+      await settle(tester, frames: 30);
+      await waitFor(
+        tester,
+        find.byKey(const Key('admin-queue-screen')),
+        'the admin queue screen',
+      );
+      expect(find.byKey(const Key('admin-queue-forbidden')), findsNothing);
+
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('admin-tab-changes')),
+        'the Changes tab',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 10));
+      await binding.takeScreenshot('36-admin-changes');
+      expect(
+        find.textContaining("Couldn't load recent changes"),
+        findsNothing,
+        reason: 'material_changes() failed for a real admin JWT — the RPC is '
+            'missing, not granted to authenticated, or is_admin() is false',
+      );
+
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('admin-tab-abandoned')),
+        'the Stalled tab',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 10));
+      await binding.takeScreenshot('37-admin-stalled');
+      expect(
+        find.textContaining("Couldn't load stalled topos"),
+        findsNothing,
+        reason: 'abandoned_topos() failed for a real admin JWT',
+      );
+    },
+    skip: !e2eRealSessionRequested,
+    timeout: const Timeout(Duration(minutes: 4)),
+  );
+
   testWidgets(
     'owner: the trust standing is readable from a real session',
     (tester) async {

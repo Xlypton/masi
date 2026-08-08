@@ -13,15 +13,22 @@ import '../application/moderation_providers.dart';
 import '../application/report_providers.dart';
 import '../domain/abandoned_topo.dart';
 import '../domain/content_report.dart';
+import '../domain/material_change.dart';
 
-/// The admin review queue (community editing phases 3 and 6b).
+/// The admin review queue (community editing phases 3 and 6b, C-5d, C-11).
 ///
-/// Two tabs, and the split is the point. **Submissions** are content asking to
-/// come in; **Reports** are content already in that somebody says should not
-/// be. A queue containing only the first stops bad submissions and does
-/// nothing about a good submission that goes bad later — which, with owner
-/// approval final and no re-review after publication (C-5c), is most of what
-/// actually happens.
+/// Four tabs, and the split is the point. **Submissions** are content asking to
+/// come in; the other three are all about content already in. A queue
+/// containing only the first stops bad submissions and does nothing about a
+/// good submission that goes bad later — which, with owner approval final and
+/// no re-review after publication (C-5c), is most of what actually happens.
+///
+/// The three after it are deliberately different KINDS of "later", not
+/// variations on one: **Reports** are somebody complaining, **Changes** are a
+/// published topo quietly changing shape with nobody complaining (C-5d), and
+/// **Stalled** is nothing happening at all when it should be (C-11). Only the
+/// first of those has anyone waiting on it, which is why only it carries a
+/// count.
 ///
 /// Reaching this screen is not what makes someone an admin — every action it
 /// offers is re-checked server-side by a `SECURITY DEFINER` RPC. Hiding the
@@ -55,7 +62,7 @@ class AdminQueueScreen extends ConsumerWidget {
     final urgent = reports?.any((r) => r.isUrgent) ?? false;
 
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         key: const Key('admin-queue-screen'),
         appBar: AppBar(
@@ -67,6 +74,12 @@ class AdminQueueScreen extends ConsumerWidget {
           ),
           centerTitle: false,
           bottom: TabBar(
+            // Scrollable from the fourth tab on. Four fixed tabs divide a phone
+            // width into ~95px each, which is narrower than "Submissions" and
+            // narrower still than "Reports (12) !" — and a tab bar that
+            // ellipsises its own labels hides which queues exist at all.
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
             tabs: [
               const Tab(key: Key('admin-tab-submissions'), text: 'Submissions'),
               Tab(
@@ -88,11 +101,23 @@ class AdminQueueScreen extends ConsumerWidget {
               // urgency as an unsafe report, which is exactly the attention it
               // should not take.
               const Tab(key: Key('admin-tab-abandoned'), text: 'Stalled'),
+              // No count here either, and for a different reason than Stalled.
+              // A material change BLOCKS NOTHING by design (C-5d) — the content
+              // is already public and was always allowed to be. Badging it would
+              // put "someone edited a topo" at the same volume as an unsafe
+              // report, and the tab that must survive a busy day is that one.
+              // `Submissions` carries no count for the same reason.
+              const Tab(key: Key('admin-tab-changes'), text: 'Changes'),
             ],
           ),
         ),
         body: const TabBarView(
-          children: [_SubmissionsTab(), _ReportsTab(), _AbandonedTab()],
+          children: [
+            _SubmissionsTab(),
+            _ReportsTab(),
+            _AbandonedTab(),
+            _MaterialChangesTab(),
+          ],
         ),
       ),
     );
@@ -244,6 +269,174 @@ class _AbandonedRow extends StatelessWidget {
               onPressed: () => context.push('/walls/${topo.wallId}'),
               child: const Text('Open'),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Published topos that changed shape after approval (C-5d).
+///
+/// The two controls are **Open** and **Clear**, and there is deliberately no
+/// third. Approval is a one-time gate, so by the time a notice exists the
+/// change is already public and was always allowed to be — this surface is a
+/// watch list, not a decision. If the change turns out to be vandalism, the
+/// actions that carry a consequence already exist on the topo itself (revert,
+/// C-8) and in the reports queue (take down, C-7), and routing an admin through
+/// looking at the topo before reaching either of them is the right order.
+class _MaterialChangesTab extends ConsumerWidget {
+  const _MaterialChangesTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    return RefreshIndicator(
+      onRefresh: () async => ref.invalidate(materialChangesProvider),
+      child: MasiAsyncView<List<MaterialChange>>(
+        value: ref.watch(materialChangesProvider),
+        errorMessage: "Couldn't load recent changes",
+        onRetry: () => ref.invalidate(materialChangesProvider),
+        skeleton: (context) => const Center(
+          child: Padding(
+            padding: EdgeInsets.all(MasiSpacing.xxl),
+            child: CircularProgressIndicator(),
+          ),
+        ),
+        data: (context, changes) => changes.isEmpty
+            ? ListView(
+                padding: const EdgeInsets.symmetric(
+                  vertical: MasiSpacing.xxl * 2,
+                ),
+                children: [
+                  Center(
+                    child: Column(
+                      children: [
+                        MasiIcon('check', size: 40, color: colors.ink3),
+                        const SizedBox(height: MasiSpacing.md),
+                        Text(
+                          'No published topo has changed shape',
+                          key: const Key('admin-changes-empty'),
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(color: colors.ink2),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.only(bottom: MasiSpacing.xxl),
+                itemCount: changes.length,
+                itemBuilder: (context, i) => _ChangeRow(change: changes[i]),
+              ),
+      ),
+    );
+  }
+}
+
+class _ChangeRow extends ConsumerStatefulWidget {
+  const _ChangeRow({required this.change});
+
+  final MaterialChange change;
+
+  @override
+  ConsumerState<_ChangeRow> createState() => _ChangeRowState();
+}
+
+class _ChangeRowState extends ConsumerState<_ChangeRow> {
+  Future<void> _clear() async {
+    try {
+      await ref
+          .read(materialChangeServiceProvider)
+          .resolve(widget.change.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cleared')),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't clear that")),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final change = widget.change;
+
+    return Container(
+      key: Key('admin-change-row-${change.id}'),
+      margin: const EdgeInsets.fromLTRB(
+        MasiSpacing.lg,
+        MasiSpacing.sm,
+        MasiSpacing.lg,
+        0,
+      ),
+      padding: const EdgeInsets.all(MasiSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        border: Border.all(color: colors.separator),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            change.wallName,
+            style: textTheme.titleMedium,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            change.summary,
+            key: Key('admin-change-summary-${change.id}'),
+            style: textTheme.bodySmall?.copyWith(color: colors.ink),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            [
+              // Who, and whether it was the owner themselves. Both readings
+              // matter: a stranger reshaping someone's topo and an owner
+              // quietly replacing their own approved content are different
+              // problems, and only one of them is bait-and-switch. Qualified
+              // to "last edit by …" once several changes are folded in — see
+              // [MaterialChange.actorSentence].
+              change.actorSentence,
+              if (change.changeCount > 1) '${change.changeCount} edits',
+              _waitedFor(change.lastAt),
+            ].join(' · '),
+            key: Key('admin-change-actor-${change.id}'),
+            style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: MasiSpacing.sm),
+          Row(
+            children: [
+              // Looking comes first, as everywhere else in this queue — and
+              // here it is the only thing the admin can actually do about the
+              // change, so burying it would leave the row with nothing but a
+              // dismiss button.
+              TextButton(
+                key: Key('admin-change-open-${change.id}'),
+                onPressed: () => context.push('/walls/${change.wallId}'),
+                child: const Text('Open'),
+              ),
+              const Spacer(),
+              MasiPendingButton.text(
+                key: Key('admin-change-clear-${change.id}'),
+                onPressed: _clear,
+                child: const Text('Clear'),
+              ),
+            ],
           ),
         ],
       ),

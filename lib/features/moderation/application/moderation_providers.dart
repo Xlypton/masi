@@ -8,6 +8,7 @@ import '../data/moderation_remote.dart';
 import '../data/moderation_repository.dart';
 import '../domain/abandoned_topo.dart';
 import '../domain/access_state.dart';
+import '../domain/material_change.dart';
 import '../domain/moderation_state.dart';
 
 /// The cloud read seam for moderation state. Overridden in tests with an
@@ -153,6 +154,41 @@ final abandonedToposProvider =
         for (final row in rows) ?AbandonedTopo.fromRow(row),
       ];
     });
+
+/// Published topos that changed shape after approval (C-5d), newest first.
+///
+/// Not best-effort, for the same reason as [moderationQueueProvider]: an empty
+/// list that actually means "we could not ask" reads here as "nothing has been
+/// tampered with", which is precisely the conclusion this surface exists to
+/// stop an admin drawing by default.
+final materialChangesProvider =
+    FutureProvider.autoDispose<List<MaterialChange>>((ref) async {
+      final rows = await ref.watch(moderationRemoteProvider).fetchMaterialChanges();
+      return [
+        for (final row in rows) ?MaterialChange.fromRow(row),
+      ];
+    });
+
+/// Clearing a material-change notice.
+///
+/// A one-line service rather than a direct remote call from the widget, so the
+/// list refresh cannot be forgotten at a call site: a row that stays on screen
+/// after being cleared invites a second tap, and while the RPC is idempotent
+/// the admin has no way to know that.
+class MaterialChangeService {
+  const MaterialChangeService(this._ref);
+
+  final Ref _ref;
+
+  Future<void> resolve(String noticeId) async {
+    await _ref.read(moderationRemoteProvider).resolveMaterialChange(noticeId);
+    _ref.invalidate(materialChangesProvider);
+  }
+}
+
+final materialChangeServiceProvider = Provider<MaterialChangeService>(
+  MaterialChangeService.new,
+);
 
 /// The effective access/closure state for one topo, after inheritance up the
 /// Wall → Sector → Area chain (community editing phase 2 / R-2).
