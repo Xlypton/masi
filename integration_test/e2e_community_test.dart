@@ -63,7 +63,7 @@ final String kSuggestedName =
 Future<void> openSeededTopo(WidgetTester tester) async {
   appRouter.go('/feed');
   await settle(tester, frames: 30);
-  await tapOrFail(
+  await pullToRefresh(
     tester,
     find.byKey(const Key('community-feed-refresh')),
     'the community feed refresh button',
@@ -324,11 +324,11 @@ void main() {
 
       appRouter.go('/feed');
       await settle(tester, frames: 30);
-      await tapOrFail(
+      await pullToRefresh(
         tester,
         find.byKey(const Key('community-feed-refresh')),
         'the community feed refresh button',
-      );
+        );
       await waitFor(
         tester,
         find.text(kSuggestedName),

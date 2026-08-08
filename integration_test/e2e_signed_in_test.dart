@@ -217,12 +217,18 @@ void main() {
     );
     await binding.takeScreenshot('08-community-feed');
 
-    // The refresh button IS the pull trigger (`SyncOrchestrator.pullNow`).
-    // Tapping it is what makes this test meaningful in REAL mode: nothing else
+    // Pull-to-refresh IS the pull trigger (`SyncOrchestrator.pullNow`).
+    // Firing it is what makes this test meaningful in REAL mode: nothing else
     // on a cold boot with an ALREADY-signed-in session fires a pull, because
     // the orchestrator's automatic pull is on the signed-out -> signed-in EDGE
     // and `e2eBoot` signs in before the app starts.
-    await tapOrFail(
+    //
+    // [pullToRefresh], never `tapOrFail` — the key is on the `RefreshIndicator`
+    // wrapping the whole feed, so a tap lands mid-list and opens a row. Until
+    // 2026-08-08 that is exactly what happened and no pull ran at all; this
+    // test still reported green, because the sync-error key it asserts is
+    // absent is equally absent on the ascent screen it had navigated to.
+    await pullToRefresh(
       tester,
       find.byKey(const Key('community-feed-refresh')),
       'the community feed refresh button',
@@ -253,7 +259,7 @@ void main() {
       // Force the pull through the feed's own refresh affordance.
       appRouter.go('/feed');
       await settle(tester, frames: 30);
-      await tapOrFail(
+      await pullToRefresh(
         tester,
         find.byKey(const Key('community-feed-refresh')),
         'the community feed refresh button',
@@ -313,7 +319,7 @@ void main() {
 
       appRouter.go('/feed');
       await settle(tester, frames: 30);
-      await tapOrFail(
+      await pullToRefresh(
         tester,
         find.byKey(const Key('community-feed-refresh')),
         'the community feed refresh button',

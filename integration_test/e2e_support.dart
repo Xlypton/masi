@@ -11,6 +11,8 @@
 // for anything server-dependent — it interleaves real `Future.delayed`s with
 // pumps and fails with a NAMED reason on timeout, which is the difference
 // between "the feature is broken" and "the test was impatient".
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -78,6 +80,39 @@ Future<void> tapOrFail(
 }) async {
   await waitFor(tester, finder, what, timeout: timeout);
   await tester.tap(finder.first, warnIfMissed: false);
+  await settle(tester);
+}
+
+/// Fires a [RefreshIndicator]'s `onRefresh` and pumps until it finishes.
+///
+/// **Never use [tapOrFail] on a refresh indicator.** `community-feed-refresh`
+/// is the key on the `RefreshIndicator` itself, and that widget wraps the WHOLE
+/// scrollable feed — so `find.byKey` resolves to a full-screen widget and
+/// `tester.tap` hits its CENTRE, which is whichever list row happens to sit
+/// mid-list.
+///
+/// That is precisely what it did until 2026-08-08. The "refresh button" tap
+/// opened an ascent detail screen, **the pull never ran at all**, and the three
+/// tests built on it split two ways: two failed hunting for feed content on a
+/// detail screen (and were written off as a known-red sync bug for a day), and
+/// the third *passed* — by asserting the absence of a sync-error key that is
+/// equally absent on the detail screen it had accidentally navigated to. A
+/// tapped `RefreshIndicator` fails silently in both directions, which is the
+/// worst way for a harness to be wrong.
+///
+/// `show()` drives the real callback rather than simulating an overscroll
+/// gesture, so it cannot be defeated by fling velocity or by a list too short
+/// to overscroll. It is deliberately NOT awaited: the returned future only
+/// completes once the indicator has animated away, and nothing pumps the clock
+/// while a test awaits it.
+Future<void> pullToRefresh(
+  WidgetTester tester,
+  Finder finder,
+  String what, {
+  Duration timeout = const Duration(seconds: 25),
+}) async {
+  await waitFor(tester, finder, what, timeout: timeout);
+  unawaited(tester.state<RefreshIndicatorState>(finder.first).show());
   await settle(tester);
 }
 
