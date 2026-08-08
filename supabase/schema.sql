@@ -292,7 +292,11 @@ CREATE TABLE IF NOT EXISTS public.comments (
   "wallId" TEXT,
   "ascentId" TEXT REFERENCES public.ascents("id"),
   "body" TEXT NOT NULL,
-  "authorName" TEXT
+  "authorName" TEXT,
+  -- Who this comment tags, as a JSON array of uids. Already applied live; see
+  -- `supabase/migrations/2026-08-08_comment_mentions.sql` for why it is uids
+  -- rather than the `@name` text already in the body.
+  "mentionedUids" TEXT
 );
 
 CREATE TABLE IF NOT EXISTS public.likes (

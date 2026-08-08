@@ -19,8 +19,27 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:masi/features/backup/application/sync_orchestrator.dart';
+
 import '../support/async_drain.dart';
 import '../support/blocked_network.dart';
+
+/// Skips the real orchestrator's `tableUpdates()` subscription, which would
+/// otherwise schedule a 2s debounce `Timer` that outlives the test and trips
+/// flutter_test's "A Timer is still pending" teardown assertion.
+///
+/// Needed here as of the Feed tab's unseen dot: entering or leaving that tab
+/// stamps a baseline into the local settings table, and ANY write to the
+/// database arms that debounce. `nav_shell_test.dart`,
+/// `topos_screen_test.dart` and `topos_storage_banner_test.dart` all carry the
+/// identical double for the same reason.
+class _FakeSyncOrchestrator extends SyncOrchestrator {
+  @override
+  SyncOrchestratorState build() => const SyncOrchestratorState();
+
+  @override
+  Future<void> pullNow({bool throttled = false}) async {}
+}
 
 /// Builds a [ProviderContainer] wired to a fresh in-memory database, mirroring
 /// the pattern in `areas_screen_test.dart`: `db.close` is registered BEFORE
@@ -33,6 +52,7 @@ ProviderContainer _makeContainer() {
     overrides: [
       appDatabaseProvider.overrideWithValue(db),
       nowMsProvider.overrideWithValue(() => 1000),
+      syncOrchestratorProvider.overrideWith(_FakeSyncOrchestrator.new),
     ],
   );
   addTearDown(db.close);
@@ -183,6 +203,7 @@ ProviderContainer _makeGateContainerFromRepo(
       nowMsProvider.overrideWithValue(() => 1000),
       authRepositoryProvider.overrideWithValue(repo),
       webAuthGateEnabledProvider.overrideWithValue(gateEnabled),
+      syncOrchestratorProvider.overrideWith(_FakeSyncOrchestrator.new),
       ...extraOverrides,
     ],
   );
