@@ -33,8 +33,14 @@ E2E_AREA_ID="e2e-area-0001"
 E2E_SECTOR_ID="e2e-sector-0001"
 E2E_WALL_PUBLISHED="e2e-wall-published-0001"
 E2E_WALL_PENDING="e2e-wall-pending-0001"
+# Never submitted, and it must STAY that way — it is the only topo the trust
+# test can open the publish sheet on. The other two are both published by the
+# time that test runs (the admin test approves the pending one earlier in the
+# same run), and a published topo's overflow offers Withdraw, not Publish.
+E2E_WALL_DRAFT="e2e-wall-draft-0001"
 E2E_PHOTO_PUBLISHED="e2e-photo-published-0001"
 E2E_PHOTO_PENDING="e2e-photo-pending-0001"
+E2E_PHOTO_DRAFT="e2e-photo-draft-0001"
 
 command -v jq >/dev/null 2>&1 || { echo "e2e: jq is required" >&2; exit 1; }
 [[ -f "$MGMT_TOKEN_FILE" ]] || { echo "e2e: token file not found: $MGMT_TOKEN_FILE" >&2; exit 1; }

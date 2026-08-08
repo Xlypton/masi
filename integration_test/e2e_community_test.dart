@@ -52,6 +52,10 @@ import 'e2e_support.dart';
 const String kE2ePendingWallId = 'e2e-wall-pending-0001';
 const String kE2ePublishedWallName = 'E2E Published Wall';
 
+/// The never-submitted wall. It is the ONLY topo the publish confirmation sheet
+/// can be opened on by the time the trust test runs — see `tool/e2e_seed.sh`.
+const String kE2eDraftWallId = 'e2e-wall-draft-0001';
+
 /// The name the reader suggests. Unique per run so the final assertion cannot
 /// be satisfied by a leftover from an earlier run.
 final String kSuggestedName =
@@ -529,12 +533,17 @@ void main() {
         reason: 'the owner has no topos in the local library after a pull — '
             'the seeded fixture did not import',
       );
+      // THE DRAFT WALL BY ID, never `menus.first`. The publish sheet only opens
+      // on a topo that has not been published, and by the time this test runs
+      // BOTH other fixture walls are published — the admin test above approves
+      // the pending one. Taking the first row timed out here for exactly that
+      // reason until 2026-08-08, and read as a trust/RPC failure.
+      const wallId = kE2eDraftWallId;
       await tapOrFail(
         tester,
-        find.byKey(Key(menus.first)),
-        'a topo overflow menu',
+        find.byKey(const Key('topo-menu-$kE2eDraftWallId')),
+        'the draft topo\'s overflow menu (run tool/e2e_seed.sh)',
       );
-      final wallId = menus.first.substring('topo-menu-'.length);
       await tapOrFail(
         tester,
         find.byKey(Key('topo-publish-$wallId')),

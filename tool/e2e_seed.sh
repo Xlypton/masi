@@ -14,6 +14,14 @@
 #       `moderation_log` entry are therefore genuine.
 #     * e2e-wall-pending-0001 — submitted and left PENDING, so the admin
 #       scripted run has something of its own to approve in the queue UI.
+#     * e2e-wall-draft-0001 — never submitted, `visibility='private'`. It exists
+#       for the trust test, which reads `myTrustProvider` through the publish
+#       confirmation sheet. That sheet is only reachable from a topo that has
+#       NOT been published, and by the time that test runs both of the walls
+#       above are published — the admin test approves the pending one earlier in
+#       the same run. Without this third wall the trust test times out waiting
+#       for a sheet that cannot open, which is exactly what it did until
+#       2026-08-08. Nothing may submit or publish this wall.
 #
 # WHY A PENDING ONE MATTERS: the live queue also contains the USER'S REAL
 # pending topos. The scripted admin test must only ever tap
@@ -37,7 +45,8 @@ area      $E2E_AREA_ID
 sector    $E2E_SECTOR_ID
 published $E2E_WALL_PUBLISHED
 pending   $E2E_WALL_PENDING
-photos    $E2E_PHOTO_PUBLISHED $E2E_PHOTO_PENDING
+draft     $E2E_WALL_DRAFT
+photos    $E2E_PHOTO_PUBLISHED $E2E_PHOTO_PENDING $E2E_PHOTO_DRAFT
 EOF
   exit 0
 fi
@@ -68,11 +77,13 @@ sql "INSERT INTO public.sectors (id, \"createdAt\", \"updatedAt\", \"ownerId\", 
 # brand-new account) rather than one this script asserts.
 sql "INSERT INTO public.walls (id, \"createdAt\", \"updatedAt\", \"ownerId\", \"sectorId\", name, \"sortOrder\", visibility, latitude, longitude, dirty)
      VALUES ('$E2E_WALL_PUBLISHED', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Published Wall', 0, 'shared', 47.4979, 19.0402, false),
-            ('$E2E_WALL_PENDING',   $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Pending Wall',   1, 'shared', 47.4985, 19.0410, false);" >/dev/null
+            ('$E2E_WALL_PENDING',   $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Pending Wall',   1, 'shared', 47.4985, 19.0410, false),
+            ('$E2E_WALL_DRAFT',     $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Draft Wall',     2, 'private', 47.4990, 19.0415, false);" >/dev/null
 
 sql "INSERT INTO public.photos (id, \"createdAt\", \"updatedAt\", \"ownerId\", \"wallId\", \"localPath\", kind, width, height, \"sortOrder\", \"isPrimary\", dirty)
      VALUES ('$E2E_PHOTO_PUBLISHED', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PUBLISHED', 'photos/$E2E_PHOTO_PUBLISHED.png', 'original', 96, 144, 0, true, false),
-            ('$E2E_PHOTO_PENDING',   $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PENDING',   'photos/$E2E_PHOTO_PENDING.png',   'original', 96, 144, 0, true, false);" >/dev/null
+            ('$E2E_PHOTO_PENDING',   $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PENDING',   'photos/$E2E_PHOTO_PENDING.png',   'original', 96, 144, 0, true, false),
+            ('$E2E_PHOTO_DRAFT',     $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_DRAFT',     'photos/$E2E_PHOTO_DRAFT.png',     'original', 96, 144, 0, true, false);" >/dev/null
 
 # Two routes on the published wall so the phase-7b propose-line screen has both
 # a "New line" target and at least one "Fix line N" target to choose between,
@@ -87,7 +98,9 @@ sql "INSERT INTO public.routes (id, \"createdAt\", \"updatedAt\", \"ownerId\", \
              '[{\"x\":0.70,\"y\":0.92},{\"x\":0.68,\"y\":0.55},{\"x\":0.72,\"y\":0.20}]',
              '[{\"type\":\"top\",\"x\":0.72,\"y\":0.10}]', 1, true, false),
             ('e2e-route-pend-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PENDING', '$E2E_PHOTO_PENDING', 1, 'E2E Pending Line', 'french', '5c', 540, 0,
-             '[{\"x\":0.50,\"y\":0.90},{\"x\":0.50,\"y\":0.20}]', '[]', 0, true, false);" >/dev/null
+             '[{\"x\":0.50,\"y\":0.90},{\"x\":0.50,\"y\":0.20}]', '[]', 0, true, false),
+            ('e2e-route-draft-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_DRAFT', '$E2E_PHOTO_DRAFT', 1, 'E2E Draft Line', 'french', '6b', 620, 0,
+             '[{\"x\":0.45,\"y\":0.88},{\"x\":0.55,\"y\":0.25}]', '[]', 0, true, false);" >/dev/null
 
 echo "==> uploading fixture photo bytes to Storage"
 SERVICE_KEY="$(service_role_key)"
@@ -111,9 +124,13 @@ upload_object() {
 # Both conventions, because the app reads two different ones: `<uid>/<id>.<ext>`
 # for the owner's own pull, and `shared/<id>.<ext>` for everybody else's view of
 # a published topo (see `sharedPhotoPath` in `sync_remote.dart`).
-for pid in "$E2E_PHOTO_PUBLISHED" "$E2E_PHOTO_PENDING"; do
+for pid in "$E2E_PHOTO_PUBLISHED" "$E2E_PHOTO_PENDING" "$E2E_PHOTO_DRAFT"; do
   upload_object "${E2E_OWNER_UID}/${pid}.png"
 done
+# Only the PUBLISHED wall gets a `shared/` copy. The draft has none by
+# definition, and `e2e_reset.sh` deletes named objects from `shared/` rather
+# than sweeping the prefix — so an object that should never exist there must
+# never be uploaded there either.
 upload_object "shared/${E2E_PHOTO_PUBLISHED}.png"
 
 echo "==> approving the published wall through the REAL review_topo RPC"
