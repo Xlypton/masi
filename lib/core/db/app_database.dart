@@ -32,6 +32,7 @@ part 'app_database.g.dart';
     GradeOpinionRows,
     TopoVerificationRows,
     TopoHazardRows,
+    NotificationRows,
   ],
 )
 class AppDatabase extends _$AppDatabase {
@@ -50,7 +51,7 @@ class AppDatabase extends _$AppDatabase {
   final bool _flushAfterCommit;
 
   @override
-  int get schemaVersion => 14;
+  int get schemaVersion => 15;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -77,6 +78,29 @@ class AppDatabase extends _$AppDatabase {
       // `test/core/db/schema_downgrade_test.dart`.
       if (from > to) {
         throw SchemaDowngradeException(storedVersion: from, appVersion: to);
+      }
+
+      /// Adds [column] to [table] unless it is already there.
+      ///
+      /// Guarded because SQLite has no `ADD COLUMN IF NOT EXISTS` and a
+      /// duplicate add is a hard error — which both a re-run and any harness
+      /// that synthesizes an "old" database via `createAll` before stamping an
+      /// old `user_version` would otherwise hit, arriving at a branch with the
+      /// columns already present.
+      ///
+      /// Declared here rather than inside a single branch (it used to live in
+      /// the v12 -> v13 block) so every later branch can reach the one copy.
+      Future<void> addIfMissing(
+        TableInfo<Table, dynamic> table,
+        GeneratedColumn<Object> column,
+      ) async {
+        final existing = await customSelect(
+          "PRAGMA table_info('${table.actualTableName}')",
+        ).get();
+        final present = existing.any(
+          (row) => row.read<String>('name') == column.name,
+        );
+        if (!present) await m.addColumn(table, column);
       }
       // v1 -> v2: row-level cloud-sync pivot (Phase 1). Adds a nullable
       // `ownerId` to every SyncColumns table (ADD COLUMN is non-destructive;
@@ -221,8 +245,20 @@ class AppDatabase extends _$AppDatabase {
         await m.alterTable(
           TableMigration(likes, newColumns: [likes.ascentId]),
         );
+        // `mentionedUids` is listed as a new column here even though it
+        // arrives in v15, several branches below. `alterTable` rebuilds the
+        // table against the CURRENT generated schema and copies every column
+        // it is not told is new — so the moment v15 added `mentionedUids`,
+        // this v6 -> v7 rebuild started emitting
+        // `INSERT INTO tmp … SELECT …, "mentioned_uids" FROM comments`
+        // against a v6 table that has no such column, and every upgrade from
+        // a pre-v7 database died here. Anything added to `Comments` in future
+        // has to be named here too, for the same reason.
         await m.alterTable(
-          TableMigration(comments, newColumns: [comments.ascentId]),
+          TableMigration(
+            comments,
+            newColumns: [comments.ascentId, comments.mentionedUids],
+          ),
         );
       }
       // v7 -> v8: adds the brand-new `Profiles` table (#18, editable synced
@@ -353,26 +389,9 @@ class AppDatabase extends _$AppDatabase {
       // `supabase/migrations/2026-08-06_community_phase2_access.sql` and must
       // be applied BEFORE a build carrying v13 ships.
       //
-      // Each add is guarded on the column not already existing, for the same
-      // reason the v10 -> v11 branch is: SQLite has no
-      // `ADD COLUMN IF NOT EXISTS`, a duplicate add is a hard error, and both
-      // a re-run and any harness that synthesizes an "old" database via
-      // `createAll` before stamping an old `user_version` reach this branch
-      // with the columns already present.
+      // Each add is guarded on the column not already existing — see
+      // `addIfMissing` at the top of this callback for why.
       if (from < 13) {
-        Future<void> addIfMissing(
-          TableInfo<Table, dynamic> table,
-          GeneratedColumn<Object> column,
-        ) async {
-          final existing = await customSelect(
-            "PRAGMA table_info('${table.actualTableName}')",
-          ).get();
-          final present = existing.any(
-            (row) => row.read<String>('name') == column.name,
-          );
-          if (!present) await m.addColumn(table, column);
-        }
-
         await addIfMissing(areas, areas.accessState);
         await addIfMissing(areas, areas.accessNote);
         await addIfMissing(sectors, sectors.accessState);
@@ -395,6 +414,25 @@ class AppDatabase extends _$AppDatabase {
         await m.createTable(gradeOpinionRows);
         await m.createTable(topoVerificationRows);
         await m.createTable(topoHazardRows);
+      }
+      // v14 -> v15: the feed overhaul's two additions — tagging someone in a
+      // comment, and the notifications that tagging (and commenting, liking,
+      // suggesting) produces.
+      //
+      // `Comments.mentionedUids` is a plain nullable column on an existing
+      // SyncColumns table, so it goes through `addIfMissing` like every other
+      // added column here; `null` on every pre-existing row is exactly right,
+      // because no comment written before this feature tagged anybody.
+      //
+      // `NotificationRows` is a mirror table, not a synced one — the server
+      // authors every row, and a client that could insert one could put a
+      // message in anyone's inbox. Same plain `createTable` shape as the
+      // v13 -> v14 additions. The matching live table lives in
+      // `supabase/migrations/2026-08-08_notifications.sql` and must be applied
+      // BEFORE a build carrying v15 ships.
+      if (from < 15) {
+        await addIfMissing(comments, comments.mentionedUids);
+        await m.createTable(notificationRows);
       }
     },
     beforeOpen: (details) async {

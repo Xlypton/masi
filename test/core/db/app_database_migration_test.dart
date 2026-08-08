@@ -1824,6 +1824,11 @@ void main() {
           'grade_opinion_rows',
           'topo_verification_rows',
           'topo_hazard_rows',
+          // Notifications (v15). A mirror table like the three above, and for
+          // the strongest reason of any of them: the server authors every row
+          // in a trigger, so a client that could insert one could put a
+          // message in somebody else's inbox.
+          'notification_rows',
         },
         reason: 'onCreate must build every table declared on AppDatabase',
       );
@@ -2562,5 +2567,136 @@ void main() {
         }
       },
     );
+  });
+
+  group('v14 -> v15 migration (comment mentions + notifications)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('masi_v15_migration_');
+      dbFile = File(p.join(tempDir.path, 'v14.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    /// Builds a real database at the CURRENT schema, then rewinds it to the
+    /// v14 shape on disk: drops the v15 table, drops the v15 column (SQLite
+    /// has supported `DROP COLUMN` since 3.35), and stamps `user_version`.
+    Future<void> makeV14Database() async {
+      final fresh = AppDatabase(NativeDatabase(dbFile));
+      await fresh
+          .into(fresh.areas)
+          .insert(
+            AreasCompanion.insert(
+              id: 'area-v14',
+              createdAt: 100,
+              updatedAt: 100,
+              name: 'Pre-v15 Area',
+            ),
+          );
+      // Deliberately no wall behind it: `Comments.wallId` is nullable and FK
+      // enforcement is on, so leaving it null is the cheapest row that still
+      // exercises what this group is about — whether the COLUMN survives.
+      // Building the Area -> Sector -> Wall chain would only add required
+      // fields that have nothing to do with the migration.
+      await fresh
+          .into(fresh.comments)
+          .insert(
+            CommentsCompanion.insert(
+              id: 'comment-v14',
+              createdAt: 100,
+              updatedAt: 100,
+              body: 'Nice line',
+            ),
+          );
+      await fresh.close();
+
+      final raw = sqlite3lib.sqlite3.open(dbFile.path);
+      raw.execute(
+        'DROP TABLE notification_rows; '
+        'ALTER TABLE comments DROP COLUMN mentioned_uids; '
+        'PRAGMA user_version = 14;',
+      );
+      expect(raw.select('PRAGMA user_version;').first.values.first, 14);
+      raw.close();
+    }
+
+    test(
+      'adds mentionedUids and the notifications table to an existing v14 '
+      'database without losing rows',
+      () async {
+        await makeV14Database();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        final comment = await (db.select(db.comments)
+              ..where((t) => t.id.equals('comment-v14')))
+            .getSingle();
+        expect(
+          comment.body,
+          'Nice line',
+          reason: 'pre-existing row must survive the v14 -> v15 migration',
+        );
+        expect(
+          comment.mentionedUids,
+          isNull,
+          reason: 'no comment written before this feature tagged anybody',
+        );
+
+        final tables = await db
+            .customSelect(
+              "SELECT name FROM sqlite_master WHERE type = 'table' "
+              "AND name NOT LIKE 'sqlite_%'",
+            )
+            .map((row) => row.read<String>('name'))
+            .get();
+        expect(tables, contains('notification_rows'));
+
+        // Usable immediately after the migration.
+        await db
+            .into(db.notificationRows)
+            .insert(
+              const NotificationRowsCompanion(
+                id: Value('n1'),
+                recipientId: Value('uid-1'),
+                kind: Value('mention'),
+                createdAt: Value(1),
+              ),
+            );
+        expect((await db.select(db.notificationRows).getSingle()).kind, 'mention');
+      },
+    );
+
+    test(
+      'notification_rows carries no SyncColumns — the server authors every '
+      'row in a trigger, and a client able to insert one could put a message '
+      'in somebody else\'s inbox',
+      () async {
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        final columns = await db
+            .customSelect("PRAGMA table_info('notification_rows')")
+            .map((row) => row.read<String>('name'))
+            .get();
+
+        expect(columns, isNot(contains('dirty')));
+        expect(columns, isNot(contains('owner_id')));
+        expect(columns, isNot(contains('remote_id')));
+        expect(columns, isNot(contains('deleted_at')));
+      },
+    );
+
+    // NOTE — the other half of this migration's risk is covered by the P6
+    // group above, not here. `Comments` is rebuilt by the v6 -> v7
+    // `alterTable`, which copies every column of the CURRENT generated schema
+    // that it is not told is new; the moment `mentionedUids` was added, that
+    // rebuild started SELECTing `mentioned_uids` from a v6 table that has no
+    // such column, and P6 went red. It is the guard, and duplicating a weaker
+    // version of it here would only make the real one look optional.
   });
 }
