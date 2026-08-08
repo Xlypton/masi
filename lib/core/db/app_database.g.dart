@@ -5688,6 +5688,17 @@ class $CommentsTable extends Comments with TableInfo<$CommentsTable, Comment> {
       'REFERENCES ascents (id)',
     ),
   );
+  static const VerificationMeta _mentionedUidsMeta = const VerificationMeta(
+    'mentionedUids',
+  );
+  @override
+  late final GeneratedColumn<String> mentionedUids = GeneratedColumn<String>(
+    'mentioned_uids',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -5701,6 +5712,7 @@ class $CommentsTable extends Comments with TableInfo<$CommentsTable, Comment> {
     body,
     authorName,
     ascentId,
+    mentionedUids,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -5785,6 +5797,15 @@ class $CommentsTable extends Comments with TableInfo<$CommentsTable, Comment> {
         ascentId.isAcceptableOrUnknown(data['ascent_id']!, _ascentIdMeta),
       );
     }
+    if (data.containsKey('mentioned_uids')) {
+      context.handle(
+        _mentionedUidsMeta,
+        mentionedUids.isAcceptableOrUnknown(
+          data['mentioned_uids']!,
+          _mentionedUidsMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -5838,6 +5859,10 @@ class $CommentsTable extends Comments with TableInfo<$CommentsTable, Comment> {
         DriftSqlType.string,
         data['${effectivePrefix}ascent_id'],
       ),
+      mentionedUids: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}mentioned_uids'],
+      ),
     );
   }
 
@@ -5869,6 +5894,24 @@ class Comment extends DataClass implements Insertable<Comment> {
   /// set" is enforced by the repositories, NOT a DB CHECK constraint.
   /// `null` for every pre-Feature-#12 comment (all wall-attached).
   final String? ascentId;
+
+  /// The uids this comment tags, as a JSON array of strings (`["uid-a"]`),
+  /// or `null` for the overwhelming majority of comments, which tag nobody.
+  ///
+  /// **Uids, not names.** A mention could have been stored as the `@name` text
+  /// already in [body] and re-resolved at render time, and that would have
+  /// been less code. It would also have broken silently the first time
+  /// somebody renamed themselves — display names are editable (#18), so the
+  /// text is a description of who they were that day, not a reference. Two
+  /// climbers may also legitimately choose the same display name, which a
+  /// text match cannot tell apart and a uid can.
+  ///
+  /// A JSON array in one column rather than a join table: a mention has no
+  /// attributes of its own, is only ever read as "who does this comment tag",
+  /// and travels with the comment through the sync engine's full-row re-push
+  /// (decision D-4) for free. A join table would need its own sync plumbing to
+  /// carry exactly the same information.
+  final String? mentionedUids;
   const Comment({
     required this.id,
     required this.createdAt,
@@ -5881,6 +5924,7 @@ class Comment extends DataClass implements Insertable<Comment> {
     required this.body,
     this.authorName,
     this.ascentId,
+    this.mentionedUids,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -5907,6 +5951,9 @@ class Comment extends DataClass implements Insertable<Comment> {
     }
     if (!nullToAbsent || ascentId != null) {
       map['ascent_id'] = Variable<String>(ascentId);
+    }
+    if (!nullToAbsent || mentionedUids != null) {
+      map['mentioned_uids'] = Variable<String>(mentionedUids);
     }
     return map;
   }
@@ -5936,6 +5983,9 @@ class Comment extends DataClass implements Insertable<Comment> {
       ascentId: ascentId == null && nullToAbsent
           ? const Value.absent()
           : Value(ascentId),
+      mentionedUids: mentionedUids == null && nullToAbsent
+          ? const Value.absent()
+          : Value(mentionedUids),
     );
   }
 
@@ -5956,6 +6006,7 @@ class Comment extends DataClass implements Insertable<Comment> {
       body: serializer.fromJson<String>(json['body']),
       authorName: serializer.fromJson<String?>(json['authorName']),
       ascentId: serializer.fromJson<String?>(json['ascentId']),
+      mentionedUids: serializer.fromJson<String?>(json['mentionedUids']),
     );
   }
   @override
@@ -5973,6 +6024,7 @@ class Comment extends DataClass implements Insertable<Comment> {
       'body': serializer.toJson<String>(body),
       'authorName': serializer.toJson<String?>(authorName),
       'ascentId': serializer.toJson<String?>(ascentId),
+      'mentionedUids': serializer.toJson<String?>(mentionedUids),
     };
   }
 
@@ -5988,6 +6040,7 @@ class Comment extends DataClass implements Insertable<Comment> {
     String? body,
     Value<String?> authorName = const Value.absent(),
     Value<String?> ascentId = const Value.absent(),
+    Value<String?> mentionedUids = const Value.absent(),
   }) => Comment(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -6000,6 +6053,9 @@ class Comment extends DataClass implements Insertable<Comment> {
     body: body ?? this.body,
     authorName: authorName.present ? authorName.value : this.authorName,
     ascentId: ascentId.present ? ascentId.value : this.ascentId,
+    mentionedUids: mentionedUids.present
+        ? mentionedUids.value
+        : this.mentionedUids,
   );
   Comment copyWithCompanion(CommentsCompanion data) {
     return Comment(
@@ -6016,6 +6072,9 @@ class Comment extends DataClass implements Insertable<Comment> {
           ? data.authorName.value
           : this.authorName,
       ascentId: data.ascentId.present ? data.ascentId.value : this.ascentId,
+      mentionedUids: data.mentionedUids.present
+          ? data.mentionedUids.value
+          : this.mentionedUids,
     );
   }
 
@@ -6032,7 +6091,8 @@ class Comment extends DataClass implements Insertable<Comment> {
           ..write('wallId: $wallId, ')
           ..write('body: $body, ')
           ..write('authorName: $authorName, ')
-          ..write('ascentId: $ascentId')
+          ..write('ascentId: $ascentId, ')
+          ..write('mentionedUids: $mentionedUids')
           ..write(')'))
         .toString();
   }
@@ -6050,6 +6110,7 @@ class Comment extends DataClass implements Insertable<Comment> {
     body,
     authorName,
     ascentId,
+    mentionedUids,
   );
   @override
   bool operator ==(Object other) =>
@@ -6065,7 +6126,8 @@ class Comment extends DataClass implements Insertable<Comment> {
           other.wallId == this.wallId &&
           other.body == this.body &&
           other.authorName == this.authorName &&
-          other.ascentId == this.ascentId);
+          other.ascentId == this.ascentId &&
+          other.mentionedUids == this.mentionedUids);
 }
 
 class CommentsCompanion extends UpdateCompanion<Comment> {
@@ -6080,6 +6142,7 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
   final Value<String> body;
   final Value<String?> authorName;
   final Value<String?> ascentId;
+  final Value<String?> mentionedUids;
   final Value<int> rowid;
   const CommentsCompanion({
     this.id = const Value.absent(),
@@ -6093,6 +6156,7 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
     this.body = const Value.absent(),
     this.authorName = const Value.absent(),
     this.ascentId = const Value.absent(),
+    this.mentionedUids = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   CommentsCompanion.insert({
@@ -6107,6 +6171,7 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
     required String body,
     this.authorName = const Value.absent(),
     this.ascentId = const Value.absent(),
+    this.mentionedUids = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -6124,6 +6189,7 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
     Expression<String>? body,
     Expression<String>? authorName,
     Expression<String>? ascentId,
+    Expression<String>? mentionedUids,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -6138,6 +6204,7 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
       if (body != null) 'body': body,
       if (authorName != null) 'author_name': authorName,
       if (ascentId != null) 'ascent_id': ascentId,
+      if (mentionedUids != null) 'mentioned_uids': mentionedUids,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -6154,6 +6221,7 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
     Value<String>? body,
     Value<String?>? authorName,
     Value<String?>? ascentId,
+    Value<String?>? mentionedUids,
     Value<int>? rowid,
   }) {
     return CommentsCompanion(
@@ -6168,6 +6236,7 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
       body: body ?? this.body,
       authorName: authorName ?? this.authorName,
       ascentId: ascentId ?? this.ascentId,
+      mentionedUids: mentionedUids ?? this.mentionedUids,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -6208,6 +6277,9 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
     if (ascentId.present) {
       map['ascent_id'] = Variable<String>(ascentId.value);
     }
+    if (mentionedUids.present) {
+      map['mentioned_uids'] = Variable<String>(mentionedUids.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -6228,6 +6300,7 @@ class CommentsCompanion extends UpdateCompanion<Comment> {
           ..write('body: $body, ')
           ..write('authorName: $authorName, ')
           ..write('ascentId: $ascentId, ')
+          ..write('mentionedUids: $mentionedUids, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -9716,6 +9789,642 @@ class TopoHazardRowsCompanion extends UpdateCompanion<TopoHazardRow> {
   }
 }
 
+class $NotificationRowsTable extends NotificationRows
+    with TableInfo<$NotificationRowsTable, NotificationRow> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $NotificationRowsTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _recipientIdMeta = const VerificationMeta(
+    'recipientId',
+  );
+  @override
+  late final GeneratedColumn<String> recipientId = GeneratedColumn<String>(
+    'recipient_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _kindMeta = const VerificationMeta('kind');
+  @override
+  late final GeneratedColumn<String> kind = GeneratedColumn<String>(
+    'kind',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _actorIdMeta = const VerificationMeta(
+    'actorId',
+  );
+  @override
+  late final GeneratedColumn<String> actorId = GeneratedColumn<String>(
+    'actor_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _wallIdMeta = const VerificationMeta('wallId');
+  @override
+  late final GeneratedColumn<String> wallId = GeneratedColumn<String>(
+    'wall_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _ascentIdMeta = const VerificationMeta(
+    'ascentId',
+  );
+  @override
+  late final GeneratedColumn<String> ascentId = GeneratedColumn<String>(
+    'ascent_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _commentIdMeta = const VerificationMeta(
+    'commentId',
+  );
+  @override
+  late final GeneratedColumn<String> commentId = GeneratedColumn<String>(
+    'comment_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _previewMeta = const VerificationMeta(
+    'preview',
+  );
+  @override
+  late final GeneratedColumn<String> preview = GeneratedColumn<String>(
+    'preview',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _readAtMeta = const VerificationMeta('readAt');
+  @override
+  late final GeneratedColumn<int> readAt = GeneratedColumn<int>(
+    'read_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    recipientId,
+    kind,
+    actorId,
+    wallId,
+    ascentId,
+    commentId,
+    preview,
+    createdAt,
+    readAt,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'notification_rows';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<NotificationRow> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('recipient_id')) {
+      context.handle(
+        _recipientIdMeta,
+        recipientId.isAcceptableOrUnknown(
+          data['recipient_id']!,
+          _recipientIdMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_recipientIdMeta);
+    }
+    if (data.containsKey('kind')) {
+      context.handle(
+        _kindMeta,
+        kind.isAcceptableOrUnknown(data['kind']!, _kindMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_kindMeta);
+    }
+    if (data.containsKey('actor_id')) {
+      context.handle(
+        _actorIdMeta,
+        actorId.isAcceptableOrUnknown(data['actor_id']!, _actorIdMeta),
+      );
+    }
+    if (data.containsKey('wall_id')) {
+      context.handle(
+        _wallIdMeta,
+        wallId.isAcceptableOrUnknown(data['wall_id']!, _wallIdMeta),
+      );
+    }
+    if (data.containsKey('ascent_id')) {
+      context.handle(
+        _ascentIdMeta,
+        ascentId.isAcceptableOrUnknown(data['ascent_id']!, _ascentIdMeta),
+      );
+    }
+    if (data.containsKey('comment_id')) {
+      context.handle(
+        _commentIdMeta,
+        commentId.isAcceptableOrUnknown(data['comment_id']!, _commentIdMeta),
+      );
+    }
+    if (data.containsKey('preview')) {
+      context.handle(
+        _previewMeta,
+        preview.isAcceptableOrUnknown(data['preview']!, _previewMeta),
+      );
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('read_at')) {
+      context.handle(
+        _readAtMeta,
+        readAt.isAcceptableOrUnknown(data['read_at']!, _readAtMeta),
+      );
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  NotificationRow map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return NotificationRow(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      recipientId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}recipient_id'],
+      )!,
+      kind: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}kind'],
+      )!,
+      actorId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}actor_id'],
+      ),
+      wallId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}wall_id'],
+      ),
+      ascentId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}ascent_id'],
+      ),
+      commentId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}comment_id'],
+      ),
+      preview: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}preview'],
+      ),
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      readAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}read_at'],
+      ),
+    );
+  }
+
+  @override
+  $NotificationRowsTable createAlias(String alias) {
+    return $NotificationRowsTable(attachedDatabase, alias);
+  }
+}
+
+class NotificationRow extends DataClass implements Insertable<NotificationRow> {
+  final String id;
+
+  /// Who this is FOR. Every read is scoped by it, and the server's RLS scopes
+  /// on it too, so a pull can only ever return the signed-in user's own.
+  final String recipientId;
+
+  /// What happened, as the raw server string (`comment`, `mention`, `like`,
+  /// `suggestion`, …). Stored raw and parsed at the edge so a build that
+  /// predates a new kind renders it as a generic entry instead of throwing on
+  /// a value its enum has never heard of — the same rule [GradeOpinionRows]
+  /// applies to grade systems.
+  final String kind;
+
+  /// Who did it. Nullable because not every kind has a person behind it, and
+  /// because an actor whose account is gone must not take the notification
+  /// with them.
+  final String? actorId;
+
+  /// What it happened to. Which of these is set depends on [kind]; all are
+  /// nullable so a new kind can arrive without a schema change.
+  final String? wallId;
+  final String? ascentId;
+  final String? commentId;
+
+  /// A short server-rendered summary — e.g. the first line of the comment.
+  /// Nullable: an entry is perfectly readable without one.
+  final String? preview;
+  final int createdAt;
+
+  /// When the user read it, or `null` while unread. A timestamp rather than a
+  /// bool so "mark all read" is one write with one value, and so the unread
+  /// badge is a plain `readAt IS NULL` count.
+  final int? readAt;
+  const NotificationRow({
+    required this.id,
+    required this.recipientId,
+    required this.kind,
+    this.actorId,
+    this.wallId,
+    this.ascentId,
+    this.commentId,
+    this.preview,
+    required this.createdAt,
+    this.readAt,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['recipient_id'] = Variable<String>(recipientId);
+    map['kind'] = Variable<String>(kind);
+    if (!nullToAbsent || actorId != null) {
+      map['actor_id'] = Variable<String>(actorId);
+    }
+    if (!nullToAbsent || wallId != null) {
+      map['wall_id'] = Variable<String>(wallId);
+    }
+    if (!nullToAbsent || ascentId != null) {
+      map['ascent_id'] = Variable<String>(ascentId);
+    }
+    if (!nullToAbsent || commentId != null) {
+      map['comment_id'] = Variable<String>(commentId);
+    }
+    if (!nullToAbsent || preview != null) {
+      map['preview'] = Variable<String>(preview);
+    }
+    map['created_at'] = Variable<int>(createdAt);
+    if (!nullToAbsent || readAt != null) {
+      map['read_at'] = Variable<int>(readAt);
+    }
+    return map;
+  }
+
+  NotificationRowsCompanion toCompanion(bool nullToAbsent) {
+    return NotificationRowsCompanion(
+      id: Value(id),
+      recipientId: Value(recipientId),
+      kind: Value(kind),
+      actorId: actorId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(actorId),
+      wallId: wallId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(wallId),
+      ascentId: ascentId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ascentId),
+      commentId: commentId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(commentId),
+      preview: preview == null && nullToAbsent
+          ? const Value.absent()
+          : Value(preview),
+      createdAt: Value(createdAt),
+      readAt: readAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(readAt),
+    );
+  }
+
+  factory NotificationRow.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return NotificationRow(
+      id: serializer.fromJson<String>(json['id']),
+      recipientId: serializer.fromJson<String>(json['recipientId']),
+      kind: serializer.fromJson<String>(json['kind']),
+      actorId: serializer.fromJson<String?>(json['actorId']),
+      wallId: serializer.fromJson<String?>(json['wallId']),
+      ascentId: serializer.fromJson<String?>(json['ascentId']),
+      commentId: serializer.fromJson<String?>(json['commentId']),
+      preview: serializer.fromJson<String?>(json['preview']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      readAt: serializer.fromJson<int?>(json['readAt']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'recipientId': serializer.toJson<String>(recipientId),
+      'kind': serializer.toJson<String>(kind),
+      'actorId': serializer.toJson<String?>(actorId),
+      'wallId': serializer.toJson<String?>(wallId),
+      'ascentId': serializer.toJson<String?>(ascentId),
+      'commentId': serializer.toJson<String?>(commentId),
+      'preview': serializer.toJson<String?>(preview),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'readAt': serializer.toJson<int?>(readAt),
+    };
+  }
+
+  NotificationRow copyWith({
+    String? id,
+    String? recipientId,
+    String? kind,
+    Value<String?> actorId = const Value.absent(),
+    Value<String?> wallId = const Value.absent(),
+    Value<String?> ascentId = const Value.absent(),
+    Value<String?> commentId = const Value.absent(),
+    Value<String?> preview = const Value.absent(),
+    int? createdAt,
+    Value<int?> readAt = const Value.absent(),
+  }) => NotificationRow(
+    id: id ?? this.id,
+    recipientId: recipientId ?? this.recipientId,
+    kind: kind ?? this.kind,
+    actorId: actorId.present ? actorId.value : this.actorId,
+    wallId: wallId.present ? wallId.value : this.wallId,
+    ascentId: ascentId.present ? ascentId.value : this.ascentId,
+    commentId: commentId.present ? commentId.value : this.commentId,
+    preview: preview.present ? preview.value : this.preview,
+    createdAt: createdAt ?? this.createdAt,
+    readAt: readAt.present ? readAt.value : this.readAt,
+  );
+  NotificationRow copyWithCompanion(NotificationRowsCompanion data) {
+    return NotificationRow(
+      id: data.id.present ? data.id.value : this.id,
+      recipientId: data.recipientId.present
+          ? data.recipientId.value
+          : this.recipientId,
+      kind: data.kind.present ? data.kind.value : this.kind,
+      actorId: data.actorId.present ? data.actorId.value : this.actorId,
+      wallId: data.wallId.present ? data.wallId.value : this.wallId,
+      ascentId: data.ascentId.present ? data.ascentId.value : this.ascentId,
+      commentId: data.commentId.present ? data.commentId.value : this.commentId,
+      preview: data.preview.present ? data.preview.value : this.preview,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      readAt: data.readAt.present ? data.readAt.value : this.readAt,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NotificationRow(')
+          ..write('id: $id, ')
+          ..write('recipientId: $recipientId, ')
+          ..write('kind: $kind, ')
+          ..write('actorId: $actorId, ')
+          ..write('wallId: $wallId, ')
+          ..write('ascentId: $ascentId, ')
+          ..write('commentId: $commentId, ')
+          ..write('preview: $preview, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('readAt: $readAt')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    recipientId,
+    kind,
+    actorId,
+    wallId,
+    ascentId,
+    commentId,
+    preview,
+    createdAt,
+    readAt,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is NotificationRow &&
+          other.id == this.id &&
+          other.recipientId == this.recipientId &&
+          other.kind == this.kind &&
+          other.actorId == this.actorId &&
+          other.wallId == this.wallId &&
+          other.ascentId == this.ascentId &&
+          other.commentId == this.commentId &&
+          other.preview == this.preview &&
+          other.createdAt == this.createdAt &&
+          other.readAt == this.readAt);
+}
+
+class NotificationRowsCompanion extends UpdateCompanion<NotificationRow> {
+  final Value<String> id;
+  final Value<String> recipientId;
+  final Value<String> kind;
+  final Value<String?> actorId;
+  final Value<String?> wallId;
+  final Value<String?> ascentId;
+  final Value<String?> commentId;
+  final Value<String?> preview;
+  final Value<int> createdAt;
+  final Value<int?> readAt;
+  final Value<int> rowid;
+  const NotificationRowsCompanion({
+    this.id = const Value.absent(),
+    this.recipientId = const Value.absent(),
+    this.kind = const Value.absent(),
+    this.actorId = const Value.absent(),
+    this.wallId = const Value.absent(),
+    this.ascentId = const Value.absent(),
+    this.commentId = const Value.absent(),
+    this.preview = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.readAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  NotificationRowsCompanion.insert({
+    required String id,
+    required String recipientId,
+    required String kind,
+    this.actorId = const Value.absent(),
+    this.wallId = const Value.absent(),
+    this.ascentId = const Value.absent(),
+    this.commentId = const Value.absent(),
+    this.preview = const Value.absent(),
+    required int createdAt,
+    this.readAt = const Value.absent(),
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       recipientId = Value(recipientId),
+       kind = Value(kind),
+       createdAt = Value(createdAt);
+  static Insertable<NotificationRow> custom({
+    Expression<String>? id,
+    Expression<String>? recipientId,
+    Expression<String>? kind,
+    Expression<String>? actorId,
+    Expression<String>? wallId,
+    Expression<String>? ascentId,
+    Expression<String>? commentId,
+    Expression<String>? preview,
+    Expression<int>? createdAt,
+    Expression<int>? readAt,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (recipientId != null) 'recipient_id': recipientId,
+      if (kind != null) 'kind': kind,
+      if (actorId != null) 'actor_id': actorId,
+      if (wallId != null) 'wall_id': wallId,
+      if (ascentId != null) 'ascent_id': ascentId,
+      if (commentId != null) 'comment_id': commentId,
+      if (preview != null) 'preview': preview,
+      if (createdAt != null) 'created_at': createdAt,
+      if (readAt != null) 'read_at': readAt,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  NotificationRowsCompanion copyWith({
+    Value<String>? id,
+    Value<String>? recipientId,
+    Value<String>? kind,
+    Value<String?>? actorId,
+    Value<String?>? wallId,
+    Value<String?>? ascentId,
+    Value<String?>? commentId,
+    Value<String?>? preview,
+    Value<int>? createdAt,
+    Value<int?>? readAt,
+    Value<int>? rowid,
+  }) {
+    return NotificationRowsCompanion(
+      id: id ?? this.id,
+      recipientId: recipientId ?? this.recipientId,
+      kind: kind ?? this.kind,
+      actorId: actorId ?? this.actorId,
+      wallId: wallId ?? this.wallId,
+      ascentId: ascentId ?? this.ascentId,
+      commentId: commentId ?? this.commentId,
+      preview: preview ?? this.preview,
+      createdAt: createdAt ?? this.createdAt,
+      readAt: readAt ?? this.readAt,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (recipientId.present) {
+      map['recipient_id'] = Variable<String>(recipientId.value);
+    }
+    if (kind.present) {
+      map['kind'] = Variable<String>(kind.value);
+    }
+    if (actorId.present) {
+      map['actor_id'] = Variable<String>(actorId.value);
+    }
+    if (wallId.present) {
+      map['wall_id'] = Variable<String>(wallId.value);
+    }
+    if (ascentId.present) {
+      map['ascent_id'] = Variable<String>(ascentId.value);
+    }
+    if (commentId.present) {
+      map['comment_id'] = Variable<String>(commentId.value);
+    }
+    if (preview.present) {
+      map['preview'] = Variable<String>(preview.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (readAt.present) {
+      map['read_at'] = Variable<int>(readAt.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('NotificationRowsCompanion(')
+          ..write('id: $id, ')
+          ..write('recipientId: $recipientId, ')
+          ..write('kind: $kind, ')
+          ..write('actorId: $actorId, ')
+          ..write('wallId: $wallId, ')
+          ..write('ascentId: $ascentId, ')
+          ..write('commentId: $commentId, ')
+          ..write('preview: $preview, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('readAt: $readAt, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
 abstract class _$AppDatabase extends GeneratedDatabase {
   _$AppDatabase(QueryExecutor e) : super(e);
   $AppDatabaseManager get managers => $AppDatabaseManager(this);
@@ -9737,6 +10446,9 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $TopoVerificationRowsTable topoVerificationRows =
       $TopoVerificationRowsTable(this);
   late final $TopoHazardRowsTable topoHazardRows = $TopoHazardRowsTable(this);
+  late final $NotificationRowsTable notificationRows = $NotificationRowsTable(
+    this,
+  );
   late final Index idxSectorsAreaLive = Index(
     'idx_sectors_area_live',
     'CREATE INDEX idx_sectors_area_live ON sectors (area_id) WHERE deleted_at IS NULL',
@@ -9804,6 +10516,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     gradeOpinionRows,
     topoVerificationRows,
     topoHazardRows,
+    notificationRows,
     idxSectorsAreaLive,
     idxWallsSectorLive,
     idxPhotosWallLive,
@@ -14147,6 +14860,7 @@ typedef $$CommentsTableCreateCompanionBuilder =
       required String body,
       Value<String?> authorName,
       Value<String?> ascentId,
+      Value<String?> mentionedUids,
       Value<int> rowid,
     });
 typedef $$CommentsTableUpdateCompanionBuilder =
@@ -14162,6 +14876,7 @@ typedef $$CommentsTableUpdateCompanionBuilder =
       Value<String> body,
       Value<String?> authorName,
       Value<String?> ascentId,
+      Value<String?> mentionedUids,
       Value<int> rowid,
     });
 
@@ -14255,6 +14970,11 @@ class $$CommentsTableFilterComposer
 
   ColumnFilters<String> get authorName => $composableBuilder(
     column: $table.authorName,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get mentionedUids => $composableBuilder(
+    column: $table.mentionedUids,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -14359,6 +15079,11 @@ class $$CommentsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get mentionedUids => $composableBuilder(
+    column: $table.mentionedUids,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$WallsTableOrderingComposer get wallId {
     final $$WallsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -14441,6 +15166,11 @@ class $$CommentsTableAnnotationComposer
 
   GeneratedColumn<String> get authorName => $composableBuilder(
     column: $table.authorName,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get mentionedUids => $composableBuilder(
+    column: $table.mentionedUids,
     builder: (column) => column,
   );
 
@@ -14530,6 +15260,7 @@ class $$CommentsTableTableManager
                 Value<String> body = const Value.absent(),
                 Value<String?> authorName = const Value.absent(),
                 Value<String?> ascentId = const Value.absent(),
+                Value<String?> mentionedUids = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CommentsCompanion(
                 id: id,
@@ -14543,6 +15274,7 @@ class $$CommentsTableTableManager
                 body: body,
                 authorName: authorName,
                 ascentId: ascentId,
+                mentionedUids: mentionedUids,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -14558,6 +15290,7 @@ class $$CommentsTableTableManager
                 required String body,
                 Value<String?> authorName = const Value.absent(),
                 Value<String?> ascentId = const Value.absent(),
+                Value<String?> mentionedUids = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => CommentsCompanion.insert(
                 id: id,
@@ -14571,6 +15304,7 @@ class $$CommentsTableTableManager
                 body: body,
                 authorName: authorName,
                 ascentId: ascentId,
+                mentionedUids: mentionedUids,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -16612,6 +17346,309 @@ typedef $$TopoHazardRowsTableProcessedTableManager =
       TopoHazardRow,
       PrefetchHooks Function()
     >;
+typedef $$NotificationRowsTableCreateCompanionBuilder =
+    NotificationRowsCompanion Function({
+      required String id,
+      required String recipientId,
+      required String kind,
+      Value<String?> actorId,
+      Value<String?> wallId,
+      Value<String?> ascentId,
+      Value<String?> commentId,
+      Value<String?> preview,
+      required int createdAt,
+      Value<int?> readAt,
+      Value<int> rowid,
+    });
+typedef $$NotificationRowsTableUpdateCompanionBuilder =
+    NotificationRowsCompanion Function({
+      Value<String> id,
+      Value<String> recipientId,
+      Value<String> kind,
+      Value<String?> actorId,
+      Value<String?> wallId,
+      Value<String?> ascentId,
+      Value<String?> commentId,
+      Value<String?> preview,
+      Value<int> createdAt,
+      Value<int?> readAt,
+      Value<int> rowid,
+    });
+
+class $$NotificationRowsTableFilterComposer
+    extends Composer<_$AppDatabase, $NotificationRowsTable> {
+  $$NotificationRowsTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get recipientId => $composableBuilder(
+    column: $table.recipientId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get actorId => $composableBuilder(
+    column: $table.actorId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get wallId => $composableBuilder(
+    column: $table.wallId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ascentId => $composableBuilder(
+    column: $table.ascentId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get commentId => $composableBuilder(
+    column: $table.commentId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get preview => $composableBuilder(
+    column: $table.preview,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get readAt => $composableBuilder(
+    column: $table.readAt,
+    builder: (column) => ColumnFilters(column),
+  );
+}
+
+class $$NotificationRowsTableOrderingComposer
+    extends Composer<_$AppDatabase, $NotificationRowsTable> {
+  $$NotificationRowsTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get recipientId => $composableBuilder(
+    column: $table.recipientId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get kind => $composableBuilder(
+    column: $table.kind,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get actorId => $composableBuilder(
+    column: $table.actorId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get wallId => $composableBuilder(
+    column: $table.wallId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ascentId => $composableBuilder(
+    column: $table.ascentId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get commentId => $composableBuilder(
+    column: $table.commentId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get preview => $composableBuilder(
+    column: $table.preview,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get readAt => $composableBuilder(
+    column: $table.readAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+}
+
+class $$NotificationRowsTableAnnotationComposer
+    extends Composer<_$AppDatabase, $NotificationRowsTable> {
+  $$NotificationRowsTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<String> get recipientId => $composableBuilder(
+    column: $table.recipientId,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get kind =>
+      $composableBuilder(column: $table.kind, builder: (column) => column);
+
+  GeneratedColumn<String> get actorId =>
+      $composableBuilder(column: $table.actorId, builder: (column) => column);
+
+  GeneratedColumn<String> get wallId =>
+      $composableBuilder(column: $table.wallId, builder: (column) => column);
+
+  GeneratedColumn<String> get ascentId =>
+      $composableBuilder(column: $table.ascentId, builder: (column) => column);
+
+  GeneratedColumn<String> get commentId =>
+      $composableBuilder(column: $table.commentId, builder: (column) => column);
+
+  GeneratedColumn<String> get preview =>
+      $composableBuilder(column: $table.preview, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get readAt =>
+      $composableBuilder(column: $table.readAt, builder: (column) => column);
+}
+
+class $$NotificationRowsTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $NotificationRowsTable,
+          NotificationRow,
+          $$NotificationRowsTableFilterComposer,
+          $$NotificationRowsTableOrderingComposer,
+          $$NotificationRowsTableAnnotationComposer,
+          $$NotificationRowsTableCreateCompanionBuilder,
+          $$NotificationRowsTableUpdateCompanionBuilder,
+          (
+            NotificationRow,
+            BaseReferences<
+              _$AppDatabase,
+              $NotificationRowsTable,
+              NotificationRow
+            >,
+          ),
+          NotificationRow,
+          PrefetchHooks Function()
+        > {
+  $$NotificationRowsTableTableManager(
+    _$AppDatabase db,
+    $NotificationRowsTable table,
+  ) : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$NotificationRowsTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$NotificationRowsTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$NotificationRowsTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<String> recipientId = const Value.absent(),
+                Value<String> kind = const Value.absent(),
+                Value<String?> actorId = const Value.absent(),
+                Value<String?> wallId = const Value.absent(),
+                Value<String?> ascentId = const Value.absent(),
+                Value<String?> commentId = const Value.absent(),
+                Value<String?> preview = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int?> readAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NotificationRowsCompanion(
+                id: id,
+                recipientId: recipientId,
+                kind: kind,
+                actorId: actorId,
+                wallId: wallId,
+                ascentId: ascentId,
+                commentId: commentId,
+                preview: preview,
+                createdAt: createdAt,
+                readAt: readAt,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required String recipientId,
+                required String kind,
+                Value<String?> actorId = const Value.absent(),
+                Value<String?> wallId = const Value.absent(),
+                Value<String?> ascentId = const Value.absent(),
+                Value<String?> commentId = const Value.absent(),
+                Value<String?> preview = const Value.absent(),
+                required int createdAt,
+                Value<int?> readAt = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => NotificationRowsCompanion.insert(
+                id: id,
+                recipientId: recipientId,
+                kind: kind,
+                actorId: actorId,
+                wallId: wallId,
+                ascentId: ascentId,
+                commentId: commentId,
+                preview: preview,
+                createdAt: createdAt,
+                readAt: readAt,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map((e) => (e.readTable(table), BaseReferences(db, table, e)))
+              .toList(),
+          prefetchHooksCallback: null,
+        ),
+      );
+}
+
+typedef $$NotificationRowsTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $NotificationRowsTable,
+      NotificationRow,
+      $$NotificationRowsTableFilterComposer,
+      $$NotificationRowsTableOrderingComposer,
+      $$NotificationRowsTableAnnotationComposer,
+      $$NotificationRowsTableCreateCompanionBuilder,
+      $$NotificationRowsTableUpdateCompanionBuilder,
+      (
+        NotificationRow,
+        BaseReferences<_$AppDatabase, $NotificationRowsTable, NotificationRow>,
+      ),
+      NotificationRow,
+      PrefetchHooks Function()
+    >;
 
 class $AppDatabaseManager {
   final _$AppDatabase _db;
@@ -16644,4 +17681,6 @@ class $AppDatabaseManager {
       $$TopoVerificationRowsTableTableManager(_db, _db.topoVerificationRows);
   $$TopoHazardRowsTableTableManager get topoHazardRows =>
       $$TopoHazardRowsTableTableManager(_db, _db.topoHazardRows);
+  $$NotificationRowsTableTableManager get notificationRows =>
+      $$NotificationRowsTableTableManager(_db, _db.notificationRows);
 }

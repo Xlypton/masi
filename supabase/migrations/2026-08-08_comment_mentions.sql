@@ -1,0 +1,22 @@
+-- Feed overhaul #4: tagging another climber in a comment.
+--
+-- One column. `comments` is a SyncColumns table, so the client pushes the
+-- WHOLE row on every change (decision D-4, no outbox) — which means this column
+-- has to exist here before a build that writes it locally can push anything at
+-- all, or every comment push starts failing on an unknown column.
+--
+-- `text`, holding a JSON array of uids (`["uid-a","uid-b"]`), not `jsonb` and
+-- not `text[]`: Drift stores it as a plain string locally and PostgREST sends
+-- exactly that string, so `text` is the shape that round-trips without the
+-- client having to know anything about Postgres types. Nothing server-side
+-- queries INTO it today; the notification trigger reads it with a cast at the
+-- point of use.
+--
+-- Uids rather than the `@name` text already in the body: display names are
+-- editable (#18), so the text is a description of who somebody was that day
+-- rather than a reference to them, and two climbers may legitimately pick the
+-- same one.
+--
+-- Idempotent, like every migration here.
+ALTER TABLE public.comments
+  ADD COLUMN IF NOT EXISTS "mentionedUids" text;

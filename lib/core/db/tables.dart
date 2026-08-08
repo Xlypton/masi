@@ -485,6 +485,24 @@ class Comments extends Table with SyncColumns {
   /// `null` for every pre-Feature-#12 comment (all wall-attached).
   TextColumn get ascentId => text().nullable().references(Ascents, #id)();
 
+  /// The uids this comment tags, as a JSON array of strings (`["uid-a"]`),
+  /// or `null` for the overwhelming majority of comments, which tag nobody.
+  ///
+  /// **Uids, not names.** A mention could have been stored as the `@name` text
+  /// already in [body] and re-resolved at render time, and that would have
+  /// been less code. It would also have broken silently the first time
+  /// somebody renamed themselves — display names are editable (#18), so the
+  /// text is a description of who they were that day, not a reference. Two
+  /// climbers may also legitimately choose the same display name, which a
+  /// text match cannot tell apart and a uid can.
+  ///
+  /// A JSON array in one column rather than a join table: a mention has no
+  /// attributes of its own, is only ever read as "who does this comment tag",
+  /// and travels with the comment through the sync engine's full-row re-push
+  /// (decision D-4) for free. A join table would need its own sync plumbing to
+  /// carry exactly the same information.
+  TextColumn get mentionedUids => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -543,6 +561,63 @@ class Ascents extends Table with SyncColumns {
   /// [Comments.authorName]'s shape/purpose. `null` for every pre-Feature-#12
   /// ascent and for any private one that never sets it.
   TextColumn get authorName => text().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// A thing that happened to you, or to something you made — the local mirror
+/// of `public.notifications`.
+///
+/// See [GradeOpinionRows] for the shared design note on mirror tables; this
+/// one follows it for a stronger reason than any of them. A notification is
+/// written by the SERVER, in a trigger, when somebody else acts. A client can
+/// never author one, which is the whole security property: if the app could
+/// insert notifications, anyone could put a message in anyone else's inbox.
+/// So this is not a [SyncColumns] table and is not in `syncTableNames` — the
+/// only local write is marking one read, and even that goes to Supabase first
+/// and is mirrored back.
+///
+/// Deliberately no Drift FK to [Walls]/[Comments]/[Ascents]: rows arrive from
+/// a server pull and can reference a topo this device has never held — which
+/// is the normal case for a notification about somebody commenting on a topo
+/// you have not opened in months.
+@DataClassName('NotificationRow')
+class NotificationRows extends Table {
+  TextColumn get id => text()();
+
+  /// Who this is FOR. Every read is scoped by it, and the server's RLS scopes
+  /// on it too, so a pull can only ever return the signed-in user's own.
+  TextColumn get recipientId => text()();
+
+  /// What happened, as the raw server string (`comment`, `mention`, `like`,
+  /// `suggestion`, …). Stored raw and parsed at the edge so a build that
+  /// predates a new kind renders it as a generic entry instead of throwing on
+  /// a value its enum has never heard of — the same rule [GradeOpinionRows]
+  /// applies to grade systems.
+  TextColumn get kind => text()();
+
+  /// Who did it. Nullable because not every kind has a person behind it, and
+  /// because an actor whose account is gone must not take the notification
+  /// with them.
+  TextColumn get actorId => text().nullable()();
+
+  /// What it happened to. Which of these is set depends on [kind]; all are
+  /// nullable so a new kind can arrive without a schema change.
+  TextColumn get wallId => text().nullable()();
+  TextColumn get ascentId => text().nullable()();
+  TextColumn get commentId => text().nullable()();
+
+  /// A short server-rendered summary — e.g. the first line of the comment.
+  /// Nullable: an entry is perfectly readable without one.
+  TextColumn get preview => text().nullable()();
+
+  IntColumn get createdAt => integer()();
+
+  /// When the user read it, or `null` while unread. A timestamp rather than a
+  /// bool so "mark all read" is one write with one value, and so the unread
+  /// badge is a plain `readAt IS NULL` count.
+  IntColumn get readAt => integer().nullable()();
 
   @override
   Set<Column> get primaryKey => {id};

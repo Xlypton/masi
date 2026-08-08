@@ -13,10 +13,10 @@ void main() {
     await db.close();
   });
 
-  test('schemaVersion is 14', () {
+  test('schemaVersion is 15', () {
     expect(
       db.schemaVersion,
-      14,
+      15,
       reason: 'bumping this is only correct alongside a matching `if (from < '
           'N)` branch in AppDatabase.migration and a v(N-1) -> vN group in '
           'app_database_migration_test.dart — the version alone migrates '
