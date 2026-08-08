@@ -45,6 +45,7 @@ import '../application/likes_providers.dart';
 import '../data/comments_repository.dart';
 import '../data/community_repository.dart';
 import 'comment_row.dart';
+import 'mention_composer.dart';
 
 /// Read-only detail view for a single shared ("community") topo: a
 /// collapsing header showing the wall's photo + route overlays (tap it to
@@ -81,7 +82,10 @@ class CommunityTopoDetailScreen extends ConsumerStatefulWidget {
 
 class _CommunityTopoDetailScreenState
     extends ConsumerState<CommunityTopoDetailScreen> {
-  final _commentController = TextEditingController();
+  /// A [MentionComposerController], not a plain [TextEditingController]: the
+  /// draft's tagged uids have to live exactly as long as its text, and be
+  /// cleared with it.
+  final _commentController = MentionComposerController();
 
   /// D3: the Routes section's own expand/collapse state — defaults to
   /// expanded (matches [LegendExpandedController]'s own view-mode default),
@@ -284,11 +288,20 @@ class _CommunityTopoDetailScreenState
   Future<void> _submitComment() async {
     final body = _commentController.text.trim();
     if (body.isEmpty) return;
+    // Read BEFORE the await: `_resolveAuthorName` can wait seconds, and the
+    // user is free to keep editing meanwhile — the uids stored have to be the
+    // ones belonging to the body being posted.
+    final mentionedUids = _commentController.mentionedUids;
     final authorName = await _resolveAuthorName();
     if (!mounted) return;
     await ref
         .read(commentsRepositoryProvider)
-        .addComment(wallId: widget.wallId, body: body, authorName: authorName);
+        .addComment(
+          wallId: widget.wallId,
+          body: body,
+          authorName: authorName,
+          mentionedUids: mentionedUids,
+        );
     if (!mounted) return;
     _commentController.clear();
     FocusManager.instance.primaryFocus?.unfocus();
@@ -985,7 +998,24 @@ class _CommunityTopoDetailScreenState
                         context,
                       ).textTheme.bodySmall?.copyWith(color: colors.ink2),
                     )
-                  else
+                  else ...[
+                    // Above the field, not below it: on a phone the composer
+                    // sits just over the keyboard, so a list hung underneath
+                    // would open behind it.
+                    MentionSuggestions(
+                      controller: _commentController,
+                      keyPrefix: 'community-comment',
+                      participantUids: {
+                        // Everyone who has already said something in this
+                        // thread — the people a comment here is plausibly
+                        // aimed at. The topo's owner is not reachable from
+                        // this screen's state; they are almost always in the
+                        // thread anyway, and if not, the general pool still
+                        // offers them.
+                        for (final comment in comments)
+                          if (comment.ownerId != null) comment.ownerId!,
+                      },
+                    ),
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
@@ -1063,6 +1093,7 @@ class _CommunityTopoDetailScreenState
                         ),
                       ],
                     ),
+                  ],
                   const SizedBox(height: MasiSpacing.lg),
                   const Divider(),
                   const SizedBox(height: MasiSpacing.sm),
