@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../core/db/storage_durability_provider.dart';
 import '../features/account/application/pwa_install_providers.dart';
 import '../features/backup/application/sync_orchestrator.dart';
+import '../features/community/application/feed_freshness_providers.dart';
 import '../features/topo/presentation/canvas_chrome.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'install_banner.dart';
@@ -46,7 +47,7 @@ import 'theme.dart';
 /// uses `bottom: false` so that measured value reaches its scroll view
 /// unconsumed, exactly like `CommunityMapScreen` already did for the Map
 /// branch pre-#51.
-class NavShell extends ConsumerWidget {
+class NavShell extends ConsumerStatefulWidget {
   const NavShell({super.key, required this.navigationShell});
 
   /// Drives which branch's content is shown (`navigationShell.currentIndex`)
@@ -54,8 +55,61 @@ class NavShell extends ConsumerWidget {
   /// `router.dart`'s `StatefulShellRoute.indexedStack` builder.
   final StatefulNavigationShell navigationShell;
 
+  /// The Feed branch's index, named because three separate places below
+  /// compare against it and an off-by-one would silently mis-target the dot.
+  static const int feedBranchIndex = 2;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<NavShell> createState() => _NavShellState();
+}
+
+class _NavShellState extends ConsumerState<NavShell> {
+  @override
+  void initState() {
+    super.initState();
+    // Covers a cold start that lands ON the Feed — a PWA reload of `/feed`,
+    // or a restored route. Without this the baseline would never be stamped
+    // for a user who mostly arrives that way, and the dot could never appear
+    // for them at all.
+    if (widget.navigationShell.currentIndex == NavShell.feedBranchIndex) {
+      _markFeedSeen();
+    }
+  }
+
+  @override
+  void didUpdateWidget(NavShell oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final was = oldWidget.navigationShell.currentIndex;
+    final now = widget.navigationShell.currentIndex;
+    if (was == now) return;
+    // Stamped on ENTERING and on LEAVING, which is not belt-and-braces.
+    //
+    // Entering alone is not enough: the list updates live, so somebody sitting
+    // on the Feed for ten minutes genuinely sees everything that lands during
+    // it, and stamping only at entry would dot the tab the moment they walked
+    // away for things they had already read.
+    //
+    // Leaving alone is not enough either, because of the cold-start case in
+    // `initState`.
+    if (was == NavShell.feedBranchIndex || now == NavShell.feedBranchIndex) {
+      _markFeedSeen();
+    }
+  }
+
+  /// Fire-and-forget: nothing renders off the result, and a nav transition
+  /// must never wait on a settings write.
+  void _markFeedSeen() {
+    // Post-frame — `initState`/`didUpdateWidget` run mid-build, and this
+    // mutates a provider the same tree is reading.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref.read(feedLastSeenProvider.notifier).markSeen();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final navigationShell = widget.navigationShell;
     // Installed-standalone-PWA-only (#58 cluster): iOS reports
     // safe-area-inset-bottom = 0 in that mode (apple-mobile-web-app-status-bar-style
     // is 'default'), so the bottom bar's SafeArea below adds nothing and the
@@ -120,8 +174,17 @@ class NavShell extends ConsumerWidget {
                     tabKey: const Key('nav-tab-feed'),
                     iconName: 'comment',
                     label: 'Feed',
-                    selected: navigationShell.currentIndex == 2,
-                    onTap: () => navigationShell.goBranch(2),
+                    selected:
+                        navigationShell.currentIndex ==
+                        NavShell.feedBranchIndex,
+                    // Never dotted while you are standing on it — the tab is
+                    // showing you the very thing the dot would point at.
+                    showDot:
+                        navigationShell.currentIndex !=
+                            NavShell.feedBranchIndex &&
+                        ref.watch(feedHasUnseenProvider),
+                    onTap: () =>
+                        navigationShell.goBranch(NavShell.feedBranchIndex),
                   ),
                 ),
               ],
@@ -142,6 +205,7 @@ class _NavTab extends StatelessWidget {
     required this.label,
     required this.selected,
     required this.onTap,
+    this.showDot = false,
   });
 
   final Key tabKey;
@@ -149,6 +213,15 @@ class _NavTab extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
+
+  /// Draws the unseen dot over the glyph's top-right corner.
+  ///
+  /// A dot, not a count. A number would have to be honest about WHAT it was
+  /// counting, and the feed's unit is not a countable thing the way an inbox's
+  /// is — a duplicate group is one row made of several topos, and a rank
+  /// change can move an old topo to the top. "There is something you have not
+  /// seen" is the claim this can actually support.
+  final bool showDot;
 
   @override
   Widget build(BuildContext context) {
@@ -165,7 +238,20 @@ class _NavTab extends StatelessWidget {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              MasiIcon(iconName, size: 22, color: color),
+              // `clipBehavior: none` — the dot deliberately overhangs the
+              // glyph's box, and the default `hardEdge` would shave it.
+              Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  MasiIcon(iconName, size: 22, color: color),
+                  if (showDot)
+                    Positioned(
+                      top: -1,
+                      right: -2,
+                      child: _UnseenDot(colors: colors),
+                    ),
+                ],
+              ),
               const SizedBox(height: 2),
               Text(
                 label,
@@ -232,5 +318,31 @@ class ShellNotices extends ConsumerWidget {
     }
 
     return const InstallBanner();
+  }
+}
+
+/// The Feed tab's "there is something you have not seen" mark.
+///
+/// A ring in the bar's own surface colour sits under the accent dot so it
+/// stays legible against the glyph it overlaps. Without it, a dot landing on a
+/// dark icon stroke reads as part of the icon rather than as a badge — and the
+/// bar is translucent glass, so there is no fixed background colour to rely on.
+class _UnseenDot extends StatelessWidget {
+  const _UnseenDot({required this.colors});
+
+  final MasiColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      key: const Key('nav-tab-feed-dot'),
+      width: 9,
+      height: 9,
+      decoration: BoxDecoration(
+        color: colors.accent,
+        shape: BoxShape.circle,
+        border: Border.all(color: colors.surface, width: 1.5),
+      ),
+    );
   }
 }

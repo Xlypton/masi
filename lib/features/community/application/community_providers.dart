@@ -42,6 +42,21 @@ sealed class FeedItem {
   /// (when the wall it wraps has one; see that field's doc) or an ascent's
   /// [SharedAscentEntry.climbedAt].
   int get sortKeyMs;
+
+  /// When this entry ENTERED the feed, which is a different question from
+  /// [sortKeyMs] and answered by a different column.
+  ///
+  /// [sortKeyMs] orders the list by when the climb happened or the topo was
+  /// drawn, which is what a reader wants to scroll. This one drives the Feed
+  /// tab's unseen dot, and for that the only thing that matters is when the
+  /// thing became visible to other people — publishing a topo drawn in January
+  /// is a January `createdAt` and a today `updatedAt`. See
+  /// [SharedTopo.updatedAt] for the trade-off that choice carries.
+  int get feedArrivalMs;
+
+  /// Who this belongs to, so the dot can skip the user's own posts — see
+  /// `newestForeignArrival`.
+  String? get ownerId;
 }
 
 /// A [FeedItem] wrapping a shared topo — renders as the existing `_FeedRow`
@@ -60,6 +75,21 @@ class TopoFeedItem extends FeedItem {
 
   @override
   int get sortKeyMs => topo.createdAt;
+
+  /// The GROUP's arrival, not just the head's. A duplicate-group row collapses
+  /// several topos of one place into one entry (`groupTopos`), and a fresh
+  /// alternate appearing under an old head is still something new in the feed.
+  @override
+  int get feedArrivalMs {
+    var newest = topo.updatedAt;
+    for (final alternate in alternates) {
+      if (alternate.updatedAt > newest) newest = alternate.updatedAt;
+    }
+    return newest;
+  }
+
+  @override
+  String? get ownerId => topo.ownerId;
 
   @override
   bool operator ==(Object other) =>
@@ -88,6 +118,12 @@ class AscentFeedItem extends FeedItem {
 
   @override
   int get sortKeyMs => entry.climbedAt.millisecondsSinceEpoch;
+
+  @override
+  int get feedArrivalMs => entry.updatedAt;
+
+  @override
+  String? get ownerId => entry.ownerId;
 
   @override
   bool operator ==(Object other) =>

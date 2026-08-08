@@ -24,6 +24,7 @@ class SharedTopo {
     this.routeStyles = const {},
     this.routeStyleTags = const {},
     this.createdAt = 0,
+    this.updatedAt = 0,
     this.ascentCount = 0,
     this.lastVerifiedAt,
   });
@@ -96,6 +97,22 @@ class SharedTopo {
   /// directly without a real wall row — those never exercise cross-source
   /// sorting.
   final int createdAt;
+
+  /// The wall's `updated_at` — **when this topo entered the feed**, which is
+  /// what the Feed tab's unseen dot compares against.
+  ///
+  /// Not [createdAt], and the difference is the whole reason this column is
+  /// projected. A topo is created privately and published later, sometimes
+  /// much later; `createdAt` is when the author started drawing it, so a topo
+  /// drawn in January and published today would never register as new and the
+  /// dot would miss the single event it exists for. Publishing flips
+  /// `visibility`, which is a local write, which bumps `updated_at`.
+  ///
+  /// The cost, stated plainly: an ordinary EDIT to a published topo bumps this
+  /// too, so fixing a typo can dot the tab. That is the right way round —
+  /// a dot that occasionally means "this changed" is noise, while a dot that
+  /// silently never fires on publication is a broken feature.
+  final int updatedAt;
 
   /// Live ascents logged against this wall, as far as THIS DEVICE knows
   /// (community editing phase 8c / C-6.3).
@@ -324,6 +341,7 @@ class CommunityRepository {
         w.latitude AS latitude,
         w.longitude AS longitude,
         w.created_at AS created_at,
+        w.updated_at AS updated_at,
         (SELECT p.local_path FROM photos p
            WHERE p.wall_id = w.id AND p.kind = 'original' AND p.deleted_at IS NULL
            ORDER BY p.is_primary DESC, p.created_at DESC, p.id DESC LIMIT 1) AS thumbnail_path,
@@ -421,6 +439,7 @@ class CommunityRepository {
                   row.readNullable<String>('route_style_tags_json'),
                 ),
                 createdAt: row.read<int>('created_at'),
+                updatedAt: row.read<int>('updated_at'),
                 ascentCount: row.read<int>('ascent_count'),
                 lastVerifiedAt: row.readNullable<int>('last_verified_at'),
               ),

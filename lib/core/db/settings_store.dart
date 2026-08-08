@@ -24,6 +24,21 @@ class SettingsStore {
   /// user-initiated sign-out.
   static const String lastKnownUidKey = 'lastKnownUid';
 
+  /// When this device last LOOKED at the Community Feed, per account — the
+  /// baseline the Feed tab's unseen dot compares new arrivals against.
+  ///
+  /// Lives here, in the local-only device store, rather than in a synced
+  /// table, because "have I looked at this yet" is a property of a screen on a
+  /// device and not of the account. Syncing it would mean reading the feed on
+  /// a laptop silently clears the dot on a phone that has genuinely never
+  /// shown the user those rows.
+  ///
+  /// Keyed by uid so switching accounts on one device does not inherit the
+  /// other's baseline; signed-out gets its own bucket rather than sharing one
+  /// with whoever signed in last.
+  static String feedLastSeenKey(String? uid) =>
+      'feedLastSeenAt:${uid ?? 'anon'}';
+
   Future<String?> read(String key) async {
     final row = await (_db.select(_db.appSettings)
           ..where((t) => t.settingKey.equals(key)))

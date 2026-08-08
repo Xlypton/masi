@@ -146,6 +146,7 @@ class SharedAscentEntry {
     this.gradeSortKey,
     this.notes,
     this.gradeOpinion,
+    this.updatedAt = 0,
   });
 
   final String ascentId;
@@ -172,6 +173,18 @@ class SharedAscentEntry {
   final double? gradeSortKey;
   final String? notes;
   final String? gradeOpinion;
+
+  /// The ascent row's `updated_at` — **when this ascent entered the feed**.
+  ///
+  /// Not [climbedAt], which is when the CLIMB happened and can be backdated to
+  /// any day the climber likes; an ascent logged today for a climb done last
+  /// summer would never register as new. Sharing flips `visibility`, which is
+  /// a local write, which bumps `updated_at`. See [SharedTopo.updatedAt] for
+  /// the same reasoning, and the same trade-off, on the topo side.
+  ///
+  /// Defaults to `0` for the tests that construct an entry directly — those
+  /// never exercise the Feed tab's unseen dot.
+  final int updatedAt;
 
   @override
   bool operator ==(Object other) =>
@@ -445,6 +458,7 @@ class AscentsRepository {
         a.notes AS notes,
         a.grade_opinion AS grade_opinion,
         a.wall_id AS wall_id,
+        a.updated_at AS updated_at,
         r.number AS route_number,
         r.name AS route_name,
         r.grade_raw AS grade_raw,
@@ -503,6 +517,7 @@ class AscentsRepository {
       gradeSortKey: gradeSortKey,
       notes: row.readNullable<String>('notes'),
       gradeOpinion: row.readNullable<String>('grade_opinion'),
+      updatedAt: row.read<int>('updated_at'),
     );
   }
 
