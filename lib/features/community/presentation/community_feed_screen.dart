@@ -17,6 +17,7 @@ import '../../backup/data/sync_service.dart' show SharedPhotoBudgetReason;
 import '../../logbook/application/ascents_providers.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
+import '../../notifications/presentation/notification_bell.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_shimmer.dart';
@@ -102,6 +103,11 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
         ),
         centerTitle: false,
         actions: [
+          // The notification centre sits on the Feed rather than on the home
+          // screen because everything it reports — a comment, a tag, a like, a
+          // suggested edit — happens in the community half of the app, so this
+          // is where a user is when the answer to "what happened?" matters.
+          const NotificationBell(),
           // #12 Wave 3, ST5: the home-screen's own Logbook icon is removed
           // in this wave, so the Feed — the screen a "shared ascent" row
           // now links a climber's other activity from — carries the entry

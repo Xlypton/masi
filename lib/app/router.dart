@@ -21,6 +21,7 @@ import '../features/moderation/presentation/admin_queue_screen.dart';
 import '../features/moderation/presentation/propose_line_screen.dart';
 import '../features/moderation/presentation/suggestions_inbox_screen.dart';
 import '../features/logbook/presentation/logbook_screen.dart';
+import '../features/notifications/presentation/notifications_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
 
 /// Where the legacy `/community` deep link (`?tab=`/`?focus=` query params —
@@ -302,6 +303,15 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/logbook',
       builder: (context, state) => const LogbookScreen(),
+    ),
+    // The notification centre. Unguarded like `/suggestions` below, and for
+    // the same reason: `my_notifications` is scoped to `auth.uid()` and
+    // `public.notifications` has a recipient-only SELECT policy, so reaching
+    // this route as anybody else shows an empty inbox rather than somebody
+    // else's.
+    GoRoute(
+      path: '/notifications',
+      builder: (context, state) => const NotificationsScreen(),
     ),
     // Admin review queue (community editing phase 3). A top-level sibling of
     // the shell, like every other focused full-screen task.
