@@ -436,7 +436,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.material_changes(int) FROM public;
+REVOKE ALL ON FUNCTION public.material_changes(int) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.material_changes(int) TO authenticated;
 
 DROP FUNCTION IF EXISTS public.resolve_material_change(text);
@@ -488,5 +488,5 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.resolve_material_change(text) FROM public;
+REVOKE ALL ON FUNCTION public.resolve_material_change(text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.resolve_material_change(text) TO authenticated;

@@ -144,7 +144,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.request_deletion(text, text) FROM public;
+REVOKE ALL ON FUNCTION public.request_deletion(text, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.request_deletion(text, text) TO authenticated;
 
 -- ---------------------------------------------------------------------------
@@ -224,7 +224,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.review_deletion(text, boolean, text) FROM public;
+REVOKE ALL ON FUNCTION public.review_deletion(text, boolean, text) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.review_deletion(text, boolean, text) TO authenticated;
 
 -- ---------------------------------------------------------------------------
@@ -276,7 +276,7 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.deletion_requests_queue(int) FROM public;
+REVOKE ALL ON FUNCTION public.deletion_requests_queue(int) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.deletion_requests_queue(int) TO authenticated;
 
 -- ---------------------------------------------------------------------------
