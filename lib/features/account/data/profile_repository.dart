@@ -186,4 +186,27 @@ class ProfileRepository {
       ..where((t) => t.id.equals(uid) & t.deletedAt.isNull());
     return query.watchSingleOrNull().map((row) => row?.avatarUrl);
   }
+
+  /// Every local profile row that has a name to show, most recently updated
+  /// first, capped at [limit].
+  ///
+  /// Added for the comment composer's `@`-mention picker, which needs a set of
+  /// climbers to offer without a network call per keystroke. Note what this is
+  /// NOT: a directory of the app's users. `profiles` holds only the rows sync
+  /// has pulled onto this device — the people whose topos, ascents and comments
+  /// this user has actually seen — which is exactly the population a mention is
+  /// plausibly aimed at.
+  ///
+  /// Nameless rows are filtered in SQL rather than by the caller: a profile
+  /// with no `displayName` has nothing to insert into a comment and nothing for
+  /// a reader to see, so it can never be a candidate. [limit] bounds an
+  /// unbounded local table that grows with every synced author; ranking within
+  /// the result is the caller's job (`rankMentionCandidates`).
+  Stream<List<db.Profile>> watchNamedProfiles({int limit = 200}) {
+    final query = _db.select(_db.profiles)
+      ..where((t) => t.deletedAt.isNull() & t.displayName.isNotNull())
+      ..orderBy([(t) => OrderingTerm.desc(t.updatedAt)])
+      ..limit(limit);
+    return query.watch();
+  }
 }

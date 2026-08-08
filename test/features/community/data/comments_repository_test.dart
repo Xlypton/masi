@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/features/community/data/comments_repository.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
@@ -301,6 +302,103 @@ void main() {
         )..where((t) => t.id.equals(comment.id))).getSingle();
         expect(rawRow.deletedAt, isNotNull);
         expect(rawRow.dirty, isTrue);
+      },
+    );
+  });
+
+  // Tagging other climbers (@mentions). The uids are the reference — display
+  // names are editable, so the `@name` text in the body is only a description
+  // of who somebody was that day (see `Comments.mentionedUids`).
+  group('mentions', () {
+    test(
+      'the tagged uids come back as a decoded list, never the raw JSON — the '
+      'column shape is a storage detail and no widget should have to parse it',
+      () async {
+        final wallId = await seedWall('Wall');
+
+        final comment = await repo.addComment(
+          wallId: wallId,
+          body: 'Nice one @Bogi',
+          mentionedUids: const ['uid-bogi'],
+        );
+
+        expect(comment.mentionedUids, ['uid-bogi']);
+        final rows = await repo.commentsForWall(wallId);
+        expect(rows.single.mentionedUids, ['uid-bogi']);
+      },
+    );
+
+    test(
+      'a comment that tags nobody stores NULL, not "[]" — most comments tag '
+      'nobody and the column should stay empty',
+      () async {
+        final wallId = await seedWall('Wall');
+
+        final comment = await repo.addComment(wallId: wallId, body: 'Nice');
+
+        expect(comment.mentionedUids, isEmpty);
+        final rawRow = await (db.select(
+          db.comments,
+        )..where((t) => t.id.equals(comment.id))).getSingle();
+        expect(rawRow.mentionedUids, isNull);
+      },
+    );
+
+    test(
+      'blanks and duplicates handed in by a caller are tidied before storage, '
+      'so the row and the returned model always agree',
+      () async {
+        final wallId = await seedWall('Wall');
+
+        final comment = await repo.addComment(
+          wallId: wallId,
+          body: 'Nice one @Bogi',
+          mentionedUids: const ['uid-bogi', '', ' uid-bogi ', 'uid-zsofi'],
+        );
+
+        expect(comment.mentionedUids, ['uid-bogi', 'uid-zsofi']);
+        final rawRow = await (db.select(
+          db.comments,
+        )..where((t) => t.id.equals(comment.id))).getSingle();
+        expect(rawRow.mentionedUids, '["uid-bogi","uid-zsofi"]');
+      },
+    );
+
+    test('an ascent comment carries its tags the same way a wall comment does', () async {
+      final ascentId = await seedAscent('Ascent Wall 4');
+
+      final comment = await repo.addAscentComment(
+        ascentId: ascentId,
+        body: 'Well done @Zsofi',
+        mentionedUids: const ['uid-zsofi'],
+      );
+
+      expect(comment.mentionedUids, ['uid-zsofi']);
+      final rows = await repo.commentsForAscent(ascentId);
+      expect(rows.single.mentionedUids, ['uid-zsofi']);
+    });
+
+    test(
+      'a row whose column holds garbage still reads as a comment — a bad value '
+      'from an older client or a bad sync must not break a whole thread',
+      () async {
+        final wallId = await seedWall('Wall');
+        await db
+            .into(db.comments)
+            .insert(
+              CommentsCompanion.insert(
+                id: 'broken-1',
+                createdAt: 1000,
+                updatedAt: 1000,
+                wallId: Value(wallId),
+                body: 'Nice one @Bogi',
+                mentionedUids: const Value('{not json'),
+              ),
+            );
+
+        final rows = await repo.commentsForWall(wallId);
+        expect(rows.single.body, 'Nice one @Bogi');
+        expect(rows.single.mentionedUids, isEmpty);
       },
     );
   });
