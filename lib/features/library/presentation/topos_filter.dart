@@ -33,7 +33,8 @@ bool _matchesProximityQuery(ProximityTopoEntry entry, String query) {
 /// (see [ToposScreen.build]): a [Row] holding the `topos-search-field`
 /// [TextField] (mirrors `community_screen.dart`'s `_FeedView` search field:
 /// same hint text and prefix icon) alongside the `topos-filter-button` icon
-/// button -- same key, [Icons.tune] icon, `topos-filter-active-indicator`
+/// button -- same key, filter glyph (`MasiIcon('filter')`, swapped for
+/// `filter_active` while any facet is set), `topos-filter-active-indicator`
 /// badge, and [_showToposFiltersSheet] behavior as before. The filter
 /// trigger was relocated out of the AppBar's trailing actions: with a fifth
 /// action there (this button alongside Organize/Community/Logbook/Account),
