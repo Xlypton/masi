@@ -2,6 +2,7 @@ import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../../core/db/app_database.dart' as db;
+import '../domain/comment_mentions.dart';
 
 /// Immutable read model for a non-deleted [db.Comment] row: a discussion
 /// comment left on EITHER a Wall (topo) or an ascent log (Feature #12 —
@@ -17,6 +18,7 @@ class Comment {
     this.ownerId,
     required this.createdAt,
     required this.updatedAt,
+    this.mentionedUids = const [],
   });
 
   final String id;
@@ -28,6 +30,16 @@ class Comment {
   final int createdAt;
   final int updatedAt;
 
+  /// The uids this comment tags, already decoded — see
+  /// [db.Comments.mentionedUids] for why they are uids and not names.
+  ///
+  /// A `List<String>`, never the raw column text: the JSON is a storage detail,
+  /// and a repository that handed it out as a string would push the parse (and
+  /// every one of its failure modes — see [decodeMentionedUids]) onto whichever
+  /// widget happened to need it. Empty for the overwhelming majority of
+  /// comments, which tag nobody.
+  final List<String> mentionedUids;
+
   @override
   bool operator ==(Object other) =>
       other is Comment &&
@@ -38,7 +50,8 @@ class Comment {
       other.authorName == authorName &&
       other.ownerId == ownerId &&
       other.createdAt == createdAt &&
-      other.updatedAt == updatedAt;
+      other.updatedAt == updatedAt &&
+      _sameUids(other.mentionedUids, mentionedUids);
 
   @override
   int get hashCode => Object.hash(
@@ -50,13 +63,25 @@ class Comment {
     ownerId,
     createdAt,
     updatedAt,
+    Object.hashAll(mentionedUids),
   );
 
   @override
   String toString() =>
       'Comment(id: $id, wallId: $wallId, ascentId: $ascentId, body: $body, '
       'authorName: $authorName, ownerId: $ownerId, createdAt: $createdAt, '
-      'updatedAt: $updatedAt)';
+      'updatedAt: $updatedAt, mentionedUids: $mentionedUids)';
+
+  /// Lists don't compare by value in Dart, and [Comment] equality is what the
+  /// comment-thread widgets rebuild off — comparing the fields by identity
+  /// would make every rebuild look like a change.
+  static bool _sameUids(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
 }
 
 /// Create/read/soft-delete for Wall (and, as of Feature #12, ascent-log)
@@ -92,16 +117,22 @@ class CommentsRepository {
   /// Adds a new comment to [wallId], owner-stamped with whatever
   /// [currentUid] returns (may be `null` if signed out) and marked `dirty`
   /// so a future sync push picks it up. Returns the newly-created [Comment].
+  ///
+  /// [mentionedUids] are the climbers this comment tags (see
+  /// [Comment.mentionedUids]); omit it, or pass an empty list, for the usual
+  /// comment that tags nobody.
   Future<Comment> addComment({
     required String wallId,
     required String body,
     String? authorName,
+    Iterable<String> mentionedUids = const [],
   }) {
     return _addComment(
       body: body,
       authorName: authorName,
       wallId: wallId,
       ascentId: null,
+      mentionedUids: mentionedUids,
     );
   }
 
@@ -114,12 +145,14 @@ class CommentsRepository {
     required String ascentId,
     required String body,
     String? authorName,
+    Iterable<String> mentionedUids = const [],
   }) {
     return _addComment(
       body: body,
       authorName: authorName,
       wallId: null,
       ascentId: ascentId,
+      mentionedUids: mentionedUids,
     );
   }
 
@@ -128,10 +161,15 @@ class CommentsRepository {
     required String? authorName,
     required String? wallId,
     required String? ascentId,
+    required Iterable<String> mentionedUids,
   }) async {
     final now = nowMs();
     final id = _uuid.v4();
     final ownerId = currentUid();
+    // Encoded once and decoded straight back, rather than trusting the caller's
+    // list: the row and the returned model must agree about blanks, duplicates
+    // and ordering, and the column is the side that decides.
+    final encodedMentions = encodeMentionedUids(mentionedUids);
     await _db
         .into(_db.comments)
         .insert(
@@ -145,6 +183,7 @@ class CommentsRepository {
             authorName: Value(authorName),
             ownerId: Value(ownerId),
             dirty: const Value(true),
+            mentionedUids: Value(encodedMentions),
           ),
         );
     return Comment(
@@ -156,6 +195,7 @@ class CommentsRepository {
       ownerId: ownerId,
       createdAt: now,
       updatedAt: now,
+      mentionedUids: decodeMentionedUids(encodedMentions),
     );
   }
 
@@ -244,5 +284,9 @@ class CommentsRepository {
     ownerId: row.ownerId,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+    // Decoded at the repository boundary so no caller ever sees the JSON —
+    // and so a malformed value written by an older client or a future server
+    // degrades to "tags nobody" here instead of throwing inside a widget.
+    mentionedUids: decodeMentionedUids(row.mentionedUids),
   );
 }

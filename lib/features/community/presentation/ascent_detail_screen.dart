@@ -15,6 +15,7 @@ import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
 import 'comment_row.dart';
+import 'mention_composer.dart';
 
 /// Read-only detail view for a single shared ("community") ascent log
 /// (Feature #12, public opt-in ascent logs): the climber's resolved display
@@ -38,7 +39,10 @@ class AscentDetailScreen extends ConsumerStatefulWidget {
 }
 
 class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
-  final _commentController = TextEditingController();
+  /// A [MentionComposerController], not a plain [TextEditingController]: the
+  /// draft's tagged uids have to live exactly as long as its text, and be
+  /// cleared with it.
+  final _commentController = MentionComposerController();
 
   /// How long [_resolveAuthorName] is willing to wait for a display name that
   /// has not resolved yet. A bound, not a timing assumption: the provider
@@ -154,6 +158,10 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
   Future<void> _submitComment() async {
     final body = _commentController.text.trim();
     if (body.isEmpty) return;
+    // Read BEFORE the await: `_resolveAuthorName` can wait seconds, and the
+    // user is free to keep editing meanwhile — the uids stored have to be the
+    // ones belonging to the body being posted.
+    final mentionedUids = _commentController.mentionedUids;
     final authorName = await _resolveAuthorName();
     if (!mounted) return;
     await ref
@@ -162,6 +170,7 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
           ascentId: widget.ascentId,
           body: body,
           authorName: authorName,
+          mentionedUids: mentionedUids,
         );
     if (!mounted) return;
     _commentController.clear();
@@ -236,7 +245,7 @@ class _AscentDetailBody extends ConsumerWidget {
   });
 
   final SharedAscentEntry entry;
-  final TextEditingController commentController;
+  final MentionComposerController commentController;
 
   /// The parent's optimistic liked state, winning over
   /// [hasLikedAscentProvider] while a toggle is in flight — see
@@ -371,6 +380,19 @@ class _AscentDetailBody extends ConsumerWidget {
           for (final comment in comments)
             CommentRow(comment: comment, keyPrefix: 'ascent-detail-comment'),
         const SizedBox(height: MasiSpacing.sm),
+        // Above the field, not below it: on a phone the composer sits just
+        // over the keyboard, so a list hung underneath would open behind it.
+        MentionSuggestions(
+          controller: commentController,
+          keyPrefix: 'ascent-detail-comment',
+          participantUids: {
+            // Whoever logged the ascent, plus everyone who has said something
+            // about it — the people a comment here is plausibly aimed at.
+            if (entry.ownerId != null) entry.ownerId!,
+            for (final comment in comments)
+              if (comment.ownerId != null) comment.ownerId!,
+          },
+        ),
         Row(
           children: [
             Expanded(

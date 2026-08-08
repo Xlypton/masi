@@ -5,6 +5,7 @@ import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_avatar.dart';
 import '../../account/application/profile_providers.dart';
 import '../data/comments_repository.dart';
+import '../domain/comment_mentions.dart';
 
 /// One comment in a thread: the author's picture and name beside what they
 /// said.
@@ -93,7 +94,7 @@ class CommentRow extends ConsumerWidget {
                   overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 2),
-                Text(comment.body, style: textTheme.bodyMedium),
+                _CommentBody(comment: comment, colors: colors),
               ],
             ),
           ),
@@ -111,5 +112,72 @@ class CommentRow extends ConsumerWidget {
       if (value != null && value.trim().isNotEmpty) return value;
     }
     return null;
+  }
+}
+
+/// What the comment says, with any tagged climbers drawn in the accent colour
+/// and under their CURRENT name.
+///
+/// The same argument as the identity line above, one level down: the `@Bogi`
+/// sitting in [Comment.body] is text frozen at write time, so it is the uid
+/// list that says who was tagged and `profiles.displayName` that says what they
+/// are called today. [parseCommentBodySpans] does the matching (and carries the
+/// reasoning for how a uid is tied to a place in the text); this widget only
+/// paints the result.
+///
+/// A comment that tags nobody — nearly all of them — is rendered by the plain
+/// [Text] path, not a one-child [Text.rich]. Not a micro-optimisation: a
+/// `Text.rich` has no `data`, so `find.text(body)` stops matching it, and the
+/// existing thread tests (and anything else looking for a comment by its words)
+/// would have gone quietly blind.
+class _CommentBody extends ConsumerWidget {
+  const _CommentBody({required this.comment, required this.colors});
+
+  final Comment comment;
+  final MasiColors colors;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final textTheme = Theme.of(context).textTheme;
+    final uids = comment.mentionedUids;
+    if (uids.isEmpty) {
+      return Text(comment.body, style: textTheme.bodyMedium);
+    }
+
+    // Resolved up front, into a map, so `displayNameOf` stays a pure lookup:
+    // `ref.watch` inside the parse callback would subscribe (or not) depending
+    // on which branch the matcher happened to take.
+    final liveNames = <String, String?>{
+      for (final uid in uids)
+        uid: ref.watch(profileDisplayNameProvider(uid)).asData?.value,
+    };
+    final spans = parseCommentBodySpans(
+      body: comment.body,
+      mentionedUids: uids,
+      displayNameOf: (uid) => liveNames[uid],
+    );
+    if (!spans.any((span) => span.isMention)) {
+      // Tagged uids, but nothing in the text they could be tied to — the body
+      // was edited down, or the data arrived odd. Plain text, same as above.
+      return Text(comment.body, style: textTheme.bodyMedium);
+    }
+
+    return Text.rich(
+      TextSpan(
+        children: [
+          for (final span in spans)
+            TextSpan(
+              text: span.text,
+              style: span.isMention
+                  ? TextStyle(
+                      color: colors.accent,
+                      fontWeight: FontWeight.w600,
+                    )
+                  : null,
+            ),
+        ],
+      ),
+      style: textTheme.bodyMedium,
+    );
   }
 }

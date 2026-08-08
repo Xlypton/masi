@@ -1116,3 +1116,81 @@ CREATE POLICY deletion_requests_read
   USING ("requesterId" = (auth.uid())::text OR public.is_admin());
 
 GRANT SELECT ON public.deletion_requests TO authenticated;
+
+-- ===========================================================================
+-- Notifications - the in-app inbox (2026-08-08)
+-- ===========================================================================
+--
+-- Full DDL, triggers and RPCs: supabase/migrations/2026-08-08_notifications.sql
+-- (APPLIED LIVE 2026-08-08). Repeated here only for fresh-run correctness; the
+-- functions and triggers live in the migration alone, like the other phases.
+--
+-- The load-bearing property: a client can NEVER author a notification. No
+-- insert policy, no write RPC - every row comes from a SECURITY DEFINER
+-- trigger fired by an action the server already witnessed. A client that could
+-- insert here could put any sentence it liked in anybody else's inbox,
+-- attributed to anybody, and it would arrive pre-trusted because it renders in
+-- the user's own notification centre.
+--
+-- Marking read is an RPC and not an UPDATE policy because RLS restricts WHICH
+-- ROWS an update touches but not WHICH COLUMNS: a recipient with an update
+-- policy could rewrite `kind`, `actorId` and `preview` on their own rows.
+--
+-- The triggers fire on TRANSITIONS, not states, and derive every notification
+-- id from the event that caused it (`c:`/`m:`/`l:`/`s:` + the source row id)
+-- with ON CONFLICT DO NOTHING. Both are needed because there is no outbox
+-- (D-4): the sync engine re-pushes the client's own `comments` and `likes`
+-- rows forever, so a state-tested trigger would re-notify on every sync, and
+-- the first sync after this landed would have delivered a notification for
+-- every comment and like that has ever existed. The derived id is also what
+-- answers like/unlike/like - `LikesRepository._toggle` flips `deletedAt` on
+-- the SAME row, so all three taps derive one id and the owner is told once.
+--
+-- Verified live in rolled-back transactions on 2026-08-08: a comment on my
+-- topo notifies once and survives two re-pushes; my own comment notifies
+-- nobody; a mention notifies the tagged user; an owner who is ALSO tagged gets
+-- the mention only; a malformed `mentionedUids` payload still stores the
+-- comment; an ascent comment carries its wall; like/unlike/like/re-push is one
+-- row; liking my own topo is none; a suggestion notifies the owner. RPCs:
+-- refused signed out, scoped to the caller, newest first, limit clamped,
+-- re-marking a read row is a no-op, and another user's row cannot be marked by
+-- id.
+
+CREATE TABLE IF NOT EXISTS public.notifications (
+  id            text PRIMARY KEY,
+  "recipientId" text   NOT NULL,
+  -- Raw text, never an enum: the client parses at the edge and renders an
+  -- unknown kind as a generic entry, so adding one needs no client release.
+  kind          text   NOT NULL,
+  "actorId"     text,
+  "wallId"      text,
+  "ascentId"    text,
+  "commentId"   text,
+  preview       text,
+  "createdAt"   bigint NOT NULL,
+  -- A timestamp, not a bool: "mark all read" is one write with one value, and
+  -- the badge is a plain `readAt IS NULL` count.
+  "readAt"      bigint
+);
+
+CREATE INDEX IF NOT EXISTS notifications_recipient_created
+  ON public.notifications ("recipientId", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS notifications_recipient_unread
+  ON public.notifications ("recipientId") WHERE "readAt" IS NULL;
+
+ALTER TABLE public.notifications ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS notifications_read ON public.notifications;
+CREATE POLICY notifications_read
+  ON public.notifications FOR SELECT TO authenticated
+  USING ("recipientId" = (auth.uid())::text);
+
+-- REVOKE ALL, then grant back exactly one privilege to exactly one role.
+-- Supabase's default privileges GRANT ALL to anon+authenticated, and a
+-- targeted `REVOKE INSERT, UPDATE, DELETE` leaves **TRUNCATE** behind - which
+-- is NOT filtered by RLS, so it would let any signed-in client empty every
+-- inbox in the project in one statement. (Same fact as SEC-1/SEC-2: `anon` and
+-- `authenticated` are real roles holding their own grants, not members reached
+-- through the PUBLIC pseudo-role.)
+REVOKE ALL ON public.notifications FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.notifications TO authenticated;
