@@ -358,6 +358,11 @@ DROP POLICY IF EXISTS "ascents_owner_all"     ON public.ascents;
 DROP POLICY IF EXISTS "ascents_shared_select" ON public.ascents;
 CREATE POLICY "ascents_owner_all" ON public.ascents FOR ALL TO authenticated
   USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
+-- NOTE: this is the P0 form, and it is NOT the policy that should end up live.
+-- The community phase-1 migration introduces `is_wall_public(text)` and swaps
+-- the sharing policies over to it; this one is hardened the same way at the end
+-- of this file (see "SHARED ASCENTS MUST NOT OUTLIVE THEIR TOPO"). Left bare
+-- here only so this section still runs before that function exists.
 CREATE POLICY "ascents_shared_select" ON public.ascents FOR SELECT TO authenticated
   USING ("visibility" = 'shared');
 
@@ -995,3 +1000,47 @@ GRANT SELECT ON public.material_change_notices TO authenticated;
 -- file replaced. Renames, grades, descriptions, added routes and nudged lines
 -- are ordinary work on a topo somebody owns. The failure mode of this feature is
 -- not "we missed one", it is "the queue filled with normal editing".
+
+-- ===========================================================================
+-- SHARED ASCENTS MUST NOT OUTLIVE THEIR TOPO
+-- See supabase/migrations/2026-08-08_shared_ascent_wall_visibility.sql
+-- ===========================================================================
+--
+-- Re-applies `ascents_shared_select` in its hardened form. It has to live down
+-- here rather than in the P0 section above because it depends on
+-- `is_wall_public(text)`, which the community phase-1 migration creates.
+--
+-- The P0 rule was `visibility = 'shared'` and nothing else, while every table an
+-- ascent POINTS AT is gated on `is_wall_public(...)`. That asymmetry caused two
+-- separate defects, both observed on live on 2026-08-08:
+--
+--   * A LEAK PAST A MODERATION DECISION. The row carries wallId, routeId,
+--     climbedAt, style, notes and gradeOpinion, so a topo an admin had just
+--     taken down - or one whose owner marked it access-sensitive precisely so it
+--     would stop being findable - stayed traceable straight off PostgREST. The
+--     takedown removed the topo, its routes, its photos and its photo bytes
+--     (W-2) and left the ascents pointing at them.
+--
+--   * PERMANENTLY BROKEN SYNC, FOR EVERY USER. `fetchSharedAscents` fetches the
+--     ascents first and their ancestor chain afterwards, in separate queries,
+--     each RLS-filtered on its own table. The ancestors correctly refused, so
+--     the ascent arrived with no route and no wall - and `ascents.routeId` and
+--     `ascents.wallId` are enforced NOT NULL FKs locally. The import deferred
+--     the row and reported `shared rows deferred (parent row missing)`, which
+--     the user saw as a red "Couldn't sync - Retry" banner on the feed that
+--     could NEVER heal: the parent was soft-deleted server-side and was never
+--     going to be returned.
+--
+-- `ascents_owner_all` is untouched, so whoever logged the climb keeps full
+-- access to their own row whatever happened to the topo. This narrows only what
+-- OTHER people can see, which is what `visibility` always meant. Measured before
+-- applying: 2 live shared ascents, exactly 1 of them pointing at a wall that is
+-- no longer public.
+--
+-- The client half is `consistentSharedAscentBatch` in sync_remote.dart, and it
+-- is not redundant: these are two queries against a live database, so a topo
+-- withdrawn BETWEEN them produces the same orphan with no bug at either end.
+
+DROP POLICY IF EXISTS "ascents_shared_select" ON public.ascents;
+CREATE POLICY "ascents_shared_select" ON public.ascents FOR SELECT TO authenticated
+  USING ("visibility" = 'shared' AND public.is_wall_public("wallId"));

@@ -443,6 +443,106 @@ List<Map<String, dynamic>> filterValidSyncRows(
   required String debugLabel,
 }) => partitionSyncRows(rows, requiredFields, debugLabel: debugLabel).valid;
 
+/// Drops rows from a shared-ascent batch whose own parents are not in the same
+/// batch, so the importer is never handed something it structurally cannot
+/// insert.
+///
+/// ## Why this is needed at all
+///
+/// The local schema enforces every one of these FKs, all NOT NULL:
+/// `ascents.routeId → routes`, `ascents.wallId → walls`,
+/// `routes.photoId → photos`, `routes.wallId → walls`,
+/// `walls.sectorId → sectors`, `sectors.areaId → areas`. So a batch missing one
+/// link cannot be written, and `BackupRepository.importSnapshot` defers the row
+/// and reports `shared rows deferred (parent row missing)` — which reaches the
+/// user as the red "Couldn't sync — Retry" banner on the feed.
+///
+/// [SupabaseSyncRemote.fetchSharedAscents] assembles the chain in four waves,
+/// and **every wave after the first is subject to RLS on the table it reads**.
+/// The ascent policy and the ancestor policies did not agree: a shared ascent
+/// was readable on `visibility = 'shared'` alone, while its route and wall need
+/// `is_wall_public(...)`. An ascent on a topo that had since been deleted,
+/// unpublished, withdrawn, taken down or marked sensitive therefore came back
+/// with no parents at all — and the resulting error could never heal, because
+/// the parent was never going to be returned again.
+///
+/// `supabase/migrations/2026-08-08_shared_ascent_wall_visibility.sql` fixes the
+/// asymmetry at the source. This is the client half, and it is worth having on
+/// its own: the two halves of the chain are separate queries against a live
+/// database, so a topo withdrawn *between* them produces the same orphan with
+/// no bug at either end. That race heals on the next pull; what it must not do
+/// is tell the user their sync is broken in the meantime.
+///
+/// ## What it does NOT do
+///
+/// It does not silence the deferral report. Dropping a row that provably cannot
+/// be inserted is not the same as swallowing a failure (#72) — the batch this
+/// returns is internally consistent, so any deferral the importer still reports
+/// is a real defect worth showing.
+///
+/// Pruning runs bottom-up (areas → sectors → walls → photos → routes →
+/// ascents), so a hole at any depth propagates to everything hanging off it in
+/// a single pass; nothing here is order-independent.
+Map<String, List<Map<String, dynamic>>> consistentSharedAscentBatch(
+  Map<String, List<Map<String, dynamic>>> tables,
+) {
+  List<Map<String, dynamic>> rows(String key) => tables[key] ?? const [];
+  Set<String> idsOf(Iterable<Map<String, dynamic>> from) => {
+    for (final row in from)
+      if (row['id'] case final String id) id,
+  };
+  bool has(Set<String> ids, Object? value) => value is String && ids.contains(value);
+
+  final areaIds = idsOf(rows('areas'));
+  final sectors = [
+    for (final s in rows('sectors'))
+      if (has(areaIds, s['areaId'])) s,
+  ];
+
+  final sectorIds = idsOf(sectors);
+  final walls = [
+    for (final w in rows('walls'))
+      if (has(sectorIds, w['sectorId'])) w,
+  ];
+
+  // A slice points at its original via the nullable `parentPhotoId`. A null
+  // parent is the ordinary case and must not be pruned; a non-null one that is
+  // absent would break the FK exactly like any other missing parent.
+  final wallIds = idsOf(walls);
+  final photos = [
+    for (final p in rows('photos'))
+      if (has(wallIds, p['wallId'])) p,
+  ];
+  final photoIdsWithParents = idsOf(photos);
+  final keptPhotos = [
+    for (final p in photos)
+      if (p['parentPhotoId'] == null || has(photoIdsWithParents, p['parentPhotoId']))
+        p,
+  ];
+
+  final photoIds = idsOf(keptPhotos);
+  final routes = [
+    for (final r in rows('routes'))
+      if (has(wallIds, r['wallId']) && has(photoIds, r['photoId'])) r,
+  ];
+
+  final routeIds = idsOf(routes);
+  final ascents = [
+    for (final a in rows('ascents'))
+      if (has(wallIds, a['wallId']) && has(routeIds, a['routeId'])) a,
+  ];
+
+  return {
+    ...tables,
+    'areas': rows('areas'),
+    'sectors': sectors,
+    'walls': walls,
+    'photos': keptPhotos,
+    'routes': routes,
+    'ascents': ascents,
+  };
+}
+
 /// The columns present in every `<TableRow>.toJson()` that are LOCAL-ONLY
 /// sync bookkeeping and must never travel to the cloud.
 ///
@@ -888,14 +988,17 @@ class SupabaseSyncRemote implements SyncRemote {
     ];
     final areaRows = filterValidSyncRows(rawAreas, const ['id'], debugLabel: 'shared-ascent area');
 
-    return {
+    // Every wave above is RLS-filtered independently of the ascent query that
+    // seeded it, so this batch is NOT internally consistent by construction —
+    // see [consistentSharedAscentBatch] for the failure it prevents.
+    return consistentSharedAscentBatch({
       'areas': areaRows,
       'sectors': sectorRows,
       'walls': wallRows,
       'photos': photoRows,
       'routes': routeRows,
       'ascents': ascentRows,
-    };
+    });
   }
 
   @override
