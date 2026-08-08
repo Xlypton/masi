@@ -23,9 +23,13 @@
 //                         build it came from. A cache MISS with no network
 //                         fails fast (see `cacheFirst`) instead of waiting on
 //                         a fetch that cannot succeed.
-//   renderer artifacts -> precached at install by `rendererArtifacts()`, which
-//                         the static manifest cannot name (the loader picks
-//                         the renderer at runtime). That install-time pick is a
+//   renderer artifacts -> cached BEST-EFFORT at install by
+//                         `rendererArtifacts()` — never via the atomic
+//                         `addAll` — because the static manifest cannot name
+//                         which of the two Dart bundles and which canvaskit
+//                         variant this browser will use (the loader picks at
+//                         runtime, and a browser runs exactly ONE of each).
+//                         That install-time pick is a
 //                         GUESS — a worker has no `document` and so cannot run
 //                         the loader's WebGL probe — and it is CORRECTED by the
 //                         `masi-observed` list the page posts from a
@@ -47,11 +51,19 @@
 'use strict';
 
 // --- BEGIN MASI BUILD STAMP -------------------------------------------------
-// `tool/gen_sw_manifest.dart` rewrites EXACTLY these two lines in
+// `tool/gen_sw_manifest.dart` rewrites EXACTLY these four lines in
 // `build/web/sw.js` after `flutter build web`. Each must stay on one line and
 // keep this exact shape; `test/web_shell_source_test.dart` pins that, because
 // a reformat here would silently ship an empty precache and the app would
 // still look fine online.
+//
+// `PRECACHE` is the ATOMIC set (`cache.addAll` at install — all or nothing).
+// `PRECACHE_WASM` and `PRECACHE_JS` are the two renderer bundles a `--wasm`
+// build emits, of which a given browser executes exactly ONE; they are
+// deliberately NOT in `PRECACHE`, and are fetched best-effort by
+// `rendererArtifacts()` below. See its doc for why, and
+// `tool/gen_sw_manifest.dart`'s `isPrecacheExcluded` for what it cost to
+// precache both.
 //
 // The committed values are the dev defaults. An unsubstituted worker — served
 // by `flutter run -d chrome` or `flutter drive -d web-server`, neither of
@@ -59,6 +71,8 @@
 // through, which is what those harnesses want.
 const SHELL_VERSION = 'dev';
 const PRECACHE = [];
+const PRECACHE_WASM = [];
+const PRECACHE_JS = [];
 // --- END MASI BUILD STAMP ---------------------------------------------------
 
 const CACHE_NAME = `masi-shell-${SHELL_VERSION}`;
@@ -127,11 +141,15 @@ const RELOAD_ON_PRECACHE = new Set(['sqlite3.wasm', 'drift_worker.js']);
  * `flutter-first-frame`, so unlike the warm pass it also runs on a load that
  * never paints.
  *
- * `tool/gen_sw_manifest.dart` excludes `main.dart.js` and all of `canvaskit/`
- * (37 MB across six variants) because exactly ONE variant is used per browser
- * and the loader decides which at runtime. The intent was to warm them from
- * the page's resource timing after the first frame — but that warm is a RACE,
- * not a guarantee:
+ * `tool/gen_sw_manifest.dart` excludes BOTH renderer bundles (`main.dart.wasm`
+ * + `main.dart.mjs`, and `main.dart.js`) and all of `canvaskit/` (37 MB across
+ * six variants) because exactly ONE of each is used per browser and the loader
+ * decides which at runtime. The dart2wasm pair used to be precached
+ * unconditionally, which meant every iPhone Safari visitor atomically
+ * downloaded ~4.2 MB — about 70% of the precache — that WebKit can never
+ * execute, on the first visit and again after every deploy. The intent was to
+ * warm the runtime-chosen ones from the page's resource timing after the first
+ * frame — but that warm is a RACE, not a guarantee:
  *
  *   - it is posted from `flutter-first-frame`, so it never runs at all on a
  *     load that fails to paint (which is exactly the offline load we are
@@ -155,20 +173,38 @@ const RELOAD_ON_PRECACHE = new Set(['sqlite3.wasm', 'drift_worker.js']);
  *   - skwasm requires WasmGC **and** an allow-listed browser engine. The
  *     loader's default `wasmAllowList` is `{blink: true, gecko: false,
  *     webkit: false, unknown: false}` — so Safari takes the dart2js/canvaskit
- *     build even on a WebKit that supports WasmGC, and needs `main.dart.js`
- *     plus the FULL `canvaskit/canvaskit.{js,wasm}` (the smaller `chromium/`
- *     variant requires `ImageDecoder` + `Intl.v8BreakIterator`, both
- *     blink-only);
- *   - blink takes skwasm: `canvaskit/skwasm.{js,wasm}`. Its `.ww.js` worker is
- *     built from a Blob by the loader, never fetched, so it needs no entry.
+ *     build even on a WebKit that supports WasmGC, and needs `PRECACHE_JS`
+ *     (`main.dart.js`) plus the FULL `canvaskit/canvaskit.{js,wasm}` (the
+ *     smaller `chromium/` variant requires `ImageDecoder` +
+ *     `Intl.v8BreakIterator`, both blink-only);
+ *   - blink takes skwasm: `PRECACHE_WASM` (`main.dart.wasm` +
+ *     `main.dart.mjs`) plus `canvaskit/skwasm.{js,wasm}`. skwasm's `.ww.js`
+ *     worker is built from a Blob by the loader, never fetched, so it needs no
+ *     entry.
  *
- * Cost, stated explicitly, because it is a product decision: +3.6 MB on blink,
- * +11.8 MB on everything else, on top of the ~5.5 MB manifest. Nothing cheaper
- * exists — these are the bytes the engine cannot boot without. Per-deploy
- * download is far smaller than that: `web/_headers` serves everything
- * `Cache-Control: no-cache`, so the (engine-revision-stable) canvaskit/skwasm
- * wasm revalidates to a 304 and only `main.dart.js` is a real transfer. We
- * deliberately do NOT `cache: 'reload'` these, so that revalidation can happen.
+ * The two bundle lists are STAMPED, not hardcoded, so a `--js`-only build (see
+ * `tool/build_web.sh --js`) simply stamps an empty `PRECACHE_WASM` and the
+ * blink branch degrades to canvaskit-only rather than 404-ing on a file the
+ * build never emitted.
+ *
+ * Cost, stated explicitly, because it is a product decision: ~+7.8 MB on
+ * blink, ~+16 MB on everything else, on top of the ~1.3 MB atomic manifest —
+ * i.e. the same total bytes as before per browser, minus the ~4.2 MB of dead
+ * renderer every non-blink visitor used to be charged. Nothing cheaper exists;
+ * these are the bytes the engine cannot boot without. Per-deploy download is
+ * far smaller: `web/_headers` serves everything `Cache-Control: no-cache`, so
+ * the (engine-revision-stable) canvaskit/skwasm wasm revalidates to a 304 and
+ * only the Dart bundle is a real transfer. We deliberately do NOT
+ * `cache: 'reload'` these, so that revalidation can happen.
+ *
+ * MOVING THE DART BUNDLE ONTO THIS BEST-EFFORT PATH IS THE POINT, not a
+ * shortcut around it: promoting it back into `PRECACHE`'s `addAll` would make
+ * a single failed renderer fetch abort the whole install, leaving the user on
+ * the PREVIOUS build with every fix in the deploy undelivered. A renderer that
+ * is merely missing costs one offline cold start, and the page's own
+ * `masi-observed` reporter re-stores it on the very next online load. The
+ * bundle is also in `PER_BUILD_SHELL`, so an online client gets it
+ * network-first regardless of what install managed to cache.
  *
  * NOT covered on purpose: `skwasm_heavy` and `wimp`. Choosing between them
  * needs `ImageDecoder`, which is `[Exposed=(Window,DedicatedWorker)]` and so is
@@ -199,9 +235,15 @@ function isBlinkLike() {
 
 function rendererArtifacts() {
   if (supportsWasmGc() && isBlinkLike()) {
-    return ['canvaskit/skwasm.js', 'canvaskit/skwasm.wasm'];
+    return PRECACHE_WASM.concat([
+      'canvaskit/skwasm.js',
+      'canvaskit/skwasm.wasm',
+    ]);
   }
-  return ['main.dart.js', 'canvaskit/canvaskit.js', 'canvaskit/canvaskit.wasm'];
+  return PRECACHE_JS.concat([
+    'canvaskit/canvaskit.js',
+    'canvaskit/canvaskit.wasm',
+  ]);
 }
 
 /**
@@ -324,6 +366,11 @@ self.addEventListener('install', (event) => {
       // aborted install strands the user on the previous build. A renderer
       // that is merely missing costs an offline cold start, which is what the
       // warm pass then retries; a failed update costs every fix in the deploy.
+      //
+      // This now carries the Dart bundle (`PRECACHE_WASM`/`PRECACHE_JS`) as
+      // well as the canvaskit variant. That is the whole renderer fix: only
+      // the bundle THIS browser can execute is fetched, instead of `addAll`
+      // atomically downloading the dart2wasm pair onto every iPhone.
       await cacheMissing(cache, rendererArtifacts());
     }
     if (SHELL_STRATEGY.takeOverImmediately) {

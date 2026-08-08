@@ -12,10 +12,17 @@ import 'package:path/path.dart' as p;
 import '../../tool/gen_sw_manifest.dart';
 
 /// Builds a directory shaped like a real `build/web`, with the sizes that
-/// actually matter (a 37 MB canvaskit tree, a 4.2 MB dart2js fallback, a
-/// 1.4 MB NOTICES blob and a 10 MB test fixture are the four things that must
-/// stay OUT of a precache that has to fit on a phone).
-Directory _fakeBuildDir({int wasmBytes = 1024}) {
+/// actually matter (a 37 MB canvaskit tree, the two ~4.2 MB Dart renderer
+/// bundles, a 1.4 MB NOTICES blob and a 10 MB test fixture are the things that
+/// must stay OUT of an atomic precache that has to fit on a phone).
+///
+/// [emitWasm] false models `tool/build_web.sh --js`, which emits only the
+/// dart2js bundle.
+Directory _fakeBuildDir({
+  int wasmBytes = 1024,
+  int bootstrapBytes = 16,
+  bool emitWasm = true,
+}) {
   final dir = Directory.systemTemp.createTempSync('masi_sw_manifest');
   addTearDown(() {
     if (dir.existsSync()) dir.deleteSync(recursive: true);
@@ -28,9 +35,11 @@ Directory _fakeBuildDir({int wasmBytes = 1024}) {
   }
 
   write('index.html');
-  write('flutter_bootstrap.js');
-  write('main.dart.wasm', bytes: wasmBytes);
-  write('main.dart.mjs');
+  write('flutter_bootstrap.js', bytes: bootstrapBytes);
+  if (emitWasm) {
+    write('main.dart.wasm', bytes: wasmBytes);
+    write('main.dart.mjs');
+  }
   write('main.dart.js', bytes: 4 * 1024 * 1024);
   write('flutter.js');
   write('version.json');
@@ -67,6 +76,8 @@ Directory _fakeBuildDir({int wasmBytes = 1024}) {
 'use strict';
 const SHELL_VERSION = 'dev';
 const PRECACHE = [];
+const PRECACHE_WASM = [];
+const PRECACHE_JS = [];
 const CACHE_NAME = `masi-shell-\${SHELL_VERSION}`;
 ''');
 
@@ -75,12 +86,30 @@ const CACHE_NAME = `masi-shell-\${SHELL_VERSION}`;
 
 void main() {
   group('isPrecacheExcluded', () {
-    test('excludes the four payloads that would blow the budget', () {
+    test('excludes the payloads that would blow the budget', () {
       expect(isPrecacheExcluded('canvaskit/skwasm.wasm'), isTrue);
       expect(isPrecacheExcluded('canvaskit/chromium/canvaskit.wasm'), isTrue);
       expect(isPrecacheExcluded('main.dart.js'), isTrue);
       expect(isPrecacheExcluded('assets/NOTICES'), isTrue);
       expect(isPrecacheExcluded('assets/assets/test/crag_sample.jpg'), isTrue);
+    });
+
+    // The regression this fix exists for: the dart2wasm pair used to be
+    // atomically precached, so every iPhone Safari visitor downloaded ~4.2 MB
+    // — about 70% of the precache — that WebKit can never execute, on first
+    // visit and again after every deploy. A browser runs exactly ONE renderer
+    // bundle, so neither belongs in the all-or-nothing set; both are stamped
+    // separately and fetched best-effort by `sw.js`'s `rendererArtifacts()`.
+    test('excludes BOTH renderer bundles, not just the dart2js one', () {
+      expect(isPrecacheExcluded('main.dart.wasm'), isTrue);
+      expect(isPrecacheExcluded('main.dart.mjs'), isTrue);
+      expect(isPrecacheExcluded('main.dart.js'), isTrue);
+
+      expect(isRendererArtifact('main.dart.wasm'), isTrue);
+      expect(isRendererArtifact('main.dart.mjs'), isTrue);
+      expect(isRendererArtifact('main.dart.js'), isTrue);
+      expect(isRendererArtifact('flutter_bootstrap.js'), isFalse);
+      expect(isRendererArtifact('canvaskit/skwasm.wasm'), isFalse);
     });
 
     test('excludes worker-visible and build-only files', () {
@@ -97,7 +126,7 @@ void main() {
         'includes everything else — new Flutter output is precached by '
         'default rather than silently dropped', () {
       expect(isPrecacheExcluded('index.html'), isFalse);
-      expect(isPrecacheExcluded('main.dart.wasm'), isFalse);
+      expect(isPrecacheExcluded('flutter_bootstrap.js'), isFalse);
       expect(isPrecacheExcluded('sqlite3.wasm'), isFalse);
       expect(isPrecacheExcluded('drift_worker.js'), isFalse);
       expect(
@@ -159,8 +188,6 @@ void main() {
 
       expect(manifest.urls, contains('index.html'));
       expect(manifest.urls, contains('flutter_bootstrap.js'));
-      expect(manifest.urls, contains('main.dart.wasm'));
-      expect(manifest.urls, contains('main.dart.mjs'));
       expect(manifest.urls, contains('sqlite3.wasm'));
       expect(manifest.urls, contains('drift_worker.js'));
       expect(manifest.urls, contains('assets/assets/icons/masi/masi_add.svg'));
@@ -169,6 +196,8 @@ void main() {
 
       expect(manifest.urls, isNot(contains('sw.js')));
       expect(manifest.urls, isNot(contains('main.dart.js')));
+      expect(manifest.urls, isNot(contains('main.dart.wasm')));
+      expect(manifest.urls, isNot(contains('main.dart.mjs')));
       expect(manifest.urls, isNot(contains('assets/NOTICES')));
       expect(manifest.urls, isNot(contains('canvaskit/skwasm.wasm')));
       expect(
@@ -180,6 +209,24 @@ void main() {
       );
     });
 
+    test('splits the two renderer bundles out of the atomic set', () {
+      final manifest = buildShellManifest(_fakeBuildDir());
+
+      expect(manifest.wasmRenderer, ['main.dart.mjs', 'main.dart.wasm']);
+      expect(manifest.jsRenderer, ['main.dart.js']);
+      // Never their sum: no browser fetches both, so the ceiling must bound
+      // the worst case (the larger one), not a total nobody downloads.
+      expect(manifest.rendererBytes, 4 * 1024 * 1024);
+    });
+
+    test('a --js build stamps an empty wasm bundle rather than failing', () {
+      final manifest = buildShellManifest(_fakeBuildDir(emitWasm: false));
+
+      expect(manifest.wasmRenderer, isEmpty);
+      expect(manifest.jsRenderer, ['main.dart.js']);
+      expect(manifest.urls, contains('flutter_bootstrap.js'));
+    });
+
     test('the list is sorted, so the version is reproducible', () {
       final manifest = buildShellManifest(_fakeBuildDir());
       final sorted = [...manifest.urls]..sort();
@@ -187,6 +234,18 @@ void main() {
     });
 
     test('the version changes when a precached file changes', () {
+      final a = buildShellManifest(_fakeBuildDir(bootstrapBytes: 16));
+      final b = buildShellManifest(_fakeBuildDir(bootstrapBytes: 17));
+      expect(a.version, isNot(b.version));
+    });
+
+    // The renderer bundles left `urls`, but they must NOT leave the hash.
+    // SHELL_VERSION names the per-build cache and is the only reason a browser
+    // sees a changed worker at all, while `main.dart.wasm`/`main.dart.js` are
+    // the files that change on every Dart edit. Hash `urls` alone and a
+    // pure-Dart change ships a byte-identical `sw.js`: no worker update, no
+    // cache rollover, last build's renderer served from cache indefinitely.
+    test('the version changes when only the RENDERER changes', () {
       final a = buildShellManifest(_fakeBuildDir(wasmBytes: 1024));
       final b = buildShellManifest(_fakeBuildDir(wasmBytes: 1025));
       expect(a.version, isNot(b.version));
@@ -199,10 +258,22 @@ void main() {
       expect(a.version, matches(RegExp(r'^[0-9a-f]{16}$')));
     });
 
-    test('throws when the precache would exceed the ceiling', () {
+    // The ceiling bounds what ONE CLIENT downloads at install: the atomic
+    // precache plus the larger renderer bundle. Driven here through the
+    // renderer specifically, because that is the half that no longer lives in
+    // `urls` — if the check had been left counting `totalBytes` only, moving
+    // ~4.2 MB out of the atomic set would have silently bought 4.2 MB of slack
+    // in the one guard that exists to make a size regression loud.
+    test('throws when the install download would exceed the ceiling', () {
       expect(
         () => buildShellManifest(
           _fakeBuildDir(wasmBytes: precacheCeilingBytes + 1),
+        ),
+        throwsA(isA<StateError>()),
+      );
+      expect(
+        () => buildShellManifest(
+          _fakeBuildDir(bootstrapBytes: precacheCeilingBytes + 1),
         ),
         throwsA(isA<StateError>()),
       );
@@ -227,8 +298,18 @@ void main() {
         stamped,
         contains('const PRECACHE = ${jsonEncode(manifest.urls)};'),
       );
+      expect(
+        stamped,
+        contains('const PRECACHE_WASM = ${jsonEncode(manifest.wasmRenderer)};'),
+      );
+      expect(
+        stamped,
+        contains('const PRECACHE_JS = ${jsonEncode(manifest.jsRenderer)};'),
+      );
       expect(stamped, isNot(contains("const SHELL_VERSION = 'dev';")));
       expect(stamped, isNot(contains('const PRECACHE = [];')));
+      expect(stamped, isNot(contains('const PRECACHE_WASM = [];')));
+      expect(stamped, isNot(contains('const PRECACHE_JS = [];')));
       expect(
         stamped,
         contains(r'const CACHE_NAME = `masi-shell-${SHELL_VERSION}`;'),

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:ui' show PlatformDispatcher;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -14,7 +15,113 @@ import 'core/storage/storage_persistence_providers.dart';
 import 'features/account/application/auth_providers.dart';
 import 'features/account/application/pwa_install.dart' show pwaIsStandalone;
 
-Future<void> main() => bootApp();
+Future<void> main() {
+  // Installed HERE and not inside [bootApp] — see
+  // [installGlobalErrorHandlers]'s doc for why that distinction is
+  // load-bearing rather than stylistic.
+  installGlobalErrorHandlers();
+  return bootApp();
+}
+
+/// Ceiling on the DECODED-image cache, in bytes.
+///
+/// Flutter's default is 1000 images / 100 MB, and 100 MB is far larger than it
+/// sounds: a decoded frame costs width x height x 4 bytes, so one 24.5 MP phone
+/// photo is ~98 MB on its own — a single topo photo able to evict essentially
+/// every other decoded image in the app, on every photo switch. A budget the
+/// largest single decode cannot fill is what keeps this a cache rather than a
+/// one-entry buffer.
+///
+/// 32 MiB holds roughly an 8.4 MP decode (32 MiB / 4 bytes per pixel), which
+/// covers the render-time sizes this app actually decodes. Anything bigger is
+/// simply never RETAINED — `ImageCache` refuses to store an image larger than
+/// its budget — which is the correct outcome: it still renders, it just does
+/// not evict everything else on the way past.
+///
+/// This also shrinks flutter_map's tile budget, since decoded tiles share this
+/// one cache. Accepted deliberately: a 256x256 tile is 256 KB decoded, so 32
+/// MiB is still ~128 tiles — several screenfuls — and the on-disk/IndexedDB
+/// tile store (`core/map/masi_tile_caching_provider.dart`) is what actually
+/// backs offline map rendering, not this in-memory one.
+const int kImageCacheMaxBytes = 32 * 1024 * 1024;
+
+/// Guards [installGlobalErrorHandlers] so a second call is a no-op.
+/// `TestWidgetsFlutterBinding` installs a fresh `FlutterError.onError` before
+/// every test, but it does NOT reset `PlatformDispatcher.instance.onError` —
+/// so without this flag, a repeated `app.main()`/`bootApp()` in one
+/// headless-Chrome page would chain another closure onto the previous call's
+/// `PlatformDispatcher` handler every time, instead of installing once. See
+/// [installGlobalErrorHandlers]'s doc for the full argument.
+bool _globalErrorHandlersInstalled = false;
+
+/// Installs process-wide handlers for BOTH error channels Flutter exposes, so
+/// an uncaught failure leaves a diagnosable trace instead of a featureless
+/// grey box and no record at all.
+///
+/// The two channels are disjoint and neither subsumes the other:
+/// [FlutterError.onError] receives what the framework catches — a throw in
+/// `build`/`layout`/`paint`, a failed gesture callback — while
+/// [PlatformDispatcher.onError] receives what escapes to the root zone, which
+/// is where an un-awaited `Future` that rejects ends up.
+///
+/// BOTH CHAIN rather than replace. In a release build the previous
+/// `FlutterError.onError` is `presentError` (the console dump); under a test
+/// binding it is the binding's own reporter — the hook that turns a
+/// widget-build throw into a FAILED test. Replacing it would silence precisely
+/// the signal this exists to preserve.
+///
+/// Called from [main] and deliberately NOT from [bootApp]. `bootApp` is a
+/// shared seam: nine `integration_test/` files call it directly (every web
+/// flow, `tool/drive_web.sh`'s entire suite), under a
+/// `TestWidgetsFlutterBinding` that installs a FRESH `FlutterError.onError`
+/// per test — the hook that fails a test when a widget build throws.
+/// Installing from inside `bootApp` would capture that per-test reporter as
+/// `previous` and then, on a second `bootApp()` in the same page (which
+/// `web_boot_stability_test.dart` does on purpose), keep calling a stale one
+/// belonging to an already-finished test. `main()` runs once per real page
+/// load and is not on that path.
+///
+/// Sixteen native `integration_test/` flows DO call `app.main()`, so they do
+/// reach this. `FlutterError.onError` stays safe at any call count because
+/// the binding re-installs its own per-test handler before each test, so a
+/// chained `previous` is never stale. `PlatformDispatcher.instance.onError`
+/// has NO such reset, though: `TestWidgetsFlutterBinding` never restores it
+/// between tests, so a second call in the same headless-Chrome page (several
+/// files call `app.main()`/`bootApp()` more than once — see
+/// `web_boot_stability_test.dart`) would otherwise chain one more closure onto
+/// the last call's `previousPlatformError`, nesting the handler one level
+/// deeper forever instead of installing once. [_globalErrorHandlersInstalled]
+/// below is what actually keeps repeated calls safe now.
+///
+/// No reporting SDK and no new dependency, on purpose: this app has no
+/// crash-reporting backend, and `debugPrint` is captured by the browser
+/// console, by `flutter drive`'s harness and by `devicectl --console`'s Dart
+/// side — which is every place these lines are actually read.
+void installGlobalErrorHandlers() {
+  if (_globalErrorHandlersInstalled) return;
+  _globalErrorHandlersInstalled = true;
+
+  final previousFlutterError = FlutterError.onError;
+  FlutterError.onError = (details) {
+    final library = details.library == null ? '' : ' in ${details.library}';
+    final context = details.context == null ? '' : ' while ${details.context}';
+    debugPrint(
+      'masi/error: uncaught framework error$library$context: '
+      '${details.exception}\n${details.stack}',
+    );
+    previousFlutterError?.call(details);
+  };
+
+  final previousPlatformError = PlatformDispatcher.instance.onError;
+  PlatformDispatcher.instance.onError = (error, stackTrace) {
+    debugPrint('masi/error: uncaught async error: $error\n$stackTrace');
+    // `false` means NOT HANDLED, which is what keeps the error travelling on
+    // to the platform's own reporting — returning `true` here would SWALLOW
+    // it, the exact opposite of the point. When a previous handler exists its
+    // verdict wins, because whoever installed it owns this zone.
+    return previousPlatformError?.call(error, stackTrace) ?? false;
+  };
+}
 
 /// Guards [usePathUrlStrategy] so it's only ever invoked once per page.
 /// `usePathUrlStrategy()` sets a one-time browser global (`dart:ui_web`) and
@@ -35,6 +142,16 @@ bool _urlStrategyConfigured = false;
 /// overrides at all.
 Future<void> bootApp({List<Override> overrides = const []}) async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Bound the decoded-image cache before anything can decode into it. See
+  // [kImageCacheMaxBytes] for the sizing argument.
+  //
+  // In `bootApp` rather than `main()` — the opposite placement to
+  // [installGlobalErrorHandlers] above, and for the opposite reason: this is
+  // plain configuration that clobbers no test hook, so the nine
+  // `integration_test/` files that drive `bootApp()` directly should run under
+  // the SAME memory budget production does. It needs the binding, which the
+  // line above guarantees.
+  PaintingBinding.instance.imageCache.maximumSizeBytes = kImageCacheMaxBytes;
   // Path-based (rather than the default `#/`-hash) browser URLs, so shared
   // links like `/community/topo/<wallId>` are real, shareable paths instead
   // of `/#/community/topo/<wallId>`. `usePathUrlStrategy()` itself is a
