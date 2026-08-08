@@ -501,6 +501,20 @@ void main() {
         findsNothing,
         reason: 'abandoned_topos() failed for a real admin JWT',
       );
+
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('admin-tab-deletions')),
+        'the Deletions tab',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 10));
+      await binding.takeScreenshot('38-admin-deletions');
+      expect(
+        find.textContaining("Couldn't load deletion requests"),
+        findsNothing,
+        reason: 'deletion_requests_queue() failed for a real admin JWT — the '
+            'RPC is missing, or SEC-2 revoked one grant too many',
+      );
     },
     skip: !e2eRealSessionRequested,
     timeout: const Timeout(Duration(minutes: 4)),

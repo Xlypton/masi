@@ -13,22 +13,31 @@ import '../application/moderation_providers.dart';
 import '../application/report_providers.dart';
 import '../domain/abandoned_topo.dart';
 import '../domain/content_report.dart';
+import '../domain/deletion_request.dart';
 import '../domain/material_change.dart';
 
 /// The admin review queue (community editing phases 3 and 6b, C-5d, C-11).
 ///
-/// Four tabs, and the split is the point. **Submissions** are content asking to
-/// come in; the other three are all about content already in. A queue
-/// containing only the first stops bad submissions and does nothing about a
-/// good submission that goes bad later — which, with owner approval final and
-/// no re-review after publication (C-5c), is most of what actually happens.
+/// Five tabs, and the split is the point. **Submissions** are content asking to
+/// come in; the other four are all about content already in. A queue containing
+/// only the first stops bad submissions and does nothing about a good
+/// submission that goes bad later — which, with owner approval final and no
+/// re-review after publication (C-5c), is most of what actually happens.
 ///
-/// The three after it are deliberately different KINDS of "later", not
-/// variations on one: **Reports** are somebody complaining, **Changes** are a
-/// published topo quietly changing shape with nobody complaining (C-5d), and
-/// **Stalled** is nothing happening at all when it should be (C-11). Only the
-/// first of those has anyone waiting on it, which is why only it carries a
-/// count.
+/// The four after it are deliberately different KINDS of "later", not
+/// variations on one: **Reports** are somebody complaining; **Stalled** is
+/// nothing happening at all when it should be (C-11); **Changes** are a
+/// published topo quietly changing shape with nobody complaining (C-5d); and
+/// **Deletions** are an owner asking to destroy one outright.
+///
+/// Only Reports carries a count, and that restraint is the design. Deletions
+/// has the next-best claim — a person is genuinely waiting — but a bar where
+/// everything is badged is a bar where nothing is, and the one that has to
+/// survive a busy day is the unsafe report (C-12).
+///
+/// Deletions is also the only tab whose decision is irreversible, which is why
+/// it is the only one that states what would be LOST (the ascent count) rather
+/// than what the item is.
 ///
 /// Reaching this screen is not what makes someone an admin — every action it
 /// offers is re-checked server-side by a `SECURITY DEFINER` RPC. Hiding the
@@ -62,7 +71,7 @@ class AdminQueueScreen extends ConsumerWidget {
     final urgent = reports?.any((r) => r.isUrgent) ?? false;
 
     return DefaultTabController(
-      length: 4,
+      length: 5,
       child: Scaffold(
         key: const Key('admin-queue-screen'),
         appBar: AppBar(
@@ -108,6 +117,12 @@ class AdminQueueScreen extends ConsumerWidget {
               // report, and the tab that must survive a busy day is that one.
               // `Submissions` carries no count for the same reason.
               const Tab(key: Key('admin-tab-changes'), text: 'Changes'),
+              // No count here either. Somebody IS waiting on each of these, so
+              // it has more claim to a badge than Stalled or Changes — but
+              // Submissions carries none for the same reason, and the tab that
+              // has to survive a busy day is Reports. One badge in the bar is
+              // what keeps that badge meaning "look now".
+              const Tab(key: Key('admin-tab-deletions'), text: 'Deletions'),
             ],
           ),
         ),
@@ -117,6 +132,7 @@ class AdminQueueScreen extends ConsumerWidget {
             _ReportsTab(),
             _AbandonedTab(),
             _MaterialChangesTab(),
+            _DeletionsTab(),
           ],
         ),
       ),
@@ -435,6 +451,246 @@ class _ChangeRowState extends ConsumerState<_ChangeRow> {
                 key: Key('admin-change-clear-${change.id}'),
                 onPressed: _clear,
                 child: const Text('Clear'),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Owners asking permission to delete a topo that has been public.
+///
+/// The number this queue is built around is the ASCENT COUNT. Routes can be
+/// re-drawn and a photo can be re-taken; somebody's record of a climb they did
+/// cannot, and that is the whole of §3.3. So it is on every row, stated even
+/// when it is zero — "no ascents logged" is the fact that makes an approval
+/// easy, and omitting it would leave its absence ambiguous.
+class _DeletionsTab extends ConsumerWidget {
+  const _DeletionsTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    return RefreshIndicator(
+      onRefresh: () async => ref.invalidate(deletionRequestsProvider),
+      child: MasiAsyncView<List<DeletionRequest>>(
+        value: ref.watch(deletionRequestsProvider),
+        errorMessage: "Couldn't load deletion requests",
+        onRetry: () => ref.invalidate(deletionRequestsProvider),
+        skeleton: (context) => const Center(
+          child: Padding(
+            padding: EdgeInsets.all(MasiSpacing.xxl),
+            child: CircularProgressIndicator(),
+          ),
+        ),
+        data: (context, requests) => requests.isEmpty
+            ? ListView(
+                padding: const EdgeInsets.symmetric(
+                  vertical: MasiSpacing.xxl * 2,
+                ),
+                children: [
+                  Center(
+                    child: Column(
+                      children: [
+                        MasiIcon('check', size: 40, color: colors.ink3),
+                        const SizedBox(height: MasiSpacing.md),
+                        Text(
+                          'Nobody is waiting to delete anything',
+                          key: const Key('admin-deletions-empty'),
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(color: colors.ink2),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.only(bottom: MasiSpacing.xxl),
+                itemCount: requests.length,
+                itemBuilder: (context, i) =>
+                    _DeletionRow(request: requests[i]),
+              ),
+      ),
+    );
+  }
+}
+
+class _DeletionRow extends ConsumerStatefulWidget {
+  const _DeletionRow({required this.request});
+
+  final DeletionRequest request;
+
+  @override
+  ConsumerState<_DeletionRow> createState() => _DeletionRowState();
+}
+
+class _DeletionRowState extends ConsumerState<_DeletionRow> {
+  /// Approving is the consequential act here, so it asks first — and the sheet
+  /// states the ascent count rather than a generic warning, because "11 people
+  /// logged climbs on this" is the fact that should change the answer.
+  ///
+  /// What it does NOT do is delete. The sheet says so out loud: an admin who
+  /// believes they are destroying a topo will hesitate over a control that
+  /// only grants permission, and an admin who believes the opposite would
+  /// approve too freely. Both misreadings are worth one sentence.
+  Future<void> _approve() async {
+    final request = widget.request;
+    final confirmed = await showMasiConfirm(
+      context,
+      sheetKey: const Key('admin-deletion-approve-confirm'),
+      confirmKey: const Key('admin-deletion-approve-yes'),
+      cancelKey: const Key('admin-deletion-approve-no'),
+      title: 'Let "${request.wallName}" be deleted?',
+      message: request.costsOthers
+          ? '${request.stakes}. Those ascents belong to other climbers and go '
+                'with it. This does not delete anything now — it lets the owner '
+                'do it.'
+          : '${request.stakes}. This does not delete anything now — it lets '
+                'the owner do it.',
+      confirmLabel: 'Approve',
+      isDestructive: true,
+    );
+    if (!confirmed || !mounted) return;
+    await _review(approve: true);
+  }
+
+  /// A reason is REQUIRED to decline, and unlike a report resolution the owner
+  /// can read it — `deletion_requests` is readable by its requester. A silent
+  /// refusal teaches them nothing and guarantees they ask again.
+  Future<void> _decline() async {
+    final reason = await showMasiTextPrompt(
+      context,
+      title: 'Why not?',
+      submitLabel: 'Decline',
+      placeholder: 'Shown to the owner',
+      fieldKey: const Key('admin-deletion-decline-reason-field'),
+      submitKey: const Key('admin-deletion-decline-reason-submit'),
+    );
+    if (reason == null || reason.trim().isEmpty || !mounted) return;
+    await _review(approve: false, note: reason.trim());
+  }
+
+  Future<void> _review({required bool approve, String? note}) async {
+    try {
+      await ref
+          .read(deletionReviewServiceProvider)
+          .review(
+            requestId: widget.request.id,
+            approve: approve,
+            note: note,
+          );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            approve
+                ? '"${widget.request.wallName}" can now be deleted by its owner'
+                : 'Declined — "${widget.request.wallName}" stays',
+          ),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't record that decision")),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final request = widget.request;
+
+    return Container(
+      key: Key('admin-deletion-row-${request.id}'),
+      margin: const EdgeInsets.fromLTRB(
+        MasiSpacing.lg,
+        MasiSpacing.sm,
+        MasiSpacing.lg,
+        0,
+      ),
+      padding: const EdgeInsets.all(MasiSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        border: Border.all(
+          // Bordered like an urgent report only when other people's climbing
+          // records are at stake. A topo nobody has climbed is the owner's
+          // alone, and dressing that up as grave would make the border stop
+          // meaning anything on the rows where it does.
+          color: request.costsOthers ? colors.gradeHard : colors.separator,
+          width: request.costsOthers ? 1.5 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            request.wallName,
+            style: textTheme.titleMedium,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: 2),
+          Text(
+            request.stakes,
+            key: Key('admin-deletion-stakes-${request.id}'),
+            style: textTheme.titleSmall?.copyWith(
+              color: request.costsOthers ? colors.gradeHard : colors.ink,
+              fontWeight: request.costsOthers ? FontWeight.w700 : null,
+            ),
+          ),
+          if (request.reason != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              request.reason!,
+              style: textTheme.bodySmall?.copyWith(color: colors.ink),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+          const SizedBox(height: 2),
+          Text(
+            '${request.requesterLabel} · ${_waitedFor(request.createdAt)}',
+            style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: MasiSpacing.sm),
+          Row(
+            children: [
+              // Looking first, as everywhere in this queue — and more so here
+              // than anywhere else, because this is the only decision that
+              // ends with content gone for good.
+              TextButton(
+                key: Key('admin-deletion-open-${request.wallId}'),
+                onPressed: () => context.push('/walls/${request.wallId}'),
+                child: const Text('Open'),
+              ),
+              const Spacer(),
+              TextButton(
+                key: Key('admin-deletion-decline-${request.id}'),
+                onPressed: _decline,
+                child: const Text('Decline'),
+              ),
+              const SizedBox(width: MasiSpacing.xs),
+              // A plain TextButton, not MasiPendingButton: this opens a
+              // confirmation sheet first, and a pending button would spin for
+              // as long as the admin takes to read it (and hang
+              // `pumpAndSettle` in tests). Same reason as `_takeDown`.
+              TextButton(
+                key: Key('admin-deletion-approve-${request.id}'),
+                onPressed: _approve,
+                child: Text(
+                  'Approve',
+                  style: TextStyle(color: Theme.of(context).colorScheme.error),
+                ),
               ),
             ],
           ),
