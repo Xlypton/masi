@@ -611,3 +611,137 @@ async function cacheMissing(cache, urls, storedOut) {
   }
   return cached;
 }
+
+/* ---------------------------------------------------------------------------
+ * Web Push.
+ *
+ * The notification centre and the Realtime channel both only work while the
+ * app is OPEN. This is the half that reaches a phone with the app closed, and
+ * it has to live in the worker because that is the only thing the browser will
+ * wake up when the app is not running.
+ *
+ * The payload is written by the Edge Function that fans out on a
+ * `public.notifications` insert. It is decrypted by the browser before it gets
+ * here, so it is trustworthy in the sense that it came from our VAPID key —
+ * but it is still JSON off the network, so every field is treated as absent
+ * until proven otherwise. A push that throws here is a push the user never
+ * sees, and on some browsers a worker that repeatedly throws in `push` gets
+ * its subscription revoked.
+ * ------------------------------------------------------------------------ */
+
+/** Everything a malformed payload degrades to. */
+const PUSH_FALLBACK = {
+  title: 'Masi',
+  body: 'Something happened on one of your topos.',
+  url: '/notifications',
+  tag: undefined,
+};
+
+self.addEventListener('push', (event) => {
+  event.waitUntil(showPush(event.data));
+});
+
+async function showPush(data) {
+  const payload = parsePushPayload(data);
+  await self.registration.showNotification(payload.title, {
+    body: payload.body,
+    // The app icon, not a per-notification image: this is the one asset
+    // guaranteed to be in the precache, so it renders offline and cannot
+    // become a network fetch the browser cancels.
+    icon: new URL('icons/Icon-192.png', SCOPE).href,
+    badge: new URL('icons/Icon-192.png', SCOPE).href,
+    // `tag` collapses repeats. The server sends one per subject (a topo, an
+    // ascent), so ten comments on one topo replace each other on the lock
+    // screen instead of burying everything else.
+    tag: payload.tag,
+    data: { url: payload.url },
+  });
+}
+
+/**
+ * Reduces an untrusted push payload to something showable.
+ *
+ * Returns the fallback for: no data at all, data that is not JSON, JSON that
+ * is not an object, and an object whose fields are the wrong type. A
+ * notification saying something vague is recoverable; a worker that throws
+ * before `showNotification` shows nothing at all, and Chrome then displays its
+ * own "This site has been updated in the background" instead — which is worse
+ * than any wording we could pick.
+ */
+function parsePushPayload(data) {
+  if (!data) return PUSH_FALLBACK;
+  let raw;
+  try {
+    raw = data.json();
+  } catch (error) {
+    return PUSH_FALLBACK;
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return PUSH_FALLBACK;
+  }
+  const text = (value, fallback) =>
+    typeof value === 'string' && value.trim().length > 0 ? value : fallback;
+  return {
+    title: text(raw.title, PUSH_FALLBACK.title),
+    body: text(raw.body, PUSH_FALLBACK.body),
+    // Same-origin only. `new URL(untrusted, SCOPE)` happily produces
+    // `https://evil.example/` for an absolute input, and this URL is handed
+    // straight to `clients.openWindow` below — so a hostile payload could
+    // otherwise open any site it liked from a tap on a Masi notification.
+    url: sameOriginPath(raw.url) || PUSH_FALLBACK.url,
+    tag: typeof raw.tag === 'string' && raw.tag.length > 0 ? raw.tag : undefined,
+  };
+}
+
+/** The resolved href if [value] stays inside our scope, else null. */
+function sameOriginPath(value) {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  try {
+    const resolved = new URL(value, SCOPE);
+    // Origin AND path prefix, matching `scopedPath`'s two checks above: a
+    // same-origin URL outside our registration scope is still not ours.
+    if (resolved.origin !== SCOPE.origin) return null;
+    if (!resolved.pathname.startsWith(SCOPE.pathname)) return null;
+    return resolved.href;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Tapping a notification focuses the app if it is already open, and only opens
+ * a new window if it is not.
+ *
+ * Focusing rather than always opening matters more than it looks: the app is a
+ * local-first PWA holding an OPFS-backed database, and a second window on the
+ * same origin is a second client contending for the same storage. Reusing the
+ * existing client also means the user lands back where they were.
+ */
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = sameOriginPath(event.notification.data && event.notification.data.url)
+    || new URL(PUSH_FALLBACK.url, SCOPE).href;
+  event.waitUntil(focusOrOpen(target));
+});
+
+async function focusOrOpen(target) {
+  const all = await self.clients.matchAll({
+    type: 'window',
+    includeUncontrolled: true,
+  });
+  for (const client of all) {
+    // Any window on this origin will do — `navigate` moves it to the right
+    // place. Matching on exact URL would open a duplicate window whenever the
+    // user happened to be on a different screen, which is almost always.
+    if ('focus' in client) {
+      try {
+        if ('navigate' in client) await client.navigate(target);
+      } catch (error) {
+        // A cross-origin or otherwise un-navigable client. Focusing it is
+        // still better than opening a second window.
+      }
+      return client.focus();
+    }
+  }
+  if (self.clients.openWindow) return self.clients.openWindow(target);
+}
