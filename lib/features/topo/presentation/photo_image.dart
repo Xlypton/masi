@@ -45,10 +45,44 @@ import 'photo_image_source.dart';
 ///
 /// [cacheWidth]/[cacheHeight] (#56) are optional decode-size hints — passed
 /// straight through to the underlying `Image.file`/`Image.network`'s own
-/// `cacheWidth`/`cacheHeight` — so a small on-screen tile (e.g. a 52px list
-/// thumbnail) doesn't pay the memory/CPU cost of decoding a full-resolution
-/// original at its native size. Omitted by default (decode at native size,
-/// the pre-existing behavior) so every other call site is unaffected.
+/// `cacheWidth`/`cacheHeight`, i.e. a `ResizeImage` wrapped around the real
+/// provider. Omitted by default (decode at native size, the pre-existing
+/// behavior) so every other call site is unaffected.
+///
+/// WHAT THEY ACTUALLY BUY DIFFERS BY PLATFORM, and the difference matters
+/// because web is the primary target. This doc used to claim flatly that a
+/// 52px tile "doesn't pay the cost of decoding a full-resolution original".
+/// That is true on native and FALSE on web:
+///
+///  - native: the codec is handed the target size and decodes straight to it,
+///    so the full-resolution bitmap is never materialized — peak memory and
+///    decode CPU are both bounded.
+///  - web: the browser decodes the frame at its native size and the resize is
+///    applied to the result, so a full-resolution decode happens either way
+///    (twice over, in effect: full frame, then the scaled copy). What these
+///    hints bound is what is RETAINED in `imageCache` afterwards. For a LIST
+///    that is still the win worth having — N retained thumbnails instead of N
+///    retained originals — but it is not a peak-memory fix, and reaching for
+///    it as one is how you end up surprised.
+///
+/// Two rules follow, both learned the hard way:
+///
+///  - PASS [cacheWidth] ALONE FOR A THUMBNAIL, NEVER BOTH. `ResizeImage`'s
+///    default policy is `ResizeImagePolicy.exact`, which with both dimensions
+///    set scales the bitmap to exactly those numbers "regardless of whether
+///    it matches the source image's intrinsic aspect ratio" — `BoxFit.fill`,
+///    performed in the decoder. A portrait photo behind a square tile arrives
+///    already squashed (~1.33x for 4:3) and the widget's own `BoxFit.cover`
+///    cannot undo it, because by then the bitmap really IS square. With
+///    [cacheWidth] alone the height follows the intrinsic ratio and `cover`
+///    centre-crops as intended (`topos_row.dart`'s `_Thumbnail` is the fixed
+///    precedent).
+///  - NEVER ADD ONE TO A SITE THAT ALSO DECODES THE SAME PHOTO UNSIZED. A
+///    resized decode is a DIFFERENT `imageCache` key, not a replacement for
+///    the unsized one, so both get decoded and both get retained. That is
+///    exactly the topo canvas's situation — its dimension probe resolves the
+///    unsized image through [PhotoImageProvider] — which is why that call
+///    site deliberately passes neither.
 class PhotoImage extends StatelessWidget {
   const PhotoImage(
     this.storedPath, {

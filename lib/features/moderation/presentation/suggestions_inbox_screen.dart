@@ -3,9 +3,11 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/theme.dart';
+import '../../../core/db/database_provider.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
+import '../../topo/data/photo_path_resolution.dart';
 import '../application/geometry_providers.dart';
 import '../application/suggestion_providers.dart';
 import '../domain/edit_suggestion.dart';
@@ -101,6 +103,20 @@ class _InboxList extends StatelessWidget {
   );
 }
 
+/// Whether [key] (a `PhotoFiles`-style storage key) actually has bytes
+/// behind it locally.
+///
+/// `topoGeometryProvider` resolving proves the photo's DB ROW exists, not
+/// that anything is behind the THUMBNAIL key `_GeometryDiff` asks
+/// `TopoLineView` to render (MEM-1, `TopoLineView.useThumbnail`) — a photo
+/// published before thumbnail generation existed has no `thumbs/<id>.jpg`
+/// ever written for it. This is what lets `_SuggestionRow` fall back to the
+/// full-resolution original in exactly that case, instead of rendering
+/// nothing behind an Apply button that stayed enabled.
+final _thumbHasBytesProvider = FutureProvider.autoDispose.family<bool, String>(
+  (ref, key) => ref.watch(photoFilesProvider).hasPhotoBytes(key),
+);
+
 /// The proposed line drawn over the topo it is proposed for (§C-5b,
 /// requirement 3).
 ///
@@ -109,10 +125,23 @@ class _InboxList extends StatelessWidget {
 /// canvas — and an inbox where every unanswered suggestion is a full-bleed
 /// photo is an inbox nobody scrolls to the bottom of.
 class _GeometryDiff extends StatelessWidget {
-  const _GeometryDiff({required this.suggestion, required this.geometry});
+  const _GeometryDiff({
+    required this.suggestion,
+    required this.geometry,
+    required this.useThumbnail,
+  });
 
   final EditSuggestion suggestion;
   final AsyncValue<TopoGeometry?> geometry;
+
+  /// Whether to render the photo's small `thumbs/<id>.jpg` derivative rather
+  /// than the full-resolution original — decided by `_SuggestionRowState`
+  /// from [_thumbHasBytesProvider], not by this widget: see
+  /// `TopoLineView.useThumbnail`'s doc for why the inbox wants the small one
+  /// at all (MEM-1 — a full-resolution decode behind every pending row's
+  /// 180px box is a mobile-Safari crash risk), and this class's own
+  /// [_thumbHasBytesProvider] doc for why it is not unconditional.
+  final bool useThumbnail;
 
   @override
   Widget build(BuildContext context) {
@@ -138,6 +167,7 @@ class _GeometryDiff extends StatelessWidget {
                 // is on screen is what accepting would produce. See
                 // `TopoLineView.replacedRouteNumber`.
                 replacedRouteNumber: _replacedNumber(data),
+                useThumbnail: useThumbnail,
               ),
             ),
           ),
@@ -248,7 +278,35 @@ class _SuggestionRowState extends ConsumerState<_SuggestionRow> {
             topoGeometryProvider((wallId: s.wallId, photoId: s.photoId)),
           )
         : null;
-    final canApply = geometry == null || geometry.value != null;
+
+    // The diff reads the photo's THUMBNAIL (MEM-1), which a photo published
+    // before thumbnail generation existed has no bytes behind — resolving
+    // `geometry` only proves the ROW is there, not that key. `_GeometryDiff`
+    // falls back to the full-resolution original the moment this resolves
+    // `false`, rather than rendering nothing behind an enabled Apply button.
+    final geometryPhoto = geometry?.value?.photo;
+    final thumbHasBytes = geometryPhoto == null
+        ? null
+        : ref.watch(
+            _thumbHasBytesProvider(thumbKeyFor(geometryPhoto.localPath)),
+          );
+
+    // NOT YET KNOWN is not the same as PRESENT: `useThumbnail` below defaults
+    // to `true` while `thumbHasBytes` is still resolving (the common case,
+    // and the whole memory fix — defaulting the other way would decode the
+    // full-resolution original on every row's first frame, exactly the cost
+    // this activation exists to avoid), which means the row can briefly show
+    // an empty placeholder for a photo that in fact has no thumbnail. So
+    // Apply waits for `thumbHasBytes` to have SETTLED (`hasValue`, true
+    // whichever way it resolves) in addition to `geometry` itself — the same
+    // "no photo row [resolved], no diff, no Apply" reasoning this gate
+    // already applied to `geometry`, extended to the second async read the
+    // fallback introduced. Never permanently blocked: once settled, either
+    // branch renders a real, visible line.
+    final canApply =
+        geometry == null ||
+        (geometry.value != null && (thumbHasBytes?.hasValue ?? false));
+    final useThumbnail = thumbHasBytes?.value ?? true;
 
     return Container(
       key: Key('suggestion-row-${s.id}'),
@@ -286,7 +344,11 @@ class _SuggestionRowState extends ConsumerState<_SuggestionRow> {
               style: textTheme.bodySmall?.copyWith(color: colors.ink2),
             ),
             const SizedBox(height: MasiSpacing.xs),
-            _GeometryDiff(suggestion: s, geometry: geometry!),
+            _GeometryDiff(
+              suggestion: s,
+              geometry: geometry!,
+              useThumbnail: useThumbnail,
+            ),
             const SizedBox(height: MasiSpacing.xs),
           ],
           // What is actually proposed, spelled out. An owner deciding from
