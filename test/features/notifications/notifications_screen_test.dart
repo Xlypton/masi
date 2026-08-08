@@ -143,6 +143,15 @@ Future<_FakeRemote> _pump(
     ),
   );
   await tester.pumpAndSettle();
+  // One more zero-duration pump before handing back.
+  //
+  // The mount-time refresh settles AFTER `pumpAndSettle` returns, and its
+  // continuation leaves a zero-duration timer behind. flutter_test asserts on
+  // any timer still pending at teardown, and that assertion does not merely
+  // fail the one test — it poisons the binding, so every test after it in this
+  // file reports "did not complete" and the file's real coverage silently
+  // drops to whatever ran before it.
+  await tester.pump(const Duration(milliseconds: 1));
   return remote;
 }
 
@@ -181,6 +190,12 @@ void main() {
         await _pump(tester, list: [_n('a')], fetchThrows: true);
         expect(find.byKey(const Key('notification-row-a')), findsOne);
         expect(find.byKey(const Key('notifications-empty-offline')), findsNothing);
+        // The mount-time refresh rejects, and the rejection lands after the
+        // last settle — leaving a zero-duration timer that trips
+        // flutter_test's "A Timer is still pending" teardown assertion and
+        // poisons every test after this one in the file. One more pump lets
+        // it fire.
+        await tester.pump(const Duration(milliseconds: 1));
       },
     );
   });
