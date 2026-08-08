@@ -14,7 +14,7 @@ import '../application/ascent_detail_providers.dart';
 import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
-import '../data/comments_repository.dart';
+import 'comment_row.dart';
 
 /// Read-only detail view for a single shared ("community") ascent log
 /// (Feature #12, public opt-in ascent logs): the climber's resolved display
@@ -368,7 +368,8 @@ class _AscentDetailBody extends ConsumerWidget {
             style: textTheme.bodyMedium?.copyWith(color: colors.ink2),
           )
         else
-          for (final comment in comments) _AscentCommentRow(comment: comment),
+          for (final comment in comments)
+            CommentRow(comment: comment, keyPrefix: 'ascent-detail-comment'),
         const SizedBox(height: MasiSpacing.sm),
         Row(
           children: [
@@ -510,38 +511,6 @@ class _NotFoundState extends StatelessWidget {
             ),
           ],
         ),
-      ),
-    );
-  }
-}
-
-/// A single comment row — duplicated from `CommunityTopoDetailScreen`'s
-/// identical private `_CommentRow` (that class's copy is library-private to
-/// its own file, and this screen and that one are otherwise independent
-/// presentation modules — same duplication convention as this screen's
-/// sibling `_RouteStyleTagChip`/`launchBetaVideo` elsewhere in this feature).
-class _AscentCommentRow extends StatelessWidget {
-  const _AscentCommentRow({required this.comment});
-
-  final Comment comment;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return Padding(
-      key: Key('ascent-detail-comment-${comment.id}'),
-      padding: const EdgeInsets.symmetric(vertical: MasiSpacing.xs),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            comment.authorName ?? 'Anonymous',
-            style: Theme.of(
-              context,
-            ).textTheme.labelLarge?.copyWith(color: colors.ink),
-          ),
-          Text(comment.body, style: Theme.of(context).textTheme.bodyMedium),
-        ],
       ),
     );
   }

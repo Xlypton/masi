@@ -31,6 +31,7 @@ class MasiAvatar extends StatelessWidget {
     required this.avatarUrl,
     required this.email,
     required this.radius,
+    this.displayName,
   });
 
   /// The picture to draw, or `null` to go straight to the initials.
@@ -39,6 +40,16 @@ class MasiAvatar extends StatelessWidget {
   /// The signed-in email, used for the initials fallback. `null`/empty falls
   /// back one further, to the generic person glyph.
   final String? email;
+
+  /// A human display name to take the initials from INSTEAD of [email], for
+  /// the surfaces that know who someone is without knowing their address —
+  /// a comment thread resolves its authors through `profiles.displayName` and
+  /// must never see their email.
+  ///
+  /// Wins over [email] whenever it yields initials at all; a name that is
+  /// empty or all whitespace falls through to [email], and then to the person
+  /// glyph, so passing this can only ever add information.
+  final String? displayName;
 
   final double radius;
 
@@ -85,22 +96,34 @@ class MasiAvatar extends StatelessWidget {
       // load reveals the initials instead of an empty accent-coloured disc.
       foregroundImage: image,
       onForegroundImageError: image == null ? null : (_, _) {},
-      child: _InitialsOrGlyph(email: email, radius: radius),
+      child: _InitialsOrGlyph(
+        email: email,
+        displayName: displayName,
+        radius: radius,
+      ),
     );
   }
 }
 
-/// The fallback painted under [MasiAvatar]'s picture: 1-2 email initials, or
-/// a person glyph when there is no usable email to derive them from.
+/// The fallback painted under [MasiAvatar]'s picture: 1-2 initials taken from
+/// the display name if there is one and the email otherwise, or a person glyph
+/// when neither yields any.
 class _InitialsOrGlyph extends StatelessWidget {
-  const _InitialsOrGlyph({required this.email, required this.radius});
+  const _InitialsOrGlyph({
+    required this.email,
+    required this.displayName,
+    required this.radius,
+  });
 
   final String? email;
+  final String? displayName;
   final double radius;
 
   @override
   Widget build(BuildContext context) {
-    final initials = email == null ? '' : emailInitials(email!);
+    final name = displayName;
+    var initials = name == null ? '' : displayNameInitials(name);
+    if (initials.isEmpty) initials = email == null ? '' : emailInitials(email!);
     if (initials.isEmpty) {
       return Icon(Icons.person, size: radius, color: MasiColors.of(context).onAccent);
     }

@@ -120,6 +120,53 @@ class ProfileRepository {
     }
   }
 
+  /// Copies the identity provider's picture (today: Google) into the
+  /// signed-in user's own `avatarUrl`, so that **other people can see it**.
+  ///
+  /// Why this is needed at all: the provider avatar lives on the auth session
+  /// ([AuthSessionState.providerAvatarUrl]) and a session is readable only by
+  /// the user it belongs to. Everyone else resolves an author through the
+  /// `profiles` row, so before this ran, a user who had never opened Account
+  /// and picked a photo appeared to the whole community as their initials —
+  /// which made "comments show the profile picture" look unimplemented for
+  /// almost every real account.
+  ///
+  /// **It never overwrites a picture the user chose in-app.** Those are always
+  /// `data:` URLs (see `avatar_picker.dart`, which base64-encodes the bytes),
+  /// so a stored `data:` value is an explicit choice and is left alone. A
+  /// stored `http(s)` value can only have come from a previous adoption, so it
+  /// is refreshed when the provider hands out a different URL — Google's
+  /// `lh3.googleusercontent.com` links do rotate, and a stale one 404s (which
+  /// [MasiAvatar] renders as the initials, not a broken glyph).
+  ///
+  /// No-op, never throws, when signed out or when the session carries no
+  /// picture — a missing avatar is not an error anywhere in this app.
+  ///
+  /// Note this is the one write here that does NOT take the user through a
+  /// choice: it publishes the picture their identity provider already holds.
+  /// It matches what the app has always shown the user as their own avatar
+  /// (`myAvatarUrlProvider` falls back to the provider picture), so nothing
+  /// they see changes — what changes is that everyone else now sees it too.
+  Future<void> adoptProviderAvatarUrl(String? providerAvatarUrl) async {
+    final uid = currentUid();
+    if (uid == null) return;
+    final incoming = providerAvatarUrl?.trim();
+    if (incoming == null || incoming.isEmpty) return;
+    if (!incoming.startsWith('http://') && !incoming.startsWith('https://')) {
+      return;
+    }
+
+    final existing = await (_db.select(
+      _db.profiles,
+    )..where((t) => t.id.equals(uid))).getSingleOrNull();
+
+    final current = existing?.avatarUrl;
+    if (current != null && current.startsWith('data:')) return;
+    if (current == incoming) return;
+
+    await setMyAvatarUrl(incoming);
+  }
+
   /// Reactive display name for the profile row keyed by [uid] (any user, not
   /// just the signed-in one — this is how a shared topo's author name is
   /// resolved). Emits `null` when no row exists yet, the row has no

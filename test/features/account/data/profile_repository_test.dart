@@ -127,4 +127,106 @@ void main() {
       expect(await repo.watchDisplayName(uid).first, isNull);
     });
   });
+
+  group('adoptProviderAvatarUrl', () {
+    /// The picture is what OTHER people see. The provider avatar lives on the
+    /// auth session and a session is readable only by its own user, so
+    /// without this step a user who never opened Account and picked a photo
+    /// appeared to the whole community as their initials.
+    const google = 'https://lh3.googleusercontent.com/a/abc123';
+
+    test('signed out is a safe no-op: no row is created', () async {
+      final repo = makeRepo();
+      await repo.adoptProviderAvatarUrl(google);
+
+      expect(await db.select(db.profiles).get(), isEmpty);
+    });
+
+    test('a null or blank provider URL writes nothing', () async {
+      final repo = makeRepo(uid: uid);
+      await repo.adoptProviderAvatarUrl(null);
+      await repo.adoptProviderAvatarUrl('');
+      await repo.adoptProviderAvatarUrl('   ');
+
+      expect(await db.select(db.profiles).get(), isEmpty);
+    });
+
+    test(
+      'a non-http value is refused — only an identity provider hands out a '
+      'URL here, and anything else reaching this method is a bug, not a '
+      'picture',
+      () async {
+        final repo = makeRepo(uid: uid);
+        await repo.adoptProviderAvatarUrl('data:image/jpeg;base64,AAAA');
+        await repo.adoptProviderAvatarUrl('/local/path.jpg');
+
+        expect(await db.select(db.profiles).get(), isEmpty);
+      },
+    );
+
+    test('adopts into a profile that has no picture yet', () async {
+      final repo = makeRepo(uid: uid);
+      await repo.adoptProviderAvatarUrl(google);
+
+      final row = await (db.select(
+        db.profiles,
+      )..where((t) => t.id.equals(uid))).getSingle();
+      expect(row.avatarUrl, google);
+      // Marked dirty so the sync push carries it to the cloud — the whole
+      // point is that other devices and other people can read it.
+      expect(row.dirty, isTrue);
+    });
+
+    test(
+      'NEVER overwrites a picture the user picked in-app: those are always '
+      'data: URLs (avatar_picker base64-encodes the bytes), and an explicit '
+      'choice must not be undone by whatever Google happens to hold',
+      () async {
+        final repo = makeRepo(uid: uid);
+        await repo.setMyAvatarUrl('data:image/jpeg;base64,MINE');
+        await repo.adoptProviderAvatarUrl(google);
+
+        final row = await (db.select(
+          db.profiles,
+        )..where((t) => t.id.equals(uid))).getSingle();
+        expect(row.avatarUrl, 'data:image/jpeg;base64,MINE');
+      },
+    );
+
+    test(
+      'refreshes a previously-adopted http URL when the provider rotates it '
+      '— a stale lh3.googleusercontent.com link 404s, which MasiAvatar draws '
+      'as the initials',
+      () async {
+        final repo = makeRepo(uid: uid);
+        await repo.adoptProviderAvatarUrl(google);
+        now = 2000;
+        await repo.adoptProviderAvatarUrl('$google-rotated');
+
+        final row = await (db.select(
+          db.profiles,
+        )..where((t) => t.id.equals(uid))).getSingle();
+        expect(row.avatarUrl, '$google-rotated');
+        expect(row.updatedAt, 2000);
+      },
+    );
+
+    test('re-adopting the SAME URL does not touch the row', () async {
+      final repo = makeRepo(uid: uid);
+      await repo.adoptProviderAvatarUrl(google);
+      final before = await (db.select(
+        db.profiles,
+      )..where((t) => t.id.equals(uid))).getSingle();
+
+      now = 5000;
+      await repo.adoptProviderAvatarUrl(google);
+
+      final after = await (db.select(
+        db.profiles,
+      )..where((t) => t.id.equals(uid))).getSingle();
+      // Not merely "the URL is unchanged" — `updatedAt` must not move either,
+      // or every sign-in would dirty the row and push a no-op change.
+      expect(after.updatedAt, before.updatedAt);
+    });
+  });
 }

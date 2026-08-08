@@ -44,6 +44,7 @@ import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
 import '../data/comments_repository.dart';
 import '../data/community_repository.dart';
+import 'comment_row.dart';
 
 /// Read-only detail view for a single shared ("community") topo: a
 /// collapsing header showing the wall's photo + route overlays (tap it to
@@ -964,7 +965,10 @@ class _CommunityTopoDetailScreenState
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           for (final comment in comments)
-                            _CommentRow(comment: comment),
+                            CommentRow(
+                              comment: comment,
+                              keyPrefix: 'community-comment',
+                            ),
                         ],
                       );
                     },
@@ -1585,29 +1589,3 @@ class _RouteStyleTagChip extends StatelessWidget {
   }
 }
 
-class _CommentRow extends StatelessWidget {
-  const _CommentRow({required this.comment});
-
-  final Comment comment;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return Padding(
-      key: Key('community-comment-${comment.id}'),
-      padding: const EdgeInsets.symmetric(vertical: MasiSpacing.xs),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            comment.authorName ?? 'Anonymous',
-            style: Theme.of(
-              context,
-            ).textTheme.labelLarge?.copyWith(color: colors.ink),
-          ),
-          Text(comment.body, style: Theme.of(context).textTheme.bodyMedium),
-        ],
-      ),
-    );
-  }
-}

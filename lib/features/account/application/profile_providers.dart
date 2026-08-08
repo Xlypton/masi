@@ -26,6 +26,26 @@ final profileDisplayNameProvider =
   (ref, uid) => ref.watch(profileRepositoryProvider).watchDisplayName(uid),
 );
 
+/// Reactive profile picture for the profile row keyed by [uid] (ANY user,
+/// not just the signed-in one) — the avatar counterpart of
+/// [profileDisplayNameProvider], wrapping [ProfileRepository.watchAvatarUrl].
+/// `autoDispose` for the same reason: a picture resolved for a comment author
+/// who has scrolled away must not stay subscribed for the life of the app.
+///
+/// Emits `null` for "no picture — draw the initials instead", which is what
+/// every failure mode here collapses to: no profile row pulled yet, a row with
+/// nothing set, or a soft-deleted one.
+///
+/// Note what this CANNOT see, and why [SessionAvatarSync] exists: the Google
+/// avatar lives on the session ([AuthSessionState.providerAvatarUrl]) and is
+/// readable only by the user it belongs to. Another user's picture is visible
+/// here only once it has been written to their `profiles.avatarUrl` column and
+/// synced down.
+final profileAvatarUrlProvider =
+    StreamProvider.autoDispose.family<String?, String>(
+  (ref, uid) => ref.watch(profileRepositoryProvider).watchAvatarUrl(uid),
+);
+
 /// Reactive display name for the SIGNED-IN user specifically: resolves the
 /// current uid from [authStateProvider] and watches
 /// [ProfileRepository.watchDisplayName] for it directly. Emits `null`

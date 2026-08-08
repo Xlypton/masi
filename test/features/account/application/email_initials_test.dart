@@ -71,4 +71,43 @@ void main() {
       },
     );
   });
+
+  group('displayNameInitials', () {
+    test('two or more words take the first letter of the first two', () {
+      expect(displayNameInitials('Peter Keri'), 'PK');
+      expect(displayNameInitials('bogi devecser'), 'BD');
+      // Extra words beyond the first two are ignored, matching
+      // emailInitials' handling of extra segments.
+      expect(displayNameInitials('Ana Maria Silva'), 'AM');
+    });
+
+    test('a single word takes its first two characters', () {
+      expect(displayNameInitials('bogi'), 'BO');
+      expect(displayNameInitials('A'), 'A');
+    });
+
+    test('runs of whitespace collapse, and the ends are ignored', () {
+      expect(displayNameInitials('  Peter   Keri  '), 'PK');
+      expect(displayNameInitials('\tPeter\nKeri'), 'PK');
+    });
+
+    test(
+      'empty or all-whitespace yields no initials, so the caller falls back '
+      'to the person glyph rather than drawing a blank disc',
+      () {
+        expect(displayNameInitials(''), '');
+        expect(displayNameInitials('   '), '');
+      },
+    );
+
+    test(
+      'grapheme clusters stay intact rather than tearing a UTF-16 surrogate '
+      'pair — the same rule emailInitials follows, and the reason both slice '
+      'with .characters instead of String[0]',
+      () {
+        expect(displayNameInitials('😀keri'), '😀K');
+        expect(displayNameInitials('😀 keri'), '😀K');
+      },
+    );
+  });
 }
