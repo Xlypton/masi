@@ -78,6 +78,86 @@ class AppDatabase extends _$AppDatabase {
       if (from > to) {
         throw SchemaDowngradeException(storedVersion: from, appVersion: to);
       }
+
+      // IDEMPOTENCE HELPERS — every schema-changing step below goes through
+      // one of these, and must stay safe to re-run against a database that
+      // already has the thing it is adding.
+      //
+      // `onUpgrade` is not atomic. Drift stamps `PRAGMA user_version` only
+      // after the whole callback returns
+      // (`executor/helpers/engines.dart:562`), while each `ALTER TABLE`
+      // commits on its own. Lose the process between the two — a killed tab,
+      // an OOM, a swipe-away mid-open — and the column is on disk with the
+      // OLD version still recorded. The next open re-runs the same branch,
+      // SQLite answers `duplicate column name` (it has no `ADD COLUMN IF NOT
+      // EXISTS`), and every open after that fails the same way, with the
+      // user's entire local library behind a database that will not open.
+      // Guarding each step turns that from a permanent brick into a retry.
+      //
+      // The live exposure today is small: only a stored version of v1-6
+      // reaches the adds that used to be unguarded, and v7 shipped the same
+      // day the PWA did. This hardens the mechanism for the NEXT
+      // `addColumn` migration rather than fixing an outage.
+      //
+      // Cost: `PRAGMA table_info` is read ONCE PER TABLE and cached for the
+      // rest of the run, never once per column. On web every one of these is
+      // a main-thread -> worker round-trip inside an already-tight 30s open
+      // budget, so the 24 guarded steps below cost at most 9 reads (one per
+      // distinct table ever inspected), and at most 2 more than the two
+      // hand-rolled guards that came before this.
+      final tableColumnCache = <String, Set<String>>{};
+
+      /// Column names currently on [table], read at most once per run.
+      ///
+      /// The returned set is the LIVE cache entry: [addIfMissing] and
+      /// [addViaRebuildIfMissing] mutate it after a successful add so a later
+      /// guard on the same table sees the new column without another PRAGMA.
+      Future<Set<String>> columnsOf(TableInfo<Table, dynamic> table) async {
+        final cached = tableColumnCache[table.actualTableName];
+        if (cached != null) return cached;
+        final rows = await customSelect(
+          "PRAGMA table_info('${table.actualTableName}')",
+        ).get();
+        return tableColumnCache[table.actualTableName] = {
+          for (final row in rows) row.read<String>('name'),
+        };
+      }
+
+      /// `ALTER TABLE ... ADD COLUMN`, skipped when [column] is already there.
+      Future<void> addIfMissing(
+        TableInfo<Table, dynamic> table,
+        GeneratedColumn<Object> column,
+      ) async {
+        final columns = await columnsOf(table);
+        if (columns.contains(column.name)) return;
+        await m.addColumn(table, column);
+        columns.add(column.name);
+      }
+
+      /// The 12-step table rebuild that adds [column] to [table], skipped when
+      /// [column] is already there.
+      ///
+      /// This guard matters MORE than the plain-ADD-COLUMN one, because its
+      /// failure mode is quieter. Re-running an unguarded `newColumns:`
+      /// rebuild does not throw: `newColumns` is precisely the promise that
+      /// the column is absent from the old table, so drift leaves it out of
+      /// the copy-INSERT's column list (drift 2.34.2
+      /// `query_builder/migration.dart:231`) and every existing value comes
+      /// back NULL. A crash is recoverable; silently blanking a column of
+      /// real rows is not.
+      Future<void> addViaRebuildIfMissing(
+        TableInfo<Table, dynamic> table,
+        GeneratedColumn<Object> column,
+      ) async {
+        final columns = await columnsOf(table);
+        if (columns.contains(column.name)) return;
+        await m.alterTable(TableMigration(table, newColumns: [column]));
+        columns.add(column.name);
+      }
+
+      // (`m.createTable` needs no guard of its own — drift emits
+      // `CREATE TABLE IF NOT EXISTS`, `migration.dart:319`.)
+
       // v1 -> v2: row-level cloud-sync pivot (Phase 1). Adds a nullable
       // `ownerId` to every SyncColumns table (ADD COLUMN is non-destructive;
       // pre-existing rows come back with `ownerId == null`, i.e.
@@ -86,12 +166,12 @@ class AppDatabase extends _$AppDatabase {
       // = a Wall, and this is the sharing flag, deliberately distinct from
       // the existing per-route `visible` render flag.
       if (from < 2) {
-        await m.addColumn(areas, areas.ownerId);
-        await m.addColumn(sectors, sectors.ownerId);
-        await m.addColumn(walls, walls.ownerId);
-        await m.addColumn(photos, photos.ownerId);
-        await m.addColumn(routes, routes.ownerId);
-        await m.addColumn(walls, walls.visibility);
+        await addIfMissing(areas, areas.ownerId);
+        await addIfMissing(sectors, sectors.ownerId);
+        await addIfMissing(walls, walls.ownerId);
+        await addIfMissing(photos, photos.ownerId);
+        await addIfMissing(routes, routes.ownerId);
+        await addIfMissing(walls, walls.visibility);
       }
       // v2 -> v3: adds community features (comments, likes, ascent logging)
       // as three brand-new tables, each carrying the full SyncColumns set
@@ -109,17 +189,17 @@ class AppDatabase extends _$AppDatabase {
       // without the user ever having to enter coordinates by hand. Plain
       // ADD COLUMN, so every pre-existing wall comes back with both `null`.
       if (from < 4) {
-        await m.addColumn(walls, walls.latitude);
-        await m.addColumn(walls, walls.longitude);
+        await addIfMissing(walls, walls.latitude);
+        await addIfMissing(walls, walls.longitude);
       }
       // v4 -> v5: per-route metadata (#41 beta-video URL, #42 style tags,
       // #44 0-3 star rating) — three nullable ADD COLUMNs on Routes, so
       // every pre-existing route comes back with all three `null`
       // (unrated / no tags / no beta link) rather than losing any data.
       if (from < 5) {
-        await m.addColumn(routes, routes.betaVideoUrl);
-        await m.addColumn(routes, routes.styleTagsJson);
-        await m.addColumn(routes, routes.stars);
+        await addIfMissing(routes, routes.betaVideoUrl);
+        await addIfMissing(routes, routes.styleTagsJson);
+        await addIfMissing(routes, routes.stars);
       }
       // v5 -> v6: multiple photos per topo, each with its own route overlay
       // (#46 fix + the underlying feature). Three parts:
@@ -146,8 +226,8 @@ class AppDatabase extends _$AppDatabase {
       //    was always there. Written defensively: walls with zero, one, or
       //    many live originals are all handled by the same loop.
       if (from < 6) {
-        await m.addColumn(photos, photos.sortOrder);
-        await m.addColumn(photos, photos.isPrimary);
+        await addIfMissing(photos, photos.sortOrder);
+        await addIfMissing(photos, photos.isPrimary);
 
         await customStatement(
           'DROP INDEX IF EXISTS idx_routes_wall_number_live',
@@ -209,21 +289,23 @@ class AppDatabase extends _$AppDatabase {
       // stamps them from the CURRENT (already-edited) `tables.dart`
       // definitions — i.e. any upgrade path that passes through the
       // `from < 3` branch above already creates these three tables with
-      // `visibility`/`authorName`/`ascentId` baked in from the start. Re-running
-      // the ADD COLUMN/alterTable steps below on such a fresh table would
-      // fail (`duplicate column name`), so they only run for a database
-      // that already had the pre-v7 (two-column-short) shape on disk, i.e.
-      // one that reached v3+ before this migration was introduced.
+      // `visibility`/`authorName`/`ascentId` baked in from the start, so
+      // there is simply nothing here for those paths to do. The per-column
+      // guards below would no-op anyway; keeping the version bound just
+      // saves them three `PRAGMA table_info` round-trips.
+      //
+      // The `ascentId` pair goes through [addViaRebuildIfMissing] rather than
+      // a bare `m.alterTable`, because a re-run of that rebuild is the one
+      // step here that LOSES DATA instead of throwing — see that helper's
+      // doc. Both a v7-interrupted upgrade and any harness that synthesizes
+      // an "old" database via `createAll` before stamping an old
+      // `user_version` reach this branch with `ascent_id` already populated.
       if (from < 7 && from >= 3) {
-        await m.addColumn(ascents, ascents.visibility);
-        await m.addColumn(ascents, ascents.authorName);
+        await addIfMissing(ascents, ascents.visibility);
+        await addIfMissing(ascents, ascents.authorName);
 
-        await m.alterTable(
-          TableMigration(likes, newColumns: [likes.ascentId]),
-        );
-        await m.alterTable(
-          TableMigration(comments, newColumns: [comments.ascentId]),
-        );
+        await addViaRebuildIfMissing(likes, likes.ascentId);
+        await addViaRebuildIfMissing(comments, comments.ascentId);
       }
       // v7 -> v8: adds the brand-new `Profiles` table (#18, editable synced
       // display name). A fresh table, unrelated to any existing row/column,
@@ -309,25 +391,17 @@ class AppDatabase extends _$AppDatabase {
       // column is what schema drift looks like here (bugs #64/#65/#72), so
       // that migration must be applied BEFORE a build carrying this ships.
       //
-      // Guarded on the column not already being there, because SQLite has no
-      // `ADD COLUMN IF NOT EXISTS` and a duplicate add is a hard error, not a
-      // no-op. Two real paths reach this branch with the column already
-      // present: the v7 -> v8 branch above, whose `m.createTable(profiles)`
-      // builds the table from its CURRENT definition; and any harness that
-      // synthesizes an "old" database via `createAll` and then stamps an old
+      // Three real paths reach this branch with the column already present,
+      // which is what [addIfMissing] is for: the v7 -> v8 branch above, whose
+      // `m.createTable(profiles)` builds the table from its CURRENT
+      // definition; an upgrade interrupted after the ALTER committed but
+      // before `user_version` was stamped; and any harness that synthesizes
+      // an "old" database via `createAll` and then stamps an old
       // `user_version` (which is exactly what `app_database_migration_test`
       // does). Same re-runnability discipline as the v9 -> v10 index branch's
       // `IF NOT EXISTS`.
       if (from < 11) {
-        final columns = await customSelect(
-          "PRAGMA table_info('profiles')",
-        ).get();
-        final hasAvatarUrl = columns.any(
-          (row) => row.read<String>('name') == 'avatar_url',
-        );
-        if (!hasAvatarUrl) {
-          await m.addColumn(profiles, profiles.avatarUrl);
-        }
+        await addIfMissing(profiles, profiles.avatarUrl);
       }
       // v11 -> v12: `WallModerationRows` — the local, pull-only mirror of the
       // server's `wall_moderation` (community editing, phase 1). Same shape as
@@ -358,21 +432,10 @@ class AppDatabase extends _$AppDatabase {
       // `ADD COLUMN IF NOT EXISTS`, a duplicate add is a hard error, and both
       // a re-run and any harness that synthesizes an "old" database via
       // `createAll` before stamping an old `user_version` reach this branch
-      // with the columns already present.
+      // with the columns already present. (These six were where the
+      // [addIfMissing] helper originally lived, before it was hoisted to
+      // cover every branch.)
       if (from < 13) {
-        Future<void> addIfMissing(
-          TableInfo<Table, dynamic> table,
-          GeneratedColumn<Object> column,
-        ) async {
-          final existing = await customSelect(
-            "PRAGMA table_info('${table.actualTableName}')",
-          ).get();
-          final present = existing.any(
-            (row) => row.read<String>('name') == column.name,
-          );
-          if (!present) await m.addColumn(table, column);
-        }
-
         await addIfMissing(areas, areas.accessState);
         await addIfMissing(areas, areas.accessNote);
         await addIfMissing(sectors, sectors.accessState);

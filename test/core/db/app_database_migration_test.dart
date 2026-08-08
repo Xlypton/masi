@@ -2563,4 +2563,406 @@ void main() {
       },
     );
   });
+
+  /// INTERRUPTED migrations — the failure mode `onUpgrade` has by
+  /// construction, and the reason every step in it is guarded.
+  ///
+  /// `onUpgrade` is not atomic. Each `ALTER TABLE` commits on its own, but
+  /// drift stamps `PRAGMA user_version` only after the whole callback returns
+  /// (drift 2.34.2 `executor/helpers/engines.dart:562`). Kill the process
+  /// between the two — a swiped-away tab, an OOM, a browser reload mid-open —
+  /// and the schema change is on disk with the OLD version still recorded. On
+  /// the next open drift re-runs the exact same branch.
+  ///
+  /// Without guards that is not a retry, it is a brick: SQLite has no
+  /// `ADD COLUMN IF NOT EXISTS`, so the re-run answers `duplicate column
+  /// name`, the open fails, `user_version` is never advanced, and every
+  /// subsequent open fails identically with the user's whole local library
+  /// behind it. These tests reproduce that state on disk and assert the app
+  /// recovers from it instead.
+  group('interrupted migration (onUpgrade is not atomic)', () {
+    late Directory tempDir;
+    late File dbFile;
+
+    setUp(() async {
+      tempDir = await Directory.systemTemp.createTemp('masi_interrupted_');
+      dbFile = File(p.join(tempDir.path, 'interrupted.sqlite'));
+    });
+
+    tearDown(() async {
+      if (await tempDir.exists()) await tempDir.delete(recursive: true);
+    });
+
+    Future<List<String>> columnsOf(AppDatabase db, String table) => db
+        .customSelect("PRAGMA table_info('$table')")
+        .map((row) => row.read<String>('name'))
+        .get();
+
+    Future<int> userVersion(AppDatabase db) async =>
+        (await db.customSelect('PRAGMA user_version').getSingle())
+            .read<int>('user_version');
+
+    test(
+      'v1 -> v2 killed after the FIRST ADD COLUMN committed: reopening '
+      'completes the remaining five and finishes the upgrade, instead of '
+      'failing forever on `duplicate column name`',
+      () async {
+        // Build a real current-schema file with a row in it, then rewind it
+        // to the exact half-applied shape: `areas.owner_id` landed (the
+        // first statement of the `from < 2` branch), the other five did not,
+        // and `user_version` was never bumped off 1.
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh
+            .into(fresh.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-interrupted',
+                createdAt: 100,
+                updatedAt: 100,
+                name: 'Library Behind The Brick',
+              ),
+            );
+        await fresh.close();
+
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute('''
+          ALTER TABLE sectors DROP COLUMN owner_id;
+          ALTER TABLE walls DROP COLUMN owner_id;
+          ALTER TABLE photos DROP COLUMN owner_id;
+          ALTER TABLE routes DROP COLUMN owner_id;
+          ALTER TABLE walls DROP COLUMN visibility;
+          PRAGMA user_version = 1;
+        ''');
+        // Sanity: the rewind must really be half-applied, or this test would
+        // pass without the guards doing anything.
+        expect(raw.select('PRAGMA user_version;').first.values.first, 1);
+        expect(
+          raw
+              .select("PRAGMA table_info('areas')")
+              .map((r) => r['name'] as String),
+          contains('owner_id'),
+          reason: 'the already-committed ALTER is what the re-run trips on',
+        );
+        expect(
+          raw
+              .select("PRAGMA table_info('walls')")
+              .map((r) => r['name'] as String),
+          isNot(contains('owner_id')),
+        );
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        // Forces the migration to actually run (drift is lazy). Before the
+        // guards this threw `duplicate column name: owner_id` here, and on
+        // every open after it.
+        await expectLater(db.customSelect('SELECT 1').get(), completes);
+
+        // The half-applied step is completed, not skipped and not repeated.
+        expect(await columnsOf(db, 'areas'), contains('owner_id'));
+        expect(await columnsOf(db, 'sectors'), contains('owner_id'));
+        expect(await columnsOf(db, 'photos'), contains('owner_id'));
+        expect(await columnsOf(db, 'routes'), contains('owner_id'));
+        final wallColumns = await columnsOf(db, 'walls');
+        expect(wallColumns, contains('owner_id'));
+        expect(wallColumns, contains('visibility'));
+
+        // Every later branch re-ran too (from 1, all of them do) and none of
+        // them destroyed the row that was already there.
+        final area = await (db.select(db.areas)
+              ..where((t) => t.id.equals('area-interrupted')))
+            .getSingle();
+        expect(area.name, 'Library Behind The Brick');
+        expect(area.ownerId, isNull);
+
+        // The recovery actually STICKS: the version is stamped, so the next
+        // open is an ordinary no-migration open rather than another retry.
+        expect(await userVersion(db), 14);
+
+        // And a re-added column is wired into the generated companion, not
+        // merely physically present in SQLite.
+        await db
+            .into(db.sectors)
+            .insert(
+              SectorsCompanion.insert(
+                id: 'sector-post-recovery',
+                createdAt: 200,
+                updatedAt: 200,
+                areaId: 'area-interrupted',
+                name: 'Post-recovery Sector',
+                sortOrder: 0,
+                ownerId: const Value('u1'),
+              ),
+            );
+        final sector = await (db.select(db.sectors)
+              ..where((t) => t.id.equals('sector-post-recovery')))
+            .getSingle();
+        expect(sector.ownerId, 'u1');
+      },
+    );
+
+    test(
+      'v6 -> v7 re-run must NOT blank likes/comments.ascentId — the '
+      'alterTable rebuild fails quietly (data loss) where a plain ADD COLUMN '
+      'fails loudly',
+      () async {
+        // `TableMigration(likes, newColumns: [likes.ascentId])` is a PROMISE
+        // that ascent_id is absent from the old table: drift leaves it out of
+        // the rebuild's copy-INSERT (drift 2.34.2
+        // `query_builder/migration.dart:231`). Re-run it against a table that
+        // already HAS the column and it does not throw — it silently rewrites
+        // every row's ascent_id to NULL, orphaning every like and comment
+        // that was attached to an ascent log. That is strictly worse than the
+        // duplicate-column crash, which at least announces itself.
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh
+            .into(fresh.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-1',
+                createdAt: 100,
+                updatedAt: 100,
+                name: 'Area',
+              ),
+            );
+        await fresh
+            .into(fresh.sectors)
+            .insert(
+              SectorsCompanion.insert(
+                id: 'sector-1',
+                createdAt: 100,
+                updatedAt: 100,
+                areaId: 'area-1',
+                name: 'Sector',
+                sortOrder: 0,
+              ),
+            );
+        await fresh
+            .into(fresh.walls)
+            .insert(
+              WallsCompanion.insert(
+                id: 'wall-1',
+                createdAt: 100,
+                updatedAt: 100,
+                sectorId: 'sector-1',
+                name: 'Wall',
+                sortOrder: 0,
+              ),
+            );
+        await fresh
+            .into(fresh.photos)
+            .insert(
+              PhotosCompanion.insert(
+                id: 'photo-1',
+                createdAt: 100,
+                updatedAt: 100,
+                wallId: 'wall-1',
+                localPath: '/tmp/p.jpg',
+                kind: 'original',
+                width: 100,
+                height: 200,
+              ),
+            );
+        await fresh
+            .into(fresh.routes)
+            .insert(
+              RoutesCompanion.insert(
+                id: 'route-1',
+                createdAt: 100,
+                updatedAt: 100,
+                wallId: 'wall-1',
+                photoId: 'photo-1',
+                number: 1,
+                colorIndex: 0,
+                pointsJson: '[]',
+                symbolsJson: '[]',
+                sortOrder: 0,
+              ),
+            );
+        await fresh
+            .into(fresh.ascents)
+            .insert(
+              AscentsCompanion.insert(
+                id: 'ascent-1',
+                createdAt: 100,
+                updatedAt: 100,
+                routeId: 'route-1',
+                wallId: 'wall-1',
+                climbedAt: 100,
+                style: 'redpoint',
+                // Deliberately NOT the 'private' default: an unguarded
+                // re-add of this column could only ever throw, but asserting
+                // the real value survives also proves the guard skipped
+                // rather than rewrote.
+                visibility: const Value('public'),
+              ),
+            );
+        // The rows the quiet failure destroys: a like and a comment attached
+        // to an ASCENT (ascent_id set, wall_id null) rather than to a topo.
+        await fresh
+            .into(fresh.likes)
+            .insert(
+              LikesCompanion.insert(
+                id: 'like-on-ascent',
+                createdAt: 100,
+                updatedAt: 100,
+                ascentId: const Value('ascent-1'),
+              ),
+            );
+        await fresh
+            .into(fresh.comments)
+            .insert(
+              CommentsCompanion.insert(
+                id: 'comment-on-ascent',
+                createdAt: 100,
+                updatedAt: 100,
+                body: 'Strong effort',
+                ascentId: const Value('ascent-1'),
+              ),
+            );
+        await fresh.close();
+
+        // Rewind to the interrupted v6 -> v7 state: `ascents.visibility`
+        // committed, `ascents.author_name` did not, the two rebuilds had
+        // already run, and `user_version` was never bumped off 6.
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute(
+          'ALTER TABLE ascents DROP COLUMN author_name; '
+          'PRAGMA user_version = 6;',
+        );
+        expect(raw.select('PRAGMA user_version;').first.values.first, 6);
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        await expectLater(db.customSelect('SELECT 1').get(), completes);
+
+        // THE assertion: the re-run left the existing attachments alone.
+        final like = await (db.select(db.likes)
+              ..where((t) => t.id.equals('like-on-ascent')))
+            .getSingle();
+        expect(
+          like.ascentId,
+          'ascent-1',
+          reason: 'an unguarded newColumns: rebuild silently NULLs this',
+        );
+        final comment = await (db.select(db.comments)
+              ..where((t) => t.id.equals('comment-on-ascent')))
+            .getSingle();
+        expect(comment.ascentId, 'ascent-1');
+        expect(comment.body, 'Strong effort');
+
+        // The half-applied ADD COLUMN is completed, and the one that had
+        // already landed keeps its real value.
+        expect(await columnsOf(db, 'ascents'), contains('author_name'));
+        final ascent = await (db.select(db.ascents)
+              ..where((t) => t.id.equals('ascent-1')))
+            .getSingle();
+        expect(ascent.visibility, 'public');
+        expect(ascent.authorName, isNull);
+
+        expect(await userVersion(db), 14);
+      },
+    );
+
+    test(
+      'the extreme case — a fully-current database stamped all the way back '
+      'to v1 — replays every branch without throwing and without losing a '
+      'row',
+      () async {
+        // Nothing is dropped here: every ADD COLUMN, every createTable and
+        // every index in the whole chain re-runs against a schema that
+        // already has all of it. This is the shape a downgrade-then-reupgrade
+        // or a repeatedly-interrupted upgrade converges on, and it is the
+        // cheapest possible proof that no step in `onUpgrade` is
+        // single-shot.
+        final fresh = AppDatabase(NativeDatabase(dbFile));
+        await fresh
+            .into(fresh.areas)
+            .insert(
+              AreasCompanion.insert(
+                id: 'area-1',
+                createdAt: 100,
+                updatedAt: 100,
+                name: 'Area',
+              ),
+            );
+        await fresh
+            .into(fresh.sectors)
+            .insert(
+              SectorsCompanion.insert(
+                id: 'sector-1',
+                createdAt: 100,
+                updatedAt: 100,
+                areaId: 'area-1',
+                name: 'Sector',
+                sortOrder: 0,
+              ),
+            );
+        await fresh
+            .into(fresh.walls)
+            .insert(
+              WallsCompanion.insert(
+                id: 'wall-1',
+                createdAt: 100,
+                updatedAt: 100,
+                sectorId: 'sector-1',
+                name: 'Wall',
+                sortOrder: 0,
+                accessState: const Value('closed'),
+                accessNote: const Value('Nesting season'),
+              ),
+            );
+        await fresh
+            .into(fresh.photos)
+            .insert(
+              PhotosCompanion.insert(
+                id: 'photo-1',
+                createdAt: 100,
+                updatedAt: 100,
+                wallId: 'wall-1',
+                localPath: '/tmp/p.jpg',
+                kind: 'original',
+                width: 100,
+                height: 200,
+                isPrimary: const Value(true),
+              ),
+            );
+        await fresh.close();
+
+        final raw = sqlite3lib.sqlite3.open(dbFile.path);
+        raw.execute('PRAGMA user_version = 1;');
+        raw.close();
+
+        final db = AppDatabase(NativeDatabase(dbFile));
+        addTearDown(db.close);
+
+        await expectLater(db.customSelect('SELECT 1').get(), completes);
+
+        final wall = await (db.select(db.walls)
+              ..where((t) => t.id.equals('wall-1')))
+            .getSingle();
+        expect(wall.name, 'Wall');
+        expect(
+          wall.accessState,
+          'closed',
+          reason: 'a replayed ADD COLUMN must not overwrite a real value '
+              'with the column default',
+        );
+        expect(wall.accessNote, 'Nesting season');
+
+        // The v5 -> v6 backfill also re-runs; for a wall with a single live
+        // original it is idempotent by construction.
+        final photo = await (db.select(db.photos)
+              ..where((t) => t.id.equals('photo-1')))
+            .getSingle();
+        expect(photo.isPrimary, isTrue);
+        expect(photo.sortOrder, 0);
+
+        expect(await userVersion(db), 14);
+      },
+    );
+  });
 }
