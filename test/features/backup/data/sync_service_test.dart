@@ -2542,8 +2542,8 @@ void main() {
 
     test(
       'a TRUE orphan (the other owner un-shared the topo, so no batch can '
-      'supply the parent) is reported on the visible error surface, never '
-      'silently dropped -- and the rest of the pull still lands',
+      'supply the parent) is COUNTED, not treated as a sync failure -- and the '
+      'rest of the pull still lands',
       () async {
         final remote = FakeSyncRemote();
 
@@ -2610,14 +2610,37 @@ void main() {
         addTearDown(() => fresh.db.close());
         final result = await fresh.service.pullOwnAndShared();
 
+        // CHANGED 2026-08-08, deliberately, and against what this test used to
+        // assert. It required the orphan on the "Couldn't sync ... Retry"
+        // surface, citing #72 ("never vanish behind a debugPrint"). #72 is
+        // still right about hidden FAILURES -- but this is not a failure. The
+        // parent is gone because its owner un-shared, deleted, or a moderator
+        // took down the topo, and a takedown hides content from everyone
+        // (decided 2026-08-08). So the row can never resolve, retrying
+        // re-fetches the same orphan, and the banner could never clear: it told
+        // the user their sync was broken when nothing was broken and nothing
+        // was lost.
+        //
+        // It stays VISIBLE -- as a count and a log line -- which is what #72
+        // actually protects. What changed is only whether an expected,
+        // unfixable state is dressed up as breakage.
         expect(
           result.errors.join(' | '),
-          allOf(contains('own rows deferred'), contains('like-on-u2')),
-          reason: '#72: an unimportable row must never vanish behind a '
-              'debugPrint -- it belongs on the "Couldn\'t sync ... Retry" '
-              'surface',
+          isNot(contains('own rows deferred')),
+          reason: 'an orphan whose parent can never come back must not raise a '
+              'sync error the user can do nothing about and that can never '
+              'clear',
         );
-        expect(result.ownImported, isFalse);
+        expect(
+          result.ownRowsOrphaned,
+          1,
+          reason: 'still reported, just not as a failure',
+        );
+        expect(
+          result.ownImported,
+          isTrue,
+          reason: 'every importable row landed -- the pull did its job',
+        );
         // Everything importable still imported.
         expect(
           (await fresh.db.select(fresh.db.likes).get()).map((l) => l.id),
