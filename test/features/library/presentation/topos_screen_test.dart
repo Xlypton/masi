@@ -1927,6 +1927,42 @@ void main() {
 
   group('A3: delete confirm flow', () {
     testWidgets(
+      'Delete is NOT in the main menu — it lives behind "More…", so a mis-tap '
+      'in the sheet that also holds Rename and Show on map cannot start a '
+      'deletion (decided 2026-08-08: deletion should be rare, so reaching it '
+      'should be a decision rather than a slip)',
+      (tester) async {
+        final container = _makeContainer();
+        final wallId = await _dbWork(
+          tester,
+          () => container
+              .read(libraryCrudRepositoryProvider)
+              .createTopo('Roof Wall'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(Key('topo-delete-$wallId')),
+          findsNothing,
+          reason: 'Delete must not be reachable from the first sheet',
+        );
+        expect(find.byKey(Key('topo-more-$wallId')), findsOne);
+
+        await tester.tap(find.byKey(Key('topo-more-$wallId')));
+        await tester.pumpAndSettle();
+        expect(
+          find.byKey(Key('topo-delete-$wallId')),
+          findsOne,
+          reason: 'one step further in, same control, same key',
+        );
+      },
+    );
+
+    testWidgets(
       'confirming delete calls softDeleteWall via the real repo and the '
       'row disappears once the stream re-emits',
       (tester) async {
@@ -1946,6 +1982,10 @@ void main() {
         await tester.tap(find.byKey(Key('topo-menu-$wallId')));
         await tester.pumpAndSettle();
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-$wallId')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-$wallId')));
         await tester.pumpAndSettle();
 
@@ -6420,6 +6460,10 @@ void main() {
 
         await tester.tap(find.byKey(Key('topo-menu-$wallId')));
         await tester.pumpAndSettle();
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-$wallId')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-$wallId')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-confirm-$wallId')));
@@ -6591,6 +6635,10 @@ void main() {
       );
 
       await tester.tap(find.byKey(Key('topo-menu-$wallId')));
+      await tester.pumpAndSettle();
+      // Delete sits one step in now, behind "More…", so it is not a single tap
+      // from Rename (decided 2026-08-08).
+      await tester.tap(find.byKey(Key('topo-more-$wallId')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('topo-delete-$wallId')));
       await tester.pumpAndSettle();

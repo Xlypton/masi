@@ -238,6 +238,10 @@ void main() {
       (tester) async {
         final ctx = await _openMenu(tester);
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
 
@@ -256,6 +260,10 @@ void main() {
       (tester) async {
         final ctx = await _openMenu(tester);
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-blocked-${ctx.wallId}')));
@@ -319,6 +327,10 @@ void main() {
     ) async {
       final ctx = await open(tester);
 
+      // Delete sits one step in now, behind "More…", so it is not a single tap
+      // from Rename (decided 2026-08-08).
+      await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
       await tester.pumpAndSettle();
 
@@ -374,6 +386,10 @@ void main() {
       (tester) async {
         final ctx = await open(tester);
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
 
@@ -398,6 +414,10 @@ void main() {
         expect(find.text('Unpublish'), findsOne);
         expect(find.text('Withdraw from Community…'), findsNothing);
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
         expect(find.byKey(Key('topo-delete-confirm-${ctx.wallId}')), findsOne);
@@ -419,6 +439,10 @@ void main() {
         final ctx = await _openMenu(tester, state: 'wat');
 
         expect(find.text('Unpublish'), findsOne);
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
         expect(find.byKey(Key('topo-delete-confirm-${ctx.wallId}')), findsOne);

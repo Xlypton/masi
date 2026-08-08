@@ -485,11 +485,17 @@ class _TopoRowState extends ConsumerState<_TopoRow>
             value: 'history',
             subtitle: 'What changed, and when',
           ),
+        // Delete lives one step further in, deliberately (decided
+        // 2026-08-08). It used to sit right here, a single tap from "Rename"
+        // and "Show on map" — same sheet, same gesture, and the only thing
+        // between a mis-tap and destroying a topo was the confirm. Deletion is
+        // meant to be rare, so reaching it should be a decision rather than a
+        // slip. This is about the PATH to the control, not the control: the
+        // confirm sheet and the published-topo block below are unchanged.
         MasiSheetAction(
-          key: Key('topo-delete-${topo.wallId}'),
-          label: 'Delete',
-          value: 'delete',
-          isDestructive: true,
+          key: Key('topo-more-${topo.wallId}'),
+          label: 'More…',
+          value: 'more',
         ),
       ],
     );
@@ -516,9 +522,43 @@ class _TopoRowState extends ConsumerState<_TopoRow>
         await _handleWithdraw(context, ref, topo, reportBusy);
       case 'cancel-withdraw':
         await _handleCancelWithdraw(context, ref, topo, isWithdrawn, reportBusy);
+      case 'more':
+        await _showMoreSheet(context, ref, topo, reportBusy, isProtected);
       case 'delete':
         await _handleDelete(context, ref, topo, reportBusy, isProtected);
     }
+  }
+
+  /// The second step in front of [_handleDelete].
+  ///
+  /// One entry today, which is the point: this sheet exists to put a
+  /// deliberate step between the everyday menu and the only action that
+  /// destroys something. Keyed `topo-delete-<id>` exactly as before, so the
+  /// control it leads to is the same one every test and flow already targets —
+  /// only the route to it changed.
+  Future<void> _showMoreSheet(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+    MasiBusyReporter reportBusy,
+    bool isProtected,
+  ) async {
+    final action = await showMasiActionSheet<String>(
+      context,
+      sheetKey: Key('topo-more-sheet-${topo.wallId}'),
+      title: topo.name,
+      actions: [
+        MasiSheetAction(
+          key: Key('topo-delete-${topo.wallId}'),
+          label: 'Delete',
+          value: 'delete',
+          isDestructive: true,
+          subtitle: isProtected ? 'Published — withdraw first' : null,
+        ),
+      ],
+    );
+    if (!context.mounted || action != 'delete') return;
+    await _handleDelete(context, ref, topo, reportBusy, isProtected);
   }
 
   /// "Stops being public in 3 days" for the Cancel action's subtitle, or null
