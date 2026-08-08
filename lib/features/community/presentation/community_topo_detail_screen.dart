@@ -883,15 +883,26 @@ class _CommunityTopoDetailScreenState
                       // that asymmetry is the whole point of R-1. The topo is
                       // the author's work; whether there is a loose block over
                       // the belay is not.
-                      TextButton.icon(
-                        key: const Key('community-report-hazard'),
-                        onPressed: () => _reportHazard(wallId),
-                        icon: MasiIcon(
-                          'warning',
-                          size: 16,
-                          color: colors.ink2,
+                      // Flexible + an ellipsizing label: at a large
+                      // accessibility text scale "Report a hazard" outgrows
+                      // what the row has left after the like cluster, and an
+                      // inflexible child there is a RenderFlex overflow rather
+                      // than a shortened label.
+                      Flexible(
+                        child: TextButton.icon(
+                          key: const Key('community-report-hazard'),
+                          onPressed: () => _reportHazard(wallId),
+                          icon: MasiIcon(
+                            'warning',
+                            size: 16,
+                            color: colors.ink2,
+                          ),
+                          label: const Text(
+                            'Report a hazard',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                         ),
-                        label: const Text('Report a hazard'),
                       ),
                     ],
                   ),
@@ -1185,85 +1196,110 @@ class _CommunityTopoDetailScreenState
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // Tapping the grade is how you comment on the grade. A dedicated
-          // "suggest a grade" button would be a third control in a row that
-          // already carries beta-video and Log ascent; this adds no chrome and
-          // puts the affordance exactly where the subject is.
-          // Flexible so the grade cluster yields before the row overflows: the
-          // badge plus a consensus chip is wider than the badge alone, and at
-          // a large text scale the two together tipped the row over its budget
-          // by a hair.
-          Flexible(
-            child: GestureDetector(
-              key: Key('route-grade-tap-${entry.dbId}'),
-              onTap: () => _suggestGrade(entry),
-              child: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (grade != null) ...[
-                    _GradeBadge(grade: grade),
-                    const SizedBox(width: MasiSpacing.xs),
-                  ],
-                  // The community's median, BESIDE the author's grade and
-                  // never instead of it (R-1). Nothing below three opinions.
-                  GradeConsensusChip(
-                    routeId: entry.dbId,
-                    system: route.gradeSystem ?? GradeSystem.french,
-                    authorGrade: grade,
-                  ),
-                ],
-              ),
-            ),
-          ),
-          const SizedBox(width: MasiSpacing.sm),
+          // The grade cluster and the route name share ONE `Expanded` rather
+          // than sitting in the outer row as two separate flex children.
+          //
+          // They used to be `Flexible(grade)` + `Expanded(name)`, both at the
+          // default flex of 1, and that is what pushed "Log ascent" off the
+          // right edge. A `Flexible` is LOOSE: it is allotted half the free
+          // width but only takes the ~50 px it needs, and the leftover is NOT
+          // handed to its `Expanded` sibling — it stays free space, which
+          // `mainAxisAlignment.start` then parks at the END of the row. So the
+          // trailing actions floated short of the card's right edge by
+          // whatever the grade cluster happened not to use, and by an amount
+          // that changed from row to row with the grade's width.
+          //
+          // Nesting them inside a single TIGHT flex child leaves the outer row
+          // with no leftover to misplace, so the trailing actions are flush
+          // right on every row. The inner row keeps the original
+          // Flexible/Expanded pair, and with it the reason the `Flexible` was
+          // introduced: the badge plus a consensus chip is wider than the
+          // badge alone, and at a large text scale the two together tipped the
+          // row over its budget by a hair.
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
-                Text(
-                  _routeNameLabel(route),
-                  style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                    color: colors.ink,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (route.styleTags.isNotEmpty || (route.stars ?? 0) > 0)
-                  Padding(
-                    padding: const EdgeInsets.only(top: MasiSpacing.xs),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                // Tapping the grade is how you comment on the grade. A
+                // dedicated "suggest a grade" button would be a third control
+                // in a row that already carries beta-video and Log ascent;
+                // this adds no chrome and puts the affordance exactly where
+                // the subject is.
+                Flexible(
+                  child: GestureDetector(
+                    key: Key('route-grade-tap-${entry.dbId}'),
+                    onTap: () => _suggestGrade(entry),
+                    child: Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        if (route.styleTags.isNotEmpty)
-                          Wrap(
-                            spacing: 4,
-                            runSpacing: 4,
-                            children: [
-                              for (final tag in route.styleTags)
-                                _RouteStyleTagChip(
-                                  routeId: entry.dbId,
-                                  tag: tag,
-                                ),
-                            ],
-                          ),
-                        if ((route.stars ?? 0) > 0)
-                          Row(
-                            key: Key('route-stars-${entry.dbId}'),
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              for (var i = 0; i < route.stars!; i++)
-                                const Padding(
-                                  padding: EdgeInsets.only(right: 1),
-                                  child: MasiIcon('star_fill', size: 12),
-                                ),
-                            ],
-                          ),
+                        if (grade != null) ...[
+                          _GradeBadge(grade: grade),
+                          const SizedBox(width: MasiSpacing.xs),
+                        ],
+                        // The community's median, BESIDE the author's grade
+                        // and never instead of it (R-1). Nothing below three
+                        // opinions.
+                        GradeConsensusChip(
+                          routeId: entry.dbId,
+                          system: route.gradeSystem ?? GradeSystem.french,
+                          authorGrade: grade,
+                        ),
                       ],
                     ),
                   ),
+                ),
+                const SizedBox(width: MasiSpacing.sm),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        _routeNameLabel(route),
+                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                          color: colors.ink,
+                          fontWeight: FontWeight.w600,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                      if (route.styleTags.isNotEmpty || (route.stars ?? 0) > 0)
+                        Padding(
+                          padding: const EdgeInsets.only(top: MasiSpacing.xs),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (route.styleTags.isNotEmpty)
+                                Wrap(
+                                  spacing: 4,
+                                  runSpacing: 4,
+                                  children: [
+                                    for (final tag in route.styleTags)
+                                      _RouteStyleTagChip(
+                                        routeId: entry.dbId,
+                                        tag: tag,
+                                      ),
+                                  ],
+                                ),
+                              if ((route.stars ?? 0) > 0)
+                                Row(
+                                  key: Key('route-stars-${entry.dbId}'),
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    for (var i = 0; i < route.stars!; i++)
+                                      const Padding(
+                                        padding: EdgeInsets.only(right: 1),
+                                        child: MasiIcon('star_fill', size: 12),
+                                      ),
+                                  ],
+                                ),
+                            ],
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),

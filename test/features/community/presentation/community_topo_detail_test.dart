@@ -1318,6 +1318,60 @@ void main() {
       },
     );
   });
+
+  testWidgets(
+    'the Log ascent button sits flush against the route card\'s right edge, '
+    'and the row does not overflow at phone width',
+    (tester) async {
+      // A real phone viewport. The default 800x600 test surface has enough
+      // slack to hide this: the misalignment is the grade cluster's UNUSED
+      // flex allotment, and how much that is depends on how much width is
+      // going spare.
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final buttonKey = Key('community-log-ascent-${seeded.routeDbId}');
+      await scrollKeyIntoView(tester, buttonKey);
+
+      final button = find.byKey(buttonKey);
+      // `.first` — the button's CLOSEST Row ancestor, which is the outer route
+      // row whose right edge is the card's content edge. (The leading cluster's
+      // inner row is a sibling of this button, not an ancestor of it, so it
+      // cannot be picked up here; `.last` would walk all the way out to
+      // whatever Row sits nearest the root and prove nothing.)
+      final row = find
+          .ancestor(of: button, matching: find.byType(Row))
+          .first;
+
+      // The measurement that failed before the fix: the button's right edge
+      // was 10.5 px shy of the row's, because the grade cluster's loose
+      // `Flexible` left that much of its allotment unused and
+      // `mainAxisAlignment.start` parked the remainder at the end of the row.
+      // Widths here come from flutter_test's fixed-advance test font, so the
+      // ABSOLUTE numbers mean nothing — the equality of the two right edges is
+      // the whole assertion, and it is font-independent.
+      expect(
+        tester.getRect(button).right,
+        moreOrLessEquals(tester.getRect(row).right, epsilon: 0.01),
+      );
+    },
+  );
 }
 
 /// Whether [FocusManager.instance.primaryFocus] is currently held by a text
