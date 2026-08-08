@@ -855,7 +855,33 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     // collapsing as it scrolls).
     final isContentReframe = !_hasFramed || !sameImage;
 
-    if (_hasFramed && sameImage && !viewportChanged) {
+    // Somebody OUTSIDE this widget wrote identity to the shared controller
+    // since our last auto-frame — and [TopoCanvasScreen] does exactly that,
+    // unconditionally, from its `selectedImageProvider` listener.
+    //
+    // Both branches below reason only about OUR OWN inputs (content, viewport)
+    // and about a USER pan; neither can see a third party stomping the
+    // controller. When that write lands without any accompanying content or
+    // viewport change, the "truly unchanged" early return fires, nothing
+    // reframes, and — because `_autoFrameApplied` is already true from the
+    // previous frame — the photo stays VISIBLE at identity, which with
+    // `constrained: false` plus the oversized child paints its top-left corner
+    // at 1:1 and never recovers. That is bug #78 arriving by a different road
+    // than the ones the guards above were built for.
+    //
+    // Identity is safe to treat as "not ours": every fit this method computes
+    // for a real (positive-sized) image is a scale+translate that is only
+    // identity in the degenerate case, and `_hasFrameableImageSize` has already
+    // excluded that above. `_autoFrameWritePending` is excluded because during
+    // that window identity is legitimately still on the controller — it is our
+    // own not-yet-applied write, not a foreign one.
+    final externallyReset =
+        _lastAutoFrameMatrix != null &&
+        !_autoFrameWritePending &&
+        _lastAutoFrameMatrix != Matrix4.identity() &&
+        widget.transformationController.value == Matrix4.identity();
+
+    if (_hasFramed && sameImage && !viewportChanged && !externallyReset) {
       return; // Truly unchanged: never stomp a manual pan/zoom.
     }
 
@@ -877,10 +903,17 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // supersede the still-pending one, rather than mistaking our own
       // lag for a manual pan and permanently committing the stale
       // viewport's fit — the "auto-fit sticks after a fast resize" bug.
+      // `externallyReset` is the third way the live value can legitimately
+      // differ from `_lastAutoFrameMatrix` without a user having panned: the
+      // owning screen reset the shared controller to identity. Without it here,
+      // a resize arriving after such a reset is read as "the user has taken
+      // over" and returns — stranding the photo at identity for exactly the
+      // same reason the branch above had to account for.
       final stillAutoFramed =
           _lastAutoFrameMatrix != null &&
           (widget.transformationController.value == _lastAutoFrameMatrix ||
-              _autoFrameWritePending);
+              _autoFrameWritePending ||
+              externallyReset);
       if (!stillAutoFramed) return;
     } else if (!_hasFramed &&
         widget.transformationController.value != Matrix4.identity()) {
