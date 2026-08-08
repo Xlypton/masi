@@ -6,6 +6,7 @@ import '../core/db/storage_durability_provider.dart';
 import '../features/account/application/pwa_install_providers.dart';
 import '../features/backup/application/sync_orchestrator.dart';
 import '../features/community/application/feed_freshness_providers.dart';
+import '../features/notifications/application/notification_realtime.dart';
 import '../features/topo/presentation/canvas_chrome.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'install_banner.dart';
@@ -116,6 +117,12 @@ class _NavShellState extends ConsumerState<NavShell> {
     // pill sits over the home indicator. Everywhere else (in-browser Safari,
     // native iOS/Android, tests) this stays false and behavior is unchanged.
     final isStandalone = ref.watch(pwaInstallStatusProvider).isStandalone;
+    // Watched HERE because a Realtime subscription only exists while something
+    // watches the provider (same lifecycle rule as `syncOrchestratorProvider`),
+    // and this shell is the one widget mounted for the whole signed-in session.
+    // Hanging it off the notification bell instead would tie live delivery to
+    // whether the Feed tab happens to be built.
+    ref.watch(notificationRealtimeProvider);
     return Scaffold(
       // At most ONE shell notice sits ABOVE the branch content, never covering
       // the floating bottom bar — see [ShellNotices]. On the overwhelmingly

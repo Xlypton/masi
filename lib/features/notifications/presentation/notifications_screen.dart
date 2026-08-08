@@ -8,6 +8,7 @@ import '../../../shared/presentation/masi_icon.dart';
 import '../../account/application/profile_providers.dart';
 import '../application/notification_providers.dart';
 import '../domain/app_notification.dart';
+import 'push_toggle.dart';
 
 /// The notification centre: what other people did to your work.
 ///
@@ -63,9 +64,9 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
       // Said out loud rather than swallowed: the badge is still there, and a
       // user who tapped "Mark all read" and saw nothing change would assume
       // the app is broken rather than that the network is.
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't mark those read")),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text("Couldn't mark those read")));
     }
   }
 
@@ -97,24 +98,33 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
       ),
       body: SafeArea(
         bottom: false,
-        child: RefreshIndicator(
-          onRefresh: _refresh,
-          child: MasiAsyncView<List<AppNotification>>(
-            value: ref.watch(notificationsProvider),
-            errorMessage: "Couldn't load your notifications",
-            showErrorDetail: false,
-            onRetry: _refresh,
-            skeleton: (context) => const Center(
-              child: Padding(
-                padding: EdgeInsets.all(MasiSpacing.xxl),
-                child: CircularProgressIndicator(),
-              ),
-            ),
-            data: (context, list) => list.isEmpty
-                ? _NotificationsEmpty(refreshFailed: _refreshError != null)
-                : _NotificationsList(list: list),
+        child: Column(
+          children: [
+            const PushToggle(),
+            Expanded(child: _buildList()),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildList() {
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: MasiAsyncView<List<AppNotification>>(
+        value: ref.watch(notificationsProvider),
+        errorMessage: "Couldn't load your notifications",
+        showErrorDetail: false,
+        onRetry: _refresh,
+        skeleton: (context) => const Center(
+          child: Padding(
+            padding: EdgeInsets.all(MasiSpacing.xxl),
+            child: CircularProgressIndicator(),
           ),
         ),
+        data: (context, list) => list.isEmpty
+            ? _NotificationsEmpty(refreshFailed: _refreshError != null)
+            : _NotificationsList(list: list),
       ),
     );
   }

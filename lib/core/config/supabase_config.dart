@@ -34,3 +34,18 @@ const String supabaseAnonKey = String.fromEnvironment(
   'SUPABASE_ANON_KEY',
   defaultValue: 'sb_publishable_CjAxoGe0OSS0RrIK3nT6Ng_p0-uSPKC',
 );
+
+/// The Web Push VAPID **public** key.
+///
+/// Public by design — it is the identity a push service checks a send against,
+/// and it ships to every client so the browser can bind a subscription to it.
+/// The matching PRIVATE key lives only in the `send-push` Edge Function's
+/// secrets and must never appear in this repo or in any build.
+///
+/// Rotating this invalidates every existing subscription: a push service checks
+/// the send's signature against the key the subscription was created with, so
+/// devices would have to re-subscribe before they received anything again.
+const String vapidPublicKey = String.fromEnvironment(
+  'VAPID_PUBLIC_KEY',
+  defaultValue: 'BFlwnCh7rbcN9w0Kw-D4KEcDkrvOjX42w248mql7VZckJbWDcus39QZ4x0kjVsQ_SlMreZpRdqVV2CUar6dItaw',
+);
