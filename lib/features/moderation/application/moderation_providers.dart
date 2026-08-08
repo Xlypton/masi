@@ -8,6 +8,7 @@ import '../data/moderation_remote.dart';
 import '../data/moderation_repository.dart';
 import '../domain/abandoned_topo.dart';
 import '../domain/access_state.dart';
+import '../domain/deletion_request.dart';
 import '../domain/material_change.dart';
 import '../domain/moderation_state.dart';
 
@@ -188,6 +189,50 @@ class MaterialChangeService {
 
 final materialChangeServiceProvider = Provider<MaterialChangeService>(
   MaterialChangeService.new,
+);
+
+/// Owners asking permission to delete a topo that has been public, oldest
+/// first — somebody is waiting on each of these.
+///
+/// Not best-effort, for the same reason as [moderationQueueProvider]: an empty
+/// list that actually means "we could not ask" reads as "nobody is waiting",
+/// and the person waiting has been told a moderator will look.
+final deletionRequestsProvider =
+    FutureProvider.autoDispose<List<DeletionRequest>>((ref) async {
+      final rows = await ref
+          .watch(moderationRemoteProvider)
+          .fetchDeletionRequests();
+      return [
+        for (final row in rows) ?DeletionRequest.fromRow(row),
+      ];
+    });
+
+/// Deciding a deletion request.
+///
+/// Approving GRANTS PERMISSION — it deletes nothing. The owner still performs
+/// the deletion, so the destructive act stays with the person whose work it is
+/// and an admin's mis-tap costs nobody their topo. That is also why this
+/// service cannot delete anything itself, and has no method that could.
+class DeletionReviewService {
+  const DeletionReviewService(this._ref);
+
+  final Ref _ref;
+
+  Future<String> review({
+    required String requestId,
+    required bool approve,
+    String? note,
+  }) async {
+    final result = await _ref
+        .read(moderationRemoteProvider)
+        .reviewDeletion(requestId: requestId, approve: approve, note: note);
+    _ref.invalidate(deletionRequestsProvider);
+    return result;
+  }
+}
+
+final deletionReviewServiceProvider = Provider<DeletionReviewService>(
+  DeletionReviewService.new,
 );
 
 /// The effective access/closure state for one topo, after inheritance up the

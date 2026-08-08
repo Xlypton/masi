@@ -311,10 +311,25 @@ The AR/camera path can ONLY be verified on the physical device, and the usual `f
   deploy whenever the change touched app behaviour, UI, routing, the data layer, or anything server-gated;
   skip it only for pure refactors, docs, or tooling — and say which case you decided.
 
-## Version control — commit automatically
+## Version control — branch, commit, and push automatically
 
 Commit **without being asked**. The goal is a clean, granular history we can read and revert.
 
+**More than one agent works this repo now (changed 2026-08-08), so `main` is a shared base, not a
+scratchpad.** That reverses the two rules this section used to carry — it said commit straight to
+`main` and never push. Both are now the opposite:
+
+- **Work on a branch, never directly on `main`.** Cut it from an up-to-date `main`
+  (`git checkout main && git pull && git checkout -b <type>/<subject>`). Name it for the work, not
+  the agent: `fix/shared-ascent-visibility`, `feat/community-ranking`. Two agents on one branch is
+  the thing the branching is there to avoid — if you do not know what the other agent is doing, that
+  is a reason for a separate branch, not a shared one.
+- **Push by default**, and set upstream on the first push (`git push -u origin <branch>`). Push after
+  each verified unit of work rather than saving it up: an unpushed branch is invisible to the other
+  agent, which is most of the point.
+- **Opening a PR still needs an explicit ask.** Push is how work becomes visible; a PR is a request
+  for a decision, and that stays the user's call. Same for merging into `main` and for `--force`
+  anything.
 - **Commit after every verified unit of work** — as soon as a subtask/fix clears its verify gate
   (analyze 0 + tests green + independent verify where the orchestrate flow applies), commit it. Don't
   let changes pile up uncommitted.
@@ -322,12 +337,19 @@ Commit **without being asked**. The goal is a clean, granular history we can rea
   `git revert`/`git reset` a safe undo. Don't bundle unrelated work into one commit.
 - **Conventional messages**: `type(scope): summary` (e.g. `fix(topo): center canvas image vertically`,
   `feat(community): add likes on published topos`). Body only when the *why* isn't obvious.
-- **Commit straight to `main`** (solo, local-first repo). **Never push to a remote** or open a PR without
-  the user explicitly asking — automatic means *commit*, not publish.
 - End every commit message with the trailer:
   `Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>`
-- Never commit secrets (the `~/.config/climbtopo-mgmt-token`, any `sb_secret_…`/`sbp_…` key). The client
-  uses only the anon/publishable key.
+- Never commit secrets (the `~/.config/climbtopo-mgmt-token`, any `sb_secret_…`/`sbp_…` key, the E2E
+  password at `~/.config/masi-e2e-password`, the Cloudflare token at `~/.config/cf-pages-token`). The
+  client uses only the anon/publishable key. **Pushing publishes** — this matters more now that push
+  is the default, because a secret committed to a branch is on GitHub the moment that branch goes up,
+  and rewriting history does not un-publish it.
+
+**The live Supabase project is shared too, and it is NOT branched.** A migration applied from one
+branch is live for every agent and for the user's real data immediately — there is no per-branch
+database. So a schema change is effectively merged the moment it is applied, whatever branch its
+`.sql` file sits on. Apply migrations that are additive and verified (the recipe below), and say in
+the commit that they are already live.
 
 ## Supabase backend — auto-troubleshoot + schema edits (DEV env, standing approval)
 

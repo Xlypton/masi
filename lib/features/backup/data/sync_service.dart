@@ -1,7 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show debugPrint, kIsWeb;
 import 'package:path/path.dart' as p;
 
 import '../../../core/db/app_database.dart' as db;
@@ -298,6 +298,7 @@ class PullResult {
     required this.ownImported,
     required this.sharedImported,
     required this.errors,
+    this.ownRowsOrphaned = 0,
     this.sharedPhotoBytesSkipped = 0,
     this.sharedPhotoBudgetReason = SharedPhotoBudgetReason.withinBudget,
   }) : outcome = SyncPullOutcome.pulled;
@@ -310,6 +311,7 @@ class PullResult {
       ownImported = false,
       sharedImported = false,
       errors = const [],
+      ownRowsOrphaned = 0,
       sharedPhotoBytesSkipped = 0,
       sharedPhotoBudgetReason = SharedPhotoBudgetReason.withinBudget;
 
@@ -336,6 +338,21 @@ class PullResult {
   /// threw — see [errors]). Always 0 when [outcome] isn't
   /// [SyncPullOutcome.pulled].
   final int photosDownloaded;
+
+  /// Own rows that could not be imported because the topo they hang off is no
+  /// longer available to this account — deleted by its owner, un-shared, or
+  /// taken down by a moderator.
+  ///
+  /// **Reported, but deliberately NOT an error.** These rows are untouched in
+  /// the cloud and nothing is lost; the local library simply cannot render a
+  /// climb logged on a topo that no longer exists. Counting them as a sync
+  /// failure produced a red "Couldn't sync — Retry" banner that could never
+  /// clear, because retrying re-fetches the same orphan every time — see the
+  /// deferral block in [pullOwnAndShared] for the live case this came from.
+  ///
+  /// A non-zero value here is a fact about the world, not a defect to chase.
+  /// If you want the row back, the topo has to come back.
+  final int ownRowsOrphaned;
 
   /// True when the signed-in user's OWN rows were successfully fetched AND
   /// imported this call. `false` when signed out, or when the own-row
@@ -1305,6 +1322,7 @@ class SyncService {
     var ownPhotosDownloaded = 0;
     var sharedPhotosDownloaded = 0;
     var ownImported = false;
+    var ownRowsOrphaned = 0;
     var sharedImported = false;
     var sharedPhotoBytesSkipped = 0;
     final errors = <String>[];
@@ -1548,15 +1566,38 @@ class SyncService {
           mode: ConflictMode.lww,
         );
         if (retry.hasDeferrals) {
-          // A genuine orphan: the parent is in neither batch (e.g. its owner
-          // un-shared or hard-deleted the topo this row hangs off). The row is
-          // untouched in the cloud and will be retried on every pull — and the
-          // user is TOLD, on the visible "Couldn't sync … Retry" surface,
-          // rather than it disappearing behind a debugPrint.
-          ownImported = false;
-          errors.add(
-            'own rows deferred (parent row missing after shared import): '
-            '${retry.summary}',
+          // A genuine orphan: the parent is in neither batch, because the topo
+          // this row hangs off was deleted, un-shared, or taken down by a
+          // moderator. **This is expected, terminal, and NOT a sync failure.**
+          //
+          // It used to set `ownImported = false` and push onto `errors`, which
+          // is the red "Couldn't sync — Retry" banner. That was wrong in the
+          // one way a sync error must never be wrong: it can NEVER clear.
+          // Retrying re-fetches the same orphan and re-fails, forever, and the
+          // banner tells the user their sync is broken when nothing is broken
+          // and nothing is lost — the row is untouched in the cloud, and if the
+          // topo ever comes back the next pull imports it (no outbox, D-4).
+          //
+          // Observed live on 2026-08-08: the user's own shared ascent on
+          // another climber's topo, which that climber later deleted. Both this
+          // and the shared-side half of it produced a permanent banner.
+          //
+          // Deliberately NOT re-openable by making takedowns readable. A
+          // takedown hides content from everyone, including people who climbed
+          // there (decided 2026-08-08) — so the parent is gone by design and
+          // the client's job is to stop shouting about it, not to fetch it.
+          //
+          // This is not the swallowing #72 forbade. That was about losing a
+          // failure nobody could see; here the count is reported on
+          // [PullResult.ownRowsOrphaned] and logged. What changed is only
+          // whether an expected, unfixable state is dressed up as breakage.
+          ownRowsOrphaned = retry.deferredRows.values.fold(
+            0,
+            (sum, rows) => sum + rows.length,
+          );
+          debugPrint(
+            'masi/sync: $ownRowsOrphaned own row(s) skipped — their topo is no '
+            'longer available to this account: ${retry.summary}',
           );
         }
       } catch (e) {
@@ -1572,6 +1613,7 @@ class SyncService {
       ownImported: ownImported,
       sharedImported: sharedImported,
       errors: errors,
+      ownRowsOrphaned: ownRowsOrphaned,
       sharedPhotoBytesSkipped: sharedPhotoBytesSkipped,
       sharedPhotoBudgetReason: sharedPhotoBytesSkipped == 0
           ? SharedPhotoBudgetReason.withinBudget

@@ -485,11 +485,17 @@ class _TopoRowState extends ConsumerState<_TopoRow>
             value: 'history',
             subtitle: 'What changed, and when',
           ),
+        // Delete lives one step further in, deliberately (decided
+        // 2026-08-08). It used to sit right here, a single tap from "Rename"
+        // and "Show on map" — same sheet, same gesture, and the only thing
+        // between a mis-tap and destroying a topo was the confirm. Deletion is
+        // meant to be rare, so reaching it should be a decision rather than a
+        // slip. This is about the PATH to the control, not the control: the
+        // confirm sheet and the published-topo block below are unchanged.
         MasiSheetAction(
-          key: Key('topo-delete-${topo.wallId}'),
-          label: 'Delete',
-          value: 'delete',
-          isDestructive: true,
+          key: Key('topo-more-${topo.wallId}'),
+          label: 'More…',
+          value: 'more',
         ),
       ],
     );
@@ -516,9 +522,43 @@ class _TopoRowState extends ConsumerState<_TopoRow>
         await _handleWithdraw(context, ref, topo, reportBusy);
       case 'cancel-withdraw':
         await _handleCancelWithdraw(context, ref, topo, isWithdrawn, reportBusy);
+      case 'more':
+        await _showMoreSheet(context, ref, topo, reportBusy, isProtected);
       case 'delete':
         await _handleDelete(context, ref, topo, reportBusy, isProtected);
     }
+  }
+
+  /// The second step in front of [_handleDelete].
+  ///
+  /// One entry today, which is the point: this sheet exists to put a
+  /// deliberate step between the everyday menu and the only action that
+  /// destroys something. Keyed `topo-delete-<id>` exactly as before, so the
+  /// control it leads to is the same one every test and flow already targets —
+  /// only the route to it changed.
+  Future<void> _showMoreSheet(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+    MasiBusyReporter reportBusy,
+    bool isProtected,
+  ) async {
+    final action = await showMasiActionSheet<String>(
+      context,
+      sheetKey: Key('topo-more-sheet-${topo.wallId}'),
+      title: topo.name,
+      actions: [
+        MasiSheetAction(
+          key: Key('topo-delete-${topo.wallId}'),
+          label: 'Delete',
+          value: 'delete',
+          isDestructive: true,
+          subtitle: isProtected ? 'Published — withdraw first' : null,
+        ),
+      ],
+    );
+    if (!context.mounted || action != 'delete') return;
+    await _handleDelete(context, ref, topo, reportBusy, isProtected);
   }
 
   /// "Stops being public in 3 days" for the Cancel action's subtitle, or null
@@ -946,6 +986,101 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     ).showSnackBar(const SnackBar(content: Text('Location saved')));
   }
 
+  /// Whether deletion is still gated on an admin, and says so — returning true
+  /// means [_handleDelete] must stop.
+  ///
+  /// Reads the request on demand rather than from a local mirror: deletion is
+  /// rare, so this is one network read on a rare path, and mirroring it would
+  /// put a table and a sync rule in front of every ordinary write for a state
+  /// almost no topo is ever in.
+  ///
+  /// A topo that was never public has no request and needs none — `null` from
+  /// the server means "no request", and for a draft the caller never gets here
+  /// because `isProtected` already sent it down the withdrawal path.
+  ///
+  /// Fails CLOSED. If the read fails we cannot tell approved from pending, and
+  /// the honest answer is the one that does not end in a delete that silently
+  /// undoes itself.
+  Future<bool> _needsDeletionApproval(
+    BuildContext context,
+    WidgetRef ref,
+    TopoRef topo,
+  ) async {
+    // Decided BEFORE anything is read from the moderation layer, and that
+    // ordering is load-bearing. A draft is the overwhelmingly common case and
+    // must cost nothing extra: no provider read, no network, no behaviour
+    // change at all. `moderationRemoteProvider` also throws outright when
+    // Supabase is not initialised (early boot, and every widget test that does
+    // not stand up a fake client), so touching it up here would break deleting
+    // a draft in exactly the situations that have nothing to do with sharing.
+    final view = ref.read(wallModerationViewProvider(topo.wallId)).asData?.value;
+    final everPublic =
+        view?.storedState == ModerationState.published ||
+        view?.storedState == ModerationState.removed;
+    if (!everPublic) return false;
+
+    Map<String, dynamic>? request;
+    var readFailed = false;
+    try {
+      request = await ref.read(moderationRemoteProvider).deletionRequestFor(
+        topo.wallId,
+      );
+    } catch (_) {
+      readFailed = true;
+    }
+    if (!context.mounted) return true;
+
+    final status = request?['status'];
+    if (status == 'approved') return false; // cleared — carry on and delete
+
+    if (readFailed) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text("Couldn't check whether deletion was approved"),
+        ),
+      );
+      return true;
+    }
+
+    if (status == 'pending') {
+      await showMasiConfirm(
+        context,
+        title: 'Waiting for a moderator',
+        message:
+            'You have already asked to delete "${topo.name}". A moderator will '
+            'review it — nothing is lost in the meantime.',
+        confirmLabel: 'OK',
+        confirmKey: Key('topo-delete-pending-${topo.wallId}'),
+      );
+      return true;
+    }
+
+    final ask = await showMasiConfirm(
+      context,
+      title: status == 'rejected'
+          ? 'Ask again about "${topo.name}"?'
+          : 'Ask to delete "${topo.name}"?',
+      message: status == 'rejected'
+          ? 'A moderator declined the last request. You can ask again.'
+          : 'People may have logged ascents on this topo, so deleting it needs '
+                'a moderator to agree. Nothing is deleted until they do.',
+      confirmLabel: 'Ask',
+      confirmKey: Key('topo-delete-request-${topo.wallId}'),
+    );
+    if (!ask || !context.mounted) return true;
+
+    await _runGuarded(
+      context,
+      "Couldn't send that request",
+      () => ref.read(moderationRemoteProvider).requestDeletion(topo.wallId),
+    );
+    if (!context.mounted) return true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Asked a moderator to review it')),
+    );
+    return true;
+  }
+
   /// Title/message wording is now byte-identical to `crud_list_scaffold.dart`'s
   /// delete confirm. It used to read title "Delete?" over message 'Delete
   /// "X"? This cannot be undone.' — asking the same question twice, once
@@ -979,6 +1114,18 @@ class _TopoRowState extends ConsumerState<_TopoRow>
       await _handleWithdraw(context, ref, topo, reportBusy);
       return;
     }
+
+    // The withdrawal has matured, but a topo that HAS been public also needs an
+    // admin's approval before it can be destroyed (decided 2026-08-08). The
+    // ten days protect readers; the approval protects the record (§3.3).
+    //
+    // This branch is not optional politeness. The server trigger enforces the
+    // approval, so without it the owner taps Delete, the row disappears from
+    // the list, the push is reverted server-side and the topo REAPPEARS on the
+    // next pull — the exact silently-undone delete the block above exists to
+    // prevent, just moved ten days later.
+    if (await _needsDeletionApproval(context, ref, topo)) return;
+    if (!context.mounted) return;
 
     final confirmed = await showMasiConfirm(
       context,

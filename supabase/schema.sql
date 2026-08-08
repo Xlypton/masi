@@ -358,6 +358,11 @@ DROP POLICY IF EXISTS "ascents_owner_all"     ON public.ascents;
 DROP POLICY IF EXISTS "ascents_shared_select" ON public.ascents;
 CREATE POLICY "ascents_owner_all" ON public.ascents FOR ALL TO authenticated
   USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
+-- NOTE: this is the P0 form, and it is NOT the policy that should end up live.
+-- The community phase-1 migration introduces `is_wall_public(text)` and swaps
+-- the sharing policies over to it; this one is hardened the same way at the end
+-- of this file (see "SHARED ASCENTS MUST NOT OUTLIVE THEIR TOPO"). Left bare
+-- here only so this section still runs before that function exists.
 CREATE POLICY "ascents_shared_select" ON public.ascents FOR SELECT TO authenticated
   USING ("visibility" = 'shared');
 
@@ -995,3 +1000,115 @@ GRANT SELECT ON public.material_change_notices TO authenticated;
 -- file replaced. Renames, grades, descriptions, added routes and nudged lines
 -- are ordinary work on a topo somebody owns. The failure mode of this feature is
 -- not "we missed one", it is "the queue filled with normal editing".
+
+-- ===========================================================================
+-- SHARED ASCENTS MUST NOT OUTLIVE THEIR TOPO
+-- See supabase/migrations/2026-08-08_shared_ascent_wall_visibility.sql
+-- ===========================================================================
+--
+-- Re-applies `ascents_shared_select` in its hardened form. It has to live down
+-- here rather than in the P0 section above because it depends on
+-- `is_wall_public(text)`, which the community phase-1 migration creates.
+--
+-- The P0 rule was `visibility = 'shared'` and nothing else, while every table an
+-- ascent POINTS AT is gated on `is_wall_public(...)`. That asymmetry caused two
+-- separate defects, both observed on live on 2026-08-08:
+--
+--   * A LEAK PAST A MODERATION DECISION. The row carries wallId, routeId,
+--     climbedAt, style, notes and gradeOpinion, so a topo an admin had just
+--     taken down - or one whose owner marked it access-sensitive precisely so it
+--     would stop being findable - stayed traceable straight off PostgREST. The
+--     takedown removed the topo, its routes, its photos and its photo bytes
+--     (W-2) and left the ascents pointing at them.
+--
+--   * PERMANENTLY BROKEN SYNC, FOR EVERY USER. `fetchSharedAscents` fetches the
+--     ascents first and their ancestor chain afterwards, in separate queries,
+--     each RLS-filtered on its own table. The ancestors correctly refused, so
+--     the ascent arrived with no route and no wall - and `ascents.routeId` and
+--     `ascents.wallId` are enforced NOT NULL FKs locally. The import deferred
+--     the row and reported `shared rows deferred (parent row missing)`, which
+--     the user saw as a red "Couldn't sync - Retry" banner on the feed that
+--     could NEVER heal: the parent was soft-deleted server-side and was never
+--     going to be returned.
+--
+-- `ascents_owner_all` is untouched, so whoever logged the climb keeps full
+-- access to their own row whatever happened to the topo. This narrows only what
+-- OTHER people can see, which is what `visibility` always meant. Measured before
+-- applying: 2 live shared ascents, exactly 1 of them pointing at a wall that is
+-- no longer public.
+--
+-- The client half is `consistentSharedAscentBatch` in sync_remote.dart, and it
+-- is not redundant: these are two queries against a live database, so a topo
+-- withdrawn BETWEEN them produces the same orphan with no bug at either end.
+
+DROP POLICY IF EXISTS "ascents_shared_select" ON public.ascents;
+CREATE POLICY "ascents_shared_select" ON public.ascents FOR SELECT TO authenticated
+  USING ("visibility" = 'shared' AND public.is_wall_public("wallId"));
+
+-- ===========================================================================
+-- DELETING A PUBLISHED TOPO NEEDS AN ADMIN'S APPROVAL
+-- See supabase/migrations/2026-08-08_deletion_requests.sql
+-- ===========================================================================
+--
+-- Decided 2026-08-08. Before this there was no approval anywhere, and it is
+-- worth being precise about what the protection WAS, because it is easy to
+-- assume it was more: `protect_published_wall` silently reverted an owner's
+-- soft-delete of a published topo, so they had to Withdraw, wait ten days, then
+-- delete. A TIME LOCK, not a review - nobody looked at it. And the trigger
+-- returned early for admins, so an admin could delete outright unreviewed.
+--
+-- Two gates now, protecting different things, neither replacing the other:
+--   * the ten-day withdrawal protects READERS (C-3);
+--   * the approved request protects THE RECORD (§3.3 - never destroy something
+--     people have logged ascents against).
+-- A published topo is deletable only when it is no longer publicly visible AND
+-- an approved request exists. Requests can be filed at any time, so the clocks
+-- run in parallel: this adds a review, not a second wait.
+--
+-- Three things worth not undoing by accident:
+--   * `removed` (taken down) joined the protected set. A takedown moves the
+--     state off `published`, so the old early-return handed a taken-down topo
+--     back to its owner to delete at will - destroying the record the takedown
+--     existed to preserve. That was a hole from the day takedowns shipped.
+--   * Admins go through the same door. No account can destroy a published topo
+--     in one step; `remove_topo` remains the moderation tool, and it takes a
+--     topo down without destroying it.
+--   * An admin cannot approve their OWN request while another admin exists -
+--     that is the second pair of eyes the gate is for. Conditional on another
+--     admin existing, so a single-admin project cannot deadlock.
+--
+-- Drafts are untouched: freely and instantly deletable, per C-1.
+--
+-- Verified live in rolled-back transactions on 2026-08-08: matured withdrawal
+-- alone refused; admin without approval refused; self-approval refused with a
+-- second admin present and allowed by a different one; matured + approved
+-- deletes; stranger refused on request, queue and RLS.
+
+CREATE TABLE IF NOT EXISTS public.deletion_requests (
+  id            text PRIMARY KEY,
+  "wallId"      text   NOT NULL,
+  "requesterId" text   NOT NULL,
+  reason        text,
+  status        text   NOT NULL DEFAULT 'pending',
+  "createdAt"   bigint NOT NULL,
+  "resolvedAt"  bigint,
+  "reviewerId"  text,
+  resolution    text
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS deletion_requests_open_wall
+  ON public.deletion_requests ("wallId") WHERE status = 'pending';
+CREATE INDEX IF NOT EXISTS deletion_requests_created_at
+  ON public.deletion_requests ("createdAt");
+
+ALTER TABLE public.deletion_requests ENABLE ROW LEVEL SECURITY;
+
+-- The requester SHOULD see their own row, unlike a report: they are asking for
+-- something and are entitled to know whether it was granted. No write policy -
+-- every mutation goes through a SECURITY DEFINER RPC.
+DROP POLICY IF EXISTS deletion_requests_read ON public.deletion_requests;
+CREATE POLICY deletion_requests_read
+  ON public.deletion_requests FOR SELECT TO authenticated
+  USING ("requesterId" = (auth.uid())::text OR public.is_admin());
+
+GRANT SELECT ON public.deletion_requests TO authenticated;

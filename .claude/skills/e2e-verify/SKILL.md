@@ -230,49 +230,43 @@ All of these have actually happened here.
 
 ---
 
-## 6. Known-red as of 2026-08-08 — do not report these as regressions
+## 6. Baseline as of 2026-08-08: BOTH SUITES GREEN
 
-**One root cause, six failing assertions.** The seeded fixture never reaches the community feed on
-the client, and everything that needs the fixture to be *visible* fails behind it:
+`tool/drive_e2e.sh signed-in` and `tool/drive_e2e.sh community` both exit 0. **There is no
+known-red list any more — any failure is a real regression, and should be treated as one.**
 
-- `e2e_signed_in_test.dart` — 2: `the seeded fixture arrives through a live sync pull`, and
-  `version history renders server-side versions`.
-- `e2e_community_test.dart` — 4: the reader/report test times out on the same wait, and the owner
-  inbox, admin reports and owner trust tests then fail on state that test never created.
+The two entries that lived here for a day, and what they actually were, because both mistakes are
+easy to repeat:
 
-**The harness itself works** — accounts converge, the seed goes through the real RPC, sign-in is
-proven (the Account test passes and the app logs `REAL session as e2e-owner@masi.test … RLS
-applies, sync push/pull is live`), and teardown is exact.
+- **The "seeded fixture never reaches the feed" bug did not exist.** The fixture reached the feed
+  the whole time. `community-feed-refresh` is the key on the **`RefreshIndicator`**, which wraps the
+  entire scrollable feed — so `find.byKey` resolved to a full-screen widget and `tapOrFail` hit its
+  **centre**, i.e. whichever list row sat mid-list. The tap opened an ascent detail screen and **the
+  pull never ran**. Two tests then timed out hunting for feed content on a detail screen, and a
+  third *passed* by asserting the absence of a sync-error key that is equally absent there. Use
+  [`pullToRefresh`](../../../integration_test/e2e_support.dart), never `tapOrFail`, on a refresh
+  indicator. **A tapped `RefreshIndicator` fails silently in both directions.**
+- **The trust test's timeout was fixture ordering.** It took `menus.first` and expected a publish
+  sheet, but the admin test earlier in the same run approves the pending wall, so by then every
+  fixture topo was published — and a published topo's overflow offers Withdraw, not Publish. The
+  seed now carries a third, never-submitted wall (`e2e-wall-draft-0001`) and the test names it
+  explicitly. **Nothing may ever submit or publish that wall.**
 
-Two traps in reading a run, both hit on 2026-08-08:
+Two things worth keeping from that episode:
 
 - **`tool/drive_e2e.sh` with no argument stops after the signed-in suite fails**, so the community
-  suite never runs and its screenshots (20+) are absent. A run that reports "only the 2 known
-  failures" has usually not executed the other four tests at all. Run `tool/drive_e2e.sh community`
-  explicitly to exercise them.
-- **Do not put a new assertion at the end of an existing community test.** Every one of them is
-  downstream of the broken feed wait, so a check parked there is never reached and silently proves
-  nothing. `admin: the Changes and Stalled tabs answer from a real admin JWT` is the model to copy:
-  its own `testWidgets`, signing in and going straight to `/admin`, depending on no fixture state —
-  which is why it passes while the four around it fail.
+  suite never runs and its screenshots (20+) are absent. A run reporting only signed-in failures has
+  usually not executed the community tests at all. Run `tool/drive_e2e.sh community` explicitly.
+- **Do not park a new assertion at the end of an existing community test.** If anything earlier in
+  that test breaks, the check is never reached and silently proves nothing — which is exactly what
+  happened to the first version of the C-5d check. `admin: the Changes and Stalled tabs answer from
+  a real admin JWT` is the model: its own `testWidgets`, straight to `/admin`, depending on no
+  fixture state.
 
-Already ruled out, so do not re-test:
-
-- timing (identical failure at 150 s as at 40 s);
-- server-side visibility (`is_wall_public` returns true for the fixture);
-- RLS (the owner's real JWT returns both fixture walls via `curl`);
-- missing ancestors (area/sector share the owner uid — this matters because the feed INNER-JOINs
-  sectors and areas);
-- sync error state (the feed test asserts `community-sync-error-empty` is absent).
-
-The break is between "the pull ran" and "the row is in the local `walls` table". Next step is §3,
-the interactive loop, because the driver hides the app console.
-
-**If a run comes back with exactly these two failures, that is the known baseline — say so
-explicitly rather than reporting green.** Any *other* failure is a real regression.
-
----
-
+The deeper lesson, and the reason this section is worth reading before diagnosing anything: **an
+E2E failure is at least as likely to be a harness defect as a product defect.** Six assertions were
+filed here as a sync bug for a day, and the sync engine was innocent. Before writing "known-red",
+prove the step you think ran actually ran — read the screenshot, not just the exit code.
 ## 7. Teardown, always
 
 ```bash

@@ -284,12 +284,14 @@ void main() {
         {..._validRow('walls', 'w1'), 'sectorId': 's1'},
       ];
       fake.rows['routes'] = [
-        {..._validRow('routes', 'r1'), 'photoId': 'p1'},
+        {..._validRow('routes', 'r1'), 'wallId': 'w1', 'photoId': 'p1'},
       ];
       fake.rows['sectors'] = [
         {..._validRow('sectors', 's1'), 'areaId': 'a1'},
       ];
-      fake.rows['photos'] = [_validRow('photos', 'p1')];
+      fake.rows['photos'] = [
+        {..._validRow('photos', 'p1'), 'wallId': 'w1'},
+      ];
       fake.rows['areas'] = [_validRow('areas', 'a1')];
     }
 
@@ -337,21 +339,46 @@ void main() {
 
     test('skips an ascent missing the FKs its ancestor chain is derived from',
         () async {
+      // Seeds the WHOLE consistent chain, then adds the broken ascent to it.
+      // Seeding only walls+routes would exercise `consistentSharedAscentBatch`
+      // (which drops a wall whose sector is absent, and everything under it)
+      // instead of the required-field filter this test is about — and would
+      // pass for entirely the wrong reason.
+      seedSharedAscent();
       fake.rows['ascents'] = [
-        {..._validRow('ascents', 'ok'), 'wallId': 'w1', 'routeId': 'r1'},
+        {
+          ..._validRow('ascents', 'ok'),
+          'wallId': 'w1',
+          'routeId': 'r1',
+          'visibility': 'shared',
+        },
         // No wallId/routeId: the `as String` casts downstream would throw.
         {'id': 'broken', 'visibility': 'shared'},
-      ];
-      fake.rows['walls'] = [
-        {..._validRow('walls', 'w1'), 'sectorId': 's1'},
-      ];
-      fake.rows['routes'] = [
-        {..._validRow('routes', 'r1'), 'photoId': 'p1'},
       ];
 
       final result = await remote.fetchSharedAscents();
 
       expect(result['ascents']!.map((r) => r['id']), ['ok']);
     });
+
+    test(
+      'an ascent whose ancestors were filtered out by RLS is DROPPED, not '
+      'returned to defer. Live, 2026-08-08: the ascent policy checked only '
+      '`visibility`, its route and wall needed `is_wall_public`, and the topo '
+      'had been deleted — so the row could never be inserted and the user got '
+      'a "Couldn\'t sync" banner that could never clear',
+      () async {
+        seedSharedAscent();
+        // What RLS actually does to the follow-up queries: the ancestors of a
+        // no-longer-public topo simply do not come back.
+        fake.rows['walls'] = [];
+        fake.rows['routes'] = [];
+
+        final result = await remote.fetchSharedAscents();
+
+        expect(result['ascents'], isEmpty);
+        expect(result['walls'], isEmpty);
+      },
+    );
   });
 }

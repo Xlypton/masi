@@ -99,6 +99,19 @@ class _FakeRemote implements ModerationRemote {
   Future<List<String>> publishedPhotoObjects(String wallId) async => const [];
 
   @override
+  Future<Map<String, dynamic>?> deletionRequestFor(String wallId) async => null;
+  @override
+  Future<String> requestDeletion(String wallId, {String? reason}) async => '';
+  @override
+  Future<List<Map<String, dynamic>>> fetchDeletionRequests({int limit = 50}) async =>
+      const [];
+  @override
+  Future<String> reviewDeletion({
+    required String requestId,
+    required bool approve,
+    String? note,
+  }) async => approve ? 'approved' : 'rejected';
+  @override
   Future<List<Map<String, dynamic>>> fetchMaterialChanges({
     int limit = 50,
   }) async => const [];
@@ -238,6 +251,10 @@ void main() {
       (tester) async {
         final ctx = await _openMenu(tester);
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
 
@@ -256,6 +273,10 @@ void main() {
       (tester) async {
         final ctx = await _openMenu(tester);
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-blocked-${ctx.wallId}')));
@@ -319,6 +340,10 @@ void main() {
     ) async {
       final ctx = await open(tester);
 
+      // Delete sits one step in now, behind "More…", so it is not a single tap
+      // from Rename (decided 2026-08-08).
+      await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
       await tester.pumpAndSettle();
 
@@ -369,16 +394,50 @@ void main() {
     );
 
     testWidgets(
-      'delete is NO LONGER intercepted — the cooldown is a delay, not a '
-      'permanent lock on the owner\'s own content',
+      'the withdrawal is served, but delete now asks a moderator instead of '
+      'going straight through — CHANGED 2026-08-08, and this test used to '
+      'assert the opposite',
       (tester) async {
+        // What it asserted before: "delete is NO LONGER intercepted — the
+        // cooldown is a delay, not a permanent lock on the owner's own
+        // content." The first half is superseded; the second half still holds,
+        // just by a different mechanism.
+        //
+        // The ten days protect READERS and they have now run, so the withdrawal
+        // block is correctly gone. But a topo people may have logged ascents
+        // against also needs a moderator to agree before it is destroyed (§3.3)
+        // — and that gate is enforced by `protect_published_wall` server-side.
+        // Without this branch the owner would tap Delete, watch the row vanish,
+        // and see it reappear on the next pull when the server reverted the
+        // push: a delete that silently undoes itself, which is precisely what
+        // the withdrawal block exists to prevent.
+        //
+        // Still not a permanent lock: the owner asks, an admin agrees, the
+        // delete goes through.
         final ctx = await open(tester);
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
 
-        expect(find.byKey(Key('topo-delete-confirm-${ctx.wallId}')), findsOne);
-        expect(find.text('Withdraw "Dolomitici" first'), findsNothing);
+        expect(
+          find.text('Withdraw "Dolomitici" first'),
+          findsNothing,
+          reason: 'the ten days have run — the reader-facing gate is satisfied',
+        );
+        expect(
+          find.byKey(Key('topo-delete-request-${ctx.wallId}')),
+          findsOne,
+          reason: 'and the record-facing gate asks a moderator',
+        );
+        expect(
+          find.byKey(Key('topo-delete-confirm-${ctx.wallId}')),
+          findsNothing,
+          reason: 'nothing may go straight to an unapproved delete',
+        );
       },
     );
 
@@ -398,6 +457,10 @@ void main() {
         expect(find.text('Unpublish'), findsOne);
         expect(find.text('Withdraw from Community…'), findsNothing);
 
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
         expect(find.byKey(Key('topo-delete-confirm-${ctx.wallId}')), findsOne);
@@ -419,6 +482,10 @@ void main() {
         final ctx = await _openMenu(tester, state: 'wat');
 
         expect(find.text('Unpublish'), findsOne);
+        // Delete sits one step in now, behind "More…", so it is not a single tap
+        // from Rename (decided 2026-08-08).
+        await tester.tap(find.byKey(Key('topo-more-${ctx.wallId}')));
+        await tester.pumpAndSettle();
         await tester.tap(find.byKey(Key('topo-delete-${ctx.wallId}')));
         await tester.pumpAndSettle();
         expect(find.byKey(Key('topo-delete-confirm-${ctx.wallId}')), findsOne);

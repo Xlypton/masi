@@ -91,6 +91,34 @@ abstract class ModerationRemote {
   /// carry a consequence, and both already exist.
   Future<void> resolveMaterialChange(String noticeId);
 
+  /// The standing deletion request for [wallId], or null if there is none.
+  ///
+  /// Read on demand, at the moment the owner reaches for Delete, rather than
+  /// mirrored locally. Deletion is meant to be rare, so this is one read on a
+  /// rare path — mirroring it would put a table and a sync rule in the way of
+  /// every ordinary write for a state almost no topo is ever in.
+  ///
+  /// Returns null on failure too. The caller's fallback is to explain that the
+  /// topo cannot be deleted yet, which is the truth whatever the reason.
+  Future<Map<String, dynamic>?> deletionRequestFor(String wallId);
+
+  /// Asks an admin to approve deleting [wallId]. Owner-only, published or
+  /// taken-down topos only, and idempotent — asking twice returns the same
+  /// request rather than queueing a duplicate.
+  Future<String> requestDeletion(String wallId, {String? reason});
+
+  /// Pending deletion requests, oldest first. Admin-only, throws like
+  /// [fetchQueue] — somebody is waiting on each of these.
+  Future<List<Map<String, dynamic>>> fetchDeletionRequests({int limit});
+
+  /// Approves or rejects one. Admin-only. Approving grants PERMISSION; the
+  /// owner still performs the deletion, so an admin's mis-tap destroys nothing.
+  Future<String> reviewDeletion({
+    required String requestId,
+    required bool approve,
+    String? note,
+  });
+
   /// Approves or rejects a pending topo. Admin-only, enforced server-side.
   /// Returns the resulting state. [reason] is shown to the owner on rejection.
   Future<String> reviewTopo({
@@ -256,6 +284,56 @@ class SupabaseModerationRemote implements ModerationRemote {
       'resolve_material_change',
       params: {'notice_id': noticeId},
     );
+  }
+
+  @override
+  Future<Map<String, dynamic>?> deletionRequestFor(String wallId) async {
+    try {
+      final rows = await _client
+          .from('deletion_requests')
+          .select()
+          .eq('wallId', wallId)
+          .order('createdAt', ascending: false)
+          .limit(1);
+      if (rows.isEmpty) return null;
+      return Map<String, dynamic>.from(rows.first);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  @override
+  Future<String> requestDeletion(String wallId, {String? reason}) async {
+    final result = await _client.rpc<dynamic>(
+      'request_deletion',
+      params: {'wall_id': wallId, 'reason': reason},
+    );
+    return result is String ? result : '';
+  }
+
+  @override
+  Future<List<Map<String, dynamic>>> fetchDeletionRequests({
+    int limit = 50,
+  }) async {
+    final rows = await _client.rpc<dynamic>(
+      'deletion_requests_queue',
+      params: {'limit_count': limit},
+    );
+    if (rows is! List) return const [];
+    return [for (final row in rows) Map<String, dynamic>.from(row as Map)];
+  }
+
+  @override
+  Future<String> reviewDeletion({
+    required String requestId,
+    required bool approve,
+    String? note,
+  }) async {
+    final result = await _client.rpc<dynamic>(
+      'review_deletion',
+      params: {'request_id': requestId, 'approve': approve, 'note': note},
+    );
+    return result is String ? result : (approve ? 'approved' : 'rejected');
   }
 
   @override
