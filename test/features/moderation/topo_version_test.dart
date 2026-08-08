@@ -95,6 +95,19 @@ class _FakeModeration implements ModerationRemote {
   Future<List<String>> publishedPhotoObjects(String wallId) async => const [];
 
   @override
+  Future<Map<String, dynamic>?> deletionRequestFor(String wallId) async => null;
+  @override
+  Future<String> requestDeletion(String wallId, {String? reason}) async => '';
+  @override
+  Future<List<Map<String, dynamic>>> fetchDeletionRequests({int limit = 50}) async =>
+      const [];
+  @override
+  Future<String> reviewDeletion({
+    required String requestId,
+    required bool approve,
+    String? note,
+  }) async => approve ? 'approved' : 'rejected';
+  @override
   Future<List<Map<String, dynamic>>> fetchMaterialChanges({
     int limit = 50,
   }) async => const [];
