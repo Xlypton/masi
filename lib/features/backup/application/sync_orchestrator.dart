@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/config/supabase_init_provider.dart';
 import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
+import '../../account/application/profile_providers.dart';
 import '../../account/data/auth_repository.dart';
 import '../../topo/data/public_photo_prune_service.dart';
 import '../data/connectivity_service.dart';
@@ -393,6 +394,18 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       final nextUid = next.asData?.value.uid;
       if (previousUid == null && nextUid != null) {
         unawaited(pullNow());
+        // Publish the identity provider's picture into the user's own profile
+        // row, so the rest of the community can actually see it — see
+        // [ProfileRepository.adoptProviderAvatarUrl] for why a session-only
+        // avatar is invisible to everyone else, and for the rules that keep
+        // this from ever overwriting a picture the user chose in-app.
+        //
+        // Riding the existing sign-in edge rather than adding a second
+        // listener: this class's doc explains that a `ref.listen` here only
+        // keeps firing while `syncOrchestratorProvider` is actively watched,
+        // and duplicating that subtlety is how a second hook ends up silently
+        // never running.
+        unawaited(_adoptProviderAvatar(next.asData?.value.providerAvatarUrl));
       }
     });
 
@@ -939,6 +952,26 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       }),
     );
     return future;
+  }
+
+  /// Best-effort "publish my provider picture" on the sign-in edge — see
+  /// [ProfileRepository.adoptProviderAvatarUrl] for the policy it applies.
+  ///
+  /// Swallows everything, deliberately and at BOTH layers. The write itself is
+  /// a local Drift row that sync picks up later, but reaching
+  /// [profileRepositoryProvider] can throw outright on a container whose
+  /// database is unavailable — and an avatar is the least important thing this
+  /// listener does. Sign-in must never fail because a picture could not be
+  /// copied.
+  Future<void> _adoptProviderAvatar(String? providerAvatarUrl) async {
+    if (providerAvatarUrl == null) return;
+    try {
+      await ref
+          .read(profileRepositoryProvider)
+          .adoptProviderAvatarUrl(providerAvatarUrl);
+    } catch (error) {
+      debugPrint('masi/profile: could not adopt the provider avatar: $error');
+    }
   }
 
   /// #72 P1 fix: this used to swallow every [PullResult] whole — only the

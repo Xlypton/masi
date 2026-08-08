@@ -44,3 +44,42 @@ String emailInitials(String email) {
   final second = segments[1].characters.take(1).toString();
   return (first + second).toUpperCase();
 }
+
+/// Derives 1-2 uppercase initials from a human display name — the
+/// [emailInitials] counterpart for every surface that knows WHO someone is
+/// without knowing their email.
+///
+/// That distinction is the reason this exists rather than reusing
+/// [emailInitials]: a comment thread resolves its authors through
+/// `profiles.displayName`, and it must never see their address. Feeding a
+/// display name to [emailInitials] returns `''` (it requires an `@`), so
+/// every avatar in a thread would have collapsed to the generic person glyph.
+///
+/// Rules, mirroring [emailInitials] on the same shapes:
+///  - Split on any whitespace run into non-empty words.
+///  - Two or more words: the first character of the first TWO (`Peter Keri`
+///    -> `PK`; extra words are ignored).
+///  - Exactly one word: its first 1-2 characters (`bogi` -> `BO`; a
+///    single-character name -> that one letter).
+///  - Empty, or all whitespace -> `''`, so callers fall back to the person
+///    glyph rather than drawing a blank disc.
+///
+/// Grapheme-cluster aware for the same reason [emailInitials] is: `String[0]`
+/// on an emoji or a surrogate pair yields a lone unpaired code unit.
+String displayNameInitials(String name) {
+  final words = name
+      .split(RegExp(r'\s+'))
+      .where((word) => word.isNotEmpty)
+      .toList();
+  if (words.isEmpty) return '';
+
+  if (words.length == 1) {
+    final chars = words.first.characters;
+    final length = chars.length >= 2 ? 2 : 1;
+    return chars.take(length).toString().toUpperCase();
+  }
+
+  final first = words[0].characters.take(1).toString();
+  final second = words[1].characters.take(1).toString();
+  return (first + second).toUpperCase();
+}
