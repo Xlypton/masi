@@ -26,6 +26,7 @@ import '../../topo/presentation/photo_image.dart';
 import '../application/community_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../data/community_repository.dart';
+import 'ascent_route_thumbnail.dart';
 
 /// The Community Feed tab (bottom-nav branch `/feed`): a searchable list of
 /// every shared topo (thumbnail, name, grade pill, like/comment counts,
@@ -970,7 +971,17 @@ class _AscentFeedRow extends ConsumerWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _AscentGradeSwatch(band: entry.gradeBand),
+              // The rock, cropped to the line this climber actually did — with
+              // the grade swatch kept as the fallback for every row whose
+              // photo or geometry cannot be resolved (see
+              // [AscentRouteThumbnail]).
+              AscentRouteThumbnail(
+                key: Key('community-ascent-row-$ascentId-art'),
+                wallId: entry.wallId,
+                routeNumber: entry.routeNumber,
+                size: 52,
+                fallback: () => _AscentGradeSwatch(band: entry.gradeBand),
+              ),
               const SizedBox(width: MasiSpacing.md),
               Expanded(
                 child: Column(
