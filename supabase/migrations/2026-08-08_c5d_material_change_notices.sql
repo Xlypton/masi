@@ -254,8 +254,15 @@ BEGIN
 END;
 $$;
 
+-- SEC-1 (2026-08-08): this originally read `FROM public` only, which revokes
+-- the PUBLIC pseudo-role but does NOT remove Supabase's default-privilege
+-- grant made directly to the `anon` and `authenticated` roles on every
+-- CREATE FUNCTION — so despite this REVOKE already being here, the function
+-- was still callable by a fully anonymous REST caller to forge change
+-- notices. Naming the roles explicitly is the fix. See
+-- 2026-08-08_sec1_revoke_internal_helper_execute.sql.
 REVOKE ALL ON FUNCTION public.note_material_change(text, text, jsonb, jsonb)
-  FROM public;
+  FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 4. `snapshot_topo`, re-applied with the detector wired in
