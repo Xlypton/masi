@@ -10,6 +10,7 @@ import '../features/notifications/application/notification_realtime.dart';
 import '../features/topo/presentation/canvas_chrome.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'install_banner.dart';
+import 'shell_notice_dismissal.dart';
 import 'storage_pressure_banner.dart';
 import 'storage_retry_banner.dart';
 import 'theme.dart';
@@ -311,7 +312,6 @@ class ShellNotices extends ConsumerWidget {
     // boot into an alarm and never offers a button that cannot work. See that
     // function's doc.
     final notice = storageRetryNotice(ref.watch(storageDurabilityProvider));
-    if (notice != null) return StorageRetryBanner(notice: notice);
 
     // #51: the proactive "storage is nearly full" warning. Reuses #49 P1's
     // existing signal (`SyncOrchestratorState.lastPublicPhotoPruneOutcome`,
@@ -320,9 +320,36 @@ class ShellNotices extends ConsumerWidget {
     // doc for exactly which two prune reasons mean "nothing further this app
     // can do on its own."
     final pruneOutcome = ref.watch(syncOrchestratorProvider).lastPublicPhotoPruneOutcome;
-    if (pruneOutcome != null && pruneOutcome.automaticReliefExhausted) {
-      return const StoragePressureBanner();
-    }
+    final pressureShowing = pruneOutcome != null && pruneOutcome.automaticReliefExhausted;
+
+    // Reported to `shellNoticeDismissalProvider` on EVERY build, whatever the
+    // outcome — see `ShellNoticeDismissalController.reportCurrent`'s doc for
+    // why this is what makes a dismissal episode-scoped rather than
+    // permanent-for-the-session: the instant neither notice below applies,
+    // a stale dismissal of either one is dropped, so the same condition
+    // recurring later (even with byte-identical text) is shown again. This is
+    // the ONE place that can compute "is either notice currently showing" —
+    // `_StorageDetailNotice` (`topos_screen.dart`) reads the RESULT of this
+    // provider but must not try to recompute it itself, since it only ever
+    // sees the retry side. Deferred by a microtask: Riverpod forbids a
+    // provider mutating another during a build, and this runs inside THIS
+    // widget's build.
+    final currentNoticeSignature = notice != null
+        ? ShellNoticeDismissalController.signature('storageRetry', notice)
+        : pressureShowing
+        ? ShellNoticeDismissalController.signature(
+            'storagePressure',
+            StoragePressureBanner.message,
+          )
+        : null;
+    Future.microtask(
+      () => ref
+          .read(shellNoticeDismissalProvider.notifier)
+          .reportCurrent(currentNoticeSignature),
+    );
+
+    if (notice != null) return StorageRetryBanner(notice: notice);
+    if (pressureShowing) return const StoragePressureBanner();
 
     return const InstallBanner();
   }

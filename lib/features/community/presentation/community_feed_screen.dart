@@ -379,6 +379,30 @@ class _FeedView extends ConsumerWidget {
             bannerKind.name,
             bannerDetail,
           );
+    // The RAW condition, with NEITHER of this screen's own display
+    // suppressions (`showSyncError`/`showOfflineEmpty`) folded in — reported
+    // on every build so the dismissal controller can tell "the condition
+    // actually cleared" apart from "this screen chose not to show it right
+    // now". See `SyncBannerDismissalController.reportCurrent`'s doc and
+    // `topos_screen.dart`'s identical copy of this computation.
+    final rawBannerKind = reachability.isKnownOffline
+        ? SyncBannerKind.offline
+        : syncError != null
+        ? SyncBannerKind.syncFailed
+        : sharedPhotosWithheld
+        ? SyncBannerKind.sharedPhotosWithheld
+        : null;
+    final rawBannerSignature = rawBannerKind == null
+        ? null
+        : SyncBannerDismissalController.signature(
+            rawBannerKind.name,
+            rawBannerKind == SyncBannerKind.syncFailed ? syncError : null,
+          );
+    Future.microtask(
+      () => ref
+          .read(syncBannerDismissalProvider.notifier)
+          .reportCurrent(rawBannerSignature),
+    );
     final dismissedSignature = ref.watch(syncBannerDismissalProvider);
     // Dismissed means GONE, not collapsed: `null` puts no sliver in the scroll
     // view below at all, so neither the banner nor its own top margin
@@ -401,10 +425,7 @@ class _FeedView extends ConsumerWidget {
             // changes.
             onDismiss: () => ref
                 .read(syncBannerDismissalProvider.notifier)
-                .dismiss(
-                  bannerSignature!,
-                  endsWithOfflineEpisode: bannerKind == SyncBannerKind.offline,
-                ),
+                .dismiss(bannerSignature!),
           );
 
     return Column(

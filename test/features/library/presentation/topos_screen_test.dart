@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:masi/app/shell_notice_dismissal.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
@@ -1324,6 +1325,120 @@ void main() {
       },
     );
 
+    // Defect-B regression (review-verified): the OLD dismissal controller
+    // cleared its acknowledgement only for the `offline` kind (a
+    // `ref.listen<Reachability>` special case). `syncFailed`'s dismissal had
+    // no equivalent reset, so a genuinely NEW failure that happened to
+    // produce byte-identical wording to an old, already-resolved one (common
+    // — network errors have stock messages) stayed silently suppressed for
+    // the rest of the session. The fix is uniform: an episode ends the moment
+    // NOTHING is wrong (`lastPullError == null`), which
+    // `SyncBannerDismissalController.reportCurrent` observes on every build
+    // and clears against, whatever the wording of what comes next.
+    testWidgets(
+      'a dismissed sync failure re-arms once a clean pull clears it — even '
+      'when the NEXT failure has the IDENTICAL wording as the dismissed one',
+      (tester) async {
+        final orchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastPullError: 'Sync failed: boom',
+          ),
+        );
+        final container = _makeContainer(
+          topos: populated,
+          syncOrchestrator: orchestrator,
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        // A clean pull lands — the condition genuinely clears.
+        orchestrator.emit(const SyncOrchestratorState());
+        await _drain(tester);
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsNothing,
+          reason: 'nothing is wrong, so nothing shows — dismissed or not',
+        );
+
+        // ...and a SECOND, unrelated outage happens to produce the exact same
+        // stock wording as the one already acknowledged.
+        orchestrator.emit(
+          const SyncOrchestratorState(lastPullError: 'Sync failed: boom'),
+        );
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsOneWidget,
+          reason: 'THE BUG: a dismissal that survives a clear-then-recur '
+              'cycle would permanently silence every future failure that '
+              'happens to share the same wording as an old, resolved one',
+        );
+      },
+    );
+
+    // Defect-A regression (review-verified, and the worst of the three the
+    // review found): `sharedPhotosWithheld`'s `SyncBanner.detail` is always
+    // `null` (see `topos_screen.dart`'s `bannerDetail`), so its signature is a
+    // CONSTANT — `'sharedPhotosWithheld|'` never varies at all. The OLD
+    // dismissal controller only ever reset for `offline`, so once this kind
+    // was dismissed once, no future occurrence could ever re-arm it for the
+    // rest of the session, no matter how many times storage pressure cleared
+    // and returned.
+    testWidgets(
+      'a dismissed "shared photos withheld" banner re-arms once storage '
+      'pressure clears and recurs — its signature never varies, so only an '
+      'actual clear-then-recur can re-arm it',
+      (tester) async {
+        final orchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastSharedPhotoBudgetReason: SharedPhotoBudgetReason.storagePressure,
+          ),
+        );
+        final container = _makeContainer(
+          topos: populated,
+          syncOrchestrator: orchestrator,
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        // The next pull is back within budget — the condition clears.
+        orchestrator.emit(
+          const SyncOrchestratorState(
+            lastSharedPhotoBudgetReason: SharedPhotoBudgetReason.withinBudget,
+          ),
+        );
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        // ...and storage fills up again on a LATER pull.
+        orchestrator.emit(
+          const SyncOrchestratorState(
+            lastSharedPhotoBudgetReason: SharedPhotoBudgetReason.storagePressure,
+          ),
+        );
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsOneWidget,
+          reason: 'THE BUG: because this signature never varies, the old '
+              'controller could never re-arm this kind at all once dismissed '
+              'once — a permanent, session-long suppression',
+        );
+      },
+    );
+
     testWidgets(
       'a dismissed offline banner does NOT fall through to a stale pull error '
       '— acknowledging "you are offline" must not answer with the raw '
@@ -1910,6 +2025,53 @@ void main() {
           reason: 'a squeezed viewport is a required case, not an edge case '
               '-- see topos_storage_banner.dart\'s own 400x420 measured '
               'repro for why',
+        );
+      },
+    );
+
+    // Defect-C regression (review-verified, the actual reported bug): before
+    // the fix, `_StorageDetailNotice`'s dismissal lived nowhere shared — it
+    // always rendered whenever `storageRetryNoticeText != null`, with zero
+    // awareness of the shell's `StorageRetryBanner` (a SEPARATE widget, in a
+    // separate widget tree — `app/nav_shell.dart`'s `ShellNotices`, not part
+    // of this bare `ToposScreen` harness) being dismissed. Dismissing the
+    // shell banner left this exact detail line orphaned on screen: no
+    // context (the sentence it was annotating was gone) and no way to close
+    // it either. `shellNoticeDismissalProvider` is the shared signal that
+    // fixes that — this test drives it directly (there is no
+    // `StorageRetryBanner` mounted in THIS tree to tap), exactly the way the
+    // real one's dismiss button does in production.
+    testWidgets(
+      "dismissing the shell's StorageRetryBanner (simulated via the shared "
+      'shellNoticeDismissalProvider it actually writes to) ALSO hides '
+      '`_StorageDetailNotice` — the two must not go out of sync',
+      (tester) async {
+        final container = _makeContainer(
+          storageDurability: unavailableFailed,
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+        expect(
+          find.byKey(const Key('topos-storage-detail-only')),
+          findsOneWidget,
+        );
+
+        container.read(shellNoticeDismissalProvider.notifier).dismiss(
+          ShellNoticeDismissalController.signature(
+            'storageRetry',
+            storageRetryNotice(unavailableFailed)!,
+          ),
+        );
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('topos-storage-detail-only')),
+          findsNothing,
+          reason: 'THE BUG: without reading the SAME shared dismissal, this '
+              "widget has no way to learn the shell banner it companions "
+              'was closed, and stays behind as an orphaned diagnostic line '
+              'with no context and no retry',
         );
       },
     );
@@ -6825,6 +6987,82 @@ void main() {
 
         expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
         expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
+
+    // Defect-D regression (review-verified): the reported screenshot's exact
+    // compound state — `storageDurabilityProvider` reporting `unavailable`
+    // AND `toposProvider` erroring TOGETHER, which `database_provider.dart`
+    // documents happens for real (a wedged connection turns every
+    // `watch()`-backed provider, including this one, into a named error).
+    // Neither test above exercises this: the first two tests in this group
+    // use a HEALTHY storage verdict with only `toposProvider` erroring, and
+    // `§1a follow-up`'s own group above uses a healthy `toposProvider` (a
+    // real in-memory DB) with only `storageDurabilityProvider` faked. Before
+    // this fix, the two combined to stack THREE reports of one failure on
+    // screen (shell `StorageRetryBanner` + `_StorageDetailNotice` +
+    // `MasiAsyncView`'s own full-screen error) — this bare-`ToposScreen`
+    // harness cannot see the shell's banner (it isn't part of this widget
+    // tree), but it can and must prove the other two no longer BOTH render.
+    testWidgets(
+      "the compound failure (storage unavailable AND the topos list itself "
+      'erroring for the same reason) reports the diagnostic ONCE — via '
+      '`_StorageDetailNotice` — not a second time via `MasiAsyncView`\'s own '
+      'full-screen error',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        const reason = 'the local database did not answer (test)';
+        final container = ProviderContainer(
+          retry: (retryCount, error) => null,
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            connectivityServiceProvider.overrideWithValue(
+              _ScriptedConnectivity(reachable: true),
+            ),
+            syncOrchestratorProvider.overrideWith(
+              () => _FakeSyncOrchestrator(),
+            ),
+            storageDurabilityProvider.overrideWith(
+              () => _FakeStorageDurability(
+                const StorageDurability.unavailable(reason),
+              ),
+            ),
+            toposProvider.overrideWith(
+              (ref) => Stream<List<TopoRef>>.error(
+                Exception('watchTopos boom (test)'),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('topos-storage-detail-only')),
+          findsOneWidget,
+          reason: 'the diagnostic detail line must still be reachable — it '
+              'is what the user would report',
+        );
+        expect(find.textContaining(reason), findsOneWidget);
+        expect(
+          find.byKey(MasiAsyncView.errorKey),
+          findsNothing,
+          reason: 'THE BUG: this is the third block from the reported '
+              'screenshot — the shell banner and `_StorageDetailNotice` '
+              'already say this is a storage failure and the diagnostic '
+              'that goes with it, so a THIRD "Couldn\'t load your topos" box '
+              'is the exact duplication the fix removes',
+        );
+        expect(find.text("Couldn't load your topos"), findsNothing);
+        expect(
+          find.byKey(const Key('topos-new-topo')),
+          findsNothing,
+          reason: 'canCreate is already false in this verdict',
+        );
       },
     );
 

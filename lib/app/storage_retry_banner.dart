@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/db/storage_retry_provider.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'page_reload.dart';
+import 'shell_notice_dismissal.dart';
 import 'theme.dart';
 
 /// Injects [reloadPage] behind a provider rather than letting the widget call
@@ -48,21 +49,23 @@ final pageReloadProvider = Provider<void Function()>((ref) => reloadPage);
 /// — closing this notice only stops it from occupying the screen for a user
 /// who has already read it.
 ///
-/// **Episode-scoped, via the widget's OWN [State] rather than a shared
-/// provider** (unlike `SyncBanner`, which needs `offline_banner_dismissal
-/// .dart`'s cross-screen provider because it renders on two different
-/// screens). This banner has exactly one mount point — [ShellNotices] — so a
-/// plain [State] field already gives the right lifecycle for free:
-/// [ShellNotices] removes this widget from the tree entirely once
-/// [storageRetryNotice] returns `null` (see its `build`), so the dismissal
-/// dies with it; the NEXT time the condition recurs, [ShellNotices] mounts a
-/// brand-new [StorageRetryBanner] with a brand-new [State], and the notice is
-/// un-dismissed. Re-arms a second way too, WITHIN one mount: [_dismissedNotice]
-/// is compared against the live [notice] text rather than a bare bool, so a
+/// **Episode-scoped via `shell_notice_dismissal.dart`'s shared
+/// [shellNoticeDismissalProvider]**, not a per-widget [State] field. A
+/// dismissal recorded there is cleared the instant NEITHER this banner nor
+/// [StoragePressureBanner] has anything to show (see
+/// [ShellNoticeDismissalController.reportCurrent], called from
+/// [ShellNotices] on every build) — the same episode-scoping a per-`State`
+/// field used to get for free from unmounting, generalized so a THIRD widget
+/// (`topos_screen.dart`'s `_StorageDetailNotice`, which exists only as this
+/// banner's Library-screen companion) can observe the same acknowledgement
+/// and stay coherent with it, which a `State` field could never do. Re-arms
+/// a second way too, WITHIN one mount: the stored signature is compared
+/// against the live [notice] text (via
+/// [ShellNoticeDismissalController.signature]) rather than a bare bool, so a
 /// retry that escalates the message (idle -> failed adds the reload
-/// paragraph) is a different message and is shown again even though the
-/// widget never unmounted.
-class StorageRetryBanner extends ConsumerStatefulWidget {
+/// paragraph) is a different message and is shown again even though nothing
+/// unmounted.
+class StorageRetryBanner extends ConsumerWidget {
   const StorageRetryBanner({super.key, required this.notice});
 
   /// The sentence to render — [storageRetryNotice]'s non-null result. Passed in
@@ -109,22 +112,17 @@ class StorageRetryBanner extends ConsumerStatefulWidget {
   /// scrolls at any real phone height" was simply false.
   static const double _maxViewportShare = 0.4;
 
-  @override
-  ConsumerState<StorageRetryBanner> createState() =>
-      _StorageRetryBannerState();
-}
-
-class _StorageRetryBannerState extends ConsumerState<StorageRetryBanner> {
-  /// The exact [StorageRetryBanner.notice] text that was dismissed, or `null`
-  /// if nothing currently is. A signature (the live text), not a bare bool —
-  /// see the class doc's "re-arms a second way too" paragraph: comparing
-  /// against the CURRENT notice is what lets an escalated message (idle ->
-  /// failed) re-arm without this [State] ever being disposed.
-  String? _dismissedNotice;
+  /// This banner's own identity in [shellNoticeDismissalProvider]'s
+  /// signature space — the live [notice] text, not a bare bool, for the same
+  /// "re-arms on escalation" reason the class doc explains.
+  String get _signature =>
+      ShellNoticeDismissalController.signature('storageRetry', notice);
 
   @override
-  Widget build(BuildContext context) {
-    if (_dismissedNotice == widget.notice) return const SizedBox.shrink();
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (ref.watch(shellNoticeDismissalProvider) == _signature) {
+      return const SizedBox.shrink();
+    }
 
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
@@ -193,7 +191,7 @@ class _StorageRetryBannerState extends ConsumerState<StorageRetryBanner> {
                         Semantics(
                           liveRegion: true,
                           child: Text(
-                            widget.notice,
+                            notice,
                             key: const Key('storage-retry-banner-message'),
                             style: textTheme.bodyMedium?.copyWith(
                               color: colors.ink2,
@@ -300,8 +298,9 @@ class _StorageRetryBannerState extends ConsumerState<StorageRetryBanner> {
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     tooltip: 'Dismiss',
-                    onPressed: () =>
-                        setState(() => _dismissedNotice = widget.notice),
+                    onPressed: () => ref
+                        .read(shellNoticeDismissalProvider.notifier)
+                        .dismiss(_signature),
                     icon: MasiIcon('close', size: 18, color: colors.ink3),
                   ),
                 ],
