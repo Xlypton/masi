@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../../app/theme.dart';
 import '../../features/account/application/email_initials.dart';
+import 'masi_icon.dart';
 
 /// The app's one profile-picture surface: a circular avatar showing, in
 /// order of preference, the user's picture ([avatarUrl]), their email
@@ -125,7 +126,19 @@ class _InitialsOrGlyph extends StatelessWidget {
     var initials = name == null ? '' : displayNameInitials(name);
     if (initials.isEmpty) initials = email == null ? '' : emailInitials(email!);
     if (initials.isEmpty) {
-      return Icon(Icons.person, size: radius, color: MasiColors.of(context).onAccent);
+      // `radius * 0.9`, not a bare `radius`, because the two widgets measure
+      // different things: `Icon(size:)` sized the Material `person` glyph's EM
+      // BOX, and that glyph inked only ~16 of its 24-unit design grid, whereas
+      // `MasiIcon(size:)` sizes the SVG's 24-unit VIEWBOX and `masi_person.svg`
+      // inks ~19 of it (head cap at y=2.5 down to the shoulder stroke at
+      // y=21.5). Handing the same number to both would render this fallback
+      // ~10% larger than the one users already see, so the factor cancels the
+      // difference in ink coverage rather than changing the intended size.
+      return MasiIcon(
+        'person',
+        size: radius * 0.9,
+        color: MasiColors.of(context).onAccent,
+      );
     }
     return Text(
       initials,

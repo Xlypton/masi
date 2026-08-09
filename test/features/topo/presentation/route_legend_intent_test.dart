@@ -406,10 +406,11 @@ void main() {
   );
 
   testWidgets(
-    'A2h (#15): rows are compact — dense ListTile + VisualDensity.compact, '
-    'small trailing IconButtons with their default 48px tap-target '
-    'constraint removed — so the capped legend height comfortably fits '
-    'MORE than ~2 rows, keys unchanged',
+    'A2h (#15): rows are compact — dense ListTile + a tightened '
+    'VisualDensity, small trailing IconButtons — while the '
+    'visibility/delete pair still meets the 44pt touch-target floor, so '
+    'the capped legend height comfortably fits MORE than ~2 rows, keys '
+    'unchanged',
     (tester) async {
       _setViewportSize(tester, const Size(400, 800));
       final container = await _seedRoutes(tester, 6);
@@ -429,8 +430,13 @@ void main() {
       );
       expect(
         tile.visualDensity,
-        VisualDensity.compact,
-        reason: 'rows must use VisualDensity.compact',
+        const VisualDensity(horizontal: -2, vertical: -1),
+        reason:
+            'rows must use a tightened VisualDensity (horizontal: -2, '
+            'vertical: -1), not the plain compact (-2, -2) — the row is '
+            'compressed vertically only as far as it can go without '
+            'dropping ListTile\'s trailing-slot height ceiling below the '
+            '44pt touch-target floor the visibility/delete buttons need',
       );
 
       final visibilityButton = tester.widget<IconButton>(
@@ -438,19 +444,21 @@ void main() {
       );
       expect(
         visibilityButton.constraints,
-        const BoxConstraints(),
+        const BoxConstraints(minWidth: 44, minHeight: 44),
         reason:
-            'the visibility toggle must drop the default 48px '
-            'kMinInteractiveDimension tap-target constraint to shrink to '
-            'its padded icon size',
+            'the visibility toggle must keep a 44pt minimum tap-target '
+            'constraint — shrinking it back below that reintroduces the '
+            'mis-tap-into-Delete bug this was fixed for',
       );
       final deleteButton = tester.widget<IconButton>(
         find.byKey(Key('topo-route-delete-$firstId')),
       );
       expect(
         deleteButton.constraints,
-        const BoxConstraints(),
-        reason: 'the delete button must drop the same default constraint',
+        const BoxConstraints(minWidth: 44, minHeight: 44),
+        reason:
+            'the delete button must keep the same 44pt minimum tap-target '
+            'constraint as the visibility toggle',
       );
 
       // Keys must be unchanged (still findable, still functional — see the

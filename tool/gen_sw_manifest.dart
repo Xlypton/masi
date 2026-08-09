@@ -8,8 +8,13 @@
 // Why a deny-list rather than an allow-list: a Flutter upgrade that starts
 // emitting a new required asset must be precached AUTOMATICALLY. An
 // allow-list would silently drop it and the offline shell would break in a
-// way no test could see. The four things that must never be precached are
-// large, enumerable and stable, so they are the ones spelled out.
+// way no test could see. The things that must stay OUT of the atomic precache
+// are large, enumerable and stable, so they are the ones spelled out.
+//
+// Four lines are stamped, not two: `SHELL_VERSION`, the atomic `PRECACHE`, and
+// then `PRECACHE_WASM`/`PRECACHE_JS` — the two renderer bundles, of which a
+// browser runs exactly one. Those two are named here but fetched best-effort
+// by `sw.js` at install, never added atomically; see `isPrecacheExcluded`.
 //
 // Why FNV-1a rather than SHA-256: `package:crypto` is a TRANSITIVE dependency
 // (pubspec.lock, `dependency: transitive`), so importing it would trip
@@ -32,18 +37,52 @@ class ShellManifest {
     required this.version,
     required this.urls,
     required this.totalBytes,
+    required this.wasmRenderer,
+    required this.jsRenderer,
+    required this.rendererBytes,
   });
 
   /// 16 lowercase hex chars derived from every precached file's path AND
-  /// bytes. Changing any of them changes this, which changes `sw.js`, which
-  /// is what makes the browser treat the worker as updated.
+  /// bytes — plus both renderer bundles, which are NOT in [urls]. See
+  /// [buildShellManifest] for why they still have to be hashed. Changing any
+  /// of them changes this, which changes `sw.js`, which is what makes the
+  /// browser treat the worker as updated.
   final String version;
 
-  /// Scope-relative URLs, sorted, forward-slashed.
+  /// Scope-relative URLs, sorted, forward-slashed. The ATOMIC precache — what
+  /// `sw.js`'s install handler passes to `cache.addAll`.
   final List<String> urls;
 
   final int totalBytes;
+
+  /// The dart2wasm renderer artifacts this build emitted, sorted, or empty on
+  /// a `--js` build. Stamped into `sw.js` as `PRECACHE_WASM`; fetched
+  /// best-effort at install, by the clients that can actually run them.
+  final List<String> wasmRenderer;
+
+  /// The dart2js renderer artifacts, sorted. Stamped as `PRECACHE_JS`.
+  final List<String> jsRenderer;
+
+  /// Bytes of the LARGER of the two renderer bundles — the worst case a
+  /// single client downloads at install time on top of [totalBytes]. Never
+  /// their sum: no browser fetches both (see [isRendererArtifact]).
+  final int rendererBytes;
 }
+
+/// The dart2wasm renderer bundle: the compiled Dart program plus the JS module
+/// that instantiates it.
+const wasmRendererArtifacts = <String>['main.dart.wasm', 'main.dart.mjs'];
+
+/// The dart2js renderer bundle. A `--wasm` build emits this TOO, as the
+/// fallback for browsers Flutter's loader will not hand WasmGC — which is all
+/// of WebKit, i.e. every browser on iOS.
+const jsRendererArtifacts = <String>['main.dart.js'];
+
+/// Whether [relativePath] is part of a renderer bundle — an artifact only ONE
+/// kind of browser can execute.
+bool isRendererArtifact(String relativePath) =>
+    wasmRendererArtifacts.contains(relativePath) ||
+    jsRendererArtifacts.contains(relativePath);
 
 /// Files that must never enter the precache.
 bool isPrecacheExcluded(String relativePath) {
@@ -60,10 +99,26 @@ bool isPrecacheExcluded(String relativePath) {
   // inlined verbatim at the top of `flutter_bootstrap.js`; nothing fetches it.
   if (relativePath == 'flutter.js') return true;
 
-  // The dart2js/canvaskit fallback build (4.2 MB), used only by browsers
-  // without WasmGC. Warmed at runtime on exactly those browsers instead of
-  // being paid for by every visitor.
-  if (relativePath == 'main.dart.js') return true;
+  // BOTH renderer bundles — not just the dart2js one. A `--wasm` build emits
+  // dart2wasm (`main.dart.wasm` + `main.dart.mjs`, ~4.2 MB) AND the dart2js
+  // fallback (`main.dart.js`, ~4.2 MB), and every browser executes exactly
+  // ONE of them: blink takes dart2wasm, everything WebKit — i.e. every browser
+  // on iOS, which is this app's primary target — takes dart2js.
+  //
+  // Only `main.dart.js` used to be excluded here, so the atomic precache still
+  // carried the dart2wasm pair and every iPhone visitor downloaded ~4.2 MB it
+  // can never run, on the first visit and again after every deploy: roughly
+  // 70% of the precache, competing for bandwidth with the canvaskit bundle it
+  // actually needs and for origin quota with the user's photos.
+  //
+  // They are not dropped, only MOVED: `stampServiceWorker` writes both sets
+  // into `sw.js` as `PRECACHE_WASM`/`PRECACHE_JS`, and `rendererArtifacts()`
+  // there feeds the one the client actually needs to the same best-effort
+  // `cacheMissing()` path that already handles `canvaskit/`. Best-effort and
+  // deliberately NOT `addAll`: an atomic add that fails aborts the install, and
+  // an aborted install strands the user on the previous build — a far worse
+  // outcome on a flaky link than one offline cold start.
+  if (isRendererArtifact(relativePath)) return true;
 
   // 1.4 MB of licence text, reachable only from the licences page.
   if (relativePath == 'assets/NOTICES') return true;
@@ -104,20 +159,49 @@ ShellManifest buildShellManifest(Directory buildDir) {
   }
 
   final urls = <String>[];
+  final wasmRenderer = <String>[];
+  final jsRenderer = <String>[];
   var totalBytes = 0;
+  var wasmRendererBytes = 0;
+  var jsRendererBytes = 0;
   for (final entity in buildDir.listSync(recursive: true)) {
     if (entity is! File) continue;
     final relative =
         p.relative(entity.path, from: buildDir.path).replaceAll(r'\', '/');
+    // The two renderer branches come BEFORE `isPrecacheExcluded`, which now
+    // excludes them from the atomic set — they are collected here rather than
+    // discarded, because `sw.js` still has to be told their names.
+    if (wasmRendererArtifacts.contains(relative)) {
+      wasmRenderer.add(relative);
+      wasmRendererBytes += entity.lengthSync();
+      continue;
+    }
+    if (jsRendererArtifacts.contains(relative)) {
+      jsRenderer.add(relative);
+      jsRendererBytes += entity.lengthSync();
+      continue;
+    }
     if (isPrecacheExcluded(relative)) continue;
     urls.add(relative);
     totalBytes += entity.lengthSync();
   }
   urls.sort();
+  wasmRenderer.sort();
+  jsRenderer.sort();
 
-  if (totalBytes > precacheCeilingBytes) {
+  // The ceiling bounds what ONE CLIENT downloads at install time, which is the
+  // atomic precache plus exactly one renderer bundle — never both. Counting
+  // the larger of the two keeps that a worst case now that the renderer bytes
+  // have left `urls`; without it, moving ~4.2 MB out of the atomic set would
+  // have silently bought 4.2 MB of slack in a guard whose entire job is to
+  // make a size regression loud.
+  final rendererBytes =
+      wasmRendererBytes > jsRendererBytes ? wasmRendererBytes : jsRendererBytes;
+  final installBytes = totalBytes + rendererBytes;
+  if (installBytes > precacheCeilingBytes) {
     throw StateError(
-      'precache is $totalBytes bytes, over the '
+      'install download is $installBytes bytes ($totalBytes precache + '
+      '$rendererBytes for the larger renderer bundle), over the '
       '$precacheCeilingBytes-byte ceiling. Either something large started '
       'being emitted (check `du -sh ${buildDir.path}/*`) or the ceiling '
       'needs a deliberate, reviewed increase — do not raise it silently.',
@@ -138,7 +222,15 @@ ShellManifest buildShellManifest(Directory buildDir) {
     }
   }
 
-  for (final url in urls) {
+  // The renderer artifacts are hashed even though they are NOT in `urls`, and
+  // that is load-bearing rather than tidy: `SHELL_VERSION` names the cache and
+  // is the only reason the browser sees a CHANGED worker at all, while
+  // `main.dart.wasm`/`main.dart.js` are the files that change on every single
+  // Dart edit. Hash `urls` alone and a pure-Dart change leaves `sw.js`
+  // byte-identical — no worker update, no cache rollover, and last build's
+  // renderer served out of the previous cache indefinitely.
+  final hashed = <String>[...urls, ...wasmRenderer, ...jsRenderer]..sort();
+  for (final url in hashed) {
     fold(utf8.encode(url));
     fold(const [0]);
     fold(File(p.join(buildDir.path, url)).readAsBytesSync());
@@ -149,6 +241,9 @@ ShellManifest buildShellManifest(Directory buildDir) {
     version: formatShellVersion(hash),
     urls: urls,
     totalBytes: totalBytes,
+    wasmRenderer: wasmRenderer,
+    jsRenderer: jsRenderer,
+    rendererBytes: rendererBytes,
   );
 }
 
@@ -177,27 +272,49 @@ String formatShellVersion(int hash) {
 
 final _versionLine =
     RegExp(r"^const SHELL_VERSION = '[^']*';$", multiLine: true);
+// The three list stamps are matched by DISTINCT patterns rather than one
+// parameterised `PRECACHE\w*` — `^const PRECACHE = ` cannot match
+// `const PRECACHE_WASM = `, which is what keeps `_replaceExactlyOnce`'s
+// "exactly one match" contract meaningful for each of them. The same property
+// is what keeps `tool/verify_offline_shell.py`'s `^const PRECACHE = (\[.*\]);$`
+// reader pointed at the atomic set and not at a renderer list.
 final _precacheLine = RegExp(r'^const PRECACHE = \[[^\]]*\];$', multiLine: true);
+final _precacheWasmLine =
+    RegExp(r'^const PRECACHE_WASM = \[[^\]]*\];$', multiLine: true);
+final _precacheJsLine =
+    RegExp(r'^const PRECACHE_JS = \[[^\]]*\];$', multiLine: true);
 
-/// Rewrites the two stamp lines in `<buildDir>/sw.js`, in place.
+/// Rewrites the four stamp lines in `<buildDir>/sw.js`, in place.
 void stampServiceWorker(Directory buildDir, ShellManifest manifest) {
   final swFile = File(p.join(buildDir.path, 'sw.js'));
-  final source = swFile.readAsStringSync();
+  var source = swFile.readAsStringSync();
 
-  final withVersion = _replaceExactlyOnce(
+  source = _replaceExactlyOnce(
     source,
     _versionLine,
     "const SHELL_VERSION = '${manifest.version}';",
     'SHELL_VERSION',
   );
-  final stamped = _replaceExactlyOnce(
-    withVersion,
+  source = _replaceExactlyOnce(
+    source,
     _precacheLine,
     'const PRECACHE = ${jsonEncode(manifest.urls)};',
     'PRECACHE',
   );
+  source = _replaceExactlyOnce(
+    source,
+    _precacheWasmLine,
+    'const PRECACHE_WASM = ${jsonEncode(manifest.wasmRenderer)};',
+    'PRECACHE_WASM',
+  );
+  source = _replaceExactlyOnce(
+    source,
+    _precacheJsLine,
+    'const PRECACHE_JS = ${jsonEncode(manifest.jsRenderer)};',
+    'PRECACHE_JS',
+  );
 
-  swFile.writeAsStringSync(stamped);
+  swFile.writeAsStringSync(source);
 }
 
 String _replaceExactlyOnce(
@@ -240,6 +357,9 @@ void main(List<String> args) {
   }
   stdout.writeln(
     '    ok: sw.js stamped — version=${manifest.version} '
-    'files=${manifest.urls.length} bytes=${manifest.totalBytes}',
+    'files=${manifest.urls.length} bytes=${manifest.totalBytes} '
+    'renderer=wasm${manifest.wasmRenderer.length}/js'
+    '${manifest.jsRenderer.length} (+${manifest.rendererBytes} bytes '
+    'best-effort, one bundle per client)',
   );
 }

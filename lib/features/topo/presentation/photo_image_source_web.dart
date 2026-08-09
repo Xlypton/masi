@@ -148,10 +148,17 @@ class _PlatformPhotoImageState extends ConsumerState<PlatformPhotoImage> {
   /// metadata with NO bytes — which without this renders as a permanent
   /// placeholder with no path back (see `missing_photo_byte_resolver.dart`).
   /// Fetching from the widget build path is safe because the resolver
-  /// de-duplicates concurrent requests per photo id, keeps a one-minute
-  /// negative cache, and NEVER throws (offline answers `null`); and because
-  /// [PhotoImageCache.resolveUrl] itself caches and de-dups per key, so at most
-  /// one fetch is ever in flight for a key no matter how many widgets show it.
+  /// de-duplicates concurrent requests per REMOTE OBJECT PATH, caps how many
+  /// run at once, keeps a one-minute negative cache, and NEVER throws (offline
+  /// answers `null`); and because [PhotoImageCache.resolveUrl] itself caches
+  /// and de-dups per key, so at most one fetch is ever in flight for a key no
+  /// matter how many widgets show it.
+  ///
+  /// [key] is whatever the caller asked to display, which for a list row or a
+  /// photo-strip tile is a `thumbs/<id>.jpg` key — and the resolver maps that
+  /// to the cloud's small `shared/thumbs/<id>.jpg` object, so a screenful of
+  /// foreign rows costs tens of kilobytes each rather than one full-resolution
+  /// original per 52-pixel tile.
   ///
   /// A `null` result is unchanged from before: [PhotoImageCache.resolveUrl]
   /// resolves to `null`, [_resolved] flips true, and [build] falls through to

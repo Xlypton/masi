@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../../../app/theme.dart';
+import '../../topo/data/photo_path_resolution.dart';
 import '../../topo/data/photo_repository.dart';
 import '../../topo/domain/topo_route.dart';
 import '../../topo/presentation/grade_colors.dart';
@@ -45,6 +46,7 @@ class TopoLineView extends StatelessWidget {
     this.proposedSymbols = const [],
     this.replacedRouteNumber,
     this.onTapPercent,
+    this.useThumbnail = false,
   });
 
   final PhotoRef photo;
@@ -70,6 +72,32 @@ class TopoLineView extends StatelessWidget {
   /// how the owner's diff uses it.
   final void Function(Offset percent)? onTapPercent;
 
+  /// Render [photo]'s downscaled `thumbs/<id>.jpg` derivative instead of the
+  /// full-resolution original.
+  ///
+  /// For the suggestions inbox, and only for it. That screen puts EVERY
+  /// unanswered suggestion on screen at once, each one a photo in a 180px-tall
+  /// row: at full resolution a single 24.5 MP original is ~98 MB of decoded
+  /// RGBA, so a handful of pending suggestions was several hundred megabytes of
+  /// bitmap behind boxes the size of a stamp. Mobile Safari — the primary
+  /// target — answers that by silently discarding the page and reloading it,
+  /// which is why this is a crash risk and not a slowness complaint.
+  ///
+  /// DEFAULTS TO FALSE AND MUST STAY THAT WAY. `propose_line_screen` renders
+  /// this same widget inside a 6x-zoom `InteractiveViewer` so a stranger can
+  /// place a line on an individual hold; a 512px-max-edge thumbnail blown up
+  /// 6x is precisely the mush that makes that impossible. The two uses want
+  /// opposite things from the same widget, so the caller says which.
+  ///
+  /// [thumbKeyFor] only rewrites the basename, so it composes with every path
+  /// shape [PhotoImage] re-resolves (a relative storage key, a legacy absolute
+  /// path, a stale absolute one pending self-heal) — same derivation
+  /// `photo_strip.dart`'s 52px tile and `LibraryCrudRepository
+  /// ._resolveThumbnail` already use. A photo that predates thumbnail
+  /// generation has no bytes behind that key and degrades to the same
+  /// `placeholder` any unreadable photo gets, never a broken-image glyph.
+  final bool useThumbnail;
+
   @override
   Widget build(BuildContext context) {
     return LayoutBuilder(
@@ -87,7 +115,10 @@ class TopoLineView extends StatelessWidget {
               width: display.width,
               height: display.height,
               child: PhotoImage(
-                photo.localPath,
+                // See [useThumbnail] — the inbox row gets the small
+                // derivative, the propose canvas the full-resolution
+                // original.
+                useThumbnail ? thumbKeyFor(photo.localPath) : photo.localPath,
                 fit: BoxFit.fill,
                 placeholder: () => ColoredBox(
                   color: MasiColors.of(context).surface2,

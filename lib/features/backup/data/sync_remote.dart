@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 import 'package:supabase_flutter/supabase_flutter.dart';
 
+import '../../topo/data/image_ops/image_ops.dart';
 import '../domain/shared_topo_scope.dart';
 import 'storage_pagination.dart';
 
@@ -257,6 +261,35 @@ abstract class SyncRemote {
   /// second copy under a flat `shared/` prefix rather than trying to make
   /// the owner-scoped path conditionally public, so the two policies never
   /// have to interact.
+  ///
+  /// PUBLISHES TWO OBJECTS, not one: the full-resolution original at
+  /// [sharedPhotoPath], and a derived downscaled JPEG at [sharedThumbPath].
+  /// The thumbnail is why: without it the ONLY object a viewer could fetch for
+  /// an absent foreign photo was the multi-megabyte original, which every
+  /// 52-pixel list tile then downloaded in full. Decision D-5 is untouched —
+  /// the original is still stored at full resolution and the thumbnail is
+  /// strictly an ADDITIONAL derivative, never a replacement.
+  ///
+  /// THE TWO OBJECTS ARE NOT EQUALS, and implementations must keep them
+  /// unequal. The ORIGINAL is the publication: it is written FIRST, and it is
+  /// the only one of the two whose failure may propagate out of this call —
+  /// because `SyncService._uploadOwnPhotos` turns a throw here into
+  /// `failedCanonicalIds`, which WITHHOLDS the photo's metadata row (S5),
+  /// clears `PushSyncResult.fullyLanded` and re-arms the retry loop. That is
+  /// the correct response to "the bytes a viewer needs are not in the cloud".
+  /// It is the WRONG response to "the small derived tile is not in the cloud",
+  /// which merely costs a viewer the tile-size win: the read path already falls
+  /// back to the original for an absent thumbnail (see
+  /// `SharedMissingPhotoByteResolver`). So the thumbnail is written SECOND and
+  /// STRICTLY BEST-EFFORT — a failed thumbnail must never be observable as a
+  /// failed publish.
+  ///
+  /// CALLER CONTRACT: [bytes] must ALREADY be safe to publish (EXIF stripped
+  /// via `strippedForPublishing` — see `SyncService._uploadOwnPhotos`, the
+  /// only caller). The thumbnail is derived FROM [bytes], so it inherits that
+  /// guarantee rather than re-establishing it. Deriving it from unstripped
+  /// bytes would leak: a photo already small enough to skip the resize comes
+  /// back from `generateThumbnail` VERBATIM, metadata and all.
   Future<void> uploadSharedPhoto({
     required String photoId,
     required String ext,
@@ -267,8 +300,33 @@ abstract class SyncRemote {
   /// [sharedPhotoPath]), or `null` if no such object exists.
   Future<List<int>?> downloadSharedPhoto(String objectPath);
 
-  /// Every object path that currently exists under the shared `shared/`
-  /// folder — used to skip re-uploading a shared photo already there.
+  /// The shared object paths a push may treat as ALREADY PUBLISHED — i.e.
+  /// the skip-set for [uploadSharedPhoto].
+  ///
+  /// "Already published" means THE ORIGINAL AT [sharedPhotoPath] EXISTS, and
+  /// nothing more. Specifically it does NOT mean the photo's thumbnail is
+  /// there too, even though [uploadSharedPhoto] writes both.
+  ///
+  /// That distinction is the whole safety property of this method, so it is
+  /// worth stating what the other definition cost. `SyncService.
+  /// _uploadOwnPhotos` derives `needsShared` from exactly this set, and a photo
+  /// with `needsShared` runs the ENTIRE publish pipeline again — including the
+  /// fail-closed EXIF-strip gate. Reporting an already-published original as
+  /// unpublished merely because it predates the thumbnail tier therefore pushed
+  /// the whole existing published corpus back through that gate, on bytes
+  /// nothing had ever validated. Every refusal there withholds the photo's row,
+  /// drops `fullyLanded` and re-arms the retry loop — and because no thumbnail
+  /// is ever produced for a photo that was refused, it never enters the
+  /// skip-set, so the loop never terminates. A derived, disposable, optional
+  /// object must never be able to gate a publication that already happened.
+  ///
+  /// Backfilling the thumbnails of everything published BEFORE the tier existed
+  /// is therefore a SIDE CHANNEL that cannot touch publish state at all — see
+  /// [sharedOriginalsNeedingThumbs] and [SharedThumbBackfill]. There is no
+  /// outbox to schedule a migration through (decision D-4), and this is why one
+  /// is not needed: a missing thumbnail is not a failure to heal, it is a
+  /// derivative that has not been computed yet, and the read path already
+  /// degrades to the original for it.
   Future<Set<String>> listSharedPhotoObjectPaths();
 
   /// Removes the object at the caller's OWN private object path
@@ -284,9 +342,14 @@ abstract class SyncRemote {
     required String ext,
   });
 
-  /// Removes the object at the SHARED object path (`shared/<photoId><ext>`,
-  /// see [sharedPhotoPath]) for a just-tombstoned photo. Best-effort/
-  /// idempotent, mirroring [removePhoto].
+  /// Removes the SHARED copy of a just-tombstoned photo — BOTH objects
+  /// [uploadSharedPhoto] wrote, the original at [sharedPhotoPath] and the
+  /// derived thumbnail at [sharedThumbPath]. Removing only the original would
+  /// leave the thumbnail as a world-readable orphan of a photo the owner has
+  /// deleted, which is the same leak the takedown exists to close.
+  ///
+  /// Best-effort/idempotent, mirroring [removePhoto]: either object may never
+  /// have existed.
   Future<void> removeSharedPhoto({
     required String photoId,
     required String ext,
@@ -306,6 +369,221 @@ abstract class SyncRemote {
 /// a slice shares its original's id/file) and extension [ext] (including
 /// the leading dot, e.g. `.jpg`).
 String sharedPhotoPath(String photoId, String ext) => 'shared/$photoId$ext';
+
+/// The extension a published THUMBNAIL always carries, whatever the original's
+/// is. `generateThumbnail` re-encodes to JPEG, so this is a property of the
+/// derivation, not of the source — which is exactly what makes the thumbnail
+/// path derivable from a `thumbs/<id>.jpg` key that no longer remembers
+/// whether its original was `.jpeg`, `.png` or `.JPG`.
+const String kSharedThumbExt = '.jpg';
+
+/// The shared-bucket object path for the THUMBNAIL of the photo with canonical
+/// id [photoId] — the small companion object [SyncRemote.uploadSharedPhoto]
+/// writes alongside the full-resolution [sharedPhotoPath].
+///
+/// Mirrors `thumbKeyFor`'s local `thumbs/<id>.jpg` convention one level down
+/// from `shared/`, so a local thumbnail key and its cloud object differ only by
+/// the `shared/` prefix.
+String sharedThumbPath(String photoId) => 'shared/thumbs/$photoId$kSharedThumbExt';
+
+/// The shared object paths that count as PUBLISHED, given the object NAMES
+/// (not paths) listed directly under `shared/`.
+///
+/// The pure half of [SupabaseSyncRemote.listSharedPhotoObjectPaths] — see
+/// [SyncRemote.listSharedPhotoObjectPaths] for why the thumbnail listing is
+/// deliberately not an input here.
+///
+/// Entries with NO extension are dropped, which is how the pseudo-entry
+/// Supabase returns for the `thumbs` FOLDER itself is excluded without naming
+/// it: every real photo object is `<canonical id><ext>` with a non-empty
+/// extension (`PhotoFiles` stores `photos/<id><ext>` and the publish path takes
+/// `ext` straight off it), and a folder entry has none.
+Set<String> publishedSharedOriginals(Iterable<String> originalNames) => {
+  for (final name in originalNames)
+    if (p.extension(name).isNotEmpty) 'shared/$name',
+};
+
+/// The ORIGINAL object NAMES under `shared/` that have no `shared/thumbs/`
+/// companion yet — the side-channel backfill's worklist, in listing order.
+///
+/// The complement of a publication check, NOT a publication check: nothing here
+/// feeds [SupabaseSyncRemote.listSharedPhotoObjectPaths]'s return value, and
+/// nothing derived from it may ever reach `SyncService`'s
+/// `failedCanonicalIds`/`missingLocalBytes` accounting. See
+/// [SyncRemote.listSharedPhotoObjectPaths] for what happened when the two were
+/// the same computation.
+///
+/// The join is on the id, i.e. the name minus its extension, because the two
+/// sides deliberately do not share one: the original keeps whatever the
+/// climber's camera produced (`.jpeg`, `.png`, `.JPG`) while the thumbnail is
+/// always [kSharedThumbExt]. Matching on the full name is the mistake this
+/// helper exists to make impossible.
+///
+/// Extension-less entries are skipped for the same reason as in
+/// [publishedSharedOriginals], and here it is load-bearing rather than
+/// cosmetic: the `thumbs` folder pseudo-entry would otherwise be worklisted
+/// forever (nothing can ever produce a `thumbs.jpg` for it), and every pass
+/// would spend a download attempt trying to read a directory as a photo.
+List<String> sharedOriginalsNeedingThumbs({
+  required Iterable<String> originalNames,
+  required Set<String> thumbNames,
+}) => [
+  for (final name in originalNames)
+    if (p.extension(name).isNotEmpty &&
+        !thumbNames.contains(
+          '${p.basenameWithoutExtension(name)}$kSharedThumbExt',
+        ))
+      name,
+];
+
+/// Derives the missing `shared/thumbs/<id>.jpg` companions of originals that
+/// were published before the thumbnail tier existed — WITHOUT re-uploading a
+/// single original, and without any connection to publish state.
+///
+/// ## Why a side channel and not the push
+///
+/// The obvious mechanism is to report a thumbnail-less original as unpublished
+/// and let the ordinary push re-publish it. That is what this replaces, and it
+/// was a defect rather than a shortcut: see
+/// [SyncRemote.listSharedPhotoObjectPaths] for the retry loop it created. The
+/// property this class exists to have is that NOTHING it does — a failed
+/// download, an undecodable photo, a rejected upload, being offline for a
+/// month — can be observed by `SyncService` at all. It reports nothing, throws
+/// nothing, and returns nothing.
+///
+/// ## Cost, and why it is bounded the way it is
+///
+/// A thumbnail can only be derived from pixels, and the only copy of a legacy
+/// photo's pixels this device is guaranteed to be able to reach is the one
+/// already in the bucket — the local file may have been evicted, and on a
+/// second device it was never there. So a backfill costs ONE DOWNLOAD of the
+/// original, once, ever, per object; it uploads only the ~30 KB derivative. That
+/// is the cheap direction of the same trade the push would have made: measured
+/// on the live dev bucket when this landed, 21 legacy objects totalling 94 MB,
+/// which as a re-PUSH would also have been 21 chances to withhold a row that
+/// was already fine.
+///
+/// [maxPerPass] keeps one push from spending all of it at once (a phone browser
+/// at a crag), and one pass runs at a time. The work is globally finite and
+/// self-extinguishing: only objects published before the tier can ever appear
+/// in the worklist, every success removes one permanently, and once the bucket
+/// is converged every later pass finds an empty worklist and costs nothing.
+///
+/// Deliberately NOT scoped to the caller's own photos, even though the pass
+/// runs during the caller's push. A legacy photo whose owner never opens the
+/// app again would otherwise keep every VIEWER paying the full-original
+/// fallback forever, and the derivative is computed from an object that is
+/// already world-readable, so no one sees anything they could not already
+/// fetch.
+@visibleForTesting
+class SharedThumbBackfill {
+  SharedThumbBackfill({
+    required Future<List<int>?> Function(String objectPath) download,
+    required Future<void> Function(String objectPath, Uint8List bytes) upload,
+    Future<Uint8List> Function(Uint8List original)? thumbnail,
+    this.maxPerPass = 3,
+    this.perStepTimeout = const Duration(seconds: 45),
+    // Private fields with named params, matching `SyncService`'s and
+    // `SharedMissingPhotoByteResolver`'s house pattern: a named parameter
+    // cannot itself be private, so the initializing formal the lint asks for is
+    // not expressible here.
+  }) : _download = download, // ignore: prefer_initializing_formals
+       _upload = upload, // ignore: prefer_initializing_formals
+       _thumbnail = thumbnail ?? _computeThumbnail;
+
+  static Future<Uint8List> _computeThumbnail(Uint8List original) =>
+      compute(generateThumbnail, original);
+
+  final Future<List<int>?> Function(String objectPath) _download;
+  final Future<void> Function(String objectPath, Uint8List bytes) _upload;
+  final Future<Uint8List> Function(Uint8List original) _thumbnail;
+
+  /// How many originals one pass may backfill. Three keeps a single push's
+  /// incidental cost in the same order as the push itself.
+  final int maxPerPass;
+
+  /// Ceiling on any ONE download/derive/upload step, so a stalled request
+  /// cannot hold the single-pass latch for the rest of the session.
+  final Duration perStepTimeout;
+
+  /// Object names whose pixels this session could not turn into a thumbnail
+  /// (undecodable container, a backend that refuses the bitmap). Retrying those
+  /// costs a full download every pass and cannot start succeeding, so they are
+  /// dropped for the session — and dropping them is FREE, because a missing
+  /// thumbnail is a degradation to the original, not a failure.
+  final Set<String> _givenUp = <String>{};
+
+  bool _running = false;
+  Future<void> _pending = Future<void>.value();
+
+  /// The current (or most recent) pass. Only a test ever awaits it — production
+  /// deliberately fires and forgets, because a push must not wait on, or be
+  /// able to fail because of, a derivative.
+  @visibleForTesting
+  Future<void> get pending => _pending;
+
+  /// Object names this session gave up deriving a thumbnail for.
+  @visibleForTesting
+  Set<String> get givenUp => Set.unmodifiable(_givenUp);
+
+  /// Starts at most one pass over [originalNames] (the output of
+  /// [sharedOriginalsNeedingThumbs]) and RETURNS IMMEDIATELY. Never throws.
+  void schedule(Iterable<String> originalNames) {
+    if (_running) return;
+    final batch = <String>[];
+    for (final name in originalNames) {
+      if (_givenUp.contains(name)) continue;
+      batch.add(name);
+      if (batch.length == maxPerPass) break;
+    }
+    if (batch.isEmpty) return;
+    _running = true;
+    _pending = _runPass(batch).whenComplete(() => _running = false);
+    // `_runPass` never throws, so this can never become an unhandled async
+    // error — which is the only reason firing and forgetting is safe here.
+    unawaited(_pending);
+  }
+
+  Future<void> _runPass(List<String> originalNames) async {
+    for (final name in originalNames) {
+      try {
+        final original = await _download(
+          'shared/$name',
+        ).timeout(perStepTimeout);
+        // Absent or empty: the object was deleted or unshared between the
+        // listing and now. It will not be in the next listing either, so there
+        // is nothing to remember.
+        if (original == null || original.isEmpty) continue;
+        final source = original is Uint8List
+            ? original
+            : Uint8List.fromList(original);
+
+        final Uint8List thumb;
+        try {
+          thumb = await _thumbnail(source).timeout(perStepTimeout);
+        } catch (_) {
+          _givenUp.add(name);
+          continue;
+        }
+        if (thumb.isEmpty) {
+          _givenUp.add(name);
+          continue;
+        }
+
+        await _upload(
+          sharedThumbPath(p.basenameWithoutExtension(name)),
+          thumb,
+        ).timeout(perStepTimeout);
+      } catch (_) {
+        // Transient — offline, a Storage error, a timeout. Deliberately NOT
+        // remembered: the object stays in the worklist exactly as long as it
+        // genuinely lacks a thumbnail, so the next pass retries it and the
+        // whole mechanism heals itself the way every other no-outbox path in
+        // this app does (decision D-4).
+      }
+    }
+  }
+}
 
 /// True when a LOCAL row (with `updatedAt` [localUpdatedAt]) should be
 /// pushed up to the cloud, given the cloud's current `updatedAt` for that
@@ -590,6 +868,28 @@ class SupabaseSyncRemote implements SyncRemote {
   final SupabaseClient _client;
 
   static const String _bucket = 'topo-photos';
+
+  /// The side channel that gives pre-thumbnail-tier objects their
+  /// `shared/thumbs/` companion. Driven from [listSharedPhotoObjectPaths],
+  /// which is the one place that already knows both sides of the comparison —
+  /// and which deliberately does not let the answer reach its own return value.
+  ///
+  /// `late final` rather than an initializer-list entry because it closes over
+  /// this instance's own storage helpers.
+  late final SharedThumbBackfill _thumbBackfill = SharedThumbBackfill(
+    download: downloadSharedPhoto,
+    upload: (objectPath, bytes) => _client.storage
+        .from(_bucket)
+        .uploadBinary(
+          objectPath,
+          bytes,
+          fileOptions: const FileOptions(upsert: true),
+        ),
+  );
+
+  /// The backfill pass in flight, for tests that need to await it.
+  @visibleForTesting
+  SharedThumbBackfill get thumbBackfill => _thumbBackfill;
 
   @override
   Future<List<TablePushOutcome>> upsertOwnRows(
@@ -1057,13 +1357,57 @@ class SupabaseSyncRemote implements SyncRemote {
     required String ext,
     required List<int> bytes,
   }) async {
+    final data = bytes is Uint8List ? bytes : Uint8List.fromList(bytes);
+
+    // ORIGINAL FIRST — this is the publication, and its throw is the only one
+    // allowed out of here. See [SyncRemote.uploadSharedPhoto] for why the two
+    // objects must not be treated as equals.
     await _client.storage
         .from(_bucket)
         .uploadBinary(
           sharedPhotoPath(photoId, ext),
-          Uint8List.fromList(bytes),
+          data,
           fileOptions: const FileOptions(upsert: true),
         );
+
+    await _publishThumbBestEffort(photoId, data);
+  }
+
+  /// Derives and publishes the small companion at [sharedThumbPath] for an
+  /// already-publish-safe [data] (see [SyncRemote.uploadSharedPhoto]'s caller
+  /// contract). NEVER throws, on any failure, by construction.
+  ///
+  /// Reuses `generateThumbnail` — the app's ONE resampler, the same seam
+  /// `PhotoFiles` uses for the local `thumbs/` tier — through `compute`, so the
+  /// decode/resize/encode of a 24-megapixel photo does not run on the UI
+  /// thread during a push. (`compute` calls the function inline on web, where
+  /// the backend is already the browser's offscreen canvas and therefore
+  /// already off Flutter's own codec path.)
+  ///
+  /// Failure means NO THUMBNAIL — not "publish the original under the thumbnail
+  /// path", which is what an earlier draft did to guarantee the pair completed.
+  /// That guarantee is no longer needed (the skip-set is the original alone,
+  /// see [listSharedPhotoObjectPaths]) and it was actively harmful: a
+  /// multi-megabyte object at a path every 52-pixel list tile fetches is
+  /// precisely the defect the thumbnail tier exists to remove. Absent is
+  /// better, because absent already has a defined meaning downstream — the read
+  /// path falls back to the original — while a lying thumbnail does not.
+  Future<void> _publishThumbBestEffort(String photoId, Uint8List data) async {
+    try {
+      final thumb = await compute(generateThumbnail, data);
+      await _client.storage
+          .from(_bucket)
+          .uploadBinary(
+            sharedThumbPath(photoId),
+            thumb,
+            fileOptions: const FileOptions(upsert: true),
+          );
+    } catch (e) {
+      debugPrint(
+        'SyncRemote: shared thumbnail for "$photoId" not published — the '
+        'original IS published and readers fall back to it: $e',
+      );
+    }
   }
 
   @override
@@ -1077,8 +1421,39 @@ class SupabaseSyncRemote implements SyncRemote {
 
   @override
   Future<Set<String>> listSharedPhotoObjectPaths() async {
-    final files = await _listAllObjects('shared');
-    return {for (final file in files) 'shared/${file.name}'};
+    // Two listings, not one: `list(path: 'shared')` returns only the objects
+    // DIRECTLY under `shared/` (plus a pseudo-entry for the `thumbs` folder
+    // itself, dropped by [publishedSharedOriginals] for having no extension),
+    // so the thumbnails need their own call. The second listing exists ONLY to
+    // feed the backfill below — it is not, and must never become, a term of the
+    // skip-set this returns.
+    final originals = await _listAllObjects('shared');
+    final thumbs = await _listAllObjects('shared/thumbs');
+    final originalNames = [for (final file in originals) file.name];
+
+    // SIDE CHANNEL, fired and forgotten. It cannot delay this call, cannot fail
+    // it, and cannot change what it returns — see [SharedThumbBackfill] for why
+    // that isolation is the point rather than an optimisation.
+    _thumbBackfill.schedule(
+      sharedOriginalsNeedingThumbs(
+        originalNames: originalNames,
+        thumbNames: {for (final file in thumbs) file.name},
+      ),
+    );
+
+    // KNOWN AND DELIBERATE (privacy): every original published before the
+    // publish-side EXIF strip landed (2026-08-08) is in this set, so the push
+    // skips it and its ORIGINAL METADATA — including GPS — stays in the
+    // world-readable bucket. Re-publishing them would strip it retroactively,
+    // and this is the decision not to: that is ~94 MB of re-upload traffic
+    // across the legacy corpus and, far worse, it would route an
+    // already-published photo back through the fail-closed strip gate, which is
+    // the exact retry-loop defect [SyncRemote.listSharedPhotoObjectPaths]
+    // describes. Healing it is a separate, deliberate re-upload (a one-off
+    // migration, or a per-photo "re-publish" action), NOT a side effect of
+    // widening this skip-set. Recorded here so it is a findable item rather
+    // than a silent one.
+    return publishedSharedOriginals(originalNames);
   }
 
   @override
@@ -1100,7 +1475,14 @@ class SupabaseSyncRemote implements SyncRemote {
     required String ext,
   }) async {
     try {
-      await _client.storage.from(_bucket).remove([sharedPhotoPath(photoId, ext)]);
+      // One call, both objects — the original and the thumbnail published
+      // alongside it. `remove` is idempotent per path, so a photo published
+      // before the thumbnail tier existed (no thumbnail object) takes the
+      // exact same path.
+      await _client.storage.from(_bucket).remove([
+        sharedPhotoPath(photoId, ext),
+        sharedThumbPath(photoId),
+      ]);
     } on StorageException {
       // Best-effort/idempotent.
     }

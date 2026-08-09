@@ -175,6 +175,72 @@
       pointer-events: none;
     }
   </style>
+
+  <!-- Global browser-level error reporting.
+       In <head>, ABOVE the `flutter_bootstrap.js` tag, on purpose: the
+       bootstrap script is `async`, so it can execute before any inline script
+       further down the body. Registering here is the only placement that also
+       catches a failure inside the loader itself — a 404 on a renderer
+       artifact, a wasm instantiation error — which otherwise leaves the splash
+       up forever with nothing in the log to say why.
+
+       LOG AND PASS THROUGH. Neither handler calls `preventDefault()`, and that
+       is deliberate rather than an omission: `preventDefault()` on an `error`
+       or `unhandledrejection` event marks it HANDLED, which suppresses the
+       browser's own console reporting — and that console is exactly what
+       `tool/drive_web.sh`'s headless-Chrome harness and
+       `tool/verify_offline_shell.py` read to tell a broken boot from a slow
+       one. Masking it would turn a hard failure into a silent hang.
+
+       The `window.__masi*` counters follow the same convention as
+       `__masiCanInstall`/`__masiAppInstalledCount` below — a monotonic count
+       plus the last message, readable without a listener of one's own. Every
+       handler body is wrapped, because an error handler that throws is its own
+       outage. -->
+  <script>
+    window.__masiErrorCount = 0;
+    window.__masiLastError = null;
+    window.addEventListener('error', function (event) {
+      try {
+        window.__masiErrorCount = (window.__masiErrorCount || 0) + 1;
+        // A resource load failure (a <script>/<img> that 404s) fires this same
+        // event with no `message` and no `error`, so fall back to the target
+        // rather than logging "undefined".
+        var detail = (event && (event.error || event.message)) ||
+          (event && event.target && (event.target.src || event.target.href)) ||
+          'unknown error';
+        var where = event && event.filename
+          ? ' at ' + event.filename + ':' + event.lineno + ':' + event.colno
+          : '';
+        window.__masiLastError = String((detail && detail.message) || detail);
+        console.error('masi/error: uncaught' + where + ':', detail);
+      } catch (_) {}
+      // No preventDefault(): the event must stay unhandled so the browser
+      // reports it too.
+    }, true);
+    // ^ CAPTURE phase, deliberately — see the doc above this script block.
+    // A resource load failure (a <script>/<img>/<link> 404) fires an `error`
+    // event on the FAILING ELEMENT, not on `window`, and that event does not
+    // bubble. Capturing listeners still see it on the way DOWN to that
+    // element, which is the only phase a `window`-level listener can catch it
+    // in at all; a bubble-phase listener here never receives it. This is also
+    // exactly why the `event.target.src || event.target.href` fallback three
+    // lines up is not dead code: a resource-load `Event` has no `.message`/
+    // `.error` (it isn't an `ErrorEvent`), so that fallback is the only thing
+    // that ever gets logged for a 404'd renderer artifact. Uncaught script
+    // errors are unaffected either way — those are dispatched directly on
+    // `window`, so both phases already saw them.
+    window.addEventListener('unhandledrejection', function (event) {
+      try {
+        window.__masiErrorCount = (window.__masiErrorCount || 0) + 1;
+        var reason = event && event.reason;
+        window.__masiLastError =
+          String((reason && reason.message) || reason || 'unknown rejection');
+        console.error('masi/error: unhandled rejection:', reason);
+      } catch (_) {}
+      // No preventDefault(): see above.
+    });
+  </script>
 </head>
 <body>
   <div id="splash">

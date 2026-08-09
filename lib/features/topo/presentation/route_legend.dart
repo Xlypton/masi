@@ -208,17 +208,32 @@ class RouteLegend extends ConsumerWidget {
 
           // Compact rows (refined alongside #15's floating-overlay legend):
           // `dense` + `VisualDensity.compact` shrink the ListTile's own
-          // vertical rhythm, a smaller CircleAvatar swatch, and both
-          // trailing IconButtons dropped to a small icon size with their
-          // default `kMinInteractiveDimension` (48px) tap-target constraint
-          // removed (`constraints: BoxConstraints()`) plus tight padding —
-          // together this fits noticeably more than ~2 rows in the legend's
-          // capped height instead of the previous default-ListTile spacing
-          // reading as squished-yet-oversized.
+          // vertical rhythm, a smaller CircleAvatar swatch, and the
+          // display-only trailing IconButtons (beta video, log ascent)
+          // dropped to a small icon size with their default
+          // `kMinInteractiveDimension` (48px) tap-target constraint removed
+          // (`constraints: BoxConstraints()`) plus tight padding — together
+          // this fits noticeably more than ~2 rows in the legend's capped
+          // height instead of the previous default-ListTile spacing reading
+          // as squished-yet-oversized. The visibility/delete PAIR is the one
+          // exception and keeps a full 44pt target — see its own comment
+          // below for why those two can't be shrunk with the rest.
           return ListTile(
             key: Key('topo-route-legend-item-${route.id}'),
             dense: true,
-            visualDensity: VisualDensity.compact,
+            // `vertical: -1`, not the plain `VisualDensity.compact`
+            // (`-2, -2`) this used to be, and the difference is load-bearing
+            // rather than cosmetic: `ListTile` hard-caps the height of its
+            // `leading`/`trailing` slots at
+            // `(isDense ? 48 : 56) + visualDensity.baseSizeAdjustment.dy`
+            // (`_RenderListTile.maxIconHeightConstraint`). At `-2` that
+            // ceiling is 48-8 = 40px, which silently clamped the
+            // visibility/delete buttons below to 40 tall no matter what
+            // minimum size they asked for. `-1` raises the ceiling to exactly
+            // 44 — the touch-target floor those two need — and costs the row
+            // only 4px of the vertical compression #15 introduced. Horizontal
+            // density stays at `-2`, so the row's side rhythm is unchanged.
+            visualDensity: const VisualDensity(horizontal: -2, vertical: -1),
             tileColor: Colors.transparent,
             selectedTileColor: accent.withValues(alpha: 0.12),
             contentPadding: const EdgeInsets.symmetric(
@@ -305,25 +320,49 @@ class RouteLegend extends ConsumerWidget {
                       icon: MasiIcon('send_check', size: 18),
                       onPressed: () => onLogAscent!(route.id),
                     ),
+                  // Hide and Delete are the only ADJACENT pair here that do
+                  // opposite things — one is reversible, one destroys a
+                  // route — and they used to share an edge with no gutter at
+                  // all, so a thumb landing a few pixels left of Delete hit
+                  // Delete anyway. They therefore opt out of the compact
+                  // sizing above and take the same 44pt floor the canvas's
+                  // own top chrome documents, plus a `MasiSpacing.sm` gutter
+                  // between them.
+                  //
+                  // `constraints` alone would NOT get there:
+                  // `VisualDensity.compact` subtracts 8 from a button's
+                  // minimum size (`VisualDensity.effectiveConstraints`, which
+                  // both the M2 and M3 `IconButton` paths apply), so a 44
+                  // constraint under compact density renders 36x36. Hence the
+                  // explicit `VisualDensity.standard` — pinned rather than
+                  // omitted, because an inherited/adaptive density would
+                  // silently reintroduce the same subtraction on desktop web.
                   IconButton(
                     key: Key('topo-route-visibility-${route.id}'),
                     tooltip: route.visible ? 'Hide route' : 'Show route',
                     iconSize: 18,
-                    visualDensity: VisualDensity.compact,
+                    visualDensity: VisualDensity.standard,
                     padding: const EdgeInsets.all(4),
-                    constraints: const BoxConstraints(),
+                    constraints: const BoxConstraints(
+                      minWidth: 44,
+                      minHeight: 44,
+                    ),
                     icon: route.visible
                         ? MasiIcon('eye')
                         : MasiIcon('eye_off'),
                     onPressed: () => notifier.toggleRouteVisibility(route.id),
                   ),
+                  const SizedBox(width: MasiSpacing.sm),
                   IconButton(
                     key: Key('topo-route-delete-${route.id}'),
                     tooltip: 'Delete route',
                     iconSize: 18,
-                    visualDensity: VisualDensity.compact,
+                    visualDensity: VisualDensity.standard,
                     padding: const EdgeInsets.all(4),
-                    constraints: const BoxConstraints(),
+                    constraints: const BoxConstraints(
+                      minWidth: 44,
+                      minHeight: 44,
+                    ),
                     icon: MasiIcon('delete'),
                     onPressed: () => notifier.removeRoute(route.id),
                   ),

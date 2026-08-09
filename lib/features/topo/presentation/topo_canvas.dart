@@ -1277,6 +1277,29 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   fit: BoxFit.contain,
                   width: _effectiveImageSize.width,
                   height: _effectiveImageSize.height,
+                  // DELIBERATELY no `cacheWidth`/`cacheHeight`, even though
+                  // this is far and away the largest decode in the app. Two
+                  // reasons, in order:
+                  //
+                  //  1. Full resolution is the POINT here. This canvas
+                  //     pinch-zooms well past 1:1 so a line can be placed on
+                  //     an individual hold; decoding it at viewport size
+                  //     would make the zoom show nothing but the decoder's
+                  //     own blur.
+                  //  2. A sized decode would not even replace the full one.
+                  //     `cacheWidth` wraps the provider in a `ResizeImage`,
+                  //     which is a DIFFERENT `imageCache` key — and this
+                  //     screen already resolves the UNSIZED image through
+                  //     `PhotoImageProvider` for its dimension probe (see
+                  //     `_maybeProbeDecodedSize`). So the hint would decode
+                  //     this photo a second time and retain both bitmaps:
+                  //     strictly more memory, which is the opposite of why
+                  //     anyone would add it. See [PhotoImage]'s doc for what
+                  //     these hints do and don't buy, per platform.
+                  //
+                  // Bounding what the app RETAINS across screens is a
+                  // separate lever (the global `imageCache` budget), not this
+                  // one.
                   // Swallow decode errors (e.g. a path that doesn't resolve
                   // to a real file, as widget tests use) instead of letting
                   // them propagate as an unhandled exception — see class

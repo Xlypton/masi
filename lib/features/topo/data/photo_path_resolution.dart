@@ -47,3 +47,26 @@ String thumbKeyFor(String storedOriginal) {
   final id = p.basenameWithoutExtension(storedOriginal);
   return 'thumbs/$id.jpg';
 }
+
+/// The single directory component every thumbnail key/path carries — the
+/// `thumbs` in [thumbKeyFor]'s `thumbs/<id>.jpg`, and (with a `shared/`
+/// prefix) in the cloud's `shared/thumbs/<id>.jpg`.
+const String kThumbDirName = 'thumbs';
+
+/// Whether [key] names a THUMBNAIL rather than an original.
+///
+/// The extension is NOT a discriminator: a thumbnail is always `.jpg` and so
+/// are most originals. What distinguishes them is the directory component
+/// [thumbKeyFor] puts them in, so that is what this checks — and it checks the
+/// PARENT directory rather than a `startsWith('thumbs/')`, because the native
+/// backend hands display code the absolute form (`<docs>/thumbs/<id>.jpg`)
+/// while the web backend hands it the bare key. Both must answer the same.
+///
+/// This exists because a thumbnail key has, by construction, LOST the
+/// original's extension — `thumbKeyFor` derives `<id>` and hard-codes `.jpg`.
+/// Anything that has to map a key back to a remote object therefore cannot
+/// treat `p.extension(key)` as the photo's extension; it has to know which
+/// kind of key it is holding first. See `MissingPhotoByteResolver.resolve`,
+/// where getting that wrong meant asking the cloud for `shared/<id>.jpg` on
+/// behalf of a `.jpeg` photo — an object that cannot exist.
+bool isThumbKey(String key) => p.basename(p.dirname(key)) == kThumbDirName;

@@ -187,11 +187,42 @@ void main() {
 
     test('picks exactly one minimal renderer set per engine', () {
       final body = _functionBody(_read('web/sw.js'), 'function rendererArtifacts(');
-      expect(body, contains("'main.dart.js'"));
-      expect(body, contains("'canvaskit/canvaskit.js'"));
-      expect(body, contains("'canvaskit/canvaskit.wasm'"));
-      expect(body, contains("'canvaskit/skwasm.js'"));
-      expect(body, contains("'canvaskit/skwasm.wasm'"));
+      // The Dart bundle is no longer a literal `'main.dart.js'` in this
+      // function: it comes from the STAMPED `PRECACHE_WASM`/`PRECACHE_JS`
+      // lists (see the BUILD STAMP block), so a `--js`-only build degrades to
+      // an empty `PRECACHE_WASM` instead of 404-ing on a file that was never
+      // emitted. Pin the concat call, not a bundle filename that no longer
+      // appears in this function's source.
+      expect(body, contains('PRECACHE_WASM.concat('));
+      expect(body, contains('PRECACHE_JS.concat('));
+      expect(
+        RegExp(r'PRECACHE_(WASM|JS)\.concat\(').allMatches(body),
+        hasLength(2),
+        reason: 'exactly one bundle-concat call per engine branch — a third '
+            'would mean some branch mixes both renderer bundles into one '
+            'returned list, which is the whole regression this function '
+            'exists to avoid',
+      );
+
+      // Split at the fallback branch's own concat call, so each half can be
+      // checked for containing ONLY its own bundle list — never the other
+      // one, which is the "exactly one... per engine" property the test name
+      // promises.
+      final split = body.indexOf('return PRECACHE_JS');
+      expect(split, isNot(-1), reason: 'expected the fallback return to exist');
+      final blinkBranch = body.substring(0, split);
+      final fallbackBranch = body.substring(split);
+
+      expect(blinkBranch, contains('PRECACHE_WASM.concat('));
+      expect(blinkBranch, isNot(contains('PRECACHE_JS.concat(')));
+      expect(blinkBranch, contains("'canvaskit/skwasm.js'"));
+      expect(blinkBranch, contains("'canvaskit/skwasm.wasm'"));
+
+      expect(fallbackBranch, contains('PRECACHE_JS.concat('));
+      expect(fallbackBranch, isNot(contains('PRECACHE_WASM.concat(')));
+      expect(fallbackBranch, contains("'canvaskit/canvaskit.js'"));
+      expect(fallbackBranch, contains("'canvaskit/canvaskit.wasm'"));
+
       // The size discipline. canvaskit/ is 37 MB across six variants; blanket
       // precaching it is not acceptable, and the two variants below cannot be
       // chosen correctly from a service worker anyway (ImageDecoder is

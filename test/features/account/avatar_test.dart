@@ -24,6 +24,7 @@ import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/account/data/avatar_picker.dart';
 import 'package:masi/features/account/data/profile_repository.dart';
 import 'package:masi/shared/presentation/masi_avatar.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// A 1x1 transparent PNG. Small enough to embed, and never actually decoded
 /// by any test here (nothing pumps a frame that paints it to a real canvas
@@ -140,7 +141,10 @@ void main() {
           _wrap(const MasiAvatar(avatarUrl: null, email: null, radius: 24)),
         );
 
-        expect(find.byIcon(Icons.person), findsOneWidget);
+        expect(
+          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'person'),
+          findsOneWidget,
+        );
       },
     );
 
