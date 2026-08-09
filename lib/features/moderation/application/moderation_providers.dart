@@ -290,10 +290,13 @@ final withdrawalServiceProvider = Provider<WithdrawalService>(
 
 /// What a takedown actually accomplished.
 ///
-/// [photoObjects] vs [photoBytesRemoved] are reported separately on purpose: a
-/// takedown that changed the moderation state but removed none of the bytes is
-/// the exact failure W-2 describes, and collapsing the two into a bool is how
-/// it stayed invisible for so long.
+/// [photoObjects] counts ORIGINAL photos only — not the cloud-thumbnail
+/// companion Storage removes alongside each one, best-effort (see
+/// `ModerationRemote.removePublishedPhotoObjects` and
+/// [originalPhotoRequestCount]). [photoObjects] vs [photoBytesRemoved] are
+/// reported separately on purpose: a takedown that changed the moderation
+/// state but removed none of the bytes is the exact failure W-2 describes,
+/// and collapsing the two into a bool is how it stayed invisible for so long.
 typedef TakedownResult = ({int photoObjects, int photoBytesRemoved});
 
 /// Takes a published topo down, and removes its PUBLIC photo bytes with it
@@ -342,7 +345,10 @@ class TakedownService {
     final removed = await remote.removePublishedPhotoObjects(objects);
 
     await refreshWallModeration(_ref, {wallId});
-    return (photoObjects: objects.length, photoBytesRemoved: removed);
+    return (
+      photoObjects: originalPhotoRequestCount(objects),
+      photoBytesRemoved: removed,
+    );
   }
 }
 
@@ -355,11 +361,13 @@ final takedownServiceProvider = Provider<TakedownService>(TakedownService.new);
 /// few seconds between the phone and Postgres would make a locally-stamped one
 /// match nothing.
 ///
-/// [photoObjects] vs [photoBytesRemoved] are reported separately for the same
-/// reason [TakedownResult] does it: a delete that tombstoned every row but
-/// removed none of the world-readable bytes is the W-2 failure, and collapsing
-/// the two into a bool is how it stayed invisible. Both are zero for an ascent
-/// or a comment, neither of which owns any photo bytes.
+/// [photoObjects] counts ORIGINAL photos only, for the same reason
+/// [TakedownResult] does — see [originalPhotoRequestCount]. [photoObjects] vs
+/// [photoBytesRemoved] are reported separately for the same reason
+/// [TakedownResult] does it: a delete that tombstoned every row but removed
+/// none of the world-readable bytes is the W-2 failure, and collapsing the two
+/// into a bool is how it stayed invisible. Both are zero for an ascent or a
+/// comment, neither of which owns any photo bytes.
 typedef AdminDeleteResult = ({
   int? deletedAt,
   int photoObjects,
@@ -445,7 +453,7 @@ class AdminDeleteService {
     await _settle({wallId});
     return (
       deletedAt: deletedAt,
-      photoObjects: objects.length,
+      photoObjects: originalPhotoRequestCount(objects),
       photoBytesRemoved: removed,
     );
   }

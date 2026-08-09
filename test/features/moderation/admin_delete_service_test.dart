@@ -221,6 +221,40 @@ void main() {
     );
 
     test(
+      'a legacy photo (original only, no cloud thumbnail) is not reported as '
+      'a partial failure — the thumbnail companion Storage removes alongside '
+      'the original is best-effort and must not inflate the requested count',
+      () async {
+        final remote = _RecordingModerationRemote(
+          // Two photos published: "modern" has a thumbnail companion (a
+          // photo published after the thumbnail tier shipped), "legacy" does
+          // not (published before it existed) — 3 Storage objects requested
+          // for 2 photos.
+          photoObjects: const [
+            'shared/modern.jpg',
+            'shared/thumbs/modern.jpg',
+            'shared/legacy.jpg',
+          ],
+          // Both ORIGINALS were removed successfully; the thumbnail's
+          // (non-)removal never reaches this count.
+          photoBytesRemoved: 2,
+          deleteTopoResult: 777000,
+        );
+        final container = _container(remote);
+
+        final result = await container
+            .read(adminDeleteServiceProvider)
+            .deleteTopo(wallId: 'w2', reason: 'cleanup');
+
+        // 2 PHOTOS were requested, not 3 Storage objects — and 2 were
+        // removed, so this must read as a full, unqualified success (missed
+        // == 0), never "1 of 3 could not be removed".
+        expect(result.photoObjects, 2);
+        expect(result.photoBytesRemoved, 2);
+      },
+    );
+
+    test(
       'an RPC that throws propagates out of deleteTopo, and the byte removal '
       'never runs — an admin who believes they deleted something they did '
       'not is the worst outcome this feature has',
