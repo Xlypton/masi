@@ -87,6 +87,24 @@ final wallNameProvider = FutureProvider.family<String?, String>(
   (ref, wallId) => ref.watch(libraryCrudRepositoryProvider).wallName(wallId),
 );
 
+/// A single wall's [db.Wall.visibility] (`'private'`/`'shared'`), or `null`
+/// if it doesn't exist. Backs the topo canvas's "open community page"
+/// shortcut (`topo-open-community` in `TopoCanvasScreen`) — `'shared'` is
+/// the exact condition a topo needs a `CommunityTopoDetailScreen` to open at
+/// all (see `community_repository.dart`'s `sharedTopos` query, gated on the
+/// same `visibility = 'shared'`). Deliberately NOT derived from
+/// [toposProvider]/[TopoRef.visibility]: that list is owner-scoped (own, or
+/// unowned, walls only — see [LibraryCrudRepository.watchTopos]'s doc), so
+/// it resolves to nothing for someone else's shared topo, which the canvas
+/// also renders read-only (see [LibraryCrudRepository.wallVisibility]'s own
+/// doc for the exact entry points). This provider reads the wall directly,
+/// unscoped by owner, so both the owner's own canvas and a read-only
+/// community/nearby view get the correct answer.
+final wallVisibilityProvider = FutureProvider.family<String?, String>(
+  (ref, wallId) =>
+      ref.watch(libraryCrudRepositoryProvider).wallVisibility(wallId),
+);
+
 // ---------------------------------------------------------------------
 // Map search reads — see `features/community/data/map_search.dart`'s
 // `mapContentSearch`, which combines these with [toposProvider].

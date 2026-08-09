@@ -1402,6 +1402,33 @@ class LibraryCrudRepository {
     return row?.name;
   }
 
+  /// [db.Wall.visibility] (`'private'` or `'shared'`) of the non-deleted
+  /// wall identified by [wallId], or `null` if it doesn't exist (or has
+  /// been soft-deleted). Backs the topo canvas's "open community page"
+  /// shortcut (see `wallVisibilityProvider` in `library_providers.dart` /
+  /// `topo-open-community` in `TopoCanvasScreen`), which must be able to
+  /// tell "this wall HAS a feed version" for ANY wallId — not just the
+  /// signed-in user's own — since the canvas is also reached read-only for
+  /// someone else's shared topo (e.g. `topos_row.dart`'s
+  /// `_CommunityProximityRow`, `community_map_screen.dart`'s marker), both
+  /// of which push straight to `/walls/:wallId?readonly=1` without ever
+  /// going through `CommunityTopoDetailScreen` first. [watchTopos]'s
+  /// `TopoRef.visibility` is unusable for that case: it's filtered to
+  /// `owner_id IS NULL OR owner_id = ?`, which excludes another user's
+  /// owned wall entirely, so a lookup through that list would find nothing
+  /// and read as "no feed version" even when one genuinely exists. This
+  /// query is deliberately unscoped by owner — mirroring [wallName] above,
+  /// which the same read-only community screens already rely on for the
+  /// identical reason.
+  Future<String?> wallVisibility(String wallId) async {
+    final row =
+        await (_db.select(_db.walls)
+              ..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())
+              ..limit(1))
+            .getSingleOrNull();
+    return row?.visibility;
+  }
+
   /// The current `sectorId` of the non-deleted [db.Wall] identified by
   /// [wallId], or `null` if it doesn't exist (or has been soft-deleted).
   ///

@@ -1302,6 +1302,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       }
     }
 
+    // Backs `_topTrailingActions`' `topo-open-community` shortcut — see
+    // `wallVisibilityProvider`'s doc for why this is a dedicated,
+    // owner-unscoped lookup rather than reusing `currentTopo?.visibility`
+    // (which resolves to nothing for a read-only view of someone else's
+    // shared topo). `'shared'` is the one real signal that a
+    // `CommunityTopoDetailScreen` exists at all for this wall; anything
+    // else (private, not-yet-loaded, no such wall) hides the shortcut —
+    // never a dead button.
+    final hasCommunityPage =
+        ref.watch(wallVisibilityProvider(widget.wallId)).value == 'shared';
+
     // U1/U2/U3/U4 (photo strip): switching between DIFFERENT photos on this
     // wall (see PhotoStrip's class doc). NOT gated on `widget.readOnly` — a
     // read-only community viewer can still switch between someone else's
@@ -1466,6 +1477,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                               drawNotifier,
                               currentTopo,
                               locationUnknown,
+                              hasCommunityPage,
                             ),
                             PhotoStrip(
                               wallId: widget.wallId,
@@ -1633,6 +1645,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     DrawController drawNotifier,
     TopoRef? currentTopo,
     bool locationUnknown,
+    bool hasCommunityPage,
   ) {
     return Row(
       children: [
@@ -1665,6 +1678,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           drawNotifier,
           currentTopo,
           locationUnknown,
+          hasCommunityPage,
         ),
       ],
     );
@@ -1777,6 +1791,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     DrawController drawNotifier,
     TopoRef? currentTopo,
     bool locationUnknown,
+    bool hasCommunityPage,
   ) {
     final colors = MasiColors.of(context);
     final actions = <Widget>[];
@@ -1975,6 +1990,47 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           onPressed: hasCoords
               ? () => context.push('/community?tab=map&focus=${widget.wallId}')
               : null,
+          color: colors.accent,
+          style: _topRowIconStyle(),
+        ),
+      );
+    }
+
+    // Feed/community shortcut: "if one opens the topo they can easily
+    // navigate to the info rich feed version" — jumps straight to
+    // `CommunityTopoDetailScreen`'s richer social surface (comments, likes,
+    // ascents, grade consensus, hazards, version history) for this SAME
+    // wall. Named-path navigation (`context.push` on the real
+    // `/community/topo/:wallId` route — see router.dart), never a direct
+    // widget push, so deep-linking and this screen's own back stack stay
+    // correct.
+    //
+    // Gated on `hasCommunityPage` (== `wallVisibilityProvider`'s
+    // `'shared'`) — the exact same condition `community_repository.dart`'s
+    // `sharedTopos` query requires for a wall to appear on the Feed/Map at
+    // all. A private, never-published topo has no community page to open,
+    // so this glyph must not exist for one (a "dead button" the user could
+    // tap into nothing); see `wallVisibilityProvider`'s doc for why this
+    // reads the wall directly rather than through the owner-scoped
+    // `currentTopo`, so the shortcut also appears for a read-only view of
+    // someone ELSE's shared topo (e.g. the community/nearby entry points
+    // that route straight into this canvas without passing through
+    // `CommunityTopoDetailScreen` first).
+    //
+    // View mode only, alongside the locate-on-map glyph just above: like
+    // that one, this is a non-mutating "jump elsewhere" affordance rather
+    // than a drawing tool, so it stays out of draw mode's crowded
+    // editing cluster. Not gated on `widget.readOnly` — opening the feed is
+    // exactly as meaningful whether this canvas is the owner's editable
+    // copy or a read-only viewer.
+    if (drawState.mode == DrawMode.view && hasCommunityPage) {
+      actions.add(
+        IconButton(
+          key: const Key('topo-open-community'),
+          icon: MasiIcon('comment'),
+          tooltip: 'See comments and ascents',
+          onPressed: () =>
+              context.push('/community/topo/${widget.wallId}'),
           color: colors.accent,
           style: _topRowIconStyle(),
         ),
