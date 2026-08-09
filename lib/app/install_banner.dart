@@ -65,10 +65,16 @@ class _InstallBannerState extends ConsumerState<InstallBanner> {
       top: true,
       bottom: false,
       child: Padding(
+        // `lg` sides to match the screen-level notices (`SyncBanner`,
+        // `_StorageWarningBanner`, `MasiAsyncView`'s stale-error bar), all of
+        // which inset by `fromLTRB(lg, md, lg, 0)`. See
+        // `StorageRetryBanner`'s copy of this comment — the two shell notices
+        // and the screen ones can appear in one vertical stack, and the 12px
+        // vs 16px mismatch read as staggered edges.
         padding: const EdgeInsets.fromLTRB(
+          MasiSpacing.lg,
           MasiSpacing.md,
-          MasiSpacing.md,
-          MasiSpacing.md,
+          MasiSpacing.lg,
           0,
         ),
         child: Container(
@@ -100,7 +106,22 @@ class _InstallBannerState extends ConsumerState<InstallBanner> {
                   padding: const EdgeInsets.symmetric(
                     horizontal: MasiSpacing.sm,
                   ),
-                  minimumSize: Size.zero,
+                  // 44x44, not `Size.zero` — the iOS HIG minimum tap target
+                  // (same recipe as `topo_canvas_screen.dart`'s
+                  // `_topRowIconStyle`). The short labels this wears
+                  // ("Install"/"How") made it the smallest target of the lot.
+                  //
+                  // MEASURED 135.7x44 under the app's own theme. `minimumSize`
+                  // is the one thing here the ambient `VisualDensity` still
+                  // scales, so under a desktop-density theme this same button
+                  // measures 36 tall rather than 44. Accepted: the target is
+                  // mobile web (iPhone Safari), whose platform density is
+                  // standard — but it is why the floor is asserted by
+                  // `tester.getSize` in `install_banner_test.dart` rather than
+                  // trusted to be whatever this constant says.
+                  minimumSize: const Size(44, 44),
+                  // Kept: `shrinkWrap` keeps the footprint at exactly
+                  // `minimumSize` rather than Material's padded 48x48 default.
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                 ),
                 onPressed: () => _handleAction(context, status),
@@ -110,7 +131,36 @@ class _InstallBannerState extends ConsumerState<InstallBanner> {
                 key: const Key('install-banner-dismiss'),
                 padding: EdgeInsets.zero,
                 constraints: const BoxConstraints(),
-                visualDensity: VisualDensity.compact,
+                // NO `visualDensity: VisualDensity.compact` here, deliberately
+                // — that is what put this control under the tap-target floor
+                // the rest of this banner was raised to.
+                //
+                // `IconButton`'s footprint is its TAP TARGET, not its icon:
+                // with the default `MaterialTapTargetSize.padded` the button
+                // reserves `kMinInteractiveDimension`, and a non-standard
+                // `VisualDensity` shrinks that reservation rather than only
+                // the visible box — so compact density silently took the
+                // dismiss target below 44. Dropping it restores the Material
+                // default, which is already at or above the floor.
+                //
+                // MEASURED, never derived: `install_banner_test.dart`'s "the
+                // dismiss control clears the 44x44 tap-target floor" asserts
+                // `tester.getSize` on this button, which now reports 48x48.
+                // Reasoning about density arithmetic instead of measuring it
+                // is exactly what produced the wrong number the first time
+                // round — the claim that compact density left this at 44 was
+                // off by the 4.0 interval `baseSizeAdjustment` scales by, and
+                // it actually shipped at 40.
+                //
+                // Unlike the `minimumSize` on the action button above, this
+                // 48x48 was measured to hold under the ambient theme density
+                // too (standard AND compact themes both render it 48x48) —
+                // only the WIDGET-level `visualDensity` this line removed ever
+                // shrank it. So there is no desktop-density caveat here.
+                //
+                // Nothing VISIBLE changes: `padding` and `constraints` are
+                // untouched, so the glyph and its ink box render as before —
+                // only the invisible hit area grows.
                 tooltip: 'Dismiss',
                 onPressed: () => setState(() => _dismissed = true),
                 icon: MasiIcon('close', size: 18, color: colors.ink3),

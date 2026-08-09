@@ -96,10 +96,17 @@ class StoragePressureBanner extends ConsumerWidget {
       top: true,
       bottom: false,
       child: Padding(
+        // `lg` sides to match the screen-level notices (`SyncBanner`,
+        // `_StorageWarningBanner`, `MasiAsyncView`'s stale-error bar), all of
+        // which inset by `fromLTRB(lg, md, lg, 0)`. This banner is already
+        // documented as a visual sibling of those, and at 12px it sat 4px
+        // wider on each side than the notice it could be stacked directly
+        // above. Horizontal only — the `md` top keeps the same vertical
+        // rhythm.
         padding: const EdgeInsets.fromLTRB(
+          MasiSpacing.lg,
           MasiSpacing.md,
-          MasiSpacing.md,
-          MasiSpacing.md,
+          MasiSpacing.lg,
           0,
         ),
         child: Container(
@@ -160,7 +167,17 @@ class StoragePressureBanner extends ConsumerWidget {
                                 : () => _confirmAndClear(context, ref),
                             style: TextButton.styleFrom(
                               padding: EdgeInsets.zero,
-                              minimumSize: Size.zero,
+                              // 44x44, not `Size.zero` — the iOS HIG minimum
+                              // tap target (same recipe as
+                              // `topo_canvas_screen.dart`'s
+                              // `_topRowIconStyle`). `shrinkWrap` below opts
+                              // OUT of Material's padded 48x48 hit area, so
+                              // at `Size.zero` the tappable region really was
+                              // the ~20pt label box and nothing more.
+                              minimumSize: const Size(44, 44),
+                              // Kept deliberately: the footprint should be
+                              // exactly `minimumSize`, not Material's larger
+                              // default. Only the minimum size changes here.
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             ),
                             child: Text(

@@ -313,6 +313,127 @@ void main() {
     );
   });
 
+  group('the height cap — the bound this banner was the only one missing', () {
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    /// Mirrors `storage_pressure_banner_test.dart`'s identical harness: the
+    /// notice above a stand-in for the tab content, so "the content beneath
+    /// stays reachable" is an assertion about a real `Column`, not about the
+    /// banner in isolation.
+    Widget wrapWithContent(ProviderContainer container, {double textScale = 1.0}) {
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: MasiTheme.light,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: Column(
+              children: [
+                const ShellNotices(),
+                Expanded(child: Container(key: const Key('the-content'))),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    testWidgets(
+      'leaves most of a squeezed viewport to the tab content beneath it — the '
+      'sibling notices all cap at this share, and this one did not',
+      (tester) async {
+        // The exact surface `nav_shell_test.dart` and
+        // `topos_storage_banner.dart` both record a measured overflow at.
+        // Unbounded, this banner sized itself to its content and pushed the
+        // branch below it into an 11px `RenderFlex` overflow the moment its
+        // actions were (correctly) raised to the 44pt tap-target floor.
+        const surface = Size(400, 420);
+        setViewportSize(tester, surface);
+        final (container: container, opens: _) = makeContainer(
+          retryStatus: StorageRetryStatus.failed,
+        );
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(
+              const StorageDurability.unavailable(
+                'the local database did not answer its first query within 30s',
+              ),
+            );
+
+        await tester.pumpWidget(wrapWithContent(container, textScale: 3.0));
+        await tester.pump();
+
+        expect(
+          tester.getSize(find.byKey(const Key('storage-retry-banner'))).height,
+          lessThan(surface.height * 0.5),
+          reason: 'a notice that eats the viewport hides the tab it warns '
+              'about',
+        );
+        expect(
+          tester.getSize(find.byKey(const Key('the-content'))).height,
+          greaterThan(0),
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'the 44pt floor on both actions survives the cap — the overflow is '
+      'fixed by bounding the banner, never by shrinking the tap targets',
+      (tester) async {
+        setViewportSize(tester, const Size(390, 844));
+        final (container: container, opens: _) = makeContainer(
+          retryStatus: StorageRetryStatus.failed,
+        );
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.unavailable('dead'));
+
+        await tester.pumpWidget(wrapWithContent(container));
+        await tester.pump();
+
+        for (final key in const [
+          Key('storage-retry-banner-action'),
+          Key('storage-retry-banner-reload'),
+        ]) {
+          final size = tester.getSize(find.byKey(key));
+          expect(
+            size.width,
+            greaterThanOrEqualTo(44.0),
+            reason: '$key must stay at the HIG minimum tap target',
+          );
+          expect(size.height, greaterThanOrEqualTo(44.0), reason: '$key');
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('an ordinary phone viewport is unaffected', (tester) async {
+      setViewportSize(tester, const Size(390, 844));
+      final (container: container, opens: _) = makeContainer();
+      container
+          .read(storageDurabilityProvider.notifier)
+          .report(const StorageDurability.unavailable('dead'));
+
+      await tester.pumpWidget(wrapWithContent(container));
+      await tester.pump();
+
+      expect(find.textContaining("storage isn't responding"), findsOneWidget);
+      expect(find.text('Try again'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
   group('Step 3 — page_reload.dart seam', () {
     test(
       'REGRESSION GUARD: the stub resolved under `flutter test` (no '

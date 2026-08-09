@@ -143,7 +143,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
 
         // One shared topo, so the Feed renders its real (non-empty)
-        // scrollable `ListView.separated` rather than the empty-state
+        // scrollable row-list branch rather than the empty-state
         // branch — either is a valid `RefreshIndicator` target after this
         // fix, but the non-empty branch is the common case.
         await tester.runAsync(() async {
@@ -183,7 +183,16 @@ void main() {
         expect(find.byType(RefreshIndicator), findsOneWidget);
         expect(fakeOrchestrator.pullNowCallCount, 0);
 
-        await tester.fling(find.byType(ListView), const Offset(0, 300), 1000);
+        // A `CustomScrollView`, not a `ListView`: the feed is now ONE scroll
+        // view for every state, so the sync/offline banner can be its first
+        // sliver rather than an unreclaimable header above it (see
+        // `SyncBanner`'s doc). The `RefreshIndicator` and its
+        // `AlwaysScrollableScrollPhysics` are unchanged.
+        await tester.fling(
+          find.byType(CustomScrollView),
+          const Offset(0, 300),
+          1000,
+        );
         await tester.pump();
         await tester.pump(const Duration(seconds: 1));
         await _drain(tester);
@@ -205,7 +214,14 @@ void main() {
 
         expect(find.byKey(const Key('community-empty')), findsOneWidget);
 
-        await tester.fling(find.byType(ListView), const Offset(0, 300), 1000);
+        // Same `CustomScrollView` in the empty branch — that ONE scroll view
+        // hosting every state is exactly what keeps the banner from vanishing
+        // here.
+        await tester.fling(
+          find.byType(CustomScrollView),
+          const Offset(0, 300),
+          1000,
+        );
         await tester.pump();
         await tester.pump(const Duration(seconds: 1));
         await _drain(tester);

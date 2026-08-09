@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:masi/shared/presentation/sync_banner.dart';
 
 Widget _wrap(Widget child) => MaterialApp(
@@ -14,6 +18,33 @@ void setViewportSize(WidgetTester tester, Size size) {
   tester.view.devicePixelRatio = 1.0;
   addTearDown(tester.view.resetPhysicalSize);
   addTearDown(tester.view.resetDevicePixelRatio);
+}
+
+/// Intercepts `Clipboard.setData` and hands back whatever the widget wrote.
+///
+/// `SystemChannels.platform` has no implementation under `flutter_test`, so
+/// without this the copy button's `Clipboard.setData` throws a
+/// `MissingPluginException` — which the sheet catches and reports as "couldn't
+/// copy". Asserting the CONTENT is the point: a copy action that copies the
+/// truncated headline instead of the full exception would be worse than none.
+List<String> _captureClipboard(WidgetTester tester) {
+  final copied = <String>[];
+  tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+    SystemChannels.platform,
+    (call) async {
+      if (call.method == 'Clipboard.setData') {
+        copied.add((call.arguments as Map)['text'] as String);
+      }
+      return null;
+    },
+  );
+  addTearDown(
+    () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      null,
+    ),
+  );
+  return copied;
 }
 
 void main() {
@@ -66,9 +97,14 @@ void main() {
       },
     );
 
+    // THE HEIGHT FIX, at the copy level. The banner used to print the whole
+    // exception `toString()` — three lines and ~122 px on a real 390x844
+    // phone, of which the part that fit was a half-printed backend URL. It now
+    // says only what happened; the reason is one tap away (see the details
+    // group below), which is where an exception `toString()` belongs.
     testWidgets(
-      'syncFailed keeps the pre-existing empty-state wording verbatim, '
-      "reason and all — \"Couldn't sync — <reason>.\"",
+      'syncFailed shows ONLY the headline on the banner — the raw reason is '
+      'not printed inline',
       (tester) async {
         await tester.pumpWidget(
           _wrap(
@@ -79,10 +115,8 @@ void main() {
           ),
         );
 
-        expect(
-          find.text("Couldn't sync — Sync failed: connection closed."),
-          findsOneWidget,
-        );
+        expect(find.text("Couldn't sync"), findsOneWidget);
+        expect(find.textContaining('connection closed'), findsNothing);
       },
     );
 
@@ -93,8 +127,168 @@ void main() {
         _wrap(const SyncBanner(kind: SyncBannerKind.syncFailed)),
       );
 
-      expect(find.text("Couldn't sync."), findsOneWidget);
+      expect(find.text("Couldn't sync"), findsOneWidget);
     });
+
+    // The visible text is the collapsed line, but a screen-reader user has no
+    // ⓘ-sized affordance for "read the rest", so the SPOKEN label is the full
+    // sentence. Without this, the redesign would have taken information away
+    // from exactly the users who cannot get it back.
+    testWidgets(
+      'the accessible label carries the FULL message, reason and all',
+      (tester) async {
+        final handle = tester.ensureSemantics();
+        await tester.pumpWidget(
+          _wrap(
+            const SyncBanner(
+              kind: SyncBannerKind.syncFailed,
+              detail: 'Sync failed: connection closed',
+            ),
+          ),
+        );
+
+        expect(
+          find.bySemanticsLabel(
+            "Couldn't sync — Sync failed: connection closed.",
+          ),
+          findsOneWidget,
+        );
+        handle.dispose();
+      },
+    );
+
+    test(
+      'messageFor still composes the pre-existing full sentence, verbatim',
+      () {
+        expect(
+          SyncBanner.messageFor(
+            SyncBannerKind.syncFailed,
+            'Sync failed: connection closed',
+          ),
+          "Couldn't sync — Sync failed: connection closed.",
+        );
+        expect(
+          SyncBanner.messageFor(SyncBannerKind.syncFailed),
+          "Couldn't sync.",
+        );
+      },
+    );
+  });
+
+  group('SyncBanner details disclosure', () {
+    const long =
+        'Sync failed: own rows fetch failed: ClientException: Failed to fetch, '
+        'uri=https://mnaipcqbkqzffgvxpato.supabase.co/rest/v1/walls';
+
+    testWidgets(
+      'EVERY kind offers the disclosure — at a large accessibility text scale '
+      'even a fixed one-line sentence ellipsizes, and the sheet is then the '
+      'only way to read it',
+      (tester) async {
+        for (final kind in SyncBannerKind.values) {
+          await tester.pumpWidget(_wrap(SyncBanner(kind: kind)));
+          expect(
+            find.byKey(const Key('sync-banner-details')),
+            findsOneWidget,
+            reason: '$kind',
+          );
+        }
+      },
+    );
+
+    testWidgets(
+      'THE OTHER HALF OF THE FIX: the ⓘ opens a sheet carrying the FULL '
+      'technical error — the truncated URL on the banner was useless to the '
+      'user AND useless in a bug report; the whole string is not',
+      (tester) async {
+        await tester.pumpWidget(
+          _wrap(
+            const SyncBanner(kind: SyncBannerKind.syncFailed, detail: long),
+          ),
+        );
+
+        expect(find.textContaining('mnaipcqbkqzffgvxpato'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('sync-banner-details')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('sync-banner-details-sheet')),
+          findsOneWidget,
+        );
+        expect(
+          find.text("Couldn't sync — $long."),
+          findsOneWidget,
+          reason: 'the sheet is where the whole reason lives now',
+        );
+      },
+    );
+
+    testWidgets('the sheet copies the FULL text, not the collapsed headline', (
+      tester,
+    ) async {
+      final copied = _captureClipboard(tester);
+
+      await tester.pumpWidget(
+        _wrap(const SyncBanner(kind: SyncBannerKind.syncFailed, detail: long)),
+      );
+      await tester.tap(find.byKey(const Key('sync-banner-details')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('sync-banner-details-copy')));
+      // Explicit pumps rather than `pumpAndSettle`: while a MasiPendingButton's
+      // future is in flight it holds a live spinner gate, which never settles.
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1));
+
+      expect(copied, ["Couldn't sync — $long."]);
+      expect(find.text('Copied'), findsOneWidget);
+    });
+
+    testWidgets(
+      'a clipboard that refuses does not throw out of a button press — the '
+      'text is selectable, so there is a real fallback to point at',
+      (tester) async {
+        // A handler that REFUSES, which is what a browser without clipboard
+        // permission does. (An absent handler is not the same thing: the test
+        // binding answers unhandled platform-channel calls itself, so the copy
+        // would silently "succeed" and this test would prove nothing.)
+        tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+          SystemChannels.platform,
+          (call) async {
+            if (call.method == 'Clipboard.setData') {
+              throw PlatformException(code: 'clipboard-denied');
+            }
+            return null;
+          },
+        );
+        addTearDown(
+          () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+            SystemChannels.platform,
+            null,
+          ),
+        );
+
+        await tester.pumpWidget(
+          _wrap(
+            const SyncBanner(kind: SyncBannerKind.syncFailed, detail: long),
+          ),
+        );
+        await tester.tap(find.byKey(const Key('sync-banner-details')));
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('sync-banner-details-copy')));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 1));
+
+        expect(tester.takeException(), isNull);
+        expect(find.textContaining("Couldn't copy"), findsOneWidget);
+        expect(
+          find.byKey(const Key('sync-banner-details-text')),
+          findsOneWidget,
+        );
+      },
+    );
   });
 
   group('SyncBanner retry affordance', () {
@@ -115,7 +309,7 @@ void main() {
           SyncBanner(
             kind: SyncBannerKind.syncFailed,
             detail: 'boom',
-            onRetry: () => taps++,
+            onRetry: () async => taps++,
           ),
         ),
       );
@@ -123,33 +317,110 @@ void main() {
       expect(find.byKey(const Key('sync-banner-retry')), findsOneWidget);
       await tester.tap(find.byKey(const Key('sync-banner-retry')));
       await tester.pump();
+      await tester.pump(const Duration(milliseconds: 1));
 
       expect(taps, 1);
     });
-  });
 
-  group('SyncBanner dismiss affordance', () {
+    // The user reported that Retry "usually" fixes it — which is what an
+    // INVISIBLE retry feels like. As a plain `VoidCallback` on a bare
+    // TextButton, both call sites discarded the returned future and this widget
+    // read only `detail`, so nothing on screen changed for the entire pull.
     testWidgets(
-      'offline is closable: onDismiss renders the close button and tapping it '
-      'calls back exactly once',
+      'Retry shows a live pending cue for the whole round trip, so the button '
+      'cannot read as dead while the pull is in flight',
       (tester) async {
-        var dismissals = 0;
+        final gate = Completer<void>();
         await tester.pumpWidget(
           _wrap(
             SyncBanner(
-              kind: SyncBannerKind.offline,
-              onDismiss: () => dismissals++,
+              kind: SyncBannerKind.syncFailed,
+              detail: 'boom',
+              onRetry: () => gate.future,
             ),
           ),
         );
 
-        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
-        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
-        await tester.pump();
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
 
-        expect(dismissals, 1);
+        await tester.tap(find.byKey(const Key('sync-banner-retry')));
+        // Past MasiMotion.loadingRevealDelay (180 ms) — the anti-flash gate
+        // deliberately shows nothing for a pull that finishes instantly.
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(
+          find.byKey(MasiLoadingIndicator.spinnerKey),
+          findsOneWidget,
+          reason:
+              'a retry that looks idle for the whole round trip reads as '
+              'a dead button',
+        );
+
+        gate.complete();
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+
+        expect(find.byKey(MasiLoadingIndicator.spinnerKey), findsNothing);
       },
     );
+
+    testWidgets('an in-flight retry swallows a second tap', (tester) async {
+      final gate = Completer<void>();
+      var taps = 0;
+      await tester.pumpWidget(
+        _wrap(
+          SyncBanner(
+            kind: SyncBannerKind.syncFailed,
+            detail: 'boom',
+            onRetry: () {
+              taps++;
+              return gate.future;
+            },
+          ),
+        ),
+      );
+
+      await tester.tap(find.byKey(const Key('sync-banner-retry')));
+      await tester.pump();
+      await tester.tap(find.byKey(const Key('sync-banner-retry')));
+      await tester.pump();
+
+      expect(taps, 1);
+
+      gate.complete();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
+    });
+  });
+
+  group('SyncBanner dismiss affordance', () {
+    // THE USER'S DECISION, pinned. This group used to assert the exact
+    // opposite for `syncFailed`/`sharedPhotosWithheld` — that the close button
+    // was structurally impossible for them, on the grounds that "a closable
+    // version of it is how silent data loss becomes invisible". The user
+    // reversed that, and the old justification did not survive checking
+    // anyway: this banner renders `lastPullError`, which is PULL-only, so a
+    // failed PUSH — the case where the user's work may genuinely not have
+    // reached the cloud — never sets it. See `SyncBanner.onDismiss`.
+    for (final kind in SyncBannerKind.values) {
+      testWidgets(
+        '$kind is closable: onDismiss renders the close button and tapping it '
+        'calls back exactly once',
+        (tester) async {
+          var dismissals = 0;
+          await tester.pumpWidget(
+            _wrap(SyncBanner(kind: kind, onDismiss: () => dismissals++)),
+          );
+
+          expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+          await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+          await tester.pump();
+
+          expect(dismissals, 1, reason: '$kind');
+        },
+      );
+    }
 
     testWidgets('no onDismiss means no close affordance at all', (
       tester,
@@ -160,33 +431,6 @@ void main() {
 
       expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
     });
-
-    // The load-bearing half of this feature's scope. "Couldn't sync" is the
-    // ONLY signal that the user's work may not have reached the cloud, and
-    // `sharedPhotosWithheld` is the only account of a visibly incomplete feed
-    // — a closable version of either is how a real problem becomes invisible.
-    // Asserted with `onDismiss` deliberately SUPPLIED, so this pins the
-    // widget's own structural guard rather than the call sites' discipline.
-    for (final kind in const [
-      SyncBannerKind.syncFailed,
-      SyncBannerKind.sharedPhotosWithheld,
-    ]) {
-      testWidgets(
-        '$kind is NOT dismissible even when handed an onDismiss — only being '
-        'offline is a message the user is allowed to have finished reading',
-        (tester) async {
-          var dismissals = 0;
-          await tester.pumpWidget(
-            _wrap(SyncBanner(kind: kind, onDismiss: () => dismissals++)),
-          );
-
-          expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
-          expect(find.byKey(const Key('sync-banner')), findsOneWidget);
-          expect(find.text(SyncBanner.messageFor(kind)), findsOneWidget);
-          expect(dismissals, 0);
-        },
-      );
-    }
 
     testWidgets(
       'the close button does not push the offline banner into an overflow at '
@@ -222,9 +466,9 @@ void main() {
 
   group('SyncBanner iconography', () {
     /// The LEADING glyph each kind must render. The assertions below are about
-    /// this exact mapping rather than "some MasiIcon is present", so the
-    /// dismissible offline variant (which legitimately renders a second
-    /// MasiIcon, the close glyph) cannot weaken them.
+    /// this exact mapping rather than "some MasiIcon is present", so the extra
+    /// glyphs the row legitimately carries (the ⓘ, and the close button) cannot
+    /// weaken them.
     const leadingGlyph = {
       SyncBannerKind.offline: 'phone_off',
       SyncBannerKind.syncFailed: 'warning',
@@ -236,9 +480,8 @@ void main() {
     ) async {
       for (final kind in SyncBannerKind.values) {
         await tester.pumpWidget(_wrap(SyncBanner(kind: kind)));
-        expect(find.byType(MasiIcon), findsOneWidget, reason: '$kind');
         expect(
-          tester.widget<MasiIcon>(find.byType(MasiIcon)).name,
+          tester.widgetList<MasiIcon>(find.byType(MasiIcon)).first.name,
           leadingGlyph[kind],
           reason: '$kind',
         );
@@ -247,10 +490,9 @@ void main() {
     });
 
     testWidgets(
-      'the closable offline banner adds the brand close glyph and nothing '
-      'else — the leading glyph is still exactly phone_off, and a '
-      'Material/Cupertino Icon still never appears (masi_close.svg is the '
-      "app's only close glyph)",
+      'the full closable banner renders exactly the leading glyph, the details '
+      'glyph and the brand close glyph — and still never a Material/Cupertino '
+      'Icon (masi_close.svg is the app\'s only close glyph)',
       (tester) async {
         await tester.pumpWidget(
           _wrap(SyncBanner(kind: SyncBannerKind.offline, onDismiss: () {})),
@@ -258,7 +500,7 @@ void main() {
 
         expect(
           tester.widgetList<MasiIcon>(find.byType(MasiIcon)).map((i) => i.name),
-          ['phone_off', 'close'],
+          ['phone_off', 'info', 'close'],
         );
         expect(find.byType(Icon), findsNothing);
       },
@@ -274,14 +516,24 @@ void main() {
         final context = tester.element(find.byKey(const Key('sync-banner')));
         final colors = MasiColors.of(context);
 
-        final offlineIcon = tester.widget<MasiIcon>(find.byType(MasiIcon));
+        final offlineIcon = tester
+            .widgetList<MasiIcon>(find.byType(MasiIcon))
+            .first;
         expect(offlineIcon.color, isNot(colors.gradeHard));
 
         await tester.pumpWidget(
           _wrap(const SyncBanner(kind: SyncBannerKind.syncFailed)),
         );
-        final failedIcon = tester.widget<MasiIcon>(find.byType(MasiIcon));
-        expect(failedIcon.color, colors.gradeHard);
+        final failedIcon = tester
+            .widgetList<MasiIcon>(find.byType(MasiIcon))
+            .first;
+        expect(
+          failedIcon.color,
+          colors.gradeHard,
+          reason:
+              'the severity colour survives the collapse — it must still '
+              'read as an error',
+        );
       },
     );
   });
@@ -313,7 +565,7 @@ void main() {
                         "'mnaipcqbkqzffgvxpato.supabase.co' "
                         '(OS Error: nodename nor servname provided, or not '
                         'known, errno = 8)',
-                    onRetry: () {},
+                    onRetry: () async {},
                   ),
                 ],
               ),
@@ -329,8 +581,7 @@ void main() {
     // Same treatment, and the same reasoning, as `_StorageWarningBanner`'s
     // viewport-share cap: the invariant is "the list stays reachable", which is
     // a statement about the screen. `maxLines` alone is not a height bound —
-    // three lines at a 3.0x accessibility text scale are as tall as a dozen at
-    // 1.0x.
+    // one line at a 3.0x accessibility text scale is as tall as three at 1.0x.
     group('the height cap', () {
       const long =
           'Sync failed: ClientException with SocketException: Failed host '
@@ -377,11 +628,9 @@ void main() {
         const surface = Size(400, 420);
         await pumpAt(tester, surface, textScale: 3.0);
 
-        // MEASURED uncapped at exactly these settings: 407 px of a 420 px
-        // surface, i.e. the entire screen.
         expect(
           tester.getSize(find.byKey(const Key('sync-banner'))).height,
-          lessThan(surface.height * 0.5),
+          lessThan(surface.height * 0.3),
           reason:
               'a notice that eats the viewport hides the very thing the '
               'user opened the app for',
@@ -394,16 +643,54 @@ void main() {
         expect(tester.takeException(), isNull);
       });
 
-      testWidgets('an ordinary phone viewport is unaffected — the cap must not '
-          'shrink the normal case', (tester) async {
-        await pumpAt(tester, const Size(390, 844));
+      // The cap is a share of the viewport, not a pixel ceiling, so it has to
+      // be tightened when the body it bounds shrinks — otherwise 0.4 stops
+      // being a cap and becomes permission. What it now actually guards is
+      // this screen's real case: a shell-level notice
+      // (`storage_retry_banner.dart`) stacked above this banner. At 0.4 apiece
+      // that pair could claim 80% of the viewport between them.
+      testWidgets(
+        'a shell notice PLUS this banner cannot between them claim most of '
+        'the screen',
+        (tester) async {
+          const surface = Size(400, 420);
+          await pumpAt(tester, surface, textScale: 3.0);
 
-        expect(
-          find.textContaining('Failed host lookup'),
-          findsOneWidget,
-          reason: 'the reason still reads in full at a normal text scale',
-        );
-      });
+          expect(
+            tester.getSize(find.byKey(const Key('sync-banner'))).height,
+            lessThanOrEqualTo(surface.height * 0.25 + 0.5),
+            reason: 'two stacked 0.4-capped notices leave the list a sliver',
+          );
+        },
+      );
+
+      // THE MEASURED REGRESSION GUARD. The old three-line block was ~122 px on
+      // a 390x844 phone — 1.4 topo rows, on every frame, forever. One line of
+      // bodyMedium beside icon-sized controls cannot be that.
+      testWidgets(
+        'the collapsed banner is roughly ONE line tall — materially shorter '
+        'than the ~122px three-line block it replaced',
+        (tester) async {
+          await pumpAt(tester, const Size(390, 844));
+
+          expect(
+            tester.getSize(find.byKey(const Key('sync-banner'))).height,
+            lessThan(80),
+            reason: 'measured before the collapse: ~122px, i.e. 1.4 topo rows',
+          );
+        },
+      );
+
+      testWidgets(
+        'an ordinary phone viewport still says what happened — the collapse '
+        'takes the reason away, never the headline',
+        (tester) async {
+          await pumpAt(tester, const Size(390, 844));
+
+          expect(find.text("Couldn't sync"), findsOneWidget);
+          expect(find.byKey(const Key('sync-banner-details')), findsOneWidget);
+        },
+      );
     });
   });
 }
