@@ -6737,6 +6737,97 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
+    testWidgets(
+      'device-screenshot bug fix: a hard load failure (asyncTopos errors '
+      'with no cached value) suppresses the sync/offline banner — '
+      "MasiAsyncView's own full-screen error already reports the one "
+      'underlying failure, and stacking the OFFLINE banner on top of it '
+      'would report it a second time (a third, counting the shell\'s own '
+      'StorageRetryBanner, on the actual device screenshot)',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          retry: (retryCount, error) => null,
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            connectivityServiceProvider.overrideWithValue(
+              _ScriptedConnectivity(reachable: false),
+            ),
+            syncOrchestratorProvider.overrideWith(
+              () => _FakeSyncOrchestrator(),
+            ),
+            storageDurabilityProvider.overrideWith(
+              () => _FakeStorageDurability(const StorageDurability.probing()),
+            ),
+            toposProvider.overrideWith(
+              (ref) => Stream<List<TopoRef>>.error(
+                Exception('watchTopos boom (test)'),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsNothing,
+          reason: "the full-screen error already reports the failure; an "
+              'OFFLINE banner riding above it as the scroll view\'s first '
+              'sliver would also — falsely — claim there IS saved data '
+              'being shown ("showing your saved topos"), directly '
+              'contradicting the full-screen error beneath it',
+        );
+      },
+    );
+
+    testWidgets(
+      'the same hard-failure suppression applies to the SYNC-FAILED banner '
+      'too (not just offline) — the underlying condition is reported once, '
+      'by the full-screen error, not twice',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          retry: (retryCount, error) => null,
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            connectivityServiceProvider.overrideWithValue(
+              _ScriptedConnectivity(reachable: true),
+            ),
+            syncOrchestratorProvider.overrideWith(
+              () => _FakeSyncOrchestrator(
+                initialState: const SyncOrchestratorState(
+                  lastPullError: 'Sync failed: boom (test)',
+                ),
+              ),
+            ),
+            storageDurabilityProvider.overrideWith(
+              () => _FakeStorageDurability(const StorageDurability.probing()),
+            ),
+            toposProvider.overrideWith(
+              (ref) => Stream<List<TopoRef>>.error(
+                Exception('watchTopos boom (test)'),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
+
     testWidgets('the create button shows a cue for the WRITE, and only for the '
         'write — not while the picker or name dialog is up', (tester) async {
       final db = AppDatabase(NativeDatabase.memory());

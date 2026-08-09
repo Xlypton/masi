@@ -17,7 +17,7 @@ import 'theme.dart';
 /// provider has exactly one consumer, [StorageRetryBanner] itself.
 final pageReloadProvider = Provider<void Function()>((ref) => reloadPage);
 
-/// A compact, non-dismissible notice with a working "Try again" button, shown
+/// A compact, dismissible notice with a working "Try again" button, shown
 /// at the top of the [NavShell] body whenever the local database could not be
 /// opened and re-opening it might help ([storageRetryNotice]).
 ///
@@ -38,9 +38,31 @@ final pageReloadProvider = Provider<void Function()>((ref) => reloadPage);
 ///
 /// Placed in the shell rather than on each screen for the same reason
 /// [InstallBanner] is: it must not depend on which tab happens to be selected.
-/// Not dismissible, deliberately — the condition is not cosmetic and dismissing
-/// it would put the user back where they started.
-class StorageRetryBanner extends ConsumerWidget {
+///
+/// **Dismissible (the user's decision — every banner in this family closes;
+/// see `sync_banner.dart`'s `SyncBanner.onDismiss` for the full argument this
+/// class doc used to disagree with).** Dismissing does not "put the user back
+/// where they started": the underlying condition is unchanged and still
+/// blocks writes, [ShellNotices] still suppresses [InstallBanner] beneath it,
+/// and the ordinary "Try again"/"Reload page" actions are still one tap away
+/// — closing this notice only stops it from occupying the screen for a user
+/// who has already read it.
+///
+/// **Episode-scoped, via the widget's OWN [State] rather than a shared
+/// provider** (unlike `SyncBanner`, which needs `offline_banner_dismissal
+/// .dart`'s cross-screen provider because it renders on two different
+/// screens). This banner has exactly one mount point — [ShellNotices] — so a
+/// plain [State] field already gives the right lifecycle for free:
+/// [ShellNotices] removes this widget from the tree entirely once
+/// [storageRetryNotice] returns `null` (see its `build`), so the dismissal
+/// dies with it; the NEXT time the condition recurs, [ShellNotices] mounts a
+/// brand-new [StorageRetryBanner] with a brand-new [State], and the notice is
+/// un-dismissed. Re-arms a second way too, WITHIN one mount: [_dismissedNotice]
+/// is compared against the live [notice] text rather than a bare bool, so a
+/// retry that escalates the message (idle -> failed adds the reload
+/// paragraph) is a different message and is shown again even though the
+/// widget never unmounted.
+class StorageRetryBanner extends ConsumerStatefulWidget {
   const StorageRetryBanner({super.key, required this.notice});
 
   /// The sentence to render — [storageRetryNotice]'s non-null result. Passed in
@@ -88,7 +110,22 @@ class StorageRetryBanner extends ConsumerWidget {
   static const double _maxViewportShare = 0.4;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<StorageRetryBanner> createState() =>
+      _StorageRetryBannerState();
+}
+
+class _StorageRetryBannerState extends ConsumerState<StorageRetryBanner> {
+  /// The exact [StorageRetryBanner.notice] text that was dismissed, or `null`
+  /// if nothing currently is. A signature (the live text), not a bare bool —
+  /// see the class doc's "re-arms a second way too" paragraph: comparing
+  /// against the CURRENT notice is what lets an escalated message (idle ->
+  /// failed) re-arm without this [State] ever being disposed.
+  String? _dismissedNotice;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissedNotice == widget.notice) return const SizedBox.shrink();
+
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final status = ref.watch(storageRetryProvider);
@@ -133,7 +170,9 @@ class StorageRetryBanner extends ConsumerWidget {
           ),
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * _maxViewportShare,
+              maxHeight:
+                  MediaQuery.sizeOf(context).height *
+                  StorageRetryBanner._maxViewportShare,
             ),
             child: SingleChildScrollView(
               child: Row(
@@ -154,7 +193,7 @@ class StorageRetryBanner extends ConsumerWidget {
                         Semantics(
                           liveRegion: true,
                           child: Text(
-                            notice,
+                            widget.notice,
                             key: const Key('storage-retry-banner-message'),
                             style: textTheme.bodyMedium?.copyWith(
                               color: colors.ink2,
@@ -248,6 +287,22 @@ class StorageRetryBanner extends ConsumerWidget {
                         ],
                       ],
                     ),
+                  ),
+                  // Every shell/screen notice in this family closes now — see
+                  // the class doc. Sized/styled exactly like
+                  // `install_banner.dart`'s dismiss control (no
+                  // `visualDensity: compact`, which is what keeps its tap
+                  // target at 48x48 rather than silently shrinking below the
+                  // 44pt floor the rest of this banner was raised to).
+                  const SizedBox(width: MasiSpacing.xs),
+                  IconButton(
+                    key: const Key('storage-retry-banner-dismiss'),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Dismiss',
+                    onPressed: () =>
+                        setState(() => _dismissedNotice = widget.notice),
+                    icon: MasiIcon('close', size: 18, color: colors.ink3),
                   ),
                 ],
               ),

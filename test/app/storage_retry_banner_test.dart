@@ -434,6 +434,130 @@ void main() {
     });
   });
 
+  group('dismissibility (the user\'s decision — every banner in this family '
+      'closes, episode-scoped)', () {
+    /// Exercises [StorageRetryBanner] directly rather than through
+    /// [ShellNotices]: the widget's own dismiss/re-arm contract is what is
+    /// under test here, not `storageDurabilityProvider`'s computation of
+    /// [notice] — that pipeline is already covered above.
+    Widget wrapBannerDirect(ProviderContainer container, String notice) =>
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Scaffold(body: StorageRetryBanner(notice: notice)),
+          ),
+        );
+
+    testWidgets('tapping dismiss hides the banner', (tester) async {
+      final (container: container, opens: _) = makeContainer();
+
+      await tester.pumpWidget(
+        wrapBannerDirect(container, "Your topos couldn't be opened."),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const Key('storage-retry-banner')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('storage-retry-banner-dismiss')));
+      await tester.pump();
+
+      expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+    });
+
+    testWidgets(
+      'a dismissed message re-arms the moment the notice text changes '
+      '(escalation), even though the widget never unmounted',
+      (tester) async {
+        final (container: container, opens: _) = makeContainer();
+
+        await tester.pumpWidget(wrapBannerDirect(container, 'Message A'));
+        await tester.pump();
+        await tester.tap(
+          find.byKey(const Key('storage-retry-banner-dismiss')),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+
+        // Same widget slot, same State, but a DIFFERENT notice — mirrors
+        // `idle` escalating to `failed` (the reload paragraph appearing).
+        await tester.pumpWidget(wrapBannerDirect(container, 'Message B'));
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('storage-retry-banner')),
+          findsOneWidget,
+          reason: 'a different message is a different episode and must not '
+              'stay hidden behind an acknowledgement of the old one',
+        );
+      },
+    );
+
+    testWidgets(
+      'the SAME message stays dismissed across rebuilds within one mount '
+      '(a dismissal is not knocked loose by an unrelated rebuild)',
+      (tester) async {
+        final (container: container, opens: _) = makeContainer();
+
+        await tester.pumpWidget(wrapBannerDirect(container, 'Message A'));
+        await tester.pump();
+        await tester.tap(
+          find.byKey(const Key('storage-retry-banner-dismiss')),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+
+        // Rebuilding with the IDENTICAL notice must not resurrect it.
+        await tester.pumpWidget(wrapBannerDirect(container, 'Message A'));
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'the condition clearing and then recurring re-arms a dismissal, even '
+      'with the identical message — through the REAL ShellNotices path',
+      (tester) async {
+        final (container: container, opens: _) = makeContainer();
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.unavailable('dead'));
+
+        await tester.pumpWidget(wrap(container));
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsOneWidget);
+
+        await tester.tap(
+          find.byKey(const Key('storage-retry-banner-dismiss')),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+
+        // The condition clears entirely — `ShellNotices` removes this
+        // widget from the tree, disposing its State (and the dismissal
+        // with it).
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.probing());
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+
+        // ...and recurs, with the SAME message. A fresh episode of an old
+        // failure must not stay silenced by the earlier acknowledgement.
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.unavailable('dead'));
+        await tester.pump();
+        expect(
+          find.byKey(const Key('storage-retry-banner')),
+          findsOneWidget,
+          reason: 'a new episode of the same failure must re-arm, not stay '
+              'hidden behind the earlier dismissal',
+        );
+      },
+    );
+  });
+
   group('Step 3 — page_reload.dart seam', () {
     test(
       'REGRESSION GUARD: the stub resolved under `flutter test` (no '

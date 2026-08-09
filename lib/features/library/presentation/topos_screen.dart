@@ -410,13 +410,30 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     // reads as "your topos are gone".
     final emptyStateOwnsTheError =
         loadedTopos != null && proximityEntries.isEmpty && pullError != null;
+    // Device-screenshot bug fix, part 2 of "say it once": `asyncTopos` going
+    // to a HARD error (no cached value at all) is exactly the case
+    // `MasiAsyncView` below renders as its own full-screen "Couldn't load
+    // your topos" + Retry (`_errorState`) — see that widget's doc. Without
+    // this guard the sync/offline banner still resolves from `reachability`/
+    // `pullError` alone and rides as the FIRST SLIVER above that full-screen
+    // error, so the one underlying failure was reported three times over on
+    // one screen: the shell's `StorageRetryBanner` ("Your topos couldn't be
+    // opened"), this banner ("Couldn't sync"), and `MasiAsyncView`'s own
+    // error ("Couldn't load your topos") — the exact stack from the reported
+    // screenshot. `emptyStateOwnsTheError` above already covers the milder
+    // sibling case (list loaded, but empty); this is its hard-error twin, and
+    // strictly the more urgent one to fix since it hides the ENTIRE list, not
+    // just an empty one.
+    final asyncToposHardError = asyncTopos.hasError && !asyncTopos.hasValue;
     // #49 P2 fix: lowest priority of the three — a real fault or being
     // offline is worth reading about first, and this is neither: the pull
     // succeeded, it just downloaded fewer other-climbers' photos than usual.
     final sharedPhotosWithheld =
         syncState.lastSharedPhotoBudgetReason ==
         SharedPhotoBudgetReason.storagePressure;
-    final SyncBannerKind? bannerKind = reachability.isKnownOffline
+    final SyncBannerKind? bannerKind = asyncToposHardError
+        ? null
+        : reachability.isKnownOffline
         ? SyncBannerKind.offline
         : (pullError != null && !emptyStateOwnsTheError)
         ? SyncBannerKind.syncFailed
