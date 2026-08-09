@@ -19,6 +19,7 @@ import '../../logbook/presentation/log_ascent_sheet.dart';
 import '../../moderation/application/community_facts_providers.dart';
 import '../../moderation/application/duplicate_providers.dart';
 import '../../moderation/application/moderation_providers.dart';
+import '../../moderation/domain/admin_delete_policy.dart';
 import '../../moderation/domain/nearby_topo.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../moderation/presentation/access_banner.dart';
@@ -106,6 +107,16 @@ class _CommunityTopoDetailScreenState
   final _scrollController = ScrollController();
   bool _headerCollapsed = false;
   double _expandedHeight = 0;
+
+  /// Whether — and what — [_openOverflow]'s admin row should offer for THIS
+  /// topo, computed once per [build] and stashed here for that callback to
+  /// read later. The same "answer it in build, read it in the tap handler"
+  /// split [_expandedHeight] already uses for [_onScroll]: `ref.watch`
+  /// belongs in `build`, not in an `onPressed`, and [isAdminProvider] is a
+  /// `FutureProvider` that has to be watched to pick up its resolved value at
+  /// all. Defaults to [AdminContentAction.hidden] — the fail-closed answer —
+  /// for the one frame before the first [build] runs.
+  AdminContentAction _adminAction = AdminContentAction.hidden;
 
   @override
   void initState() {
@@ -444,41 +455,60 @@ class _CommunityTopoDetailScreenState
     }
   }
 
-  /// The AppBar overflow: history, and reporting the topo itself.
+  /// The AppBar overflow: history, reporting the topo itself, and — for an
+  /// admin only — a "More…" row that opens [_openAdminDeleteSheet].
+  ///
+  /// The admin row is appended to this ordinary sheet rather than replacing
+  /// it or growing a fifth first-level action: an admin is also just a
+  /// reader here, and every non-destructive thing a reader can do (history,
+  /// suggest, report) stays exactly as reachable as before. Not `const`
+  /// anymore because [_adminAction] decides at RUNTIME whether the extra row
+  /// exists at all — see that field's doc for where it comes from.
   Future<void> _openOverflow(String wallId) async {
+    final actions = [
+      const MasiSheetAction(
+        key: Key('community-detail-history'),
+        label: 'History',
+        value: 'history',
+        subtitle: 'What changed, and when',
+      ),
+      const MasiSheetAction(
+        key: Key('community-detail-suggest'),
+        label: 'Suggest a fix',
+        value: 'suggest',
+        subtitle: 'Wrong name or location — the owner decides',
+      ),
+      // Separate from "Suggest a fix", not folded into it. A typo is typed
+      // and a line is drawn — they share a destination and nothing else,
+      // and one of them opens a canvas.
+      const MasiSheetAction(
+        key: Key('community-detail-suggest-line'),
+        label: 'Suggest a line',
+        value: 'suggest-line',
+        subtitle: 'Draw a route this topo is missing, or fix one',
+      ),
+      const MasiSheetAction(
+        key: Key('community-detail-report'),
+        label: 'Report this topo',
+        value: 'report',
+        subtitle: 'Wrong, unsafe, duplicate, access problem',
+        isDestructive: true,
+      ),
+      // Admin-only, and itself just a door to a SECOND sheet — see
+      // `_openAdminDeleteSheet`'s doc for why the destructive action never
+      // sits directly in this first-level list.
+      if (_adminAction == AdminContentAction.delete)
+        const MasiSheetAction(
+          key: Key('community-detail-admin-more'),
+          label: 'More…',
+          value: 'admin-more',
+          subtitle: 'Moderator tools',
+        ),
+    ];
     final action = await showMasiActionSheet<String>(
       context,
       sheetKey: const Key('community-detail-overflow'),
-      actions: const [
-        MasiSheetAction(
-          key: Key('community-detail-history'),
-          label: 'History',
-          value: 'history',
-          subtitle: 'What changed, and when',
-        ),
-        MasiSheetAction(
-          key: Key('community-detail-suggest'),
-          label: 'Suggest a fix',
-          value: 'suggest',
-          subtitle: 'Wrong name or location — the owner decides',
-        ),
-        // Separate from "Suggest a fix", not folded into it. A typo is typed
-        // and a line is drawn — they share a destination and nothing else,
-        // and one of them opens a canvas.
-        MasiSheetAction(
-          key: Key('community-detail-suggest-line'),
-          label: 'Suggest a line',
-          value: 'suggest-line',
-          subtitle: 'Draw a route this topo is missing, or fix one',
-        ),
-        MasiSheetAction(
-          key: Key('community-detail-report'),
-          label: 'Report this topo',
-          value: 'report',
-          subtitle: 'Wrong, unsafe, duplicate, access problem',
-          isDestructive: true,
-        ),
-      ],
+      actions: actions,
     );
     if (action == null || !mounted) return;
     switch (action) {
@@ -493,6 +523,88 @@ class _CommunityTopoDetailScreenState
         );
       case 'report':
         await _reportTopo(wallId);
+      case 'admin-more':
+        await _openAdminDeleteSheet(wallId);
+    }
+  }
+
+  /// The admin-only SECOND step behind "More…" — one destructive action,
+  /// itself gated behind [showMasiConfirm].
+  ///
+  /// Deliberately two sheets deep rather than one, mirroring
+  /// `topos_row.dart`'s `_showMoreSheet`, which puts the exact same
+  /// overflow → More… → destructive-action → confirm shape in front of an
+  /// OWNER deleting their own topo. An admin deleting someone else's must
+  /// not be fewer taps away from "gone" than the owner's own path is.
+  ///
+  /// [AdminDeleteService.deleteTopo] is the real authority check (its own
+  /// doc explains why); [_adminAction] only decided whether this control was
+  /// drawn at all. On success the screen pops itself — the topo it renders
+  /// no longer exists to look at.
+  Future<void> _openAdminDeleteSheet(String wallId) async {
+    final action = await showMasiActionSheet<String>(
+      context,
+      sheetKey: const Key('community-detail-admin-sheet'),
+      actions: const [
+        MasiSheetAction(
+          key: Key('community-detail-admin-delete'),
+          label: 'Delete this topo',
+          value: 'delete',
+          subtitle:
+              'Removes it for everyone, with its routes, ascents and '
+              'comments',
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (action != 'delete' || !mounted) return;
+
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Delete this topo?',
+      message:
+          'Removes this topo for everyone — its routes, ascents and '
+          'comments go with it, and its photos come down too. This cannot '
+          'be undone.',
+      confirmLabel: 'Delete',
+      confirmKey: const Key('community-detail-admin-delete-confirm'),
+    );
+    if (!confirmed || !mounted) return;
+
+    // Captured after both dialogs above have already resolved and `mounted`
+    // has already been re-checked, not any earlier — the same placement
+    // `_reportTopo`/`_reportHazard` use in this same file, so what's held
+    // here is still good across the one await left: the RPC call.
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final navigator = Navigator.of(context);
+    try {
+      final result = await ref
+          .read(adminDeleteServiceProvider)
+          .deleteTopo(wallId: wallId);
+      if (!mounted) return;
+      // Counts surfaced rather than smoothed over — same reasoning as
+      // `admin_queue_screen.dart`'s `_takeDown`: a delete that removed the
+      // record but left world-readable photo bytes behind is the exact W-2
+      // failure, and a bare "Deleted" is how that stayed invisible.
+      final missed = result.photoObjects - result.photoBytesRemoved;
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+            missed == 0
+                ? 'Deleted — ${result.photoBytesRemoved} image(s) removed'
+                : 'Deleted, but $missed of ${result.photoObjects} image(s) '
+                      'could not be removed',
+          ),
+        ),
+      );
+      navigator.maybePop();
+    } catch (error) {
+      // Loud, not silent — an admin who believes a delete went through when
+      // it did not is worse off than one who was told it failed (the same
+      // stance `_reportTopo`/`_reportHazard` take on this same screen).
+      messenger?.showSnackBar(
+        SnackBar(content: Text("Couldn't delete that topo. $error")),
+      );
     }
   }
 
@@ -603,6 +715,14 @@ class _CommunityTopoDetailScreenState
   Widget build(BuildContext context) {
     final wallId = widget.wallId;
     final colors = MasiColors.of(context);
+    // Admin "delete any topo" surface (moderation). `isAdminProvider` fails
+    // closed (false while loading, false on error — see its own doc), and
+    // `effectiveUidProvider` is checked separately rather than folded into
+    // it, per `admin_delete_policy.dart`'s doc. Stashed in `_adminAction` for
+    // `_openOverflow`'s tap handler — see that field's doc for why.
+    final isAdmin = ref.watch(isAdminProvider).asData?.value ?? false;
+    final isSignedIn = ref.watch(effectiveUidProvider) != null;
+    _adminAction = adminContentAction(isAdmin: isAdmin, isSignedIn: isSignedIn);
     final likeCount = ref.watch(likeCountForWallProvider(wallId)).value ?? 0;
     final hasLiked =
         _likeOverride ?? ref.watch(hasLikedWallProvider(wallId)).value ?? false;
@@ -1619,4 +1739,3 @@ class _RouteStyleTagChip extends StatelessWidget {
     );
   }
 }
-

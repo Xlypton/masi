@@ -104,6 +104,25 @@ class _FakeModeration implements ModerationRemote {
   Future<int?> requestWithdrawal(String wallId) async => null;
   @override
   Future<String> cancelWithdrawal(String wallId) async => 'published';
+
+  @override
+  Future<int?> adminDeleteTopo({required String wallId, String? reason}) async =>
+      null;
+  @override
+  Future<int?> adminRestoreTopo({
+    required String wallId,
+    String? reason,
+  }) async => null;
+  @override
+  Future<int?> adminDeleteAscent({
+    required String ascentId,
+    String? reason,
+  }) async => null;
+  @override
+  Future<int?> adminDeleteComment({
+    required String commentId,
+    String? reason,
+  }) async => null;
 }
 
 String? _pushed;

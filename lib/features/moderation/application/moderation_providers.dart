@@ -4,6 +4,8 @@ import '../../../core/db/app_database.dart' as db;
 import '../../../core/db/database_provider.dart';
 import '../../../core/config/supabase_providers.dart';
 import '../../account/application/auth_providers.dart';
+import '../../backup/application/sync_orchestrator.dart';
+import '../../library/application/library_providers.dart';
 import '../data/moderation_remote.dart';
 import '../data/moderation_repository.dart';
 import '../domain/abandoned_topo.dart';
@@ -288,10 +290,13 @@ final withdrawalServiceProvider = Provider<WithdrawalService>(
 
 /// What a takedown actually accomplished.
 ///
-/// [photoObjects] vs [photoBytesRemoved] are reported separately on purpose: a
-/// takedown that changed the moderation state but removed none of the bytes is
-/// the exact failure W-2 describes, and collapsing the two into a bool is how
-/// it stayed invisible for so long.
+/// [photoObjects] counts ORIGINAL photos only — not the cloud-thumbnail
+/// companion Storage removes alongside each one, best-effort (see
+/// `ModerationRemote.removePublishedPhotoObjects` and
+/// [originalPhotoRequestCount]). [photoObjects] vs [photoBytesRemoved] are
+/// reported separately on purpose: a takedown that changed the moderation
+/// state but removed none of the bytes is the exact failure W-2 describes,
+/// and collapsing the two into a bool is how it stayed invisible for so long.
 typedef TakedownResult = ({int photoObjects, int photoBytesRemoved});
 
 /// Takes a published topo down, and removes its PUBLIC photo bytes with it
@@ -340,11 +345,189 @@ class TakedownService {
     final removed = await remote.removePublishedPhotoObjects(objects);
 
     await refreshWallModeration(_ref, {wallId});
-    return (photoObjects: objects.length, photoBytesRemoved: removed);
+    return (
+      photoObjects: originalPhotoRequestCount(objects),
+      photoBytesRemoved: removed,
+    );
   }
 }
 
 final takedownServiceProvider = Provider<TakedownService>(TakedownService.new);
+
+/// What one admin delete actually accomplished.
+///
+/// [deletedAt] is the server's instant, not the client's — it is what
+/// [AdminDeleteService.restoreTopo] matches on later, and a clock skew of a
+/// few seconds between the phone and Postgres would make a locally-stamped one
+/// match nothing.
+///
+/// [photoObjects] counts ORIGINAL photos only, for the same reason
+/// [TakedownResult] does — see [originalPhotoRequestCount]. [photoObjects] vs
+/// [photoBytesRemoved] are reported separately for the same reason
+/// [TakedownResult] does it: a delete that tombstoned every row but removed
+/// none of the world-readable bytes is the W-2 failure, and collapsing the two
+/// into a bool is how it stayed invisible. Both are zero for an ascent or a
+/// comment, neither of which owns any photo bytes.
+typedef AdminDeleteResult = ({
+  int? deletedAt,
+  int photoObjects,
+  int photoBytesRemoved,
+});
+
+/// An admin's power to delete ANY topo and ANY feed item — not just their own.
+///
+/// ## Why this is not the ordinary delete path
+///
+/// It cannot be. `LibraryCrudRepository.softDeleteWall` refuses to touch a row
+/// whose `ownerId` is not the signed-in uid, and even if it did, the push query
+/// is hard-filtered `ownerId = uid` so the tombstone would never leave the
+/// device. Both walls are deliberate. So every method here goes through a
+/// `SECURITY DEFINER` RPC, which re-checks `is_admin()` server-side and writes
+/// the `moderation_log` entry in the SAME transaction as the delete — the
+/// action and its audit record cannot diverge, because nothing can commit one
+/// without the other.
+///
+/// ## Why soft delete
+///
+/// Sync is a dirty-scoped full-state re-push with tombstoned soft-delete and no
+/// outbox (D-4): a delete reaches other devices as `deletedAt` on a row that is
+/// still there. A hard `DELETE` would remove it from Postgres and tell nobody —
+/// every device already holding the topo would keep it forever, because a pull
+/// sees an absence and an absence means nothing. A hard delete is not a
+/// stronger delete here; it is one that does not propagate.
+///
+/// ## Why the photo bytes go too, and why the order is not stylistic
+///
+/// Same argument, and the same trap, as [TakedownService]: the shared-photo
+/// SELECT policy is `is_wall_public("wallId")`, and `admin_delete_topo` sets
+/// `wall_moderation.state` to `removed`, which makes it false. Enumerate after
+/// the RPC and you always list nothing and always leave world-readable copies
+/// of the imagery you were asked to remove. Reading first is the only order
+/// that works.
+class AdminDeleteService {
+  const AdminDeleteService(this._ref);
+
+  final Ref _ref;
+
+  /// Deletes [wallId] and its whole subtree, whoever owns it, and removes its
+  /// published photo bytes.
+  ///
+  /// The RPC's errors propagate (see the class doc); the byte removal never
+  /// throws but its count is returned rather than swallowed, so the caller can
+  /// say "deleted, but 2 of 3 images could not be removed" instead of a bare
+  /// success.
+  Future<AdminDeleteResult> deleteTopo({
+    required String wallId,
+    String? reason,
+  }) async {
+    final remote = _ref.read(moderationRemoteProvider);
+
+    // BEFORE the RPC — see this class's doc. Not an optimisation.
+    final objects = await remote.publishedPhotoObjects(wallId);
+
+    final deletedAt = await remote.adminDeleteTopo(
+      wallId: wallId,
+      reason: reason,
+    );
+
+    final removed = await remote.removePublishedPhotoObjects(objects);
+
+    // The RPC has committed server-side by this point, so the admin's own
+    // device is now the one place still showing a topo the server already
+    // deleted — `CommunityRepository.watchSharedTopos` is a local Drift
+    // stream with no moderation awareness, and the admin's cached copy is a
+    // FOREIGN row that the ordinary `softDeleteWall` guard would refuse to
+    // touch. `softDeleteWallAsModerator` (see its doc) mirrors the tombstone
+    // locally without that guard, safely, because it only copies what the
+    // server already authorised. Swallowed the same way `_settle` swallows
+    // below: the delete already succeeded, so a local-mirror failure here
+    // must not turn a successful admin action into a reported one.
+    try {
+      await _ref
+          .read(libraryCrudRepositoryProvider)
+          .softDeleteWallAsModerator(wallId);
+    } catch (_) {
+      // Deliberately swallowed — see the comment above.
+    }
+
+    await _settle({wallId});
+    return (
+      deletedAt: deletedAt,
+      photoObjects: originalPhotoRequestCount(objects),
+      photoBytesRemoved: removed,
+    );
+  }
+
+  /// Puts back one [deleteTopo] sweep.
+  ///
+  /// The moderation state stays `removed`: restoring the rows gives the owner
+  /// their topo back, and putting it in front of the public again is a separate
+  /// decision with a separate control (`review_topo(..., approve: true)`).
+  ///
+  /// Returns null when the topo was not deleted — a double tap, which is not an
+  /// error and must not be reported as one.
+  Future<int?> restoreTopo({required String wallId, String? reason}) async {
+    final restoredAt = await _ref
+        .read(moderationRemoteProvider)
+        .adminRestoreTopo(wallId: wallId, reason: reason);
+    await _settle({wallId});
+    return restoredAt;
+  }
+
+  /// Deletes any ascent, and the comments and likes hanging off it.
+  Future<int?> deleteAscent({required String ascentId, String? reason}) async {
+    final deletedAt = await _ref
+        .read(moderationRemoteProvider)
+        .adminDeleteAscent(ascentId: ascentId, reason: reason);
+    await _settle(const {});
+    return deletedAt;
+  }
+
+  /// Deletes any single comment, in either thread.
+  Future<int?> deleteComment({
+    required String commentId,
+    String? reason,
+  }) async {
+    final deletedAt = await _ref
+        .read(moderationRemoteProvider)
+        .adminDeleteComment(commentId: commentId, reason: reason);
+    await _settle(const {});
+    return deletedAt;
+  }
+
+  /// Brings the local mirror in line with what the server now says.
+  ///
+  /// Two different jobs, and both are needed. The moderation refresh updates
+  /// the banner tables; the PULL is what actually brings the tombstones down,
+  /// because the deleted rows belong to someone else and nothing on this device
+  /// can mark them deleted on its own — the repositories refuse to write a
+  /// foreign row.
+  ///
+  /// Never throws. The risk is not the `syncOrchestratorProvider.notifier`
+  /// read below — reading `.notifier` on a `NotifierProvider` hands back the
+  /// notifier without running (or re-running) `build()`, so a build failure
+  /// there could not propagate through this call even if one happened. The
+  /// real risk is inside [refreshWallModeration]: it reads
+  /// `moderationRepositoryProvider`, an ORDINARY `Provider`, whose `build()`
+  /// failure DOES propagate through `.read()` — e.g. if `appDatabaseProvider`
+  /// underneath it is unavailable. Either way, the delete has already
+  /// committed server-side by the time this runs, so a failure here means a
+  /// stale list for one refresh cycle, not a failed moderation action — and
+  /// reporting it as an error would tell an admin their delete did not work
+  /// when it did.
+  Future<void> _settle(Set<String> wallIds) async {
+    try {
+      if (wallIds.isNotEmpty) await refreshWallModeration(_ref, wallIds);
+      await _ref.read(syncOrchestratorProvider.notifier).pullNow();
+    } catch (_) {
+      // Deliberately swallowed — see this method's doc.
+    }
+  }
+}
+
+final adminDeleteServiceProvider = Provider<AdminDeleteService>(
+  AdminDeleteService.new,
+);
 
 /// Pulls moderation state for [wallIds] and writes it to the local mirror.
 ///

@@ -2,6 +2,92 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../backup/data/sync_remote.dart' show sharedPhotoPath;
 
+/// Cloud-thumbnail companions of a published photo live directly under this
+/// prefix — mirrors `SyncRemote.sharedThumbPath`'s `shared/thumbs/<id>.jpg`
+/// convention (`lib/features/backup/data/sync_remote.dart`, currently only on
+/// the sibling `perf/photo-pipeline-and-boot` branch, not yet merged with this
+/// one). Duplicated here rather than imported, for the same reason
+/// [SupabaseModerationRemote._photoBucket] duplicates the bucket name instead
+/// of importing it (see this file's header) — and, right now, for the more
+/// concrete reason that the symbol is not reachable from here at all.
+const String _sharedThumbPrefix = 'shared/thumbs/';
+
+/// The published-thumbnail object path for [photoId] — the small companion
+/// object a takedown must remove alongside the full-resolution original at
+/// [sharedPhotoPath]. Thumbnails are always `.jpg` regardless of the
+/// original's extension (the thumbnail pipeline re-encodes to JPEG), which is
+/// why this needs no `ext` parameter the way [sharedPhotoPath] does.
+String _sharedThumbPath(String photoId) => '$_sharedThumbPrefix$photoId.jpg';
+
+/// Whether [objectPath] is a published-thumbnail companion (lives under
+/// `shared/thumbs/`) rather than an original.
+///
+/// This is the whole basis for keeping a takedown's REPORTED count about
+/// PHOTOS, not raw Storage objects: see
+/// [SupabaseModerationRemote.removePublishedPhotoObjects] and
+/// `moderation_providers.dart`'s `TakedownResult`/`AdminDeleteResult`.
+bool isSharedThumbObjectPath(String objectPath) =>
+    objectPath.startsWith(_sharedThumbPrefix);
+
+/// The Storage object paths a takedown should request for [wallId]'s
+/// published photos, given [rows] — raw `photos` table rows already scoped to
+/// the wall (the shape `SupabaseModerationRemote.publishedPhotoObjects`
+/// selects: `id, localPath, parentPhotoId, deletedAt`).
+///
+/// The pure decision half of
+/// [SupabaseModerationRemote.publishedPhotoObjects], split out so the
+/// enumeration logic — in particular, that BOTH the original and its
+/// thumbnail companion are requested for every qualifying row — is testable
+/// without a Supabase client.
+///
+/// Two paths per qualifying row: the full-resolution original at
+/// [sharedPhotoPath], and its cloud-thumbnail companion at [_sharedThumbPath].
+/// The thumbnail is requested UNCONDITIONALLY, even for a photo published
+/// before the thumbnail tier existed and which therefore has no such object —
+/// see [isSharedThumbObjectPath] and
+/// [SupabaseModerationRemote.removePublishedPhotoObjects] for why that must
+/// not be conflated with a failed delete of the original.
+Set<String> publishedPhotoObjectPathsFor(
+  Iterable<Map<String, dynamic>> rows,
+) {
+  final paths = <String>{};
+  for (final row in rows) {
+    // A slice points at its original's file, so its object is already
+    // covered by that original's row — see
+    // [SupabaseModerationRemote.publishedPhotoObjects].
+    if (row['parentPhotoId'] != null) continue;
+    if (row['deletedAt'] != null) continue;
+    final id = row['id'];
+    final localPath = row['localPath'];
+    if (id is! String || localPath is! String) continue;
+    final dot = localPath.lastIndexOf('.');
+    // The extension is part of the object NAME, so a row without one cannot
+    // be turned into a path to delete. Skipped rather than guessed: deleting
+    // `shared/<id>` when the object is `shared/<id>.jpg` would report a
+    // success that removed nothing.
+    if (dot < 0 || dot == localPath.length - 1) continue;
+    paths.add(sharedPhotoPath(id, localPath.substring(dot)));
+    paths.add(_sharedThumbPath(id));
+  }
+  return paths;
+}
+
+/// How many of [objectPaths] are ORIGINALS — i.e. excludes cloud-thumbnail
+/// companions (see [isSharedThumbObjectPath]).
+///
+/// This is what a takedown's admin-facing count must mean. Both
+/// `TakedownService.remove` and `AdminDeleteService.deleteTopo`
+/// (`moderation_providers.dart`) surface `requested - removed` to the admin as
+/// "N image(s) could not be removed" — the count has to mean "images", not
+/// "Storage objects". A thumbnail is a best-effort derivative of the publish
+/// pipeline, written best-effort and possibly not written at all for a photo
+/// published before the thumbnail tier existed (see
+/// [SupabaseModerationRemote.removePublishedPhotoObjects]): requesting one
+/// that was never there must not make a fully-successful takedown of the
+/// original read as "1 of 2 removed".
+int originalPhotoRequestCount(Iterable<String> objectPaths) =>
+    objectPaths.where((path) => !isSharedThumbObjectPath(path)).length;
+
 /// Reads moderation state from the cloud.
 ///
 /// Deliberately a SEPARATE seam from `SyncRemote` rather than another method
@@ -131,8 +217,20 @@ abstract class ModerationRemote {
   /// retained, not destroyed (COMMUNITY_PLAN.md §3.3), so this is reversible.
   Future<void> removeTopo({required String wallId, String? reason});
 
-  /// The Storage object names of [wallId]'s PUBLISHED photo copies —
-  /// `shared/<canonicalPhotoId><ext>`, one per original photo (W-2).
+  /// The Storage object names of [wallId]'s PUBLISHED photo copies — the
+  /// full-resolution original at `shared/<canonicalPhotoId><ext>`, PLUS its
+  /// cloud-thumbnail companion at `shared/thumbs/<canonicalPhotoId>.jpg`, one
+  /// pair per original photo (W-2, and its thumbnail-tier follow-up: the
+  /// thumbnail tier shipped on a sibling branch without this enumeration
+  /// being updated to match, which is the gap this pair of doc comments and
+  /// [originalPhotoRequestCount] exist to close).
+  ///
+  /// The thumbnail path is requested UNCONDITIONALLY, even for a photo
+  /// published before the thumbnail tier existed and which therefore has no
+  /// such object — see [removePublishedPhotoObjects] for why that must not be
+  /// conflated with a failed delete of the original. See
+  /// [publishedPhotoObjectPathsFor] for the actual (testable) enumeration
+  /// logic.
   ///
   /// **Must be called BEFORE [removeTopo].** The shared-photo SELECT policy is
   /// `is_wall_public("wallId")`, and a takedown makes that false, so afterwards
@@ -149,18 +247,91 @@ abstract class ModerationRemote {
   /// moderation decision itself.
   Future<List<String>> publishedPhotoObjects(String wallId);
 
-  /// Deletes [objectPaths] from the public prefix, returning how many objects
-  /// were ACTUALLY removed.
+  /// Deletes [objectPaths] from the public prefix, returning how many
+  /// ORIGINALS were ACTUALLY removed.
   ///
-  /// The count is the point, and it is why this does not reuse
+  /// [objectPaths] mixes two kinds of object, as built by
+  /// [publishedPhotoObjectPathsFor]: the full-resolution original at
+  /// `shared/<id><ext>`, and its cloud-thumbnail companion at
+  /// `shared/thumbs/<id>.jpg` (see [isSharedThumbObjectPath]). They are
+  /// deliberately NOT counted the same way, and both are still removed.
+  ///
+  /// THE RETURNED COUNT IS ABOUT ORIGINALS ONLY — see
+  /// [originalPhotoRequestCount]. The count is the point (below), and both
+  /// callers (`TakedownService.remove`, `AdminDeleteService.deleteTopo` in
+  /// `moderation_providers.dart`) surface `requested - removed` to the admin
+  /// as "N image(s) could not be removed", so the count has to mean "images",
+  /// not "Storage objects". A thumbnail is a best-effort derivative of the
+  /// publish pipeline and may not exist at all for a photo published before
+  /// the thumbnail tier existed — requesting one that was never there must
+  /// not make a fully-successful takedown of the ORIGINAL read as "1 of 2
+  /// removed". So thumbnails ARE removed (nothing may outlive the original it
+  /// was derived from — the whole point of this fix) but their removal is
+  /// best-effort and kept OUT of the returned count.
+  ///
+  /// The count is the point for ORIGINALS, and it is why this does not reuse
   /// `SyncRemote.removeSharedPhoto` (which returns void and swallows). A
   /// Storage delete that RLS filtered to nothing returns HTTP 200 and an empty
   /// list — indistinguishable from success unless you count. That exact
   /// false-success hid W-2: there was no DELETE policy for `shared/` at all, so
-  /// every removal since the feature shipped silently removed nothing.
+  /// every removal since the feature shipped silently removed nothing. That
+  /// detectability is preserved HERE for originals specifically: a genuinely
+  /// filtered/failed delete of an original still shows up as a shortfall,
+  /// because originals and thumbnails are removed — and counted — separately.
   ///
-  /// Never throws; a failure reports 0.
+  /// Never throws; a failure removing originals reports 0. A failure removing
+  /// thumbnails is swallowed entirely (best-effort, see above).
   Future<int> removePublishedPhotoObjects(List<String> objectPaths);
+
+  /// Soft-deletes ANY topo, whoever owns it, and everything hanging off it —
+  /// photos, routes, and every ascent, comment and like on the wall.
+  ///
+  /// Admin-only, enforced by `admin_delete_topo`'s own `is_admin()` check. The
+  /// RPC is the ONLY path to this: the local repositories refuse to write a row
+  /// the signed-in user does not own, and the push query filters on
+  /// `ownerId = uid`, so there is no client-side route to a foreign delete and
+  /// there is not meant to be one.
+  ///
+  /// Returns the deletion instant in epoch ms — the same `deletedAt` stamped on
+  /// every row of the sweep, which is what [adminRestoreTopo] later matches on.
+  /// Deleting an already-deleted topo returns its EXISTING instant and writes
+  /// no second audit-log entry, so a double tap costs nothing.
+  ///
+  /// Throws on failure, deliberately: an admin who believes they removed
+  /// something they did not is the worst outcome this feature has.
+  Future<int?> adminDeleteTopo({required String wallId, String? reason});
+
+  /// Undoes one [adminDeleteTopo] sweep, putting back exactly the rows that
+  /// sweep took — matched on the wall's own `deletedAt` instant, so rows the
+  /// OWNER deleted themselves months earlier stay deleted.
+  ///
+  /// Returns the restore instant, or null when the topo was not deleted (a
+  /// double tap, which is not an error).
+  ///
+  /// Note what this does NOT put back: the published photo BYTES.
+  /// [AdminDeleteService.deleteTopo] removes the world-readable `shared/` copies
+  /// from Storage, and Storage has no undelete. That is self-healing rather than
+  /// terminal — push re-reads and re-sends its own rows every time (D-4, no
+  /// outbox), so the owner's next sync re-uploads the shared copy from the
+  /// private original, which is never touched.
+  Future<int?> adminRestoreTopo({required String wallId, String? reason});
+
+  /// Soft-deletes ANY ascent and its thread — the comments and likes on it go
+  /// too, because a comment whose ascent is gone is unreachable text that still
+  /// notifies people and still counts.
+  ///
+  /// Admin-only, returns the deletion instant, idempotent, throws on failure —
+  /// all as [adminDeleteTopo].
+  Future<int?> adminDeleteAscent({required String ascentId, String? reason});
+
+  /// Soft-deletes ANY single comment, in either thread (a topo comment carries
+  /// `wallId`, an ascent comment carries `ascentId`; this needs to know
+  /// neither).
+  ///
+  /// This is the finest-grained control an admin has, and the one the takedown
+  /// path could never offer: `remove_topo` hides a whole topo to deal with one
+  /// abusive line of text.
+  Future<int?> adminDeleteComment({required String commentId, String? reason});
 
   /// Starts the ten-day withdrawal clock on a published topo (C-3). Returns
   /// the epoch-ms instant the clock started from — which for a second call is
@@ -364,25 +535,9 @@ class SupabaseModerationRemote implements ModerationRemote {
           .from('photos')
           .select('id, localPath, parentPhotoId, deletedAt')
           .eq('wallId', wallId);
-      final paths = <String>{};
-      for (final raw in rows) {
-        final row = Map<String, dynamic>.from(raw);
-        // A slice points at its original's file, so its object is already
-        // covered by that original's row — see [publishedPhotoObjects].
-        if (row['parentPhotoId'] != null) continue;
-        if (row['deletedAt'] != null) continue;
-        final id = row['id'];
-        final localPath = row['localPath'];
-        if (id is! String || localPath is! String) continue;
-        final dot = localPath.lastIndexOf('.');
-        // The extension is part of the object NAME, so a row without one
-        // cannot be turned into a path to delete. Skipped rather than guessed:
-        // deleting `shared/<id>` when the object is `shared/<id>.jpg` would
-        // report a success that removed nothing.
-        if (dot < 0 || dot == localPath.length - 1) continue;
-        paths.add(sharedPhotoPath(id, localPath.substring(dot)));
-      }
-      return paths.toList();
+      return publishedPhotoObjectPathsFor(
+        rows.map(Map<String, dynamic>.from),
+      ).toList();
     } catch (_) {
       return const [];
     }
@@ -391,15 +546,99 @@ class SupabaseModerationRemote implements ModerationRemote {
   @override
   Future<int> removePublishedPhotoObjects(List<String> objectPaths) async {
     if (objectPaths.isEmpty) return 0;
-    try {
-      final removed = await _client.storage
-          .from(_photoBucket)
-          .remove(objectPaths);
-      return removed.length;
-    } catch (_) {
-      return 0;
+
+    final originals = [
+      for (final path in objectPaths)
+        if (!isSharedThumbObjectPath(path)) path,
+    ];
+    final thumbs = [
+      for (final path in objectPaths)
+        if (isSharedThumbObjectPath(path)) path,
+    ];
+
+    var removedOriginals = 0;
+    if (originals.isNotEmpty) {
+      try {
+        final removed = await _client.storage
+            .from(_photoBucket)
+            .remove(originals);
+        removedOriginals = removed.length;
+      } catch (_) {
+        removedOriginals = 0;
+      }
     }
+
+    // Best-effort, deliberately uncounted — see this method's doc comment on
+    // the abstract class. A missing or failed thumbnail delete must never be
+    // observable as a failed takedown.
+    if (thumbs.isNotEmpty) {
+      try {
+        await _client.storage.from(_photoBucket).remove(thumbs);
+      } catch (_) {
+        // Swallowed — best-effort.
+      }
+    }
+
+    return removedOriginals;
   }
+
+  @override
+  Future<int?> adminDeleteTopo({
+    required String wallId,
+    String? reason,
+  }) async => _epochMs(
+    await _client.rpc<dynamic>(
+      'admin_delete_topo',
+      params: {'wall_id': wallId, 'reason': reason},
+    ),
+  );
+
+  @override
+  Future<int?> adminRestoreTopo({
+    required String wallId,
+    String? reason,
+  }) async => _epochMs(
+    await _client.rpc<dynamic>(
+      'admin_restore_topo',
+      params: {'wall_id': wallId, 'reason': reason},
+    ),
+  );
+
+  @override
+  Future<int?> adminDeleteAscent({
+    required String ascentId,
+    String? reason,
+  }) async => _epochMs(
+    await _client.rpc<dynamic>(
+      'admin_delete_ascent',
+      params: {'ascent_id': ascentId, 'reason': reason},
+    ),
+  );
+
+  @override
+  Future<int?> adminDeleteComment({
+    required String commentId,
+    String? reason,
+  }) async => _epochMs(
+    await _client.rpc<dynamic>(
+      'admin_delete_comment',
+      params: {'comment_id': commentId, 'reason': reason},
+    ),
+  );
+
+  /// A `bigint` epoch-ms out of PostgREST, whatever shape the JSON arrived in.
+  ///
+  /// Postgres `bigint` does not fit a JavaScript number, so PostgREST serialises
+  /// it as a JSON STRING on some paths and a number on others — and on web the
+  /// Dart value lands as `double` rather than `int`. Parsing all three is not
+  /// defensive padding: an `int` cast here would throw on wasm for a value the
+  /// server sent correctly. Mirrors [requestWithdrawal]'s existing switch.
+  static int? _epochMs(dynamic result) => switch (result) {
+    final int v => v,
+    final num v => v.toInt(),
+    final String v => int.tryParse(v),
+    _ => null,
+  };
 
   @override
   Future<int?> requestWithdrawal(String wallId) async {

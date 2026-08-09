@@ -119,6 +119,25 @@ class _FakeRemote implements ModerationRemote {
   Future<void> resolveMaterialChange(String noticeId) async {}
   @override
   Future<int> removePublishedPhotoObjects(List<String> objectPaths) async => 0;
+
+  @override
+  Future<int?> adminDeleteTopo({required String wallId, String? reason}) async =>
+      null;
+  @override
+  Future<int?> adminRestoreTopo({
+    required String wallId,
+    String? reason,
+  }) async => null;
+  @override
+  Future<int?> adminDeleteAscent({
+    required String ascentId,
+    String? reason,
+  }) async => null;
+  @override
+  Future<int?> adminDeleteComment({
+    required String commentId,
+    String? reason,
+  }) async => null;
 }
 
 class _FakeSyncOrchestrator extends SyncOrchestrator {

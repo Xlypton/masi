@@ -1194,3 +1194,67 @@ CREATE POLICY notifications_read
 -- through the PUBLIC pseudo-role.)
 REVOKE ALL ON public.notifications FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.notifications TO authenticated;
+
+-- ===========================================================================
+-- AN ADMIN CAN DELETE ANY TOPO AND ANY FEED ITEM (2026-08-09)
+-- See supabase/migrations/2026-08-09_admin_delete_any.sql (APPLIED LIVE)
+-- ===========================================================================
+--
+-- No new tables, so nothing to repeat here for fresh-run correctness - the four
+-- RPCs and the one trigger edit live in the migration alone, like every other
+-- phase. This section records the decisions, because they are the kind that get
+-- re-litigated by someone reading only the trigger.
+--
+-- SOFT DELETE, NOT HARD DELETE, and it is forced rather than chosen. Sync is a
+-- dirty-scoped full-state re-push with tombstoned soft-delete and NO OUTBOX
+-- (D-4): a delete reaches other devices as `deletedAt` on a row that is still
+-- present. `DELETE FROM walls` would drop the row and tell nobody, because a
+-- pull sees an absence and an absence means nothing - so a hard delete is not a
+-- stronger delete here, it is one that does not propagate. Tombstoning is also
+-- what keeps §3.3 intact: the record survives, and `admin_restore_topo` undoes
+-- the whole sweep.
+--
+-- THE FOUR RPCs (all `SECURITY DEFINER`, all `is_admin()`-guarded as their
+-- first statement, all writing a `moderation_log` row in the same statement
+-- they act):
+--   * admin_delete_topo(wall_id, reason)    -> photos, routes, ascents,
+--     comments, likes, then the wall, at one instant; `wall_moderation.state`
+--     to 'removed' UNLESS it is 'draft' (a draft was never public, and
+--     `ensure_wall_moderation` only re-enters the queue from 'draft', so
+--     overwriting it would strand a restored draft outside review forever).
+--     Idempotent: a second call returns the first instant and logs nothing.
+--   * admin_restore_topo(wall_id, reason)   -> clears exactly the rows whose
+--     `deletedAt` equals the wall's, so rows the OWNER deleted months earlier
+--     are not resurrected. State stays 'removed'; re-publishing is
+--     `review_topo(..., approve => true)`, a separate decision.
+--   * admin_delete_ascent(ascent_id, reason)  -> the ascent and its thread.
+--   * admin_delete_comment(comment_id, reason)-> one comment, either thread.
+-- There is deliberately NO `admin_delete_like`: a like carries no content to
+-- moderate, and the only reason to remove one is that its target is going.
+--
+-- HOW THE WITHDRAWAL/APPROVAL GUARD IS BYPASSED WITHOUT BEING WEAKENED.
+-- `protect_published_wall` silently reverts a new `deletedAt` on a published or
+-- removed topo unless the withdrawal matured AND an approved request exists,
+-- with no admin exemption - so an admin delete would have appeared to work and
+-- undone itself on the next pull. It gains ONE exemption, and it needs BOTH
+-- `public.is_admin()` AND a transaction-local `masi.admin_delete_wall` GUC
+-- naming the exact wall, which only `admin_delete_topo` sets and which it
+-- clears again before returning. The GUC alone is not authority; the owner path
+-- and every other admin path still meet the full gate.
+--
+-- PHOTO BYTES follow the W-2 precedent and are removed by the CLIENT, before
+-- the RPC: Supabase's `storage.protect_delete()` trigger raises on any direct
+-- `DELETE FROM storage.objects`, so the database cannot remove an object however
+-- it is privileged, and the shared-photo SELECT policy is `is_wall_public(...)`
+-- - which the delete makes false, so enumerating afterwards always finds
+-- nothing. The owner's private `<uid>/...` copy is never touched (D-5).
+--
+-- Verified live in a rolled-back transaction on 2026-08-09: a non-admin refused
+-- on all three deletes; the OWNER still could not destroy a published topo; the
+-- admin delete tombstoned the wall, its photo, route, a FOREIGN ascent, both
+-- comments and the like, moved the state to 'removed', took the topo out of
+-- `is_wall_public`, and logged exactly one row; a second call was a no-op; the
+-- restore put every row back and left the state 'removed'; a plain UPDATE by
+-- the same admin, on the same wall, in the same transaction, was still refused
+-- (the GUC is cleared); an unknown id raised. Row counts before and after were
+-- identical.
