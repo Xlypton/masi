@@ -105,6 +105,66 @@ void main() {
     );
 
     testWidgets(
+      'the dismiss control clears the 44x44 tap-target floor — MEASURED, not '
+      'derived from VisualDensity arithmetic',
+      (tester) async {
+        // Regression pin. This control shipped under the floor while every
+        // other button in the banner was raised to it, because its size was
+        // reasoned about rather than measured: `IconButton`'s footprint is
+        // its TAP TARGET, and `VisualDensity.compact` shrinks that target as
+        // well as the visible box. The arithmetic was done wrong, and no test
+        // would have caught it — so this asserts the RENDERED size.
+        //
+        // `tester.getSize` on the button returns its outermost box, which for
+        // a Material button is the tap-target padding — i.e. exactly the
+        // region a finger can hit, not the 18px glyph inside it.
+        await tester.pumpWidget(
+          _wrap(
+            const PwaInstallStatus(
+              isStandalone: false,
+              canPrompt: true,
+              platform: PwaPlatform.other,
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final size = tester.getSize(
+          find.byKey(const Key('install-banner-dismiss')),
+        );
+        expect(
+          size.width,
+          greaterThanOrEqualTo(44.0),
+          reason: 'the dismiss control is a real tap target, not a glyph',
+        );
+        expect(size.height, greaterThanOrEqualTo(44.0));
+      },
+    );
+
+    testWidgets(
+      "the action button keeps its 44pt floor too — the dismiss fix must not "
+      'come at its expense',
+      (tester) async {
+        await tester.pumpWidget(
+          _wrap(
+            const PwaInstallStatus(
+              isStandalone: false,
+              canPrompt: true,
+              platform: PwaPlatform.other,
+            ),
+          ),
+        );
+        await tester.pump();
+
+        final size = tester.getSize(
+          find.byKey(const Key('install-banner-action')),
+        );
+        expect(size.width, greaterThanOrEqualTo(44.0));
+        expect(size.height, greaterThanOrEqualTo(44.0));
+      },
+    );
+
+    testWidgets(
       'tapping dismiss collapses the banner for the rest of the session',
       (tester) async {
         await tester.pumpWidget(

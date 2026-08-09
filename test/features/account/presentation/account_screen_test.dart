@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -2104,5 +2105,259 @@ void main() {
         },
       );
     }
+  });
+
+  group('shortUserIdHash: stable across compilers', () {
+    // The expected digests below are the canonical 32-bit FNV-1a values,
+    // computed OUTSIDE Dart (a reference implementation in Python over the
+    // same input) rather than by running this function and writing down what
+    // it said — a self-recorded value would pin whatever the implementation
+    // happens to do, including the very drift these tests exist to catch.
+    // 'a' -> 0xe40c292c is FNV's own published test vector.
+    const vectors = <String, String>{
+      'a': 'e40c292c',
+      '00000000-0000-4000-8000-000000000e2e': '427b60b3',
+      'climber-uid-42': '23654a2b',
+      'e2e-owner@masi.test': '74fbe00f',
+    };
+
+    for (final entry in vectors.entries) {
+      test(
+        'uid "${entry.key}" hashes to the reference FNV-1a value '
+        '${entry.value} — the pre-fix `hash * prime & 0xFFFFFFFF` produced '
+        'this only where an int is 64-bit, and something else under dart2js, '
+        'where the >2^53 product loses its low bits BEFORE the mask',
+        () {
+          expect(shortUserIdHash(entry.key), entry.value);
+        },
+      );
+    }
+
+    test('a null or empty uid is the literal "none", never a digest', () {
+      expect(shortUserIdHash(null), 'none');
+      expect(shortUserIdHash(''), 'none');
+      // Specifically not FNV-1a's offset basis rendered as a digest, which
+      // is what hashing the empty string would produce — "nobody is signed
+      // in" must not look like a real account.
+      expect(shortUserIdHash(''), isNot('811c9dc5'));
+    });
+
+    test('every digest is exactly 8 lowercase hex characters', () {
+      for (final uid in [
+        'a',
+        'A',
+        '00000000-0000-4000-8000-000000000e2e',
+        'áé漢字🧗',
+        'x' * 200,
+      ]) {
+        expect(shortUserIdHash(uid), matches(RegExp(r'^[0-9a-f]{8}$')));
+      }
+    });
+
+    test('different uids do not collide, and the digest is stable', () {
+      const a = '11111111-2222-4333-8444-555555555555';
+      const b = '11111111-2222-4333-8444-555555555556';
+      expect(shortUserIdHash(a), isNot(shortUserIdHash(b)));
+      expect(shortUserIdHash(a), shortUserIdHash(a));
+    });
+  });
+
+  group('diagnosticsClipboardLine: the pasted support payload', () {
+    const fullDurability = StorageDurability(
+      backend: StorageBackend.opfsLocks,
+      missingFeatures: {StorageMissingFeature.dedicatedWorkersInSharedWorkers},
+    );
+    const fullPersistence = StoragePersistenceStatus(
+      outcome: StoragePersistOutcome.denied,
+      estimate: StorageEstimateSnapshot(
+        usageBytes: 40000000,
+        quotaBytes: 100000000,
+      ),
+    );
+
+    test('carries every enrichment token with the value it was given', () {
+      final line = diagnosticsClipboardLine(
+        fullDurability,
+        fullPersistence,
+        sync: SyncOrchestratorState(
+          status: SyncStatus.error,
+          lastSyncedAt: DateTime.utc(2026, 8, 8, 12, 34, 56),
+          lastPullError: 'pull blew up',
+          lastPushError: 'push blew up',
+        ),
+        schemaVersion: 42,
+        userId: '00000000-0000-4000-8000-000000000e2e',
+        appVersion: '9.9.9+9',
+      );
+
+      expect(line, contains('usageBytes=40000000'));
+      expect(line, contains('quotaBytes=100000000'));
+      expect(line, contains('usedPct=40'));
+      expect(line, contains('schemaVersion=42'));
+      expect(line, contains('appVersion=9.9.9+9'));
+      expect(line, contains('user=427b60b3'));
+      expect(line, contains('syncStatus=error'));
+      expect(line, contains('lastSyncedAt=2026-08-08T12:34:56.000Z'));
+      expect(line, contains('pullError="pull blew up"'));
+      expect(line, contains('pushError="push blew up"'));
+    });
+
+    test(
+      'the RAW uid never appears — only its digest. This is a privacy '
+      'guarantee, not a nicety: the raw value is what auth.uid() resolves to '
+      'server-side and what every RLS policy is written against, and this '
+      'blob is written to be pasted into a possibly-public bug report',
+      () {
+        const uid = '11111111-2222-4333-8444-555555555555';
+        final line = diagnosticsClipboardLine(
+          fullDurability,
+          fullPersistence,
+          userId: uid,
+        );
+
+        expect(line, isNot(contains(uid)));
+        // Not even a recognisable fragment of it.
+        expect(line, isNot(contains('11111111')));
+        expect(line, isNot(contains('555555555555')));
+        expect(line, contains('user=${shortUserIdHash(uid)}'));
+        expect(line, matches(RegExp(r'user=[0-9a-f]{8}(\s|$)')));
+      },
+    );
+
+    test('a signed-out payload says user=none, never an empty token', () {
+      final line = diagnosticsClipboardLine(fullDurability, fullPersistence);
+      expect(line, contains('user=none'));
+    });
+
+    test(
+      'absent values render the honest "unknown", never a plausible default',
+      () {
+        final line = diagnosticsClipboardLine(
+          const StorageDurability.probing(),
+          const StoragePersistenceStatus(),
+        );
+
+        expect(line, contains('usageBytes=unknown'));
+        expect(line, contains('quotaBytes=unknown'));
+        expect(line, contains('usedPct=unknown'));
+        expect(line, contains('schemaVersion=unknown'));
+        expect(line, contains('syncStatus=unknown'));
+        expect(line, contains('lastSyncedAt=unknown'));
+        // A caller with no sync state has nothing to say about errors —
+        // the tokens are absent rather than rendered empty.
+        expect(line, isNot(contains('pullError')));
+        expect(line, isNot(contains('pushError')));
+        expect(line, contains('appVersion=$kMasiAppVersion'));
+      },
+    );
+
+    test(
+      'a sync that has never run says lastSyncedAt=never, distinct from the '
+      '"no state supplied at all" unknown',
+      () {
+        final line = diagnosticsClipboardLine(
+          fullDurability,
+          fullPersistence,
+          sync: const SyncOrchestratorState(),
+        );
+
+        expect(line, contains('syncStatus=idle'));
+        expect(line, contains('lastSyncedAt=never'));
+      },
+    );
+
+    test('a local lastSyncedAt is normalised to UTC before it is stamped', () {
+      final local = DateTime.utc(2026, 8, 8, 12).toLocal();
+      final line = diagnosticsClipboardLine(
+        fullDurability,
+        fullPersistence,
+        sync: SyncOrchestratorState(lastSyncedAt: local),
+      );
+
+      expect(line, contains('lastSyncedAt=2026-08-08T12:00:00.000Z'));
+    });
+
+    test(
+      'the unavailable reason is flattened and quoted like every other '
+      'free-form value — a multi-line probe error must not break the '
+      'one-line clipboard guarantee',
+      () {
+        final line = diagnosticsClipboardLine(
+          StorageDurability.unavailable(
+            'probe threw\nSomeException: no "workers"\n  at frame\ttwo',
+          ),
+          const StoragePersistenceStatus(),
+        );
+
+        expect(line.contains('\n'), isFalse);
+        expect(line.contains('\r'), isFalse);
+        expect(
+          line,
+          contains(
+            'reason="probe threw SomeException: no \'workers\' at frame two"',
+          ),
+        );
+        expect(line, contains('backend=unavailable'));
+      },
+    );
+
+    test(
+      'a multi-line sync error is flattened too, and the whole payload stays '
+      'exactly one line',
+      () {
+        final line = diagnosticsClipboardLine(
+          StorageDurability.unavailable('reason\nwith a newline'),
+          fullPersistence,
+          sync: const SyncOrchestratorState(
+            status: SyncStatus.error,
+            lastPullError: 'PostgrestException:\n  message: bad row\n',
+            lastPushError: 'SocketException:\r\n  failed host lookup',
+          ),
+          schemaVersion: 7,
+          userId: 'climber-uid-42',
+        );
+
+        expect(const LineSplitter().convert(line).length, 1);
+        expect(
+          line,
+          contains('pullError="PostgrestException: message: bad row"'),
+        );
+        expect(
+          line,
+          contains('pushError="SocketException: failed host lookup"'),
+        );
+      },
+    );
+
+    test('an overlong error is truncated so the paste stays greppable', () {
+      final line = diagnosticsClipboardLine(
+        fullDurability,
+        fullPersistence,
+        sync: SyncOrchestratorState(
+          status: SyncStatus.error,
+          lastPullError: 'x' * 500,
+        ),
+      );
+
+      expect(line, contains('pullError="${'x' * 240}…"'));
+      expect(line, isNot(contains('x' * 241)));
+    });
+
+    test(
+      'usedPct is absent (not zero) when the browser reports no quota, so an '
+      'unknown fraction can never read as an empty origin',
+      () {
+        final line = diagnosticsClipboardLine(
+          fullDurability,
+          const StoragePersistenceStatus(
+            estimate: StorageEstimateSnapshot(usageBytes: 123),
+          ),
+        );
+
+        expect(line, contains('usageBytes=123'));
+        expect(line, contains('quotaBytes=unknown'));
+        expect(line, contains('usedPct=unknown'));
+      },
+    );
   });
 }

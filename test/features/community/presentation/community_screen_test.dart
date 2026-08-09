@@ -202,6 +202,12 @@ class _FakeSyncOrchestrator extends SyncOrchestrator {
   Future<void> pullNow({bool throttled = false}) async {
     pullNowCallCount++;
   }
+
+  /// Pushes a NEW orchestrator state to every watcher — what a real pull
+  /// failing differently does. Needed to drive the error-identity re-arm,
+  /// which is a change in `lastPullError` OVER TIME and so cannot be staged
+  /// from `initialState` alone.
+  void emit(SyncOrchestratorState next) => state = next;
 }
 
 /// Wraps [screen] in a real (minimal) [GoRouter] so `context.push` calls to
@@ -954,14 +960,26 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        // The headline is what the banner prints; the raw exception is one tap
+        // away instead of three lines of the viewport.
+        expect(find.text(SyncBanner.syncFailedHeadline), findsOneWidget);
+        expect(find.textContaining('shared rows fetch failed'), findsNothing);
+
+        await tester.tap(find.byKey(const Key('sync-banner-details')));
+        await tester.pumpAndSettle();
         expect(
           find.text("Couldn't sync — Sync failed: shared rows fetch failed."),
           findsOneWidget,
         );
+        Navigator.of(
+          tester.element(find.byKey(const Key('sync-banner-details-sheet'))),
+        ).pop();
+        await tester.pumpAndSettle();
 
         expect(fakeOrchestrator.pullNowCallCount, 0);
         await tester.tap(find.byKey(const Key('sync-banner-retry')));
         await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
 
         expect(fakeOrchestrator.pullNowCallCount, 1);
       },
@@ -1198,13 +1216,59 @@ void main() {
         // screen's own test above covers that they survive a dismissal; this
         // seeded feed's Library is not empty, so it has no empty state to
         // check here.)
-        expect(container.read(offlineBannerDismissedProvider), isTrue);
+        //
+        // The stored value is the SIGNATURE of the message that was closed,
+        // not a bare `true` — that is what stops this acknowledgement from
+        // swallowing a later, different failure. See
+        // `sync_banner_dismissal_test.dart`.
+        expect(
+          container.read(syncBannerDismissalProvider),
+          SyncBannerDismissalController.signature(
+            SyncBannerKind.offline.name,
+            null,
+          ),
+        );
       },
     );
 
     testWidgets(
-      'the Feed\'s sync-FAILURE banner has no close button — the one signal '
-      "that the user's work may not have reached the cloud stays put",
+      'and the other way round: closing it on the Library closes it on the '
+      'Community Feed — one acknowledgement, not one per tab',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+          syncOrchestrator: _FakeSyncOrchestrator(),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        // Switching tabs, over the SAME container.
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsNothing,
+          reason: 'the user closed this sentence once and should not have to '
+              'close it again on the next tab',
+        );
+      },
+    );
+
+    // THE USER'S DECISION, pinned on the Feed too. These two used to assert
+    // the opposite. What makes a closable failure banner safe is the SIGNATURE
+    // the dismissal is stored under — see `sync_banner_dismissal_test.dart`
+    // and the re-arm test below.
+    testWidgets(
+      "the Feed's sync-FAILURE banner IS closable, and closing it gives back "
+      'all of its space',
       (tester) async {
         final container = _makeContainer(
           syncOrchestrator: _FakeSyncOrchestrator(
@@ -1220,13 +1284,22 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('sync-banner')), findsOneWidget);
-        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
         expect(find.byKey(const Key('sync-banner-retry')), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+        expect(
+          find.byKey(const Key('community-topo-row-wall-shared-1')),
+          findsOneWidget,
+        );
       },
     );
 
     testWidgets(
-      'the Feed\'s withheld-shared-photos banner has no close button either',
+      'the Feed\'s withheld-shared-photos banner is closable too',
       (tester) async {
         final container = _makeContainer(
           syncOrchestrator: _FakeSyncOrchestrator(
@@ -1243,7 +1316,43 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('sync-banner')), findsOneWidget);
-        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'a dismissed sync failure RE-ARMS on the Feed when the underlying error '
+      'changes — one acknowledgement cannot cover a different failure',
+      (tester) async {
+        final orchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastPullError: 'Sync failed: 3 rows deferred',
+          ),
+        );
+        final container = _makeContainer(syncOrchestrator: orchestrator);
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        orchestrator.emit(
+          const SyncOrchestratorState(
+            lastPullError: 'Sync failed: own rows fetch failed',
+          ),
+        );
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
       },
     );
 
@@ -1271,6 +1380,151 @@ void main() {
           findsOneWidget,
         );
         expect(find.byKey(const Key('community-empty')), findsNothing);
+      },
+    );
+  });
+
+  group('T2c: the Feed banner is a SLIVER of the feed scroll view', () {
+    /// Enough shared walls to make the feed genuinely scrollable on the
+    /// default 800x600 test surface.
+    Future<void> seedManyShared(AppDatabase db, int count) async {
+      await _seedArea(db, id: 'area-many', name: 'Many');
+      await _seedSector(
+        db,
+        id: 'sector-many',
+        areaId: 'area-many',
+        name: 'S-many',
+      );
+      for (var i = 0; i < count; i++) {
+        await _seedWall(
+          db,
+          id: 'wall-many-$i',
+          sectorId: 'sector-many',
+          name: 'Shared $i',
+          visibility: 'shared',
+          createdAt: 3000 + i,
+          ownerId: _otherOwnerId,
+        );
+      }
+    }
+
+    /// The banner's top edge, or `null` once it has been scrolled out of the
+    /// tree entirely — a STRONGER form of "off screen", not a failure.
+    double? bannerTop(WidgetTester tester) {
+      final finder = find.byKey(const Key('sync-banner'));
+      return finder.evaluate().isEmpty ? null : tester.getTopLeft(finder).dy;
+    }
+
+    testWidgets(
+      'THE HEIGHT FIX: scrolling the feed moves the banner off screen, and '
+      'scrolling back brings it back — as a Column sibling above the list its '
+      'space could never be reclaimed',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => seedManyShared(db, 20));
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        final before = bannerTop(tester);
+        expect(before, isNotNull);
+
+        await tester.drag(
+          find.byKey(const Key('community-feed-refresh')),
+          const Offset(0, -300),
+        );
+        await tester.pumpAndSettle();
+
+        final after = bannerTop(tester);
+        expect(
+          after == null || after < before! - 100,
+          isTrue,
+          reason:
+              'the banner has to travel with the content — it was $before, '
+              'now $after',
+        );
+
+        await tester.drag(
+          find.byKey(const Key('community-feed-refresh')),
+          const Offset(0, 300),
+        );
+        await tester.pumpAndSettle();
+
+        expect(bannerTop(tester), moreOrLessEquals(before!, epsilon: 1));
+      },
+    );
+
+    // THE SINGLE MOST IMPORTANT REGRESSION TO AVOID: as "item 0" of the data
+    // list the banner would vanish in every empty branch — including
+    // offline-with-an-empty-feed, the case it exists for.
+    testWidgets(
+      'the banner still renders when the feed is EMPTY, and again when it is '
+      'merely SEARCHED down to nothing',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-offline-empty')),
+          findsOneWidget,
+        );
+
+        // Now with rows present but every one of them filtered out by a
+        // search — a different empty branch of the same scroll view.
+        final container2 = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+        final db = container2.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(container2, const CommunityFeedScreen()),
+        );
+        await _drain(tester);
+        await tester.enterText(
+          find.byKey(const Key('community-search-field')),
+          'zzzz-nothing-matches',
+        );
+        await _drain(tester);
+
+        expect(find.text('No topos match your search'), findsOneWidget);
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsOneWidget,
+          reason: 'a header baked into the row list would be gone here',
+        );
+      },
+    );
+
+    testWidgets(
+      'the withheld-photos banner survives the genuinely-empty feed too',
+      (tester) async {
+        final container = _makeContainer(
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastSharedPhotoBudgetReason:
+                  SharedPhotoBudgetReason.storagePressure,
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('community-empty')), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.text(SyncBanner.sharedPhotosWithheldMessage),
+          findsOneWidget,
+        );
       },
     );
   });
@@ -3204,8 +3458,19 @@ void main() {
         );
         await _drain(tester);
 
-        final listView = tester.widget<ListView>(find.byType(ListView));
-        final padding = listView.padding as EdgeInsets;
+        // The row list is a `SliverList` inside a `SliverPadding` now (the
+        // feed is ONE `CustomScrollView` so the sync banner can be its first
+        // sliver — see the T2c group). The padding it carries is the same
+        // padding the old `ListView.padding` did.
+        final sliverPadding = tester.widget<SliverPadding>(
+          find
+              .descendant(
+                of: find.byKey(const Key('community-feed-refresh')),
+                matching: find.byType(SliverPadding),
+              )
+              .first,
+        );
+        final padding = sliverPadding.padding as EdgeInsets;
         expect(
           padding.bottom,
           greaterThanOrEqualTo(40),

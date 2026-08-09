@@ -309,7 +309,16 @@ class MasiAsyncView<T> extends StatelessWidget {
                     onPressed: _runRetry,
                     style: TextButton.styleFrom(
                       padding: EdgeInsets.zero,
-                      minimumSize: Size.zero,
+                      // 44x44, not `Size.zero` — the iOS HIG minimum tap
+                      // target (same recipe as `topo_canvas_screen.dart`'s
+                      // `_topRowIconStyle`). `shrinkWrap` below opts OUT of
+                      // Material's padded 48x48 hit area, so at `Size.zero`
+                      // the tappable region was just the ~20pt label — on the
+                      // one control this bar exists to offer.
+                      minimumSize: const Size(44, 44),
+                      // Kept: the footprint should match `minimumSize`
+                      // exactly. Only the minimum size changes here, not the
+                      // tap-target policy.
                       tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
                     child: const Text('Try again'),

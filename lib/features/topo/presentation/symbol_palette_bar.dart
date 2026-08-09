@@ -75,7 +75,10 @@ const Map<SymbolType, String> _symbolLabels = {
 /// Bug fix ("the symbol palette buttons are unlabeled and users can't tell
 /// what they do"): each control is now icon-over-TEXT-LABEL (in addition to
 /// the [Tooltip] it already carried, which only surfaces on long-press and
-/// so was easy to miss) — see [_SymbolButton].
+/// so was easy to miss) — see [_SymbolButton]. Past
+/// [_kSymbolLabelMaxTextScale] that label is dropped again and the
+/// [Tooltip] carries the meaning alone, so that a LARGER accessibility text
+/// scale never makes the glyphs themselves smaller — see that constant.
 ///
 /// Canvas look rework: this used to be an OPAQUE `ColoredBox` (the app's
 /// `surfaceContainerHighest`) laid out IN-FLOW as a reserved band in
@@ -150,6 +153,52 @@ class SymbolPaletteBar extends ConsumerWidget {
   }
 }
 
+/// Font size of a control's text label — Caption/Footnote-sized per
+/// DESIGN.md's type scale. Named (rather than a bare `11` on the [TextStyle])
+/// because [_SymbolButton] also has to ASK the ambient [TextScaler] what it
+/// would do to this exact size, see [_kSymbolLabelMaxTextScale].
+const double _kSymbolLabelFontSize = 11;
+
+/// Effective text scale past which each control's text label is DROPPED
+/// entirely, leaving the glyph alone under the [Tooltip] every control
+/// already carries (and which, being a `Tooltip`, is also what supplies the
+/// control's accessibility label — so nothing is lost to a screen reader
+/// when the visible label goes away).
+///
+/// Bug fix (accessibility inversion): the icon+label group used to be
+/// wrapped as a UNIT in `FittedBox(fit: scaleDown)` to keep it inside the
+/// bar's deliberately fixed [kSymbolPaletteBarHeight] slot at large
+/// accessibility text scales. That worked, but backwards: the binding
+/// constraint is the button's WIDTH (six controls share the bar's width, so
+/// each gets ~a sixth of it), a bigger label is a wider label, and
+/// `scaleDown` shrinks *everything it wraps* — so raising the system text
+/// size made the CANVAS TOOL GLYPHS smaller (measured: 22px at 1.0x →
+/// 21.2px at 2.0x → 14.3px at 3.0x), i.e. the accessibility setting made
+/// the core editing surface harder to see and to hit. Now only the label is
+/// inside a `FittedBox` (so a long label still shrinks to fit its column
+/// rather than ellipsizing, exactly as before), the glyph is a fixed-size
+/// sibling OUTSIDE it, and past this scale the label — the thing that
+/// actually doesn't fit — is what gives way.
+///
+/// Why 1.3 specifically: it's the largest scale at which a worst-case label
+/// ("Anchor") still fits one control's share of the bar on the narrowest
+/// phone we target (~320pt wide → (320 − 32 screen padding − 16 glass
+/// padding) / 6 ≈ 45pt per control), and it leaves the fixed-height slot
+/// comfortable too (6 + 22 + 2 + a 1.3x label line + 6 ≈ 55 of the 68px
+/// available). Below it nothing changes at all; at 1.0x this whole branch
+/// is inert and the bar renders exactly as it always has.
+const double _kSymbolLabelMaxTextScale = 1.3;
+
+/// Minimum height of a control's tappable/highlighted region.
+///
+/// Inert at normal text scale — with its label showing, a control is
+/// naturally ~51px tall — but once the label is dropped (see
+/// [_kSymbolLabelMaxTextScale]) the glyph plus its 6px vertical padding
+/// alone would collapse the tap target to ~34px, under the 44pt minimum.
+/// The user turning text size UP is the last user who should get a smaller
+/// target, so the shell holds this floor instead.
+const double _kSymbolButtonMinHeight = 44;
+
 /// Shared button shell for both the Route tool and every [SymbolType]
 /// control — generalized (rather than keyed strictly off a `SymbolType`) so
 /// the Route tool can render through the exact same selected/unselected
@@ -181,6 +230,18 @@ class _SymbolButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final activeColor = isActive ? colorScheme.primary : colorScheme.onSurfaceVariant;
+    // Ask the ambient scaler what it would ACTUALLY do to this label's font
+    // size rather than reading a scale *factor* off it: the platform text
+    // scalers are non-linear (a 11pt caption and a 34pt headline are not
+    // multiplied by the same number), and `TextScaler` deliberately exposes
+    // no factor, so `scale(size)` on the size we actually use is the only
+    // honest way to ask "how much bigger is THIS text about to get".
+    final scaledLabelFontSize = MediaQuery.textScalerOf(
+      context,
+    ).scale(_kSymbolLabelFontSize);
+    final showLabel =
+        scaledLabelFontSize <=
+        _kSymbolLabelFontSize * _kSymbolLabelMaxTextScale;
     return Tooltip(
       message: label,
       child: Material(
@@ -190,47 +251,55 @@ class _SymbolButton extends StatelessWidget {
           onTap: onTap,
           borderRadius: BorderRadius.circular(MasiRadii.control),
           child: Container(
+            // See [_kSymbolButtonMinHeight]: a no-op while the label shows,
+            // a 44pt tap-target floor once it's dropped.
+            constraints: const BoxConstraints(
+              minHeight: _kSymbolButtonMinHeight,
+            ),
             padding: const EdgeInsets.symmetric(vertical: 6),
             decoration: BoxDecoration(
               color: isActive ? colorScheme.primaryContainer : null,
               borderRadius: BorderRadius.circular(MasiRadii.control),
             ),
-            // Bug fix (RenderFlex overflow at large text-scale factors): the
-            // bar's slot height (kSymbolPaletteBarHeight) is deliberately
-            // FIXED — see that constant's doc — so it can't grow to
-            // accommodate a tripled label line-box at e.g. a 3.0x
-            // accessibility text scale, which used to overflow this Column
-            // by ~12px. FittedBox(fit: scaleDown) scales the icon+label
-            // group down AS A UNIT to fit whatever height is actually
-            // available (only ever shrinking, never enlarging — at normal
-            // 1.0x scale, where the Column already fits, this is a no-op),
-            // which eliminates the overflow at any text scale while keeping
-            // the icon and its label legible and proportional to each
-            // other, rather than e.g. clamping just the Text's textScaler
-            // and leaving the Icon fixed (which would desync their relative
-            // sizes at large scales).
-            child: FittedBox(
-              fit: BoxFit.scaleDown,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  iconBuilder(activeColor, 22),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              // Only ever bites when the min-height floor above stretches
+              // this Column past its intrinsic height (i.e. label dropped);
+              // at its natural size, centering and packing are identical.
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                // Fixed size, and deliberately OUTSIDE the label's FittedBox
+                // — the glyph must never shrink as text scale grows. See
+                // [_kSymbolLabelMaxTextScale] for the bug this fixes.
+                iconBuilder(activeColor, 22),
+                if (showLabel) ...[
                   const SizedBox(height: 2),
                   // Caption/Footnote-sized label per DESIGN.md's type scale —
                   // this is the main "unlabeled symbols" fix: a short,
                   // always-visible name under each glyph rather than relying
                   // solely on the (easy-to-miss, long-press-only) Tooltip.
-                  Text(
-                    label,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: isActive ? colorScheme.primary : labelColor,
-                      fontSize: 11,
+                  //
+                  // The FittedBox wraps ONLY this label: six controls share
+                  // the bar's width, so on a narrow phone a scaled-up label
+                  // can outgrow its column, and shrinking it to fit is both
+                  // what this bar has always done and kinder than an
+                  // ellipsis on a 4–6 character word. `scaleDown` never
+                  // enlarges, so at 1.0x, where the label already fits, it
+                  // is a no-op and this renders exactly as it always has.
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(
+                      label,
+                      style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                        color: isActive ? colorScheme.primary : labelColor,
+                        fontSize: _kSymbolLabelFontSize,
+                      ),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
                 ],
-              ),
+              ],
             ),
           ),
         ),
