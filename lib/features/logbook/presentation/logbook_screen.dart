@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../../../app/web_back_button.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../topo/presentation/grade_colors.dart' show colorForGradeBand;
 import '../../../shared/filtering/ascent_type_filter_chips.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
@@ -478,23 +479,20 @@ class _GradeSwatch extends StatelessWidget {
   }
 }
 
-/// Maps a [GradeBand] to its display color using the [MasiColors] grade
-/// tokens. Mirrors `ToposScreen`'s private `_colorForGradeBand` helper
-/// (not reused directly: that one is library-private to `topos_screen.dart`).
-Color _colorForGradeBand(MasiColors colors, GradeBand band) {
-  switch (band) {
-    case GradeBand.beginner:
-      return colors.gradeBeginner;
-    case GradeBand.intermediate:
-      return colors.gradeIntermediate;
-    case GradeBand.advanced:
-      return colors.gradeAdvanced;
-    case GradeBand.hard:
-      return colors.gradeHard;
-    case GradeBand.elite:
-      return colors.gradeElite;
-  }
-}
+/// Maps a [GradeBand] to its display color.
+///
+/// Delegates to `grade_colors.dart`'s canonical [colorForGradeBand] (the
+/// literal five band colors, `0xFF2F9E6B`.._eliteColor) rather than keeping
+/// its own copy of the switch — this file (and `topos_screen.dart`'s
+/// `_colorForGradeBand`/`community_feed_screen.dart`'s `_colorForGradeBand`)
+/// used to each hand-maintain the identical five-case switch against the
+/// `MasiColors` grade tokens, which are defined to the SAME literal values
+/// (see `app/theme.dart`) — three independently-editable copies that could
+/// silently drift apart. The `colors` param is kept (rather than dropped and
+/// every call site updated) purely so every existing caller here stays
+/// untouched.
+Color _colorForGradeBand(MasiColors colors, GradeBand band) =>
+    colorForGradeBand(band);
 
 /// Human-readable label for an [AscentStyle], e.g. `AscentStyle.onsight` ->
 /// `'Onsight'`. Public (not library-private) so `LogAscentSheet` can reuse

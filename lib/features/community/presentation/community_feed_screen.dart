@@ -4,6 +4,8 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
+import '../../topo/presentation/grade_colors.dart'
+    show GradeBandDot, colorForGradeBand;
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
@@ -1047,6 +1049,21 @@ class _AscentFeedRow extends ConsumerWidget {
                         ),
                         if (entry.gradeLabel != null) ...[
                           const SizedBox(width: MasiSpacing.xs),
+                          // Same hardness-signal dot as the owner's own
+                          // RouteLegend (route_legend.dart) — gated on
+                          // gradeBand rather than gradeLabel: the two are
+                          // set together (see SharedAscentEntry), but the
+                          // dot's COLOR needs a band, not just a label
+                          // string, so this is the one that actually gates
+                          // it.
+                          if (entry.gradeBand != null) ...[
+                            GradeBandDot(
+                              key: Key('community-ascent-row-$ascentId-grade-dot'),
+                              color: colorForGradeBand(entry.gradeBand!),
+                              radius: 5,
+                            ),
+                            const SizedBox(width: 4),
+                          ],
                           Flexible(
                             child: Text(
                               entry.gradeLabel!,
@@ -1324,20 +1341,17 @@ class _GradePill extends StatelessWidget {
   }
 }
 
-Color _colorForGradeBand(MasiColors colors, GradeBand band) {
-  switch (band) {
-    case GradeBand.beginner:
-      return colors.gradeBeginner;
-    case GradeBand.intermediate:
-      return colors.gradeIntermediate;
-    case GradeBand.advanced:
-      return colors.gradeAdvanced;
-    case GradeBand.hard:
-      return colors.gradeHard;
-    case GradeBand.elite:
-      return colors.gradeElite;
-  }
-}
+/// Maps a [GradeBand] to its display color.
+///
+/// Delegates to `grade_colors.dart`'s canonical [colorForGradeBand] rather
+/// than keeping its own copy of the switch — see `logbook_screen.dart`'s
+/// identically-named private helper for the full dedup rationale (this file
+/// used to independently maintain the same five-case switch against the
+/// `MasiColors` grade tokens, which are defined to the same literal values).
+/// The `colors` param is kept (rather than dropped and every call site
+/// updated) purely so every existing caller here stays untouched.
+Color _colorForGradeBand(MasiColors colors, GradeBand band) =>
+    colorForGradeBand(band);
 
 /// 52x52 rounded thumbnail, mirroring `topos_screen.dart`'s `_Thumbnail`:
 /// the topo's downscaled `thumbs/<id>.jpg` thumbnail (#56 — NOT the

@@ -1,4 +1,5 @@
-import 'package:flutter/painting.dart' show Color;
+import 'package:flutter/material.dart'
+    show BuildContext, CircleAvatar, Color, StatelessWidget, Widget;
 
 import 'package:masi/core/grades/grade_system.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
@@ -70,3 +71,31 @@ Color colorForRoute(TopoRoute route, List<Color> palette) {
 /// every time, whereas a closure literal would be a new instance on every
 /// build, forcing a repaint every frame.
 Color topoRouteColor(TopoRoute route) => colorForRoute(route, kRoutePalette);
+
+/// The shared/feed-surface hardness-signal dot: a small filled circle,
+/// visually identical to [RouteLegend]'s own leading
+/// `CircleAvatar(backgroundColor: color, radius: 8)` swatch, so a route's
+/// grade band reads the same way everywhere it's shown — not just on the
+/// owner's own topo.
+///
+/// Deliberately a dumb "paint this color" widget rather than one that takes
+/// a [TopoRoute]/[GradeBand] itself: callers resolve their own color first
+/// ([colorForRoute] when a full [TopoRoute] — and its ungraded/palette
+/// fallback — is available, [colorForGradeBand] when only a [GradeBand] is
+/// known, e.g. a feed/ascent-log entry with no `TopoRoute.colorIndex` to
+/// fall back to), so this widget never needs its own copy of either
+/// resolution's logic.
+class GradeBandDot extends StatelessWidget {
+  const GradeBandDot({super.key, required this.color, this.radius = 8});
+
+  /// The resolved swatch color — see the class doc for how callers get one.
+  final Color color;
+
+  /// Matches [RouteLegend]'s own swatch radius by default; callers in a
+  /// tighter layout (e.g. inline beside a text run) may pass a smaller value.
+  final double radius;
+
+  @override
+  Widget build(BuildContext context) =>
+      CircleAvatar(backgroundColor: color, radius: radius);
+}

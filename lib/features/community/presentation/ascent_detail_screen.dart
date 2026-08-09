@@ -12,6 +12,8 @@ import '../../account/application/profile_providers.dart';
 import '../../logbook/application/ascents_providers.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
+import '../../topo/presentation/grade_colors.dart'
+    show GradeBandDot, colorForGradeBand;
 import '../../moderation/application/moderation_providers.dart';
 import '../../moderation/domain/admin_delete_policy.dart';
 import '../application/ascent_detail_providers.dart';
@@ -417,6 +419,19 @@ class _AscentDetailBody extends ConsumerWidget {
             ),
             if (entry.gradeLabel != null) ...[
               const SizedBox(width: MasiSpacing.xs),
+              // Same hardness-signal dot as the owner's own RouteLegend
+              // (route_legend.dart). Gated on gradeBand (which carries the
+              // color), not gradeLabel (the display string) — the two are
+              // set together (see SharedAscentEntry) but it's the band that
+              // actually determines whether there's a color to show.
+              if (entry.gradeBand != null) ...[
+                GradeBandDot(
+                  key: const Key('ascent-detail-grade-dot'),
+                  color: colorForGradeBand(entry.gradeBand!),
+                  radius: 6,
+                ),
+                const SizedBox(width: 6),
+              ],
               Text(
                 entry.gradeLabel!,
                 key: const Key('ascent-detail-grade-label'),

@@ -37,6 +37,9 @@ import '../../moderation/presentation/hazard_reporter.dart';
 import '../../moderation/presentation/verification_tile.dart';
 import '../../topo/domain/topo_route.dart';
 import '../../topo/presentation/canvas_chrome.dart';
+import '../../topo/presentation/grade_colors.dart'
+    show GradeBandDot, colorForRoute;
+import '../../topo/presentation/route_palette.dart' show kRoutePalette;
 import '../../topo/presentation/topo_canvas_screen.dart';
 import '../../library/application/library_providers.dart';
 import '../application/comments_providers.dart';
@@ -1375,6 +1378,17 @@ class _CommunityTopoDetailScreenState
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                // The same hardness-signal dot as the owner's own
+                // RouteLegend (route_legend.dart:207/244) — same
+                // `colorForRoute(route, kRoutePalette)` resolution, so a
+                // graded route gets its grade-band color and an UNGRADED one
+                // still falls back to its palette `colorIndex` color exactly
+                // as it does on the owner's own topo, never a crash.
+                GradeBandDot(
+                  key: Key('community-route-grade-dot-${entry.dbId}'),
+                  color: colorForRoute(route, kRoutePalette),
+                ),
+                const SizedBox(width: MasiSpacing.xs),
                 // Tapping the grade is how you comment on the grade. A
                 // dedicated "suggest a grade" button would be a third control
                 // in a row that already carries beta-video and Log ascent;
