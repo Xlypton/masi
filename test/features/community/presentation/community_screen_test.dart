@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/core/grades/grade_system.dart';
 import 'package:masi/core/location/location_service.dart';
 import 'package:masi/core/map/masi_tile_caching_provider.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
@@ -687,6 +688,83 @@ Future<void> _seedStandardScenario(AppDatabase db) async {
 }
 
 void main() {
+  group('grade-band dots on a feed topo row', () {
+    testWidgets(
+      'a shared topo whose routes span two bands shows a dot for each -- the '
+      'row used to carry a single hardest-grade pill, so the same wall '
+      'advertised a narrower grade span here than on the Topos home',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-dots', name: 'Area Dots');
+          await _seedSector(
+            db,
+            id: 'sector-dots',
+            areaId: 'area-dots',
+            name: 'S-dots',
+          );
+          await _seedWall(
+            db,
+            id: 'wall-dots',
+            sectorId: 'sector-dots',
+            name: 'Dotted Wall',
+            visibility: 'shared',
+            createdAt: 3000,
+            latitude: 45.0,
+            longitude: 7.0,
+            ownerId: _otherOwnerId,
+          );
+          final photo = await _seedPhoto(
+            db,
+            id: 'photo-dots',
+            wallId: 'wall-dots',
+          );
+          await _seedRoute(
+            db,
+            id: 'route-dots-1',
+            wallId: 'wall-dots',
+            photoId: photo,
+            number: 1,
+            gradeRaw: '5a',
+            gradeSortKey: gradeSortKey(GradeSystem.french, '5a'),
+          );
+          await _seedRoute(
+            db,
+            id: 'route-dots-2',
+            wallId: 'wall-dots',
+            photoId: photo,
+            number: 2,
+            gradeRaw: '7a',
+            gradeSortKey: gradeSortKey(GradeSystem.french, '7a'),
+          );
+        });
+
+        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('community-topo-row-wall-dots')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('topo-grade-dot-wall-dots-intermediate')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('topo-grade-dot-wall-dots-hard')),
+          findsOneWidget,
+        );
+        // Only the bands actually present -- otherwise every row would claim
+        // a grade span it does not have.
+        expect(
+          find.byKey(const Key('topo-grade-dot-wall-dots-beginner')),
+          findsNothing,
+        );
+      },
+    );
+  });
+
   group('D2a: feed populated rows (private excluded), counts shown', () {
     testWidgets(
       'exactly one row per shared wall, private wall never rendered, '

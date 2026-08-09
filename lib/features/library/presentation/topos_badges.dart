@@ -49,47 +49,12 @@ class _CommunitySharedBadge extends StatelessWidget {
   }
 }
 
-/// Row of small colored dots shown in a topo row's subtitle (see DESIGN.md
-/// "Topos home"), one per distinct [GradeBand] present across the topo's
-/// routes ([bands], already deduplicated and ordered easiest-to-hardest by
-/// [gradeBandsFor]) -- replaces the old single hardest-grade pill so a topo
-/// with, say, both a 5a and a 7a route visibly reads as spanning two bands
-/// rather than showing only its hardest. Placed before the "N routes" text;
-/// omitted entirely by the caller when a topo has no graded routes.
-class _GradeBandDots extends StatelessWidget {
-  const _GradeBandDots({required this.wallId, required this.bands});
-
-  final String wallId;
-  final List<GradeBand> bands;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return Semantics(
-      label: 'Grade bands present: ${bands.map((b) => b.name).join(', ')}',
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          for (var i = 0; i < bands.length; i++)
-            Padding(
-              padding: EdgeInsets.only(
-                right: i == bands.length - 1 ? 0 : MasiSpacing.xs,
-              ),
-              child: Container(
-                key: Key('topo-grade-dot-$wallId-${bands[i].name}'),
-                width: 8,
-                height: 8,
-                decoration: BoxDecoration(
-                  color: _colorForGradeBand(colors, bands[i]),
-                  shape: BoxShape.circle,
-                ),
-              ),
-            ),
-        ],
-      ),
-    );
-  }
-}
+// `_GradeBandDots` and `_colorForGradeBand` used to live here. Both moved to
+// `shared/presentation/grade_band_dots.dart` as public `GradeBandDots` /
+// `gradeBandColor` when the Community feed needed the same dots: it is a
+// separate Dart library and cannot reach a `_`-prefixed widget, which is why
+// it had been showing a single hardest-grade pill and quietly disagreeing with
+// this screen about the same topo's grade span.
 
 /// Compact badge marking a topo row's publish state — "Published" (accent
 /// fill) for a topo shared to Community, or a muted "Private" otherwise —
@@ -269,20 +234,5 @@ class _VisibilityBadgeStyle {
   }
 }
 
-/// Maps a [GradeBand] to its display color using the [MasiColors] grade
-/// tokens (never a hard-coded hex — see DESIGN.md's grade-band table, which
-/// these tokens mirror).
-Color _colorForGradeBand(MasiColors colors, GradeBand band) {
-  switch (band) {
-    case GradeBand.beginner:
-      return colors.gradeBeginner;
-    case GradeBand.intermediate:
-      return colors.gradeIntermediate;
-    case GradeBand.advanced:
-      return colors.gradeAdvanced;
-    case GradeBand.hard:
-      return colors.gradeHard;
-    case GradeBand.elite:
-      return colors.gradeElite;
-  }
-}
+// (grade-band colour mapping moved to shared/presentation/grade_band_dots.dart
+// as the public `gradeBandColor` — see the note above.)

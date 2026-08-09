@@ -299,7 +299,7 @@ class _TopoRowState extends ConsumerState<_TopoRow>
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
                         if (bands.isNotEmpty)
-                          _GradeBandDots(wallId: topo.wallId, bands: bands),
+                          GradeBandDots(wallId: topo.wallId, bands: bands),
                         Text(
                           '$routeCount route${routeCount == 1 ? '' : 's'}',
                           style: textTheme.titleSmall?.copyWith(
@@ -1215,7 +1215,7 @@ class _CommunityProximityRow extends StatelessWidget {
                         // view. Dots are omitted (not rendered empty) when the
                         // topo has no graded routes, matching that row.
                         if (bands.isNotEmpty)
-                          _GradeBandDots(wallId: wallId, bands: bands),
+                          GradeBandDots(wallId: wallId, bands: bands),
                         Text(
                           '$routeCount route${routeCount == 1 ? '' : 's'}',
                           key: Key('topo-community-routes-$wallId'),

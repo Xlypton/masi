@@ -41,6 +41,7 @@ import '../../topo/presentation/topo_canvas_screen.dart'
 import '../application/library_providers.dart';
 import '../application/proximity_topos_provider.dart';
 import '../data/library_crud_repository.dart';
+import '../../../shared/presentation/grade_band_dots.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_avatar.dart';
 import '../../../shared/presentation/masi_dialogs.dart';

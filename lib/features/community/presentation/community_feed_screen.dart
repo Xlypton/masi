@@ -18,6 +18,7 @@ import '../../logbook/application/ascents_providers.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
 import '../../notifications/presentation/notification_bell.dart';
+import '../../../shared/presentation/grade_band_dots.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_shimmer.dart';
@@ -789,6 +790,13 @@ class _FeedRow extends ConsumerWidget {
         ? ref.watch(profileDisplayNameProvider(ownerId)).asData?.value
         : null;
 
+    // The same grade-band dots the Topos home shows, replacing the single
+    // hardest-grade pill this row used to carry. A pill reports only the
+    // hardest route, so a wall spanning 5a to 7a advertised itself as "7a" here
+    // and as two dots there — the same topo describing itself differently
+    // depending on which screen you opened.
+    final bands = gradeBandsFor(topo.routeGradeKeys);
+
     return Material(
       key: Key('community-topo-row-$wallId'),
       color: colors.surface,
@@ -826,12 +834,8 @@ class _FeedRow extends ConsumerWidget {
                       runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        if (topo.topGradeLabel != null &&
-                            topo.topGradeBand != null)
-                          _GradePill(
-                            label: topo.topGradeLabel!,
-                            band: topo.topGradeBand!,
-                          ),
+                        if (bands.isNotEmpty)
+                          GradeBandDots(wallId: wallId, bands: bands),
                         Text(
                           '${topo.routeCount} route${topo.routeCount == 1 ? '' : 's'}',
                           style: textTheme.titleSmall?.copyWith(
@@ -1114,12 +1118,12 @@ class _AscentFeedRow extends ConsumerWidget {
   }
 }
 
-/// Small rounded grade-band swatch, colored via [_colorForGradeBand] —
-/// mirrors `logbook_screen.dart`'s private `_GradeSwatch` exactly (not
-/// reused directly: that one is library-private to `logbook_screen.dart`,
-/// and this file already carries its own [_colorForGradeBand] helper for
-/// [_GradePill]). A `null` [band] (no graded route resolved for this ascent)
-/// renders a neutral placeholder fill.
+/// Small rounded grade-band swatch, colored via the shared [gradeBandColor] —
+/// mirrors `logbook_screen.dart`'s private `_GradeSwatch` exactly (still not
+/// reused directly: that one is library-private to `logbook_screen.dart`, and
+/// only the colour mapping has been lifted into `shared/`, not the widget).
+/// A `null` [band] (no graded route resolved for this ascent) renders a
+/// neutral placeholder fill.
 class _AscentGradeSwatch extends StatelessWidget {
   const _AscentGradeSwatch({required this.band});
 
@@ -1131,7 +1135,7 @@ class _AscentGradeSwatch extends StatelessWidget {
     final gradeBand = band;
     final color = gradeBand == null
         ? colors.surface2
-        : _colorForGradeBand(colors, gradeBand);
+        : gradeBandColor(colors, gradeBand);
     return Container(
       width: 40,
       height: 40,
@@ -1259,54 +1263,12 @@ class _PlaceBadge extends StatelessWidget {
   }
 }
 
-/// Small grade pill matching `topos_screen.dart`'s `_GradePill` /
-/// `grade_colors.dart`'s band-color convention (not reused directly: that
-/// class is library-private to `topos_screen.dart`).
-class _GradePill extends StatelessWidget {
-  const _GradePill({required this.label, required this.band});
-
-  final String label;
-  final GradeBand band;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MasiSpacing.sm,
-        vertical: 2,
-      ),
-      decoration: BoxDecoration(
-        color: _colorForGradeBand(colors, band),
-        borderRadius: BorderRadius.circular(MasiRadii.control),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-          color: Colors.white,
-          fontWeight: FontWeight.w600,
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
-}
-
-Color _colorForGradeBand(MasiColors colors, GradeBand band) {
-  switch (band) {
-    case GradeBand.beginner:
-      return colors.gradeBeginner;
-    case GradeBand.intermediate:
-      return colors.gradeIntermediate;
-    case GradeBand.advanced:
-      return colors.gradeAdvanced;
-    case GradeBand.hard:
-      return colors.gradeHard;
-    case GradeBand.elite:
-      return colors.gradeElite;
-  }
-}
+// `_GradePill` and this file's copy of `_colorForGradeBand` used to live here.
+// The pill was replaced by the shared `GradeBandDots` (the topo row now shows
+// a topo's whole grade span, as the Topos home already did), and the colour
+// mapping — which existed in three files at once, each documented as mirroring
+// the others because none could reach the others — is now the public
+// `gradeBandColor` in shared/presentation/grade_band_dots.dart.
 
 /// 52x52 rounded thumbnail, mirroring `topos_screen.dart`'s `_Thumbnail`:
 /// the topo's downscaled `thumbs/<id>.jpg` thumbnail (#56 — NOT the
