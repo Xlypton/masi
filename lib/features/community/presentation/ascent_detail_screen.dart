@@ -3,13 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_async_view.dart';
+import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
+import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
 import '../../logbook/application/ascents_providers.dart';
 import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
+import '../../moderation/application/moderation_providers.dart';
+import '../../moderation/domain/admin_delete_policy.dart';
 import '../application/ascent_detail_providers.dart';
 import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
@@ -34,8 +38,7 @@ class AscentDetailScreen extends ConsumerStatefulWidget {
   final String ascentId;
 
   @override
-  ConsumerState<AscentDetailScreen> createState() =>
-      _AscentDetailScreenState();
+  ConsumerState<AscentDetailScreen> createState() => _AscentDetailScreenState();
 }
 
 class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
@@ -76,7 +79,9 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
     if (_likeInFlight) return;
     final ascentId = widget.ascentId;
     final current =
-        _likeOverride ?? ref.read(hasLikedAscentProvider(ascentId)).value ?? false;
+        _likeOverride ??
+        ref.read(hasLikedAscentProvider(ascentId)).value ??
+        false;
     _likeInFlight = true;
     // Instant feedback, before any await.
     setState(() => _likeOverride = !current);
@@ -90,7 +95,9 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
       // optimistic update that silently reverts is worse than no update.
       setState(() => _likeOverride = null);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't save your like — please try again")),
+        const SnackBar(
+          content: Text("Couldn't save your like — please try again"),
+        ),
       );
       return;
     }
@@ -177,6 +184,65 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
     FocusManager.instance.primaryFocus?.unfocus();
   }
 
+  /// The admin-only confirm sheet behind the AppBar's moderator icon (see
+  /// [build]'s `actions:` list) — one destructive action, then
+  /// [showMasiConfirm], the same two-step shape
+  /// `CommunityTopoDetailScreen._openAdminDeleteSheet` puts behind its own
+  /// "More…" row.
+  ///
+  /// [AdminDeleteService.deleteAscent] is the real authority check (its own
+  /// doc explains why); this method only decided whether the icon was drawn
+  /// at all. On success the screen pops itself — the ascent it renders no
+  /// longer exists to look at.
+  Future<void> _openAdminDeleteSheet(String ascentId) async {
+    final action = await showMasiActionSheet<String>(
+      context,
+      sheetKey: const Key('ascent-detail-admin-sheet'),
+      actions: const [
+        MasiSheetAction(
+          key: Key('ascent-detail-admin-delete'),
+          label: 'Delete this ascent',
+          value: 'delete',
+          subtitle: 'Removes it for everyone, with its comments and likes',
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (action != 'delete' || !mounted) return;
+
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Delete this ascent?',
+      message:
+          'Removes this ascent log for everyone, along with its comments '
+          'and likes. This cannot be undone.',
+      confirmLabel: 'Delete',
+      confirmKey: const Key('ascent-detail-admin-delete-confirm'),
+    );
+    if (!confirmed || !mounted) return;
+
+    // Captured after both dialogs above have already resolved and `mounted`
+    // has already been re-checked — mirrors
+    // `CommunityTopoDetailScreen._openAdminDeleteSheet`'s identical placement:
+    // what's held here only has to survive the one await left, the RPC call.
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    final navigator = Navigator.of(context);
+    try {
+      await ref
+          .read(adminDeleteServiceProvider)
+          .deleteAscent(ascentId: ascentId);
+      if (!mounted) return;
+      messenger?.showSnackBar(const SnackBar(content: Text('Ascent deleted')));
+      navigator.maybePop();
+    } catch (error) {
+      // Loud, not silent — an admin who believes a delete went through when
+      // it did not is worse off than one who was told it failed.
+      messenger?.showSnackBar(
+        SnackBar(content: Text("Couldn't delete that ascent. $error")),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final ascentId = widget.ascentId;
@@ -191,6 +257,17 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
     ref.watch(myDisplayNameProvider);
     final asyncEntry = ref.watch(ascentDetailProvider(ascentId));
 
+    // Admin "delete any feed item" surface (moderation), computed in build —
+    // mirrors CommunityTopoDetailScreen.build's identical admin-gate
+    // comment. `isAdminProvider` fails closed (false while loading, false on
+    // error); `isSignedIn` is checked separately per `admin_delete_policy.dart`.
+    final isAdmin = ref.watch(isAdminProvider).asData?.value ?? false;
+    final isSignedIn = ref.watch(effectiveUidProvider) != null;
+    final adminAction = adminContentAction(
+      isAdmin: isAdmin,
+      isSignedIn: isSignedIn,
+    );
+
     return Scaffold(
       key: Key('ascent-detail-$ascentId'),
       appBar: AppBar(
@@ -202,6 +279,21 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
           onPressed: () => Navigator.of(context).maybePop(),
         ),
         title: const Text('Ascent'),
+        actions: [
+          // Admin-only. This icon PLAYS THE ROLE of `CommunityTopoDetailScreen`'s
+          // "More…" row — this AppBar has no ordinary overflow to append one
+          // to (it carries only the back button) — so tapping it goes
+          // straight to that same shape one level in: one destructive action
+          // in `_openAdminDeleteSheet`'s sheet, then a confirm behind it.
+          if (adminAction == AdminContentAction.delete)
+            IconButton(
+              key: const Key('ascent-detail-admin-more'),
+              icon: MasiIcon('more_horiz'),
+              tooltip: 'Moderator tools',
+              color: colors.accent,
+              onPressed: () => _openAdminDeleteSheet(ascentId),
+            ),
+        ],
       ),
       body: SafeArea(
         child: MasiAsyncView<SharedAscentEntry?>(
@@ -264,7 +356,9 @@ class _AscentDetailBody extends ConsumerWidget {
     final likeCount =
         ref.watch(likeCountForAscentProvider(ascentId)).value ?? 0;
     final hasLiked =
-        likedOverride ?? ref.watch(hasLikedAscentProvider(ascentId)).value ?? false;
+        likedOverride ??
+        ref.watch(hasLikedAscentProvider(ascentId)).value ??
+        false;
     final comments =
         ref.watch(commentsForAscentProvider(ascentId)).value ?? const [];
 
@@ -425,7 +519,9 @@ class _AscentDetailBody extends ConsumerWidget {
                   onError: (error, stackTrace) =>
                       ScaffoldMessenger.of(context).showSnackBar(
                         const SnackBar(
-                          content: Text("Couldn't post your comment — please try again"),
+                          content: Text(
+                            "Couldn't post your comment — please try again",
+                          ),
                         ),
                       ),
                 );

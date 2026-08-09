@@ -3,7 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_avatar.dart';
+import '../../../shared/presentation/masi_dialogs.dart';
+import '../../../shared/presentation/masi_icon.dart';
+import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
+import '../../moderation/application/moderation_providers.dart';
+import '../../moderation/domain/admin_delete_policy.dart';
 import '../data/comments_repository.dart';
 import '../domain/comment_mentions.dart';
 
@@ -33,11 +38,7 @@ import '../domain/comment_mentions.dart';
 /// `_AscentFeedRow` already follow. In order: the live display name, the
 /// stamped `authorName`, then `'Anonymous'`.
 class CommentRow extends ConsumerWidget {
-  const CommentRow({
-    super.key,
-    required this.comment,
-    required this.keyPrefix,
-  });
+  const CommentRow({super.key, required this.comment, required this.keyPrefix});
 
   final Comment comment;
 
@@ -64,6 +65,18 @@ class CommentRow extends ConsumerWidget {
         : ref.watch(profileAvatarUrlProvider(ownerId)).asData?.value;
 
     final name = _firstNonEmpty(liveName, comment.authorName) ?? 'Anonymous';
+
+    // Admin "delete any feed item" surface (moderation), read exactly like
+    // every other admin gate in this app: `isAdminProvider` fails closed
+    // (false while loading, false on error), and `isSignedIn` is checked
+    // SEPARATELY per `admin_delete_policy.dart`'s own doc for why. A comment
+    // has no restore path — only a topo does — so the only two outcomes
+    // `adminContentAction` can hand back here are `hidden` and `delete`.
+    final isAdmin = ref.watch(isAdminProvider).asData?.value ?? false;
+    final isSignedIn = ref.watch(effectiveUidProvider) != null;
+    final showAdminDelete =
+        adminContentAction(isAdmin: isAdmin, isSignedIn: isSignedIn) ==
+        AdminContentAction.delete;
 
     return Padding(
       key: Key('$keyPrefix-${comment.id}'),
@@ -98,6 +111,20 @@ class CommentRow extends ConsumerWidget {
               ],
             ),
           ),
+          // Admin-only, appended as a THIRD row child rather than folded into
+          // any padding/sizing already here — a non-admin (nearly every
+          // reader) must see this exact row, unchanged, since this widget's
+          // whole point (see the class doc, "one widget for both threads") is
+          // one shared identity line rather than two screens quietly
+          // diverging.
+          if (showAdminDelete)
+            IconButton(
+              key: Key('$keyPrefix-${comment.id}-admin-delete'),
+              tooltip: 'Delete comment',
+              visualDensity: VisualDensity.compact,
+              icon: MasiIcon('delete', size: 18, color: colors.gradeHard),
+              onPressed: () => _delete(context, ref),
+            ),
         ],
       ),
     );
@@ -112,6 +139,47 @@ class CommentRow extends ConsumerWidget {
       if (value != null && value.trim().isNotEmpty) return value;
     }
     return null;
+  }
+
+  /// Confirms, then deletes THIS comment via the admin path (moderation).
+  ///
+  /// [AdminDeleteService.deleteComment] is the real authority check — see
+  /// that class's doc — this button only decided whether to draw itself at
+  /// all. No re-entrancy guard beyond [showMasiConfirm]'s own modal barrier:
+  /// it already blocks a second tap from landing before the first resolves,
+  /// which is what keeps this a plain [ConsumerWidget] rather than one that
+  /// has to grow State just to hold an in-flight flag (see the class doc's
+  /// note on why this stayed a `ConsumerWidget`).
+  Future<void> _delete(BuildContext context, WidgetRef ref) async {
+    final commentId = comment.id;
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Delete this comment?',
+      message: 'It disappears for everyone. This cannot be undone.',
+      confirmLabel: 'Delete',
+      confirmKey: Key('$keyPrefix-$commentId-admin-delete-confirm'),
+    );
+    if (!confirmed || !context.mounted) return;
+
+    // Captured after the confirm has resolved and `context.mounted` has
+    // already been re-checked, not any earlier — mirrors the placement
+    // `CommunityTopoDetailScreen._openAdminDeleteSheet` and
+    // `AscentDetailScreen._openAdminDeleteSheet` use around this exact RPC.
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      await ref
+          .read(adminDeleteServiceProvider)
+          .deleteComment(commentId: commentId);
+      if (!context.mounted) return;
+      messenger?.showSnackBar(const SnackBar(content: Text('Comment deleted')));
+    } catch (error) {
+      // Loud, not silent — an admin who believes a delete went through when
+      // it did not is worse off than one who was told it failed.
+      if (!context.mounted) return;
+      messenger?.showSnackBar(
+        SnackBar(content: Text("Couldn't delete that comment. $error")),
+      );
+    }
   }
 }
 
@@ -169,10 +237,7 @@ class _CommentBody extends ConsumerWidget {
             TextSpan(
               text: span.text,
               style: span.isMention
-                  ? TextStyle(
-                      color: colors.accent,
-                      fontWeight: FontWeight.w600,
-                    )
+                  ? TextStyle(color: colors.accent, fontWeight: FontWeight.w600)
                   : null,
             ),
         ],
