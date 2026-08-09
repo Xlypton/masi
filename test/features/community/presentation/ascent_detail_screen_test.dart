@@ -5,6 +5,7 @@ import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/community/application/comments_providers.dart';
 import 'package:masi/features/community/presentation/ascent_detail_screen.dart';
+import 'package:masi/features/community/presentation/route_art_picture.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/logbook/data/ascents_repository.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
@@ -64,6 +65,17 @@ void main() {
     })
   >
   seedSharedAscent(WidgetTester tester) async {
+    // A phone-shaped surface, taller than flutter_test's default 800x600.
+    // The screen now leads with a large square of route art
+    // (`AscentRouteArtHeader`), which pushes the comment composer past the
+    // bottom of the default viewport — and a `ListView` never lays out, so
+    // never builds, a child that far below the fold, so the composer would be
+    // ABSENT from the tree rather than merely off-screen. These tests are about
+    // the whole screen, so give them a viewport that holds the whole screen.
+    tester.view.physicalSize = const Size(400, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
     final db = AppDatabase(NativeDatabase.memory());
     final container = ProviderContainer(
       overrides: [
@@ -171,6 +183,17 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(Key('ascent-detail-${seeded.ascentId}')), findsOneWidget);
+      // The route on its rock, above the words describing it — the seeded wall
+      // has a photo and a drawn line, so the art resolves and the header is
+      // real rather than collapsed.
+      expect(
+        find.byKey(Key('ascent-detail-route-art-${seeded.ascentId}')),
+        findsOneWidget,
+      );
+      expect(
+        tester.getSize(find.byType(RouteArtPicture)).width,
+        greaterThan(200),
+      );
       expect(find.text('Alex Climber'), findsOneWidget);
       expect(find.text('Sunny Arete'), findsOneWidget);
       expect(find.text('7a'), findsOneWidget);
