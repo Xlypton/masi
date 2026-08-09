@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../features/topo/application/community_photo_clear_controller.dart';
 import '../shared/presentation/masi_dialogs.dart';
 import '../shared/presentation/masi_icon.dart';
+import 'shell_notice_dismissal.dart';
 import 'theme.dart';
 
 /// Proactive "storage is nearly full" notice, shown BEFORE the failing
@@ -45,15 +46,17 @@ import 'theme.dart';
 /// one is a real, near-term risk to the user's OWN unsaved work.
 ///
 /// **Dismissible** (the user's decision — every banner in this family closes;
-/// see `sync_banner.dart`'s `SyncBanner.onDismiss`). A plain per-[State] flag,
-/// not a shared provider, is enough here for the same reason it is on
-/// `StorageRetryBanner`: this banner has exactly one mount point
-/// ([ShellNotices]), which removes it from the tree entirely once the prune
-/// outcome no longer warrants it (see `ShellNotices.build`) — so the NEXT
-/// occurrence is a brand-new [State] and the dismissal does not carry over.
-/// Unlike `StorageRetryBanner`'s notice text, [message] never varies, so
-/// there is no escalation case to re-arm against WITHIN one mount — a bare
-/// bool is the whole story.
+/// see `sync_banner.dart`'s `SyncBanner.onDismiss`). Kept in
+/// `shell_notice_dismissal.dart`'s shared [shellNoticeDismissalProvider],
+/// NOT a per-[State] flag — see that provider's class doc for why a shared
+/// slot is needed (a third widget, `topos_screen.dart`'s
+/// `_StorageDetailNotice`, has to be able to observe `StorageRetryBanner`'s
+/// dismissal too, which a `State` field could never let it do). Episode
+/// scoping — the NEXT occurrence, even with [message]'s byte-identical
+/// wording, must not stay hidden behind an old dismissal — is
+/// [ShellNoticeDismissalController.reportCurrent]'s job now, called from
+/// [ShellNotices] on every build, rather than relying on this widget
+/// unmounting to throw the acknowledgement away.
 class StoragePressureBanner extends ConsumerStatefulWidget {
   const StoragePressureBanner({super.key});
 
@@ -99,19 +102,22 @@ class StoragePressureBanner extends ConsumerStatefulWidget {
 }
 
 class _StoragePressureBannerState extends ConsumerState<StoragePressureBanner> {
-  /// Whether the user closed this banner — a purely local, transient flag
-  /// (not persisted), exactly like `install_banner.dart`'s identical
-  /// `_dismissed`. See the class doc for why a bare bool (rather than
-  /// `StorageRetryBanner`'s signature-compared field) is the whole story
-  /// here: [StoragePressureBanner.message] never varies, so there is no
-  /// escalating-message case within one mount to re-arm against — only the
-  /// widget dying and remounting (handled for free by [ShellNotices]
-  /// removing this from the tree once the condition clears) re-arms it.
-  bool _dismissed = false;
+  /// This banner's identity in [shellNoticeDismissalProvider]'s signature
+  /// space. [StoragePressureBanner.message] never varies, so unlike
+  /// `StorageRetryBanner._signature` this is effectively constant — but it is
+  /// still built through [ShellNoticeDismissalController.signature] so both
+  /// shell notices share one identity scheme.
+  String get _signature =>
+      ShellNoticeDismissalController.signature(
+        'storagePressure',
+        StoragePressureBanner.message,
+      );
 
   @override
   Widget build(BuildContext context) {
-    if (_dismissed) return const SizedBox.shrink();
+    if (ref.watch(shellNoticeDismissalProvider) == _signature) {
+      return const SizedBox.shrink();
+    }
 
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
@@ -228,7 +234,9 @@ class _StoragePressureBannerState extends ConsumerState<StoragePressureBanner> {
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     tooltip: 'Dismiss',
-                    onPressed: () => setState(() => _dismissed = true),
+                    onPressed: () => ref
+                        .read(shellNoticeDismissalProvider.notifier)
+                        .dismiss(_signature),
                     icon: MasiIcon('close', size: 18, color: colors.ink3),
                   ),
                 ],

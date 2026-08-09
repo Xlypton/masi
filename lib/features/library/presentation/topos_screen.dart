@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:latlong2/latlong.dart';
 
+import '../../../app/shell_notice_dismissal.dart';
 import '../../../app/theme.dart';
 import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/grades/grade_system.dart';
@@ -375,6 +376,20 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     // as a branch of `NavShell` in production (see `router.dart`), so this
     // always agrees with what the shell actually did.
     final storageRetryNoticeText = storageRetryNotice(storage);
+    // Defect-C fix: `_StorageDetailNotice` exists only as this exact banner's
+    // companion (see its own doc), so it must disappear the moment the user
+    // dismisses THAT banner — not stay behind as an orphaned diagnostic line
+    // with no context and no retry. Reads the SAME shared
+    // `shellNoticeDismissalProvider` `nav_shell.dart`'s `ShellNotices` writes
+    // to (via `StorageRetryBanner`'s own dismiss button), comparing against
+    // the identical signature that banner computes for itself.
+    final shellStorageNoticeDismissed =
+        storageRetryNoticeText != null &&
+        ref.watch(shellNoticeDismissalProvider) ==
+            ShellNoticeDismissalController.signature(
+              'storageRetry',
+              storageRetryNoticeText,
+            );
 
     // Only an *actually loaded* topo list (AsyncData) is a safe source for
     // the "New topo" count; while still loading or errored there is no
@@ -460,6 +475,36 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
             bannerKind.name,
             bannerDetail,
           );
+    // The RAW condition — reachability/pullError/sharedPhotosWithheld alone,
+    // with NEITHER of this screen's own display suppressions
+    // (`emptyStateOwnsTheError`, `asyncToposHardError`) folded in — reported
+    // to the dismissal controller on every build so it can tell "the
+    // condition actually cleared" apart from "this screen chose not to show
+    // it right now" (see `SyncBannerDismissalController.reportCurrent`'s
+    // doc). Using `bannerKind` here instead would report `null` the moment a
+    // hard load error or an owned empty state suppressed the banner, and
+    // wrongly forget a still-live failure's dismissal scope.
+    final rawBannerKind = reachability.isKnownOffline
+        ? SyncBannerKind.offline
+        : pullError != null
+        ? SyncBannerKind.syncFailed
+        : sharedPhotosWithheld
+        ? SyncBannerKind.sharedPhotosWithheld
+        : null;
+    final rawBannerSignature = rawBannerKind == null
+        ? null
+        : SyncBannerDismissalController.signature(
+            rawBannerKind.name,
+            rawBannerKind == SyncBannerKind.syncFailed ? pullError : null,
+          );
+    // Deferred by a microtask — see `_pullModerationFor`'s identical
+    // convention just below for why mutating a provider from a value computed
+    // during `build` cannot happen synchronously here.
+    Future.microtask(
+      () => ref
+          .read(syncBannerDismissalProvider.notifier)
+          .reportCurrent(rawBannerSignature),
+    );
     final dismissedSignature = ref.watch(syncBannerDismissalProvider);
     // Built here, not in the tree below, purely so `bannerKind`'s null check
     // and its use land in one expression the compiler can promote — the tree
@@ -486,10 +531,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
             // moment the underlying error changes.
             onDismiss: () => ref
                 .read(syncBannerDismissalProvider.notifier)
-                .dismiss(
-                  bannerSignature!,
-                  endsWithOfflineEpisode: bannerKind == SyncBannerKind.offline,
-                ),
+                .dismiss(bannerSignature!),
           );
 
     // The account button shows initials once actually signed in with a
@@ -571,7 +613,14 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   // Only the `unavailable`-and-not-a-downgrade case (the one
                   // in the bug report) is ever actually duplicated.
                   storageRetryNoticeText != null
-                      ? _StorageDetailNotice(durability: storage)
+                      // Defect-C fix: gone entirely once the shell's own
+                      // banner for this exact notice was dismissed — see
+                      // `shellStorageNoticeDismissed`'s doc. Leaving this
+                      // rendering behind would be the orphaned-diagnostic-line
+                      // bug the fix exists to close.
+                      ? (shellStorageNoticeDismissed
+                            ? const SizedBox.shrink()
+                            : _StorageDetailNotice(durability: storage))
                       : _StorageWarningBanner(durability: storage),
                 _ToposFilterBar(
                   searchController: _searchController,
@@ -585,7 +634,28 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   // ~122 px that scrolling could never reclaim.
                   child: _withSyncBannerHeader(
                     banner: syncBannerWidget,
-                    body: MasiAsyncView<List<TopoRef>>(
+                    // Defect-D fix (the reported screenshot): a hard load
+                    // error caused by the SAME unopenable-database condition
+                    // the shell's `StorageRetryBanner` already explains is
+                    // the third repetition of one fact, not a second
+                    // diagnosis — the shell already carries the human
+                    // sentence AND a working retry, and
+                    // `_StorageDetailNotice` above already carries the
+                    // diagnostic detail line, so `MasiAsyncView`'s OWN
+                    // "Couldn't load your topos" box would say the same thing
+                    // a third time on one screen. Suppressed ONLY in this
+                    // exact compound state (`asyncToposHardError` alone, or
+                    // `storageRetryNoticeText != null` alone, still render
+                    // normally — this is not a general MasiAsyncView change);
+                    // the create-button interlock and this whole banner
+                    // stack already make clear nothing here can be retried
+                    // except through the shell's button, which stays live and
+                    // re-opens the database that `toposProvider` itself
+                    // depends on — so no retry ability is lost, only the
+                    // duplicate report of it.
+                    body: (asyncToposHardError && storageRetryNoticeText != null)
+                        ? const SizedBox.shrink()
+                        : MasiAsyncView<List<TopoRef>>(
                       value: asyncTopos,
                       onRetry: () => ref.invalidate(toposProvider),
                       errorMessage: "Couldn't load your topos",

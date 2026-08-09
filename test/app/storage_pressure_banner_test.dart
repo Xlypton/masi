@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/app/nav_shell.dart';
+import 'package:masi/app/shell_notice_dismissal.dart';
 import 'package:masi/app/storage_pressure_banner.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -37,6 +38,13 @@ class _PinnedSyncOrchestrator extends SyncOrchestrator {
 
   @override
   SyncOrchestratorState build() => _state;
+
+  /// Pushes a NEW state to every watcher — what a real pull actually
+  /// completing (with a different prune outcome) does. Needed to drive the
+  /// condition CLEARING and then RECURRING through the real pipeline, which
+  /// cannot be staged from the constructor alone (mirrors
+  /// `topos_screen_test.dart`'s identical `_FakeSyncOrchestrator.emit`).
+  void emit(SyncOrchestratorState next) => state = next;
 }
 
 /// A [CommunityPhotoClearController] whose `clear()` is scripted rather than
@@ -76,6 +84,12 @@ void main() {
   ProviderContainer makeContainer({
     PublicPhotoPruneOutcome? pruneOutcome,
     _ScriptedClearController? clearController,
+    // Lets a test drive the condition CLEARING and then RECURRING through
+    // the real pipeline (`_PinnedSyncOrchestrator.emit`) rather than only
+    // ever starting pinned at one fixed outcome. Ignored when null, in which
+    // case a fresh `_PinnedSyncOrchestrator` is built from [pruneOutcome] as
+    // before.
+    _PinnedSyncOrchestrator? orchestrator,
   }) {
     final container = ProviderContainer(
       overrides: [
@@ -92,9 +106,11 @@ void main() {
           ),
         ),
         syncOrchestratorProvider.overrideWith(
-          () => _PinnedSyncOrchestrator(
-            SyncOrchestratorState(lastPublicPhotoPruneOutcome: pruneOutcome),
-          ),
+          () =>
+              orchestrator ??
+              _PinnedSyncOrchestrator(
+                SyncOrchestratorState(lastPublicPhotoPruneOutcome: pruneOutcome),
+              ),
         ),
         if (clearController != null)
           communityPhotoClearProvider.overrideWith(() => clearController),
@@ -366,9 +382,16 @@ void main() {
     /// Exercises [StoragePressureBanner] directly, with [show] toggling
     /// whether it is even in the tree — the widget's own dismiss/re-arm
     /// contract is what's under test, not `ShellNotices`' decision of WHEN
-    /// to show it (already covered above). Unmounting/remounting here
-    /// stands in for `ShellNotices` swapping this widget out once the prune
-    /// outcome no longer warrants it, and back in once it recurs.
+    /// to show it (already covered above, and by the REAL-pipeline test
+    /// below). Unmounting/remounting here stands in for `ShellNotices`
+    /// swapping this widget out once the prune outcome no longer warrants
+    /// it, and back in once it recurs — but since the dismissal now lives in
+    /// [shellNoticeDismissalProvider], not this widget's own `State` (the
+    /// whole point of the fix: a third widget must be able to observe it
+    /// too), unmounting the banner alone no longer clears it by itself. The
+    /// explicit `reportCurrent(null)` call below stands in for what
+    /// `ShellNotices` does on every build once it computes nothing left to
+    /// show — see that class's doc.
     Widget wrapDirect(ProviderContainer container, {bool show = true}) =>
         UncontrolledProviderScope(
           container: container,
@@ -410,8 +433,14 @@ void main() {
         expect(find.byKey(const Key('storage-pressure-banner')), findsNothing);
 
         // The condition clearing removes this widget from the tree entirely
-        // (`ShellNotices` would swap in the install banner instead).
+        // (`ShellNotices` would swap in the install banner instead) AND
+        // reports that nothing is showing any more — this bare harness has
+        // no `ShellNotices` of its own to do that reporting, so it is done
+        // explicitly here.
         await tester.pumpWidget(wrapDirect(container, show: false));
+        container
+            .read(shellNoticeDismissalProvider.notifier)
+            .reportCurrent(null);
         await tester.pump();
 
         // ...and recurring mounts a BRAND NEW `StoragePressureBanner`, with
@@ -425,6 +454,83 @@ void main() {
           findsOneWidget,
           reason: 'a new episode of the same condition must re-arm, not '
               'stay hidden behind the earlier dismissal',
+        );
+      },
+    );
+
+    // Review-verified gap: the test above only SIMULATES a remount (swapping
+    // the widget out by hand via `show: false`). It cannot prove the real
+    // wiring — `ShellNotices` reporting `null` to `shellNoticeDismissalProvider`
+    // once the REAL prune outcome stops warranting the banner — actually
+    // works, since it never drives that outcome through `syncOrchestratorProvider`
+    // at all. This is the REAL pipeline: one `ProviderContainer`, one
+    // `ShellNotices` mount throughout, and the prune outcome changing under it
+    // exactly as a real pull would.
+    testWidgets(
+      'the condition clearing and then recurring — driven through the REAL '
+      '`syncOrchestratorProvider`/`ShellNotices` pipeline, not a simulated '
+      'widget swap — re-arms a dismissal even though the message never '
+      'varies',
+      (tester) async {
+        final orchestrator = _PinnedSyncOrchestrator(
+          const SyncOrchestratorState(
+            lastPublicPhotoPruneOutcome: PublicPhotoPruneOutcome(
+              reason: PublicPhotoPruneReason.nothingPrunable,
+              usedFractionBefore: 0.9,
+              usedFractionAfter: 0.9,
+            ),
+          ),
+        );
+        final container = makeContainer(orchestrator: orchestrator);
+
+        await tester.pumpWidget(wrap(container));
+        await tester.pump();
+        expect(
+          find.byKey(const Key('storage-pressure-banner')),
+          findsOneWidget,
+        );
+
+        await tester.tap(
+          find.byKey(const Key('storage-pressure-banner-dismiss')),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('storage-pressure-banner')), findsNothing);
+
+        // A real pull lands back within budget — `ShellNotices` itself (still
+        // mounted the whole time) now computes no notice at all and reports
+        // `null`, which is what clears the stale dismissal.
+        orchestrator.emit(
+          const SyncOrchestratorState(
+            lastPublicPhotoPruneOutcome: PublicPhotoPruneOutcome(
+              reason: PublicPhotoPruneReason.belowHighWatermark,
+              usedFractionBefore: 0.3,
+              usedFractionAfter: 0.3,
+            ),
+          ),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('storage-pressure-banner')), findsNothing);
+        expect(find.byKey(const Key('install-banner')), findsOneWidget);
+
+        // ...and storage fills up again on a LATER pull, with the identical
+        // (fixed) message — `StoragePressureBanner.message` never varies, so
+        // only a genuine clear-then-recur can re-arm this at all.
+        orchestrator.emit(
+          const SyncOrchestratorState(
+            lastPublicPhotoPruneOutcome: PublicPhotoPruneOutcome(
+              reason: PublicPhotoPruneReason.nothingPrunable,
+              usedFractionBefore: 0.9,
+              usedFractionAfter: 0.9,
+            ),
+          ),
+        );
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('storage-pressure-banner')),
+          findsOneWidget,
+          reason: 'a new episode of the same (fixed) message must re-arm, '
+              'not stay hidden behind the earlier dismissal',
         );
       },
     );
