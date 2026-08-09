@@ -6195,6 +6195,68 @@ void main() {
       );
 
       testWidgets(
+        'a nearby COMMUNITY row carries the same grade-band dots and route '
+        'count as an own row -- SharedTopo always had both fields, the row '
+        'just never rendered them, so a community topo read as if it had no '
+        'routes at all next to an identical own one',
+        (tester) async {
+          final db = AppDatabase(NativeDatabase.memory());
+          addTearDown(db.close);
+          final container = ProviderContainer(
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              nowMsProvider.overrideWithValue(() => 1000),
+              locationServiceProvider.overrideWithValue(
+                const _FakeLocationService((latitude: 0.0, longitude: 0.0)),
+              ),
+              toposProvider.overrideWith((ref) => Stream.value(const [])),
+              sharedToposProvider.overrideWith(
+                (ref) => Stream.value([
+                  SharedTopo(
+                    wallId: 'wall-community',
+                    name: 'Community Boulder',
+                    routeCount: 3,
+                    likeCount: 0,
+                    commentCount: 0,
+                    latitude: 0.02,
+                    longitude: 0.02,
+                    routeGradeKeys: [
+                      gradeSortKey(GradeSystem.french, '5a'), // intermediate
+                      gradeSortKey(GradeSystem.french, '7a'), // hard
+                    ],
+                  ),
+                ]),
+              ),
+            ],
+          );
+          addTearDown(container.dispose);
+
+          await tester.pumpWidget(_wrap(container, const ToposScreen()));
+          await _drain(tester);
+
+          expect(
+            find.byKey(const Key('topo-community-routes-wall-community')),
+            findsOneWidget,
+          );
+          expect(find.text('3 routes'), findsOneWidget);
+          expect(
+            find.byKey(const Key('topo-grade-dot-wall-community-intermediate')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('topo-grade-dot-wall-community-hard')),
+            findsOneWidget,
+          );
+          // Exactly the bands present -- an absent band must not draw a dot,
+          // or every community row would claim a grade span it does not have.
+          expect(
+            find.byKey(const Key('topo-grade-dot-wall-community-beginner')),
+            findsNothing,
+          );
+        },
+      );
+
+      testWidgets(
         'A4 regression: an OWN topo row still pushes the plain editable '
         '/walls/<wallId> route (no readonly param, and never '
         '/community/topo/<wallId>)',

@@ -1167,6 +1167,14 @@ class _CommunityProximityRow extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final SharedTopo topo = entry.communityTopo!;
     final wallId = entry.wallId;
+    // Same two facts, from the same fields, as [_TopoRow] above: `SharedTopo`
+    // already carries `routeCount`/`routeGradeKeys` (CommunityRepository
+    // computes both with the same subqueries `watchTopos` uses), so a nearby
+    // community topo had the data all along and simply wasn't showing it —
+    // which made an own topo and a community topo of identical content read as
+    // if the community one had no routes at all.
+    final routeCount = topo.routeCount;
+    final bands = gradeBandsFor(topo.routeGradeKeys);
 
     return Material(
       key: Key('topo-item-community-$wallId'),
@@ -1201,6 +1209,22 @@ class _CommunityProximityRow extends StatelessWidget {
                       runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
+                        // Ordered exactly as [_TopoRow]'s subtitle — dots,
+                        // count, badge, distance — so the two row types read as
+                        // one list rather than two designs sharing a scroll
+                        // view. Dots are omitted (not rendered empty) when the
+                        // topo has no graded routes, matching that row.
+                        if (bands.isNotEmpty)
+                          _GradeBandDots(wallId: wallId, bands: bands),
+                        Text(
+                          '$routeCount route${routeCount == 1 ? '' : 's'}',
+                          key: Key('topo-community-routes-$wallId'),
+                          style: textTheme.titleSmall?.copyWith(
+                            color: colors.ink2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         _CommunitySharedBadge(wallId: wallId),
                         if (entry.distanceKm != null)
                           Text(
