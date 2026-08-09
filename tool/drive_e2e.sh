@@ -42,6 +42,26 @@ if [[ "$FAKE" == "0" ]]; then
   # runtime via `e2eSignInAs`. Read into an array so the value is never
   # word-split or glob-expanded.
   read -r -a DEFINES <<< "$("$(dirname "$0")/e2e_accounts.sh" env owner)"
+  # A real run that quietly loses its password define is the WORST outcome this
+  # harness can produce: `main_e2e.dart` falls back to the fake identity, every
+  # server-gated screen comes back empty because `auth.uid()` is null, and the
+  # suite still reports "All tests passed" — so the run looks like proof of RLS,
+  # sync and moderation while having exercised none of them. That has actually
+  # happened here (the accounts script is invoked through a command substitution
+  # whose failure `set -e` does not reliably catch, and the scripts shipped
+  # non-executable, so it produced no output at all).
+  #
+  # So assert the define actually landed. Failing loudly costs a re-run; passing
+  # quietly costs a false verification that gets reported to the user as fact.
+  if [[ ${#DEFINES[@]} -eq 0 ]] || \
+     ! printf '%s\n' "${DEFINES[@]}" | grep -q 'E2E_PASSWORD='; then
+    echo "FATAL: no E2E_PASSWORD dart-define — tool/e2e_accounts.sh produced" >&2
+    echo "  nothing usable, so this run would silently use the FAKE identity" >&2
+    echo "  and report success without touching the backend. Refusing." >&2
+    echo "  Check: ~/.config/masi-e2e-password exists, and tool/e2e_*.sh are" >&2
+    echo "  executable (git ls-files -s tool/e2e_accounts.sh -> 100755)." >&2
+    exit 3
+  fi
   echo "==> seeding the live fixture"
   "$(dirname "$0")/e2e_seed.sh" >/dev/null
   echo "    ok"
