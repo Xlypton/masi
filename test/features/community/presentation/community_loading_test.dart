@@ -281,6 +281,15 @@ void main() {
     /// `seedSharedAscent` (private to that file).
     Future<({AppDatabase db, ProviderContainer container, String ascentId})>
     seedSharedAscent(WidgetTester tester, {Completer<void>? likeGate}) async {
+      // Taller than flutter_test's default 800x600: the screen now leads with
+      // a large square of route art (`AscentRouteArtHeader`) and a `ListView`
+      // never builds a child it never lays out, so the comment composer would
+      // be absent from the tree rather than merely below the fold. Mirrors
+      // `ascent_detail_screen_test.dart`'s identical guard.
+      tester.view.physicalSize = const Size(400, 1200);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(tester.view.reset);
+
       final db = AppDatabase(NativeDatabase.memory());
       addTearDown(db.close);
       final container = ProviderContainer(

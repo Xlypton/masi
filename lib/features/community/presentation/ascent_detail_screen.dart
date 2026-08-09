@@ -18,6 +18,7 @@ import '../application/ascent_detail_providers.dart';
 import '../application/comments_providers.dart';
 import '../application/community_topo_detail_providers.dart';
 import '../application/likes_providers.dart';
+import 'ascent_route_art_header.dart';
 import 'comment_row.dart';
 import 'mention_composer.dart';
 
@@ -386,6 +387,15 @@ class _AscentDetailBody extends ConsumerWidget {
       key: const Key('ascent-detail-body'),
       padding: const EdgeInsets.all(MasiSpacing.lg),
       children: [
+        // The subject of the screen, first: the line this climber actually
+        // did, on the rock they did it on. Collapses to nothing when the art
+        // cannot be resolved, so an ascent without a picture reads exactly as
+        // this screen always did — see [AscentRouteArtHeader].
+        AscentRouteArtHeader(
+          key: Key('ascent-detail-route-art-$ascentId'),
+          wallId: entry.wallId,
+          routeNumber: entry.routeNumber,
+        ),
         Text(
           climberLabel,
           key: const Key('ascent-detail-climber-name'),
@@ -543,6 +553,14 @@ class _AscentDetailBody extends ConsumerWidget {
 /// shared composites do it: an unscaled skeleton matches at the default text
 /// size and lands short of the real content at every larger one, bringing back
 /// the jump for exactly the users least able to absorb it.
+///
+/// Deliberately does NOT reserve the route-art square that
+/// [AscentRouteArtHeader] draws above the climber's name: whether there is a
+/// picture at all is not known until the ascent has loaded and its wall's photo
+/// has resolved, so a square here would be a promise this skeleton cannot keep
+/// — and collapsing it afterwards is a bigger jump than the one it was meant to
+/// prevent. The header brings its own loading slot once it knows it has
+/// something to show.
 ///
 /// Non-scrollable and inert (a placeholder must not be draggable or tappable),
 /// but laid out in a [ListView] so it CLIPS rather than overflowing if a very
