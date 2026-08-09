@@ -928,6 +928,42 @@ class LibraryCrudRepository {
     });
   }
 
+  /// Mirrors an ADMIN delete locally, for the one caller that already holds
+  /// server-side authorisation: `AdminDeleteService.deleteTopo`
+  /// (`moderation_providers.dart`), only ever AFTER its `admin_delete_topo`
+  /// RPC has committed. That RPC re-checks `is_admin()` itself and raises
+  /// `42501` for anyone who is not one, so by the time this method runs the
+  /// server has already tombstoned [id] and its subtree — this method's
+  /// whole job is to make the admin's OWN device catch up, because without
+  /// it the admin would tap delete and watch nothing happen: the wall is
+  /// gone server-side, but this device's cached copy is a FOREIGN row (the
+  /// admin need not own it), so [softDeleteWall]'s ownership guard would
+  /// correctly refuse to touch it, and no future pull would fix that either
+  /// — see below.
+  ///
+  /// Runs the exact same [_cascadeSoftDeleteWallSubtree] as [softDeleteWall],
+  /// in the same one-transaction shape, but does not call
+  /// [_guardedCascadeAllowed] first. That is not a weakening of the guard —
+  /// [softDeleteWall] keeps it, and every other caller must keep going
+  /// through [softDeleteWall]. This method exists ONLY because the ownership
+  /// check would reject the exact row this method is supposed to touch, and
+  /// it is safe to skip precisely because it grants no authority of its
+  /// own — it copies an outcome the server already authorised, and two
+  /// properties stop that copy from becoming a hole:
+  ///  - **It cannot leave the device.** Sync's push query is hard-filtered
+  ///    `ownerId = uid` (`sync_service.dart`, ~line 631), so marking a
+  ///    foreign wall dirty here never gets it selected for push — there is
+  ///    no path from this write back to Postgres.
+  ///  - **The next pull cannot resurrect it.** `admin_delete_topo` flips
+  ///    `wall_moderation.state` to `'removed'` in the same transaction as
+  ///    the tombstone, so `is_wall_public` — which requires BOTH
+  ///    `deletedAt IS NULL` and `state = 'published'` — is now false on
+  ///    both counts. The row is unreadable to anyone but its owner, so this
+  ///    device never re-imports it and the local tombstone sticks.
+  Future<void> softDeleteWallAsModerator(String id) {
+    return _db.transaction(() => _cascadeSoftDeleteWallSubtree(id, nowMs()));
+  }
+
   /// Publishes [wallId] to Community: flips its [db.Wall.visibility] to
   /// `'shared'` and marks the wall itself plus every non-deleted [db.Photo]
   /// and [db.Route] on it `dirty:true` with a freshly bumped `updatedAt`, so

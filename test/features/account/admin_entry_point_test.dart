@@ -93,6 +93,25 @@ class _FakeRemote implements ModerationRemote {
   Future<List<Map<String, dynamic>>> fetchWallModeration(
     Set<String> wallIds,
   ) async => const [];
+
+  @override
+  Future<int?> adminDeleteTopo({required String wallId, String? reason}) async =>
+      null;
+  @override
+  Future<int?> adminRestoreTopo({
+    required String wallId,
+    String? reason,
+  }) async => null;
+  @override
+  Future<int?> adminDeleteAscent({
+    required String ascentId,
+    String? reason,
+  }) async => null;
+  @override
+  Future<int?> adminDeleteComment({
+    required String commentId,
+    String? reason,
+  }) async => null;
 }
 
 Map<String, dynamic> _queueRow(String id) => {

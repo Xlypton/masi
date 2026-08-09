@@ -162,6 +162,56 @@ abstract class ModerationRemote {
   /// Never throws; a failure reports 0.
   Future<int> removePublishedPhotoObjects(List<String> objectPaths);
 
+  /// Soft-deletes ANY topo, whoever owns it, and everything hanging off it —
+  /// photos, routes, and every ascent, comment and like on the wall.
+  ///
+  /// Admin-only, enforced by `admin_delete_topo`'s own `is_admin()` check. The
+  /// RPC is the ONLY path to this: the local repositories refuse to write a row
+  /// the signed-in user does not own, and the push query filters on
+  /// `ownerId = uid`, so there is no client-side route to a foreign delete and
+  /// there is not meant to be one.
+  ///
+  /// Returns the deletion instant in epoch ms — the same `deletedAt` stamped on
+  /// every row of the sweep, which is what [adminRestoreTopo] later matches on.
+  /// Deleting an already-deleted topo returns its EXISTING instant and writes
+  /// no second audit-log entry, so a double tap costs nothing.
+  ///
+  /// Throws on failure, deliberately: an admin who believes they removed
+  /// something they did not is the worst outcome this feature has.
+  Future<int?> adminDeleteTopo({required String wallId, String? reason});
+
+  /// Undoes one [adminDeleteTopo] sweep, putting back exactly the rows that
+  /// sweep took — matched on the wall's own `deletedAt` instant, so rows the
+  /// OWNER deleted themselves months earlier stay deleted.
+  ///
+  /// Returns the restore instant, or null when the topo was not deleted (a
+  /// double tap, which is not an error).
+  ///
+  /// Note what this does NOT put back: the published photo BYTES.
+  /// [AdminDeleteService.deleteTopo] removes the world-readable `shared/` copies
+  /// from Storage, and Storage has no undelete. That is self-healing rather than
+  /// terminal — push re-reads and re-sends its own rows every time (D-4, no
+  /// outbox), so the owner's next sync re-uploads the shared copy from the
+  /// private original, which is never touched.
+  Future<int?> adminRestoreTopo({required String wallId, String? reason});
+
+  /// Soft-deletes ANY ascent and its thread — the comments and likes on it go
+  /// too, because a comment whose ascent is gone is unreachable text that still
+  /// notifies people and still counts.
+  ///
+  /// Admin-only, returns the deletion instant, idempotent, throws on failure —
+  /// all as [adminDeleteTopo].
+  Future<int?> adminDeleteAscent({required String ascentId, String? reason});
+
+  /// Soft-deletes ANY single comment, in either thread (a topo comment carries
+  /// `wallId`, an ascent comment carries `ascentId`; this needs to know
+  /// neither).
+  ///
+  /// This is the finest-grained control an admin has, and the one the takedown
+  /// path could never offer: `remove_topo` hides a whole topo to deal with one
+  /// abusive line of text.
+  Future<int?> adminDeleteComment({required String commentId, String? reason});
+
   /// Starts the ten-day withdrawal clock on a published topo (C-3). Returns
   /// the epoch-ms instant the clock started from — which for a second call is
   /// the ORIGINAL one, not a fresh one: asking twice must not silently cost
@@ -400,6 +450,64 @@ class SupabaseModerationRemote implements ModerationRemote {
       return 0;
     }
   }
+
+  @override
+  Future<int?> adminDeleteTopo({
+    required String wallId,
+    String? reason,
+  }) async => _epochMs(
+    await _client.rpc<dynamic>(
+      'admin_delete_topo',
+      params: {'wall_id': wallId, 'reason': reason},
+    ),
+  );
+
+  @override
+  Future<int?> adminRestoreTopo({
+    required String wallId,
+    String? reason,
+  }) async => _epochMs(
+    await _client.rpc<dynamic>(
+      'admin_restore_topo',
+      params: {'wall_id': wallId, 'reason': reason},
+    ),
+  );
+
+  @override
+  Future<int?> adminDeleteAscent({
+    required String ascentId,
+    String? reason,
+  }) async => _epochMs(
+    await _client.rpc<dynamic>(
+      'admin_delete_ascent',
+      params: {'ascent_id': ascentId, 'reason': reason},
+    ),
+  );
+
+  @override
+  Future<int?> adminDeleteComment({
+    required String commentId,
+    String? reason,
+  }) async => _epochMs(
+    await _client.rpc<dynamic>(
+      'admin_delete_comment',
+      params: {'comment_id': commentId, 'reason': reason},
+    ),
+  );
+
+  /// A `bigint` epoch-ms out of PostgREST, whatever shape the JSON arrived in.
+  ///
+  /// Postgres `bigint` does not fit a JavaScript number, so PostgREST serialises
+  /// it as a JSON STRING on some paths and a number on others — and on web the
+  /// Dart value lands as `double` rather than `int`. Parsing all three is not
+  /// defensive padding: an `int` cast here would throw on wasm for a value the
+  /// server sent correctly. Mirrors [requestWithdrawal]'s existing switch.
+  static int? _epochMs(dynamic result) => switch (result) {
+    final int v => v,
+    final num v => v.toInt(),
+    final String v => int.tryParse(v),
+    _ => null,
+  };
 
   @override
   Future<int?> requestWithdrawal(String wallId) async {
