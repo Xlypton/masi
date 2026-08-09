@@ -8,6 +8,7 @@ import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../../../app/theme.dart';
+import '../../../core/db/database_provider.dart';
 import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/storage/storage_persistence_providers.dart';
 import '../../../core/storage/storage_persistence_types.dart';
@@ -1286,6 +1287,11 @@ class _InstallSection extends ConsumerWidget {
 ///    call site as exactly "the refresh path for the Account screen's
 ///    diagnostics row".
 ///
+/// Those two are the only providers this row WATCHES. The Copy button
+/// additionally READS three more at press time — `syncOrchestratorProvider`,
+/// `appDatabaseProvider` and `authStateProvider` — see [_handleCopy] for why
+/// that is a `ref.read` in the callback rather than a `ref.watch` in `build`.
+///
 /// Deliberately NOT `kIsWeb`-gated, unlike [_InstallSection]: on native every
 /// value here is still honest ([StorageBackend.nativeFile],
 /// [StoragePersistOutcome.notApplicable]), so gating it would only hide the
@@ -1355,8 +1361,23 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
             Expanded(
               child: OutlinedButton(
                 key: const Key('account-storage-copy'),
-                onPressed: () =>
-                    _handleCopy(context, durability, persistence),
+                // Every value below is `ref.read` HERE, at press time, and
+                // deliberately NOT `ref.watch`ed up in `build` — see
+                // [_handleCopy]'s doc. Reading in the callback is also the
+                // more truthful answer: the blob then describes the moment
+                // the user pressed the button, not the moment this row
+                // happened to last rebuild.
+                onPressed: () => _handleCopy(
+                  context,
+                  durability,
+                  persistence,
+                  sync: ref.read(syncOrchestratorProvider),
+                  // `.schemaVersion` is a plain `=> 14` getter on the
+                  // already-open database — reading it opens nothing and
+                  // touches no query.
+                  schemaVersion: ref.read(appDatabaseProvider).schemaVersion,
+                  userId: _currentUid(ref),
+                ),
                 child: const Text('Copy diagnostics'),
               ),
             ),
@@ -1431,16 +1452,34 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
   /// single non-cancellable clipboard write with no meaningful in-flight
   /// state to show a spinner for — the actual bug this fixes is the DROPPED
   /// FUTURE and the silent failure, not a missing pending cue.
+  ///
+  /// [sync], [schemaVersion] and [userId] are all OPTIONAL, and are read by
+  /// the caller with `ref.read` at press time rather than `ref.watch`ed in
+  /// `build`. Watching [syncOrchestratorProvider] in particular would rebuild
+  /// this whole row on every debounced push/pull tick — the state object
+  /// changes identity on each one — to feed a string that nothing renders and
+  /// only the button ever reads. Optional (not required) because they are
+  /// pure enrichment: a caller that has none of them still produces a valid
+  /// blob, which is what keeps every existing test of this screen compiling.
   Future<void> _handleCopy(
     BuildContext context,
     StorageDurability durability,
-    StoragePersistenceStatus persistence,
-  ) async {
+    StoragePersistenceStatus persistence, {
+    SyncOrchestratorState? sync,
+    int? schemaVersion,
+    String? userId,
+  }) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
       await Clipboard.setData(
         ClipboardData(
-          text: diagnosticsClipboardLine(durability, persistence),
+          text: diagnosticsClipboardLine(
+            durability,
+            persistence,
+            sync: sync,
+            schemaVersion: schemaVersion,
+            userId: userId,
+          ),
         ),
       );
     } catch (e) {
@@ -1518,27 +1557,193 @@ String _humanizeBytes(int? bytes) {
   return '$formatted ${units[unitIndex]}';
 }
 
+/// The app version stamped into [diagnosticsClipboardLine].
+///
+/// A compile-time constant rather than a runtime lookup: this project has no
+/// `package_info_plus` dependency, and adding one to read back a number that
+/// is already known at build time would buy a plugin, an async call and a
+/// loading state for nothing. A build that passes
+/// `--dart-define=APP_VERSION=…` wins; the fallback mirrors `pubspec.yaml`'s
+/// own `version:` line, which is the same value a `package_info` lookup
+/// would have returned.
+///
+/// KEEP IN SYNC with `pubspec.yaml`'s `version:` — or, better, teach the
+/// build script to pass the define and this literal stops mattering.
+const String kMasiAppVersion = String.fromEnvironment(
+  'APP_VERSION',
+  defaultValue: '1.0.0+1',
+);
+
+/// The signed-in user's Supabase uid, for [diagnosticsClipboardLine]'s
+/// [shortUserIdHash].
+///
+/// Reads through `hasValue`/`requireValue`, NOT `asData?.value`, for exactly
+/// the reason [AccountScreen.build] already spells out: in Riverpod v3 a
+/// REFRESHING provider is an `AsyncLoading` that still carries its previous
+/// value and whose `asData` is null, so the `asData` form would blank the
+/// user token for the whole of every token refresh — precisely the windows a
+/// user is most likely to be reporting a problem in.
+String? _currentUid(WidgetRef ref) {
+  final auth = ref.read(authStateProvider);
+  return auth.hasValue ? auth.requireValue.uid : null;
+}
+
+/// A short, stable, one-way digest of [uid] — the ONLY form the user id is
+/// allowed to take in [diagnosticsClipboardLine].
+///
+/// The blob exists to be pasted into a bug report, quite possibly a public
+/// one. The raw uid is the exact value `auth.uid()` resolves to server-side
+/// and the value every RLS policy in `supabase/schema.sql` is written
+/// against, so it must never leave the app in a support paste. Eight hex
+/// characters still answers the only question support actually asks of it —
+/// "are these two reports the same account?" — and answers nothing else.
+///
+/// FNV-1a rather than `uid.hashCode`: Dart's String hash is not a stable
+/// cross-compiler contract, so the same account could hash differently on
+/// wasm and on JS, destroying the one property this value exists to have.
+/// Hand-rolled rather than `crypto`: it has to be deterministic and
+/// dependency-free, not cryptographic.
+///
+/// Returns `'none'` for a null/empty uid — never an empty token, and never a
+/// digest of the empty string (which would be a real-looking value for
+/// "nobody is signed in").
+@visibleForTesting
+String shortUserIdHash(String? uid) {
+  if (uid == null || uid.isEmpty) return 'none';
+  const prime = 0x01000193;
+  var hash = 0x811c9dc5;
+  for (final unit in uid.codeUnits) {
+    // FNV-1a over UTF-16 code units — identical to the canonical byte form
+    // for the ASCII UUIDs this ever sees, and still deterministic for
+    // anything else.
+    hash ^= unit;
+
+    // The multiply is SPLIT INTO 16-BIT HALVES on purpose, and the obvious
+    // `(hash * prime) & 0xFFFFFFFF` is a bug, not a simplification. Under
+    // dart2js a Dart `int` IS an IEEE-754 double: a 32-bit `hash` times the
+    // ~2^24 FNV prime is up to ~2^56, which loses its low bits to rounding
+    // BEFORE the mask can take them — so a JS build would hash the same uid
+    // differently from wasm, from the VM, and from this file's tests, which
+    // is precisely the cross-compiler stability this digest exists to have.
+    //
+    // Splitting keeps every intermediate under 2^53, where a double is
+    // exact: `hash = hi * 2^16 + lo`, so `hash * prime` mod 2^32 is
+    // `lo * prime` (≤ 2^41) plus the LOW 16 bits of `hi * prime` shifted
+    // back up (≤ 2^32) — everything above bit 31 is masked away regardless,
+    // which is why only those 16 bits of the high half can matter.
+    final lo = (hash & 0xFFFF) * prime;
+    final hi = ((hash >> 16) * prime) & 0xFFFF;
+    hash = (lo + (hi << 16)) & 0xFFFFFFFF;
+  }
+  return hash.toRadixString(16).padLeft(8, '0');
+}
+
+/// [text] flattened into something that can live inside the single-line
+/// diagnostics blob: every run of whitespace (a wrapped sentence, or the
+/// newlines in an exception's `toString`) collapsed to one space, embedded
+/// `"` normalised to `'` so it can't close the quoting around it, and the
+/// result capped at [maxLength].
+///
+/// The cap is why this exists. A sync error is whatever the server or the
+/// transport threw, and one of those pasting forty lines of stack trace onto
+/// the clipboard would destroy the single property that makes this blob
+/// useful in a bug report — being one greppable line a person will actually
+/// paste. The head of a message is the part that names the cause.
+String _flattenForBlob(String text, {int maxLength = 240}) {
+  final flattened = text
+      .replaceAll(RegExp(r'\s+'), ' ')
+      .replaceAll('"', "'")
+      .trim();
+  return flattened.length <= maxLength
+      ? flattened
+      : '${flattened.substring(0, maxLength)}…';
+}
+
+/// ` key="value"` for a free-form [message], or `''` when it is null.
+///
+/// Quoted, unlike the single-token fields around it, because these values are
+/// whole sentences: without the delimiters a reader (or a script) could not
+/// tell where `pullError` ends and `pushError` begins.
+String _errorToken(String key, String? message) =>
+    message == null ? '' : ' $key="${_flattenForBlob(message)}"';
+
 /// One greppable line — the Copy-diagnostics clipboard payload — combining
 /// [durability]'s backend/missing-features/error with [persistence]'s
-/// persist outcome, in the same `key=value` shape [logStorageDurability]
-/// already uses, so a pasted report reads like the boot log line a user
-/// could never have opened themselves.
+/// persist outcome and space estimate, the [sync] engine's last push/pull
+/// errors, the local Drift [schemaVersion] and the [appVersion], in the same
+/// `key=value` shape [logStorageDurability] already uses, so a pasted report
+/// reads like the boot log line a user could never have opened themselves.
+///
+/// The extra facts are the point. Before them this blob could not answer
+/// either of the two things people actually report — "my photo wouldn't
+/// save" (needs the usage/quota numbers rendered directly above the button,
+/// which is why they come from the SAME [StoragePersistenceStatus.estimate]
+/// the row renders and are not re-estimated here) and "sync is broken"
+/// (needs [SyncOrchestratorState.lastPullError]/
+/// [SyncOrchestratorState.lastPushError], plus the status and last-synced
+/// stamp without which a pair of null errors reads identically for "all
+/// fine" and "no sync has ever run").
+///
+/// Every added parameter is OPTIONAL: a caller with nothing to add still
+/// gets a valid line, and each absent value renders the honest `unknown`
+/// rather than a plausible-looking default. [userId] is hashed on the way in
+/// (see [shortUserIdHash]) and never appears raw.
 @visibleForTesting
 String diagnosticsClipboardLine(
   StorageDurability durability,
-  StoragePersistenceStatus persistence,
-) {
+  StoragePersistenceStatus persistence, {
+  SyncOrchestratorState? sync,
+  int? schemaVersion,
+  String? userId,
+  String appVersion = kMasiAppVersion,
+}) {
   final backendLabel =
       durability.measuredBackend?.name ??
       (durability.unavailable ? 'unavailable' : 'probing');
   final missing = _sortedMissingFeatureNames(durability);
-  final reasonSuffix = durability.unavailableReason == null
-      ? ''
-      : ' reason=${durability.unavailableReason}';
+
+  // Through [_errorToken] like every other free-form value, NOT interpolated
+  // raw. `unavailableReason` is whatever the storage probe caught — an
+  // exception's `toString`, which routinely carries newlines — and one of
+  // those pasted in unflattened turns this blob into several lines, breaking
+  // the single-greppable-line guarantee the rest of this function exists to
+  // keep. Quoted for the same reason the error tokens are: a reader has to
+  // be able to see where a sentence-shaped value ends.
+  final reasonSuffix = _errorToken('reason', durability.unavailableReason);
+
+  // Raw byte counts, not `_spaceUsedLabel`'s humanised "38.1 MB / 100.0 MB
+  // (38%)": same source object, but a support blob wants values that survive
+  // being grepped and compared, and "38.1 MB" carries a space that would
+  // break the key=value shape every other token here keeps. The percentage
+  // is carried alongside so the pasted line still agrees, digit for digit,
+  // with the number the reporting user can see on screen.
+  final estimate = persistence.estimate;
+  final fraction = estimate?.usedFraction;
+  final usedPct = fraction == null ? 'unknown' : (fraction * 100).round();
+
+  // `unknown` (not `idle`/`never`) when no state was supplied at all — the
+  // caller having nothing to say is a different fact from the engine being
+  // idle, and collapsing the two would put a confident, invented "idle" in
+  // the one artifact whose entire job is to be trustworthy.
+  final syncTokens = sync == null
+      ? 'syncStatus=unknown lastSyncedAt=unknown'
+      : 'syncStatus=${sync.status.name} '
+            'lastSyncedAt='
+            '${sync.lastSyncedAt?.toUtc().toIso8601String() ?? 'never'}';
+
   return 'masi/storage: backend=$backendLabel '
       'missingFeatures=${missing.join(',')} '
       'persistOutcome=${persistence.outcome.name} '
-      'persisted=${persistence.persisted}'
+      'persisted=${persistence.persisted} '
+      'usageBytes=${estimate?.usageBytes ?? 'unknown'} '
+      'quotaBytes=${estimate?.quotaBytes ?? 'unknown'} '
+      'usedPct=$usedPct '
+      'schemaVersion=${schemaVersion ?? 'unknown'} '
+      'appVersion=$appVersion '
+      'user=${shortUserIdHash(userId)} '
+      '$syncTokens'
+      '${_errorToken('pullError', sync?.lastPullError)}'
+      '${_errorToken('pushError', sync?.lastPushError)}'
       '$reasonSuffix';
 }
 

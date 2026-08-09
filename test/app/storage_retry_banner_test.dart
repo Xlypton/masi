@@ -313,6 +313,251 @@ void main() {
     );
   });
 
+  group('the height cap — the bound this banner was the only one missing', () {
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
+
+    /// Mirrors `storage_pressure_banner_test.dart`'s identical harness: the
+    /// notice above a stand-in for the tab content, so "the content beneath
+    /// stays reachable" is an assertion about a real `Column`, not about the
+    /// banner in isolation.
+    Widget wrapWithContent(ProviderContainer container, {double textScale = 1.0}) {
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp(
+          theme: MasiTheme.light,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
+          home: Scaffold(
+            body: Column(
+              children: [
+                const ShellNotices(),
+                Expanded(child: Container(key: const Key('the-content'))),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    testWidgets(
+      'leaves most of a squeezed viewport to the tab content beneath it — the '
+      'sibling notices all cap at this share, and this one did not',
+      (tester) async {
+        // The exact surface `nav_shell_test.dart` and
+        // `topos_storage_banner.dart` both record a measured overflow at.
+        // Unbounded, this banner sized itself to its content and pushed the
+        // branch below it into an 11px `RenderFlex` overflow the moment its
+        // actions were (correctly) raised to the 44pt tap-target floor.
+        const surface = Size(400, 420);
+        setViewportSize(tester, surface);
+        final (container: container, opens: _) = makeContainer(
+          retryStatus: StorageRetryStatus.failed,
+        );
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(
+              const StorageDurability.unavailable(
+                'the local database did not answer its first query within 30s',
+              ),
+            );
+
+        await tester.pumpWidget(wrapWithContent(container, textScale: 3.0));
+        await tester.pump();
+
+        expect(
+          tester.getSize(find.byKey(const Key('storage-retry-banner'))).height,
+          lessThan(surface.height * 0.5),
+          reason: 'a notice that eats the viewport hides the tab it warns '
+              'about',
+        );
+        expect(
+          tester.getSize(find.byKey(const Key('the-content'))).height,
+          greaterThan(0),
+        );
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets(
+      'the 44pt floor on both actions survives the cap — the overflow is '
+      'fixed by bounding the banner, never by shrinking the tap targets',
+      (tester) async {
+        setViewportSize(tester, const Size(390, 844));
+        final (container: container, opens: _) = makeContainer(
+          retryStatus: StorageRetryStatus.failed,
+        );
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.unavailable('dead'));
+
+        await tester.pumpWidget(wrapWithContent(container));
+        await tester.pump();
+
+        for (final key in const [
+          Key('storage-retry-banner-action'),
+          Key('storage-retry-banner-reload'),
+        ]) {
+          final size = tester.getSize(find.byKey(key));
+          expect(
+            size.width,
+            greaterThanOrEqualTo(44.0),
+            reason: '$key must stay at the HIG minimum tap target',
+          );
+          expect(size.height, greaterThanOrEqualTo(44.0), reason: '$key');
+        }
+        expect(tester.takeException(), isNull);
+      },
+    );
+
+    testWidgets('an ordinary phone viewport is unaffected', (tester) async {
+      setViewportSize(tester, const Size(390, 844));
+      final (container: container, opens: _) = makeContainer();
+      container
+          .read(storageDurabilityProvider.notifier)
+          .report(const StorageDurability.unavailable('dead'));
+
+      await tester.pumpWidget(wrapWithContent(container));
+      await tester.pump();
+
+      expect(find.textContaining("storage isn't responding"), findsOneWidget);
+      expect(find.text('Try again'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('dismissibility (the user\'s decision — every banner in this family '
+      'closes, episode-scoped)', () {
+    /// Exercises [StorageRetryBanner] directly rather than through
+    /// [ShellNotices]: the widget's own dismiss/re-arm contract is what is
+    /// under test here, not `storageDurabilityProvider`'s computation of
+    /// [notice] — that pipeline is already covered above.
+    Widget wrapBannerDirect(ProviderContainer container, String notice) =>
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Scaffold(body: StorageRetryBanner(notice: notice)),
+          ),
+        );
+
+    testWidgets('tapping dismiss hides the banner', (tester) async {
+      final (container: container, opens: _) = makeContainer();
+
+      await tester.pumpWidget(
+        wrapBannerDirect(container, "Your topos couldn't be opened."),
+      );
+      await tester.pump();
+
+      expect(find.byKey(const Key('storage-retry-banner')), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('storage-retry-banner-dismiss')));
+      await tester.pump();
+
+      expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+    });
+
+    testWidgets(
+      'a dismissed message re-arms the moment the notice text changes '
+      '(escalation), even though the widget never unmounted',
+      (tester) async {
+        final (container: container, opens: _) = makeContainer();
+
+        await tester.pumpWidget(wrapBannerDirect(container, 'Message A'));
+        await tester.pump();
+        await tester.tap(
+          find.byKey(const Key('storage-retry-banner-dismiss')),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+
+        // Same widget slot, same State, but a DIFFERENT notice — mirrors
+        // `idle` escalating to `failed` (the reload paragraph appearing).
+        await tester.pumpWidget(wrapBannerDirect(container, 'Message B'));
+        await tester.pump();
+
+        expect(
+          find.byKey(const Key('storage-retry-banner')),
+          findsOneWidget,
+          reason: 'a different message is a different episode and must not '
+              'stay hidden behind an acknowledgement of the old one',
+        );
+      },
+    );
+
+    testWidgets(
+      'the SAME message stays dismissed across rebuilds within one mount '
+      '(a dismissal is not knocked loose by an unrelated rebuild)',
+      (tester) async {
+        final (container: container, opens: _) = makeContainer();
+
+        await tester.pumpWidget(wrapBannerDirect(container, 'Message A'));
+        await tester.pump();
+        await tester.tap(
+          find.byKey(const Key('storage-retry-banner-dismiss')),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+
+        // Rebuilding with the IDENTICAL notice must not resurrect it.
+        await tester.pumpWidget(wrapBannerDirect(container, 'Message A'));
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'the condition clearing and then recurring re-arms a dismissal, even '
+      'with the identical message — through the REAL ShellNotices path',
+      (tester) async {
+        final (container: container, opens: _) = makeContainer();
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.unavailable('dead'));
+
+        await tester.pumpWidget(wrap(container));
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsOneWidget);
+
+        await tester.tap(
+          find.byKey(const Key('storage-retry-banner-dismiss')),
+        );
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+
+        // The condition clears entirely — `ShellNotices` removes this
+        // widget from the tree, disposing its State (and the dismissal
+        // with it).
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.probing());
+        await tester.pump();
+        expect(find.byKey(const Key('storage-retry-banner')), findsNothing);
+
+        // ...and recurs, with the SAME message. A fresh episode of an old
+        // failure must not stay silenced by the earlier acknowledgement.
+        container
+            .read(storageDurabilityProvider.notifier)
+            .report(const StorageDurability.unavailable('dead'));
+        await tester.pump();
+        expect(
+          find.byKey(const Key('storage-retry-banner')),
+          findsOneWidget,
+          reason: 'a new episode of the same failure must re-arm, not stay '
+              'hidden behind the earlier dismissal',
+        );
+      },
+    );
+  });
+
   group('Step 3 — page_reload.dart seam', () {
     test(
       'REGRESSION GUARD: the stub resolved under `flutter test` (no '

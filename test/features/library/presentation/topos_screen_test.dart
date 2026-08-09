@@ -286,6 +286,12 @@ class _FakeSyncOrchestrator extends SyncOrchestrator {
   Future<void> pullNow({bool throttled = false}) async {
     pullNowCallCount++;
   }
+
+  /// Pushes a NEW orchestrator state to every watcher — what a real pull
+  /// failing differently does. Needed to drive the error-identity re-arm,
+  /// which is a change in `lastPullError` OVER TIME and so cannot be staged
+  /// from `initialState` alone.
+  void emit(SyncOrchestratorState next) => state = next;
 }
 
 /// A [StorageDurabilityNotifier] double that just reports a fixed verdict —
@@ -842,7 +848,8 @@ void main() {
 
     testWidgets(
       'a populated library with a lastPullError shows the sync-failure '
-      'banner, reason and all, and its Retry calls pullNow()',
+      'banner — headline on the banner, raw reason behind the ⓘ — and its '
+      'Retry calls pullNow()',
       (tester) async {
         final fakeOrchestrator = _FakeSyncOrchestrator(
           initialState: const SyncOrchestratorState(
@@ -858,15 +865,28 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.text(SyncBanner.syncFailedHeadline), findsOneWidget);
+        // The exception text is NOT printed on the banner any more (it ran to
+        // three lines and ~122px, of which the part that fit was half a
+        // backend URL) — it lives one tap away, in full.
+        expect(find.textContaining('shared rows fetch failed'), findsNothing);
+        expect(find.byKey(const Key('topo-item-wall-1')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('sync-banner-details')));
+        await tester.pumpAndSettle();
         expect(
           find.text("Couldn't sync — Sync failed: shared rows fetch failed."),
           findsOneWidget,
         );
-        expect(find.byKey(const Key('topo-item-wall-1')), findsOneWidget);
+        Navigator.of(
+          tester.element(find.byKey(const Key('sync-banner-details-sheet'))),
+        ).pop();
+        await tester.pumpAndSettle();
 
         expect(fakeOrchestrator.pullNowCallCount, 0);
         await tester.tap(find.byKey(const Key('sync-banner-retry')));
         await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
 
         expect(fakeOrchestrator.pullNowCallCount, 1);
       },
@@ -1010,7 +1030,7 @@ void main() {
         await tester.pumpWidget(_wrap(container, const ToposScreen()));
         await _drain(tester);
 
-        expect(find.text("Couldn't sync — Sync failed: boom."), findsOneWidget);
+        expect(find.text(SyncBanner.syncFailedHeadline), findsOneWidget);
         expect(
           find.text(SyncBanner.sharedPhotosWithheldMessage),
           findsNothing,
@@ -1192,9 +1212,17 @@ void main() {
       },
     );
 
+    // THE USER'S DECISION, pinned at the screen level. These two tests used to
+    // assert the exact opposite — that "Couldn't sync" and the withheld-photos
+    // notice were structurally NOT closable. The user reversed that, and the
+    // old justification did not survive checking anyway: the text this banner
+    // renders is `lastPullError`, which is PULL-only, so a failed PUSH (the
+    // case where the user's work really might not have reached the cloud)
+    // never sets it. What keeps dismissal safe is the SIGNATURE — see the
+    // re-arm test below.
     testWidgets(
-      "the sync-FAILURE banner has no close button — \"Couldn't sync\" is the "
-      'only signal that the user\'s work may not have reached the cloud',
+      'the sync-FAILURE banner IS closable, and its Retry stays reachable '
+      'right up to the moment it goes',
       (tester) async {
         final container = _makeContainer(
           topos: populated,
@@ -1209,14 +1237,19 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('sync-banner')), findsOneWidget);
-        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
         expect(find.byKey(const Key('sync-banner-retry')), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+        expect(find.byKey(const Key('topo-item-wall-1')), findsOneWidget);
       },
     );
 
     testWidgets(
-      'the withheld-shared-photos banner has no close button either — it is '
-      'the only account of a visibly incomplete feed',
+      'the withheld-shared-photos banner is closable too',
       (tester) async {
         final container = _makeContainer(
           topos: populated,
@@ -1232,7 +1265,62 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('sync-banner')), findsOneWidget);
-        expect(find.byKey(const Key('sync-banner-dismiss')), findsNothing);
+        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
+
+    // THE THING THAT MAKES A CLOSABLE FAILURE BANNER SAFE. Without it, "I have
+    // closed A sync banner" would let today's acknowledgement swallow
+    // tomorrow's genuine, different failure in silence.
+    testWidgets(
+      'a dismissed sync failure RE-ARMS when the underlying error changes — '
+      'acknowledging one message cannot suppress a later, different one',
+      (tester) async {
+        final orchestrator = _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastPullError: 'Sync failed: 3 rows deferred',
+          ),
+        );
+        final container = _makeContainer(
+          topos: populated,
+          syncOrchestrator: orchestrator,
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+
+        // A DIFFERENT failure lands.
+        orchestrator.emit(
+          const SyncOrchestratorState(
+            lastPullError: 'Sync failed: own rows fetch failed',
+          ),
+        );
+        await _drain(tester);
+
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsOneWidget,
+          reason: 'a dismissal is scoped to the message it acknowledged, not '
+              'to "sync banners" as a category',
+        );
+
+        // ...and the SAME message coming back around stays acknowledged.
+        orchestrator.emit(
+          const SyncOrchestratorState(
+            lastPullError: 'Sync failed: 3 rows deferred',
+          ),
+        );
+        await _drain(tester);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
       },
     );
 
@@ -1259,6 +1347,131 @@ void main() {
 
         expect(find.byKey(const Key('sync-banner')), findsNothing);
         expect(find.textContaining('Failed host lookup'), findsNothing);
+      },
+    );
+  });
+
+  group('T2c: the banner is a SLIVER of the feed, not a header above it', () {
+    List<TopoRef> manyTopos(int count) => [
+      for (var i = 0; i < count; i++)
+        TopoRef(
+          wallId: 'wall-$i',
+          name: 'Topo $i',
+          thumbnailPath: null,
+          routeCount: 1,
+          createdAt: 1000 + i,
+        ),
+    ];
+
+    /// The banner's top edge, or `null` once it has been scrolled out of the
+    /// tree entirely — which is a STRONGER form of "it moved off screen", not
+    /// a failure, so the assertions below accept either.
+    double? bannerTop(WidgetTester tester) {
+      final finder = find.byKey(const Key('sync-banner'));
+      return finder.evaluate().isEmpty ? null : tester.getTopLeft(finder).dy;
+    }
+
+    testWidgets(
+      'THE HEIGHT FIX: scrolling the list moves the banner off screen, and '
+      'scrolling back brings it back — as a Column sibling above the list its '
+      '~122px could never be reclaimed by any amount of scrolling',
+      (tester) async {
+        final container = _makeContainer(
+          topos: manyTopos(30),
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        final before = bannerTop(tester);
+        expect(before, isNotNull, reason: 'the banner should start on screen');
+
+        await tester.drag(
+          find.byKey(const Key('topo-item-wall-0')),
+          const Offset(0, -300),
+        );
+        await tester.pumpAndSettle();
+
+        final after = bannerTop(tester);
+        expect(
+          after == null || after < before! - 100,
+          isTrue,
+          reason:
+              'the banner has to travel with the content — it was $before, '
+              'now $after',
+        );
+
+        await tester.drag(find.byType(Scrollable).last, const Offset(0, 300));
+        await tester.pumpAndSettle();
+
+        expect(
+          bannerTop(tester),
+          moreOrLessEquals(before!, epsilon: 1),
+          reason:
+              'scrolling back must reveal it again — it is scrolled away, '
+              'not consumed',
+        );
+      },
+    );
+
+    // THE SINGLE MOST IMPORTANT REGRESSION TO AVOID. As "item 0" of the data
+    // list the banner would silently vanish in every one of this screen's
+    // empty branches — including the offline-at-a-crag case it exists for.
+    testWidgets(
+      'the banner still renders when the list is EMPTY — the empty states '
+      'live in the same scroll view, so it cannot vanish under them',
+      (tester) async {
+        final container = _makeContainer(
+          connectivity: _ScriptedConnectivity(reachable: false),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(find.text(SyncBanner.offlineMessage), findsOneWidget);
+        expect(find.byKey(const Key('topos-offline-empty')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'and with the OTHER empty state under it too — a genuinely empty, '
+      'online library whose shared photos were withheld',
+      (tester) async {
+        final container = _makeContainer(
+          syncOrchestrator: _FakeSyncOrchestrator(
+            initialState: const SyncOrchestratorState(
+              lastSharedPhotoBudgetReason:
+                  SharedPhotoBudgetReason.storagePressure,
+            ),
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+        expect(
+          find.text(SyncBanner.sharedPhotosWithheldMessage),
+          findsOneWidget,
+        );
+        expect(find.byKey(const Key('topos-empty-state')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'no banner means no wrapper at all — the list keeps exactly the layout '
+      'it had before any of this existed',
+      (tester) async {
+        final container = _makeContainer(topos: manyTopos(30));
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+        expect(find.byType(NestedScrollView), findsNothing);
+        expect(find.byKey(const Key('topo-item-wall-0')), findsOneWidget);
       },
     );
   });
@@ -6523,6 +6736,97 @@ void main() {
       expect(callCount, greaterThan(callsAfterFirstBuild));
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets(
+      'device-screenshot bug fix: a hard load failure (asyncTopos errors '
+      'with no cached value) suppresses the sync/offline banner — '
+      "MasiAsyncView's own full-screen error already reports the one "
+      'underlying failure, and stacking the OFFLINE banner on top of it '
+      'would report it a second time (a third, counting the shell\'s own '
+      'StorageRetryBanner, on the actual device screenshot)',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          retry: (retryCount, error) => null,
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            connectivityServiceProvider.overrideWithValue(
+              _ScriptedConnectivity(reachable: false),
+            ),
+            syncOrchestratorProvider.overrideWith(
+              () => _FakeSyncOrchestrator(),
+            ),
+            storageDurabilityProvider.overrideWith(
+              () => _FakeStorageDurability(const StorageDurability.probing()),
+            ),
+            toposProvider.overrideWith(
+              (ref) => Stream<List<TopoRef>>.error(
+                Exception('watchTopos boom (test)'),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+        expect(
+          find.byKey(const Key('sync-banner')),
+          findsNothing,
+          reason: "the full-screen error already reports the failure; an "
+              'OFFLINE banner riding above it as the scroll view\'s first '
+              'sliver would also — falsely — claim there IS saved data '
+              'being shown ("showing your saved topos"), directly '
+              'contradicting the full-screen error beneath it',
+        );
+      },
+    );
+
+    testWidgets(
+      'the same hard-failure suppression applies to the SYNC-FAILED banner '
+      'too (not just offline) — the underlying condition is reported once, '
+      'by the full-screen error, not twice',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          retry: (retryCount, error) => null,
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+            connectivityServiceProvider.overrideWithValue(
+              _ScriptedConnectivity(reachable: true),
+            ),
+            syncOrchestratorProvider.overrideWith(
+              () => _FakeSyncOrchestrator(
+                initialState: const SyncOrchestratorState(
+                  lastPullError: 'Sync failed: boom (test)',
+                ),
+              ),
+            ),
+            storageDurabilityProvider.overrideWith(
+              () => _FakeStorageDurability(const StorageDurability.probing()),
+            ),
+            toposProvider.overrideWith(
+              (ref) => Stream<List<TopoRef>>.error(
+                Exception('watchTopos boom (test)'),
+              ),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
+        expect(find.byKey(const Key('sync-banner')), findsNothing);
+      },
+    );
 
     testWidgets('the create button shows a cue for the WRITE, and only for the '
         'write — not while the picker or name dialog is up', (tester) async {

@@ -308,8 +308,11 @@ class _FeedView extends ConsumerWidget {
 
     // Stage 3 (T2). The `showSyncError` gate above is empty-feed-only, so a
     // user with cached rows was told nothing at all when the feed silently
-    // stopped refreshing. [SyncBanner] renders above the list irrespective of
-    // how much is in it.
+    // stopped refreshing. [SyncBanner] renders irrespective of how much is in
+    // the list — as the FIRST SLIVER of the feed's own scroll view, so it can
+    // be scrolled out of the way once read but never vanishes just because the
+    // feed is empty (see [SyncBanner]'s class doc for why those are not the
+    // same thing).
     //
     // `isKnownOffline`, never `!= online`: `Reachability.unknown` is the
     // pre-probe state, and treating it as offline flashes this banner for a
@@ -353,34 +356,57 @@ class _FeedView extends ConsumerWidget {
         : sharedPhotosWithheld
         ? SyncBannerKind.sharedPhotosWithheld
         : null;
+    // The reason text this banner is actually reporting. `null` for every kind
+    // but `syncFailed`, matching [SyncBanner.detail]'s own contract — and the
+    // reason a stale pull error changing underneath an OFFLINE banner (which
+    // was never showing it) cannot knock that banner's dismissal loose.
+    final bannerDetail = bannerKind == SyncBannerKind.syncFailed
+        ? syncError
+        : null;
     // Shared with the Library's copy of this banner (see
     // `offline_banner_dismissal.dart`): closing it there closes it here, since
-    // it is one condition acknowledged once — and it comes back on the next
-    // offline episode. Suppresses the OFFLINE kind only; it never promotes the
-    // stale pull error that `bannerKind` deliberately ranks below it.
-    final offlineBannerDismissed = ref.watch(offlineBannerDismissedProvider);
-
-    return Column(
-      children: [
-        // Dismissed means no widget at all — not a zero-height box that still
-        // contributes the banner's own margin.
-        if (bannerKind != null &&
-            !(bannerKind == SyncBannerKind.offline && offlineBannerDismissed))
-          SyncBanner(
+    // it is one condition acknowledged once — and it re-arms when the message
+    // changes, or, for the offline kind, when the signal comes back. Applied
+    // as a suppression of the RESOLVED kind rather than folded into the ranking
+    // above: falling through to the next kind would answer "I've read that
+    // you're offline" by printing the stale `SocketException` the offline
+    // banner deliberately outranks.
+    final bannerSignature = bannerKind == null
+        ? null
+        : SyncBannerDismissalController.signature(
+            bannerKind.name,
+            bannerDetail,
+          );
+    final dismissedSignature = ref.watch(syncBannerDismissalProvider);
+    // Dismissed means GONE, not collapsed: `null` puts no sliver in the scroll
+    // view below at all, so neither the banner nor its own top margin
+    // contributes a single logical pixel.
+    final Widget? syncBannerWidget =
+        (bannerKind == null || bannerSignature == dismissedSignature)
+        ? null
+        : SyncBanner(
             kind: bannerKind,
-            detail: syncError,
+            detail: bannerDetail,
             // Nothing useful to press while genuinely offline.
             onRetry: bannerKind == SyncBannerKind.syncFailed
                 ? () => ref.read(syncOrchestratorProvider.notifier).pullNow()
                 : null,
-            // Offline only — `SyncBanner.onDismiss` enforces that structurally
-            // too, so a future call site cannot make "Couldn't sync" closable.
-            onDismiss: bannerKind == SyncBannerKind.offline
-                ? () => ref
-                      .read(offlineBannerDismissedProvider.notifier)
-                      .dismiss()
-                : null,
-          ),
+            // EVERY kind is closable now (the user's decision — see
+            // [SyncBanner.onDismiss] for why the old "syncFailed must never be
+            // dismissible" rule was wrong on the facts as well). What keeps
+            // that safe is the signature: this acknowledgement covers this
+            // exact message and re-arms the moment the underlying error
+            // changes.
+            onDismiss: () => ref
+                .read(syncBannerDismissalProvider.notifier)
+                .dismiss(
+                  bannerSignature!,
+                  endsWithOfflineEpisode: bannerKind == SyncBannerKind.offline,
+                ),
+          );
+
+    return Column(
+      children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(
             MasiSpacing.lg,
@@ -437,51 +463,70 @@ class _FeedView extends ConsumerWidget {
             key: const Key('community-feed-refresh'),
             onRefresh: () =>
                 ref.read(syncOrchestratorProvider.notifier).pullNow(),
-            child: emptyMessage != null
-                // `RefreshIndicator` needs an `AlwaysScrollableScrollPhysics`
-                // scrollable ancestor to arm its overscroll gesture even
-                // when there's nothing to scroll — a bare, non-scrollable
-                // `_EmptyState` (the previous body here) could never be
-                // pulled. `LayoutBuilder` + a height-matched `SizedBox`
-                // keeps `_EmptyState`'s own `Center` filling/centering in
-                // exactly the same visual spot as before, now inside a
-                // (trivially) scrollable `ListView`.
-                ? LayoutBuilder(
-                    builder: (context, constraints) => ListView(
-                      physics: const AlwaysScrollableScrollPhysics(),
-                      children: [
-                        SizedBox(
-                          height: constraints.maxHeight,
-                          child: showSyncError
-                              ? _SyncErrorEmptyState(message: syncError)
-                              : showOfflineEmpty
-                              ? const _OfflineEmptyState()
-                              : _EmptyState(message: emptyMessage),
-                        ),
-                      ],
-                    ),
+            // ONE scroll view for EVERY state of this feed — populated list,
+            // filtered/searched-empty, genuinely-empty, sync-failed and
+            // offline alike — with [SyncBanner] as its first sliver.
+            //
+            // That single-scroll-view shape is the whole point, not an
+            // incidental refactor. As a `Column` sibling above this the banner
+            // cost the list ~122 px that scrolling could never reclaim (on a
+            // 390x844 phone it pushed the first row from 14.7% down the screen
+            // to 31%, and to 42.9% at a 1.8x text scale). As "item 0" of the
+            // list it would instead have silently disappeared in all four
+            // empty branches below — including offline-with-an-empty-feed,
+            // which is precisely the case it exists for. A sliver in the view
+            // that ALSO hosts the empty states is the only arrangement that is
+            // neither.
+            child: CustomScrollView(
+              // `RefreshIndicator` needs an `AlwaysScrollableScrollPhysics`
+              // scrollable descendant to arm its overscroll gesture even when
+              // there's nothing to scroll — a bare, non-scrollable
+              // `_EmptyState` (the body here two revisions ago) could never be
+              // pulled.
+              physics: const AlwaysScrollableScrollPhysics(),
+              slivers: [
+                if (syncBannerWidget != null)
+                  SliverToBoxAdapter(child: syncBannerWidget),
+                if (emptyMessage != null)
+                  // `hasScrollBody` deliberately left at its `true` default:
+                  // `_OfflineEmptyState` IS a `SingleChildScrollView` (it
+                  // wraps itself for squeeze tolerance), and `false` asserts on
+                  // a scrollable child — it measures the child's max intrinsic
+                  // height, which a scrollable reports as infinite. `true`
+                  // hands the child exactly the space left under the banner,
+                  // which is what the old height-matched `SizedBox` did, so
+                  // every empty state keeps the geometry it was tuned for.
+                  SliverFillRemaining(
+                    child: showSyncError
+                        ? _SyncErrorEmptyState(message: syncError)
+                        : showOfflineEmpty
+                        ? const _OfflineEmptyState()
+                        : _EmptyState(message: emptyMessage),
                   )
-                : ListView.separated(
-                    physics: const AlwaysScrollableScrollPhysics(),
+                else
+                  SliverPadding(
                     padding: EdgeInsets.fromLTRB(
                       MasiSpacing.lg,
                       MasiSpacing.sm,
                       MasiSpacing.lg,
                       MasiSpacing.sm + bottomChromeInset,
                     ),
-                    itemCount: filtered.length,
-                    separatorBuilder: (context, index) =>
-                        const SizedBox(height: MasiSpacing.sm),
-                    itemBuilder: (context, index) => switch (filtered[index]) {
-                      TopoFeedItem(:final topo, :final alternates) => _FeedRow(
-                        topo: topo,
-                        alternates: alternates,
-                      ),
-                      AscentFeedItem(:final entry) => _AscentFeedRow(
-                        entry: entry,
-                      ),
-                    },
+                    sliver: SliverList.separated(
+                      itemCount: filtered.length,
+                      separatorBuilder: (context, index) =>
+                          const SizedBox(height: MasiSpacing.sm),
+                      itemBuilder: (context, index) =>
+                          switch (filtered[index]) {
+                            TopoFeedItem(:final topo, :final alternates) =>
+                              _FeedRow(topo: topo, alternates: alternates),
+                            AscentFeedItem(:final entry) => _AscentFeedRow(
+                              entry: entry,
+                            ),
+                          },
+                    ),
                   ),
+              ],
+            ),
           ),
         ),
       ],
@@ -870,11 +915,7 @@ class _FeedRow extends ConsumerWidget {
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              MasiIcon(
-                                'comment',
-                                size: 16,
-                                color: colors.ink3,
-                              ),
+                              MasiIcon('comment', size: 16, color: colors.ink3),
                               const SizedBox(width: 2),
                               Text(
                                 '${topo.commentCount}',
@@ -1030,9 +1071,7 @@ class _AscentFeedRow extends ConsumerWidget {
                     Text(
                       '${styleLabel(entry.style)} · '
                       '${_formatAscentDate(entry.climbedAt)}',
-                      style: textTheme.titleSmall?.copyWith(
-                        color: colors.ink2,
-                      ),
+                      style: textTheme.titleSmall?.copyWith(color: colors.ink2),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1042,9 +1081,7 @@ class _AscentFeedRow extends ConsumerWidget {
                       children: [
                         Flexible(
                           child: Row(
-                            key: Key(
-                              'community-ascent-row-$ascentId-likes',
-                            ),
+                            key: Key('community-ascent-row-$ascentId-likes'),
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
@@ -1064,17 +1101,11 @@ class _AscentFeedRow extends ConsumerWidget {
                         const SizedBox(width: MasiSpacing.sm),
                         Flexible(
                           child: Row(
-                            key: Key(
-                              'community-ascent-row-$ascentId-comments',
-                            ),
+                            key: Key('community-ascent-row-$ascentId-comments'),
                             mainAxisSize: MainAxisSize.min,
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              MasiIcon(
-                                'comment',
-                                size: 16,
-                                color: colors.ink3,
-                              ),
+                              MasiIcon('comment', size: 16, color: colors.ink3),
                               const SizedBox(width: 2),
                               Text(
                                 '$commentCount',

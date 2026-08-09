@@ -43,7 +43,18 @@ import 'theme.dart';
 /// NOT the quieter `accent` tone `SyncBanner` uses for `sharedPhotosWithheld`:
 /// that condition is a harmless "some placeholders" cosmetic fact, while this
 /// one is a real, near-term risk to the user's OWN unsaved work.
-class StoragePressureBanner extends ConsumerWidget {
+///
+/// **Dismissible** (the user's decision — every banner in this family closes;
+/// see `sync_banner.dart`'s `SyncBanner.onDismiss`). A plain per-[State] flag,
+/// not a shared provider, is enough here for the same reason it is on
+/// `StorageRetryBanner`: this banner has exactly one mount point
+/// ([ShellNotices]), which removes it from the tree entirely once the prune
+/// outcome no longer warrants it (see `ShellNotices.build`) — so the NEXT
+/// occurrence is a brand-new [State] and the dismissal does not carry over.
+/// Unlike `StorageRetryBanner`'s notice text, [message] never varies, so
+/// there is no escalation case to re-arm against WITHIN one mount — a bare
+/// bool is the whole story.
+class StoragePressureBanner extends ConsumerStatefulWidget {
   const StoragePressureBanner({super.key});
 
   /// The one agreed sentence, exposed as a constant for the same reason
@@ -83,7 +94,25 @@ class StoragePressureBanner extends ConsumerWidget {
   static const int _messageMaxLines = 4;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<StoragePressureBanner> createState() =>
+      _StoragePressureBannerState();
+}
+
+class _StoragePressureBannerState extends ConsumerState<StoragePressureBanner> {
+  /// Whether the user closed this banner — a purely local, transient flag
+  /// (not persisted), exactly like `install_banner.dart`'s identical
+  /// `_dismissed`. See the class doc for why a bare bool (rather than
+  /// `StorageRetryBanner`'s signature-compared field) is the whole story
+  /// here: [StoragePressureBanner.message] never varies, so there is no
+  /// escalating-message case within one mount to re-arm against — only the
+  /// widget dying and remounting (handled for free by [ShellNotices]
+  /// removing this from the tree once the condition clears) re-arms it.
+  bool _dismissed = false;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_dismissed) return const SizedBox.shrink();
+
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final clearing =
@@ -96,10 +125,17 @@ class StoragePressureBanner extends ConsumerWidget {
       top: true,
       bottom: false,
       child: Padding(
+        // `lg` sides to match the screen-level notices (`SyncBanner`,
+        // `_StorageWarningBanner`, `MasiAsyncView`'s stale-error bar), all of
+        // which inset by `fromLTRB(lg, md, lg, 0)`. This banner is already
+        // documented as a visual sibling of those, and at 12px it sat 4px
+        // wider on each side than the notice it could be stacked directly
+        // above. Horizontal only — the `md` top keeps the same vertical
+        // rhythm.
         padding: const EdgeInsets.fromLTRB(
+          MasiSpacing.lg,
           MasiSpacing.md,
-          MasiSpacing.md,
-          MasiSpacing.md,
+          MasiSpacing.lg,
           0,
         ),
         child: Container(
@@ -115,7 +151,9 @@ class StoragePressureBanner extends ConsumerWidget {
           ),
           child: ConstrainedBox(
             constraints: BoxConstraints(
-              maxHeight: MediaQuery.sizeOf(context).height * _maxViewportShare,
+              maxHeight:
+                  MediaQuery.sizeOf(context).height *
+                  StoragePressureBanner._maxViewportShare,
             ),
             child: SingleChildScrollView(
               child: Row(
@@ -137,9 +175,9 @@ class StoragePressureBanner extends ConsumerWidget {
                         Semantics(
                           liveRegion: true,
                           child: Text(
-                            message,
+                            StoragePressureBanner.message,
                             key: const Key('storage-pressure-banner-message'),
-                            maxLines: _messageMaxLines,
+                            maxLines: StoragePressureBanner._messageMaxLines,
                             overflow: TextOverflow.ellipsis,
                             style: textTheme.bodyMedium?.copyWith(
                               color: colors.ink2,
@@ -155,12 +193,20 @@ class StoragePressureBanner extends ConsumerWidget {
                             // same reason `StorageRetryBanner`'s action is: a
                             // second tap mid-clear would be a no-op the user
                             // reads as a dead button.
-                            onPressed: clearing
-                                ? null
-                                : () => _confirmAndClear(context, ref),
+                            onPressed: clearing ? null : _confirmAndClear,
                             style: TextButton.styleFrom(
                               padding: EdgeInsets.zero,
-                              minimumSize: Size.zero,
+                              // 44x44, not `Size.zero` — the iOS HIG minimum
+                              // tap target (same recipe as
+                              // `topo_canvas_screen.dart`'s
+                              // `_topRowIconStyle`). `shrinkWrap` below opts
+                              // OUT of Material's padded 48x48 hit area, so
+                              // at `Size.zero` the tappable region really was
+                              // the ~20pt label box and nothing more.
+                              minimumSize: const Size(44, 44),
+                              // Kept deliberately: the footprint should be
+                              // exactly `minimumSize`, not Material's larger
+                              // default. Only the minimum size changes here.
                               tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             ),
                             child: Text(
@@ -172,6 +218,18 @@ class StoragePressureBanner extends ConsumerWidget {
                         ),
                       ],
                     ),
+                  ),
+                  // Every shell/screen notice in this family closes now — see
+                  // the class doc. Same sizing/styling as
+                  // `StorageRetryBanner`'s identical control.
+                  const SizedBox(width: MasiSpacing.xs),
+                  IconButton(
+                    key: const Key('storage-pressure-banner-dismiss'),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Dismiss',
+                    onPressed: () => setState(() => _dismissed = true),
+                    icon: MasiIcon('close', size: 18, color: colors.ink3),
                   ),
                 ],
               ),
@@ -187,11 +245,11 @@ class StoragePressureBanner extends ConsumerWidget {
   /// `true` return of this dialog — a cancelled or dismissed dialog (`false`
   /// or `null`, e.g. a barrier tap or the back gesture) returns without ever
   /// touching the controller, so no bytes are deleted.
-  Future<void> _confirmAndClear(BuildContext context, WidgetRef ref) async {
+  Future<void> _confirmAndClear() async {
     final confirmed = await showMasiConfirm(
       context,
       title: 'Clear cached community photos?',
-      message: confirmBody,
+      message: StoragePressureBanner.confirmBody,
       confirmLabel: 'Clear',
       confirmKey: const Key('storage-pressure-clear-confirm'),
       cancelKey: const Key('storage-pressure-clear-cancel'),
@@ -201,7 +259,7 @@ class StoragePressureBanner extends ConsumerWidget {
 
     final controller = ref.read(communityPhotoClearProvider.notifier);
     await controller.clear();
-    if (!context.mounted) return;
+    if (!mounted) return;
 
     final status = ref.read(communityPhotoClearProvider);
     final outcome = controller.lastOutcome;

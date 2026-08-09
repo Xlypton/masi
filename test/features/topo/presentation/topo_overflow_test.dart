@@ -4,6 +4,7 @@ import 'package:masi/features/topo/presentation/route_legend.dart';
 import 'package:masi/features/topo/presentation/symbol_palette_bar.dart';
 import 'package:masi/features/topo/presentation/topo_canvas.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -18,7 +19,21 @@ const _testWallId = 'test-wall';
 ///
 /// Bug A: `SymbolPaletteBar`'s fixed-height (`kSymbolPaletteBarHeight`) bar
 /// overflowed at large `textScaler` values because its icon+label `Column`
-/// grew past the bar's fixed slot.
+/// grew past the bar's fixed slot. The bar must still not overflow at any
+/// text scale — that is what this group guards — but the WAY it stays inside
+/// its slot has since changed, and so has what "correct" looks like above
+/// ~1.3x. The original fix wrapped the whole icon+label group in
+/// `FittedBox(fit: scaleDown)`, which kept the bar inside its slot by
+/// shrinking the CANVAS TOOL GLYPHS as the system text size grew — an
+/// accessibility inversion (measured: 22px at 1.0x → 14.3px at 3.0x). The
+/// bar now keeps the glyph at a fixed size and DROPS the text label past
+/// `_kSymbolLabelMaxTextScale` (1.3), leaving the `Tooltip` each control
+/// already carried to supply both the meaning and the accessibility label —
+/// so above that threshold "no label rendered" is the correct outcome, not a
+/// failure. See `symbol_palette_bar.dart`'s `_kSymbolLabelMaxTextScale`, and
+/// `symbol_palette_text_scale_test.dart` for the full threshold/tap-target
+/// matrix; the cases below pin only the no-overflow guarantee plus the
+/// contract at 3.0x.
 ///
 /// Bug B: `TopoCanvasBody`'s Column wasn't scrollable, and `RouteLegend`
 /// capped its height at 40% of the FULL SCREEN (not the height actually
@@ -43,21 +58,66 @@ void main() {
     }
 
     testWidgets(
-      'B-A1: no overflow at 3.0x text scale, and all symbol labels still '
-      'render',
+      'B-A1: no overflow at 3.0x text scale; the labels give way and the '
+      'Tooltip carries each symbol instead, with the glyph left full size',
       (tester) async {
         final container = ProviderContainer();
         addTearDown(container.dispose);
+        // See B-A2's note: keep this family member alive so the unmount at
+        // teardown can't leave an autoDispose Timer pending.
+        container.listen(drawControllerProvider(_testWallId), (_, _) {});
 
         await tester.pumpWidget(buildPaletteBar(container, 3.0));
         await tester.pumpAndSettle();
 
+        // The original point of this case, unchanged: whatever the bar does
+        // about labels, it must not overflow its fixed-height slot.
         expect(tester.takeException(), isNull);
-        for (final label in ['Anchor', 'Bolt', 'Top', 'Crux']) {
+
+        for (final (label, buttonKey) in const [
+          ('Anchor', 'topo-symbol-anchor'),
+          ('Bolt', 'topo-symbol-bolt'),
+          ('Top', 'topo-symbol-top'),
+          ('Crux', 'topo-symbol-crux'),
+        ]) {
           expect(
             find.text(label),
+            findsNothing,
+            reason:
+                'past _kSymbolLabelMaxTextScale (1.3) the visible label "$label" '
+                'is what gives way — at 3.0x it must not be rendered',
+          );
+          expect(
+            find.byTooltip(label),
             findsOneWidget,
-            reason: 'label "$label" must still render at 3.0x text scale',
+            reason:
+                'the Tooltip for "$label" must survive the label drop — it is '
+                'what carries the meaning, and the accessibility label, once '
+                'the text is gone',
+          );
+
+          // The actual regression the label drop exists to prevent: a LARGER
+          // accessibility text scale must never shrink the canvas tools.
+          // `getRect` resolves through `localToGlobal`, so any ancestor
+          // FittedBox scale shows up here — the pre-fix widget's MasiIcon
+          // still *reported* 22px while painting at 14.3px.
+          final glyph = tester
+              .getRect(
+                find.descendant(
+                  of: find.byKey(Key(buttonKey)),
+                  matching: find.byType(MasiIcon),
+                ),
+              )
+              .size;
+          expect(
+            glyph.width,
+            moreOrLessEquals(22.0, epsilon: 0.01),
+            reason: '"$label" glyph shrank at 3.0x text scale',
+          );
+          expect(
+            glyph.height,
+            moreOrLessEquals(22.0, epsilon: 0.01),
+            reason: '"$label" glyph shrank at 3.0x text scale',
           );
         }
       },
