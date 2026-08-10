@@ -921,6 +921,16 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     // The only action here with nothing to confirm, so the wait is ours from
     // the instant the menu closes.
     reportBusy(true);
+    // Deliberately does NOT delete the published bytes here. That belongs to
+    // the sync push (SEC-2, `sync_service.dart`), and putting it here was an
+    // active bug: this sheet offers "Unpublish" rather than "Withdraw…"
+    // whenever `wallModerationViewProvider` has no value yet — a cold start,
+    // a failed best-effort refresh, or a post-sign-out clear — so a genuinely
+    // published topo could have its bytes deleted while the server's
+    // `protect_published_wall` trigger reverted the visibility flip, leaving
+    // it publicly listed with no images and no way back. `_setWallVisibility`
+    // already marks the wall's photos dirty, so the dirty-scoped push reaches
+    // the unshare branch unaided.
     return _runGuarded(
       context,
       "Couldn't unpublish — please try again",
