@@ -181,7 +181,7 @@ Future<void> _showToposFiltersSheet(BuildContext context) {
 /// chip row ([MinStarsFilterChips]), a style-tag multi-select
 /// ([StyleTagFilterChips] — the same widget and the same OR semantics the
 /// Community filter uses), a visibility segmented control
-/// (All/Shared/Private), and an area multi-select (every real area from
+/// (All/Published/Private), and an area multi-select (every real area from
 /// [areasProvider] plus an explicit "Unfiled" option mapping to
 /// [ToposFilter.unfiledAreaId]), with a Clear action that resets
 /// [toposFilterProvider] back to its default (inactive) value.
@@ -419,12 +419,21 @@ class _FilterSectionLabel extends StatelessWidget {
   }
 }
 
-/// A [ToposVisibilityFilter] segmented toggle (All/Shared/Private) for
+/// A [ToposVisibilityFilter] segmented toggle (All/Published/Private) for
 /// [_ToposFiltersSheet], visually mirroring [GradeRangePicker]'s
 /// `CupertinoSlidingSegmentedControl` (that widget's own segment-label
 /// helper is private to its file, so this replicates rather than imports
 /// it). Purely controlled: [value] is the current selection, [onChanged]
 /// fires with the new value on every tap.
+///
+/// **The middle segment reads "Published", not "Shared"** — the same word
+/// [_VisibilityBadge] stamps on the rows this segment selects (see
+/// `topos_badges.dart`'s header for the owner's three-words-for-three-facts
+/// decision). It said "Shared" until the two were reconciled, which meant
+/// filtering by *Shared* returned rows badged *Published*. The enum value is
+/// still [ToposVisibilityFilter.shared] and the stored `walls.visibility`
+/// column still holds `'shared'`: this is a label, and renaming data to match
+/// a label would be a migration for no gain.
 class _VisibilitySegmented extends StatelessWidget {
   const _VisibilitySegmented({required this.value, required this.onChanged});
 
@@ -448,7 +457,7 @@ class _VisibilitySegmented extends StatelessWidget {
         ),
         ToposVisibilityFilter.shared: _FilterSegmentLabel(
           key: const Key('topos-filter-visibility-shared'),
-          label: 'Shared',
+          label: 'Published',
           selected: value == ToposVisibilityFilter.shared,
           colors: colors,
         ),

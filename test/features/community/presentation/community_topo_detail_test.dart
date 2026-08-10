@@ -1378,8 +1378,136 @@ void main() {
         tester.getRect(button).right,
         moreOrLessEquals(tester.getRect(row).right, epsilon: 0.01),
       );
+      expect(tester.takeException(), isNull);
     },
   );
+
+  /// The accessibility half of the row above.
+  ///
+  /// The flush-right layout has ZERO horizontal slack by construction, so the
+  /// moment "Log ascent" is scaled up it ran past the card's right edge — ~20 px
+  /// at 1.5x, ~77 px at 2x on a 360-wide viewport. That was a real overflow on
+  /// the first screen an iPhone user sees (the routes card is now the first thing
+  /// under the photo), and it was previously swallowed rather than asserted.
+  ///
+  /// The fix is `_buildRouteRow`'s two shapes: inline-and-flush at the default
+  /// text size, stacked (info above, actions right-aligned below) once text is
+  /// enlarged past [kRouteRowStackTextScale]. Clamping the text scale was NOT an
+  /// option — the users who turn text up are exactly the ones who need it.
+  group('the per-route row at accessibility text scales', () {
+    Future<
+      ({AppDatabase db, ProviderContainer container, String namedRouteDbId})
+    >
+    pumpAtScale(WidgetTester tester, double scale) async {
+      // 360x640: a small phone in the browser, the narrowest realistic target.
+      tester.view.physicalSize = const Size(360, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final seeded = await seedWallWithTwoRoutesAndComments(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: seeded.container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            // Above the Navigator (so it wraps `home`) rather than a MediaQuery
+            // around the screen, which would have to fabricate a whole
+            // MediaQueryData and lose the pinned view size.
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: TextScaler.linear(scale)),
+              child: child!,
+            ),
+            home: CommunityTopoDetailScreen(
+              wallId: seeded.wallId,
+              debugInitialImageSize: const Size(1000, 2000),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return (
+        db: seeded.db,
+        container: seeded.container,
+        namedRouteDbId: seeded.namedRouteDbId,
+      );
+    }
+
+    for (final scale in const [1.5, 2.0, 3.0]) {
+      testWidgets('lays out with NO overflow at ${scale}x text scale', (
+        tester,
+      ) async {
+        final seeded = await pumpAtScale(tester, scale);
+
+        // Both route rows are really built — an overflow assertion over a row
+        // the lazy list never laid out proves nothing.
+        expect(
+          find.byKey(
+            Key('community-log-ascent-${seeded.namedRouteDbId}'),
+            skipOffstage: false,
+          ),
+          findsOneWidget,
+        );
+        await scrollKeyIntoView(
+          tester,
+          Key('community-log-ascent-${seeded.namedRouteDbId}'),
+        );
+
+        expect(
+          tester.takeException(),
+          isNull,
+          reason: 'a RenderFlex overflow at ${scale}x is the defect itself',
+        );
+
+        // The defect stated in measurable terms, independent of whether the
+        // framework happens to raise a debug overflow error: the button never
+        // runs off the 360 px viewport.
+        expect(
+          tester
+              .getRect(
+                find.byKey(
+                  Key('community-log-ascent-${seeded.namedRouteDbId}'),
+                ),
+              )
+              .right,
+          lessThanOrEqualTo(360.0),
+          reason: 'the actions must stay inside the card at ${scale}x',
+        );
+      });
+    }
+
+    testWidgets('the actions sit BELOW the route info once text is enlarged, '
+        'and still inside the card', (tester) async {
+      final seeded = await pumpAtScale(tester, 2.0);
+      final button = find.byKey(
+        Key('community-log-ascent-${seeded.namedRouteDbId}'),
+        skipOffstage: false,
+      );
+      await scrollKeyIntoView(
+        tester,
+        Key('community-log-ascent-${seeded.namedRouteDbId}'),
+      );
+
+      // Stacked, not inline: the button is under the route's name, not beside
+      // it. This is the deliberate shape change — see the group doc.
+      //
+      // The rendered label is `_routeNameLabel`'s "N. Name" form, NOT the bare
+      // seeded name (the same string the D5 label test asserts as
+      // `'1. Sunny Arete'`), so `find.text('Sunny Arete')` matches nothing.
+      final name = find.text('1. Sunny Arete', skipOffstage: false);
+      expect(
+        tester.getRect(button).top,
+        greaterThan(tester.getRect(name).bottom - 1),
+      );
+      // And nothing escapes the viewport horizontally.
+      expect(tester.getRect(button).right, lessThanOrEqualTo(360.0));
+      expect(tester.takeException(), isNull);
+    });
+  });
 
   /// The owner's reordering decision: on a shared topo the route list is the
   /// content, so it comes FIRST in the body — it used to be dead last, under
@@ -1744,16 +1872,22 @@ void main() {
         expect(finder, findsOneWidget);
       }
 
-      // DRAINED, deliberately not asserted on: at a large text scale the
-      // per-route row overflows horizontally, and it does so independently of
-      // this reordering — that row is laid out to put "Log ascent" FLUSH
-      // against the route card's right edge (see the flush-right test above,
-      // which measures exactly that), so it has zero horizontal slack by
-      // design and any scaled-up label runs past it whatever vertical order
-      // the sections are in. Its width is set by the card, which this change
-      // does not touch. Swallowed rather than expected, so that fixing it
-      // does not fail this test.
-      tester.takeException();
+      // ASSERTED, no longer drained. This used to swallow a real 77 px
+      // horizontal overflow in the per-route row: that row put "Log ascent"
+      // FLUSH against the card's right edge, so it had zero horizontal slack
+      // and any scaled-up label ran past it. The overflow predated the
+      // reordering, but the reordering is what made it matter — routes moved
+      // from the last section (below the fold on a short viewport, so never
+      // built) to the first thing under the photo, i.e. onto the first screen
+      // an iPhone user sees at an accessibility text size.
+      //
+      // It is fixed properly now: past [kRouteRowStackTextScale] the row
+      // switches to a stacked shape instead of competing for a width it does
+      // not have. Clamping the text scale was explicitly NOT the fix — that
+      // would break the users who need the larger size. So this must assert
+      // clean like every other overflow check in this file; if the stacked
+      // shape regresses, this is the test that says so.
+      expect(tester.takeException(), isNull);
 
       // What this test is actually for: with the route rows folded away, the
       // chrome this change DID touch — the like row, the one-line

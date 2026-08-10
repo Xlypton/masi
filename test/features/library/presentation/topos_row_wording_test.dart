@@ -1,11 +1,18 @@
 // "Shared" used to mean three different things on one screen — the owner's own
 // live topo, the Filters sheet's visibility segment, and somebody else's topo.
-// Option B, chosen by the owner: rename only the COMMUNITY badge, so three
-// distinct facts get three distinct words.
+// Option B, chosen by the owner: three distinct facts get three distinct words.
 //
 //   Published — my topo, live to others
 //   Private   — my topo, not shared
 //   Community — somebody else's topo (or their display name, once resolved)
+//
+// The word "Shared" is retired from the own-topo vocabulary altogether, which
+// includes the Filters sheet's middle visibility segment. That one lagged the
+// badges for a while and the mismatch was user-visible — filtering by *Shared*
+// returned rows badged *Published* — so "THE ANTI-DRIFT ONE" below asserts the
+// segment's string and the badge's string TOGETHER. Renaming either alone fails
+// it. The enum and the stored `walls.visibility` value are untouched: this was
+// only ever a label.
 //
 // Plus the honest filter note: the facets can only be evaluated against own
 // topos, so community rows drop out of the list entirely while any facet is set,
@@ -280,6 +287,96 @@ void main() {
           ),
           findsOneWidget,
         );
+      },
+    );
+
+    testWidgets(
+      'THE ANTI-DRIFT ONE: the visibility FILTER segment and the row BADGE use '
+      'the same word for the same fact',
+      (tester) async {
+        // This is the bug the rename half-fixed: the badges were renamed to
+        // "Published" but the Filters sheet's middle segment still said
+        // "Shared", so filtering by *Shared* returned rows badged *Published*.
+        // Asserting the two strings TOGETHER, in one test, is what stops them
+        // drifting apart again — either one changed alone fails here.
+        final container = _makeContainer(shared: const []);
+        await tester.pumpWidget(_wrap(container));
+        await _drain(tester);
+
+        final badgeLabel = tester
+            .widget<Text>(
+              find
+                  .descendant(
+                    of: find.byKey(const Key('topo-visibility-badge-w-pub')),
+                    matching: find.byType(Text),
+                  )
+                  .first,
+            )
+            .data;
+        expect(badgeLabel, 'Published');
+
+        await _openSheet(tester);
+        final segmentLabel = tester
+            .widget<Text>(
+              find
+                  .descendant(
+                    of: find.byKey(
+                      const Key('topos-filter-visibility-shared'),
+                    ),
+                    matching: find.byType(Text),
+                  )
+                  .first,
+            )
+            .data;
+
+        expect(
+          segmentLabel,
+          badgeLabel,
+          reason:
+              'the segment selects exactly the rows the badge marks, so the '
+              'two must read the same; "Shared" here was the collision',
+        );
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('topos-filter-visibility')),
+            matching: find.text('Shared'),
+          ),
+          findsNothing,
+          reason: '"Shared" is retired from the own-topo vocabulary entirely',
+        );
+        // The rename is LABEL-ONLY: the enum value the segment writes is
+        // untouched, which is what keeps the stored `walls.visibility` value
+        // and every `== 'shared'` comparison working.
+        expect(ToposVisibilityFilter.shared.name, 'shared');
+      },
+    );
+
+    testWidgets(
+      'and filtering by that segment still returns own+live topos only — the '
+      'rename changed the word, not the query',
+      (tester) async {
+        final container = _makeContainer(shared: const []);
+        await tester.pumpWidget(_wrap(container));
+        await _drain(tester);
+
+        await _openSheet(tester);
+        await tester.tap(
+          find.byKey(const Key('topos-filter-visibility-shared')),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('topos-filter-done')));
+        await tester.pumpAndSettle();
+
+        expect(
+          container.read(toposFilterProvider).visibility,
+          ToposVisibilityFilter.shared,
+        );
+        expect(
+          find.byKey(const Key('topo-item-w-pub')),
+          findsOneWidget,
+          reason: 'own + live is exactly what "Published" means',
+        );
+        expect(find.byKey(const Key('topo-item-w-priv')), findsNothing);
       },
     );
   });

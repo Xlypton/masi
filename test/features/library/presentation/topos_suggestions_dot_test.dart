@@ -9,6 +9,14 @@
 // `AppLifecycleState.resumed` and invalidates the provider, and the test that
 // matters here is the one that proves the dot reflects a value which arrived
 // ONLY after that invalidation — not merely that a first resolve can light it.
+//
+// The second trap, and the reason for the fake clock. That invalidation is
+// THROTTLED (`kSuggestionsResumeRefreshThrottle`): on web the engine raises
+// `resumed` for `window.focus` as well as `visibilitychange`, so an unthrottled
+// invalidation turned every keyboard dismissal into a Supabase round trip. So a
+// resume in these tests only re-asks if the injected clock has moved past the
+// throttle window first — which is what a real background→foreground return
+// looks like, and is why `_foreground` advances time by default.
 
 import 'dart:async';
 
@@ -141,11 +149,27 @@ ProviderContainer _makeContainer(_ScriptedSuggestionsRemote remote) {
   return container;
 }
 
-Widget _wrap(ProviderContainer container) {
+/// A hand-cranked clock for [ToposScreen.debugNow].
+///
+/// `DateTime.now()` is wall time and `tester.pump(duration)` does not advance
+/// it, so without this a test could never get to the far side of
+/// [kSuggestionsResumeRefreshThrottle] without really sleeping 30 seconds.
+class _FakeClock {
+  DateTime value = DateTime.utc(2026, 8, 10, 12);
+
+  DateTime call() => value;
+
+  void advance(Duration by) => value = value.add(by);
+}
+
+Widget _wrap(ProviderContainer container, _FakeClock clock) {
   final router = GoRouter(
     initialLocation: '/',
     routes: [
-      GoRoute(path: '/', builder: (context, state) => const ToposScreen()),
+      GoRoute(
+        path: '/',
+        builder: (context, state) => ToposScreen(debugNow: clock.call),
+      ),
       GoRoute(
         path: '/walls/:wallId',
         builder: (context, state) => const SizedBox(),
@@ -182,7 +206,23 @@ Future<void> _background(WidgetTester tester) async {
   }
 }
 
-Future<void> _foreground(WidgetTester tester) async {
+/// One tick past [kSuggestionsResumeRefreshThrottle] — a resume this long after
+/// the previous ask is a genuine return and must always re-fetch.
+final _pastThrottle =
+    kSuggestionsResumeRefreshThrottle + const Duration(seconds: 1);
+
+/// Brings the app back, having been away for [away] first.
+///
+/// [away] defaults to [_pastThrottle]: the scenario every test below except the
+/// throttle group cares about is a genuine return after a real absence, which
+/// must always re-ask. Pass a shorter [away] to model a `window.focus` echo
+/// instead.
+Future<void> _foreground(
+  WidgetTester tester,
+  _FakeClock clock, {
+  Duration? away,
+}) async {
+  clock.advance(away ?? _pastThrottle);
   for (final state in const [
     AppLifecycleState.hidden,
     AppLifecycleState.inactive,
@@ -202,7 +242,8 @@ void main() {
       [_row('s-1')],
     ]);
     final container = _makeContainer(remote);
-    await tester.pumpWidget(_wrap(container));
+    final clock = _FakeClock();
+    await tester.pumpWidget(_wrap(container, clock));
     await _drain(tester);
 
     expect(find.byKey(const Key('topos-account-avatar')), findsOneWidget);
@@ -222,7 +263,8 @@ void main() {
   ) async {
     final remote = _ScriptedSuggestionsRemote([const []]);
     final container = _makeContainer(remote);
-    await tester.pumpWidget(_wrap(container));
+    final clock = _FakeClock();
+    await tester.pumpWidget(_wrap(container, clock));
     await _drain(tester);
 
     expect(find.byKey(const Key('topos-account-avatar')), findsOneWidget);
@@ -263,7 +305,7 @@ void main() {
     );
     addTearDown(container.dispose);
 
-    await tester.pumpWidget(_wrap(container));
+    await tester.pumpWidget(_wrap(container, _FakeClock()));
     await _drain(tester);
 
     expect(find.byKey(_dot), findsNothing);
@@ -282,7 +324,8 @@ void main() {
         [_row('s-late')],
       ]);
       final container = _makeContainer(remote);
-      await tester.pumpWidget(_wrap(container));
+      final clock = _FakeClock();
+      await tester.pumpWidget(_wrap(container, clock));
       await _drain(tester);
 
       expect(remote.calls, 1);
@@ -295,7 +338,7 @@ void main() {
       // Backgrounded, then brought back to the foreground — on an installed
       // iOS PWA this is every tab switch and every app re-open.
       await _background(tester);
-      await _foreground(tester);
+      await _foreground(tester, clock);
 
       expect(
         remote.calls,
@@ -319,13 +362,14 @@ void main() {
         const [],
       ]);
       final container = _makeContainer(remote);
-      await tester.pumpWidget(_wrap(container));
+      final clock = _FakeClock();
+      await tester.pumpWidget(_wrap(container, clock));
       await _drain(tester);
 
       expect(find.byKey(_dot), findsOneWidget);
 
       await _background(tester);
-      await _foreground(tester);
+      await _foreground(tester, clock);
 
       expect(find.byKey(_dot), findsNothing);
     },
@@ -337,7 +381,8 @@ void main() {
     (tester) async {
       final remote = _ScriptedSuggestionsRemote([const []]);
       final container = _makeContainer(remote);
-      await tester.pumpWidget(_wrap(container));
+      final clock = _FakeClock();
+      await tester.pumpWidget(_wrap(container, clock));
       await _drain(tester);
       expect(remote.calls, 1);
 
@@ -349,4 +394,74 @@ void main() {
       expect(remote.calls, 1);
     },
   );
+
+  // The web-only half of the story: `resumed` is not a rare event there. The
+  // engine raises it for `window.focus` as well as `visibilitychange`, so
+  // dismissing the soft keyboard, returning from a share sheet or clicking back
+  // into the window each produce one — and each used to cost a Supabase fetch.
+  group('resume throttle (kSuggestionsResumeRefreshThrottle)', () {
+    /// A blur/focus pair — `inactive` then `resumed` — which is the shape a web
+    /// `window.blur`/`window.focus` round trip takes. Deliberately NOT the
+    /// full `paused` sequence [_background] drives: the point of these tests is
+    /// the resume that arrives WITHOUT the app ever having really gone away.
+    Future<void> refocus(
+      WidgetTester tester,
+      _FakeClock clock, {
+      required Duration after,
+    }) async {
+      clock.advance(after);
+      for (final state in const [
+        AppLifecycleState.inactive,
+        AppLifecycleState.resumed,
+      ]) {
+        tester.binding.handleAppLifecycleStateChanged(state);
+        await tester.pump();
+      }
+      await _drain(tester);
+    }
+
+    testWidgets('two resumes in quick succession re-ask ONCE, and a later '
+        'resume re-asks again', (tester) async {
+      final remote = _ScriptedSuggestionsRemote([const []]);
+      final container = _makeContainer(remote);
+      final clock = _FakeClock();
+      await tester.pumpWidget(_wrap(container, clock));
+      await _drain(tester);
+      expect(remote.calls, 1, reason: 'the mount fetch');
+
+      // Well past the window, so this one is a genuine return and must re-ask.
+      await refocus(tester, clock, after: _pastThrottle);
+      expect(remote.calls, 2);
+
+      // A second resume a second later — the keyboard-dismissal case. Two
+      // resumes, ONE fetch between them.
+      await refocus(tester, clock, after: const Duration(seconds: 1));
+      expect(
+        remote.calls,
+        2,
+        reason: 'a repeat resume inside the throttle window must not re-ask',
+      );
+
+      // And once the window has passed, the next resume re-asks again — the
+      // throttle delays repeats, it does not latch the refresh off.
+      await refocus(tester, clock, after: _pastThrottle);
+      expect(remote.calls, 3);
+    });
+
+    testWidgets('a resume echoed at boot does not double-fetch — the mount '
+        'fetch counts as the last ask', (tester) async {
+      final remote = _ScriptedSuggestionsRemote([const []]);
+      final container = _makeContainer(remote);
+      final clock = _FakeClock();
+      await tester.pumpWidget(_wrap(container, clock));
+      await _drain(tester);
+      expect(remote.calls, 1);
+
+      // Adding a lifecycle observer can be answered with the current state,
+      // which on a foreground boot is `resumed`. That echo lands milliseconds
+      // after the mount fetch and asks the identical question.
+      await refocus(tester, clock, after: Duration.zero);
+      expect(remote.calls, 1);
+    });
+  });
 }

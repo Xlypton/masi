@@ -63,6 +63,28 @@ import 'mention_composer.dart';
 /// measures it cannot drift apart.
 const double kCommunityDetailHeaderFraction = 0.35;
 
+/// Text-scale ratio at or above which a route row stacks its actions BELOW the
+/// route info instead of beside it (`_buildRouteRow`).
+///
+/// **The problem.** The inline shape puts "Log ascent" flush against the card's
+/// right edge — deliberately, so the button column reads as one straight line
+/// down the card — which means the row has *zero* horizontal slack. Scale the
+/// label up and it runs straight off the edge: measured at 20 px of RenderFlex
+/// overflow at 1.5x and 77 px at 2x on a 360-wide viewport, with the routes card
+/// now the first thing under the photo. Clamping the text scale would "fix" it
+/// by taking the enlarged text away from the readers who asked for it, so the
+/// row changes shape instead.
+///
+/// **Why 1.2.** With flutter_test's fixed-advance font — wider than any real
+/// face, so this is the pessimistic measurement — the inline shape stops fitting
+/// a 360 px viewport somewhere around 1.33x. 1.2 sits below that with room to
+/// spare for a longer grade or a consensus chip, and above the ~1.0–1.15 band
+/// that iOS's default and one-step-up Dynamic Type land in, so the ordinary
+/// reader keeps the flush-right row. Above it, the info gets the full card width
+/// (which also gives the grade cluster room it never had) and the actions get
+/// their own line.
+const double kRouteRowStackTextScale = 1.2;
+
 /// Read-only detail view for a single shared ("community") topo: a
 /// collapsing header showing the wall's photo + route overlays (tap it to
 /// open the full interactive, still-`readOnly` canvas — see
@@ -1380,6 +1402,18 @@ class _CommunityTopoDetailScreenState
   /// the pill instead), its style-tag chips + star rating underneath, and
   /// right-aligned actions (beta-video + "Log ascent") — every existing
   /// key/behavior preserved exactly.
+  ///
+  /// **Two shapes, chosen by text scale** — see [kRouteRowStackTextScale] for
+  /// why. At the default text size the info and the actions sit side by side in
+  /// one [Row] with the actions flush against the card's right edge (the layout
+  /// documented inline below). Once the reader has enlarged text, they STACK:
+  /// info across the full width, actions right-aligned underneath — and the
+  /// log-ascent button becomes [Flexible], so its label is laid out against the
+  /// width the card really has and wraps onto further lines instead of running
+  /// off the edge. The extra line alone would NOT have fixed the overflow: a
+  /// [Row] gives its non-flex children an unbounded main-axis constraint, so an
+  /// unwrapped label overflows a stacked row just as it overflowed the inline
+  /// one. Both shapes keep every existing key and callback.
   Widget _buildRouteRow(
     BuildContext context,
     MasiColors colors,
@@ -1387,159 +1421,209 @@ class _CommunityTopoDetailScreenState
   ) {
     final route = entry.route;
     final grade = route.gradeRaw;
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: MasiSpacing.md),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // The grade cluster and the route name share ONE `Expanded` rather
-          // than sitting in the outer row as two separate flex children.
-          //
-          // They used to be `Flexible(grade)` + `Expanded(name)`, both at the
-          // default flex of 1, and that is what pushed "Log ascent" off the
-          // right edge. A `Flexible` is LOOSE: it is allotted half the free
-          // width but only takes the ~50 px it needs, and the leftover is NOT
-          // handed to its `Expanded` sibling — it stays free space, which
-          // `mainAxisAlignment.start` then parks at the END of the row. So the
-          // trailing actions floated short of the card's right edge by
-          // whatever the grade cluster happened not to use, and by an amount
-          // that changed from row to row with the grade's width.
-          //
-          // Nesting them inside a single TIGHT flex child leaves the outer row
-          // with no leftover to misplace, so the trailing actions are flush
-          // right on every row. The inner row keeps the original
-          // Flexible/Expanded pair, and with it the reason the `Flexible` was
-          // introduced: the badge plus a consensus chip is wider than the
-          // badge alone, and at a large text scale the two together tipped the
-          // row over its budget by a hair.
-          Expanded(
+
+    // The two trailing actions, built once and composed differently by each
+    // shape below — the shapes differ only in the WIDTH CONTRACT the log-ascent
+    // button is handed, which is the whole fix (see `stacked` below).
+    final betaButton = route.betaVideoUrl == null
+        ? null
+        // Pending: handing off to an external app is a platform round trip
+        // that can take a beat, and a second tap while it ran launched the
+        // URL twice.
+        : PendingIconButton(
+            buttonKey: Key('route-beta-${entry.dbId}'),
+            tooltip: 'Watch beta video',
+            visualDensity: VisualDensity.compact,
+            icon: MasiIcon('globe'),
+            onPressed: () => _launchBetaVideo(route.betaVideoUrl!),
+          );
+    final logAscentButton = OutlinedButton(
+      key: Key('community-log-ascent-${entry.dbId}'),
+      style: OutlinedButton.styleFrom(
+        foregroundColor: colors.accent,
+        side: BorderSide(color: colors.accent),
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.md,
+          vertical: MasiSpacing.xs,
+        ),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(MasiRadii.control),
+        ),
+      ),
+      onPressed: () => _openLogAscentSheet(entry.dbId),
+      // Centred because at a large text scale this label WRAPS (see the
+      // stacked shape below); at the default size it is one line whose width
+      // is its intrinsic width, so centring is a no-op there.
+      child: const Text('Log ascent', textAlign: TextAlign.center),
+    );
+
+    // The grade cluster and the route name share ONE `Expanded` rather
+    // than sitting in the outer row as two separate flex children.
+    //
+    // They used to be `Flexible(grade)` + `Expanded(name)`, both at the
+    // default flex of 1, and that is what pushed "Log ascent" off the
+    // right edge. A `Flexible` is LOOSE: it is allotted half the free
+    // width but only takes the ~50 px it needs, and the leftover is NOT
+    // handed to its `Expanded` sibling — it stays free space, which
+    // `mainAxisAlignment.start` then parks at the END of the row. So the
+    // trailing actions floated short of the card's right edge by
+    // whatever the grade cluster happened not to use, and by an amount
+    // that changed from row to row with the grade's width.
+    //
+    // Nesting them inside a single TIGHT flex child leaves the outer row
+    // with no leftover to misplace, so the trailing actions are flush
+    // right on every row. The inner row keeps the original
+    // Flexible/Expanded pair, and with it the reason the `Flexible` was
+    // introduced: the badge plus a consensus chip is wider than the
+    // badge alone, and at a large text scale the two together tipped the
+    // row over its budget by a hair.
+    final info = Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        // The same hardness-signal dot as the owner's own
+        // RouteLegend (route_legend.dart:207/244) — same
+        // `colorForRoute(route, kRoutePalette)` resolution, so a
+        // graded route gets its grade-band color and an UNGRADED one
+        // still falls back to its palette `colorIndex` color exactly
+        // as it does on the owner's own topo, never a crash.
+        GradeBandDot(
+          key: Key('community-route-grade-dot-${entry.dbId}'),
+          color: colorForRoute(route, kRoutePalette),
+        ),
+        const SizedBox(width: MasiSpacing.xs),
+        // Tapping the grade is how you comment on the grade. A
+        // dedicated "suggest a grade" button would be a third control
+        // in a row that already carries beta-video and Log ascent;
+        // this adds no chrome and puts the affordance exactly where
+        // the subject is.
+        Flexible(
+          child: GestureDetector(
+            key: Key('route-grade-tap-${entry.dbId}'),
+            onTap: () => _suggestGrade(entry),
             child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
               children: [
-                // The same hardness-signal dot as the owner's own
-                // RouteLegend (route_legend.dart:207/244) — same
-                // `colorForRoute(route, kRoutePalette)` resolution, so a
-                // graded route gets its grade-band color and an UNGRADED one
-                // still falls back to its palette `colorIndex` color exactly
-                // as it does on the owner's own topo, never a crash.
-                GradeBandDot(
-                  key: Key('community-route-grade-dot-${entry.dbId}'),
-                  color: colorForRoute(route, kRoutePalette),
-                ),
-                const SizedBox(width: MasiSpacing.xs),
-                // Tapping the grade is how you comment on the grade. A
-                // dedicated "suggest a grade" button would be a third control
-                // in a row that already carries beta-video and Log ascent;
-                // this adds no chrome and puts the affordance exactly where
-                // the subject is.
-                Flexible(
-                  child: GestureDetector(
-                    key: Key('route-grade-tap-${entry.dbId}'),
-                    onTap: () => _suggestGrade(entry),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (grade != null) ...[
-                          _GradeBadge(grade: grade),
-                          const SizedBox(width: MasiSpacing.xs),
-                        ],
-                        // The community's median, BESIDE the author's grade
-                        // and never instead of it (R-1). Nothing below three
-                        // opinions.
-                        GradeConsensusChip(
-                          routeId: entry.dbId,
-                          system: route.gradeSystem ?? GradeSystem.french,
-                          authorGrade: grade,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-                const SizedBox(width: MasiSpacing.sm),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        _routeNameLabel(route),
-                        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-                          color: colors.ink,
-                          fontWeight: FontWeight.w600,
-                        ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                      if (route.styleTags.isNotEmpty || (route.stars ?? 0) > 0)
-                        Padding(
-                          padding: const EdgeInsets.only(top: MasiSpacing.xs),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              if (route.styleTags.isNotEmpty)
-                                Wrap(
-                                  spacing: 4,
-                                  runSpacing: 4,
-                                  children: [
-                                    for (final tag in route.styleTags)
-                                      _RouteStyleTagChip(
-                                        routeId: entry.dbId,
-                                        tag: tag,
-                                      ),
-                                  ],
-                                ),
-                              if ((route.stars ?? 0) > 0)
-                                Row(
-                                  key: Key('route-stars-${entry.dbId}'),
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    for (var i = 0; i < route.stars!; i++)
-                                      const Padding(
-                                        padding: EdgeInsets.only(right: 1),
-                                        child: MasiIcon('star_fill', size: 12),
-                                      ),
-                                  ],
-                                ),
-                            ],
-                          ),
-                        ),
-                    ],
-                  ),
+                if (grade != null) ...[
+                  _GradeBadge(grade: grade),
+                  const SizedBox(width: MasiSpacing.xs),
+                ],
+                // The community's median, BESIDE the author's grade
+                // and never instead of it (R-1). Nothing below three
+                // opinions.
+                GradeConsensusChip(
+                  routeId: entry.dbId,
+                  system: route.gradeSystem ?? GradeSystem.french,
+                  authorGrade: grade,
                 ),
               ],
             ),
           ),
-          const SizedBox(width: MasiSpacing.sm),
-          if (route.betaVideoUrl != null)
-            // Pending: handing off to an external app is a platform round trip
-            // that can take a beat, and a second tap while it ran launched the
-            // URL twice.
-            PendingIconButton(
-              buttonKey: Key('route-beta-${entry.dbId}'),
-              tooltip: 'Watch beta video',
-              visualDensity: VisualDensity.compact,
-              icon: MasiIcon('globe'),
-              onPressed: () => _launchBetaVideo(route.betaVideoUrl!),
-            ),
-          OutlinedButton(
-            key: Key('community-log-ascent-${entry.dbId}'),
-            style: OutlinedButton.styleFrom(
-              foregroundColor: colors.accent,
-              side: BorderSide(color: colors.accent),
-              padding: const EdgeInsets.symmetric(
-                horizontal: MasiSpacing.md,
-                vertical: MasiSpacing.xs,
+        ),
+        const SizedBox(width: MasiSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _routeNameLabel(route),
+                style: Theme.of(context).textTheme.titleSmall?.copyWith(
+                  color: colors.ink,
+                  fontWeight: FontWeight.w600,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
               ),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(MasiRadii.control),
-              ),
-            ),
-            onPressed: () => _openLogAscentSheet(entry.dbId),
-            child: const Text('Log ascent'),
+              if (route.styleTags.isNotEmpty || (route.stars ?? 0) > 0)
+                Padding(
+                  padding: const EdgeInsets.only(top: MasiSpacing.xs),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (route.styleTags.isNotEmpty)
+                        Wrap(
+                          spacing: 4,
+                          runSpacing: 4,
+                          children: [
+                            for (final tag in route.styleTags)
+                              _RouteStyleTagChip(routeId: entry.dbId, tag: tag),
+                          ],
+                        ),
+                      if ((route.stars ?? 0) > 0)
+                        Row(
+                          key: Key('route-stars-${entry.dbId}'),
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            for (var i = 0; i < route.stars!; i++)
+                              const Padding(
+                                padding: EdgeInsets.only(right: 1),
+                                child: MasiIcon('star_fill', size: 12),
+                              ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
+    );
+
+    // `scale(1)` reads the scaler as a ratio, which is what a layout decision
+    // needs; `TextScaler` is deliberately opaque about its curve, so this asks
+    // it what it does to one logical pixel rather than assuming linearity.
+    final stacked =
+        MediaQuery.textScalerOf(context).scale(1) >= kRouteRowStackTextScale;
+
+    return Padding(
+      key: Key('community-route-row-${entry.dbId}'),
+      padding: const EdgeInsets.symmetric(vertical: MasiSpacing.md),
+      child: stacked
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                info,
+                const SizedBox(height: MasiSpacing.xs),
+                // Right-aligned, so the actions stay where the eye already
+                // looks for them in the inline shape — the row grows DOWN, it
+                // does not reshuffle.
+                //
+                // `mainAxisAlignment.end` + a `Flexible` log-ascent button, NOT
+                // an `Align` around a `MainAxisSize.min` row. Giving the row its
+                // own line is not by itself enough to fix anything: a `Row` lays
+                // its NON-flex children out with an UNBOUNDED main-axis
+                // constraint, so the button measured to its full intrinsic width
+                // — one unbreakable line of enlarged label — and overflowed the
+                // card's 296 px exactly as it did inline (69 px at 2x, 239 px at
+                // 3x, measured). `Flexible` is what bounds it: the label is then
+                // laid out against the width that actually exists and WRAPS onto
+                // a second line instead of running off the edge.
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    ?betaButton,
+                    Flexible(child: logAscentButton),
+                  ],
+                ),
+              ],
+            )
+          : Row(
+              crossAxisAlignment: CrossAxisAlignment.center,
+              children: [
+                Expanded(child: info),
+                const SizedBox(width: MasiSpacing.sm),
+                // `MainAxisSize.min` so the cluster measures to its content and
+                // the `Expanded` info above keeps the rest: that is what puts
+                // the button flush against the card's right edge.
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [?betaButton, logAscentButton],
+                ),
+              ],
+            ),
     );
   }
 }

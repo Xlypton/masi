@@ -340,6 +340,27 @@ class _AccountAvatar extends StatelessWidget {
   }
 }
 
+/// How recently [ToposScreen] must have asked the server about suggested edits
+/// for an `AppLifecycleState.resumed` event to be ignored as a repeat.
+///
+/// **Why a throttle exists at all.** On web the engine maps `window.focus` to
+/// `resumed` just as it maps `visibilitychange`, so dismissing the soft
+/// keyboard, coming back from a share sheet, or merely clicking into the window
+/// each raises a `resumed` — and each one used to cost a Supabase round trip
+/// (`mySuggestionsProvider` → `SuggestionsRemote.fetchForMe`). A handful of
+/// those can arrive within a second of each other on an installed iOS PWA.
+///
+/// **Why 30 seconds.** It has to be far longer than a burst of focus events
+/// (all inside a second or two) and far shorter than a real absence from the
+/// app, which on a PWA is minutes to days. Suggested edits are written by other
+/// humans and read by this one, so nothing about the dot is time-critical to
+/// sub-minute precision: a 30 s floor cannot make it meaningfully stale, while
+/// it collapses every realistic focus storm into a single fetch. Deliberately
+/// NOT a debounce — the first resume in a burst refreshes immediately, so the
+/// case the invalidation exists for (a genuine background→foreground return)
+/// never waits.
+const kSuggestionsResumeRefreshThrottle = Duration(seconds: 30);
+
 class ToposScreen extends ConsumerStatefulWidget {
   const ToposScreen({
     super.key,
@@ -348,6 +369,7 @@ class ToposScreen extends ConsumerStatefulWidget {
     this.setLocationTileProvider,
     this.setLocationMapController,
     this.setLocationLocationService,
+    this.debugNow,
   });
 
   final Future<ImageSource?> Function(BuildContext) photoSourcePicker;
@@ -361,6 +383,12 @@ class ToposScreen extends ConsumerStatefulWidget {
 
   @visibleForTesting
   final LocationService? setLocationLocationService;
+
+  /// Clock behind [kSuggestionsResumeRefreshThrottle]. Injected only by tests,
+  /// which need to step across a 30-second boundary without waiting 30 seconds
+  /// — `DateTime.now()` is wall time and is not advanced by `tester.pump`.
+  @visibleForTesting
+  final DateTime Function()? debugNow;
 
   @override
   ConsumerState<ToposScreen> createState() => _ToposScreenState();
@@ -395,9 +423,23 @@ class _ToposScreenState extends ConsumerState<ToposScreen>
   final _searchController = TextEditingController();
   String _query = '';
 
+  /// When the suggestions inbox was last asked for — see
+  /// [kSuggestionsResumeRefreshThrottle] and
+  /// [didChangeAppLifecycleState].
+  ///
+  /// Seeded at MOUNT, not left null. `mySuggestionsProvider` fetches once when
+  /// this screen first watches it, so mount *is* an ask; and adding a lifecycle
+  /// observer can be answered with the current state, which on a foreground boot
+  /// is `resumed` — an unseeded field would let that echo fire a second
+  /// identical fetch milliseconds after the first.
+  late DateTime _lastSuggestionsRefreshAt;
+
+  DateTime _now() => (widget.debugNow ?? DateTime.now)();
+
   @override
   void initState() {
     super.initState();
+    _lastSuggestionsRefreshAt = _now();
     WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
     // Seed the reachability verdict this screen renders (see `build`'s
@@ -529,11 +571,24 @@ class _ToposScreenState extends ConsumerState<ToposScreen>
   /// `invalidate`, not `refresh`: nothing here awaits a value. The screen is
   /// already watching the provider, so Riverpod re-runs it and the dot repaints
   /// when the answer lands.
+  ///
+  /// **Throttled by [kSuggestionsResumeRefreshThrottle]**, because on web
+  /// `resumed` is not only "the app came back": the engine raises it for
+  /// `window.focus` too, so a keyboard dismissal or a click back into the window
+  /// would otherwise each cost a network fetch. Leading-edge, so the resume that
+  /// matters — a real return after a long absence — still refreshes at once; only
+  /// repeats inside the window are dropped.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);
     if (state != AppLifecycleState.resumed) return;
     if (!mounted) return;
+    final now = _now();
+    if (now.difference(_lastSuggestionsRefreshAt) <
+        kSuggestionsResumeRefreshThrottle) {
+      return;
+    }
+    _lastSuggestionsRefreshAt = now;
     ref.invalidate(mySuggestionsProvider);
   }
 

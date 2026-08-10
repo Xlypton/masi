@@ -10,8 +10,21 @@ part of 'topos_screen.dart';
 /// different things at once: this badge (somebody else's topo), the
 /// [_VisibilityBadge]'s own-topo state, and the Filters sheet's
 /// All/Shared/Private visibility segment. Three distinct facts now get three
-/// distinct words: [_VisibilityBadge] says **Published** / **Private** about
-/// your own topo, and this one says **Community** about everybody else's.
+/// distinct words:
+///
+/// * [_VisibilityBadge] says **Published** / **Private** about your own topo;
+/// * this badge says **Community** (or the owner's name) about everybody
+///   else's;
+/// * the Filters sheet's visibility segment says **Published** — the SAME word
+///   as the badge, because it selects exactly the rows that badge marks.
+///
+/// That last one lagged the other two for a while, and the mismatch was
+/// user-visible: filtering by *Shared* returned rows badged *Published*.
+/// `topos_filter.dart`'s `_VisibilitySegmented` now carries the badge's word,
+/// and `topos_filter_wording_test.dart` asserts the two strings are equal so
+/// they cannot drift apart again. Only the LABELS were reconciled — the
+/// `ToposVisibilityFilter.shared` enum value and the stored
+/// `walls.visibility == 'shared'` are untouched.
 ///
 /// [ownerName] upgrades that to the owner's actual display name when it has
 /// ALREADY been resolved — `profileDisplayNameProvider` is a live Drift watch
