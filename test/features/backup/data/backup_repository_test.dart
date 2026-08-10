@@ -859,6 +859,69 @@ void main() {
     );
 
     test(
+      'an orphan that is ITSELF a tombstone is dropped, not deferred — the '
+      'permanent "shared rows deferred" sync failure seen on a real device',
+      () async {
+        await seed(db);
+
+        // Exactly the reported shape: the user deleted one of their own shared
+        // topos, so the wall/route tombstoned AND the shared ascent on it
+        // tombstoned. The ascent stays visible to the shared-ascent fetch (an
+        // owner policy) while its wall does not (`is_wall_public` requires
+        // `deletedAt IS NULL`), so it arrived every pull with no parent,
+        // deferred every pull, and was reported every pull. Retry could never
+        // clear it — nothing in the cloud was going to change.
+        final report = await repo.importSnapshot({
+          'tables': {
+            'likes': [
+              {
+                'id': 'like-deleted-orphan',
+                'createdAt': 100,
+                'updatedAt': 100,
+                'deletedAt': 555, // the tombstone
+                'remoteId': null,
+                'dirty': false,
+                'ownerId': 'me',
+                'wallId': null,
+                'ascentId': 'ascent-gone',
+              },
+              // A LIVE orphan alongside it, so this proves the drop is scoped
+              // to tombstones and did not simply switch deferral off. Without
+              // this the test would still pass with the whole mechanism broken.
+              {
+                'id': 'like-live-orphan',
+                'createdAt': 100,
+                'updatedAt': 100,
+                'deletedAt': null,
+                'remoteId': null,
+                'dirty': false,
+                'ownerId': 'me',
+                'wallId': null,
+                'ascentId': 'ascent-gone',
+              },
+            ],
+          },
+        }, mode: ConflictMode.lww);
+
+        // The tombstone is gone from the report entirely — so nothing surfaces
+        // it to the user as a sync failure.
+        expect(
+          report.deferred.map((d) => d.id),
+          const ['like-live-orphan'],
+          reason: 'the tombstone must be dropped and the live row still held',
+        );
+        expect(
+          report.deferredRows['likes']?.map((r) => r['id']),
+          const ['like-live-orphan'],
+          reason: 'a dropped tombstone must not be handed back for retry',
+        );
+        // Neither was written: the live one is waiting for its parent, and the
+        // deleted one has nothing to write.
+        expect(await db.select(db.likes).get(), isEmpty);
+      },
+    );
+
+    test(
       'a TOMBSTONED parent is still a parent: a child of a soft-deleted wall '
       'imports normally and is NOT deferred',
       () async {

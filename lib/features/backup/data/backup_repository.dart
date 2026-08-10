@@ -100,6 +100,9 @@ class _DeferralSink {
   final List<DeferredRow> _deferred = [];
   final Map<String, List<Map<String, dynamic>>> _rows = {};
 
+  /// Rows dropped rather than deferred because they are themselves tombstones.
+  int _droppedTombstones = 0;
+
   void defer({
     required String table,
     required String id,
@@ -107,6 +110,39 @@ class _DeferralSink {
     required String missingParentId,
     required Map<String, dynamic> json,
   }) {
+    // A TOMBSTONE whose parent is unreachable is dropped, not deferred.
+    //
+    // This was a permanent, self-renewing sync failure on a real device: the
+    // user deleted one of their own shared topos, which soft-deleted the wall,
+    // its route and the shared ascent on it. The ascent is still visible to the
+    // shared-ascent fetch (an owner policy), but its wall is NOT — the public
+    // wall policy is `is_wall_public("wallId")`, which requires
+    // `deletedAt IS NULL` — so the ascent arrived every pull with no parent,
+    // deferred every pull, and `SyncService` reported `shared rows deferred
+    // (parent row missing)` every pull. Retry could never clear it, because
+    // nothing about the cloud state was going to change.
+    //
+    // Dropping is safe precisely BECAUSE the row is deleted: there is nothing
+    // to render, nothing to count, and no state a later pull could recover.
+    // The only job a tombstone has is to delete a local copy — and a local copy
+    // cannot exist here, since it would require the parent row that is missing
+    // (`_existingIds` deliberately counts tombstoned parents as present, so a
+    // parent we hold at all, even deleted, resolves the FK and never reaches
+    // this path). So this drops exactly the rows that are unreachable garbage
+    // and nothing else.
+    //
+    // Deliberately NOT filtered earlier, in the fetch: a tombstone whose parent
+    // IS present must still arrive, or deletions stop propagating. The
+    // distinction that matters is "can this row be placed", which is only known
+    // here.
+    if (_isTombstone(json)) {
+      _droppedTombstones++;
+      debugPrint(
+        'importSnapshot: dropped tombstoned $table $id — $column -> missing '
+        '$missingParentId (deleted row, unreachable parent: nothing to place)',
+      );
+      return;
+    }
     _deferred.add(
       DeferredRow(
         table: table,
@@ -121,6 +157,27 @@ class _DeferralSink {
       '$missingParentId (parent not in snapshot nor local DB)',
     );
   }
+
+  /// Whether [json] is a soft-deleted row.
+  ///
+  /// Both key spellings are accepted because this JSON reaches the importer
+  /// from two sources with different conventions: Supabase rows use quoted
+  /// camelCase columns (`deletedAt`), while a drift `toJson()` round-trip can
+  /// carry the generated snake_case name. Treating only one as authoritative
+  /// would make the drop above silently stop working for the other.
+  static bool _isTombstone(Map<String, dynamic> json) {
+    final raw = json['deletedAt'] ?? json['deleted_at'];
+    if (raw is int) return raw > 0;
+    if (raw is String) {
+      final parsed = int.tryParse(raw);
+      return parsed != null && parsed > 0;
+    }
+    return false;
+  }
+
+  /// How many tombstones were dropped rather than deferred — surfaced so a
+  /// caller can tell "nothing to do" apart from "nothing happened".
+  int get droppedTombstones => _droppedTombstones;
 
   ImportReport get report => ImportReport(
     deferred: List<DeferredRow>.of(_deferred),
