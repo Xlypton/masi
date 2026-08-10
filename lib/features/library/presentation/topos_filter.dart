@@ -151,13 +151,27 @@ class _ToposFilterBar extends StatelessWidget {
 /// keeps the sheet's TOP clear of the status bar/notch once the content is
 /// tall enough to fill the screen, while deliberately leaving the BOTTOM
 /// inset unconsumed so [_ToposFiltersSheet] can paint its surface all the
-/// way to the screen edge (under `NavShell`'s floating bar) and pad only its
-/// content away from it. See that widget's `bottomInset`.
+/// way to the screen edge and pad only its content away from it. See that
+/// widget's `bottomInset`.
+///
+/// **`useRootNavigator: true` is load-bearing, not a detail.** Without it the
+/// sheet is pushed onto the SHELL BRANCH's navigator, i.e. INSIDE
+/// `NavShell`'s body — so `NavShell`'s floating nav pill, which lives in the
+/// `Scaffold.bottomNavigationBar` slot outside that body, was painted ON TOP
+/// of the sheet (the reported bug). On the ROOT navigator the sheet route sits
+/// above the shell route, which does two things at once: the sheet's own
+/// barrier and surface now cover the pill's strip, and the shell route stops
+/// being `isCurrent`, which is exactly the route-derived signal `NavShell`
+/// reads to hide the pill (see `nav_shell.dart`'s `isFrontmost`). That signal
+/// is derived, so it cannot get stuck: it is restored by every way out of this
+/// sheet — Done, Clear, a scrim tap, or a back gesture — with nothing for a
+/// sheet to remember to reset.
 Future<void> _showToposFiltersSheet(BuildContext context) {
   return showModalBottomSheet<void>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
+    useRootNavigator: true,
     backgroundColor: Colors.transparent,
     builder: (context) => const _ToposFiltersSheet(),
   );
@@ -177,11 +191,22 @@ Future<void> _showToposFiltersSheet(BuildContext context) {
 /// underlying Topos list (watched by [ToposScreen], which stays mounted
 /// underneath this modal sheet) updates live while the sheet is still open.
 ///
-/// Layout: the grab handle and the title/Clear row are PINNED and only the
-/// facets scroll, so Clear stays reachable no matter how far down the area
-/// list the user has scrolled. The whole thing is a `mainAxisSize.min`
+/// Layout: the grab handle and the Clear/title/Done row are PINNED and only
+/// the facets scroll, so both actions stay reachable no matter how far down the
+/// area list the user has scrolled. The whole thing is a `mainAxisSize.min`
 /// column with the scroll view in a [Flexible], so a sheet with two areas
 /// is still short and only a genuinely tall one grows to fill the screen.
+///
+/// **There is an explicit "Done", opposite "Clear".** The sheet is
+/// `isScrollControlled` and grows to fill the screen, and a full-screen sheet
+/// whose only exits are a scrim tap you cannot see and a drag on a 5 px handle
+/// is not dismissible in any way a user would find — that was the reported bug.
+///
+/// Clear resets the facets and STAYS. It is the "start over" control, not a
+/// second exit: clearing is very often the first half of "clear this, then set
+/// something else", and dismissing on Clear forces the user to reopen the sheet
+/// to finish the thought. "Done" is the only exit action, which is the whole
+/// point of adding it.
 class _ToposFiltersSheet extends ConsumerWidget {
   const _ToposFiltersSheet();
 
@@ -195,12 +220,19 @@ class _ToposFiltersSheet extends ConsumerWidget {
 
     // NOT a `SafeArea` wrapper (which is what this used to be, and was the
     // bug): a SafeArea puts the inset OUTSIDE the decorated box, so the
-    // sheet's surface stopped short and the dimmed list plus `NavShell`'s
-    // floating bar showed through beneath it. Under `Scaffold.extendBody`
-    // this value is the REAL measured bottom-bar height (see `NavShell`'s
-    // doc), so folding it into the SCROLL VIEW's padding instead keeps the
-    // last chip clear of the bar while the surface itself runs to the
-    // screen edge.
+    // sheet's surface stopped short and the dimmed list showed through
+    // beneath it. Folding the inset into the SCROLL VIEW's padding instead
+    // keeps the last chip clear of the screen edge while the surface itself
+    // runs all the way to it.
+    //
+    // NOTE what this value now is, because it CHANGED with
+    // `useRootNavigator: true`. This used to read the branch Scaffold's
+    // `extendBody`-measured bottom-bar height, so the padding also cleared
+    // `NavShell`'s floating pill. The sheet is now a ROOT-navigator route, so
+    // this is the plain device safe-area inset — which is the correct number,
+    // because the pill is hidden for as long as this sheet is up (see
+    // `nav_shell.dart`'s `isFrontmost`) and there is no longer a bar down there
+    // to clear.
     final bottomInset = MediaQuery.paddingOf(context).bottom;
 
     return Container(
@@ -233,17 +265,46 @@ class _ToposFiltersSheet extends ConsumerWidget {
               ),
             ),
           ),
+          // Clear leading, Done trailing, title between them — and a [Wrap],
+          // NOT a [Row].
+          //
+          // A Row cannot survive this. Measured at 360x420 @ 3.0x text scale:
+          // Material scales a TextButton's padding with the text, so "Clear"
+          // alone renders 263 px wide and "Done" 212 px, i.e. 475 px of buttons
+          // in a 352 px sheet — a 124 px `RenderFlex overflowed on the right`
+          // however the title is flexed, because neither button is compressible
+          // and both must stay tappable. Giving the buttons a flex instead just
+          // moves the failure: `Flexible` children that take less than their
+          // share leave the leftover as a trailing gap, and shrinking them
+          // ellipsises the label on the one control that closes the sheet.
+          //
+          // A Wrap makes the extra text scale cost VERTICAL space instead, which
+          // this sheet has (the facet list below is `Flexible` and simply gets
+          // shorter). At normal scale all three fit one line and
+          // `spaceBetween` renders exactly the intended header — Clear at one
+          // end, Done at the other; at a large scale they stack, each fully
+          // legible, and nothing overflows. Every child is still bounded by the
+          // Wrap's own width, so no single one can overflow either.
           Padding(
-            padding: const EdgeInsets.fromLTRB(
-              MasiSpacing.lg,
-              MasiSpacing.xs,
-              MasiSpacing.sm,
-              0,
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.xs),
+            child: Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Expanded(
+                TextButton(
+                  key: const Key('topos-filter-clear'),
+                  // Resets the facets and stays open — see the class doc.
+                  onPressed: controller.clear,
+                  child: const Text(
+                    'Clear',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: MasiSpacing.xs,
+                  ),
                   child: Text(
                     'Filters',
                     style: textTheme.titleLarge,
@@ -252,9 +313,13 @@ class _ToposFiltersSheet extends ConsumerWidget {
                   ),
                 ),
                 TextButton(
-                  key: const Key('topos-filter-clear'),
-                  onPressed: controller.clear,
-                  child: const Text('Clear'),
+                  key: const Key('topos-filter-done'),
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text(
+                    'Done',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                 ),
               ],
             ),

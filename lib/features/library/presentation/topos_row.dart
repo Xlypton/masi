@@ -102,7 +102,14 @@ class _ToposSkeleton extends StatelessWidget {
   /// Deterministic width variation (no `Random` — a skeleton must not reshuffle
   /// on every rebuild), so it reads as a list of different topos rather than a
   /// table.
-  static const List<double> _widthFactors = [0.52, 0.38, 0.61, 0.44, 0.55, 0.34];
+  static const List<double> _widthFactors = [
+    0.52,
+    0.38,
+    0.61,
+    0.44,
+    0.55,
+    0.34,
+  ];
 
   @override
   Widget build(BuildContext context) {
@@ -521,7 +528,13 @@ class _TopoRowState extends ConsumerState<_TopoRow>
       case 'withdraw':
         await _handleWithdraw(context, ref, topo, reportBusy);
       case 'cancel-withdraw':
-        await _handleCancelWithdraw(context, ref, topo, isWithdrawn, reportBusy);
+        await _handleCancelWithdraw(
+          context,
+          ref,
+          topo,
+          isWithdrawn,
+          reportBusy,
+        );
       case 'more':
         await _showMoreSheet(context, ref, topo, reportBusy, isProtected);
       case 'delete':
@@ -707,9 +720,9 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     if (!context.mounted) return;
 
     final targetSector = candidates.firstWhere((s) => s.id == targetSectorId);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Moved to ${targetSector.name}')),
-    );
+    ScaffoldMessenger.of(
+      context,
+    ).showSnackBar(SnackBar(content: Text('Moved to ${targetSector.name}')));
   }
 
   /// Publishes [topo] to Community after an explicit confirm (this is the
@@ -740,8 +753,7 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     // topo is public thirty seconds later has been misled, and one told "this
     // goes live now" who then waits three days for a moderator has been misled
     // worse.
-    final trusted =
-        ref.read(myTrustProvider).asData?.value.isTrusted ?? false;
+    final trusted = ref.read(myTrustProvider).asData?.value.isTrusted ?? false;
 
     // Phase 8b / C-6.1: what is already here, BEFORE anything is submitted.
     // Only possible when this topo has coordinates, which is most of them —
@@ -985,7 +997,9 @@ class _TopoRowState extends ConsumerState<_TopoRow>
       debugPrint('Failed to set topo location: $e\n$st');
       if (!context.mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't save location — please try again")),
+        const SnackBar(
+          content: Text("Couldn't save location — please try again"),
+        ),
       );
       return;
     }
@@ -1023,7 +1037,10 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     // Supabase is not initialised (early boot, and every widget test that does
     // not stand up a fake client), so touching it up here would break deleting
     // a draft in exactly the situations that have nothing to do with sharing.
-    final view = ref.read(wallModerationViewProvider(topo.wallId)).asData?.value;
+    final view = ref
+        .read(wallModerationViewProvider(topo.wallId))
+        .asData
+        ?.value;
     final everPublic =
         view?.storedState == ModerationState.published ||
         view?.storedState == ModerationState.removed;
@@ -1032,9 +1049,9 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     Map<String, dynamic>? request;
     var readFailed = false;
     try {
-      request = await ref.read(moderationRemoteProvider).deletionRequestFor(
-        topo.wallId,
-      );
+      request = await ref
+          .read(moderationRemoteProvider)
+          .deletionRequestFor(topo.wallId);
     } catch (_) {
       readFailed = true;
     }
@@ -1196,6 +1213,16 @@ class _CommunityProximityRow extends ConsumerWidget {
     // `.value ?? false` — fails CLOSED. An unresolved or errored admin lookup
     // draws no destructive control, which is the only safe default here.
     final isAdmin = ref.watch(isAdminProvider).value ?? false;
+    // The owner's display name for the badge, resolved the SAME way every other
+    // author name in the app is (`community_feed_screen.dart`'s `_FeedRow`,
+    // `comment_row.dart`, `notifications_screen.dart`): a live Drift watch over
+    // the locally-synced `profiles` row. This is deliberately NOT a fetch — a
+    // name that has not been pulled yet resolves to null and the badge falls
+    // back to "Community" (see `_CommunitySharedBadge`).
+    final ownerId = topo.ownerId;
+    final ownerName = ownerId == null
+        ? null
+        : ref.watch(profileDisplayNameProvider(ownerId)).asData?.value;
 
     return Material(
       key: Key('topo-item-community-$wallId'),
@@ -1242,7 +1269,10 @@ class _CommunityProximityRow extends ConsumerWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        _CommunitySharedBadge(wallId: wallId),
+                        _CommunitySharedBadge(
+                          wallId: wallId,
+                          ownerName: ownerName,
+                        ),
                         if (entry.distanceKm != null)
                           Text(
                             '${entry.distanceKm!.toStringAsFixed(1)} km',

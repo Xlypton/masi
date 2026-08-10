@@ -4,18 +4,42 @@ part of 'topos_screen.dart';
 /// one of this device's own) -- the Topos-home-side counterpart of
 /// `community_screen.dart`'s `_OwnBadge` (which marks the reverse case, an
 /// own topo shown inside the Community feed).
+///
+/// **It says "Community" (or the owner's name), never "Shared"** — the owner's
+/// decision, option B. Before this, ONE screen used the word "Shared" for three
+/// different things at once: this badge (somebody else's topo), the
+/// [_VisibilityBadge]'s own-topo state, and the Filters sheet's
+/// All/Shared/Private visibility segment. Three distinct facts now get three
+/// distinct words: [_VisibilityBadge] says **Published** / **Private** about
+/// your own topo, and this one says **Community** about everybody else's.
+///
+/// [ownerName] upgrades that to the owner's actual display name when it has
+/// ALREADY been resolved — `profileDisplayNameProvider` is a live Drift watch
+/// over the locally-synced `profiles` row (the same door
+/// `community_feed_screen.dart`'s `_FeedRow` and `comment_row.dart` use), so
+/// reading it here adds a local subscription and NOT a fetch. Unresolved (no
+/// `ownerId` at all, no profile row pulled yet, a blank name) all collapse back
+/// to "Community": a raw uid must never render, and a badge that flickers
+/// through a placeholder is worse than one that is simply generic.
 class _CommunitySharedBadge extends StatelessWidget {
-  const _CommunitySharedBadge({required this.wallId});
+  const _CommunitySharedBadge({required this.wallId, this.ownerName});
 
   final String wallId;
+
+  /// The owner's resolved `profiles.displayName`, or null for "not resolved".
+  final String? ownerName;
 
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
 
+    final trimmed = ownerName?.trim();
+    final named = trimmed != null && trimmed.isNotEmpty;
+    final label = named ? trimmed : 'Community';
+
     return Semantics(
-      label: 'Shared by the community',
+      label: named ? 'Shared by $trimmed' : 'Shared by the community',
       child: Container(
         key: Key('topo-shared-badge-$wallId'),
         padding: const EdgeInsets.symmetric(
@@ -26,6 +50,11 @@ class _CommunitySharedBadge extends StatelessWidget {
           color: colors.surface2,
           borderRadius: BorderRadius.circular(MasiRadii.control),
         ),
+        // A display name is user-supplied and can be arbitrarily long, unlike
+        // the fixed word this badge used to carry, so cap it: `Flexible` below
+        // only ellipsizes against the enclosing `Wrap`'s full width, which on a
+        // phone is the whole row. 160 keeps the badge a badge.
+        constraints: const BoxConstraints(maxWidth: 160),
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -33,7 +62,7 @@ class _CommunitySharedBadge extends StatelessWidget {
             const SizedBox(width: 2),
             Flexible(
               child: Text(
-                'Shared',
+                label,
                 style: textTheme.labelSmall?.copyWith(
                   color: colors.ink3,
                   fontWeight: FontWeight.w600,

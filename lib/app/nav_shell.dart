@@ -61,6 +61,15 @@ class NavShell extends ConsumerStatefulWidget {
   /// compare against it and an off-by-one would silently mis-target the dot.
   static const int feedBranchIndex = 2;
 
+  /// On the [Visibility] that hides the floating pill while something modal is
+  /// over the shell (see `isFrontmost` in [build]).
+  ///
+  /// The tabs themselves stay in the tree while hidden (`maintainState`), so a
+  /// `find.byKey(Key('nav-tab-topos'))` still resolves — assert
+  /// `tester.widget<Visibility>(find.byKey(NavShell.navBarVisibilityKey)).visible`
+  /// rather than the tabs' presence.
+  static const Key navBarVisibilityKey = Key('nav-bar-visibility');
+
   @override
   ConsumerState<NavShell> createState() => _NavShellState();
 }
@@ -124,6 +133,35 @@ class _NavShellState extends ConsumerState<NavShell> {
     // Hanging it off the notification bell instead would tie live delivery to
     // whether the Feed tab happens to be built.
     ref.watch(notificationRealtimeProvider);
+    // Whether this shell is the frontmost route on the ROOT navigator — i.e.
+    // whether anything modal is currently over it. The floating pill is hidden
+    // while something is.
+    //
+    // **Why the pill has to hide at all.** It lives in the
+    // `Scaffold.bottomNavigationBar` slot, which is a SIBLING of the branch
+    // content, not part of it. A `showModalBottomSheet` opened from a branch
+    // screen defaults to that branch's own navigator — i.e. inside
+    // `navigationShell` — so its barrier and surface could not cover this bar,
+    // and the pill was painted on top of the sheet (reported bug: the Filters
+    // sheet with the nav pill floating over it). Sheets that want to be modal
+    // over the whole app therefore pass `useRootNavigator: true` (see
+    // `topos_filter.dart`'s `_showToposFiltersSheet`), and this is the other
+    // half of that: the pill gets out of the way.
+    //
+    // **Why it is derived and not a flag.** `ModalRoute.of` depends on the
+    // route's `_ModalScopeStatus`, an `InheritedWidget` that carries `isCurrent`
+    // and notifies when it changes — so pushing anything above the shell rebuilds
+    // this widget, and popping it rebuilds again. There is nothing for a sheet to
+    // set and nothing for a sheet to forget to unset, which is what a manual flag
+    // would risk: a sheet that returned by an unexpected path (a scrim tap, an
+    // Android/browser back gesture, `Navigator.pop` from inside a facet) would
+    // leave the pill hidden for the rest of the session. Every one of those paths
+    // pops the route, so every one of them restores this by construction.
+    //
+    // `?? true` for the case where there is no enclosing `ModalRoute` at all
+    // (a test harness that pumps `NavShell` bare): show the bar, i.e. behave
+    // exactly as before this existed.
+    final isFrontmost = ModalRoute.of(context)?.isCurrent ?? true;
     return Scaffold(
       // At most ONE shell notice sits ABOVE the branch content, never covering
       // the floating bottom bar — see [ShellNotices]. On the overwhelmingly
@@ -138,64 +176,79 @@ class _NavShellState extends ConsumerState<NavShell> {
       // Every branch extends under the floating bar now (#51) — see this
       // class's doc.
       extendBody: true,
-      bottomNavigationBar: SafeArea(
-        // Standalone-PWA-only floor: `minimum` takes max(deviceInset, this)
-        // per edge, so a real (non-zero) device inset still wins and nothing
-        // double-counts — this only fills the gap when iOS reports zero.
-        minimum: EdgeInsets.only(bottom: isStandalone ? MasiSpacing.xxl : 0),
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(
-            MasiSpacing.lg,
-            0,
-            MasiSpacing.lg,
-            MasiSpacing.sm,
-          ),
-          // A floating GlassChrome pill (reused from the topo canvas's
-          // chrome — see that class's doc), NOT a Material
-          // `BottomNavigationBar`/opaque `BottomAppBar`: the bar is meant to
-          // read as the SAME translucent-glass chrome material used
-          // throughout the rest of the app, never a flat opaque strip.
-          child: GlassChrome(
-            padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-            child: Row(
-              children: [
-                Expanded(
-                  child: _NavTab(
-                    tabKey: const Key('nav-tab-topos'),
-                    iconName: 'route',
-                    label: 'Topos',
-                    selected: navigationShell.currentIndex == 0,
-                    onTap: () => navigationShell.goBranch(0),
+      // `Visibility` with `maintainSize`, NOT a conditional/`SizedBox.shrink()`.
+      // Under `extendBody: true` Flutter derives the value every branch reads as
+      // `MediaQuery.padding.bottom` from this slot's MEASURED height (see this
+      // class's doc), and every branch folds that into its own scroll padding.
+      // Removing the bar from the layout would therefore reflow the list, the
+      // floating add button and the map's overlay controls underneath the sheet,
+      // and reflow them back on dismissal. Keeping the space and dropping only
+      // the paint + hit-testing makes this purely a visibility change.
+      bottomNavigationBar: Visibility(
+        key: NavShell.navBarVisibilityKey,
+        visible: isFrontmost,
+        maintainState: true,
+        maintainAnimation: true,
+        maintainSize: true,
+        child: SafeArea(
+          // Standalone-PWA-only floor: `minimum` takes max(deviceInset, this)
+          // per edge, so a real (non-zero) device inset still wins and nothing
+          // double-counts — this only fills the gap when iOS reports zero.
+          minimum: EdgeInsets.only(bottom: isStandalone ? MasiSpacing.xxl : 0),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+              MasiSpacing.lg,
+              0,
+              MasiSpacing.lg,
+              MasiSpacing.sm,
+            ),
+            // A floating GlassChrome pill (reused from the topo canvas's
+            // chrome — see that class's doc), NOT a Material
+            // `BottomNavigationBar`/opaque `BottomAppBar`: the bar is meant to
+            // read as the SAME translucent-glass chrome material used
+            // throughout the rest of the app, never a flat opaque strip.
+            child: GlassChrome(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: _NavTab(
+                      tabKey: const Key('nav-tab-topos'),
+                      iconName: 'route',
+                      label: 'Topos',
+                      selected: navigationShell.currentIndex == 0,
+                      onTap: () => navigationShell.goBranch(0),
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _NavTab(
-                    tabKey: const Key('nav-tab-map'),
-                    iconName: 'topo_map',
-                    label: 'Map',
-                    selected: navigationShell.currentIndex == 1,
-                    onTap: () => navigationShell.goBranch(1),
+                  Expanded(
+                    child: _NavTab(
+                      tabKey: const Key('nav-tab-map'),
+                      iconName: 'topo_map',
+                      label: 'Map',
+                      selected: navigationShell.currentIndex == 1,
+                      onTap: () => navigationShell.goBranch(1),
+                    ),
                   ),
-                ),
-                Expanded(
-                  child: _NavTab(
-                    tabKey: const Key('nav-tab-feed'),
-                    iconName: 'comment',
-                    label: 'Feed',
-                    selected:
-                        navigationShell.currentIndex ==
-                        NavShell.feedBranchIndex,
-                    // Never dotted while you are standing on it — the tab is
-                    // showing you the very thing the dot would point at.
-                    showDot:
-                        navigationShell.currentIndex !=
-                            NavShell.feedBranchIndex &&
-                        ref.watch(feedHasUnseenProvider),
-                    onTap: () =>
-                        navigationShell.goBranch(NavShell.feedBranchIndex),
+                  Expanded(
+                    child: _NavTab(
+                      tabKey: const Key('nav-tab-feed'),
+                      iconName: 'comment',
+                      label: 'Feed',
+                      selected:
+                          navigationShell.currentIndex ==
+                          NavShell.feedBranchIndex,
+                      // Never dotted while you are standing on it — the tab is
+                      // showing you the very thing the dot would point at.
+                      showDot:
+                          navigationShell.currentIndex !=
+                              NavShell.feedBranchIndex &&
+                          ref.watch(feedHasUnseenProvider),
+                      onTap: () =>
+                          navigationShell.goBranch(NavShell.feedBranchIndex),
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
         ),
@@ -319,8 +372,11 @@ class ShellNotices extends ConsumerWidget {
     // second one — see `PublicPhotoPruneOutcome.automaticReliefExhausted`'s
     // doc for exactly which two prune reasons mean "nothing further this app
     // can do on its own."
-    final pruneOutcome = ref.watch(syncOrchestratorProvider).lastPublicPhotoPruneOutcome;
-    final pressureShowing = pruneOutcome != null && pruneOutcome.automaticReliefExhausted;
+    final pruneOutcome = ref
+        .watch(syncOrchestratorProvider)
+        .lastPublicPhotoPruneOutcome;
+    final pressureShowing =
+        pruneOutcome != null && pruneOutcome.automaticReliefExhausted;
 
     // Reported to `shellNoticeDismissalProvider` on EVERY build, whatever the
     // outcome — see `ShellNoticeDismissalController.reportCurrent`'s doc for

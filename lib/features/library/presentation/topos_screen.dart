@@ -18,6 +18,7 @@ import '../../moderation/application/moderation_providers.dart';
 import '../../moderation/application/trust_providers.dart';
 import '../../moderation/domain/moderation_state.dart';
 import '../../moderation/presentation/access_editor.dart';
+import '../../moderation/application/suggestion_providers.dart';
 import '../../moderation/presentation/duplicate_warning_sheet.dart';
 import '../../moderation/presentation/topo_history_sheet.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
@@ -181,6 +182,164 @@ class _StorageDetailNotice extends StatelessWidget {
   }
 }
 
+/// Arms pull-to-refresh over EVERY state of the Topos home, not just the list.
+///
+/// **The trap this exists to close.** The Topos home renders one of seven things
+/// in the same slot: the populated list, four empty states (`_EmptyState`,
+/// `_SearchEmptyState`, `_FilteredEmptyState`, plus `_SyncErrorEmptyState` /
+/// `_OfflineEmptyState`), the first-load skeleton, and `MasiAsyncView`'s hard
+/// error. Six of those return INSTEAD of the list. So the obvious
+/// implementation — a [RefreshIndicator] around `_ToposList` — arms the gesture
+/// in exactly the state where the user needs it least (they can already see
+/// their topos) and kills it in every state where they need it most: an empty
+/// library after a failed pull, or a screen that came up offline.
+///
+/// So the indicator wraps the whole stack. That alone is not enough, because a
+/// [RefreshIndicator] fires on OVERSCROLL, and a scroll view whose content
+/// exactly fits — which every empty state's `SingleChildScrollView` does by
+/// construction (`_EmptyStateShell` sets `minHeight` to the viewport) — will not
+/// accept a downward drag at all under the default platform physics
+/// (`ScrollPhysics.shouldAcceptUserOffset` is false when min == max). Hence the
+/// [ScrollConfiguration]: it forces [AlwaysScrollableScrollPhysics] onto every
+/// descendant scroll view that does not name its own physics, so a state's
+/// gesture works whether its content is one line or two hundred rows.
+///
+/// Doing it through the ambient scroll behaviour rather than by editing each
+/// state is the point: a NEW empty state added to `topos_empty_states.dart`
+/// tomorrow inherits a working gesture with nothing to remember. The one
+/// deliberate exception is `_ToposSkeleton`, which names
+/// `NeverScrollableScrollPhysics` explicitly (an explicit physics wins over the
+/// behaviour's) and so stays inert — correct, since a first load is already
+/// fetching and has nothing for a pull to add.
+///
+/// The indicator is nested INSIDE `_withSyncBannerHeader`'s
+/// [NestedScrollView] rather than around it, deliberately:
+/// `RefreshIndicator`'s default `notificationPredicate` only accepts
+/// `depth == 0`, and a notification from a state's scroll view bubbling out
+/// through the `NestedScrollView`'s own viewport would arrive at depth 1 and be
+/// ignored.
+class _ToposRefreshScope extends StatelessWidget {
+  const _ToposRefreshScope({required this.onRefresh, required this.child});
+
+  /// Awaited by [RefreshIndicator] — must not throw. See
+  /// `_ToposScreenState._handleRefresh`.
+  final Future<void> Function() onRefresh;
+
+  final Widget child;
+
+  /// On the [RefreshIndicator] itself. NOTE for tests: a `RefreshIndicator`
+  /// occupies its whole child's box, so `tester.tap(find.byKey(indicatorKey))`
+  /// lands on whatever happens to sit at the centre of the list — the
+  /// documented trap in `community_pull_refresh_test.dart`. Drive it with a
+  /// `fling` on the state's own scroll view, never a tap on this key.
+  static const Key indicatorKey = Key('topos-refresh');
+
+  @override
+  Widget build(BuildContext context) {
+    final ambient = ScrollConfiguration.of(context);
+    return RefreshIndicator(
+      key: indicatorKey,
+      onRefresh: onRefresh,
+      child: ScrollConfiguration(
+        // `.applyTo(ambient)` rather than a bare `AlwaysScrollableScrollPhysics()`:
+        // bare, its parent is null, which loses the platform's own boundary
+        // behaviour (iOS bounce / Android clamp) and lets a list scroll past its
+        // end. Applied to the ambient physics it only overrides
+        // `shouldAcceptUserOffset` — exactly the one thing that needs changing.
+        behavior: ambient.copyWith(
+          physics: const AlwaysScrollableScrollPhysics().applyTo(
+            ambient.getScrollPhysics(context),
+          ),
+        ),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// Wraps [child] in a viewport-filling scroll view when [fill] is true, and
+/// returns it untouched otherwise.
+///
+/// The one state on this screen with NO scroll view of its own is
+/// `MasiAsyncView`'s hard error (a bare `Center`), and the suppressed
+/// `SizedBox.shrink()` that replaces it when the shell is already reporting the
+/// same storage failure. Neither can overscroll, so neither could reach
+/// [_ToposRefreshScope]'s indicator — leaving the single state where a re-pull
+/// is the only sensible action as the one state that could not ask for one.
+///
+/// The child is given an EXACT viewport height rather than
+/// `_EmptyStateShell`'s `minHeight`, because `MasiAsyncView` lays its states out
+/// in a `Column` with the content `Expanded` and therefore requires a bounded
+/// height (see its "Layout" doc). Its error state is a fixed-size `Center`, so
+/// pinning the height loses nothing.
+Widget _fillViewportWhen(bool fill, Widget child) {
+  if (!fill) return child;
+  return LayoutBuilder(
+    builder: (context, constraints) => SingleChildScrollView(
+      child: SizedBox(
+        height: constraints.maxHeight.isFinite ? constraints.maxHeight : null,
+        child: child,
+      ),
+    ),
+  );
+}
+
+/// The Topos home's account action: the signed-in user's [MasiAvatar], with an
+/// accent dot over its top-right corner when suggested edits are waiting.
+///
+/// The dot's shape/size/ring recipe is deliberately the same as `NavShell`'s
+/// Feed `_UnseenDot` (that one is private to its own library, so this
+/// replicates rather than imports it): a ring in the surface colour under the
+/// accent dot, because the avatar underneath is an arbitrary photo and there is
+/// no fixed background colour to rely on for contrast.
+class _AccountAvatar extends StatelessWidget {
+  const _AccountAvatar({
+    required this.avatarUrl,
+    required this.email,
+    required this.showDot,
+  });
+
+  final String? avatarUrl;
+  final String email;
+  final bool showDot;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Stack(
+      // The dot overhangs the avatar's circle on purpose; the default
+      // `hardEdge` would shave it.
+      clipBehavior: Clip.none,
+      children: [
+        MasiAvatar(
+          key: const Key('topos-account-avatar'),
+          avatarUrl: avatarUrl,
+          email: email,
+          radius: 14,
+        ),
+        if (showDot)
+          Positioned(
+            top: -1,
+            right: -2,
+            child: Semantics(
+              label: 'Suggestions waiting',
+              child: Container(
+                key: const Key('topos-account-suggestions-dot'),
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                  color: colors.accent,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: colors.surface, width: 1.5),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
 class ToposScreen extends ConsumerStatefulWidget {
   const ToposScreen({
     super.key,
@@ -207,7 +366,8 @@ class ToposScreen extends ConsumerStatefulWidget {
   ConsumerState<ToposScreen> createState() => _ToposScreenState();
 }
 
-class _ToposScreenState extends ConsumerState<ToposScreen> {
+class _ToposScreenState extends ConsumerState<ToposScreen>
+    with WidgetsBindingObserver {
   /// Re-entrancy guard for [_handleNewTopo]: true for the whole duration of
   /// an in-flight "New topo" flow (source picker -> photo picker -> decode
   /// -> createTopo -> attachPhotoToWall -> navigate). While true, the
@@ -238,6 +398,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _searchController.addListener(_onSearchChanged);
     // Seed the reachability verdict this screen renders (see `build`'s
     // `bannerKind`). `reachabilityProvider` is probe-on-demand — nothing
@@ -340,8 +501,62 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     );
   }
 
+  /// Re-asks the server whether any suggested edits are waiting, every time the
+  /// app comes back to the foreground.
+  ///
+  /// **Without this the accent dot on the account avatar would be worse than
+  /// not having it.** `mySuggestionsProvider` is an `autoDispose FutureProvider`
+  /// over a NETWORK fetch: it resolves once, when this screen first mounts, and
+  /// then never again on its own — nothing polls it, nothing streams it, and it
+  /// is not backed by a local Drift table the way
+  /// `unreadNotificationCountProvider` is. So the one moment it is guaranteed to
+  /// be wrong is the moment that matters: a suggestion that arrives while the
+  /// PWA is backgrounded (which, on an installed iOS PWA, is most of its life)
+  /// would leave the dot dark until the user happened to cold-start the app.
+  ///
+  /// Resume is the right trigger and the app already has exactly one lifecycle
+  /// observer for it — `_MasiAppState` in `app/app.dart`, which re-pulls sync on
+  /// `AppLifecycleState.resumed`. That file is not this screen's to edit, so
+  /// this adds a second observer rather than a second mechanism: same hook, same
+  /// state, one extra `invalidate`. If the two ever want to coordinate, the
+  /// resume branch in `app.dart` is where they should merge.
+  ///
+  /// Sign-in needs nothing here: `mySuggestionsProvider` `ref.watch`es
+  /// [effectiveUidProvider], so signing in (or switching accounts) already
+  /// re-resolves it, and signing OUT re-resolves it to the empty list. Adding an
+  /// auth listener on top would only re-fetch the same answer twice.
+  ///
+  /// `invalidate`, not `refresh`: nothing here awaits a value. The screen is
+  /// already watching the provider, so Riverpod re-runs it and the dot repaints
+  /// when the answer lands.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state != AppLifecycleState.resumed) return;
+    if (!mounted) return;
+    ref.invalidate(mySuggestionsProvider);
+  }
+
+  /// Pull-to-refresh on the Topos home (see [_ToposRefreshScope]).
+  ///
+  /// Re-probes reachability BEFORE pulling, for the same reason
+  /// [_handleOfflineRetry] does: `reachabilityProvider` is probe-on-demand, so a
+  /// user who has walked back into signal would otherwise keep reading the
+  /// offline [SyncBanner] this very screen renders even after a successful pull.
+  ///
+  /// Unlike [_handleOfflineRetry] the pull is UNCONDITIONAL — a deliberate
+  /// gesture asking for fresh data should reach the network and, if that fails,
+  /// report a real error rather than being silently swallowed because a probe
+  /// said "offline". Never throws: `refresh()`/`pullNow()` are both documented
+  /// not to, which matters here because `RefreshIndicator` awaits this future.
+  Future<void> _handleRefresh() async {
+    await ref.read(reachabilityProvider.notifier).refresh();
+    await ref.read(syncOrchestratorProvider.notifier).pullNow();
+  }
+
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _searchController.removeListener(_onSearchChanged);
     _searchController.dispose();
     super.dispose();
@@ -539,6 +754,25 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     // signed-out, still loading, or errored (e.g. Supabase never
     // initialized) — degrades to the generic person icon rather than
     // guessing, per `authStateProvider`'s doc comment.
+    // The accent dot on the account avatar: somebody has suggested an edit to
+    // one of this user's topos and it is still waiting for an answer. The
+    // Suggestions inbox lives behind the Account screen, so without a mark here
+    // the only way to discover one is to go looking — and an unanswered
+    // suggestion is exactly the abandoned-topo failure the inbox exists to
+    // prevent.
+    //
+    // Deliberately a boolean, not a count, matching `NavShell`'s Feed dot: the
+    // number would have to be honest about what it counts, and "there is
+    // something waiting" is the claim this can support.
+    //
+    // Loading and errored both read as NO dot (`?? false`): inventing a badge
+    // off an unresolved fetch would point the user at an inbox that may be
+    // empty. `didChangeAppLifecycleState` above is what keeps that honest over
+    // time — see its doc for why a stale first resolve would otherwise make this
+    // dot dark on precisely the day a suggestion arrives.
+    final suggestionsWaiting =
+        ref.watch(mySuggestionsProvider).asData?.value.isNotEmpty ?? false;
+
     final authSession = ref.watch(authStateProvider).asData?.value;
     final signedInEmail =
         (authSession != null &&
@@ -577,14 +811,15 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
           IconButton(
             key: const Key('topos-account-button'),
             icon: signedInEmail != null
-                ? MasiAvatar(
-                    key: const Key('topos-account-avatar'),
+                ? _AccountAvatar(
                     avatarUrl: ref.watch(myAvatarUrlProvider).asData?.value,
                     email: signedInEmail,
-                    radius: 14,
+                    showDot: suggestionsWaiting,
                   )
                 : MasiIcon('person', color: colors.accent),
-            tooltip: 'Account',
+            tooltip: suggestionsWaiting
+                ? 'Account — suggestions waiting'
+                : 'Account',
             onPressed: () => context.push('/account'),
           ),
         ],
@@ -627,6 +862,35 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   isActive: filter.isActive,
                   onTap: () => _showToposFiltersSheet(context),
                 ),
+                // The honest note. The facets reason about `TopoRef.areaId` /
+                // `visibility` / stars / style tags, none of which a nearby
+                // community entry carries in the same shape, so they never
+                // applied to community rows — and the list used to show those
+                // rows anyway, which made a filtered result a lie: "grade 7a+"
+                // came back with a stranger's 5c in it. Community rows are now
+                // EXCLUDED whenever any facet is set (see `filtered` below), and
+                // this line says so, because a list that silently shrinks is its
+                // own kind of dishonesty.
+                //
+                // Keyed off `filter.isActive` only, NOT the search query: search
+                // does match community entries (see
+                // `_matchesProximityQuery`), so it needs no caveat.
+                if (filter.isActive)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(
+                      MasiSpacing.lg,
+                      MasiSpacing.xs,
+                      MasiSpacing.lg,
+                      0,
+                    ),
+                    child: Text(
+                      'Filters apply to your own topos only',
+                      key: const Key('topos-filter-scope-note'),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelMedium?.copyWith(color: colors.ink2),
+                    ),
+                  ),
                 Expanded(
                   // The sync/offline banner is a SLIVER of this scroll view,
                   // not a `Column` sibling above it — see
@@ -653,128 +917,166 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                     // re-opens the database that `toposProvider` itself
                     // depends on — so no retry ability is lost, only the
                     // duplicate report of it.
-                    body: (asyncToposHardError && storageRetryNoticeText != null)
-                        ? const SizedBox.shrink()
-                        : MasiAsyncView<List<TopoRef>>(
-                      value: asyncTopos,
-                      onRetry: () => ref.invalidate(toposProvider),
-                      errorMessage: "Couldn't load your topos",
-                      // Opted in: this is the local-first library, where the
-                      // raw drift/IO text is frequently the only diagnosis a
-                      // release build on a phone can offer (#72).
-                      showErrorDetail: true,
-                      // Row-shaped, not a spinner: this list's rows are a fixed
-                      // 52 px thumbnail beside two text lines, and a skeleton
-                      // that does not match that makes the whole list jump when
-                      // the first frame of real data lands. See `_ToposSkeleton`
-                      // for where the numbers come from.
-                      skeleton: (context) =>
-                          _ToposSkeleton(bottomInset: bottomChromeInset + 64),
-                      data: (context, topos) {
-                        // The proximity-sorted list (own + nearby community,
-                        // nearest-first — see `sortedByProximityToposProvider`'s
-                        // doc) is what actually renders; `topos` itself is only
-                        // still needed here to gate the loading/error/empty
-                        // states below on the OWN list specifically (community
-                        // entries can never appear without a location fix, so
-                        // `proximityEntries` degrades to exactly `topos` whenever
-                        // no fix is available — see that provider's doc).
-                        if (proximityEntries.isEmpty) {
-                          // #72 P1 fix: a genuinely empty topos home can mean
-                          // two very different things — a truly fresh
-                          // account with nothing yet, or a fresh install
-                          // whose own-rows pull actually failed (partially
-                          // or fully — see `PullResult`'s doc). Before this,
-                          // both looked identical: the same "No topos yet"
-                          // prompt, no way to tell a real sync failure apart
-                          // from an honestly-empty library, and no retry.
-                          // `SyncOrchestratorState.lastPullError` (see its
-                          // doc) distinguishes them; only the search/filter-
-                          // narrowed empty states below are left untouched
-                          // (there IS data in those cases).
-                          final syncError = ref
-                              .watch(syncOrchestratorProvider)
-                              .lastPullError;
-                          if (syncError != null) {
-                            return _SyncErrorEmptyState(
-                              message: syncError,
-                              onRetry: () => ref
-                                  .read(syncOrchestratorProvider.notifier)
-                                  .pullNow(),
-                            );
-                          }
-                          // Stage 3 offline-reads gap: a genuinely empty
-                          // library with NO reported pull error can still mean
-                          // "the app cannot currently tell" rather than "this
-                          // account really has nothing" — a device that never
-                          // pulled at all, or whose last pull succeeded before
-                          // the signal dropped. `isKnownOffline`, never
-                          // `!= online`, matching every other reachability
-                          // check on this screen (see `bannerKind` above).
-                          if (reachability.isKnownOffline) {
-                            return _OfflineEmptyState(
-                              onRetry: _handleOfflineRetry,
-                            );
-                          }
-                          return _EmptyState(
-                            onNewTopo: canCreate ? _handleNewTopo : null,
-                          );
-                        }
-                        // Search narrows first, then the filter facets (mirrors
-                        // `community_screen.dart`'s `_FeedView`), so the two stay
-                        // independently diagnosable: a query that matches nothing
-                        // shows the search-specific empty state even if the
-                        // active filter would otherwise also exclude everything.
-                        final query = _query;
-                        final searchFiltered = query.isEmpty
-                            ? proximityEntries
-                            : proximityEntries
-                                  .where(
-                                    (e) => _matchesProximityQuery(e, query),
-                                  )
-                                  .toList();
-                        if (searchFiltered.isEmpty) {
-                          return const _SearchEmptyState();
-                        }
-                        // The grade/visibility/area facet filter only ever applied
-                        // to the device's OWN topos (it reasons about
-                        // `TopoRef.areaId`/`visibility`, neither of which a
-                        // community-shared entry carries in the same shape) — a
-                        // nearby community entry always passes it unfiltered.
-                        final filtered = searchFiltered
-                            .where(
-                              (e) =>
-                                  e.source == ProximityTopoSource.community ||
-                                  filter.matches(e.ownTopo!),
-                            )
-                            .toList();
-                        if (filtered.isEmpty) {
-                          return const _FilteredEmptyState();
-                        }
-                        // Ask about the SEARCHED/FILTERED set, not the whole
-                        // library: the point is to be right about what is on
-                        // screen, and a user with hundreds of topos should not
-                        // pay a round trip for every one of them to render a
-                        // badge on ten.
-                        _pullModerationFor(filtered);
-                        return _ToposList(
-                          entries: filtered,
-                          // The list now runs full-bleed behind the floating
-                          // add button (see the `Positioned` button below), so
-                          // its bottom padding must clear BOTH the floating nav
-                          // bar (`bottomChromeInset`) AND the button itself
-                          // (48 height + its own bottom margin) so the last row
-                          // can still scroll fully into view instead of ending
-                          // up permanently hidden under the button.
-                          bottomInset: bottomChromeInset + 64,
-                          setLocationTileProvider:
-                              widget.setLocationTileProvider,
-                          setLocationMapController:
-                              widget.setLocationMapController,
-                          setLocationLocationService:
-                              widget.setLocationLocationService,
-                        );
-                      },
+                    //
+                    // Pull-to-refresh (#4): [_ToposRefreshScope] wraps the
+                    // WHOLE state stack rather than the list, and
+                    // [_fillViewportWhen] gives the one state that has no
+                    // scroll view of its own a surface to overscroll. See both
+                    // of their docs — the trap this closes is that the empty
+                    // states and the hard-error state return INSTEAD of the
+                    // list, so a gesture armed on the list alone is dead in
+                    // every state where the user most wants to re-pull.
+                    body: _ToposRefreshScope(
+                      onRefresh: _handleRefresh,
+                      // Only the hard-error/suppressed states need it — every
+                      // other state already owns a scroll view. See
+                      // [_fillViewportWhen].
+                      child: _fillViewportWhen(
+                        asyncToposHardError,
+                        (asyncToposHardError && storageRetryNoticeText != null)
+                            ? const SizedBox.shrink()
+                            : MasiAsyncView<List<TopoRef>>(
+                                value: asyncTopos,
+                                onRetry: () => ref.invalidate(toposProvider),
+                                errorMessage: "Couldn't load your topos",
+                                // Opted in: this is the local-first library, where the
+                                // raw drift/IO text is frequently the only diagnosis a
+                                // release build on a phone can offer (#72).
+                                showErrorDetail: true,
+                                // Row-shaped, not a spinner: this list's rows are a fixed
+                                // 52 px thumbnail beside two text lines, and a skeleton
+                                // that does not match that makes the whole list jump when
+                                // the first frame of real data lands. See `_ToposSkeleton`
+                                // for where the numbers come from.
+                                skeleton: (context) => _ToposSkeleton(
+                                  bottomInset: bottomChromeInset + 64,
+                                ),
+                                data: (context, topos) {
+                                  // The proximity-sorted list (own + nearby community,
+                                  // nearest-first — see `sortedByProximityToposProvider`'s
+                                  // doc) is what actually renders; `topos` itself is only
+                                  // still needed here to gate the loading/error/empty
+                                  // states below on the OWN list specifically (community
+                                  // entries can never appear without a location fix, so
+                                  // `proximityEntries` degrades to exactly `topos` whenever
+                                  // no fix is available — see that provider's doc).
+                                  if (proximityEntries.isEmpty) {
+                                    // #72 P1 fix: a genuinely empty topos home can mean
+                                    // two very different things — a truly fresh
+                                    // account with nothing yet, or a fresh install
+                                    // whose own-rows pull actually failed (partially
+                                    // or fully — see `PullResult`'s doc). Before this,
+                                    // both looked identical: the same "No topos yet"
+                                    // prompt, no way to tell a real sync failure apart
+                                    // from an honestly-empty library, and no retry.
+                                    // `SyncOrchestratorState.lastPullError` (see its
+                                    // doc) distinguishes them; only the search/filter-
+                                    // narrowed empty states below are left untouched
+                                    // (there IS data in those cases).
+                                    final syncError = ref
+                                        .watch(syncOrchestratorProvider)
+                                        .lastPullError;
+                                    if (syncError != null) {
+                                      return _SyncErrorEmptyState(
+                                        message: syncError,
+                                        onRetry: () => ref
+                                            .read(
+                                              syncOrchestratorProvider.notifier,
+                                            )
+                                            .pullNow(),
+                                      );
+                                    }
+                                    // Stage 3 offline-reads gap: a genuinely empty
+                                    // library with NO reported pull error can still mean
+                                    // "the app cannot currently tell" rather than "this
+                                    // account really has nothing" — a device that never
+                                    // pulled at all, or whose last pull succeeded before
+                                    // the signal dropped. `isKnownOffline`, never
+                                    // `!= online`, matching every other reachability
+                                    // check on this screen (see `bannerKind` above).
+                                    if (reachability.isKnownOffline) {
+                                      return _OfflineEmptyState(
+                                        onRetry: _handleOfflineRetry,
+                                      );
+                                    }
+                                    return _EmptyState(
+                                      onNewTopo: canCreate
+                                          ? _handleNewTopo
+                                          : null,
+                                    );
+                                  }
+                                  // Search narrows first, then the filter facets (mirrors
+                                  // `community_screen.dart`'s `_FeedView`), so the two stay
+                                  // independently diagnosable: a query that matches nothing
+                                  // shows the search-specific empty state even if the
+                                  // active filter would otherwise also exclude everything.
+                                  final query = _query;
+                                  final searchFiltered = query.isEmpty
+                                      ? proximityEntries
+                                      : proximityEntries
+                                            .where(
+                                              (e) => _matchesProximityQuery(
+                                                e,
+                                                query,
+                                              ),
+                                            )
+                                            .toList();
+                                  if (searchFiltered.isEmpty) {
+                                    return const _SearchEmptyState();
+                                  }
+                                  // The grade/visibility/area/rating/style facets can only
+                                  // ever be evaluated against the device's OWN topos: they
+                                  // reason about `TopoRef.areaId`/`visibility`/
+                                  // `routeStars`/`routeStyleTags`, none of which a
+                                  // community-shared entry carries in the same shape.
+                                  //
+                                  // A community entry used to be waved through unfiltered,
+                                  // which is the bug: with "7a+ and harder" set, the list
+                                  // still contained a stranger's 5c and the user had no way
+                                  // to know why. An honest filtered list therefore covers
+                                  // ONLY own topos — community rows drop out entirely for
+                                  // as long as any facet is set, and the
+                                  // `topos-filter-scope-note` line above says so. With no
+                                  // facet set nothing changes: every community row is back,
+                                  // exactly as before.
+                                  final filtered = searchFiltered
+                                      .where(
+                                        (e) =>
+                                            e.source ==
+                                                ProximityTopoSource.community
+                                            ? !filter.isActive
+                                            : filter.matches(e.ownTopo!),
+                                      )
+                                      .toList();
+                                  if (filtered.isEmpty) {
+                                    return const _FilteredEmptyState();
+                                  }
+                                  // Ask about the SEARCHED/FILTERED set, not the whole
+                                  // library: the point is to be right about what is on
+                                  // screen, and a user with hundreds of topos should not
+                                  // pay a round trip for every one of them to render a
+                                  // badge on ten.
+                                  _pullModerationFor(filtered);
+                                  return _ToposList(
+                                    entries: filtered,
+                                    // The list now runs full-bleed behind the floating
+                                    // add button (see the `Positioned` button below), so
+                                    // its bottom padding must clear BOTH the floating nav
+                                    // bar (`bottomChromeInset`) AND the button itself
+                                    // (48 height + its own bottom margin) so the last row
+                                    // can still scroll fully into view instead of ending
+                                    // up permanently hidden under the button.
+                                    bottomInset: bottomChromeInset + 64,
+                                    setLocationTileProvider:
+                                        widget.setLocationTileProvider,
+                                    setLocationMapController:
+                                        widget.setLocationMapController,
+                                    setLocationLocationService:
+                                        widget.setLocationLocationService,
+                                  );
+                                },
+                              ),
+                      ),
                     ),
                   ),
                 ),
