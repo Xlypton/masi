@@ -154,13 +154,17 @@ class _FakeRemote implements SyncRemote {
       ]);
 
   @override
-  Future<void> removeSharedPhoto({
+  Future<Set<String>> removeSharedPhoto({
     required String photoId,
     required String ext,
   }) async {
     removedShared.addAll([sharedPhotoPath(photoId, ext), sharedThumbPath(photoId)]);
-    shared.remove(sharedPhotoPath(photoId, ext));
-    shared.remove(sharedThumbPath(photoId));
+    // Only what was actually there comes back, as Storage's own delete response
+    // does — see [SyncRemote.removeSharedPhoto].
+    return {
+      for (final path in [sharedPhotoPath(photoId, ext), sharedThumbPath(photoId)])
+        if (shared.remove(path) != null) path,
+    };
   }
 
   @override
@@ -194,6 +198,15 @@ class _FakeRemote implements SyncRemote {
 
   @override
   Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents() async => {};
+
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchEngagementByParentIds({
+    required List<String> ascentIds,
+    required List<String> wallIds,
+  }) async => {
+    'comments': <Map<String, dynamic>>[],
+    'likes': <Map<String, dynamic>>[],
+  };
 
   @override
   Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async =>

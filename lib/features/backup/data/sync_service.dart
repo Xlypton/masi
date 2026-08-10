@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 import '../../../core/db/app_database.dart' as db;
 import '../../../core/storage/storage_persistence_service.dart';
 import '../../account/data/auth_repository.dart';
+import '../../moderation/domain/moderation_state.dart' show kWithdrawalCooldown;
 import '../../topo/data/photo_files.dart';
 import '../../topo/data/public_photo_prune_service.dart'
     show kPruneKeepNewestForeign, kPrunePressureHighWatermark;
@@ -627,6 +628,16 @@ class SyncService {
     // uploading the shared copy of a newly-added photo on an already-pushed,
     // therefore clean, shared wall.
     late Map<String, String> wallVisibility;
+    // wallId -> `withdrawRequestedAt`, for every LOCAL moderation row that has
+    // one (SEC-2). Read from the pulled-only `wall_moderation` mirror — never
+    // pushed, server-owned (see `WallModerationRows`) — and only ever consulted
+    // to decide whether a SHARED photo object may be removed. A missing row
+    // (never published, or the mirror not pulled yet) means "no withdrawal
+    // pending", which is the conservative answer for the upload side and is
+    // handled explicitly on the unshare side. Not owner-scoped because the
+    // table has no `ownerId`; every lookup below is keyed by an OWN wall id, so
+    // a foreign row can never be read.
+    late Map<String, int> wallWithdrawRequestedAt;
     await _db.transaction(() async {
       profiles = await (_db.select(_db.profiles)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
       areas = await (_db.select(_db.areas)..where((t) => dirtyOnly ? t.ownerId.equals(uid) & t.dirty.equals(true) : t.ownerId.equals(uid))).get();
@@ -644,6 +655,19 @@ class SyncService {
       wallVisibility = {
         for (final row in await visibilityQuery.get())
           row.read(_db.walls.id)!: row.read(_db.walls.visibility)!,
+      };
+
+      final withdrawQuery = _db.selectOnly(_db.wallModerationRows)
+        ..addColumns([
+          _db.wallModerationRows.wallId,
+          _db.wallModerationRows.withdrawRequestedAt,
+        ])
+        ..where(_db.wallModerationRows.withdrawRequestedAt.isNotNull());
+      wallWithdrawRequestedAt = {
+        for (final row in await withdrawQuery.get())
+          row.read(_db.wallModerationRows.wallId)!: row.read(
+            _db.wallModerationRows.withdrawRequestedAt,
+          )!,
       };
     });
 
@@ -666,7 +690,12 @@ class SyncService {
     // uploading the SHARED copy of a newly-added photo whose wall is already
     // pushed and therefore clean, so that wall's viewers never see the new
     // photo.
-    final photoUpload = await _uploadOwnPhotos(uid, photos, wallVisibility);
+    final photoUpload = await _uploadOwnPhotos(
+      uid,
+      photos,
+      wallVisibility,
+      wallWithdrawRequestedAt,
+    );
 
     // Hold back exactly the photo rows whose bytes did NOT land this push.
     // Keyed by CANONICAL id (see [_canonicalPhotoId]) so a slice — which
@@ -1090,6 +1119,18 @@ class SyncService {
   /// `'shared'` is ALSO uploaded to the shared object path, in addition to
   /// its always-uploaded private copy.
   ///
+  /// SEC-2 — the INVERSE of that shared upload also happens here: when a
+  /// `shared/` object exists for a photo whose wall is no longer publicly
+  /// visible (un-published, or a withdrawal whose ten days have run out per
+  /// [wallWithdrawRequestedAt] + [kWithdrawalCooldown]), that object and its
+  /// thumbnail are REMOVED. Un-publishing used to touch database rows only, so
+  /// the published bytes stayed in Storage indefinitely.
+  ///
+  /// The owner's own private copy at `<uid>/<photoId><ext>` is NEVER removed by
+  /// that branch — only objects under `shared/` are. Decision D-5 keeps the
+  /// owner's full-resolution original, and it is also what re-publishing
+  /// re-uploads from.
+  ///
   /// A TOMBSTONED photo (`deletedAt` set — see
   /// `PhotoRepository.deleteOriginalPhoto`) is never (re-)uploaded here:
   /// instead both its private and shared cloud copies are REMOVED (via
@@ -1132,6 +1173,7 @@ class SyncService {
     String uid,
     List<db.Photo> photos,
     Map<String, String> wallVisibility,
+    Map<String, int> wallWithdrawRequestedAt,
   ) async {
     if (photos.isEmpty) {
       return (
@@ -1148,6 +1190,13 @@ class SyncService {
     final errors = <String>[];
     var uploaded = 0;
     var missingLocalBytes = 0;
+
+    // Read ONCE for the whole pass, so two photos on the same wall can never
+    // land on opposite sides of the ten-day boundary within one push. The
+    // arithmetic below mirrors `public.is_wall_public()`'s
+    // `withdrawRequestedAt > (epoch_ms_now - 864000000)` exactly, via
+    // [kWithdrawalCooldown] — the one Dart constant tied to that literal.
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
 
     final Set<String> alreadyPrivate;
     final Set<String> alreadyShared;
@@ -1188,14 +1237,110 @@ class SyncService {
 
       if (photo.deletedAt != null) {
         await _remote.removePhoto(uid: uid, photoId: canonicalId, ext: ext);
+        // Return value deliberately ignored HERE (unlike the un-share branch
+        // below): this fires for every tombstoned photo whether or not a shared
+        // copy ever existed, so "removed nothing" is the NORMAL outcome for a
+        // photo that was never published and carries no information.
         await _remote.removeSharedPhoto(photoId: canonicalId, ext: ext);
         continue;
       }
 
       final needsPrivate = !alreadyPrivate.contains('$uid/$canonicalId$ext');
-      final needsShared =
-          wallVisibility[photo.wallId] == 'shared' &&
-          !alreadyShared.contains(sharedPhotoPath(canonicalId, ext));
+
+      // SEC-2. Three facts decide whether this photo's bytes belong under
+      // `shared/` RIGHT NOW, and they are deliberately combined the way
+      // `public.is_wall_public()` combines them rather than by a rule of our
+      // own — the server is the authority on public visibility (guardrail
+      // G-2) and bytes that outlive it are the leak.
+      //
+      //  * `sharedByVisibility` — the owner's intent, as it always was.
+      //  * `withdrawalMatured` — the ten days ran out. The server has ALREADY
+      //    stopped serving this topo (`is_wall_public`'s
+      //    `withdrawRequestedAt > now - 864000000` term evaluates lazily, so
+      //    nothing flips `state`, and `visibility` is very likely still
+      //    `'shared'`). So maturity OVERRIDES the owner's stale intent.
+      //  * `withdrawalPending` — the ten days are still running. The topo is
+      //    still public and `cancel_withdrawal` may put it straight back, so
+      //    the bytes MUST stay: deleting them would make a cancellation
+      //    restore a topo with no images.
+      final withdrawRequestedAt = wallWithdrawRequestedAt[photo.wallId];
+      final withdrawalMatured =
+          withdrawRequestedAt != null &&
+          withdrawRequestedAt <= nowMs - kWithdrawalCooldown.inMilliseconds;
+      final withdrawalPending =
+          withdrawRequestedAt != null && !withdrawalMatured;
+      final shouldBeShared =
+          wallVisibility[photo.wallId] == 'shared' && !withdrawalMatured;
+
+      final sharedPath = sharedPhotoPath(canonicalId, ext);
+      final needsShared = shouldBeShared && !alreadyShared.contains(sharedPath);
+
+      // The inverse of `needsShared`, and the whole of SEC-2: a shared object
+      // that exists for a photo whose wall is no longer publicly visible is
+      // removed. Mutually exclusive with `needsShared` by construction — that
+      // one requires the object to be ABSENT, this one requires it to be
+      // PRESENT — so no push can ever upload and remove the same object.
+      //
+      // Gated on `alreadyShared` (the listing this push already fetched) and
+      // not on a stored "was published" flag, which is what makes it
+      // idempotent: once the object is gone the next push's listing no longer
+      // contains it and this branch simply does not fire. Nothing is
+      // remembered, nothing is retried forever (D-4, no outbox).
+      //
+      // This lives in the PUSH and not in `unpublishTopo` on purpose. The CRUD
+      // path is local-first with no retry, so an unshare attempted there is
+      // lost outright if the user is offline — whereas the push re-reads and
+      // re-sends its own rows every time, so a failed unshare self-heals on
+      // the next one.
+      if (!shouldBeShared &&
+          !withdrawalPending &&
+          alreadyShared.contains(sharedPath)) {
+        try {
+          // Removes BOTH published objects — the original and its
+          // `shared/thumbs/<id>.jpg` companion (see
+          // [SyncRemote.removeSharedPhoto]). Deliberately NOT
+          // `_remote.removePhoto`: the owner's own full-resolution private copy
+          // at `<uid>/<photoId><ext>` is never touched by an unshare (decision
+          // D-5), and re-publishing later re-uploads from exactly that copy.
+          final removed = await _remote.removeSharedPhoto(
+            photoId: canonicalId,
+            ext: ext,
+          );
+
+          // A Storage delete that RLS filtered to nothing answers HTTP 200 with
+          // an EMPTY list — success and "removed nothing" look identical unless
+          // the response is inspected. That is the same false success W-2 hid
+          // behind for the whole life of the takedown feature, so an un-share
+          // that removed nothing must not read as an un-share.
+          //
+          // The signal is deliberately NARROW: only the ORIGINAL. Two paths are
+          // requested and a photo published before the thumbnail tier existed
+          // legitimately has no `shared/thumbs/<id>.jpg` at all, so "fewer came
+          // back than were asked for" is not an error. But `sharedPath` is in
+          // `alreadyShared` — this very push listed the object — so if it is
+          // missing from the response, the removal genuinely did not happen.
+          if (!removed.contains(sharedPath)) {
+            errors.add(
+              'photo $canonicalId: un-sharing removed nothing — the published '
+              'copy at $sharedPath is still there',
+            );
+          }
+        } catch (e) {
+          // NEVER fatal, and deliberately NOT counted in `failed` /
+          // `failedCanonicalIds` — which is true of the removed-nothing report
+          // above as well. The row itself is perfectly valid and withholding it
+          // would punish the metadata for a housekeeping failure: that path
+          // withholds the photo row, drops `fullyLanded`, and (per
+          // [SyncRemote.listSharedPhotoObjectPaths]) can send an
+          // already-published photo back through the fail-closed EXIF-strip
+          // gate on a loop that never terminates. Both outcomes are reported
+          // through [PushSyncResult.photoErrors] instead, and the next push
+          // retries the removal for free because the object is still in the
+          // listing (D-4, no outbox).
+          errors.add('photo $canonicalId: removing the shared copy failed: $e');
+        }
+      }
+
       if (!needsPrivate && !needsShared) continue;
 
       // `photo.localPath` as stored may be RELATIVE (`photos/<id>.jpg`, the
@@ -1301,7 +1446,8 @@ class SyncService {
   ///
   /// P0 fix (#72, "fresh install syncs nothing after login"): every
   /// independent section below — own (fetch + own photo-download + own
-  /// import), shared-topos fetch, shared-ascents fetch, profiles fetch,
+  /// import), shared-topos fetch, shared-ascents fetch, inbound
+  /// comments/likes fetch, profiles fetch,
   /// shared photo-download, and the shared import — runs inside its OWN
   /// try/catch. A throw ANYWHERE (the original trigger was a null field in
   /// one cloud row hitting a non-null `as String` cast in the shared-topo/
@@ -1422,6 +1568,14 @@ class SyncService {
     // AND host to a shared ascent would otherwise get double-fetched rows,
     // which is harmless (idempotent per-id upsert on import) but the
     // concatenation avoids silently dropping either side's rows.
+    //
+    // The ascent ids the shared batch is actually IMPORTING — read after the
+    // merge so they are the post-`consistentSharedAscentBatch` survivors, never
+    // an ascent that was pruned for a missing parent. They are the FK guarantee
+    // for the inbound comment/like fetch immediately below: a comment on one of
+    // these ascents can be imported in this same batch, because
+    // `BackupRepository.importSnapshot` writes Ascents before Comments/Likes.
+    var sharedAscentIdsInBatch = const <String>[];
     try {
       final sharedAscentTables = await _remote.fetchSharedAscents();
       for (final key in const ['areas', 'sectors', 'walls', 'photos', 'routes']) {
@@ -1434,9 +1588,55 @@ class SyncService {
         ...(sharedTables['ascents'] ?? const []),
         ...(sharedAscentTables['ascents'] ?? const []),
       ];
+      sharedAscentIdsInBatch = [
+        for (final row in sharedAscentTables['ascents'] ?? const [])
+          if (row['id'] case final String id) id,
+      ];
     } catch (e) {
       sharedHadError = true;
       errors.add('shared ascents fetch failed: $e');
+    }
+
+    // ---- INBOUND ENGAGEMENT ---------------------------------------------
+    // Comments and Likes OTHER people wrote on rows this device holds. Neither
+    // of the two fetches above can reach them and neither ever could — see
+    // [SyncRemote.fetchEngagementByParentIds] for the three-way structural gap
+    // and the live report it came from. Ordered here deliberately: AFTER the
+    // shared-ascent merge (whose surviving ascent ids it needs) and BEFORE the
+    // profiles fetch below (which walks `sharedTables` for `ownerId`s, so a
+    // brand-new commenter's display name is resolved in the SAME pull rather
+    // than showing up as an anonymous comment until the next one).
+    try {
+      final parents = await _inboundEngagementParents(uid, sharedAscentIdsInBatch);
+      final inbound = await _remote.fetchEngagementByParentIds(
+        ascentIds: parents.ascentIds.toList(),
+        wallIds: parents.wallIds.toList(),
+      );
+      for (final key in const ['comments', 'likes']) {
+        sharedTables[key] = [
+          ...(sharedTables[key] ?? const []),
+          // Merged into the SHARED batch, never into `ownTables`, and never
+          // touched afterwards: these are foreign rows, and the shared import is
+          // the path that keeps their original `ownerId` and writes them
+          // `dirty: false` (see `BackupRepository._notDirty`). A foreign row that
+          // landed dirty would be re-sent by the next `pushOwn` — except it
+          // could not even be, since `pushOwn` reads `ownerId = uid` — and per
+          // #64/#65 a row RLS rejects can abort a whole table's push. There is no
+          // outbox to unstick that (D-4).
+          ...consistentInboundEngagement(
+            inbound[key] ?? const [],
+            knownAscentIds: parents.ascentIds,
+            knownWallIds: parents.wallIds,
+          ),
+        ];
+      }
+    } catch (e) {
+      // Degrades to "no new comments/likes this pull" — never to a failed pull.
+      // Recorded, not swallowed (#72): a transient failure here clears on the
+      // next pull, because the fetch is a stateless by-id re-read of whatever
+      // the server holds (D-4, no outbox).
+      sharedHadError = true;
+      errors.add('inbound comments/likes fetch failed: $e');
     }
 
     // Resolve display-name profiles for every uid a pulled SHARED row is
@@ -1846,6 +2046,64 @@ class SyncService {
   /// necessarily written locally — see [PullResult.ownRowsPulled]).
   int _countRows(Map<String, List<Map<String, dynamic>>> tables) =>
       tables.values.fold<int>(0, (sum, rows) => sum + rows.length);
+
+  /// The parent ids [pullOwnAndShared] asks
+  /// [SyncRemote.fetchEngagementByParentIds] about: the caller's own published
+  /// ascents and walls, read from the LOCAL database, plus
+  /// [sharedAscentIdsInBatch] — the shared ascents the same pull is importing.
+  ///
+  /// LOCAL is the authoritative list on purpose. This is a by-id fetch about rows
+  /// this device HOLDS, and the local tables are the only thing that knows that;
+  /// deriving the ids from the cloud would make it a discovery query, and its
+  /// results could then reference parents that are not here. The own rows were
+  /// re-imported by the OWN section earlier in this very pull, so `visibility`
+  /// below is as fresh as the server's.
+  ///
+  /// Filtered to `visibility == 'shared'`, and to live (non-tombstoned) rows,
+  /// because that is EXACTLY what the server would answer for anyway and the
+  /// filter is what keeps a large library down to a couple of requests:
+  ///  - `comments_ascent_shared_select` returns a foreign comment only when the
+  ///    ascent is `visibility = 'shared'`;
+  ///  - `comments_shared_select` requires `is_wall_public(wallId)`, which itself
+  ///    requires `visibility = 'shared'` AND `"deletedAt" IS NULL`.
+  ///
+  /// Nothing is lost by the filter: a foreign author cannot comment on a private
+  /// ascent/wall in the first place (they cannot see it), and the caller's OWN
+  /// comments on their own private rows arrive through
+  /// [SyncRemote.fetchOwnRows]'s `ownerId = uid` scoping regardless.
+  Future<({Set<String> ascentIds, Set<String> wallIds})>
+  _inboundEngagementParents(String uid, List<String> sharedAscentIdsInBatch) async {
+    final ascentIds = <String>{...sharedAscentIdsInBatch};
+    final wallIds = <String>{};
+    // One transaction so the two projections cannot straddle a concurrent
+    // import, mirroring `pushOwn`'s snapshot read.
+    await _db.transaction(() async {
+      final ascentQuery = _db.selectOnly(_db.ascents)
+        ..addColumns([_db.ascents.id])
+        ..where(
+          _db.ascents.ownerId.equals(uid) &
+              _db.ascents.visibility.equals('shared') &
+              _db.ascents.deletedAt.isNull(),
+        );
+      for (final row in await ascentQuery.get()) {
+        final id = row.read(_db.ascents.id);
+        if (id != null) ascentIds.add(id);
+      }
+
+      final wallQuery = _db.selectOnly(_db.walls)
+        ..addColumns([_db.walls.id])
+        ..where(
+          _db.walls.ownerId.equals(uid) &
+              _db.walls.visibility.equals('shared') &
+              _db.walls.deletedAt.isNull(),
+        );
+      for (final row in await wallQuery.get()) {
+        final id = row.read(_db.walls.id);
+        if (id != null) wallIds.add(id);
+      }
+    });
+    return (ascentIds: ascentIds, wallIds: wallIds);
+  }
 
   /// The id a photo row's on-disk file is uploaded/downloaded under: a
   /// slice (`parentPhotoId` set) shares its original's file (see S1 in

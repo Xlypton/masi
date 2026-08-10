@@ -50,6 +50,17 @@ const List<String> syncTableNames = [
   'likes',
 ];
 
+/// Ids per by-id `inFilter` request in [SyncRemote.fetchEngagementByParentIds].
+///
+/// Matches `kForeignWallSweepChunkSize` (the other by-id probe in this app,
+/// which chunks at the same 150) rather than inventing a second number: both
+/// exist for the same reason, which is that a PostgREST `id=in.(...)` filter
+/// travels in the URL, and a library with hundreds of published walls/ascents
+/// would otherwise build a single request longer than an intermediary is willing
+/// to forward. Deliberately NOT imported from `foreign_wall_sweep_service.dart`
+/// — the dependency runs the other way (that file imports this one).
+const int kInboundEngagementChunkSize = 150;
+
 /// Outcome of pushing ONE table's rows within a single
 /// [SyncRemote.upsertOwnRows] call.
 ///
@@ -226,6 +237,64 @@ abstract class SyncRemote {
   /// return, as `SyncService.pullOwnAndShared` does).
   Future<Map<String, List<Map<String, dynamic>>>> fetchSharedAscents();
 
+  /// Comments and Likes — BY ANY AUTHOR, not just the caller — attached to
+  /// exactly the ascents [ascentIds] and the walls [wallIds]. Returns a
+  /// table-name-keyed map with exactly the keys `'comments'` and `'likes'`, the
+  /// same shape every other fetch here returns, so callers can merge it straight
+  /// into a shared batch.
+  ///
+  /// ## The gap this closes
+  ///
+  /// Before this existed, NO pull path could ever fetch a comment somebody else
+  /// wrote on an ASCENT. There were exactly three inbound row paths and each one
+  /// structurally excluded it:
+  ///
+  ///  1. [fetchOwnRows] is `ownerId = uid` — only comments the caller WROTE.
+  ///  2. [fetchSharedTopos] fetches comments by `inFilter('wallId', wallIds)`,
+  ///     and an ascent comment has `wallId IS NULL`, so it can never match. It
+  ///     is also [SharedTopoScope]-capped and geo-anchored, so even a WALL
+  ///     comment on the caller's own published topo is missable when that topo
+  ///     falls outside the scoped window.
+  ///  3. [fetchSharedAscents] never queried comments at all.
+  ///
+  /// So the owner of a shared ascent got the server-side notification ("someone
+  /// commented on your ascent", written by a trigger into `notifications` and
+  /// read through the `my_notifications` RPC — an entirely separate path) and
+  /// then found nothing on the ascent, forever, however many times they pulled.
+  /// Reported live 2026-08-10. The same hole hid every third party's comment on
+  /// every OTHER climber's shared ascent in the feed, and both halves applied
+  /// identically to Likes.
+  ///
+  /// ## Contract
+  ///
+  /// - The caller supplies ids it can prove it HOLDS (own rows read from the
+  ///   local database) or is importing in the same batch (the ascents
+  ///   [fetchSharedAscents] just returned). This is a by-id fetch, never a
+  ///   discovery query: nothing here widens what the caller can see, it only
+  ///   asks about rows already on this device.
+  /// - Implementations CHUNK both id lists at [kInboundEngagementChunkSize] and
+  ///   issue one request per chunk — a single unbounded `inFilter` over a large
+  ///   library is a URL-length failure waiting to happen.
+  /// - Rows come back with their ORIGINAL (foreign) `ownerId`, like every other
+  ///   shared fetch — callers must not rewrite it, and must import them through
+  ///   the shared/foreign import path so they land `dirty: false`. A foreign row
+  ///   marked dirty would be re-sent by the next push, RLS would reject it, and
+  ///   per #64/#65 one rejected row can abort a whole table's push.
+  /// - Row-level visibility stays entirely with the server. RLS returns a
+  ///   comment on an ascent only when that ascent is `visibility = 'shared'`
+  ///   (`comments_ascent_shared_select`) and one on a wall only when
+  ///   `is_wall_public(wallId)` (`comments_shared_select`); asking about an id
+  ///   that does not qualify simply returns nothing.
+  /// - Returns empty lists for two empty id lists WITHOUT a round trip.
+  /// - Tombstones (`deletedAt` set) come back like any other row, exactly as
+  ///   [fetchOwnRows]/[fetchSharedTopos] do — a deletion must propagate. The
+  ///   read path is what hides them (`CommentsRepository` filters
+  ///   `deletedAt.isNull()`).
+  Future<Map<String, List<Map<String, dynamic>>>> fetchEngagementByParentIds({
+    required List<String> ascentIds,
+    required List<String> wallIds,
+  });
+
   /// Uploads [bytes] to the caller's OWN private object path
   /// (`<uid>/<photoId><ext>`) — readable (per real backend RLS) only by
   /// [uid] themself. Overwrites any existing object at that path.
@@ -349,8 +418,25 @@ abstract class SyncRemote {
   /// deleted, which is the same leak the takedown exists to close.
   ///
   /// Best-effort/idempotent, mirroring [removePhoto]: either object may never
-  /// have existed.
-  Future<void> removeSharedPhoto({
+  /// have existed. Never throws.
+  ///
+  /// Returns the object paths Storage reports it ACTUALLY removed, which is the
+  /// ONLY way to tell a real removal from a false success. A Storage delete
+  /// that RLS filtered to nothing answers HTTP 200 with an EMPTY list — byte
+  /// for byte indistinguishable from a successful delete unless you look at
+  /// what came back. That exact false success hid W-2 (there was no DELETE
+  /// policy for `shared/` at all, so every removal since the feature shipped
+  /// removed nothing), and it is why
+  /// `ModerationRemote.removePublishedPhotoObjects` counts instead of
+  /// swallowing. This returns paths rather than a count so a caller can ask
+  /// about a SPECIFIC object: two paths are requested and a photo published
+  /// before the thumbnail tier existed legitimately has only one of them, so
+  /// "fewer came back than were asked for" proves nothing on its own.
+  ///
+  /// An empty set is also what a caught `StorageException` returns — "nothing
+  /// is known to have been removed" is the honest answer, and the caller
+  /// decides whether that matters for the path it cared about.
+  Future<Set<String>> removeSharedPhoto({
     required String photoId,
     required String ext,
   });
@@ -838,6 +924,65 @@ Map<String, List<Map<String, dynamic>>> consistentSharedAscentBatch(
   };
 }
 
+/// [ids] de-duplicated and split into request-sized batches of at most
+/// [chunkSize], preserving first-appearance order.
+///
+/// Every id appears in EXACTLY ONE returned chunk — that is the property callers
+/// depend on, and the reason this is a named pure function rather than an inline
+/// `for (var i = 0; i < ...; i += n)` at each call site. Returns an empty list
+/// for empty [ids], so `for (final chunk in chunkSyncIds(...))` is already the
+/// "no round trips" case.
+List<List<String>> chunkSyncIds(
+  Iterable<String> ids, {
+  int chunkSize = kInboundEngagementChunkSize,
+}) {
+  final unique = <String>[];
+  final seen = <String>{};
+  for (final id in ids) {
+    if (seen.add(id)) unique.add(id);
+  }
+  final chunks = <List<String>>[];
+  for (var i = 0; i < unique.length; i += chunkSize) {
+    final end = i + chunkSize;
+    chunks.add(unique.sublist(i, end > unique.length ? unique.length : end));
+  }
+  return chunks;
+}
+
+/// The subset of an inbound engagement batch (see
+/// [SyncRemote.fetchEngagementByParentIds]) whose parents are PROVABLY present —
+/// i.e. every non-null `ascentId` is in [knownAscentIds] and every non-null
+/// `wallId` is in [knownWallIds].
+///
+/// `Comments.wallId`/`Comments.ascentId` (and the same pair on `Likes`) are
+/// nullable but FK-enforced when set (`PRAGMA foreign_keys = ON`), and
+/// `BackupRepository.importSnapshot` DEFERS a row whose parent is absent rather
+/// than throwing — which `SyncService.pullOwnAndShared` then reports as
+/// `shared rows deferred (parent row missing)`, i.e. the red "Couldn't sync —
+/// Retry" banner. That banner can never clear if the parent is something this
+/// device is never going to hold, so a row that provably cannot be inserted is
+/// dropped here instead, exactly as [consistentSharedAscentBatch] does for the
+/// shared-ascent chain.
+///
+/// In practice this drops nothing: the fetch asks by exactly these ids, an
+/// ascent comment carries `wallId IS NULL`, and a wall comment carries
+/// `ascentId IS NULL`. It exists for the row shape that sets BOTH — which no
+/// current writer produces, and which would otherwise reach the importer as an
+/// orphan on whichever of the two the caller did not ask about.
+///
+/// A row with NEITHER parent is KEPT: it has no FK to violate, so it is the
+/// importer's business, not this filter's.
+List<Map<String, dynamic>> consistentInboundEngagement(
+  Iterable<Map<String, dynamic>> rows, {
+  required Set<String> knownAscentIds,
+  required Set<String> knownWallIds,
+}) => [
+  for (final row in rows)
+    if ((row['ascentId'] == null || knownAscentIds.contains(row['ascentId'])) &&
+        (row['wallId'] == null || knownWallIds.contains(row['wallId'])))
+      row,
+];
+
 /// The columns present in every `<TableRow>.toJson()` that are LOCAL-ONLY
 /// sync bookkeeping and must never travel to the cloud.
 ///
@@ -1319,6 +1464,70 @@ class SupabaseSyncRemote implements SyncRemote {
   }
 
   @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchEngagementByParentIds({
+    required List<String> ascentIds,
+    required List<String> wallIds,
+  }) async {
+    // De-duplicated by row id across all four query streams below, because the
+    // same row can legitimately come back twice: two chunks never overlap, but a
+    // hypothetical row carrying BOTH a wallId and an ascentId we asked about
+    // matches the ascent query AND the wall query. A map keyed on `id` makes that
+    // idempotent instead of importing the row twice.
+    final comments = <String, Map<String, dynamic>>{};
+    final likes = <String, Map<String, dynamic>>{};
+
+    // "No ids" must cost nothing — this runs on EVERY pull, including for an
+    // account that has published neither an ascent nor a topo.
+    if (ascentIds.isEmpty && wallIds.isEmpty) {
+      return {
+        'comments': <Map<String, dynamic>>[],
+        'likes': <Map<String, dynamic>>[],
+      };
+    }
+
+    Future<void> collect(
+      String table,
+      String column,
+      List<String> ids,
+      Map<String, Map<String, dynamic>> into,
+    ) async {
+      for (final chunk in chunkSyncIds(ids)) {
+        final rows = await _client.from(table).select().inFilter(column, chunk);
+        for (final row in rows) {
+          final mapped = Map<String, dynamic>.from(row);
+          if (mapped['id'] case final String id) into[id] = mapped;
+        }
+      }
+    }
+
+    // The four streams are mutually independent (different table/column pairs,
+    // no value from one feeding another), so they go out together for the same
+    // reason [fetchOwnRows]'s nine do — and for the same reason `Future.wait`
+    // runs here WITHOUT `eagerError`. Chunks WITHIN one stream stay sequential:
+    // that is the bound on how many requests this can have in flight at once,
+    // which is the whole point of chunking a large library.
+    await Future.wait(<Future<void>>[
+      collect('comments', 'ascentId', ascentIds, comments),
+      collect('comments', 'wallId', wallIds, comments),
+      collect('likes', 'ascentId', ascentIds, likes),
+      collect('likes', 'wallId', wallIds, likes),
+    ]);
+
+    return {
+      'comments': filterValidSyncRows(
+        comments.values,
+        syncRequiredFields['comments'] ?? const ['id'],
+        debugLabel: 'inbound comment',
+      ),
+      'likes': filterValidSyncRows(
+        likes.values,
+        syncRequiredFields['likes'] ?? const ['id'],
+        debugLabel: 'inbound like',
+      ),
+    };
+  }
+
+  @override
   Future<void> uploadPhoto({
     required String uid,
     required String photoId,
@@ -1487,7 +1696,7 @@ class SupabaseSyncRemote implements SyncRemote {
   }
 
   @override
-  Future<void> removeSharedPhoto({
+  Future<Set<String>> removeSharedPhoto({
     required String photoId,
     required String ext,
   }) async {
@@ -1496,12 +1705,20 @@ class SupabaseSyncRemote implements SyncRemote {
       // alongside it. `remove` is idempotent per path, so a photo published
       // before the thumbnail tier existed (no thumbnail object) takes the
       // exact same path.
-      await _client.storage.from(_bucket).remove([
+      final removed = await _client.storage.from(_bucket).remove([
         sharedPhotoPath(photoId, ext),
         sharedThumbPath(photoId),
       ]);
+      // `FileObject.name` on a delete response is `storage.objects.name`, i.e.
+      // the full path WITHIN the bucket (`shared/<id><ext>`) — the same shape
+      // the paths were sent in, and the shape `sharedPhotoPath` produces, so a
+      // caller can compare directly.
+      return {for (final object in removed) object.name};
     } on StorageException {
-      // Best-effort/idempotent.
+      // Best-effort/idempotent — an absent object, or a Storage outage, must
+      // not fail the push. The empty set says "nothing is known to have been
+      // removed"; see the contract on [SyncRemote.removeSharedPhoto].
+      return const <String>{};
     }
   }
 

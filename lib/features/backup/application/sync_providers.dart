@@ -92,6 +92,12 @@ class _UnavailableSyncRemote implements SyncRemote {
       _unavailable();
 
   @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchEngagementByParentIds({
+    required List<String> ascentIds,
+    required List<String> wallIds,
+  }) => _unavailable();
+
+  @override
   Future<void> uploadPhoto({
     required String uid,
     required String photoId,
@@ -129,7 +135,7 @@ class _UnavailableSyncRemote implements SyncRemote {
   }) => _unavailable();
 
   @override
-  Future<void> removeSharedPhoto({
+  Future<Set<String>> removeSharedPhoto({
     required String photoId,
     required String ext,
   }) => _unavailable();

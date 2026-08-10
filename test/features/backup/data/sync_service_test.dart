@@ -10,15 +10,17 @@ import 'package:masi/features/backup/data/connectivity_service.dart';
 import 'package:masi/features/backup/data/storage_pagination.dart';
 import 'package:masi/features/backup/data/sync_remote.dart';
 import 'package:masi/features/backup/data/sync_service.dart';
+import 'package:masi/features/moderation/data/moderation_repository.dart';
 import 'package:masi/core/storage/storage_persistence_service.dart';
 import 'package:masi/core/storage/storage_persistence_types.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/features/topo/data/public_photo_prune_service.dart';
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart' show BooleanExpressionOperators, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
+import 'package:supabase_flutter/supabase_flutter.dart' show StorageException;
 
 import '../../../support/fixture_photo.dart';
 
@@ -38,6 +40,19 @@ class FakeSyncRemote implements SyncRemote {
   final List<String> uploadedSharedPaths = [];
   final List<String> removedPrivatePaths = [];
   final List<String> removedSharedPaths = [];
+
+  /// The `shared/thumbs/<id>.jpg` companions [removeSharedPhoto] took out
+  /// alongside each original.
+  final List<String> removedSharedThumbPaths = [];
+
+  /// Makes [removeSharedPhoto] throw, so a test can prove an un-share failure
+  /// is reported and does NOT abort the push.
+  bool removeSharedPhotoThrows = false;
+
+  /// Models the FALSE SUCCESS the real bucket produces when RLS filters a delete
+  /// to nothing: HTTP 200, an EMPTY response list, and every object still there.
+  /// No exception is involved, which is exactly what made this invisible.
+  bool removeSharedPhotoRemovesNothing = false;
 
   /// Ordered log of every remote MUTATION this fake received, so a test can
   /// assert the push ORDER (bytes before metadata — S5) rather than only the
@@ -279,6 +294,58 @@ class FakeSyncRemote implements SyncRemote {
     };
   }
 
+  /// Every `fetchEngagementByParentIds` call's arguments, in order — so a test
+  /// can assert WHAT the pull asked about (the caller's own published ascents/
+  /// walls plus the shared ascents in the batch) and not merely what came back.
+  final List<({List<String> ascentIds, List<String> wallIds})>
+  engagementRequests = [];
+
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchEngagementByParentIds({
+    required List<String> ascentIds,
+    required List<String> wallIds,
+  }) async {
+    engagementRequests.add((ascentIds: ascentIds, wallIds: wallIds));
+    if (ascentIds.isEmpty && wallIds.isEmpty) {
+      return {
+        'comments': <Map<String, dynamic>>[],
+        'likes': <Map<String, dynamic>>[],
+      };
+    }
+
+    // Mirrors the LIVE RLS this fetch relies on, rather than being kinder than
+    // it: `comments_ascent_shared_select` returns a comment on an ascent only
+    // when that ascent is `visibility = 'shared'` (with NO author restriction —
+    // that is the whole point), and `comments_shared_select` requires
+    // `is_wall_public(wallId)`, of which `visibility = 'shared'` +
+    // `deletedAt IS NULL` are the parts reproducible here. Same pair of policies
+    // for `likes`. A fake that returned every row for any id could not tell "the
+    // client asked correctly" from "the server would have allowed it".
+    bool ascentIsShared(Object? id) =>
+        _rows['ascents']![id]?['visibility'] == 'shared';
+    bool wallIsPublic(Object? id) {
+      final wall = _rows['walls']![id];
+      return wall != null &&
+          wall['visibility'] == 'shared' &&
+          wall['deletedAt'] == null;
+    }
+
+    final askedAscents = ascentIds.toSet();
+    final askedWalls = wallIds.toSet();
+    List<Map<String, dynamic>> matching(String table) => [
+      for (final row in _rows[table]!.values)
+        if ((row['ascentId'] != null &&
+                askedAscents.contains(row['ascentId']) &&
+                ascentIsShared(row['ascentId'])) ||
+            (row['wallId'] != null &&
+                askedWalls.contains(row['wallId']) &&
+                wallIsPublic(row['wallId'])))
+          Map<String, dynamic>.from(row),
+    ];
+
+    return {'comments': matching('comments'), 'likes': matching('likes')};
+  }
+
   @override
   Future<void> uploadPhoto({
     required String uid,
@@ -368,13 +435,45 @@ class FakeSyncRemote implements SyncRemote {
   }
 
   @override
-  Future<void> removeSharedPhoto({
+  Future<Set<String>> removeSharedPhoto({
     required String photoId,
     required String ext,
   }) async {
+    if (removeSharedPhotoThrows) {
+      // A real Storage failure, not a stand-in: the production implementation
+      // catches exactly this type and answers with an empty set, so a test that
+      // threw something else could not tell the two report paths apart.
+      throw const StorageException('storage unavailable', statusCode: '500');
+    }
     final path = sharedPhotoPath(photoId, ext);
-    sharedStorage.remove(path);
+    final thumbPath = sharedThumbPath(photoId);
+    if (removeSharedPhotoRemovesNothing) {
+      // Attempted, recorded, and NOTHING deleted — see
+      // [removeSharedPhotoRemovesNothing].
+      removedSharedPaths.add(path);
+      removedSharedThumbPaths.add(thumbPath);
+      return const {};
+    }
+    // BOTH objects, per [SyncRemote.removeSharedPhoto]'s contract and
+    // `SupabaseSyncRemote`'s single two-path `remove([...])` call. Recorded in a
+    // SEPARATE list so the many existing assertions on `removedSharedPaths`
+    // keep reading as "the originals that were removed"; leaving the thumbnail
+    // out of the fake entirely would make it impossible to prove here that
+    // un-sharing does not strand a world-readable thumbnail of an unpublished
+    // photo.
+    //
+    // The two lists stay "what was ASKED for" (several existing tests assert a
+    // removal was attempted for an object this fake never held), while the
+    // RETURN is "what was actually deleted" — the distinction the real bucket
+    // makes, and the whole point of the return value.
+    final removedOriginal = sharedStorage.remove(path) != null;
     removedSharedPaths.add(path);
+    final removedThumb = sharedStorage.remove(thumbPath) != null;
+    removedSharedThumbPaths.add(thumbPath);
+    return {
+      if (removedOriginal) path,
+      if (removedThumb) thumbPath,
+    };
   }
 
   @override
@@ -391,6 +490,31 @@ class FakeSyncRemote implements SyncRemote {
       for (final id in ids)
         if (_rows['walls']!.containsKey(id)) id,
     ];
+  }
+
+  /// Seeds [row] directly into [table], bypassing the `ownerId == uid`
+  /// assertion in [upsertOwnRows] — used by tests that need to inject a
+  /// foreign-authored row (e.g. another user's comment on the current user's
+  /// ascent) without routing it through a push.
+  void seedRow(String table, Map<String, dynamic> row) {
+    _rows[table]![row['id'] as String] = Map<String, dynamic>.from(row);
+  }
+
+}
+
+/// [FakeSyncRemote] variant whose [fetchEngagementByParentIds] always throws.
+///
+/// Proves the isolation the inbound-engagement fetch is required to have: it is
+/// the newest sub-fetch in the pull and the least important one (a missing
+/// comment is a degradation; a lost topo is data loss), so it must never be able
+/// to take the pull down with it. Same per-section-isolation stance as #72.
+class ThrowingEngagementRemote extends FakeSyncRemote {
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchEngagementByParentIds({
+    required List<String> ascentIds,
+    required List<String> wallIds,
+  }) async {
+    throw Exception('fetchEngagementByParentIds failed: simulated cloud error');
   }
 }
 
@@ -4354,6 +4478,512 @@ void main() {
         expect(like!.ascentId, 'ascent-own');
       },
     );
+
+    test(
+      'C4: a comment by ANOTHER user on the signed-in user\'s own shared '
+      'ascent (wallId = null, ascentId set, ownerId != uid) is pulled into '
+      'a fresh install via fetchEngagementByParentIds',
+      () async {
+        final remote = FakeSyncRemote();
+
+        // ---- u1 creates a shared ascent and pushes it --------------------
+        final u1a = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => u1a.db.close());
+        await seedWallHierarchy(
+          u1a.db,
+          ownerId: _uidU1,
+          areaId: 'area-c4',
+          sectorId: 'sector-c4',
+          wallId: 'wall-c4',
+          photoId: 'photo-c4',
+          routeId: 'route-c4',
+        );
+        await u1a.db.into(u1a.db.ascents).insert(
+          AscentsCompanion.insert(
+            id: 'ascent-shared',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            routeId: 'route-c4',
+            wallId: 'wall-c4',
+            climbedAt: 100,
+            style: 'flash',
+            visibility: const Value('shared'),
+          ),
+        );
+        // u1's OWN comment on the ascent (ownerId = uid) — fetched by
+        // fetchOwnRows, should not be duplicated.
+        await u1a.db.into(u1a.db.comments).insert(
+          CommentsCompanion.insert(
+            id: 'comment-by-u1',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            ascentId: const Value('ascent-shared'),
+            body: 'My own note',
+          ),
+        );
+        await u1a.service.pushOwn();
+
+        // ---- u2 posts a comment on u1's shared ascent --------------------
+        // Seed it directly into the fake remote's comment store, exactly
+        // as a real Supabase upsert would — ownerId = u2, wallId null.
+        remote.seedRow(
+          'comments',
+          {
+            'id': 'comment-by-u2',
+            'createdAt': 200,
+            'updatedAt': 200,
+            'ownerId': _uidU2,
+            'ascentId': 'ascent-shared',
+            'wallId': null,
+            'deletedAt': null,
+            'body': "Great send! Samu's reply",
+          },
+        );
+
+        // ---- fresh device for u1: the failing pull -----------------------
+        final u1b = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => u1b.db.close());
+
+        final result = await u1b.service.pullOwnAndShared();
+
+        expect(result.errors, isEmpty);
+        expect(result.ownImported, isTrue);
+
+        final comments = await u1b.db.select(u1b.db.comments).get();
+        expect(
+          comments.map((c) => c.id),
+          unorderedEquals(['comment-by-u1', 'comment-by-u2']),
+          reason:
+              'pre-fix: only comment-by-u1 was pulled; comment-by-u2 '
+              '(ownerId=u2, wallId=null, ascentId=ascent-shared) fell through '
+              'all three fetch paths',
+        );
+
+        final foreignComment = comments.firstWhere((c) => c.id == 'comment-by-u2');
+        expect(foreignComment.ownerId, _uidU2);
+        expect(foreignComment.ascentId, 'ascent-shared');
+        expect(foreignComment.wallId, isNull);
+        expect(foreignComment.body, "Great send! Samu's reply");
+      },
+    );
+  });
+
+  // The inbound-engagement gap, reported live 2026-08-10: the owner of a shared
+  // ascent got the "someone commented on your ascent" notification (a server
+  // trigger writing `notifications`, read through the `my_notifications` RPC —
+  // an entirely separate path from row sync) and then found nothing on the
+  // ascent, however many times they pulled. No fetch path could reach it:
+  // `fetchOwnRows` is `ownerId = uid`, `fetchSharedTopos` filters comments on
+  // `wallId` (an ascent comment has `wallId IS NULL`), and `fetchSharedAscents`
+  // never asked about comments at all. Both halves applied identically to Likes.
+  group('inbound engagement (comments/likes OTHERS wrote on rows we hold)', () {
+    /// A shared ascent owned by [ownerId] on its own wall hierarchy, pushed to
+    /// [remote] so a later pull can find it. Returns nothing — every id is
+    /// derived from [suffix] so the caller can name rows without bookkeeping.
+    Future<void> pushSharedAscent(
+      FakeSyncRemote remote, {
+      required String ownerId,
+      required String suffix,
+      String wallVisibility = 'private',
+    }) async {
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(
+          AuthSessionState.signedIn('$ownerId@example.com', uid: ownerId),
+        ),
+      );
+      addTearDown(() => c.db.close());
+      await seedWallHierarchy(
+        c.db,
+        ownerId: ownerId,
+        areaId: 'area-$suffix',
+        sectorId: 'sector-$suffix',
+        wallId: 'wall-$suffix',
+        photoId: 'photo-$suffix',
+        routeId: 'route-$suffix',
+        visibility: wallVisibility,
+      );
+      await c.db.into(c.db.ascents).insert(
+        AscentsCompanion.insert(
+          id: 'ascent-$suffix',
+          createdAt: 100,
+          updatedAt: 100,
+          ownerId: Value(ownerId),
+          routeId: 'route-$suffix',
+          wallId: 'wall-$suffix',
+          climbedAt: 100,
+          style: 'flash',
+          visibility: const Value('shared'),
+        ),
+      );
+      await c.service.pushOwn();
+    }
+
+    /// A comment authored by [ownerId] on [ascentId], as it exists SERVER-side:
+    /// `wallId` null, `ownerId` somebody else's. Seeded straight into the fake's
+    /// row store because there is no local device it could be pushed from.
+    void seedForeignAscentComment(
+      FakeSyncRemote remote, {
+      required String id,
+      required String ascentId,
+      required String ownerId,
+      String body = 'nice one',
+      int? deletedAt,
+    }) {
+      remote.seedRow('comments', {
+        'id': id,
+        'createdAt': 200,
+        'updatedAt': 200,
+        'ownerId': ownerId,
+        'ascentId': ascentId,
+        'wallId': null,
+        'deletedAt': deletedAt,
+        'body': body,
+      });
+    }
+
+    void seedForeignAscentLike(
+      FakeSyncRemote remote, {
+      required String id,
+      required String ascentId,
+      required String ownerId,
+    }) {
+      remote.seedRow('likes', {
+        'id': id,
+        'createdAt': 200,
+        'updatedAt': 200,
+        'ownerId': ownerId,
+        'ascentId': ascentId,
+        'wallId': null,
+        'deletedAt': null,
+      });
+    }
+
+    test(
+      'E1: a comment ANOTHER user wrote on the caller\'s OWN shared ascent is '
+      'imported and is visible to the ascent\'s comment query — the reported '
+      'bug',
+      () async {
+        final remote = FakeSyncRemote();
+        await pushSharedAscent(remote, ownerId: _uidU1, suffix: 'e1');
+        seedForeignAscentComment(
+          remote,
+          id: 'comment-from-u2',
+          ascentId: 'ascent-e1',
+          ownerId: _uidU2,
+          body: '@Peti xd',
+        );
+        seedForeignAscentLike(
+          remote,
+          id: 'like-from-u2',
+          ascentId: 'ascent-e1',
+          ownerId: _uidU2,
+        );
+
+        final device = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => device.db.close());
+
+        final result = await device.service.pullOwnAndShared();
+
+        expect(result.errors, isEmpty);
+        // Exactly the predicate `CommentsRepository._ascentCommentsQuery` uses
+        // (`ascentId` + `wallId IS NULL` + `deletedAt IS NULL`), so this proves
+        // the row is READABLE where the user looks, not merely present in the
+        // table.
+        final visible = await (device.db.select(device.db.comments)..where(
+              (t) =>
+                  t.ascentId.equals('ascent-e1') &
+                  t.wallId.isNull() &
+                  t.deletedAt.isNull(),
+            ))
+            .get();
+        expect(visible.map((c) => c.id), ['comment-from-u2']);
+        expect(visible.single.body, '@Peti xd');
+        expect(
+          visible.single.ownerId,
+          _uidU2,
+          reason: 'a foreign row keeps its ORIGINAL ownerId — that is how the '
+              'UI knows it is not the signed-in user\'s own comment.',
+        );
+        expect(
+          (await device.db.select(device.db.likes).get()).map((l) => l.id),
+          ['like-from-u2'],
+          reason: 'Likes had the byte-for-byte identical gap: '
+              'likes_ascent_shared_select on the server, and no client fetch '
+              'that could ever ask.',
+        );
+      },
+    );
+
+    test(
+      'E2: the imported foreign comment is NOT dirty, so the next push does '
+      'not try to send somebody else\'s row',
+      () async {
+        final remote = FakeSyncRemote();
+        await pushSharedAscent(remote, ownerId: _uidU1, suffix: 'e2');
+        seedForeignAscentComment(
+          remote,
+          id: 'comment-from-u2',
+          ascentId: 'ascent-e2',
+          ownerId: _uidU2,
+        );
+
+        final device = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => device.db.close());
+        await device.service.pullOwnAndShared();
+
+        final imported = await (device.db.select(
+          device.db.comments,
+        )..where((t) => t.id.equals('comment-from-u2'))).getSingle();
+        expect(
+          imported.dirty,
+          isFalse,
+          reason: 'there is no outbox (D-4): the push RE-READS local rows and '
+              're-sends the dirty ones. A foreign row that landed dirty would '
+              'be offered to the server on every push, RLS would reject it, '
+              'and per #64/#65 one rejected row can abort a whole table.',
+        );
+
+        // The scope the orchestrator's retry loop actually uses. `FakeSyncRemote.
+        // upsertOwnRows` additionally `assert`s every pushed row's ownerId is
+        // the caller's, so a leak here would fail the test twice over.
+        remote.callLog.clear();
+        await device.service.pushOwn(scope: PushScope.dirtyOnly);
+        expect(
+          remote.callLog.where((e) => e == 'upsert:comments'),
+          isEmpty,
+          reason: 'nothing local is dirty, so the comments table must not be '
+              'pushed at all.',
+        );
+      },
+    );
+
+    test(
+      'E3: comments third parties wrote on ANOTHER owner\'s shared ascent are '
+      'imported too — the feed half of the same gap',
+      () async {
+        final remote = FakeSyncRemote();
+        // u2's ascent, on u2's own PRIVATE wall (the case fetchSharedTopos can
+        // structurally never reach), pulled by u1 as a feed row.
+        await pushSharedAscent(remote, ownerId: _uidU2, suffix: 'e3');
+        seedForeignAscentComment(
+          remote,
+          id: 'comment-from-u3',
+          ascentId: 'ascent-e3',
+          ownerId: 'user-u3',
+          body: 'third party',
+        );
+        seedForeignAscentLike(
+          remote,
+          id: 'like-from-u3',
+          ascentId: 'ascent-e3',
+          ownerId: 'user-u3',
+        );
+
+        final u1Device = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => u1Device.db.close());
+
+        final result = await u1Device.service.pullOwnAndShared();
+
+        expect(result.errors, isEmpty);
+        final comment = await (u1Device.db.select(
+          u1Device.db.comments,
+        )..where((t) => t.id.equals('comment-from-u3'))).getSingleOrNull();
+        expect(
+          comment,
+          isNotNull,
+          reason: 'the shared ascent arrives in the SAME batch, and '
+              'importSnapshot writes Ascents before Comments, so the FK on '
+              'Comments.ascentId resolves without a deferral.',
+        );
+        expect(comment!.ownerId, 'user-u3');
+        expect(
+          (await u1Device.db.select(u1Device.db.likes).get()).map((l) => l.id),
+          ['like-from-u3'],
+        );
+      },
+    );
+
+    test(
+      'E4: the pull asks about the caller\'s own PUBLISHED ascents and walls '
+      'plus the shared ascents in the batch — and about nothing private',
+      () async {
+        final remote = FakeSyncRemote();
+        await pushSharedAscent(
+          remote,
+          ownerId: _uidU1,
+          suffix: 'e4',
+          wallVisibility: 'shared',
+        );
+        // A second, PRIVATE ascent + wall for the same user: a foreign author
+        // could not see either, and RLS would answer nothing for them, so
+        // asking about them is pure request bloat.
+        final owner = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => owner.db.close());
+        await seedWallHierarchy(
+          owner.db,
+          ownerId: _uidU1,
+          areaId: 'area-e4-priv',
+          sectorId: 'sector-e4-priv',
+          wallId: 'wall-e4-priv',
+          photoId: 'photo-e4-priv',
+          routeId: 'route-e4-priv',
+        );
+        await owner.db.into(owner.db.ascents).insert(
+          AscentsCompanion.insert(
+            id: 'ascent-e4-priv',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value(_uidU1),
+            routeId: 'route-e4-priv',
+            wallId: 'wall-e4-priv',
+            climbedAt: 100,
+            style: 'flash',
+          ),
+        );
+        await owner.service.pushOwn();
+
+        remote.engagementRequests.clear();
+        await owner.service.pullOwnAndShared();
+
+        expect(remote.engagementRequests, hasLength(1));
+        final asked = remote.engagementRequests.single;
+        expect(asked.ascentIds, contains('ascent-e4'));
+        expect(asked.wallIds, contains('wall-e4'));
+        expect(
+          asked.ascentIds,
+          isNot(contains('ascent-e4-priv')),
+          reason: 'comments_ascent_shared_select only ever returns a foreign '
+              'comment when the ascent is visibility = shared, so a private '
+              'ascent id in the request buys nothing and costs URL length.',
+        );
+        expect(
+          asked.wallIds,
+          isNot(contains('wall-e4-priv')),
+          reason: 'is_wall_public(wallId) requires visibility = shared, so the '
+              'same argument applies to walls.',
+        );
+      },
+    );
+
+    test(
+      'E5: when the inbound fetch throws, the pull still completes and every '
+      'other section\'s rows are intact',
+      () async {
+        final remote = ThrowingEngagementRemote();
+        await pushSharedAscent(remote, ownerId: _uidU1, suffix: 'e5');
+        seedForeignAscentComment(
+          remote,
+          id: 'comment-from-u2',
+          ascentId: 'ascent-e5',
+          ownerId: _uidU2,
+        );
+
+        final device = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => device.db.close());
+
+        final result = await device.service.pullOwnAndShared();
+
+        expect(result.didPull, isTrue);
+        expect(
+          result.errors,
+          contains(startsWith('inbound comments/likes fetch failed')),
+          reason: 'reported, never swallowed (#72) — but it degrades to "no '
+              'new comments this pull", not to a failed pull.',
+        );
+        // The rest of the pull is untouched: the own hierarchy and the ascent
+        // came back exactly as they would with no engagement fetch at all.
+        expect(
+          await (device.db.select(
+            device.db.ascents,
+          )..where((t) => t.id.equals('ascent-e5'))).getSingleOrNull(),
+          isNotNull,
+        );
+        expect(
+          await (device.db.select(
+            device.db.walls,
+          )..where((t) => t.id.equals('wall-e5'))).getSingleOrNull(),
+          isNotNull,
+        );
+        expect(await device.db.select(device.db.comments).get(), isEmpty);
+      },
+    );
+
+    test(
+      'E6: a TOMBSTONED foreign comment does not resurrect as a visible '
+      'comment — and the tombstone itself is carried, so a deletion actually '
+      'propagates',
+      () async {
+        final remote = FakeSyncRemote();
+        await pushSharedAscent(remote, ownerId: _uidU1, suffix: 'e6');
+        seedForeignAscentComment(
+          remote,
+          id: 'comment-deleted',
+          ascentId: 'ascent-e6',
+          ownerId: _uidU2,
+          body: 'deleted by its author',
+          deletedAt: 300,
+        );
+        seedForeignAscentComment(
+          remote,
+          id: 'comment-live',
+          ascentId: 'ascent-e6',
+          ownerId: _uidU2,
+          body: 'still there',
+        );
+
+        final device = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => device.db.close());
+        await device.service.pullOwnAndShared();
+
+        final visible = await (device.db.select(device.db.comments)..where(
+              (t) =>
+                  t.ascentId.equals('ascent-e6') &
+                  t.wallId.isNull() &
+                  t.deletedAt.isNull(),
+            ))
+            .get();
+        expect(visible.map((c) => c.id), ['comment-live']);
+
+        final tombstone = await (device.db.select(
+          device.db.comments,
+        )..where((t) => t.id.equals('comment-deleted'))).getSingleOrNull();
+        expect(
+          tombstone?.deletedAt,
+          300,
+          reason: 'the tombstone is IMPORTED, not filtered out at the fetch. '
+              'Dropping it server-side would mean a device that had already '
+              'pulled the comment never learns it was deleted, because nothing '
+              'else in the pull would ever mention it again.',
+        );
+      },
+    );
   });
 
   group('profiles sync (#18: editable synced display name)', () {
@@ -4850,6 +5480,436 @@ void main() {
       await c.service.pullOwnAndShared();
       expect(remote.lastSharedScope, isNull);
     });
+  });
+
+  // SEC-2. Un-publishing a topo used to touch database rows only: `needsShared`
+  // went false and the published bytes stayed under `shared/` forever, because
+  // the push removed shared objects only for a TOMBSTONED photo and a
+  // visibility flip is not a tombstone. Every test below drives the real push.
+  group('SEC-2: un-publishing removes the published bytes', () {
+    // The same ten days `public.is_wall_public()` enforces
+    // (`withdrawRequestedAt > now_ms - 864000000`), spelled out here so a
+    // change to `kWithdrawalCooldown` shows up as a failing test rather than a
+    // silently-agreeing one.
+    const tenDaysMs = 864000000;
+
+    Future<void> makePrivate(AppDatabase db, String wallId) =>
+        (db.update(db.walls)..where((t) => t.id.equals(wallId))).write(
+          const WallsCompanion(
+            visibility: Value('private'),
+            updatedAt: Value(400),
+          ),
+        );
+
+    /// Writes the LOCAL `wall_moderation` mirror row — pulled-only, server-owned
+    /// (see `WallModerationRows`), and the only place the client learns a
+    /// withdrawal is running.
+    Future<void> seedModeration(
+      AppDatabase db, {
+      required String wallId,
+      String state = 'published',
+      int? withdrawRequestedAt,
+    }) => db.into(db.wallModerationRows).insert(
+      WallModerationRowsCompanion.insert(
+        wallId: wallId,
+        state: state,
+        updatedAt: 100,
+        withdrawRequestedAt: Value(withdrawRequestedAt),
+      ),
+    );
+
+    /// Publishes one topo FOR REAL — seeds Area→Sector→Wall(`shared`)→Photo→
+    /// Route and pushes once — so `shared/photo-1.jpg` genuinely exists in the
+    /// fake bucket, exactly as the live bucket holds it after a publish. Every
+    /// test here starts from that state, because an un-share is only observable
+    /// against an object that is actually there.
+    Future<
+      ({
+        AppDatabase db,
+        Directory docsDir,
+        Directory srcDir,
+        SyncService service,
+      })
+    >
+    publishOneTopo(FakeSyncRemote remote) async {
+      final c = makeContainer(
+        remote: remote,
+        auth: FakeAuthRepository(_signedInU1),
+      );
+      addTearDown(() => c.db.close());
+      final file = writeFile(c.srcDir, 'wall.jpg');
+      await seedWallHierarchy(
+        c.db,
+        ownerId: _uidU1,
+        areaId: 'area-1',
+        sectorId: 'sector-1',
+        wallId: 'wall-1',
+        photoId: 'photo-1',
+        routeId: 'route-1',
+        visibility: 'shared',
+        localPath: file.path,
+      );
+      final first = await c.service.pushOwn();
+      expect(first.outcome, SyncPushOutcome.pushed);
+      expect(remote.sharedStorage.keys, contains('shared/photo-1.jpg'));
+      expect(remote.privateStorage.keys, contains('$_uidU1/photo-1.jpg'));
+      // The thumbnail companion is published by
+      // `SupabaseSyncRemote.uploadSharedPhoto`'s side channel, which this fake
+      // does not model — seeded directly so the removal of BOTH shared objects
+      // is observable.
+      remote.sharedStorage['shared/thumbs/photo-1.jpg'] = const [1, 2, 3];
+      return c;
+    }
+
+    test(
+      'a wall flipped shared -> private has its shared object removed on the '
+      'next push',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        await makePrivate(c.db, 'wall-1');
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(result.fullyLanded, isTrue);
+        expect(remote.removedSharedPaths, ['shared/photo-1.jpg']);
+        expect(remote.sharedStorage.containsKey('shared/photo-1.jpg'), isFalse);
+      },
+    );
+
+    test('...and its shared/thumbs companion is removed too', () async {
+      final remote = FakeSyncRemote();
+      final c = await publishOneTopo(remote);
+
+      await makePrivate(c.db, 'wall-1');
+      await c.service.pushOwn();
+
+      expect(remote.removedSharedThumbPaths, ['shared/thumbs/photo-1.jpg']);
+      expect(
+        remote.sharedStorage.containsKey('shared/thumbs/photo-1.jpg'),
+        isFalse,
+      );
+      // Nothing at all left under `shared/` for this photo.
+      expect(remote.sharedStorage, isEmpty);
+    });
+
+    test(
+      'a photo on a still-published wall is NOT removed (the live feed)',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(remote.removedSharedPaths, isEmpty);
+        expect(remote.removedSharedThumbPaths, isEmpty);
+        expect(remote.sharedStorage.keys, contains('shared/photo-1.jpg'));
+        expect(
+          remote.sharedStorage.keys,
+          contains('shared/thumbs/photo-1.jpg'),
+        );
+        // And no pointless re-upload either: the object was already there.
+        expect(remote.uploadedSharedPaths, ['shared/photo-1.jpg']);
+      },
+    );
+
+    test(
+      'a never-published private wall triggers no removal attempt at all',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU1),
+        );
+        addTearDown(() => c.db.close());
+        final file = writeFile(c.srcDir, 'wall.jpg');
+        await seedWallHierarchy(
+          c.db,
+          ownerId: _uidU1,
+          areaId: 'area-1',
+          sectorId: 'sector-1',
+          wallId: 'wall-1',
+          photoId: 'photo-1',
+          routeId: 'route-1',
+          localPath: file.path,
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(remote.removedSharedPaths, isEmpty);
+        expect(remote.removedSharedThumbPaths, isEmpty);
+      },
+    );
+
+    test(
+      'a withdrawal requested LESS than ten days ago does NOT unshare — '
+      'cancel_withdrawal has to restore the topo with its images',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        await seedModeration(
+          c.db,
+          wallId: 'wall-1',
+          withdrawRequestedAt:
+              DateTime.now().millisecondsSinceEpoch - tenDaysMs + 3600000,
+        );
+        // Flipped locally as well, which is the harshest version of the case:
+        // the server REVERTS that flip (`protect_published_wall`) but a client
+        // holds it in the meantime, and the window must still shield the bytes.
+        await makePrivate(c.db, 'wall-1');
+
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(remote.removedSharedPaths, isEmpty);
+        expect(remote.removedSharedThumbPaths, isEmpty);
+        expect(remote.sharedStorage.keys, contains('shared/photo-1.jpg'));
+        expect(
+          remote.sharedStorage.keys,
+          contains('shared/thumbs/photo-1.jpg'),
+        );
+      },
+    );
+
+    test(
+      'a withdrawal older than ten days IS unshared on the owner\'s next push, '
+      'even though the wall row still says shared',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        // Nothing ever flips `state` or `visibility` when the window matures —
+        // `is_wall_public` evaluates the deadline lazily (COMMUNITY_IMPL §0.2),
+        // so the client has to do the same arithmetic. The wall row is left
+        // saying `shared` on purpose: maturity must override the stale intent.
+        await seedModeration(
+          c.db,
+          wallId: 'wall-1',
+          withdrawRequestedAt:
+              DateTime.now().millisecondsSinceEpoch - tenDaysMs - 1,
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(remote.removedSharedPaths, ['shared/photo-1.jpg']);
+        expect(remote.removedSharedThumbPaths, ['shared/thumbs/photo-1.jpg']);
+        expect(remote.sharedStorage, isEmpty);
+        // Not re-uploaded either — a matured withdrawal suppresses the shared
+        // upload as well, so this cannot become an upload/remove loop.
+        expect(remote.uploadedSharedPaths, ['shared/photo-1.jpg']);
+      },
+    );
+
+    test(
+      'a CANCELLED withdrawal does not unshare, even when the refresh after the '
+      'RPC failed — the local mirror clear is what makes that safe',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        // The state the defect needed: a MATURED countdown in the local mirror.
+        // The test directly above proves this alone deletes the published bytes.
+        await seedModeration(
+          c.db,
+          wallId: 'wall-1',
+          withdrawRequestedAt:
+              DateTime.now().millisecondsSinceEpoch - tenDaysMs - 1,
+        );
+
+        // Exactly the write `WithdrawalService.cancel` performs the moment
+        // `cancel_withdrawal` commits, using the same production call — see
+        // `moderation_providers.dart`. The scenario is that the
+        // `refreshWallModeration` right after it THREW (offline, PostgREST
+        // hiccup), so this single-column write is the only thing standing between
+        // a topo the server just restored and the deletion of its published
+        // bytes. `withdrawal_test.dart` proves `cancel` really does write it in
+        // that situation.
+        await ModerationRepository(c.db).recordWithdrawRequestedAt(
+          'wall-1',
+          null,
+        );
+
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(result.photoErrors, isEmpty);
+        expect(remote.removedSharedPaths, isEmpty);
+        expect(remote.removedSharedThumbPaths, isEmpty);
+        expect(remote.sharedStorage.keys, contains('shared/photo-1.jpg'));
+        expect(
+          remote.sharedStorage.keys,
+          contains('shared/thumbs/photo-1.jpg'),
+        );
+      },
+    );
+
+    test(
+      'the owner\'s private full-resolution copy is never removed by an '
+      'un-share (D-5), so re-publishing can re-upload from it',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+        final privateBytes = [...remote.privateStorage['$_uidU1/photo-1.jpg']!];
+
+        // Both routes to "no longer public" in one test.
+        await makePrivate(c.db, 'wall-1');
+        await c.service.pushOwn();
+        await seedModeration(
+          c.db,
+          wallId: 'wall-1',
+          withdrawRequestedAt:
+              DateTime.now().millisecondsSinceEpoch - tenDaysMs - 1,
+        );
+        await c.service.pushOwn();
+
+        expect(remote.removedPrivatePaths, isEmpty);
+        expect(remote.privateStorage['$_uidU1/photo-1.jpg'], privateBytes);
+
+        // And re-publishing puts the shared copy back, from that private
+        // original's still-present local file.
+        await (c.db.update(c.db.walls)..where((t) => t.id.equals('wall-1')))
+            .write(
+              const WallsCompanion(
+                visibility: Value('shared'),
+                updatedAt: Value(500),
+              ),
+            );
+        await (c.db.delete(c.db.wallModerationRows)..where(
+              (t) => t.wallId.equals('wall-1'),
+            ))
+            .go();
+        await c.service.pushOwn();
+
+        expect(remote.sharedStorage.keys, contains('shared/photo-1.jpg'));
+        expect(remote.removedPrivatePaths, isEmpty);
+      },
+    );
+
+    test(
+      'an un-share that Storage says removed NOTHING is REPORTED — an HTTP 200 '
+      'with an empty list is what a delete filtered by RLS looks like',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        await makePrivate(c.db, 'wall-1');
+        // No exception anywhere in this test. That is the whole point: this is
+        // the failure mode W-2 hid behind, and before the response was inspected
+        // it was byte-for-byte indistinguishable from a successful un-share.
+        remote.removeSharedPhotoRemovesNothing = true;
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(
+          result.photoErrors.single,
+          contains('un-sharing removed nothing'),
+        );
+        // The published bytes really are still there — which is what makes the
+        // silence a leak rather than a cosmetic gap.
+        expect(remote.sharedStorage.keys, contains('shared/photo-1.jpg'));
+
+        // Reported, but NOT as a retryable byte failure: the row is valid and
+        // withholding it would drop `fullyLanded` and re-arm the retry loop over
+        // a housekeeping failure (see `sync_remote.dart`'s
+        // `listSharedPhotoObjectPaths` doc for the incident that cost).
+        expect(result.photosFailed, 0);
+        expect(result.rowsFailed, 0);
+        expect(remote._rows['photos']!.keys, contains('photo-1'));
+
+        // And it heals for free on the next push, with no outbox (D-4).
+        remote.removeSharedPhotoRemovesNothing = false;
+        final second = await c.service.pushOwn();
+
+        expect(second.photoErrors, isEmpty);
+        expect(remote.sharedStorage, isEmpty);
+      },
+    );
+
+    test(
+      'an un-share that DID remove the original is not reported, and a missing '
+      'thumbnail on its own is NOT an error',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        // A photo published BEFORE the thumbnail tier existed: the original is
+        // there, the companion never was. `remove([original, thumb])` then comes
+        // back with ONE entry for two requested paths, and that shortfall must
+        // not read as a failure — otherwise every legacy published photo reports
+        // a false alarm on the push that un-shares it.
+        remote.sharedStorage.remove('shared/thumbs/photo-1.jpg');
+
+        await makePrivate(c.db, 'wall-1');
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(result.photoErrors, isEmpty);
+        expect(result.fullyLanded, isTrue);
+        expect(remote.removedSharedPaths, ['shared/photo-1.jpg']);
+        expect(remote.sharedStorage, isEmpty);
+      },
+    );
+
+    test(
+      'an un-share whose object removal throws a StorageException is REPORTED '
+      'and does not abort the push, and the next push retries it',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        await makePrivate(c.db, 'wall-1');
+        remote.removeSharedPhotoThrows = true;
+        final result = await c.service.pushOwn();
+
+        expect(result.outcome, SyncPushOutcome.pushed);
+        expect(result.rowsFailed, 0);
+        expect(
+          result.photoErrors.single,
+          contains('removing the shared copy failed'),
+        );
+        // NOT counted as a retryable byte failure, so the row is not withheld:
+        // a housekeeping failure must not stop the metadata landing.
+        expect(result.photosFailed, 0);
+        expect(remote._rows['photos']!.keys, contains('photo-1'));
+        expect(remote.sharedStorage.keys, contains('shared/photo-1.jpg'));
+
+        // Heals on the next push, with no outbox (D-4): the object is still in
+        // the listing, so the branch simply fires again.
+        remote.removeSharedPhotoThrows = false;
+        final second = await c.service.pushOwn();
+
+        expect(second.photoErrors, isEmpty);
+        expect(remote.removedSharedPaths, ['shared/photo-1.jpg']);
+        expect(remote.sharedStorage, isEmpty);
+      },
+    );
+
+    test(
+      'un-sharing is idempotent — a second push with the object already gone '
+      'neither re-removes nor errors',
+      () async {
+        final remote = FakeSyncRemote();
+        final c = await publishOneTopo(remote);
+
+        await makePrivate(c.db, 'wall-1');
+        await c.service.pushOwn();
+        final second = await c.service.pushOwn();
+        final third = await c.service.pushOwn();
+
+        expect(second.outcome, SyncPushOutcome.pushed);
+        expect(second.photoErrors, isEmpty);
+        expect(second.fullyLanded, isTrue);
+        expect(third.photoErrors, isEmpty);
+        // Exactly one removal across all three pushes.
+        expect(remote.removedSharedPaths, ['shared/photo-1.jpg']);
+        expect(remote.removedSharedThumbPaths, ['shared/thumbs/photo-1.jpg']);
+      },
+    );
   });
 }
 

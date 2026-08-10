@@ -56,6 +56,18 @@ class _FakePostgrest {
   /// Raw query strings, for asserting filter shaping.
   final List<String> queries = [];
 
+  /// Raw request bodies, for asserting what a non-GET call actually sent (the
+  /// Storage delete carries its object paths in a `prefixes` body, not the URL).
+  final List<String> bodies = [];
+
+  /// Status for every response. Left at 200 by every test but the Storage ones,
+  /// which need a genuine failure response to prove the production code catches
+  /// `StorageException` rather than letting it out. The error body is a JSON
+  /// OBJECT on purpose: storage_client's error handler casts the decoded body to
+  /// a `Map`, so a bare array there raises a TypeError instead of the
+  /// `StorageException` the code under test is written against.
+  int status = 200;
+
   int _inFlight = 0;
 
   /// Highest number of requests simultaneously in flight. 1 proves sequential
@@ -76,10 +88,21 @@ class _FakePostgrest {
     final table = req.uri.pathSegments.isEmpty ? '' : req.uri.pathSegments.last;
     requested.add(table);
     queries.add(req.uri.query);
+    bodies.add(await utf8.decoder.bind(req).join());
 
     // Held open so genuinely-concurrent requests are in flight at the same
     // moment. Sequential code cannot overlap here no matter how long this is.
     await Future<void>.delayed(holdFor);
+
+    if (status != 200) {
+      req.response
+        ..statusCode = status
+        ..headers.contentType = ContentType.json
+        ..write(jsonEncode({'message': 'denied', 'error': 'Unauthorized'}));
+      await req.response.close();
+      _inFlight--;
+      return;
+    }
 
     final body = jsonEncode(rows[table] ?? const <Map<String, dynamic>>[]);
     req.response
@@ -378,6 +401,302 @@ void main() {
 
         expect(result['ascents'], isEmpty);
         expect(result['walls'], isEmpty);
+      },
+    );
+  });
+
+  group('chunkSyncIds', () {
+    test('splits into batches of at most chunkSize, every id in exactly one '
+        'chunk', () async {
+      final ids = [for (var i = 0; i < 361; i++) 'id-$i'];
+
+      final chunks = chunkSyncIds(ids);
+
+      expect(chunks, hasLength(3), reason: '361 ids / 150 per chunk');
+      expect(chunks.map((c) => c.length), [150, 150, 61]);
+      // The property callers actually depend on: a partition, not merely a
+      // cover. A duplicated id would be imported twice; a dropped one would be
+      // a comment the user never sees, which is the whole bug.
+      final flat = chunks.expand((c) => c).toList();
+      expect(flat, orderedEquals(ids));
+      expect(flat.toSet(), hasLength(ids.length));
+    });
+
+    test('de-duplicates, preserving first-appearance order', () async {
+      expect(
+        chunkSyncIds(['b', 'a', 'b', 'c', 'a'], chunkSize: 10),
+        [
+          ['b', 'a', 'c'],
+        ],
+      );
+    });
+
+    test('an empty input is zero chunks, i.e. zero round trips', () async {
+      expect(chunkSyncIds(const <String>[]), isEmpty);
+    });
+  });
+
+  group('fetchEngagementByParentIds', () {
+    test('returns comments and likes attached to the asked-about ids, keyed '
+        'like every other fetch', () async {
+      fake.rows['comments'] = [
+        {..._validRow('comments', 'c1'), 'ascentId': 'as1', 'ownerId': 'other'},
+      ];
+      fake.rows['likes'] = [
+        {..._validRow('likes', 'l1'), 'ascentId': 'as1', 'ownerId': 'other'},
+      ];
+
+      final result = await remote.fetchEngagementByParentIds(
+        ascentIds: const ['as1'],
+        wallIds: const ['w1'],
+      );
+
+      expect(result.keys, unorderedEquals(['comments', 'likes']));
+      expect(result['comments']!.single['id'], 'c1');
+      expect(result['likes']!.single['id'], 'l1');
+      expect(
+        result['comments']!.single['ownerId'],
+        'other',
+        reason: 'a foreign row keeps its ORIGINAL ownerId — that is what makes '
+            'it a foreign row on import, and rewriting it would make the next '
+            'push try to send somebody else\'s comment.',
+      );
+    });
+
+    test('costs no round trip at all when there is nothing to ask about',
+        () async {
+      final result = await remote.fetchEngagementByParentIds(
+        ascentIds: const [],
+        wallIds: const [],
+      );
+
+      expect(fake.requested, isEmpty);
+      expect(result['comments'], isEmpty);
+      expect(result['likes'], isEmpty);
+    });
+
+    test('CHUNKS the by-id filter: more ids than the chunk size means more '
+        'than one request, and every id appears in exactly one chunk',
+        () async {
+      // 2.4 chunks' worth, so the last chunk is a partial one.
+      final ascentIds = [for (var i = 0; i < 360; i++) 'as-$i'];
+
+      await remote.fetchEngagementByParentIds(
+        ascentIds: ascentIds,
+        wallIds: const [],
+      );
+
+      final commentQueries = [
+        for (var i = 0; i < fake.requested.length; i++)
+          if (fake.requested[i] == 'comments') fake.queries[i],
+      ];
+      expect(
+        commentQueries,
+        hasLength(3),
+        reason: '360 ids at $kInboundEngagementChunkSize per request. A single '
+            'unbounded inFilter would put all 360 ids in one URL, which is the '
+            'failure mode this chunking exists to prevent.',
+      );
+
+      // Reconstruct the partition from the wire, not from the helper — this is
+      // the assertion that the REQUESTS (not just `chunkSyncIds`) partition the
+      // ids. `inFilter` shapes as `ascentId=in.("a","b")`.
+      final onTheWire = <String>[];
+      for (final q in commentQueries) {
+        final decoded = Uri.decodeQueryComponent(q);
+        final match = RegExp(r'ascentId=in\.\((.*?)\)').firstMatch(decoded);
+        expect(match, isNotNull, reason: 'unexpected filter shape: $decoded');
+        onTheWire.addAll(
+          match!.group(1)!.split(',').map((s) => s.replaceAll('"', '')),
+        );
+      }
+      expect(onTheWire, orderedEquals(ascentIds));
+      expect(onTheWire.toSet(), hasLength(ascentIds.length));
+    });
+
+    test('asks both tables on both columns, and de-duplicates a row that '
+        'matches twice', () async {
+      // The only row shape that can come back from two of the four queries: a
+      // comment carrying BOTH parents. No current writer produces one, but the
+      // fetch must not import it twice if the backend ever holds one.
+      fake.rows['comments'] = [
+        {
+          ..._validRow('comments', 'c1'),
+          'ascentId': 'as1',
+          'wallId': 'w1',
+        },
+      ];
+
+      final result = await remote.fetchEngagementByParentIds(
+        ascentIds: const ['as1'],
+        wallIds: const ['w1'],
+      );
+
+      expect(fake.requested.where((t) => t == 'comments'), hasLength(2));
+      expect(fake.requested.where((t) => t == 'likes'), hasLength(2));
+      expect(result['comments'], hasLength(1));
+    });
+
+    test('drops a row missing a required NOT NULL field, keeping valid '
+        'siblings', () async {
+      fake.rows['comments'] = [
+        {..._validRow('comments', 'good'), 'ascentId': 'as1'},
+        // No `body`, which `Comment.fromJson` would throw on.
+        {'id': 'bad', 'createdAt': 1, 'updatedAt': 1, 'ascentId': 'as1'},
+      ];
+
+      final result = await remote.fetchEngagementByParentIds(
+        ascentIds: const ['as1'],
+        wallIds: const [],
+      );
+
+      expect(result['comments']!.map((r) => r['id']), ['good']);
+    });
+
+    test('does NOT filter out tombstones — a deletion has to propagate too',
+        () async {
+      fake.rows['comments'] = [
+        {..._validRow('comments', 'c1'), 'ascentId': 'as1', 'deletedAt': 999},
+      ];
+
+      final result = await remote.fetchEngagementByParentIds(
+        ascentIds: const ['as1'],
+        wallIds: const [],
+      );
+
+      expect(
+        result['comments']!.single['deletedAt'],
+        999,
+        reason: 'a server-side `deletedAt IS NULL` filter here would mean a '
+            'comment its author deleted stays visible on this device forever, '
+            'because nothing else would ever tell this device it is gone. The '
+            'READ path hides tombstones (CommentsRepository filters '
+            'deletedAt.isNull()); the sync path must carry them.',
+      );
+    });
+  });
+
+  group('consistentInboundEngagement', () {
+    test('keeps a row whose only parent is one we asked about', () async {
+      final rows = [
+        {'id': 'c1', 'ascentId': 'as1', 'wallId': null},
+        {'id': 'c2', 'ascentId': null, 'wallId': 'w1'},
+      ];
+
+      expect(
+        consistentInboundEngagement(
+          rows,
+          knownAscentIds: {'as1'},
+          knownWallIds: {'w1'},
+        ).map((r) => r['id']),
+        ['c1', 'c2'],
+      );
+    });
+
+    test('drops a row whose second parent is one this device does not hold',
+        () async {
+      // Would reach `importSnapshot` as an orphan, get DEFERRED, and surface as
+      // the permanent "Couldn't sync — Retry" banner.
+      expect(
+        consistentInboundEngagement(
+          [
+            {'id': 'c1', 'ascentId': 'as1', 'wallId': 'w-elsewhere'},
+          ],
+          knownAscentIds: {'as1'},
+          knownWallIds: {'w1'},
+        ),
+        isEmpty,
+      );
+    });
+
+    test('keeps a parentless row — it has no FK to violate', () async {
+      expect(
+        consistentInboundEngagement(
+          [
+            {'id': 'c1', 'ascentId': null, 'wallId': null},
+          ],
+          knownAscentIds: const {},
+          knownWallIds: const {},
+        ),
+        hasLength(1),
+      );
+    });
+  });
+
+  // The production half of the un-share observability fix. `sync_service_test`
+  // proves the PUSH reports an un-share that removed nothing; this proves the
+  // real `SupabaseSyncRemote` gives it the information to notice — because a
+  // Storage delete that RLS filtered to nothing is an HTTP 200 with an empty
+  // list, which is what made the whole failure mode invisible.
+  group('removeSharedPhoto', () {
+    test(
+      'requests BOTH published objects in one call — the original and its '
+      'shared/thumbs companion',
+      () async {
+        await remote.removeSharedPhoto(photoId: 'p1', ext: '.jpg');
+
+        expect(fake.requested, ['topo-photos']);
+        expect(fake.bodies.single, contains('shared/p1.jpg'));
+        expect(
+          fake.bodies.single,
+          contains('shared/thumbs/p1.jpg'),
+          reason:
+              'a thumbnail outliving the original it was derived from is the '
+              'same world-readable leak the un-share exists to close',
+        );
+      },
+    );
+
+    test('returns exactly the object paths Storage says it removed', () async {
+      fake.rows['topo-photos'] = [
+        {'name': 'shared/p1.jpg'},
+        {'name': 'shared/thumbs/p1.jpg'},
+      ];
+
+      expect(await remote.removeSharedPhoto(photoId: 'p1', ext: '.jpg'), {
+        'shared/p1.jpg',
+        'shared/thumbs/p1.jpg',
+      });
+    });
+
+    test(
+      'a response listing only the ORIGINAL comes back as just that — a photo '
+      'published before the thumbnail tier has no companion to remove',
+      () async {
+        fake.rows['topo-photos'] = [
+          {'name': 'shared/p1.jpg'},
+        ];
+
+        expect(await remote.removeSharedPhoto(photoId: 'p1', ext: '.jpg'), {
+          'shared/p1.jpg',
+        });
+      },
+    );
+
+    test(
+      'an EMPTY 200 response — the shape a delete filtered by RLS returns — '
+      'comes back as an empty set rather than a silent success',
+      () async {
+        // No `fake.rows['topo-photos']`, so the bucket answers `[]` with a 200.
+        // Nothing throws, nothing is logged, and before this returned anything
+        // the caller had no way to tell this apart from a real removal.
+        expect(
+          await remote.removeSharedPhoto(photoId: 'p1', ext: '.jpg'),
+          isEmpty,
+        );
+      },
+    );
+
+    test(
+      'a StorageException is still swallowed — best-effort, never throws out of '
+      'the push — but reports having removed nothing',
+      () async {
+        fake.status = 403;
+
+        expect(
+          await remote.removeSharedPhoto(photoId: 'p1', ext: '.jpg'),
+          isEmpty,
+        );
       },
     );
   });

@@ -74,6 +74,17 @@ class _CountingSyncRemote implements SyncRemote {
   }
 
   @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchEngagementByParentIds({
+    required List<String> ascentIds,
+    required List<String> wallIds,
+  }) async {
+    return {
+      'comments': <Map<String, dynamic>>[],
+      'likes': <Map<String, dynamic>>[],
+    };
+  }
+
+  @override
   Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async {
     return const [];
   }
@@ -117,10 +128,10 @@ class _CountingSyncRemote implements SyncRemote {
   }) async {}
 
   @override
-  Future<void> removeSharedPhoto({
+  Future<Set<String>> removeSharedPhoto({
     required String photoId,
     required String ext,
-  }) async {}
+  }) async => const {};
 }
 
 /// A [_CountingSyncRemote] whose [fetchSharedTopos] always throws --
