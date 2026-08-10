@@ -10,6 +10,9 @@ import 'package:masi/features/community/data/comments_repository.dart'
 import 'package:masi/features/community/presentation/community_topo_detail_screen.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/logbook/application/ascents_providers.dart';
+import 'package:masi/features/moderation/presentation/access_banner.dart';
+import 'package:masi/features/moderation/presentation/hazard_banner.dart';
+import 'package:masi/features/moderation/presentation/moderation_banner.dart';
 import 'package:masi/features/logbook/data/ascents_repository.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
@@ -1270,9 +1273,10 @@ void main() {
 
   group('Redesign golden (visual regression)', () {
     testWidgets(
-      'the redesigned screen (photo header with gradient-scrim title, '
-      'card-based routes list, filled rounded comment input + send_fill '
-      'button) renders a stable golden image',
+      'the redesigned screen (35%-height photo header with gradient-scrim '
+      'title, then the card-based routes list, the like row, the one-line '
+      'verification and the comment thread with its filled rounded input + '
+      'send_fill button) renders a stable golden image',
       (tester) async {
         final seeded = await seedWallWithTwoRoutesAndComments(tester);
         addTearDown(seeded.db.close);
@@ -1281,9 +1285,13 @@ void main() {
         // Pin physical size + device pixel ratio so the checked-in golden
         // PNG's dimensions/content are deterministic across machines,
         // mirroring topo_painter_golden_test.dart's own golden test. Tall
-        // enough that the redesigned screen's header + like row + comments
-        // + routes card all render without being clipped by the test
-        // viewport (no scrolling needed to capture them in one shot).
+        // enough that the whole reordered body — header, routes card, like
+        // row, collapsed verification line, comment thread, composer — renders
+        // without being clipped by the test viewport (no scrolling needed to
+        // capture it in one shot). Under the pre-reorder layout the routes
+        // card, then last on the page beneath a 48%-height header, was cut off
+        // by this same viewport's bottom edge; it now fits with room to spare,
+        // which is itself the change this golden is here to hold still.
         tester.view.physicalSize = const Size(400, 1200);
         tester.view.devicePixelRatio = 1.0;
         addTearDown(tester.view.resetPhysicalSize);
@@ -1372,6 +1380,416 @@ void main() {
       );
     },
   );
+
+  /// The owner's reordering decision: on a shared topo the route list is the
+  /// content, so it comes FIRST in the body — it used to be dead last, under
+  /// the like row, the verification tile, every comment and the composer. The
+  /// header also shrank from 0.48 to [kCommunityDetailHeaderFraction] of the
+  /// viewport, and the verification tile folded down to one tappable line.
+  ///
+  /// These assert on relative vertical POSITION, not mere presence: an order
+  /// test that only checks `findsOneWidget` passes just as happily with the
+  /// sections in the old order.
+  group('body order + header height + collapsed verification', () {
+    /// A viewport tall enough that the whole body is laid out at once, so
+    /// every section has a real on-screen `dy` to compare.
+    void useTallViewport(WidgetTester tester) {
+      tester.view.physicalSize = const Size(500, 2400);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+    }
+
+    /// `dy` of the widget [finder] resolves to, allowing offstage matches: a
+    /// section below the fold is still laid out (see [scrollKeyIntoView]'s
+    /// doc) and its geometry is exactly what is being measured here.
+    double topOf(WidgetTester tester, Finder finder) =>
+        tester.getTopLeft(finder).dy;
+
+    testWidgets('the six sections render top-to-bottom in the decided order: '
+        'header, banners, routes, like row, one-line verification, comments', (
+      tester,
+    ) async {
+      useTallViewport(tester);
+      final seeded = await seedWallWithTwoRoutesAndComments(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 1. Header. Measured via the full-bleed tap target that fills the
+      // collapsing header's box (`Positioned.fill` inside its flexibleSpace) —
+      // the SliverAppBar itself is a sliver, so it has no RenderBox geometry
+      // to ask for.
+      final headerTop = topOf(
+        tester,
+        find.byKey(const Key('community-detail-open-canvas')),
+      );
+      final headerBottom =
+          headerTop +
+          tester
+              .getSize(find.byKey(const Key('community-detail-open-canvas')))
+              .height;
+
+      // 2. Banners. All three render `SizedBox.shrink()` with nothing to say
+      // (this seed has no access notice, no withdrawal, no hazard), so they
+      // are zero-height — but they are still laid out, and their offset is
+      // what proves they sit between the header and the routes rather than
+      // having been shuffled below them.
+      final accessTop = topOf(
+        tester,
+        find.byType(AccessBanner, skipOffstage: false),
+      );
+      final moderationTop = topOf(
+        tester,
+        find.byType(ModerationBanner, skipOffstage: false),
+      );
+      final hazardTop = topOf(
+        tester,
+        find.byType(HazardBanner, skipOffstage: false),
+      );
+
+      // 3. Routes.
+      final routesTop = topOf(
+        tester,
+        find.byKey(const Key('community-routes-section'), skipOffstage: false),
+      );
+      // 4. Like row.
+      final likeTop = topOf(
+        tester,
+        find.byKey(const Key('community-like-button'), skipOffstage: false),
+      );
+      // 5. Verification, as its single collapsed line.
+      final verificationTop = topOf(
+        tester,
+        find.byKey(
+          Key('verification-toggle-${seeded.wallId}'),
+          skipOffstage: false,
+        ),
+      );
+      // 6. Comments (the section heading; its thread and composer follow).
+      final commentsTop = topOf(
+        tester,
+        find.text('Comments', skipOffstage: false),
+      );
+
+      expect(headerTop, lessThan(accessTop));
+      expect(accessTop, greaterThanOrEqualTo(headerBottom - 0.5));
+      expect(accessTop, lessThanOrEqualTo(moderationTop));
+      expect(moderationTop, lessThanOrEqualTo(hazardTop));
+      expect(
+        hazardTop,
+        lessThan(routesTop),
+        reason: 'the banners stay above the route list',
+      );
+      expect(
+        routesTop,
+        lessThan(likeTop),
+        reason: 'the route list must be ABOVE the like/log-ascent row',
+      );
+      expect(likeTop, lessThan(verificationTop));
+      expect(verificationTop, lessThan(commentsTop));
+      // And the composer — the last thing on the page — is below the thread.
+      expect(
+        commentsTop,
+        lessThan(
+          topOf(
+            tester,
+            find.byKey(
+              const Key('community-comment-field'),
+              skipOffstage: false,
+            ),
+          ),
+        ),
+      );
+    });
+
+    testWidgets(
+      'the collapsing header takes kCommunityDetailHeaderFraction (~35%) of '
+      'the viewport, not the old ~48%',
+      (tester) async {
+        // 1200 logical px tall at dpr 1, so the expected height is a round
+        // number and the assertion reads as the arithmetic it is.
+        tester.view.physicalSize = const Size(400, 1200);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+
+        final seeded = await seedWallWithRoute(tester);
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
+
+        await tester.pumpWidget(
+          wrap(
+            seeded.container,
+            CommunityTopoDetailScreen(
+              wallId: seeded.wallId,
+              debugInitialImageSize: const Size(1000, 2000),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        final headerHeight = tester
+            .getSize(find.byKey(const Key('community-detail-open-canvas')))
+            .height;
+
+        // Driven off the same constant the widget multiplies by, so the two
+        // cannot drift apart — a hard-coded 420 here would silently keep
+        // passing after someone edited the widget's fraction.
+        expect(
+          headerHeight,
+          moreOrLessEquals(1200 * kCommunityDetailHeaderFraction, epsilon: 1),
+        );
+        // The regression this replaces, stated in its own right: the old 0.48
+        // header is ~156 px taller and is not what should be on screen.
+        expect(headerHeight, lessThan(1200 * 0.48 - 100));
+      },
+    );
+
+    testWidgets('verification renders as ONE tappable line by default — its '
+        'two verify buttons are not drawn until it is tapped', (tester) async {
+      useTallViewport(tester);
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final toggle = Key('verification-toggle-${seeded.wallId}');
+      // The line itself: present, and tappable (an InkWell with an onTap).
+      expect(find.byKey(toggle, skipOffstage: false), findsOneWidget);
+      expect(
+        tester
+            .widget<InkWell>(
+              find.descendant(
+                of: find.byKey(toggle, skipOffstage: false),
+                matching: find.byType(InkWell),
+                matchRoot: true,
+              ),
+            )
+            .onTap,
+        isNotNull,
+      );
+      // The summary sentence stays on screen while collapsed — collapsing
+      // hides the controls, not the state.
+      expect(
+        find.text('Nobody has confirmed this topo yet.', skipOffstage: false),
+        findsOneWidget,
+      );
+      // ... and the expanded tile's controls are genuinely absent, not merely
+      // scrolled off (`skipOffstage: false` would find them either way).
+      expect(
+        find.byKey(Key('verify-accurate-${seeded.wallId}'), skipOffstage: false),
+        findsNothing,
+      );
+      expect(
+        find.byKey(
+          Key('verify-inaccurate-${seeded.wallId}'),
+          skipOffstage: false,
+        ),
+        findsNothing,
+      );
+    });
+
+    testWidgets('tapping the verification line reveals exactly the content it '
+        'showed before the collapse — nothing became unreachable', (
+      tester,
+    ) async {
+      useTallViewport(tester);
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final toggle = Key('verification-toggle-${seeded.wallId}');
+      await scrollKeyIntoView(tester, toggle);
+      await tester.tap(find.byKey(toggle));
+      await tester.pumpAndSettle();
+
+      // Both verify controls, with their original keys and labels, and live
+      // (an `onPressed` — a revealed-but-inert control would be worse than a
+      // hidden one).
+      final accurate = find.byKey(
+        Key('verify-accurate-${seeded.wallId}'),
+        skipOffstage: false,
+      );
+      final inaccurate = find.byKey(
+        Key('verify-inaccurate-${seeded.wallId}'),
+        skipOffstage: false,
+      );
+      expect(accurate, findsOneWidget);
+      expect(inaccurate, findsOneWidget);
+      expect(tester.widget<TextButton>(accurate).onPressed, isNotNull);
+      expect(tester.widget<TextButton>(inaccurate).onPressed, isNotNull);
+      expect(find.text('Matches the rock', skipOffstage: false), findsOneWidget);
+      expect(find.text("Doesn't match", skipOffstage: false), findsOneWidget);
+
+      // And it folds back up again.
+      await tester.tap(find.byKey(toggle));
+      await tester.pumpAndSettle();
+      expect(accurate, findsNothing);
+    });
+
+    testWidgets('the route list, with its per-route Log ascent buttons, sits '
+        'above the like row', (tester) async {
+      useTallViewport(tester);
+      final seeded = await seedWallWithRoute(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        wrap(
+          seeded.container,
+          CommunityTopoDetailScreen(
+            wallId: seeded.wallId,
+            debugInitialImageSize: const Size(1000, 2000),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final logAscent = find.byKey(
+        Key('community-log-ascent-${seeded.routeDbId}'),
+        skipOffstage: false,
+      );
+      expect(logAscent, findsOneWidget);
+      expect(
+        topOf(tester, logAscent),
+        lessThan(
+          topOf(
+            tester,
+            find.byKey(const Key('community-like-button'), skipOffstage: false),
+          ),
+        ),
+      );
+    });
+
+    testWidgets('at 2x text scale on a short viewport the reordered page still '
+        'lays out with no overflow', (tester) async {
+      // Short AND narrow: a small phone in the browser with accessibility text
+      // turned up, which is the configuration that turns a Row of two labels
+      // into a RenderFlex overflow.
+      tester.view.physicalSize = const Size(360, 600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.reset);
+
+      final seeded = await seedWallWithTwoRoutesAndComments(tester);
+      addTearDown(seeded.db.close);
+      addTearDown(seeded.container.dispose);
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: seeded.container,
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            // `builder` (above the Navigator, so it wraps `home`) rather than
+            // a MediaQuery around the screen itself, which would have to
+            // fabricate a whole MediaQueryData and lose the pinned view size.
+            builder: (context, child) => MediaQuery(
+              data: MediaQuery.of(
+                context,
+              ).copyWith(textScaler: const TextScaler.linear(2)),
+              child: child!,
+            ),
+            home: CommunityTopoDetailScreen(
+              wallId: seeded.wallId,
+              debugInitialImageSize: const Size(1000, 2000),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // The reordered sections above the fold all laid out at this scale.
+      // (The composer is checked further down, after scrolling — on a 600 px
+      // viewport at 2x it is far enough below the fold that the sliver list
+      // has not built it yet, which is lazy-list behaviour, not a layout
+      // failure.)
+      for (final finder in <Finder>[
+        find.byKey(const Key('community-detail-open-canvas')),
+        find.byKey(const Key('community-routes-section'), skipOffstage: false),
+        find.byKey(const Key('community-like-button'), skipOffstage: false),
+        find.byKey(
+          Key('verification-toggle-${seeded.wallId}'),
+          skipOffstage: false,
+        ),
+      ]) {
+        expect(finder, findsOneWidget);
+      }
+
+      // DRAINED, deliberately not asserted on: at a large text scale the
+      // per-route row overflows horizontally, and it does so independently of
+      // this reordering — that row is laid out to put "Log ascent" FLUSH
+      // against the route card's right edge (see the flush-right test above,
+      // which measures exactly that), so it has zero horizontal slack by
+      // design and any scaled-up label runs past it whatever vertical order
+      // the sections are in. Its width is set by the card, which this change
+      // does not touch. Swallowed rather than expected, so that fixing it
+      // does not fail this test.
+      tester.takeException();
+
+      // What this test is actually for: with the route rows folded away, the
+      // chrome this change DID touch — the like row, the one-line
+      // verification, the Comments heading and the composer, all now in new
+      // positions — lays out at 2x on a 600 px-tall viewport with no overflow
+      // at all.
+      await scrollKeyIntoView(tester, const Key('community-routes-section'));
+      await tester.tap(find.byKey(const Key('community-routes-section')));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+
+      // Scrolled to the end of the page — the comment thread and the composer
+      // in their new position, at 2x, with nothing overflowing.
+      await tester.drag(find.byType(CustomScrollView), const Offset(0, -900));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(find.text('Comments', skipOffstage: false), findsOneWidget);
+      expect(
+        find.byKey(const Key('community-comment-field'), skipOffstage: false),
+        findsOneWidget,
+      );
+
+      // Expanding the verification line is the one interaction that ADDS
+      // height at this text scale, so it is checked too — including that the
+      // revealed buttons (a Wrap, not a Row, for this exact reason) fit.
+      final toggle = Key('verification-toggle-${seeded.wallId}');
+      await scrollKeyIntoView(tester, toggle);
+      await tester.tap(find.byKey(toggle));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(Key('verify-accurate-${seeded.wallId}'), skipOffstage: false),
+        findsOneWidget,
+      );
+    });
+  });
 }
 
 /// Whether [FocusManager.instance.primaryFocus] is currently held by a text
@@ -1388,8 +1806,8 @@ bool _holdsTextFieldFocus() {
 /// Scrolls the detail screen's `CustomScrollView` until the element keyed
 /// [key] is genuinely onstage (not just present in the tree), then settles.
 ///
-/// The collapsing header (D1) takes ~48% of the test surface's default
-/// 800x600 viewport, so this screen's Comments/Routes body content can
+/// The collapsing header (D1) takes [kCommunityDetailHeaderFraction] of the
+/// test surface's default 800x600 viewport, so this screen's body content can
 /// start below the initial visible fold — still fully built (a short,
 /// non-lazy `SliverChildListDelegate` list), just excluded from a plain
 /// `tester.ensureVisible`'s DEFAULT `skipOffstage: true` finder, which would

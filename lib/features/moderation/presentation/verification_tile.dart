@@ -16,13 +16,41 @@ import '../application/community_facts_providers.dart';
 /// exceptions that must earn attention by staying quiet; this is a standing
 /// affordance, and a topo with no verifications at all is exactly the one
 /// where the prompt is most useful.
-class VerificationTile extends ConsumerWidget {
-  const VerificationTile({super.key, required this.wallId});
+class VerificationTile extends ConsumerStatefulWidget {
+  const VerificationTile({
+    super.key,
+    required this.wallId,
+    this.collapsible = false,
+  });
 
   final String wallId;
 
+  /// When true the tile renders as ONE tappable line — the summary row plus a
+  /// chevron — and the two verify buttons appear only once that line has been
+  /// tapped.
+  ///
+  /// Opt-in, and defaulting to the always-expanded shape, on purpose: this is
+  /// a standing affordance wherever it is the page's own subject, and only
+  /// wants folding away on a screen where it competes with the content the
+  /// reader actually came for (the community topo detail page, where the route
+  /// list is the point and three expanded lines of verification chrome pushed
+  /// it down the page). Collapsing hides no information the expanded tile
+  /// carried: the summary line — including its disputed warning glyph and
+  /// colour — is the line that stays visible.
+  final bool collapsible;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<VerificationTile> createState() => _VerificationTileState();
+}
+
+class _VerificationTileState extends ConsumerState<VerificationTile> {
+  /// Only consulted when [VerificationTile.collapsible] is set; the
+  /// non-collapsible tile renders its buttons unconditionally.
+  bool _expanded = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final wallId = widget.wallId;
     final colors = MasiColors.of(context);
     final summary = ref
         .watch(wallVerificationSummaryProvider(wallId))
@@ -31,50 +59,77 @@ class VerificationTile extends ConsumerWidget {
 
     final accurate = summary?.accurateCount ?? 0;
     final disputed = summary?.isDisputed ?? false;
+    final showActions = !widget.collapsible || _expanded;
+
+    final summaryRow = Row(
+      children: [
+        MasiIcon(
+          disputed ? 'warning' : 'check',
+          size: 16,
+          color: disputed ? colors.gradeHard : colors.ink2,
+        ),
+        const SizedBox(width: MasiSpacing.xs),
+        Expanded(
+          child: Text(
+            _summaryLabel(accurate, summary?.inaccurateCount ?? 0),
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+              color: disputed ? colors.gradeHard : colors.ink2,
+            ),
+          ),
+        ),
+        if (widget.collapsible) ...[
+          const SizedBox(width: MasiSpacing.xs),
+          MasiIcon(
+            _expanded ? 'chevron_up' : 'chevron_down',
+            size: 16,
+            color: colors.ink2,
+          ),
+        ],
+      ],
+    );
 
     return Column(
       key: Key('verification-tile-$wallId'),
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
-        Row(
-          children: [
-            MasiIcon(
-              disputed ? 'warning' : 'check',
-              size: 16,
-              color: disputed ? colors.gradeHard : colors.ink2,
+        if (widget.collapsible)
+          InkWell(
+            key: Key('verification-toggle-$wallId'),
+            onTap: () => setState(() => _expanded = !_expanded),
+            borderRadius: BorderRadius.circular(MasiRadii.control),
+            child: Padding(
+              // Vertical padding, not a bare row: collapsed, this line is the
+              // whole section AND its tap target, and a 16 px bodySmall row is
+              // under any reasonable touch-target floor on its own.
+              padding: const EdgeInsets.symmetric(vertical: MasiSpacing.sm),
+              child: summaryRow,
             ),
-            const SizedBox(width: MasiSpacing.xs),
-            Expanded(
-              child: Text(
-                _summaryLabel(accurate, summary?.inaccurateCount ?? 0),
-                style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  color: disputed ? colors.gradeHard : colors.ink2,
-                ),
+          )
+        else
+          summaryRow,
+        if (showActions) ...[
+          const SizedBox(height: MasiSpacing.xs),
+          // A Wrap, not a Row: two text buttons at a large text scale overflow a
+          // narrow phone outright (a Row here overflowed by 172px in test), and
+          // silently clipping half of "Doesn't match" would leave the control
+          // unreadable rather than merely cramped.
+          Wrap(
+            spacing: MasiSpacing.sm,
+            children: [
+              TextButton(
+                key: Key('verify-accurate-$wallId'),
+                onPressed: () => _verify(context, ref, accurate: true),
+                child: const Text('Matches the rock'),
               ),
-            ),
-          ],
-        ),
-        const SizedBox(height: MasiSpacing.xs),
-        // A Wrap, not a Row: two text buttons at a large text scale overflow a
-        // narrow phone outright (a Row here overflowed by 172px in test), and
-        // silently clipping half of "Doesn't match" would leave the control
-        // unreadable rather than merely cramped.
-        Wrap(
-          spacing: MasiSpacing.sm,
-          children: [
-            TextButton(
-              key: Key('verify-accurate-$wallId'),
-              onPressed: () => _verify(context, ref, accurate: true),
-              child: const Text('Matches the rock'),
-            ),
-            TextButton(
-              key: Key('verify-inaccurate-$wallId'),
-              onPressed: () => _verify(context, ref, accurate: false),
-              child: const Text("Doesn't match"),
-            ),
-          ],
-        ),
+              TextButton(
+                key: Key('verify-inaccurate-$wallId'),
+                onPressed: () => _verify(context, ref, accurate: false),
+                child: const Text("Doesn't match"),
+              ),
+            ],
+          ),
+        ],
       ],
     );
   }
@@ -105,7 +160,7 @@ class VerificationTile extends ConsumerWidget {
     try {
       await ref
           .read(communityFactsServiceProvider)
-          .verify(wallId: wallId, accurate: accurate);
+          .verify(wallId: widget.wallId, accurate: accurate);
       messenger?.showSnackBar(
         const SnackBar(content: Text('Thanks — that helps.')),
       );

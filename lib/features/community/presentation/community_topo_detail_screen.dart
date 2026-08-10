@@ -51,12 +51,28 @@ import '../data/community_repository.dart';
 import 'comment_row.dart';
 import 'mention_composer.dart';
 
+/// The collapsing header's expanded height, as a fraction of the viewport.
+///
+/// Was 0.48 — very nearly half the page spent on the photo, which on a phone
+/// meant the reader landed on a screen with no content on it at all and had to
+/// scroll to find out what routes the topo even has. 0.35 still reads as a
+/// hero photo (and it is tappable, opening the full canvas — see
+/// `_openFullCanvas`) while leaving the top of the route list above the fold.
+///
+/// A named constant rather than a literal so the widget and the test that
+/// measures it cannot drift apart.
+const double kCommunityDetailHeaderFraction = 0.35;
+
 /// Read-only detail view for a single shared ("community") topo: a
 /// collapsing header showing the wall's photo + route overlays (tap it to
 /// open the full interactive, still-`readOnly` canvas — see
-/// [_openFullCanvas]), plus this feature's social surface: like/unlike, a
-/// comment thread, and a collapsible "Routes" section with a "log ascent"
-/// affordance per route.
+/// [_openFullCanvas]), then, in this order: the access/withdrawal/hazard
+/// banners, the collapsible "Routes" section (with a "log ascent" affordance
+/// per route), the like + report-a-hazard row, a one-line collapsed
+/// [VerificationTile], and the comment thread with its composer.
+///
+/// That order is the point of the layout: routes above the social surface,
+/// because the route list is what the page is FOR. See the body's own comments.
 ///
 /// Reached from `CommunityScreen`'s feed rows and map markers, which
 /// `context.push('/community/topo/$wallId')`.
@@ -775,7 +791,8 @@ class _CommunityTopoDetailScreenState
       ref.watch(storageDurabilityProvider),
     );
 
-    final expandedHeight = MediaQuery.sizeOf(context).height * 0.48;
+    final expandedHeight =
+        MediaQuery.sizeOf(context).height * kCommunityDetailHeaderFraction;
     // Captured for `_onScroll` (see that method's doc) — an ordinary field
     // write, not a `setState`, since it's just stashing a layout value for a
     // later scroll-callback read, not itself something that needs to
@@ -999,6 +1016,21 @@ class _CommunityTopoDetailScreenState
               padding: const EdgeInsets.all(MasiSpacing.lg),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
+                  // FIRST in the body, directly under the photo and the
+                  // banners: the route list is what a reader opens a topo for,
+                  // and it used to be the LAST thing on the page — below the
+                  // like row, the verification tile, the whole comment thread
+                  // and the composer. On a phone that put the single most
+                  // useful content on the screen behind several screens of
+                  // scrolling.
+                  //
+                  // The social surface (like, verification, comments) follows
+                  // it: those are things you do about a topo once you have
+                  // seen what is on it.
+                  _buildRoutesSection(context, colors, asyncRoutes),
+                  const SizedBox(height: MasiSpacing.lg),
+                  const Divider(),
+                  const SizedBox(height: MasiSpacing.xs),
                   Row(
                     children: [
                       IconButton(
@@ -1043,16 +1075,21 @@ class _CommunityTopoDetailScreenState
                       ),
                     ],
                   ),
-                  const SizedBox(height: MasiSpacing.sm),
-                  const Divider(),
                   const SizedBox(height: MasiSpacing.xs),
+                  const Divider(),
                   // Always shown, unlike the two banners above: a topo nobody
                   // has confirmed yet is exactly the one where the prompt is
                   // most useful.
-                  VerificationTile(wallId: wallId),
-                  const SizedBox(height: MasiSpacing.xs),
+                  //
+                  // `collapsible: true` — ONE tappable line here rather than
+                  // the always-expanded summary + two full-width text buttons.
+                  // Nothing became unreachable: the line expands in place to
+                  // exactly the controls it used to show, and the summary
+                  // sentence (with its disputed glyph) is the part that stays
+                  // on screen. See [VerificationTile.collapsible].
+                  VerificationTile(wallId: wallId, collapsible: true),
                   const Divider(),
-                  const SizedBox(height: MasiSpacing.xs),
+                  const SizedBox(height: MasiSpacing.sm),
                   Text(
                     'Comments',
                     style: Theme.of(context).textTheme.titleMedium?.copyWith(
@@ -1217,10 +1254,11 @@ class _CommunityTopoDetailScreenState
                       ],
                     ),
                   ],
+                  // Tail padding so the composer clears the bottom edge (and,
+                  // on a phone, is not flush against the home indicator) now
+                  // that it is the last thing in the list rather than sitting
+                  // above a Routes section.
                   const SizedBox(height: MasiSpacing.lg),
-                  const Divider(),
-                  const SizedBox(height: MasiSpacing.sm),
-                  _buildRoutesSection(context, colors, asyncRoutes),
                 ]),
               ),
             ),
