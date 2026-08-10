@@ -218,15 +218,103 @@ CREATE POLICY "topo_photos_own_all" ON storage.objects FOR ALL TO authenticated
   USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = auth.uid()::text)
   WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = auth.uid()::text);
 
-CREATE POLICY "topo_photos_shared_read" ON storage.objects FOR SELECT TO authenticated
-  USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
+-- SEC-3 / SEC-4 (applied live 2026-08-10, see
+-- supabase/migrations/2026-08-10_sec3_sec4_shared_photo_object_scoping.sql).
+--
+-- The three policies below used to test ONLY `foldername[1] = 'shared'`. That was
+-- two defects at once: every signed-in user could READ (and LIST) every byte ever
+-- pushed to the shared prefix, including rejected / withdrawn / sensitive /
+-- soft-deleted topos (SEC-4); and every signed-in user could INSERT under an
+-- arbitrary photo id and OVERWRITE another owner's published bytes (SEC-3).
+--
+-- What was never wrong, and stays that way: the `topo-photos` bucket is
+-- `public = false`, there is no getPublicUrl/createSignedUrl anywhere in `lib/`,
+-- and all five policies are `TO authenticated` — so `anon` matched nothing and
+-- there was no anonymous exposure at any point.
+--
+-- The two helpers below are `SECURITY DEFINER` (they read `photos`/`walls`, whose
+-- own RLS would otherwise hide exactly the rows the decision depends on) and carry
+-- `SET search_path = public`, which is why `storage.filename` is qualified. They
+-- forward-reference `is_admin()` / `is_wall_public(text)` from the community
+-- phase-1 migration, the same way `topo_photos_shared_delete` below already does.
+--
+-- NOTE the leading is_admin() short-circuit in can_read_shared_photo_object: it is
+-- deliberate and load-bearing. Without it, an object whose photos row is GONE (a
+-- true orphan) becomes unreadable by everyone, and because Supabase's remove()
+-- returns the removed rows (DELETE ... RETURNING, i.e. it needs SELECT), an
+-- unreadable orphan is also UNDELETABLE. Admins must always be able to read, hence
+-- delete, any shared object.
+CREATE OR REPLACE FUNCTION public.can_read_shared_photo_object(object_name text)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT public.is_admin() OR EXISTS (
+    SELECT 1 FROM public.photos p JOIN public.walls w ON w.id = p."wallId"
+     WHERE p.id = regexp_replace(storage.filename(object_name), '\.[^.]*$', '')
+       AND p."deletedAt" IS NULL AND w."deletedAt" IS NULL
+       AND ( public.is_wall_public(w.id) OR w."ownerId" = (auth.uid())::text )
+  );
+$$;
 
+-- Deliberately does NOT filter on "deletedAt": an owner (or admin) must still be
+-- able to write bytes for a row that is mid-tombstone.
+CREATE OR REPLACE FUNCTION public.owns_shared_photo_object(object_name text)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.photos p JOIN public.walls w ON w.id = p."wallId"
+     WHERE p.id = regexp_replace(storage.filename(object_name), '\.[^.]*$', '')
+       AND ( w."ownerId" = (auth.uid())::text OR public.is_admin() )
+  );
+$$;
+
+-- CREATE FUNCTION auto-grants EXECUTE to PUBLIC, and on Supabase `anon` holds its
+-- own grant that `REVOKE ... FROM public` does NOT remove, so it must be named.
+REVOKE EXECUTE ON FUNCTION public.can_read_shared_photo_object(text) FROM public, anon;
+REVOKE EXECUTE ON FUNCTION public.owns_shared_photo_object(text)     FROM public, anon;
+GRANT  EXECUTE ON FUNCTION public.can_read_shared_photo_object(text) TO authenticated;
+GRANT  EXECUTE ON FUNCTION public.owns_shared_photo_object(text)     TO authenticated;
+
+CREATE POLICY "topo_photos_shared_read" ON storage.objects FOR SELECT TO authenticated
+  USING (
+    bucket_id = 'topo-photos'
+    AND (storage.foldername(name))[1] = 'shared'
+    AND public.can_read_shared_photo_object(name)
+  );
+
+-- Split by path depth. Depth 1 (`shared/<id><ext>`, the originals) is owner-only.
+-- Depth 2 (`shared/thumbs/<id>.jpg`) accepts can_read rather than owns, because
+-- `SharedThumbBackfill` is cross-owner BY DESIGN — it only ever manufactures
+-- MISSING thumbs for photos the client can already see, never replacements, so a
+-- feed that predates thumbs still renders. Requiring ownership here would silently
+-- kill it. Safe because you may only derive from what you may already READ, and
+-- because this is INSERT only: the UPDATE policy below is owner-gated at BOTH
+-- depths. Net property — a foreign user may CREATE a missing thumb and may never
+-- REPLACE an existing object.
 CREATE POLICY "topo_photos_shared_write" ON storage.objects FOR INSERT TO authenticated
-  WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
+  WITH CHECK (
+    bucket_id = 'topo-photos'
+    AND (storage.foldername(name))[1] = 'shared'
+    AND (
+      CASE
+        WHEN array_length(storage.foldername(name), 1) = 1
+          THEN public.owns_shared_photo_object(name)
+        WHEN array_length(storage.foldername(name), 1) = 2
+             AND (storage.foldername(name))[2] = 'thumbs'
+          THEN public.can_read_shared_photo_object(name)
+        ELSE false
+      END
+    )
+  );
 
 CREATE POLICY "topo_photos_shared_upd" ON storage.objects FOR UPDATE TO authenticated
-  USING (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared')
-  WITH CHECK (bucket_id = 'topo-photos' AND (storage.foldername(name))[1] = 'shared');
+  USING (
+    bucket_id = 'topo-photos'
+    AND (storage.foldername(name))[1] = 'shared'
+    AND public.owns_shared_photo_object(name)
+  )
+  WITH CHECK (
+    bucket_id = 'topo-photos'
+    AND (storage.foldername(name))[1] = 'shared'
+    AND public.owns_shared_photo_object(name)
+  );
 
 -- W-2. Without this there is NO delete path for the shared prefix at all: the
 -- three policies above cover SELECT/INSERT/UPDATE, and `topo_photos_own_all` is
@@ -1245,9 +1333,14 @@ GRANT SELECT ON public.notifications TO authenticated;
 -- PHOTO BYTES follow the W-2 precedent and are removed by the CLIENT, before
 -- the RPC: Supabase's `storage.protect_delete()` trigger raises on any direct
 -- `DELETE FROM storage.objects`, so the database cannot remove an object however
--- it is privileged, and the shared-photo SELECT policy is `is_wall_public(...)`
--- - which the delete makes false, so enumerating afterwards always finds
--- nothing. The owner's private `<uid>/...` copy is never touched (D-5).
+-- it is privileged, and the shared-photo SELECT policy now routes through
+-- `can_read_shared_photo_object(...)`, i.e. `is_wall_public(...)` - which the
+-- delete makes false, so a non-admin enumerating afterwards finds nothing.
+-- (Since SEC-4 on 2026-08-10 that is literally true; before it, the SELECT policy
+-- was a bare `foldername[1] = 'shared'` test and this claim was aspirational.
+-- Admins still see the object, deliberately: an unreadable object would also be
+-- undeletable, because remove() is a DELETE ... RETURNING.)
+-- The owner's private `<uid>/...` copy is never touched (D-5).
 --
 -- Verified live in a rolled-back transaction on 2026-08-09: a non-admin refused
 -- on all three deletes; the OWNER still could not destroy a published topo; the
