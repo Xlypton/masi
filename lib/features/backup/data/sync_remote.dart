@@ -1045,7 +1045,24 @@ class SupabaseSyncRemote implements SyncRemote {
         .uploadBinary(
           objectPath,
           bytes,
-          fileOptions: const FileOptions(upsert: true),
+          // `upsert: false`, unlike every other upload in this class, and it is
+          // load-bearing rather than a style choice. This is the ONE upload
+          // that writes an object the caller does not own: the backfill is
+          // deliberately cross-owner, and the SEC-3 storage policy permits that
+          // only for a `shared/thumbs/` path the caller may already read
+          // (`can_read_shared_photo_object`), while REPLACING any existing
+          // object still requires ownership (`owns_shared_photo_object`, on
+          // UPDATE). `x-upsert: true` asks for replace semantics up front, so
+          // it risks being evaluated against the UPDATE policy even when the
+          // object does not exist yet — which would make every foreign
+          // backfill fail, silently, since the upload error is swallowed and
+          // the only symptom is feed tiles quietly falling back to
+          // multi-megabyte originals.
+          //
+          // Nothing is lost: `sharedOriginalsNeedingThumbs` only ever
+          // worklists thumbs that are MISSING, so this closure never has an
+          // existing object to overwrite.
+          fileOptions: const FileOptions(upsert: false),
         ),
   );
 
