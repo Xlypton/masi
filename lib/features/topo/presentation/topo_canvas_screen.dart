@@ -35,6 +35,7 @@ import 'package:masi/features/topo/presentation/topo_canvas.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_gps.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_photo_ops.dart';
 import 'package:masi/shared/presentation/masi_async_view.dart';
+import 'package:masi/shared/presentation/masi_dialogs.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:masi/shared/presentation/masi_loading_gate.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
@@ -276,6 +277,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// Set on the failure path too, on purpose: a load that threw is not a photo
   /// still coming, and a placeholder that shimmers forever is its own lie.
   bool _initialPhotoLoadSettled = false;
+
+  /// Whether [_handleBackIntent]'s discard-the-line confirm is currently up.
+  ///
+  /// Re-entrancy guard: both the in-app `topo-back-button` AND a refused
+  /// system/gesture pop route through the same handler, and a second back
+  /// intent arriving while the sheet is open would stack a second identical
+  /// sheet — the first of which would then answer for a line the second one
+  /// already discarded.
+  bool _discardPromptOpen = false;
 
   /// The wallId [_loadInitialPhotoForWall] has already run (or is running)
   /// for, so a rebuild never re-triggers the initial load for the same wall.
@@ -1226,7 +1236,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // per-point state it needs to paint, so it keeps repainting on every
     // point exactly as before — only THIS screen's own chrome-rebuild is now
     // gated.
-    ref.watch(
+    final drawGates = ref.watch(
       drawControllerProvider(widget.wallId).select(
         (s) => (
           mode: s.mode,
@@ -1234,6 +1244,19 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           activePhotoId: s.activePhotoId,
           selectedRouteId: s.selectedRouteId,
           switchTargetPhotoId: s.switchTargetPhotoId,
+          // Whether an UNCOMMITTED line (or a symbol placed mid-draw) is on
+          // the canvas right now — what arms the `topo-canvas-draft-guard`
+          // [PopScope] below and `_handleBackIntent`'s confirm.
+          //
+          // Deliberately a derived BOOLEAN rather than `currentPoints`
+          // itself: this `.select` exists precisely so the screen does NOT
+          // rebuild per drawn point (see the note above), and this flag flips
+          // exactly twice per drawing session — false→true on the first
+          // point, true→false on commit/clear/undo-back-to-empty — so the
+          // guard can track the draft without reintroducing the per-point
+          // rebuild storm the record was written to kill.
+          hasDraftLine:
+              s.currentPoints.isNotEmpty || s.currentSymbols.isNotEmpty,
           // Read below (via `TopoCanvasBody`, which receives the whole
           // `DrawState`) to show the photo-switch cue. Until it was part of
           // this record NOTHING in the widget tree read this flag at all, so
@@ -1415,6 +1438,70 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // glass material), and a bottom glass cluster (undo/redo/cancel/commit,
     // draw mode only — see `_buildBottomChrome`), all floating within thumb
     // reach and inset by the safe area.
+    //
+    // The whole thing sits inside the unsaved-line guard — see
+    // [_handleBackIntent] for what `canPop: false` buys and what it cannot
+    // reach (the browser's own Back button on Safari).
+    return PopScope(
+      key: const Key('topo-canvas-draft-guard'),
+      // Armed ONLY while an uncommitted line exists (see `hasDraftLine`
+      // above). `canPop: false` disables iOS's edge-swipe-back outright for
+      // as long as it is armed, which is the intended outcome here — that
+      // same swipe IS the draw gesture near the left edge, so a stray drag
+      // must not throw the line away. But it MUST NOT leak into view mode:
+      // an always-false `canPop` would kill swipe-back on the whole canvas,
+      // which is the shape of a regression this project has already shipped
+      // and fixed once (see `is_safari.dart` / bug #76). Hence the strict
+      // gate on draft state, and hence the read-only/embedded exclusions in
+      // [_draftInProgress] (those canvases cannot draw at all, and the
+      // embedded one is not even the owner of the route being popped).
+      canPop: !_guardsUnsavedLine(hasDraftLine: drawGates.hasDraftLine),
+      onPopInvokedWithResult: (didPop, _) {
+        // `didPop == true` means the route is already going; there is
+        // nothing to guard and nothing to ask. Only a REFUSED pop (the
+        // `canPop: false` case) becomes a confirm.
+        if (didPop) return;
+        unawaited(_handleBackIntent());
+      },
+      child: _buildCanvasScaffold(
+        context,
+        colors,
+        title,
+        titlePending,
+        drawState,
+        drawNotifier,
+        currentTopo,
+        locationUnknown,
+        hasCommunityPage,
+        imagePath,
+        photoPending,
+        showSymbolPalette,
+        wallPhotosAsync,
+        storageBlocked,
+      ),
+    );
+  }
+
+  /// The canvas' own [Scaffold] — split out of [build] verbatim so the
+  /// unsaved-line [PopScope] guard can wrap it without re-indenting ~150
+  /// lines of chrome. Pure extraction: every child below is byte-identical to
+  /// what [build] returned before the guard was added.
+  Widget _buildCanvasScaffold(
+    BuildContext context,
+    MasiColors colors,
+    String title,
+    bool titlePending,
+    DrawState drawState,
+    DrawController drawNotifier,
+    TopoRef? currentTopo,
+    bool locationUnknown,
+    bool hasCommunityPage,
+    String? imagePath,
+    bool photoPending,
+    bool showSymbolPalette,
+    AsyncValue<List<PhotoRef>> wallPhotosAsync,
+    String? storageBlocked,
+  ) {
     return Scaffold(
       backgroundColor: colors.ground,
       extendBody: true,
@@ -1573,6 +1660,107 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     );
   }
 
+  /// Whether an uncommitted line (or a symbol placed mid-draw) is on the
+  /// canvas right now — the one condition that arms this screen's
+  /// unsaved-work guard (see [build]'s `topo-canvas-draft-guard` [PopScope]
+  /// and [_handleBackIntent]).
+  ///
+  /// Read STRAIGHT off the controller rather than from [build]'s watched
+  /// record, because this is also consulted from an async handler (after the
+  /// confirm sheet has been up for however long the climber took to answer),
+  /// where a value captured at build time could be stale.
+  ///
+  /// `readOnly`/`embedded` are excluded rather than merely "expected to be
+  /// empty": neither of those canvases has any control that can draw (see
+  /// [TopoCanvasScreen.readOnly]), but [DrawState] is a single app-lifetime
+  /// global keyed by wallId, so a draft left over from an earlier editing
+  /// session on the SAME wall could otherwise arm a guard on a viewer — and,
+  /// worse, on the embedded preview inside `CommunityTopoDetailScreen`, where
+  /// the route the guard would block is not even this widget's.
+  bool get _draftInProgress {
+    final state = ref.read(drawControllerProvider(widget.wallId));
+    return _guardsUnsavedLine(
+      hasDraftLine:
+          state.currentPoints.isNotEmpty || state.currentSymbols.isNotEmpty,
+    );
+  }
+
+  /// THE predicate behind both the `canPop` gate ([build], fed by the watched
+  /// `hasDraftLine` so the guard re-arms on a rebuild) and
+  /// [_draftInProgress] (fed by a fresh read, for the async handler). One
+  /// method so the two can never drift apart — a `canPop: false` whose
+  /// handler then decides there was nothing to confirm would trap the user on
+  /// the screen.
+  bool _guardsUnsavedLine({required bool hasDraftLine}) =>
+      hasDraftLine && !widget.readOnly && !widget.embedded;
+
+  /// The single back path off this canvas: confirm before throwing away an
+  /// in-progress line, then leave.
+  ///
+  /// Both entry points funnel through here — the in-app `topo-back-button`
+  /// AND a pop the `topo-canvas-draft-guard` [PopScope] refused (Android's
+  /// system back, iOS's edge swipe, `Navigator.maybePop`). The button needs
+  /// its own call rather than relying on the guard alone, because
+  /// `context.pop()` is an UNCONDITIONAL `Navigator.pop`: it does not consult
+  /// `popDisposition`, so the guard would report `didPop: true` after the
+  /// fact and there would be nothing left to confirm.
+  ///
+  /// Nothing is discarded without an answer, and answering "Keep drawing"
+  /// (dismissing the sheet) leaves both the line and the screen exactly as
+  /// they were.
+  ///
+  /// LIMITATION, stated rather than papered over: on the web this cannot
+  /// guard the BROWSER's own Back button (or Safari's back swipe on the
+  /// history stack). Those unwind the browser history before Flutter is
+  /// consulted at all — a `PopScope` never sees them and no page can block
+  /// them without abusing `beforeunload`, which does not fire for a
+  /// same-document history move. So on the iPhone PWA this protects the
+  /// in-app chevron and Flutter-level pops only; a browser-level Back with a
+  /// line in progress still loses that line.
+  Future<void> _handleBackIntent() async {
+    if (_discardPromptOpen) return;
+    if (_draftInProgress) {
+      _discardPromptOpen = true;
+      final discard = await showMasiConfirm(
+        context,
+        title: 'Discard this line?',
+        message:
+            "The line you're drawing hasn't been saved yet. Leaving now "
+            'discards it.',
+        confirmLabel: 'Discard line',
+        sheetKey: const Key('topo-discard-line-sheet'),
+        confirmKey: const Key('topo-discard-line-confirm'),
+        cancelKey: const Key('topo-discard-line-cancel'),
+      );
+      _discardPromptOpen = false;
+      // Dismissed / "Cancel": stay put with the line untouched. NOT a
+      // silent discard, which is the whole bug this exists to close.
+      if (!discard || !mounted) return;
+      ref
+          .read(drawControllerProvider(widget.wallId).notifier)
+          .clearCurrent();
+    }
+    if (!mounted) return;
+    _leaveCanvas();
+  }
+
+  /// Leaves the canvas — the pop this screen's back affordance used to do
+  /// inline, now shared with [_handleBackIntent]'s confirmed-discard path.
+  ///
+  /// `context.go('/')` fallback: this route is deep-linkable (`/walls/:id`),
+  /// so it can legitimately be the first route in the history with nothing
+  /// to pop back to.
+  void _leaveCanvas() {
+    // #20a: never leave the on-screen keyboard stranded over the screen
+    // underneath (previously done only on the poppable branch).
+    FocusManager.instance.primaryFocus?.unfocus();
+    if (context.canPop()) {
+      context.pop();
+    } else {
+      context.go('/');
+    }
+  }
+
   /// UF-2: the standing, non-dismissable counterpart to
   /// [routeLoadFailureSnackBar] — shown for as long as
   /// [DrawState.lastLoadFailure] is set, i.e. for as long as
@@ -1653,14 +1841,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           key: const Key('topo-back-button'),
           icon: MasiIcon('chevron_left'),
           tooltip: 'Back',
-          onPressed: () {
-            if (context.canPop()) {
-              FocusManager.instance.primaryFocus?.unfocus();
-              context.pop();
-            } else {
-              context.go('/');
-            }
-          },
+          // Routed through the unsaved-line guard — see [_handleBackIntent]
+          // for why the button cannot just rely on the `PopScope` (a bare
+          // `context.pop()` never consults it).
+          onPressed: () => unawaited(_handleBackIntent()),
           color: colors.accent,
           style: _topRowIconStyle(),
         ),
@@ -2022,13 +2206,27 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // than a drawing tool, so it stays out of draw mode's crowded
     // editing cluster. Not gated on `widget.readOnly` — opening the feed is
     // exactly as meaningful whether this canvas is the owner's editable
-    // copy or a read-only viewer.
+    // copy or a read-only viewer, and the READ-ONLY canvas is in fact where
+    // it matters most: that is the surface a community/nearby tap lands on,
+    // from which ten of the sixteen community features (comments, likes,
+    // ascents, grade consensus, verification, hazards, history…) are
+    // otherwise unreachable.
+    //
+    // Named "More about this topo" (the owner's own words, replacing the
+    // narrower "See comments and ascents"): this one entry point stands for
+    // the whole community surface, not just its comment thread. There is
+    // deliberately EXACTLY ONE of these on this screen — the top row's
+    // glyphs carry their meaning in a Tooltip by convention here (compare
+    // 'View in AR', 'Show on map', 'Pick a photo'), which is also what
+    // supplies the accessibility label, so a second labelled copy in an
+    // overflow menu would be a duplicate affordance rather than a clearer
+    // one.
     if (drawState.mode == DrawMode.view && hasCommunityPage) {
       actions.add(
         IconButton(
           key: const Key('topo-open-community'),
           icon: MasiIcon('comment'),
-          tooltip: 'See comments and ascents',
+          tooltip: 'More about this topo',
           onPressed: () =>
               context.push('/community/topo/${widget.wallId}'),
           color: colors.accent,

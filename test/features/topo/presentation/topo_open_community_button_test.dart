@@ -152,6 +152,62 @@ void main() {
     );
 
     testWidgets(
+      'READ-ONLY canvas: exposes "More about this topo" EXACTLY ONCE, and it '
+      'pushes the community detail route for THIS wall',
+      (tester) async {
+        // The read-only canvas is where this matters most: it is the surface
+        // a community/nearby tap lands on, and ten of the sixteen community
+        // features (comments, likes, ascents, grade consensus, verification,
+        // hazards, history…) hang off the page this pushes.
+        //
+        // "exactly once" is the assertion with teeth. The affordance already
+        // existed here (commit 772f78c, keyed `topo-open-community`, then
+        // titled "See comments and ascents"); this only renames it to the
+        // owner's own words. A SECOND labelled copy — e.g. the same item
+        // added again in an overflow menu — would be a duplicate entry point
+        // into one screen, which is worse than the discoverability problem it
+        // would be trying to fix.
+        final seeded = await _seedWall(shared: true);
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
+
+        await tester.pumpWidget(
+          _wrap(
+            seeded.container,
+            TopoCanvasScreen(wallId: seeded.wallId, readOnly: true),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byTooltip('More about this topo'),
+          findsOneWidget,
+          reason:
+              'the read-only canvas must offer the community page under the '
+              "owner's chosen wording — and only one of it",
+        );
+        expect(
+          find.byKey(const Key('topo-open-community')),
+          findsOneWidget,
+          reason:
+              'one keyed entry point, not two: nothing may duplicate the '
+              'pre-existing shortcut',
+        );
+
+        await tester.tap(find.byTooltip('More about this topo'));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.text('community-topo-${seeded.wallId}'),
+          findsOneWidget,
+          reason:
+              'it must push /community/topo/:wallId for THIS wall, from the '
+              'read-only canvas too',
+        );
+      },
+    );
+
+    testWidgets(
       'ABSENT in draw mode even on a shared topo — stays out of the '
       'drawing-tools cluster, alongside the locate-on-map glyph it sits '
       'next to',
