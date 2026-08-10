@@ -90,16 +90,31 @@ sql "INSERT INTO public.photos (id, \"createdAt\", \"updatedAt\", \"ownerId\", \
 # and so the suggestions inbox's visual diff has an existing line to diff
 # against. Coordinates are 0..1 fractions of the photo, matching the app's own
 # `pointsJson` convention.
+#
+# `gradeSortKey` is a LADDER INDEX, not the grade times 100. These literals used
+# to read 600/660/540/620, which is the one thing in this file that cannot be
+# eyeballed as wrong — and `bandForSortKey` (`grade_system.dart:169-175`) has no
+# upper bound, so every one of them classified as `GradeBand.elite` (French 8a+)
+# and rendered a single PURPLE dot next to a correctly-labelled "6a" badge in
+# every screenshot this harness produced. It also made any assertion about the
+# grade-range filter vacuous over the fixture. Live data confirms the real scale:
+# 6a -> 7, 6b -> 9, 6c -> 11, 7a -> 13, 8a+ -> 20, 9c -> 29.
+#
+# Every seeder under `integration_test/` calls the real
+# `gradeSortKey(GradeSystem.french, grade)` instead of hand-writing a literal;
+# this file is the only one that hardcodes, which is why it drifted. Keep these
+# two columns in step: `gradeRaw` is what the UI prints, `gradeSortKey` is what
+# it colours and filters by, and nothing cross-checks them.
 sql "INSERT INTO public.routes (id, \"createdAt\", \"updatedAt\", \"ownerId\", \"wallId\", \"photoId\", number, name, \"gradeSystem\", \"gradeRaw\", \"gradeSortKey\", \"colorIndex\", \"pointsJson\", \"symbolsJson\", \"sortOrder\", visible, dirty)
-     VALUES ('e2e-route-pub-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PUBLISHED', '$E2E_PHOTO_PUBLISHED', 1, 'E2E Left Line', 'french', '6a', 600, 0,
+     VALUES ('e2e-route-pub-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PUBLISHED', '$E2E_PHOTO_PUBLISHED', 1, 'E2E Left Line', 'french', '6a', 7, 0,
              '[{\"x\":0.30,\"y\":0.90},{\"x\":0.32,\"y\":0.60},{\"x\":0.28,\"y\":0.30},{\"x\":0.30,\"y\":0.10}]',
              '[{\"type\":\"top\",\"x\":0.30,\"y\":0.08}]', 0, true, false),
-            ('e2e-route-pub-02', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PUBLISHED', '$E2E_PHOTO_PUBLISHED', 2, 'E2E Right Line', 'french', '6c', 660, 1,
+            ('e2e-route-pub-02', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PUBLISHED', '$E2E_PHOTO_PUBLISHED', 2, 'E2E Right Line', 'french', '6c', 11, 1,
              '[{\"x\":0.70,\"y\":0.92},{\"x\":0.68,\"y\":0.55},{\"x\":0.72,\"y\":0.20}]',
              '[{\"type\":\"top\",\"x\":0.72,\"y\":0.10}]', 1, true, false),
-            ('e2e-route-pend-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PENDING', '$E2E_PHOTO_PENDING', 1, 'E2E Pending Line', 'french', '5c', 540, 0,
+            ('e2e-route-pend-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PENDING', '$E2E_PHOTO_PENDING', 1, 'E2E Pending Line', 'french', '5c', 6, 0,
              '[{\"x\":0.50,\"y\":0.90},{\"x\":0.50,\"y\":0.20}]', '[]', 0, true, false),
-            ('e2e-route-draft-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_DRAFT', '$E2E_PHOTO_DRAFT', 1, 'E2E Draft Line', 'french', '6b', 620, 0,
+            ('e2e-route-draft-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_DRAFT', '$E2E_PHOTO_DRAFT', 1, 'E2E Draft Line', 'french', '6b', 9, 0,
              '[{\"x\":0.45,\"y\":0.88},{\"x\":0.55,\"y\":0.25}]', '[]', 0, true, false);" >/dev/null
 
 echo "==> uploading fixture photo bytes to Storage"
