@@ -9,6 +9,17 @@ import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
 import 'logbook_screen.dart' show styleLabel;
 
+/// How long the post-save "Ascent logged" confirmation stays up.
+///
+/// Longer than Material's 4 s default, deliberately. A snackbar carrying only
+/// a message can afford 4 s; this one carries the app's most prominent signal
+/// that a Logbook exists at all, and spending it needs the user to notice the
+/// bar, read it, notice there is an action to its right, decide, and move a
+/// thumb there — right after a save they were already done with. 4 s
+/// reliably lost that race in review; this is the same order as Material's
+/// own guidance for a snackbar whose action matters.
+const Duration kAscentLoggedSnackDuration = Duration(seconds: 6);
+
 /// Modal sheet for logging an ascent of one route: an [AscentStyle] picker,
 /// an optional notes field, and a save action that stamps `climbedAt` to
 /// "now" (no date picker — matches the ticket's "date defaulting to now"
@@ -30,17 +41,6 @@ import 'logbook_screen.dart' show styleLabel;
 /// (`community-log-ascent-sheet` / `community-ascent-style-<name>` /
 /// `community-ascent-notes` / `community-ascent-save`) exactly; the topo
 /// canvas passes `'topo'`.
-/// How long the post-save "Ascent logged" confirmation stays up.
-///
-/// Longer than Material's 4 s default, deliberately. A snackbar carrying only
-/// a message can afford 4 s; this one carries the app's most prominent signal
-/// that a Logbook exists at all, and spending it needs the user to notice the
-/// bar, read it, notice there is an action to its right, decide, and move a
-/// thumb there — right after a save they were already done with. 4 s
-/// reliably lost that race in review; this is the same order as Material's
-/// own guidance for a snackbar whose action matters.
-const Duration kAscentLoggedSnackDuration = Duration(seconds: 6);
-
 class LogAscentSheet extends ConsumerStatefulWidget {
   const LogAscentSheet({
     super.key,

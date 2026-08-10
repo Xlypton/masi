@@ -25,6 +25,7 @@ import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
+import 'package:masi/shared/presentation/masi_dialogs.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -78,7 +79,27 @@ Future<void> _flushTeardownTimers(WidgetTester tester) async {
 /// the canvas sits on a genuine navigation stack — `context.canPop()` is
 /// true, a `Navigator.maybePop` has something to pop, and "did we leave?" is
 /// answerable by looking for the home button again.
-Widget _wrap(ProviderContainer container, String wallId) {
+///
+/// [confirmDiscardLine] lets a test substitute a fake for
+/// [TopoCanvasScreen.confirmDiscardLine] (default: the real
+/// [showMasiConfirm]) — the seam D5 below uses to force the discard-confirm
+/// call to throw and prove `_handleBackIntent`'s guard recovers rather than
+/// latching.
+Widget _wrap(
+  ProviderContainer container,
+  String wallId, {
+  Future<bool> Function(
+    BuildContext, {
+    required String title,
+    required String confirmLabel,
+    String? message,
+    Key? confirmKey,
+    Key? cancelKey,
+    Key? sheetKey,
+    bool isDestructive,
+  })?
+  confirmDiscardLine,
+}) {
   final router = GoRouter(
     initialLocation: '/',
     routes: [
@@ -96,8 +117,10 @@ Widget _wrap(ProviderContainer container, String wallId) {
       ),
       GoRoute(
         path: '/walls/:wallId',
-        builder: (context, state) =>
-            TopoCanvasScreen(wallId: state.pathParameters['wallId']!),
+        builder: (context, state) => TopoCanvasScreen(
+          wallId: state.pathParameters['wallId']!,
+          confirmDiscardLine: confirmDiscardLine ?? showMasiConfirm,
+        ),
       ),
     ],
   );
@@ -107,12 +130,54 @@ Widget _wrap(ProviderContainer container, String wallId) {
   );
 }
 
+/// A fake [TopoCanvasScreen.confirmDiscardLine] that throws on its first
+/// call and resolves `true` (confirm) on every call after — D5's seam for
+/// proving `_handleBackIntent`'s `_discardPromptOpen` guard is reset in a
+/// `finally` rather than latched `true` forever by an exception.
+class _ThrowOnceThenConfirm {
+  int calls = 0;
+
+  Future<bool> call(
+    BuildContext context, {
+    required String title,
+    required String confirmLabel,
+    String? message,
+    Key? confirmKey,
+    Key? cancelKey,
+    Key? sheetKey,
+    bool isDestructive = true,
+  }) async {
+    calls++;
+    if (calls == 1) {
+      throw StateError('injected discard-confirm failure');
+    }
+    return true;
+  }
+}
+
 /// Pumps [_wrap] and pushes the canvas onto the stack.
 Future<void> _openCanvas(
   WidgetTester tester,
-  ({AppDatabase db, ProviderContainer container, String wallId}) seeded,
-) async {
-  await tester.pumpWidget(_wrap(seeded.container, seeded.wallId));
+  ({AppDatabase db, ProviderContainer container, String wallId}) seeded, {
+  Future<bool> Function(
+    BuildContext, {
+    required String title,
+    required String confirmLabel,
+    String? message,
+    Key? confirmKey,
+    Key? cancelKey,
+    Key? sheetKey,
+    bool isDestructive,
+  })?
+  confirmDiscardLine,
+}) async {
+  await tester.pumpWidget(
+    _wrap(
+      seeded.container,
+      seeded.wallId,
+      confirmDiscardLine: confirmDiscardLine,
+    ),
+  );
   await tester.pumpAndSettle();
   await tester.tap(find.byKey(const Key('home-open-canvas')));
   await tester.pumpAndSettle();
@@ -327,6 +392,92 @@ void main() {
         await tester.tap(find.byKey(const Key('topo-discard-line-confirm')));
         await tester.pumpAndSettle();
         expect(find.byKey(const Key('home-open-canvas')), findsOneWidget);
+        await _flushTeardownTimers(tester);
+      },
+    );
+
+    testWidgets(
+      'D5: a discard-confirm that throws recovers on the NEXT back attempt '
+      'instead of latching the guard forever — regression test for the '
+      'unguarded _discardPromptOpen reset',
+      (tester) async {
+        final seeded = await _seedWall();
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
+        final fake = _ThrowOnceThenConfirm();
+        await _openCanvas(tester, seeded, confirmDiscardLine: fake.call);
+
+        _startLine(seeded.container, seeded.wallId);
+        await tester.pump();
+
+        // First attempt: the injected confirm throws.
+        await tester.tap(find.byKey(const Key('topo-back-button')));
+        await tester.pumpAndSettle();
+
+        expect(fake.calls, 1);
+        expect(
+          find.byKey(const Key('topo-discard-line-sheet')),
+          findsNothing,
+          reason: 'the fake throws before any sheet is built',
+        );
+        expect(
+          find.byKey(const Key('topo-back-button')),
+          findsOneWidget,
+          reason:
+              'a thrown confirm must not silently leave the canvas — the '
+              'user is still exactly where they were',
+        );
+        expect(
+          find.byKey(const Key('home-open-canvas')),
+          findsNothing,
+          reason: 'a throw must not be treated as a confirmed discard',
+        );
+        expect(
+          seeded.container
+              .read(drawControllerProvider(seeded.wallId))
+              .currentPoints
+              .length,
+          2,
+          reason: 'the line must survive an errored confirm attempt',
+        );
+        expect(
+          find.textContaining("Couldn't confirm"),
+          findsOneWidget,
+          reason:
+              'a throw must surface to the user, not vanish into the '
+              '`unawaited` zone silently',
+        );
+
+        // THE regression this guards: if `_discardPromptOpen` were reset
+        // anywhere other than a `finally`, it would still read `true` here,
+        // and `_handleBackIntent` would return at its top-of-method guard
+        // with no confirm shown at all — the chevron would already be a dead
+        // button on this very next tap.
+        await tester.tap(find.byKey(const Key('topo-back-button')));
+        await tester.pumpAndSettle();
+
+        expect(
+          fake.calls,
+          2,
+          reason:
+              'the guard must have reset so a second back attempt calls the '
+              'confirm again rather than short-circuiting silently',
+        );
+        expect(
+          find.byKey(const Key('home-open-canvas')),
+          findsOneWidget,
+          reason:
+              'the second attempt succeeds (fake resolves true) and the '
+              'canvas is left normally, proving the guard recovered rather '
+              'than being permanently wedged',
+        );
+        expect(
+          seeded.container
+              .read(drawControllerProvider(seeded.wallId))
+              .currentPoints,
+          isEmpty,
+          reason: 'the confirmed discard on the second attempt clears it',
+        );
         await _flushTeardownTimers(tester);
       },
     );

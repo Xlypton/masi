@@ -96,6 +96,7 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
     @visibleForTesting this.setLocationLocationService,
     @visibleForTesting this.photoSourcePicker = showPhotoSourceSheet,
     @visibleForTesting this.photoPicker = pickPhotoFrom,
+    @visibleForTesting this.confirmDiscardLine = showMasiConfirm,
   });
 
   /// The wall this canvas is bound to (from the `/walls/:wallId` route).
@@ -119,6 +120,27 @@ class TopoCanvasScreen extends ConsumerStatefulWidget {
   /// defaults) rather than inventing a second convention.
   final Future<ImageSource?> Function(BuildContext) photoSourcePicker;
   final Future<XFile?> Function(ImageSource) photoPicker;
+
+  /// TEST-ONLY seam for the discard-line confirm [_handleBackIntent] shows
+  /// before leaving with an unsaved draft line — same rationale and shape as
+  /// [photoSourcePicker]/[photoPicker] above: defaults to the real
+  /// module-level [showMasiConfirm], so production (every real call site)
+  /// is bit-identical, and a test can substitute a fake — including one that
+  /// throws — to reach [_handleBackIntent]'s error path, which no other seam
+  /// on this screen can drive (the real [showMasiConfirm] wraps a Cupertino
+  /// action sheet that doesn't fail in a plain widget test).
+  @visibleForTesting
+  final Future<bool> Function(
+    BuildContext, {
+    required String title,
+    required String confirmLabel,
+    String? message,
+    Key? confirmKey,
+    Key? cancelKey,
+    Key? sheetKey,
+    bool isDestructive,
+  })
+  confirmDiscardLine;
 
   /// When `true`, this screen renders strictly as a viewer: the photo,
   /// routes, and floating [RouteLegend] show exactly as they would
@@ -1717,22 +1739,53 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// same-document history move. So on the iPhone PWA this protects the
   /// in-app chevron and Flutter-level pops only; a browser-level Back with a
   /// line in progress still loses that line.
+  ///
+  /// `_discardPromptOpen` is reset in a `finally` rather than right after the
+  /// `await`, so a throw out of [TopoCanvasScreen.confirmDiscardLine] (an
+  /// unmounted context, a sheet-builder error) can never leave the guard
+  /// latched `true` forever. Before that fix, a single throw here made every
+  /// later back attempt return at the top-of-method re-entrancy check with no
+  /// prompt shown — the in-app chevron went dead and `canPop` stayed `false`
+  /// (the draft line was never cleared), so Android/gesture back was refused
+  /// too, with no way off the screen short of a browser-level back. The catch
+  /// below also surfaces a SnackBar: a throw here means the user's answer was
+  /// never recorded, so silently swallowing it (as `unawaited` would) would
+  /// leave them not knowing their tap did nothing — same
+  /// debugPrint-plus-SnackBar idiom this file already uses for e.g.
+  /// `PhotoWriteException` in [_attachPhotoAndLoad].
   Future<void> _handleBackIntent() async {
     if (_discardPromptOpen) return;
     if (_draftInProgress) {
       _discardPromptOpen = true;
-      final discard = await showMasiConfirm(
-        context,
-        title: 'Discard this line?',
-        message:
-            "The line you're drawing hasn't been saved yet. Leaving now "
-            'discards it.',
-        confirmLabel: 'Discard line',
-        sheetKey: const Key('topo-discard-line-sheet'),
-        confirmKey: const Key('topo-discard-line-confirm'),
-        cancelKey: const Key('topo-discard-line-cancel'),
-      );
-      _discardPromptOpen = false;
+      bool discard;
+      try {
+        discard = await widget.confirmDiscardLine(
+          context,
+          title: 'Discard this line?',
+          message:
+              "The line you're drawing hasn't been saved yet. Leaving now "
+              'discards it.',
+          confirmLabel: 'Discard line',
+          sheetKey: const Key('topo-discard-line-sheet'),
+          confirmKey: const Key('topo-discard-line-confirm'),
+          cancelKey: const Key('topo-discard-line-cancel'),
+        );
+      } catch (e, st) {
+        debugPrint('Failed to show discard-line confirm: $e\n$st');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                "Couldn't confirm — your line is still here. Try Back "
+                'again.',
+              ),
+            ),
+          );
+        }
+        return;
+      } finally {
+        _discardPromptOpen = false;
+      }
       // Dismissed / "Cancel": stay put with the line untouched. NOT a
       // silent discard, which is the whole bug this exists to close.
       if (!discard || !mounted) return;
