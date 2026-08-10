@@ -12,6 +12,9 @@ import '../domain/moderation_state.dart';
 /// a moderation change locally, and adding one would be a bug: the client is
 /// not the authority (COMMUNITY_PLAN.md G-1/G-2), and the server refuses
 /// direct writes to that table regardless.
+///
+/// [recordWithdrawRequestedAt] is not an exception to that rule even though it
+/// is not fed by a `fetchWallModeration` — read its own doc for why.
 class ModerationRepository {
   ModerationRepository(this._db);
 
@@ -78,6 +81,37 @@ class ModerationRepository {
     });
     return written;
   }
+
+  /// Writes what the withdrawal RPCs just told us about [wallId]'s countdown —
+  /// [at] for a started clock, `null` for a stopped one.
+  ///
+  /// Still a server-sourced write, so this class's "the client is not the
+  /// authority" rule holds: the value is the RPC's own answer, taken from a call
+  /// that has already COMMITTED server-side, not a local guess about what the
+  /// server would say. It exists because `WithdrawalService` used to learn that
+  /// answer and then throw it away, relying entirely on a follow-up
+  /// `fetchWallModeration` to bring it back — and a failed follow-up left the
+  /// mirror holding a timestamp the server had just cleared. That stale
+  /// timestamp is not cosmetic: SEC-2 in `sync_service.dart` derives
+  /// `shouldBeShared` from it, so the next push would compute a MATURED
+  /// withdrawal for a topo the server had just put back and delete its
+  /// published bytes.
+  ///
+  /// Scoped to an existing row (an `UPDATE`, never an insert): a wall with no
+  /// mirrored row has no stale countdown to correct, and inventing one would
+  /// mean inventing a `state` and an `updatedAt` this call does not know.
+  ///
+  /// `updatedAt` is deliberately NOT bumped. It is the server's own stamp, and
+  /// leaving it alone keeps the next real pull authoritative over this partial,
+  /// single-column correction.
+  ///
+  /// Returns the number of rows written (0 or 1), for tests and diagnostics.
+  Future<int> recordWithdrawRequestedAt(String wallId, int? at) =>
+      (_db.update(_db.wallModerationRows)
+            ..where((t) => t.wallId.equals(wallId)))
+          .write(
+            db.WallModerationRowsCompanion(withdrawRequestedAt: Value(at)),
+          );
 
   /// The effective access state for [wallId], after walking Wall → Sector →
   /// Area and taking the most restrictive level (community editing phase 2 /

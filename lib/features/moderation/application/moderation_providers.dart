@@ -6,10 +6,12 @@ import '../../../core/config/supabase_providers.dart';
 import '../../account/application/auth_providers.dart';
 import '../../backup/application/sync_orchestrator.dart';
 import '../../library/application/library_providers.dart';
+import '../data/admin_deletion_log_remote.dart';
 import '../data/moderation_remote.dart';
 import '../data/moderation_repository.dart';
 import '../domain/abandoned_topo.dart';
 import '../domain/access_state.dart';
+import '../domain/admin_deleted_topo.dart';
 import '../domain/deletion_request.dart';
 import '../domain/material_change.dart';
 import '../domain/moderation_state.dart';
@@ -23,6 +25,14 @@ final moderationRemoteProvider = Provider<ModerationRemote>(
 /// Local reads/writes over the on-device mirror.
 final moderationRepositoryProvider = Provider<ModerationRepository>(
   (ref) => ModerationRepository(ref.watch(appDatabaseProvider)),
+);
+
+/// The cloud read seam for "which topos has an admin deleted outright, that
+/// nobody has restored yet" — see [AdminDeletionLogRemote]'s own doc for why
+/// this is a separate seam from [moderationRemoteProvider] rather than
+/// another method on it. Overridden in tests with an in-memory fake.
+final adminDeletionLogRemoteProvider = Provider<AdminDeletionLogRemote>(
+  (ref) => SupabaseAdminDeletionLogRemote(ref.watch(supabaseClientProvider)),
 );
 
 /// Reactive moderation state for one topo.
@@ -237,6 +247,27 @@ final deletionReviewServiceProvider = Provider<DeletionReviewService>(
   DeletionReviewService.new,
 );
 
+/// Admin-deleted topos still awaiting a restore, newest deletion first — see
+/// [AdminDeletionLogRemote.fetchAdminDeletedTopos].
+///
+/// Not best-effort, for the same reason [deletionRequestsProvider] isn't: an
+/// empty list that actually means "we could not ask" reads as "nothing to
+/// restore", which defeats the one thing this list exists to prevent — a
+/// reversible admin delete staying one-way in practice just because nobody
+/// could see it needed a second look.
+///
+/// Malformed rows are dropped rather than half-built, like every other list
+/// in this feature.
+final adminDeletedToposProvider =
+    FutureProvider.autoDispose<List<AdminDeletedTopo>>((ref) async {
+      final rows = await ref
+          .watch(adminDeletionLogRemoteProvider)
+          .fetchAdminDeletedTopos();
+      return [
+        for (final row in rows) ?AdminDeletedTopo.fromRow(row),
+      ];
+    });
+
 /// The effective access/closure state for one topo, after inheritance up the
 /// Wall → Sector → Area chain (community editing phase 2 / R-2).
 ///
@@ -259,18 +290,51 @@ final wallAccessProvider = StreamProvider.autoDispose
 ///
 /// Both methods re-pull the affected wall before returning, so the countdown
 /// banner is correct the moment the sheet closes rather than after the next
-/// unrelated sync. They let the RPC's own errors propagate — unlike the
+/// unrelated sync. They let THE RPC's OWN errors propagate — unlike the
 /// best-effort reads, a withdrawal that silently failed would leave the owner
 /// believing a ten-day clock is running when it is not.
+///
+/// Everything AFTER the RPC is best-effort and cannot throw, which is a
+/// different claim and a deliberate one. Once the RPC has returned, the change
+/// is committed server-side; letting a failed local write or a failed reconcile
+/// re-pull surface as a thrown error would tell the owner their withdrawal did
+/// not happen when it did — the exact inversion the paragraph above is there to
+/// prevent, just from the other side.
+///
+/// Both also write the RPC's OWN answer into the local mirror BEFORE that
+/// re-pull, so a re-pull that fails cannot leave the mirror contradicting a
+/// change the server has already committed. [cancel] explains why that ordering
+/// is load-bearing rather than tidy.
 class WithdrawalService {
   const WithdrawalService(this._ref);
 
   final Ref _ref;
 
   /// Starts the clock. Returns the epoch-ms instant it started from.
+  ///
+  /// Deliberately does NOT delete the wall's published photo bytes. A requested
+  /// withdrawal leaves `wall_moderation.state = 'published'` and only sets
+  /// `withdrawRequestedAt`, and `is_wall_public()` keeps returning true for the
+  /// full 10-day grace period — so deleting the bytes here would leave the topo
+  /// in the community feed with blank images for ten days, and `cancel` would
+  /// restore a topo with no pictures at all. Byte cleanup happens in the sync
+  /// push once the window has actually matured (SEC-2, `sync_service.dart`).
   Future<int?> request(String wallId) async {
-    final at = await _ref.read(moderationRemoteProvider).requestWithdrawal(wallId);
-    await refreshWallModeration(_ref, {wallId});
+    final at = await _ref
+        .read(moderationRemoteProvider)
+        .requestWithdrawal(wallId);
+    // Before the refresh, and for the same reason [cancel] does it — see there.
+    // This direction cannot destroy bytes (a mirror that has not heard about a
+    // withdrawal computes `withdrawalMatured == false`, which KEEPS them), but
+    // it can strand them: nothing ever flips `visibility` or `state` when the
+    // window matures, so a mirror that never learned the clock started will not
+    // notice it running out either, and the published bytes of a topo the server
+    // has stopped serving stay world-readable until some later refresh happens
+    // to succeed.
+    // A null [at] means the RPC's answer was unreadable, NOT that no clock is
+    // running — writing it would clear a countdown the server just started.
+    if (at != null) await _recordCountdown(wallId, at);
+    await _reconcile(wallId);
     return at;
   }
 
@@ -279,8 +343,57 @@ class WithdrawalService {
   /// therefore a re-submission.
   Future<String> cancel(String wallId) async {
     final state = await _ref.read(moderationRemoteProvider).cancelWithdrawal(wallId);
-    await refreshWallModeration(_ref, {wallId});
+
+    // BEFORE the refresh, and not merely as an optimisation. The RPC has already
+    // COMMITTED — the server has nulled `withdrawRequestedAt` — so its success is
+    // itself authoritative that no countdown is running any more. If the refresh
+    // below then throws (an offline moment, a PostgREST hiccup), the mirror would
+    // otherwise keep the OLD timestamp, and once that timestamp matures SEC-2 in
+    // `sync_service.dart` computes `shouldBeShared == false` from it and DELETES
+    // the published bytes of a topo the server just put back. Writing the
+    // server's answer down first makes the destructive outcome unreachable from a
+    // failed refresh.
+    await _recordCountdown(wallId, null);
+
+    await _reconcile(wallId);
     return state;
+  }
+
+  /// Mirrors the countdown the RPC just reported, guarded.
+  ///
+  /// Swallows, because the moderation change itself has already succeeded
+  /// server-side and reporting a local bookkeeping failure as a failed
+  /// withdrawal tells the owner the opposite of the truth. The provider read is
+  /// inside the guard as well — `moderationRepositoryProvider` is an ordinary
+  /// `Provider` whose `build()` failure propagates through `read()` (see
+  /// [AdminDeleteService._settle] for the same hazard).
+  Future<void> _recordCountdown(String wallId, int? at) async {
+    try {
+      await _ref
+          .read(moderationRepositoryProvider)
+          .recordWithdrawRequestedAt(wallId, at);
+    } catch (_) {
+      // Deliberately swallowed — see this method's doc.
+    }
+  }
+
+  /// Re-pulls the wall so the rest of the row (a re-submission's `state`,
+  /// `submittedAt`, cleared `reviewedAt`) matches the server too, since
+  /// [_recordCountdown] only ever writes the one column it was told about.
+  ///
+  /// Guarded for the same reason, and in a SEPARATE try from the mirror write so
+  /// neither can skip the other. [refreshWallModeration] documents itself as
+  /// never throwing, and via the real `SupabaseModerationRemote` it does not —
+  /// but it reads `moderationRepositoryProvider` and `moderationRemoteProvider`,
+  /// and an ordinary `Provider` whose `build()` fails (no Supabase, no database)
+  /// propagates straight through `read()`. That is the throw this catches, and
+  /// it is why the mirror write above happens FIRST rather than relying on this.
+  Future<void> _reconcile(String wallId) async {
+    try {
+      await refreshWallModeration(_ref, {wallId});
+    } catch (_) {
+      // Deliberately swallowed — see this method's doc.
+    }
   }
 }
 
@@ -471,6 +584,12 @@ class AdminDeleteService {
         .read(moderationRemoteProvider)
         .adminRestoreTopo(wallId: wallId, reason: reason);
     await _settle({wallId});
+    // The "Removed" admin tab (`adminDeletedToposProvider`) is built from the
+    // audit log this RPC just added a row to, and unlike the local mirror it
+    // has no other trigger to refresh on — invalidating it here is the only
+    // thing that gets a just-restored topo off that list without waiting for
+    // an unrelated screen visit.
+    _ref.invalidate(adminDeletedToposProvider);
     return restoredAt;
   }
 

@@ -21,11 +21,24 @@ class _FakeModerationRemote implements ModerationRemote {
   final List<Map<String, dynamic>> rows;
   final requestedIds = <Set<String>>[];
 
+  /// Makes [fetchWallModeration] throw, which is the whole situation the
+  /// withdrawal fix is about: the RPC committed, and the refresh meant to bring
+  /// the server's new answer back did not arrive.
+  bool fetchThrows = false;
+
+  /// Every wall [cancelWithdrawal]/[requestWithdrawal] was called for, and what
+  /// each answers. Defaults match the pre-existing behaviour of this fake.
+  final cancelledIds = <String>[];
+  final requestedWithdrawalIds = <String>[];
+  String cancelResult = 'published';
+  int? requestResult;
+
   @override
   Future<List<Map<String, dynamic>>> fetchWallModeration(
     Set<String> wallIds,
   ) async {
     requestedIds.add(wallIds);
+    if (fetchThrows) throw StateError('refresh unavailable');
     return rows
         .where((r) => wallIds.contains(r['wallId'] as String))
         .toList();
@@ -82,10 +95,16 @@ class _FakeModerationRemote implements ModerationRemote {
   Future<int> removePublishedPhotoObjects(List<String> objectPaths) async => 0;
 
   @override
-  Future<int?> requestWithdrawal(String wallId) async => null;
+  Future<int?> requestWithdrawal(String wallId) async {
+    requestedWithdrawalIds.add(wallId);
+    return requestResult;
+  }
 
   @override
-  Future<String> cancelWithdrawal(String wallId) async => 'published';
+  Future<String> cancelWithdrawal(String wallId) async {
+    cancelledIds.add(wallId);
+    return cancelResult;
+  }
 
   @override
   Future<int?> adminDeleteTopo({required String wallId, String? reason}) async =>
@@ -242,6 +261,74 @@ void main() {
       expect(row.withdrawRequestedAt, 1700000000000);
     });
 
+    group('recordWithdrawRequestedAt', () {
+      test('clears a countdown the server says is over', () async {
+        await repo.upsertFromRemote([
+          _row('w1', 'published', withdrawRequestedAt: 1700000000000),
+        ]);
+
+        expect(await repo.recordWithdrawRequestedAt('w1', null), 1);
+
+        final row = await repo.watchRow('w1').first;
+        expect(row!.withdrawRequestedAt, isNull);
+      });
+
+      test('writes a countdown the server says has started', () async {
+        await repo.upsertFromRemote([_row('w1', 'published')]);
+
+        expect(await repo.recordWithdrawRequestedAt('w1', 1700000000000), 1);
+
+        expect(
+          (await repo.watchRow('w1').first)!.withdrawRequestedAt,
+          1700000000000,
+        );
+      });
+
+      test(
+        'touches nothing else on the row, INCLUDING updatedAt — a partial local '
+        'correction must not out-rank the next real pull',
+        () async {
+          await repo.upsertFromRemote([
+            _row(
+              'w1',
+              'published',
+              withdrawRequestedAt: 1700000000000,
+              updatedAt: 42,
+            ),
+          ]);
+
+          await repo.recordWithdrawRequestedAt('w1', null);
+
+          final row = await repo.watchRow('w1').first;
+          expect(row!.updatedAt, 42);
+          expect(row.state, 'published');
+          expect(row.submittedAt, 500);
+          expect(row.reviewerId, 'admin-1');
+        },
+      );
+
+      test(
+        'an unknown wall writes NOTHING rather than inventing a row — there is '
+        'no stale countdown to correct, and no state or updatedAt to invent',
+        () async {
+          expect(await repo.recordWithdrawRequestedAt('never-seen', null), 0);
+          expect(await db.select(db.wallModerationRows).get(), isEmpty);
+        },
+      );
+
+      test('only the named wall is affected', () async {
+        await repo.upsertFromRemote([
+          _row('w1', 'published', withdrawRequestedAt: 111),
+          _row('w2', 'published', withdrawRequestedAt: 222),
+        ]);
+
+        await repo.recordWithdrawRequestedAt('w1', null);
+
+        expect((await repo.watchRow('w1').first)!.withdrawRequestedAt, isNull);
+        expect((await repo.watchRow('w2').first)!.withdrawRequestedAt, 222);
+      });
+    });
+
     test('clear() drops everything — sign-out must not leak to the next account',
         () async {
       await repo.upsertFromRemote([_row('w1', 'pending', rejectionReason: 'x')]);
@@ -323,6 +410,173 @@ void main() {
         final repo = container.read(moderationRepositoryProvider);
         expect(await repo.watchState('w1').first, ModerationState.published);
         expect(await repo.watchState('w-secret').first, ModerationState.draft);
+      },
+    );
+  });
+
+  // A cancelled withdrawal whose follow-up refresh fails used to leave the local
+  // mirror holding the MATURED timestamp the server had just cleared — and SEC-2
+  // in `sync_service.dart` derives `shouldBeShared` from exactly that value, so
+  // the next push deleted the published photo bytes of a topo the server had put
+  // back. The push half of that proof lives in
+  // `test/features/backup/data/sync_service_test.dart`; this is the mirror half.
+  group('WithdrawalService', () {
+    /// Ten days and a millisecond ago — matured, which is the only value that
+    /// can cost anything. Derived from [kWithdrawalCooldown] rather than spelled
+    /// out, since that constant is already pinned to the server's 864000000 by
+    /// `withdrawal_test.dart`.
+    final maturedAt =
+        DateTime.now().millisecondsSinceEpoch -
+        kWithdrawalCooldown.inMilliseconds -
+        1;
+
+    ({ProviderContainer container, ModerationRepository repo}) build(
+      _FakeModerationRemote remote,
+    ) {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          moderationRemoteProvider.overrideWithValue(remote),
+        ],
+      );
+      addTearDown(container.dispose);
+      return (
+        container: container,
+        repo: container.read(moderationRepositoryProvider),
+      );
+    }
+
+    /// Seeds `w1` with a countdown that has ALREADY run out, and proves the
+    /// fixture really is matured — a fixture that quietly stopped being matured
+    /// would make every test below pass for the wrong reason.
+    Future<void> seedMaturedWithdrawal(ModerationRepository repo) async {
+      await repo.upsertFromRemote([
+        _row('w1', 'published', withdrawRequestedAt: maturedAt),
+      ]);
+      expect(
+        ModerationView.fromRow(
+          state: 'published',
+          withdrawRequestedAt: maturedAt,
+        ).hasMatured,
+        isTrue,
+      );
+    }
+
+    test(
+      'cancel leaves NO matured withdrawRequestedAt in the mirror even when the '
+      'refresh after the RPC throws',
+      () async {
+        final remote = _FakeModerationRemote([])..fetchThrows = true;
+        final c = build(remote);
+        await seedMaturedWithdrawal(c.repo);
+
+        await c.container.read(withdrawalServiceProvider).cancel('w1');
+
+        expect(remote.cancelledIds, ['w1'], reason: 'the RPC did run');
+        final row = await c.repo.watchRow('w1').first;
+        expect(row!.withdrawRequestedAt, isNull);
+        expect(
+          ModerationView.fromRow(
+            state: row.state,
+            withdrawRequestedAt: row.withdrawRequestedAt,
+          ).hasMatured,
+          isFalse,
+          reason:
+              'a matured value here is what makes the next push delete the '
+              'published bytes of a topo the server just restored',
+        );
+      },
+    );
+
+    test(
+      'cancel still returns the resulting state and does not throw when the '
+      'refresh fails — the RPC already committed',
+      () async {
+        final remote = _FakeModerationRemote([])
+          ..fetchThrows = true
+          // The re-submission branch: the window had already elapsed, so the
+          // server put the topo back into the review queue.
+          ..cancelResult = 'pending';
+        final c = build(remote);
+        await seedMaturedWithdrawal(c.repo);
+
+        expect(
+          await c.container.read(withdrawalServiceProvider).cancel('w1'),
+          'pending',
+        );
+      },
+    );
+
+    test(
+      'a cancel whose refresh SUCCEEDS still ends up with the server\'s row — '
+      'the local write is a floor, not a replacement for the reconcile',
+      () async {
+        final remote = _FakeModerationRemote([
+          _row('w1', 'pending', updatedAt: 9000),
+        ])..cancelResult = 'pending';
+        final c = build(remote);
+        await seedMaturedWithdrawal(c.repo);
+
+        expect(
+          await c.container.read(withdrawalServiceProvider).cancel('w1'),
+          'pending',
+        );
+
+        final row = await c.repo.watchRow('w1').first;
+        expect(row!.withdrawRequestedAt, isNull);
+        expect(row.state, 'pending');
+        expect(row.updatedAt, 9000);
+      },
+    );
+
+    test(
+      'request records the countdown the RPC reported even when the refresh '
+      'throws, so a maturing window is not invisible to the next push',
+      () async {
+        final remote = _FakeModerationRemote([])
+          ..fetchThrows = true
+          ..requestResult = 1700000000000;
+        final c = build(remote);
+        await c.repo.upsertFromRemote([_row('w1', 'published')]);
+
+        expect(
+          await c.container.read(withdrawalServiceProvider).request('w1'),
+          1700000000000,
+        );
+
+        expect(
+          (await c.repo.watchRow('w1').first)!.withdrawRequestedAt,
+          1700000000000,
+        );
+      },
+    );
+
+    test(
+      'an UNREADABLE request answer does not clear a countdown the server may '
+      'have just started',
+      () async {
+        // `requestWithdrawal` returning null means "the answer could not be
+        // parsed", not "no clock is running". Writing it as a clear would be a
+        // local invention, which is the one thing the mirror must never hold.
+        final remote = _FakeModerationRemote([])
+          ..fetchThrows = true
+          ..requestResult = null;
+        final c = build(remote);
+        await c.repo.upsertFromRemote([
+          _row('w1', 'published', withdrawRequestedAt: 1700000000000),
+        ]);
+
+        expect(
+          await c.container.read(withdrawalServiceProvider).request('w1'),
+          isNull,
+        );
+
+        expect(
+          (await c.repo.watchRow('w1').first)!.withdrawRequestedAt,
+          1700000000000,
+        );
       },
     );
   });

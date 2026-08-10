@@ -12,23 +12,29 @@ import '../../../core/db/database_provider.dart';
 import '../application/moderation_providers.dart';
 import '../application/report_providers.dart';
 import '../domain/abandoned_topo.dart';
+import '../domain/admin_deleted_topo.dart';
 import '../domain/content_report.dart';
 import '../domain/deletion_request.dart';
 import '../domain/material_change.dart';
 
 /// The admin review queue (community editing phases 3 and 6b, C-5d, C-11).
 ///
-/// Five tabs, and the split is the point. **Submissions** are content asking to
-/// come in; the other four are all about content already in. A queue containing
+/// Six tabs, and the split is the point. **Submissions** are content asking to
+/// come in; the other five are all about content already in. A queue containing
 /// only the first stops bad submissions and does nothing about a good
 /// submission that goes bad later — which, with owner approval final and no
 /// re-review after publication (C-5c), is most of what actually happens.
 ///
-/// The four after it are deliberately different KINDS of "later", not
+/// The five after it are deliberately different KINDS of "later", not
 /// variations on one: **Reports** are somebody complaining; **Stalled** is
 /// nothing happening at all when it should be (C-11); **Changes** are a
-/// published topo quietly changing shape with nobody complaining (C-5d); and
-/// **Deletions** are an owner asking to destroy one outright.
+/// published topo quietly changing shape with nobody complaining (C-5d);
+/// **Deletions** are an owner asking to destroy one outright; and **Deleted**
+/// is the one tab that undoes another admin action rather than deciding on
+/// something for the first time — `admin_delete_topo` is deliberately
+/// reversible (COMMUNITY_PLAN.md §3.3), and until this tab existed
+/// `admin_restore_topo` had no caller anywhere in the app, which made a
+/// reversible takedown one-way in practice.
 ///
 /// Only Reports carries a count, and that restraint is the design. Deletions
 /// has the next-best claim — a person is genuinely waiting — but a bar where
@@ -71,7 +77,7 @@ class AdminQueueScreen extends ConsumerWidget {
     final urgent = reports?.any((r) => r.isUrgent) ?? false;
 
     return DefaultTabController(
-      length: 5,
+      length: 6,
       child: Scaffold(
         key: const Key('admin-queue-screen'),
         appBar: AppBar(
@@ -123,6 +129,20 @@ class AdminQueueScreen extends ConsumerWidget {
               // has to survive a busy day is Reports. One badge in the bar is
               // what keeps that badge meaning "look now".
               const Tab(key: Key('admin-tab-deletions'), text: 'Deletions'),
+              // No count here either, for the same reason as Deletions: one
+              // badge in the bar is what keeps Reports' badge meaning "look
+              // now". A restore is also never urgent in the way an unsafe
+              // report is — the content has already been off the public
+              // surface since the original takedown.
+              //
+              // Labelled "Deleted", not "Removed": the Reports tab's own
+              // "Take down"/`_takeDown` already uses "removed" for a
+              // DIFFERENT, moderation-state-only action
+              // (`TakedownService`/`remove_topo`), and "Remove" is also a
+              // substring `deletion_requests_test.dart` asserts absent from
+              // the Deletions tab — sharing either word here would either
+              // confuse the two actions or collide with that assertion.
+              const Tab(key: Key('admin-tab-removed'), text: 'Deleted'),
             ],
           ),
         ),
@@ -133,6 +153,7 @@ class AdminQueueScreen extends ConsumerWidget {
             _AbandonedTab(),
             _MaterialChangesTab(),
             _DeletionsTab(),
+            _RemovedTab(),
           ],
         ),
       ),
@@ -691,6 +712,197 @@ class _DeletionRowState extends ConsumerState<_DeletionRow> {
                   'Approve',
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Topos an admin deleted outright (`admin_delete_topo`) that nobody has put
+/// back yet.
+///
+/// This is the only tab whose action UNDOES another admin decision rather
+/// than making one for the first time — see the class doc on
+/// [AdminQueueScreen] for why that made this tab worth building even though
+/// `admin_restore_topo` was already live and reversible in principle.
+///
+/// Built from [adminDeletedToposProvider], which reads `moderation_log`
+/// directly rather than the wall itself — see [AdminDeletedTopo]'s doc for
+/// why the wall's own row is not reliably readable once it is gone.
+class _RemovedTab extends ConsumerWidget {
+  const _RemovedTab();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    return RefreshIndicator(
+      onRefresh: () async => ref.invalidate(adminDeletedToposProvider),
+      child: MasiAsyncView<List<AdminDeletedTopo>>(
+        value: ref.watch(adminDeletedToposProvider),
+        errorMessage: "Couldn't load removed topos",
+        onRetry: () => ref.invalidate(adminDeletedToposProvider),
+        skeleton: (context) => const Center(
+          child: Padding(
+            padding: EdgeInsets.all(MasiSpacing.xxl),
+            child: CircularProgressIndicator(),
+          ),
+        ),
+        data: (context, topos) => topos.isEmpty
+            ? ListView(
+                padding: const EdgeInsets.symmetric(
+                  vertical: MasiSpacing.xxl * 2,
+                ),
+                children: [
+                  Center(
+                    child: Column(
+                      children: [
+                        MasiIcon('check', size: 40, color: colors.ink3),
+                        const SizedBox(height: MasiSpacing.md),
+                        Text(
+                          'Nothing removed is waiting on a restore',
+                          key: const Key('admin-removed-empty'),
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.titleMedium
+                              ?.copyWith(color: colors.ink2),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              )
+            : ListView.builder(
+                padding: const EdgeInsets.only(bottom: MasiSpacing.xxl),
+                itemCount: topos.length,
+                itemBuilder: (context, i) => _RemovedRow(topo: topos[i]),
+              ),
+      ),
+    );
+  }
+}
+
+class _RemovedRow extends ConsumerStatefulWidget {
+  const _RemovedRow({required this.topo});
+
+  final AdminDeletedTopo topo;
+
+  @override
+  ConsumerState<_RemovedRow> createState() => _RemovedRowState();
+}
+
+class _RemovedRowState extends ConsumerState<_RemovedRow> {
+  /// Restoring is a visible, outward-facing state change — the topo becomes
+  /// public again for whoever could see it before the takedown — so it asks
+  /// first, exactly like `_takeDown` confirms before removing.
+  ///
+  /// The sheet says what restoring does NOT do: it does not review or
+  /// re-publish anything (`admin_restore_topo` deliberately leaves
+  /// `wall_moderation.state` at `removed`). Putting it back in front of the
+  /// public is a separate decision with a separate control
+  /// (`review_topo(..., approve: true)`), and an admin who believes one tap
+  /// here does both would be wrong in a way that matters.
+  Future<void> _restore() async {
+    final topo = widget.topo;
+    final confirmed = await showMasiConfirm(
+      context,
+      sheetKey: Key('admin-restore-confirm-${topo.wallId}'),
+      confirmKey: Key('admin-restore-confirm-yes-${topo.wallId}'),
+      cancelKey: Key('admin-restore-confirm-no-${topo.wallId}'),
+      title: 'Restore this topo?',
+      message:
+          'Its routes, ascents and history come back for its owner. This does '
+          'not review or re-publish it — that stays a separate decision.',
+      confirmLabel: 'Restore',
+      isDestructive: false,
+    );
+    if (!confirmed || !mounted) return;
+    await _run(topo);
+  }
+
+  Future<void> _run(AdminDeletedTopo topo) async {
+    try {
+      final restoredAt = await ref
+          .read(adminDeleteServiceProvider)
+          .restoreTopo(wallId: topo.wallId, reason: topo.reason);
+      if (!mounted) return;
+      // A bare "Restored" would hide a double tap that did nothing (the RPC
+      // returns null when the topo was not deleted) behind an identical
+      // success message — mirrors how `_takeDown`/`deleteTopo` surface their
+      // real outcome rather than an unqualified success.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(restoredAt == null ? 'Already restored' : 'Restored'),
+        ),
+      );
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Couldn't restore that topo")),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final topo = widget.topo;
+
+    return Container(
+      key: Key('admin-removed-row-${topo.wallId}'),
+      margin: const EdgeInsets.fromLTRB(
+        MasiSpacing.lg,
+        MasiSpacing.sm,
+        MasiSpacing.lg,
+        0,
+      ),
+      padding: const EdgeInsets.all(MasiSpacing.md),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        border: Border.all(color: colors.separator),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Text(
+            'Topo ${topo.wallId}',
+            key: Key('admin-removed-wall-${topo.wallId}'),
+            style: textTheme.titleMedium,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          if (topo.reason != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              topo.reason!,
+              style: textTheme.bodySmall?.copyWith(color: colors.ink),
+              maxLines: 3,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+          const SizedBox(height: 2),
+          Text(
+            'Removed ${_waitedFor(topo.deletedAt)}',
+            style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const SizedBox(height: MasiSpacing.sm),
+          Row(
+            children: [
+              TextButton(
+                key: Key('admin-removed-open-${topo.wallId}'),
+                onPressed: () => context.push('/walls/${topo.wallId}'),
+                child: const Text('Open'),
+              ),
+              const Spacer(),
+              TextButton(
+                key: Key('admin-restore-${topo.wallId}'),
+                onPressed: _restore,
+                child: const Text('Restore'),
               ),
             ],
           ),
