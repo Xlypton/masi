@@ -362,6 +362,23 @@ abstract class SyncRemote {
   /// scoping and [fetchSharedTopos]'s wall-FK join can't reach on their own.
   /// Returns an empty list for an empty [uids] set without a round trip.
   Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids);
+
+  /// Probes the server for which of exactly [ids] are still visible to the
+  /// signed-in caller RIGHT NOW — a plain by-id `SELECT` gated only by RLS
+  /// (`walls_shared_select USING (is_wall_public(id))`, plus the owner
+  /// policy), never a scoped/paginated/geo-limited fetch. Deliberately NOT
+  /// [fetchSharedTopos]: that call is capped and geo-anchored ([SharedTopoScope],
+  /// W-1) so its absence-of-a-row proves nothing about deletion — see
+  /// `ForeignWallSweepService`'s library doc for why this method exists as a
+  /// separate, narrower probe.
+  ///
+  /// Returns the SUBSET of [ids] the server actually returned a row for.
+  /// An id missing from the result was asked about and not returned — by a
+  /// takedown, an owner hard-delete, an un-share, or any other reason RLS no
+  /// longer lets this caller see it. [ids] should already be one request-
+  /// sized batch (chunking is the caller's job); this issues exactly one
+  /// round trip. Returns an empty list for an empty [ids] list without one.
+  Future<List<String>> fetchVisibleWallIds(List<String> ids);
 }
 
 /// The shared-bucket object path for a photo with canonical id [photoId]
@@ -1493,5 +1510,12 @@ class SupabaseSyncRemote implements SyncRemote {
     if (uids.isEmpty) return const [];
     final rows = await _client.from('profiles').select().inFilter('id', uids.toList());
     return [for (final row in rows) Map<String, dynamic>.from(row)];
+  }
+
+  @override
+  Future<List<String>> fetchVisibleWallIds(List<String> ids) async {
+    if (ids.isEmpty) return const [];
+    final rows = await _client.from('walls').select('id').inFilter('id', ids);
+    return [for (final row in rows) row['id'] as String];
   }
 }

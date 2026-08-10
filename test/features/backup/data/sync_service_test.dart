@@ -384,6 +384,14 @@ class FakeSyncRemote implements SyncRemote {
         if (uids.contains(row['id'])) Map<String, dynamic>.from(row),
     ];
   }
+
+  @override
+  Future<List<String>> fetchVisibleWallIds(List<String> ids) async {
+    return [
+      for (final id in ids)
+        if (_rows['walls']!.containsKey(id)) id,
+    ];
+  }
 }
 
 /// [FakeSyncRemote] variant whose [fetchSharedTopos] always throws — used

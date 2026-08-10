@@ -79,6 +79,9 @@ class _CountingSyncRemote implements SyncRemote {
   }
 
   @override
+  Future<List<String>> fetchVisibleWallIds(List<String> ids) async => const [];
+
+  @override
   Future<void> uploadPhoto({
     required String uid,
     required String photoId,

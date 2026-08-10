@@ -198,6 +198,10 @@ class _FakeRemote implements SyncRemote {
   @override
   Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async =>
       const [];
+
+  @override
+  Future<List<String>> fetchVisibleWallIds(List<String> ids) async =>
+      const [];
 }
 
 /// [_FakeRemote] with the PRE-FIX listing semantics: an original counts as

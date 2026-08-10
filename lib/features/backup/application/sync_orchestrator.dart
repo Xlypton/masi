@@ -8,6 +8,7 @@ import '../../../core/db/database_provider.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
 import '../../account/data/auth_repository.dart';
+import '../../topo/data/foreign_wall_sweep_service.dart';
 import '../../topo/data/public_photo_prune_service.dart';
 import '../data/connectivity_service.dart';
 import '../data/sync_service.dart';
@@ -1030,6 +1031,9 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
           // AFTER the state write, and deliberately NOT awaited — see
           // [_prunePublicPhotosBestEffort].
           unawaited(_prunePublicPhotosBestEffort());
+          // Independent of the prune above (different table, different
+          // failure modes) — see [_sweepStaleForeignWallsBestEffort].
+          unawaited(_sweepStaleForeignWallsBestEffort());
         case SyncPullOutcome.skippedSignedOut:
           state = SyncOrchestratorState(
             status: SyncStatus.idle,
@@ -1135,6 +1139,51 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       }
     } catch (e, st) {
       debugPrint('SyncOrchestrator: public-photo prune threw: $e\n$st');
+    }
+  }
+
+  /// Gives `ForeignWallSweepService` its one and only production trigger —
+  /// same shape as [_prunePublicPhotosBestEffort] just above, for an
+  /// unrelated failure mode: a foreign wall this device cached that the
+  /// server HARD-deleted (no tombstone, so nothing else ever notices — see
+  /// that service's library doc).
+  ///
+  /// WHY AFTER A PULL, NOT AWAITED, NEVER THROWS: identical reasoning to
+  /// [_prunePublicPhotosBestEffort] — a pull is the natural moment to
+  /// reconcile the cache, the UI has already rendered the pull's own result
+  /// by the time this starts, and `sweepStaleForeignWalls` never throws by
+  /// contract (the try/catch here is belt-and-braces for a fire-and-forget
+  /// future).
+  ///
+  /// Deliberately does NOT gate on `result.errors.isEmpty`. The sweep's own
+  /// soundness comes entirely from probing the EXACT ids this device holds
+  /// (see `ForeignWallSweepService`'s doc) — it does not depend on this
+  /// pull's shared-topos fetch having been complete or error-free, so a
+  /// harmless error elsewhere in the pull (e.g. a profile fetch hiccup) has
+  /// no bearing on whether the sweep's reasoning holds.
+  ///
+  /// Logged (not surfaced on [SyncOrchestratorState]) — a deliberately
+  /// smaller footprint than the photo prune's, since this can only ever
+  /// remove rows the server has already confirmed gone, one-way, with
+  /// nothing for a user-facing banner to react to.
+  Future<void> _sweepStaleForeignWallsBestEffort() async {
+    try {
+      final outcome = await ref
+          .read(foreignWallSweepServiceProvider)
+          .sweepStaleForeignWalls();
+      switch (outcome.reason) {
+        case ForeignWallSweepReason.notKnownOnline:
+        case ForeignWallSweepReason.unknownSession:
+        case ForeignWallSweepReason.nothingToSweep:
+        case ForeignWallSweepReason.nothingToPurge:
+          break;
+        case ForeignWallSweepReason.probeFailed:
+        case ForeignWallSweepReason.swept:
+        case ForeignWallSweepReason.unexpectedError:
+          debugPrint('SyncOrchestrator: foreign-wall sweep: $outcome');
+      }
+    } catch (e, st) {
+      debugPrint('SyncOrchestrator: foreign-wall sweep threw: $e\n$st');
     }
   }
 

@@ -137,6 +137,10 @@ class _UnavailableSyncRemote implements SyncRemote {
   @override
   Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) =>
       _unavailable();
+
+  @override
+  Future<List<String>> fetchVisibleWallIds(List<String> ids) =>
+      _unavailable();
 }
 
 /// The [SyncService] the "sync now" entry point(s) call into, wired to the
