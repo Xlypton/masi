@@ -101,11 +101,19 @@ class RouteMetadataSheet extends ConsumerStatefulWidget {
 /// Save-through exists so dismissing this sheet (swipe-down, scrim tap,
 /// system back — none of which run [_RouteMetadataSheetState._save]) does not
 /// throw away what was typed. Writing per keystroke would do that, but each
-/// write is a full route upsert that also flags the row dirty for sync, so
-/// typing a name would queue a dozen of them. Discrete controls (grade,
-/// style, tags, stars) are single taps and write immediately; only the free
-/// text is debounced, and a pop inside the window still flushes (see
-/// `topo-meta-pop-guard`), so the delay can never cost the climber an edit.
+/// write is a full route upsert, so typing a name would queue a dozen of them.
+/// Discrete controls (grade, style, tags, stars) are single taps and write
+/// immediately; only the free text is debounced, and a pop inside the window
+/// still flushes (see `topo-meta-pop-guard`), so the delay can never cost the
+/// climber an edit.
+///
+/// Every save-through write is LOCAL-ONLY (`markDirty: false` — see
+/// [DrawController.setRouteMetadata]). Save-through means the climber's typing
+/// is not LOST; it must not mean it is PUBLISHED. The write used to flag the
+/// row dirty, which put a half-typed route name on the server ~2.6s after a
+/// pause via the sync orchestrator's debounced push — visible to every other
+/// climber on the next pull of a shared topo. Only the explicit Save (and the
+/// other writers on this route: draw/commit/delete) marks the row pushable.
 const Duration kRouteMetadataDraftDebounce = Duration(milliseconds: 600);
 
 class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
@@ -125,8 +133,8 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
   Timer? _draftTimer;
 
   /// Whether an edit made in this sheet has NOT reached [DrawController] yet
-  /// (the debounce window, or a write refused by [_betaUrlInvalid]). Drives
-  /// the pop flush, and is what keeps Save/Cancel from writing twice.
+  /// — i.e. the debounce window is still open. Drives the pop flush, and is
+  /// what keeps Save/Cancel from writing twice.
   bool _draftPending = false;
 
   /// Whether save-through has written at least once — i.e. whether [_cancel]
@@ -143,6 +151,15 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
   /// [DrawState.routes], so a caller that omitted `initial` still gets a
   /// correct revert rather than a wipe.
   TopoRoute? _openedWith;
+
+  /// The last beta-video URL this sheet considered VALID (`null` = "no link").
+  ///
+  /// Seeded from the route as the sheet opened, and re-read off the field on
+  /// every change that leaves it valid. It is what a save-through write
+  /// persists while [_betaUrlInvalid] holds, so a mid-typing `htp://` never
+  /// reaches the route AND never blocks the other fields from being kept —
+  /// see [_betaUrlForWrite].
+  String? _lastValidBetaUrl;
 
   @override
   void initState() {
@@ -170,6 +187,7 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
     _styleTags = {...?initial?.styleTags};
     _stars = initial?.stars;
     _openedWith = initial ?? _routeInState();
+    _lastValidBetaUrl = _openedWith?.betaVideoUrl;
   }
 
   @override
@@ -186,6 +204,10 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
   }
 
   void _handleBetaUrlChanged() {
+    // Remember the field's value whenever it is in a state the sheet would
+    // accept, so [_betaUrlForWrite] has a known-good fallback to carry through
+    // a write made while the field is mid-typing and invalid.
+    if (!_betaUrlInvalid) _lastValidBetaUrl = _validatedBetaUrl();
     setState(() {});
     _scheduleDraftWrite();
   }
@@ -208,25 +230,29 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
     _draftTimer = Timer(kRouteMetadataDraftDebounce, _writeDraft);
   }
 
-  /// Save-through: pushes the form's CURRENT state to [DrawController]
-  /// without closing the sheet.
+  /// Save-through: writes the form's CURRENT state to [DrawController]
+  /// LOCALLY (`markDirty: false`), without closing the sheet and without
+  /// making the draft pushable — see [kRouteMetadataDraftDebounce].
   ///
   /// Called immediately for discrete controls (grade system, grade, style,
   /// style tags, stars — one tap each, no spam to debounce), and on the
   /// debounce for the text fields.
   ///
-  /// Refuses while [_betaUrlInvalid], exactly as [_save] does: the sheet's
-  /// one validation rule must hold for a save-through write too, or a
-  /// half-typed `htp://` would be persisted onto the route behind the
-  /// climber's back. [_draftPending] deliberately stays `true` in that case,
-  /// so the edit is written as soon as the URL is fixed or cleared.
+  /// Never refuses. It used to bail out whole while [_betaUrlInvalid] held,
+  /// which silently threw the OTHER fields away on the way out: the pop flush
+  /// (`topo-meta-pop-guard`) calls this same method, so typing a bad URL and
+  /// then a route name and swiping the sheet away lost the name with no
+  /// warning — the "written as soon as the URL is fixed" promise only ever
+  /// held if the climber came back and fixed it, and a dismissal never does.
+  /// An invalid URL is still never persisted; [_betaUrlForWrite] substitutes
+  /// the last valid one instead of failing the whole write.
   void _writeDraft() {
     _draftTimer?.cancel();
     _draftTimer = null;
-    if (!mounted || _betaUrlInvalid) return;
+    if (!mounted) return;
     _draftPending = false;
     _draftWritten = true;
-    _writeMetadata();
+    _writeMetadata(markDirty: false);
   }
 
   /// #41 validation: an empty (after trim) URL clears the field (`null`);
@@ -239,6 +265,16 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
     final raw = _betaUrlController.text.trim();
     return raw.isEmpty ? null : raw;
   }
+
+  /// The beta-video URL a write should persist: the field's own value when it
+  /// is valid (the [_save] case always, since Save refuses otherwise), and
+  /// otherwise [_lastValidBetaUrl] — the link the route already had.
+  ///
+  /// This is the whole of the "an invalid URL is never persisted" rule under
+  /// save-through: the URL field alone falls back, every other field on the
+  /// form is written as typed.
+  String? _betaUrlForWrite() =>
+      _betaUrlInvalid ? _lastValidBetaUrl : _validatedBetaUrl();
 
   /// True when the beta-URL field currently holds a non-empty value that
   /// isn't a valid `http`/`https` URL. Drives the inline error shown under
@@ -296,11 +332,17 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
   /// replacement (see its doc) — which is exactly why save-through is safe to
   /// repeat: every call sends every field, so writing the same form twice is
   /// idempotent and can never leave a half-built row behind.
-  void _writeMetadata() {
+  ///
+  /// [markDirty] decides whether the row becomes PUSHABLE. `false` for the
+  /// save-through/revert paths (a draft is the climber's alone until they
+  /// commit it), `true` — the default, and what [_save] passes — for an
+  /// explicit Save.
+  void _writeMetadata({bool markDirty = true}) {
     ref
         .read(drawControllerProvider(widget.wallId).notifier)
         .setRouteMetadata(
           widget.routeId,
+          markDirty: markDirty,
           name: _nameController.text.trim().isEmpty
               ? null
               : _nameController.text.trim(),
@@ -310,7 +352,7 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
           description: _descriptionController.text.trim().isEmpty
               ? null
               : _descriptionController.text.trim(),
-          betaVideoUrl: _validatedBetaUrl(),
+          betaVideoUrl: _betaUrlForWrite(),
           styleTags: _styleTags.toList(),
           stars: _stars,
         );
@@ -329,7 +371,10 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
     // Nothing left outstanding, so the pop guard below stays quiet rather
     // than writing the same form a second time.
     _draftPending = false;
-    _writeMetadata();
+    // The one write that MARKS THE ROW DIRTY, i.e. the one that makes the
+    // metadata pushable. Save is the climber saying "this is finished"; every
+    // save-through write before it was a draft (see [_writeDraft]).
+    _writeMetadata(markDirty: true);
     _pop();
   }
 
@@ -345,6 +390,11 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
   ///
   /// If save-through never fired, nothing is written at all — a Cancel with
   /// no edits behind it stays a pure no-op, as it always was.
+  ///
+  /// The revert is `markDirty: false` for the same reason save-through is: it
+  /// restores values the server already has, so flagging the row would push a
+  /// no-change row — and worse, would overwrite (last-writer-wins, see
+  /// `shouldPushLww`) a genuine remote edit made while this sheet sat open.
   void _cancel() {
     _draftTimer?.cancel();
     _draftTimer = null;
@@ -364,6 +414,7 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
             betaVideoUrl: opened?.betaVideoUrl,
             styleTags: opened?.styleTags.toList() ?? const [],
             stars: opened?.stars,
+            markDirty: false,
           );
     }
     _pop();
@@ -397,17 +448,9 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
         ? null
         : bandForSortKey(gradeSortKey(_gradeSystem, gradeValue));
 
-    // Pop flush. The debounce window (see [kRouteMetadataDraftDebounce]) is
-    // the one gap where a dismissal could still lose a keystroke: type a name
-    // and swipe the sheet away inside 600ms and the timer never fires. This
-    // catches every Flutter-level dismissal — swipe-down and scrim tap both
-    // go through `Navigator.pop` — while the widget is still mounted, so the
-    // write happens with a live `ref` rather than needing a flush from
-    // `dispose`. `canPop` stays `true`: this guard never blocks anything, it
-    // only writes on the way out.
-    // (`final sheet = …` rather than a direct `return`, purely so the whole
-    // form below keeps its original indentation under the PopScope wrapper at
-    // the end of this method — no line of it changed.)
+    // `final sheet = …` rather than a direct `return`, purely so the whole
+    // form below keeps its original indentation under the `PopScope` wrapper
+    // at the end of this method (documented there) — no line of it changed.
     final sheet = ClipRRect(
       borderRadius: const BorderRadius.only(
         topLeft: Radius.circular(MasiRadii.large),
@@ -707,6 +750,10 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
     // writes on the way out. And `_draftPending` is already false after both
     // Save (it just wrote the form) and Cancel (it deliberately discarded),
     // so neither of those paths can write twice through here.
+    //
+    // The write it makes is [_writeDraft]'s — LOCAL, not dirty-flagged. A
+    // dismissal is not a submission: it keeps the draft for when the climber
+    // reopens the sheet, it does not publish it.
     return PopScope(
       key: const Key('topo-meta-pop-guard'),
       canPop: true,

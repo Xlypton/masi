@@ -881,4 +881,164 @@ void main() {
       );
     },
   );
+
+  // The counterpart of the group above: a route write that must NOT become
+  // pushable. `RouteMetadataSheet`'s save-through writes the metadata form as
+  // the climber edits it, so a dismissed sheet does not LOSE the typing — but
+  // every one of those writes used to flag the row dirty, which meant the
+  // orchestrator's debounced push put a HALF-TYPED route name on the server
+  // ~2.6s after a pause, visible to every other climber on a shared topo.
+  // `markDirty: false` is the local-only write that fixes it.
+  group('markDirty: keeping a save-through write out of the next push', () {
+    const uid = 'u1';
+
+    late RouteRepository ownedRepo;
+
+    setUp(() {
+      ownedRepo = RouteRepository(db, nowMs: () => 1000, currentUid: () => uid);
+    });
+
+    /// The `dirty` column of route `number` — the exact signal
+    /// `SyncService.hasPendingLocalChanges`/`PushScope.dirtyOnly` gate on.
+    Future<bool> dirtyOf(int number) async {
+      final row = await (db.select(db.routes)
+            ..where((t) => t.number.equals(number)))
+          .getSingle();
+      return row.dirty;
+    }
+
+    Future<String?> nameOf(int number) async {
+      final row = await (db.select(db.routes)
+            ..where((t) => t.number.equals(number)))
+          .getSingle();
+      return row.name;
+    }
+
+    test(
+      'assertion 4: `markDirty` DEFAULTS to true on both paths — every '
+      'pre-existing caller keeps marking rows dirty, and a future refactor '
+      'cannot silently flip the default',
+      () async {
+        // Insert path, no `markDirty` argument at all.
+        await ownedRepo.upsertRoute(
+          wallId,
+          photoId,
+          const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
+        );
+        expect(
+          await dirtyOf(1),
+          isTrue,
+          reason: 'the insert path must default to dirty: true',
+        );
+
+        await db.customStatement('UPDATE routes SET dirty = 0');
+
+        // Update path, likewise with no `markDirty` argument.
+        await ownedRepo.upsertRoute(
+          wallId,
+          photoId,
+          const TopoRoute(id: 1, number: 1, points: [Offset(9, 9)]),
+        );
+        expect(
+          await dirtyOf(1),
+          isTrue,
+          reason: 'the update path must default to dirty: true',
+        );
+      },
+    );
+
+    test(
+      'markDirty: false on the insert path persists the row but leaves it '
+      'NOT dirty, so no push is owed for it',
+      () async {
+        await ownedRepo.upsertRoute(
+          wallId,
+          photoId,
+          const TopoRoute(
+            id: 1,
+            number: 1,
+            points: [Offset(0, 0)],
+            name: 'Half-typed nam',
+          ),
+          markDirty: false,
+        );
+
+        expect(
+          await nameOf(1),
+          'Half-typed nam',
+          reason: 'the value must still be persisted — that is the point',
+        );
+        expect(
+          await dirtyOf(1),
+          isFalse,
+          reason: 'a draft must not be queued for the next push',
+        );
+      },
+    );
+
+    test(
+      'markDirty: false on the update path persists the new values and leaves '
+      'a clean row clean',
+      () async {
+        await ownedRepo.upsertRoute(
+          wallId,
+          photoId,
+          const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
+        );
+        await db.customStatement('UPDATE routes SET dirty = 0');
+
+        await ownedRepo.upsertRoute(
+          wallId,
+          photoId,
+          const TopoRoute(
+            id: 1,
+            number: 1,
+            points: [Offset(0, 0)],
+            name: 'Le T',
+          ),
+          markDirty: false,
+        );
+
+        expect(await nameOf(1), 'Le T');
+        expect(await dirtyOf(1), isFalse);
+      },
+    );
+
+    test(
+      'markDirty: false never LOWERS the flag: a row that already owed a push '
+      'still owes it afterwards (with no outbox — decision D-4 — `dirty` is '
+      'the only record that the edit is owed)',
+      () async {
+        // Left dirty on purpose: this is the freshly-drawn route whose commit
+        // has not been pushed yet, which is exactly the row an open metadata
+        // sheet is editing.
+        await ownedRepo.upsertRoute(
+          wallId,
+          photoId,
+          const TopoRoute(id: 1, number: 1, points: [Offset(0, 0)]),
+        );
+        expect(await dirtyOf(1), isTrue);
+
+        await ownedRepo.upsertRoute(
+          wallId,
+          photoId,
+          const TopoRoute(
+            id: 1,
+            number: 1,
+            points: [Offset(0, 0)],
+            name: 'draft',
+          ),
+          markDirty: false,
+        );
+
+        expect(
+          await dirtyOf(1),
+          isTrue,
+          reason:
+              'clearing the flag here would silently drop the pending push of '
+              'the already-committed route',
+        );
+      },
+    );
+  });
 }

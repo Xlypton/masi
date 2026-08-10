@@ -46,11 +46,14 @@ class _FlakyRouteRepository extends RouteRepository {
   Future<void> upsertRoute(
     String wallId,
     String photoId,
-    TopoRoute route,
-  ) async {
+    TopoRoute route, {
+    bool markDirty = true,
+  }) async {
     upsertAttempts++;
     final error = writeError;
-    if (error == null) return super.upsertRoute(wallId, photoId, route);
+    if (error == null) {
+      return super.upsertRoute(wallId, photoId, route, markDirty: markDirty);
+    }
     final gate = beforeThrow;
     if (gate != null) await gate;
     throw error;

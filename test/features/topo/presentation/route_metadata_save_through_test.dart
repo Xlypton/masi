@@ -13,12 +13,21 @@
 //  * S3 — dismissing the sheet without submitting keeps what was typed, even
 //    inside the debounce window (the pop flush).
 //  * S4 — save-through obeys the sheet's ONE validation rule
-//    (`_betaUrlInvalid`): a bad URL blocks the save-through write exactly as
-//    it blocks Save, so an invalid row never reaches the route.
+//    (`_betaUrlInvalid`) WITHOUT taking the rest of the form down with it: the
+//    invalid URL is never persisted, but every other field still is. It used
+//    to refuse the write as a whole, which silently lost the other fields on
+//    the way out — the pop flush calls the same method, so it refused again
+//    and the typed name was gone. See S4b.
 //  * S5 — Cancel still means DISCARD. Save-through protects against
 //    ACCIDENTAL loss; an explicit Cancel is not accidental, so anything
 //    save-through already wrote is reverted (this is the pre-existing
 //    contract `route_metadata_intent_test.dart`'s A5d/B5 pins, kept intact).
+//  * S6 — the whole point, end to end: a draft written by save-through and
+//    then dismissed WITHOUT Save is still on the form when the sheet reopens.
+//
+// What save-through must NOT do — write a draft the sync push then publishes —
+// is pinned separately in `route_metadata_draft_dirty_test.dart`, which needs a
+// real database because `dirty` is a column rather than `DrawState`.
 //
 // Boilerplate (ProviderContainer seeding) mirrors
 // `route_metadata_intent_test.dart`'s.
@@ -99,6 +108,42 @@ Widget _buildModalHost({
                   wallId: _testWallId,
                   routeId: routeId,
                   initial: initial,
+                ),
+              ),
+              child: const Text('open'),
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
+/// Like [_buildModalHost], but reads the route's CURRENT metadata out of the
+/// controller each time the sheet is opened, which is what production does
+/// (`TopoCanvasScreen._openMetadataSheet` passes the route it opened for). That
+/// is what makes a REOPEN meaningful: a fixed `initial` captured once would
+/// pre-fill the second open with the first open's stale values.
+Widget _buildReopeningModalHost({
+  required ProviderContainer container,
+  required int routeId,
+}) {
+  return UncontrolledProviderScope(
+    container: container,
+    child: MaterialApp(
+      theme: MasiTheme.light,
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => Center(
+            child: TextButton(
+              key: const Key('host-open-meta-sheet'),
+              onPressed: () => showModalBottomSheet<void>(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => RouteMetadataSheet(
+                  wallId: _testWallId,
+                  routeId: routeId,
+                  initial: _route(container),
                 ),
               ),
               child: const Text('open'),
@@ -250,16 +295,24 @@ void main() {
     );
 
     testWidgets(
-      'S4: save-through refuses to write while the beta-URL field is invalid '
-      '(the sheet\'s existing validation), and writes once it is fixed',
+      'S4: an invalid beta URL is never persisted, but it no longer takes the '
+      'rest of the form down with it — the other fields still save through, '
+      'carrying the route\'s LAST VALID link',
       (tester) async {
         final container = ProviderContainer();
         addTearDown(container.dispose);
         final routeId = _seedRoute(container);
+        container
+            .read(drawControllerProvider(_testWallId).notifier)
+            .setRouteMetadata(
+              routeId,
+              betaVideoUrl: 'https://example.com/old-beta',
+            );
+        await tester.pump();
         final before = _route(container);
 
         await tester.pumpWidget(
-          _buildSheet(container: container, routeId: routeId),
+          _buildSheet(container: container, routeId: routeId, initial: before),
         );
         await tester.pump();
 
@@ -281,21 +334,22 @@ void main() {
         );
         expect(
           _route(container).betaVideoUrl,
-          before.betaVideoUrl,
+          'https://example.com/old-beta',
           reason:
               'save-through must never persist a value the sheet itself '
-              'refuses to save',
+              'refuses to save — the previous valid link is kept instead',
         );
         expect(
           _route(container).name,
-          before.name,
+          'Has A Bad Link',
           reason:
-              'the write is refused as a WHOLE, exactly as Save is — a '
-              'partial row would be a different validation contract',
+              'the name is a DIFFERENT field and was typed validly: refusing '
+              'it because of the URL is exactly the silent data loss this '
+              'sheet exists to avoid (see S4b)',
         );
+        expect(before.name, isNot('Has A Bad Link'));
 
-        // Fix the URL: the edit that was held back must now land, without a
-        // Save tap and without retyping the name.
+        // Fix the URL: it lands too, without a Save tap.
         await tester.enterText(
           find.byKey(const Key('topo-meta-beta-url')),
           'https://example.com/beta',
@@ -304,6 +358,54 @@ void main() {
 
         expect(_route(container).betaVideoUrl, 'https://example.com/beta');
         expect(_route(container).name, 'Has A Bad Link');
+      },
+    );
+
+    testWidgets(
+      'S4b: typing a name while the beta URL is invalid and then DISMISSING '
+      'the sheet keeps the name — the dismissal flush used to refuse the same '
+      'write and throw it away silently',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final routeId = _seedRoute(container);
+
+        await tester.pumpWidget(
+          _buildModalHost(container: container, routeId: routeId),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('host-open-meta-sheet')));
+        await tester.pumpAndSettle();
+
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-beta-url')));
+        await tester.enterText(
+          find.byKey(const Key('topo-meta-beta-url')),
+          'htp://x',
+        );
+        await tester.enterText(
+          find.byKey(const Key('topo-meta-name')),
+          'Must Survive A Bad URL',
+        );
+        // Dismiss inside the debounce window, so this goes through the pop
+        // flush — the path that used to silently drop everything.
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('topo-meta-pop-guard')), findsNothing);
+        expect(
+          _route(container).name,
+          'Must Survive A Bad URL',
+          reason:
+              'the name was valid and typed — an unrelated invalid field must '
+              'not silently discard it on the way out',
+        );
+        expect(
+          _route(container).betaVideoUrl,
+          isNull,
+          reason:
+              'and the invalid URL itself must still never be persisted (the '
+              'route had no link to fall back to, so it stays without one)',
+        );
       },
     );
 
@@ -365,6 +467,55 @@ void main() {
           after.gradeSortKey,
           before.gradeSortKey,
           reason: 'the revert must restore the derived sort key too',
+        );
+      },
+    );
+
+    testWidgets(
+      'S6: the original point of save-through, end to end — a draft written '
+      'without Save is still ON THE FORM when the sheet is reopened, so the '
+      'climber picks up where they left off',
+      (tester) async {
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        final routeId = _seedRoute(container);
+
+        await tester.pumpWidget(
+          _buildReopeningModalHost(container: container, routeId: routeId),
+        );
+        await tester.pumpAndSettle();
+        await tester.tap(find.byKey(const Key('host-open-meta-sheet')));
+        await tester.pumpAndSettle();
+
+        await tester.enterText(
+          find.byKey(const Key('topo-meta-name')),
+          'Work In Progress',
+        );
+        await tester.ensureVisible(find.byKey(const Key('topo-meta-stars-3')));
+        await tester.tap(find.byKey(const Key('topo-meta-stars-3')));
+        await tester.pump(_pastDebounce);
+
+        // Dismiss WITHOUT Save — the accidental-dismissal case.
+        await tester.binding.handlePopRoute();
+        await tester.pumpAndSettle();
+        expect(find.byKey(const Key('topo-meta-pop-guard')), findsNothing);
+
+        // Reopen.
+        await tester.tap(find.byKey(const Key('host-open-meta-sheet')));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.widgetWithText(TextField, 'Work In Progress'),
+          findsOneWidget,
+          reason:
+              'the reopened sheet must be pre-filled from the draft — a blank '
+              'field here means the dismissal ate the work, which is the whole '
+              'bug save-through was built to fix',
+        );
+        expect(
+          _route(container).stars,
+          3,
+          reason: 'the discrete control\'s draft survived too',
         );
       },
     );

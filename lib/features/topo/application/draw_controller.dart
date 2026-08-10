@@ -1169,6 +1169,14 @@ class DrawController extends Notifier<DrawState> {
   ///
   /// Persistence write-through: see [commitRoute] doc for the sync-mutation
   /// / no-op-without-a-wall contract shared by all write-through methods.
+  ///
+  /// [markDirty] (default `true`, i.e. every pre-existing caller is unchanged)
+  /// is forwarded to [RouteRepository.upsertRoute]. `false` persists the row
+  /// LOCALLY without flagging it for the next push, and is what
+  /// [RouteMetadataSheet]'s save-through — and its Cancel revert — use: a
+  /// draft the climber has not committed must survive a dismissal, but must
+  /// not become visible to other climbers on a shared topo. An explicit Save
+  /// keeps the default.
   Future<void> setRouteMetadata(
     int routeId, {
     String? name,
@@ -1179,6 +1187,7 @@ class DrawController extends Notifier<DrawState> {
     String? betaVideoUrl,
     List<String>? styleTags,
     int? stars,
+    bool markDirty = true,
   }) async {
     final index = state.routes.indexWhere((r) => r.id == routeId);
     if (index == -1) return;
@@ -1226,7 +1235,7 @@ class DrawController extends Notifier<DrawState> {
       rollbackTo: beforeMetadata,
       write: () => ref
           .read(routeRepositoryProvider)
-          .upsertRoute(wallId, photoId, updatedRoute),
+          .upsertRoute(wallId, photoId, updatedRoute, markDirty: markDirty),
     );
   }
 

@@ -47,10 +47,11 @@ class _SkipNumberRouteRepository extends RouteRepository {
   Future<void> upsertRoute(
     String wallId,
     String photoId,
-    TopoRoute route,
-  ) async {
+    TopoRoute route, {
+    bool markDirty = true,
+  }) async {
     if (route.number == skipNumber) return;
-    await super.upsertRoute(wallId, photoId, route);
+    await super.upsertRoute(wallId, photoId, route, markDirty: markDirty);
   }
 }
 

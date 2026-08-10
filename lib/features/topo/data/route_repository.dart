@@ -43,15 +43,32 @@ class RouteRepository {
 
   /// Inserts a new route row, or updates the existing non-deleted row for
   /// `(photoId, route.number)` if one exists. Sets `createdAt` only on
-  /// insert; always refreshes `updatedAt` to `nowMs()`. Always sets
+  /// insert; always refreshes `updatedAt` to `nowMs()`. By default sets
   /// `dirty: true` (§1e) so a route-only edit is visible to
   /// `SyncService.hasPendingLocalChanges`/`PushScope.dirtyOnly` immediately,
   /// instead of only reaching the cloud on the next `PushScope.full` push.
+  ///
+  /// [markDirty] `false` makes the write LOCAL-ONLY-for-now: the row's values
+  /// are persisted exactly as they would be otherwise, but the row is not
+  /// flagged for the next push. It exists for `RouteMetadataSheet`'s
+  /// save-through (see [DrawController.setRouteMetadata]), whose whole job is
+  /// that a dismissed sheet does not LOSE what was typed — which must not
+  /// also mean a half-typed name is PUBLISHED to a shared topo ~2.6s later by
+  /// the debounced push.
+  ///
+  /// It never LOWERS the flag either: on the update path `false` leaves the
+  /// `dirty` column untouched (`Value.absent()`) rather than writing `false`,
+  /// so a row that already had a committed, not-yet-pushed edit on it keeps
+  /// its place in the next push. Clearing it here would drop that edit — and
+  /// with no outbox (decision D-4) the `dirty` flag is the only record that
+  /// it is owed. On the insert path there is no prior value, so the new row
+  /// starts at `dirty: markDirty`.
   Future<void> upsertRoute(
     String wallId,
     String photoId,
-    TopoRoute route,
-  ) async {
+    TopoRoute route, {
+    bool markDirty = true,
+  }) async {
     final existing = await (_db.select(_db.routes)..where(
           (t) =>
               t.photoId.equals(photoId) &
@@ -95,7 +112,7 @@ class RouteRepository {
               betaVideoUrl: Value(route.betaVideoUrl),
               styleTagsJson: Value(styleTagsJson),
               stars: Value(route.stars),
-              dirty: const Value(true),
+              dirty: Value(markDirty),
             ),
           );
     } else {
@@ -119,7 +136,9 @@ class RouteRepository {
           betaVideoUrl: Value(route.betaVideoUrl),
           styleTagsJson: Value(styleTagsJson),
           stars: Value(route.stars),
-          dirty: const Value(true),
+          // See [markDirty]: `false` leaves the column ALONE, it does not
+          // clear it.
+          dirty: markDirty ? const Value(true) : const Value.absent(),
         ),
       );
     }

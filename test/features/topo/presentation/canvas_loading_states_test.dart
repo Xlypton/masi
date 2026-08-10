@@ -72,10 +72,15 @@ class _GatedWriteRouteRepository extends RouteRepository {
   int upserts = 0;
 
   @override
-  Future<void> upsertRoute(String wallId, String photoId, TopoRoute route) async {
+  Future<void> upsertRoute(
+    String wallId,
+    String photoId,
+    TopoRoute route, {
+    bool markDirty = true,
+  }) async {
     upserts++;
     await gate.future;
-    return super.upsertRoute(wallId, photoId, route);
+    return super.upsertRoute(wallId, photoId, route, markDirty: markDirty);
   }
 }
 
