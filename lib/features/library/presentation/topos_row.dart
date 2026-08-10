@@ -1149,24 +1149,43 @@ class _TopoRowState extends ConsumerState<_TopoRow>
 
 /// A nearby COMMUNITY topo's row in the proximity-sorted Topos-home list
 /// (see `_ToposList`/`sortedByProximityToposProvider`) -- visually mirrors
-/// [_TopoRow] (same 52x52 thumbnail) but marked with a `_CommunitySharedBadge`
-/// instead of [_VisibilityBadge] (a community entry is never "mine" to
-/// publish/unpublish/rename/delete -- there is no menu at all), and taps
-/// straight into the read-only topo canvas (`/walls/<wallId>?readonly=1` --
-/// NOT the social/likes-first `/community/topo/<wallId>` detail, which stays
-/// reserved for the Feed) so the wall photo + drawn routes render the same
-/// way an owner sees them, just non-editable.
-class _CommunityProximityRow extends StatelessWidget {
+/// [_TopoRow] (same 52x52 thumbnail, same grade-band dots and route count)
+/// but marked with a `_CommunitySharedBadge` instead of [_VisibilityBadge],
+/// and taps straight into the read-only topo canvas
+/// (`/walls/<wallId>?readonly=1` -- NOT the social/likes-first
+/// `/community/topo/<wallId>` detail, which stays reserved for the Feed) so
+/// the wall photo + drawn routes render the same way an owner sees them, just
+/// non-editable.
+///
+/// **The grade dots are the same widget the owner's row uses**, not a
+/// look-alike: `_GradeBandDots` fed from `gradeBandsFor`. They were missing
+/// here for a while, which made hardness an owner-only signal — the row that
+/// most needs it is a stranger's crag you are deciding whether to walk to.
+/// The data was always present locally (`CommunityRepository.watchSharedTopos`
+/// counts routes from the local `routes` table, and the sync pull imports
+/// foreign `routes` rows), so their absence was only ever a rendering gap.
+///
+/// **A menu appears here only for an admin.** For everyone else there is still
+/// none, and that remains right: a community entry is never "mine" to
+/// publish/unpublish/rename/delete. An admin is the exception, because
+/// moderation has to be reachable from wherever the offending topo is
+/// visible, and this list is one of those places.
+class _CommunityProximityRow extends ConsumerWidget {
   const _CommunityProximityRow({super.key, required this.entry});
 
   final ProximityTopoEntry entry;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final SharedTopo topo = entry.communityTopo!;
     final wallId = entry.wallId;
+    final routeCount = topo.routeCount;
+    final bands = gradeBandsFor(topo.routeGradeKeys);
+    // `.value ?? false` — fails CLOSED. An unresolved or errored admin lookup
+    // draws no destructive control, which is the only safe default here.
+    final isAdmin = ref.watch(isAdminProvider).value ?? false;
 
     return Material(
       key: Key('topo-item-community-$wallId'),
@@ -1201,6 +1220,18 @@ class _CommunityProximityRow extends StatelessWidget {
                       runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
+                        // Same order as `_TopoRow`: dots, count, badge,
+                        // distance — so the two row kinds scan identically.
+                        if (bands.isNotEmpty)
+                          _GradeBandDots(wallId: wallId, bands: bands),
+                        Text(
+                          '$routeCount route${routeCount == 1 ? '' : 's'}',
+                          style: textTheme.titleSmall?.copyWith(
+                            color: colors.ink2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
                         _CommunitySharedBadge(wallId: wallId),
                         if (entry.distanceKm != null)
                           Text(
@@ -1217,12 +1248,91 @@ class _CommunityProximityRow extends StatelessWidget {
                   ],
                 ),
               ),
+              if (isAdmin)
+                IconButton(
+                  key: Key('community-row-menu-$wallId'),
+                  icon: MasiIcon('more_horiz', color: colors.ink3),
+                  tooltip: 'Moderator tools',
+                  onPressed: () => _openAdminSheet(context, ref, wallId),
+                ),
               MasiIcon('chevron_right', color: colors.ink3),
             ],
           ),
         ),
       ),
     );
+  }
+
+  /// Admin-only takedown of somebody else's topo, straight from this list.
+  ///
+  /// Routed through [AdminDeleteService.deleteTopo], i.e. the
+  /// `admin_delete_topo` SECURITY DEFINER RPC — which re-checks `is_admin()`
+  /// server-side and writes the `moderation_log` entry. The `isAdmin` gate on
+  /// the button only decides whether the control is DRAWN; it is not the
+  /// authority check, and must never be treated as one.
+  ///
+  /// Two steps then a confirm, matching `community_topo_detail_screen`'s
+  /// `_openAdminDeleteSheet` — a destructive action that reaches other
+  /// people's data should not be one tap away from a scrolling list.
+  Future<void> _openAdminSheet(
+    BuildContext context,
+    WidgetRef ref,
+    String wallId,
+  ) async {
+    final action = await showMasiActionSheet<String>(
+      context,
+      sheetKey: Key('community-row-admin-sheet-$wallId'),
+      actions: [
+        MasiSheetAction(
+          key: Key('community-row-admin-delete-$wallId'),
+          label: 'Delete this topo',
+          value: 'delete',
+          subtitle:
+              'Removes it for everyone, with its routes, ascents and comments',
+          isDestructive: true,
+        ),
+      ],
+    );
+    if (action != 'delete' || !context.mounted) return;
+
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Delete this topo?',
+      message:
+          'Removes this topo for everyone — its routes, ascents and comments '
+          'go with it, and its photos come down too. This cannot be undone.',
+      confirmLabel: 'Delete',
+      confirmKey: Key('community-row-admin-delete-confirm-$wallId'),
+    );
+    if (!confirmed || !context.mounted) return;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    try {
+      final result = await ref
+          .read(adminDeleteServiceProvider)
+          .deleteTopo(wallId: wallId);
+      // Counts surfaced rather than smoothed over, the same way
+      // `community_topo_detail_screen` and `admin_queue_screen` do it: a
+      // delete that removed the record but left world-readable photo bytes
+      // behind is exactly the failure a bare "Deleted" hides.
+      final missed = result.photoObjects - result.photoBytesRemoved;
+      messenger?.showSnackBar(
+        SnackBar(
+          content: Text(
+            missed == 0
+                ? 'Deleted — ${result.photoBytesRemoved} image(s) removed'
+                : 'Deleted, but $missed of ${result.photoObjects} image(s) '
+                      'could not be removed',
+          ),
+        ),
+      );
+    } catch (error) {
+      // Loud, not silent — an admin who believes a delete went through when it
+      // did not is worse off than one who was told it failed.
+      messenger?.showSnackBar(
+        SnackBar(content: Text("Couldn't delete that topo. $error")),
+      );
+    }
   }
 }
 
