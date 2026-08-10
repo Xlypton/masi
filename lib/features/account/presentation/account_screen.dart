@@ -1015,6 +1015,16 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                   ),
                 ],
               ),
+              // Navigation entry points come BEFORE "Sign out", not after it.
+              // They used to be appended below the sign-out button — the
+              // bottom of the card, past the one control that ends the
+              // session — which is the last place anyone looks for a way
+              // FURTHER INTO the app. "Sign out" stays the last of the
+              // account ACTIONS (it is the destructive one, styled
+              // `gradeHard`), with every "go somewhere" row above it.
+              const AccountLogbookEntryPoint(),
+              const AccountSuggestionsEntryPoint(),
+              const AccountAdminEntryPoint(),
               const SizedBox(height: MasiSpacing.lg),
               // `.text` for the same contrast reason as the Google button —
               // `.filled`'s `onAccent` spinner is invisible on a `surface2`
@@ -1032,8 +1042,6 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
                 onPressed: widget.onSignOut,
                 child: const Text('Sign out'),
               ),
-              const AccountSuggestionsEntryPoint(),
-              const AccountAdminEntryPoint(),
               const _InstallSection(),
               const _StorageDiagnosticsSection(),
             ],
@@ -1117,6 +1125,64 @@ class AccountAdminEntryPoint extends ConsumerWidget {
                         : 'Review queue · $pending waiting',
                     overflow: TextOverflow.ellipsis,
                   ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The way into the personal ascent Logbook from the Account card.
+///
+/// Before this, `/logbook` had exactly ONE entry point in the whole app: an
+/// unlabelled icon button in the Community Feed's app bar
+/// (`feed-logbook-button`) — an icon, with no text, on the tab that is about
+/// everyone ELSE's climbing. Settings/Account is where people go hunting for
+/// "my stuff", so the Logbook gets a labelled row here too.
+///
+/// Unconditional, unlike [AccountSuggestionsEntryPoint] next door: that one
+/// hides itself when its inbox is empty because a permanently-visible
+/// "Suggested edits (0)" teaches people to stop reading this part of the
+/// screen. A Logbook is not an inbox — an empty one is a prompt to log a
+/// first ascent, and hiding the door until someone has already found it
+/// through some other route is exactly the discoverability bug this row
+/// exists to fix.
+class AccountLogbookEntryPoint extends StatelessWidget {
+  const AccountLogbookEntryPoint({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: MasiSpacing.lg),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          MasiPendingButton.text(
+            key: const Key('account-open-logbook'),
+            style: TextButton.styleFrom(
+              backgroundColor: colors.surface2,
+              foregroundColor: colors.ink,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(13),
+              ),
+            ),
+            // `push`, not `go`: the Logbook is a detour from Account, and the
+            // user must come back to where they were. Matches the Community
+            // Feed's own `feed-logbook-button`.
+            onPressed: () => context.push('/logbook'),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                MasiIcon('logbook', size: 18, color: colors.ink2),
+                const SizedBox(width: MasiSpacing.sm),
+                const Flexible(
+                  child: Text('My logbook', overflow: TextOverflow.ellipsis),
                 ),
               ],
             ),
