@@ -1404,7 +1404,18 @@ class _Thumbnail extends StatelessWidget {
     // #56: decode at display size, not the original's full resolution —
     // the tile is 52 LOGICAL px, so the decode target is that times the
     // device's pixel ratio.
-    final cachePx = (52 * MediaQuery.of(context).devicePixelRatio).round();
+    //
+    // WIDTH ONLY. This used to pass the same value as `cacheHeight` too,
+    // which made `ResizeImage` (default policy `exact`) scale the bitmap to
+    // exactly 52x52 whatever the source's aspect ratio was — `BoxFit.fill`,
+    // performed in the decoder. Every portrait photo therefore arrived here
+    // already squashed (~1.33x for a 4:3) and the `BoxFit.cover` below had
+    // nothing left to crop, because by then the bitmap really was square.
+    // With the width alone the height follows the intrinsic ratio and `cover`
+    // centre-crops the tile as intended. `topos_row.dart`'s `_Thumbnail` was
+    // fixed for exactly this; the feed's copy was missed and kept the bug.
+    // See [PhotoImage]'s doc.
+    final cacheWidthPx = (52 * MediaQuery.of(context).devicePixelRatio).round();
 
     final child = thumbnailPath == null
         ? _GradientFallback(colors: colors)
@@ -1413,8 +1424,7 @@ class _Thumbnail extends StatelessWidget {
             width: 52,
             height: 52,
             fit: BoxFit.cover,
-            cacheWidth: cachePx,
-            cacheHeight: cachePx,
+            cacheWidth: cacheWidthPx,
             placeholder: () => _GradientFallback(colors: colors),
             loadingPlaceholder: () => const MasiShimmer(),
           );
