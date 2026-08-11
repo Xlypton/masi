@@ -857,6 +857,15 @@ class _FeedRow extends ConsumerWidget {
         ? ref.watch(profileDisplayNameProvider(ownerId)).asData?.value
         : null;
 
+    // One dot per grade band present, replacing the single hardest-grade pill
+    // this row used to carry. The pill reported only the hardest route, so a
+    // wall spanning 5a to 7a advertised itself as "7a" here while the Topos
+    // home showed it as two bands — the same topo describing itself
+    // differently depending on which screen you opened. The ascent rows in
+    // this same feed already moved to the dot; the topo row was the one
+    // surface left behind.
+    final bands = gradeBandsFor(topo.routeGradeKeys);
+
     return Material(
       key: Key('community-topo-row-$wallId'),
       color: colors.surface,
@@ -894,11 +903,31 @@ class _FeedRow extends ConsumerWidget {
                       runSpacing: 2,
                       crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        if (topo.topGradeLabel != null &&
-                            topo.topGradeBand != null)
-                          _GradePill(
-                            label: topo.topGradeLabel!,
-                            band: topo.topGradeBand!,
+                        if (bands.isNotEmpty)
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (var i = 0; i < bands.length; i++)
+                                Padding(
+                                  padding: EdgeInsets.only(
+                                    right: i == bands.length - 1
+                                        ? 0
+                                        : MasiSpacing.xs,
+                                  ),
+                                  // radius 4, not the default 8: this sits in
+                                  // a subtitle run beside 15pt text, where a
+                                  // 16px dot reads as a bullet rather than a
+                                  // signal.
+                                  child: GradeBandDot(
+                                    key: Key(
+                                      'community-topo-row-$wallId-grade-dot-'
+                                      '${bands[i].name}',
+                                    ),
+                                    color: colorForGradeBand(bands[i]),
+                                    radius: 4,
+                                  ),
+                                ),
+                            ],
                           ),
                         Text(
                           '${topo.routeCount} route${topo.routeCount == 1 ? '' : 's'}',
@@ -1328,39 +1357,10 @@ class _PlaceBadge extends StatelessWidget {
   }
 }
 
-/// Small grade pill matching `topos_screen.dart`'s `_GradePill` /
-/// `grade_colors.dart`'s band-color convention (not reused directly: that
-/// class is library-private to `topos_screen.dart`).
-class _GradePill extends StatelessWidget {
-  const _GradePill({required this.label, required this.band});
-
-  final String label;
-  final GradeBand band;
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = MasiColors.of(context);
-    return Container(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MasiSpacing.sm,
-        vertical: 2,
-      ),
-      decoration: BoxDecoration(
-        color: _colorForGradeBand(colors, band),
-        borderRadius: BorderRadius.circular(MasiRadii.control),
-      ),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-          color: Colors.white,
-          fontWeight: FontWeight.w600,
-        ),
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-      ),
-    );
-  }
-}
+// `_GradePill` used to live here. It reported only a topo's HARDEST grade, so
+// the feed's topo row claimed a narrower grade span than the Topos home showed
+// for the same wall. Replaced by the shared `GradeBandDot`, one per band —
+// which is what the ascent rows in this same feed had already moved to.
 
 /// Maps a [GradeBand] to its display color.
 ///

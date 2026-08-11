@@ -270,4 +270,79 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'a shared TOPO row renders one dot per grade band present — it used to '
+    'carry a single hardest-grade pill, so the same wall claimed a narrower '
+    'grade span here than the Topos home showed for it',
+    (tester) async {
+      final container = _makeContainer(currentUid: 'climber-1');
+      final db = container.read(appDatabaseProvider);
+      await _seedArea(db, id: 'area-span');
+      await _seedSector(db, id: 'sector-span', areaId: 'area-span');
+      // Inserted directly rather than via `_seedWall`: that helper leaves a
+      // wall private, and only a SHARED wall reaches the feed at all.
+      await db
+          .into(db.walls)
+          .insert(
+            WallsCompanion.insert(
+              id: 'wall-span',
+              createdAt: 1000,
+              updatedAt: 1000,
+              sectorId: 'sector-span',
+              name: 'Span Wall',
+              sortOrder: 0,
+              visibility: const Value('shared'),
+            ),
+          );
+      final photo = await _seedPhoto(db, id: 'photo-span', wallId: 'wall-span');
+      await _seedRoute(
+        db,
+        id: 'route-span-easy',
+        wallId: 'wall-span',
+        photoId: photo,
+        number: 1,
+        gradeRaw: '4a',
+        gradeSortKey: 1.0, // beginner band
+      );
+      await _seedRoute(
+        db,
+        id: 'route-span-hard',
+        wallId: 'wall-span',
+        photoId: photo,
+        number: 2,
+        gradeRaw: '7a',
+        gradeSortKey: 13.0, // hard band
+      );
+
+      await tester.pumpWidget(_wrap(container));
+      await _drain(tester);
+
+      expect(
+        find.byKey(const Key('community-topo-row-wall-span')),
+        findsOneWidget,
+      );
+
+      final beginner = tester.widget<GradeBandDot>(
+        find.byKey(
+          const Key('community-topo-row-wall-span-grade-dot-beginner'),
+        ),
+      );
+      expect(beginner.color, colorForGradeBand(GradeBand.beginner));
+
+      final hard = tester.widget<GradeBandDot>(
+        find.byKey(const Key('community-topo-row-wall-span-grade-dot-hard')),
+      );
+      expect(hard.color, colorForGradeBand(GradeBand.hard));
+
+      // Only the bands actually present — a row must never claim a span it
+      // does not have.
+      expect(
+        find.byKey(
+          const Key('community-topo-row-wall-span-grade-dot-intermediate'),
+        ),
+        findsNothing,
+      );
+    },
+  );
 }

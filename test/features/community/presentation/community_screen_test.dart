@@ -608,16 +608,22 @@ Finder _commentGlyphFinder(Key commentsKey) => find.descendant(
   ),
 );
 
-/// Matches the top-level `Material`/`InkWell` feed row for a shared topo
-/// (`community-topo-row-<wallId>`), excluding the `-likes`/`-comments` text
-/// keys nested inside it — used to count "exactly N rows" (D2a).
+/// Matches the top-level `Material` feed row for a shared topo
+/// (`community-topo-row-<wallId>`) — used to count "exactly N rows" (D2a).
+///
+/// Matches on the ROW WIDGET ITSELF, not merely on its key prefix. This used
+/// to accept any key starting with `community-topo-row-` and then subtract the
+/// nested ones it knew about by suffix (`-likes`, `-comments`), which meant
+/// every new keyed child added inside a row silently inflated the row counts
+/// and failed a test that had nothing to do with the change. The grade-band
+/// dots did exactly that. Requiring `Material` is what keeps this correct as
+/// the row grows, since only the row itself is one.
 Finder _feedRowFinder() {
   return find.byWidgetPredicate((widget) {
     final key = widget.key;
-    return key is ValueKey<String> &&
-        key.value.startsWith('community-topo-row-') &&
-        !key.value.endsWith('-likes') &&
-        !key.value.endsWith('-comments');
+    return widget is Material &&
+        key is ValueKey<String> &&
+        key.value.startsWith('community-topo-row-');
   });
 }
 
