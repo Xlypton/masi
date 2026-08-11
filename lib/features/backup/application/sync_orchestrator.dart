@@ -249,6 +249,54 @@ final syncDebounceDurationProvider = Provider<Duration>((ref) => const Duration(
 /// than a throw) — this class adds no NEW gating of its own; it only decides
 /// WHEN to call `pushOwn()`/`pullOwnAndShared()` and translates the result
 /// into a [SyncStatus].
+/// Whether [error] is PostgREST refusing a token whose `iat` it reads as
+/// being in the future — `PGRST303`, surfaced to the user as
+/// `"Sync failed: own rows fetch failed: PostgrestException(message: JWT
+/// issued at future, code: PGRST303, …)"`.
+///
+/// This is a CLOCK-SKEW artefact, not a fault in the app, the session, or the
+/// network: the token is signed with the auth server's clock and validated
+/// against PostgREST's, and a second or two of drift between them (or between
+/// either and a device that just woke up) makes a freshly-issued token
+/// momentarily "from the future". It clears by itself within seconds, which
+/// is exactly why the reported symptom (2026-08-11) was "it comes up on
+/// freshly opening the app but goes away after I hit Retry" — the Retry
+/// button's only contribution was the delay before it.
+///
+/// So the honest response is a short, silent retry rather than a red banner
+/// asking the user to do by hand what the app can do for itself. See
+/// [SyncOrchestrator._runPull], which is where that happens.
+///
+/// Matched on the message text rather than on an exception type on purpose:
+/// by the time this is consulted the failure has already been flattened to a
+/// string by `SyncService.pullOwnAndShared` (it collects per-section failures
+/// into `PullResult.errors`), so the type is long gone. Both the code and the
+/// message are checked because either alone is a thin thread — PostgREST
+/// sends both, and a future version dropping one should not silently turn
+/// this back into a user-facing error.
+bool isClockSkewRejection(Object? error) {
+  if (error == null) return false;
+  final text = error.toString().toLowerCase();
+  return text.contains('pgrst303') || text.contains('jwt issued at future');
+}
+
+/// How many times a pull silently retries itself through a clock-skew
+/// rejection before giving up and reporting it like any other failure.
+///
+/// Three, with [clockSkewRetryDelay]'s backoff, spans ~14s — comfortably
+/// past the couple of seconds of drift this actually is, and short enough
+/// that a genuine, persistent PGRST303 (a badly misconfigured backend, say)
+/// still surfaces while the user is looking at the app rather than never.
+const int kClockSkewPullRetryLimit = 3;
+
+/// Delay before the [attempt]-th (1-based) clock-skew pull retry: 2s, 4s, 8s.
+///
+/// Backs off rather than hammering, because the thing being waited for is
+/// wall-clock time passing — retrying instantly would just re-present the
+/// same token to the same offended validator.
+Duration clockSkewRetryDelay(int attempt) =>
+    Duration(seconds: 2 << (attempt - 1).clamp(0, 2));
+
 class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
   Timer? _debounceTimer;
   StreamSubscription<void>? _dbSubscription;
@@ -310,6 +358,16 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
 
   /// The pending backoff retry armed by [_scheduleRetry], or `null`.
   Timer? _retryTimer;
+
+  /// The pending clock-skew pull retry armed by [_runPull], or `null` — see
+  /// [isClockSkewRejection].
+  Timer? _clockSkewRetryTimer;
+
+  /// Clock-skew pull retries taken since the last pull that got past it.
+  /// Reset by any pull that does not hit the skew, so a device whose clock is
+  /// merely a little fast pays the silent retry once per app run rather than
+  /// running out of attempts and then reporting forever.
+  int _clockSkewPullRetries = 0;
 
   /// True while a [PushScope.full] push is still owed.
   ///
@@ -413,6 +471,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
     ref.onDispose(() {
       _debounceTimer?.cancel();
       _retryTimer?.cancel();
+      _clockSkewRetryTimer?.cancel();
       _dbSubscription?.cancel();
       _connectivitySubscription?.cancel();
     });
@@ -793,6 +852,43 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         'details were saved.';
   }
 
+  /// If [error] is a clock-skew rejection ([isClockSkewRejection]) and this
+  /// pull still has attempts left, arms a short retry and returns `true` —
+  /// telling [_runPull] to write NO state at all for this attempt and simply
+  /// return.
+  ///
+  /// Writing no state is the point. The status stays [SyncStatus.syncing]
+  /// (set at the top of [_runPull]) for the whole silent-retry window, so
+  /// what the user sees is a sync still in progress — which is the truth —
+  /// rather than the red "Couldn't sync" banner they reported having to
+  /// dismiss with Retry on every cold start. Any stale [lastPullError] from
+  /// an earlier attempt is likewise left untouched rather than overwritten
+  /// with a message that is about to stop being true.
+  ///
+  /// Returns `false` for anything else, and for a skew that has outlasted
+  /// [kClockSkewPullRetryLimit] — at which point it is no longer plausibly
+  /// transient and [_runPull] reports it exactly as it always did. The
+  /// counter is reset there on any pull that gets past the skew, so a device
+  /// with a permanently fast clock still gets its silent retries on the next
+  /// app run instead of having spent them forever.
+  bool _armClockSkewRetry(Object? error) {
+    if (!isClockSkewRejection(error)) {
+      _clockSkewPullRetries = 0;
+      return false;
+    }
+    if (_clockSkewPullRetries >= kClockSkewPullRetryLimit) {
+      _clockSkewPullRetries = 0;
+      return false;
+    }
+    _clockSkewPullRetries++;
+    _clockSkewRetryTimer?.cancel();
+    _clockSkewRetryTimer = Timer(
+      clockSkewRetryDelay(_clockSkewPullRetries),
+      () => unawaited(pullNow()),
+    );
+    return true;
+  }
+
   /// Arms the next retry, [SyncRetrySchedule.delayFor] from now.
   ///
   /// Bounded interval (~2s doubling to a 5min ceiling, jittered), unbounded
@@ -1006,6 +1102,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       final pullError = result.errors.isEmpty
           ? null
           : 'Sync failed: ${result.errors.join('; ')}';
+      if (_armClockSkewRetry(pullError)) return;
       switch (result.outcome) {
         case SyncPullOutcome.pulled:
           state = SyncOrchestratorState(
@@ -1048,6 +1145,7 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
       }
     } catch (e, st) {
       debugPrint('SyncOrchestrator: pullOwnAndShared failed: $e\n$st');
+      if (_armClockSkewRetry(e)) return;
       state = SyncOrchestratorState(
         status: SyncStatus.error,
         lastSyncedAt: state.lastSyncedAt,

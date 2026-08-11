@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../topo/presentation/grade_colors.dart'
-    show GradeBandDot, colorForGradeBand;
+    show GradeBandDot, GradeBandPill, colorForGradeBand;
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
@@ -1099,31 +1099,43 @@ class _AscentFeedRow extends ConsumerWidget {
                         ),
                         if (entry.gradeLabel != null) ...[
                           const SizedBox(width: MasiSpacing.xs),
-                          // Same hardness-signal dot as the owner's own
-                          // RouteLegend (route_legend.dart) — gated on
-                          // gradeBand rather than gradeLabel: the two are
+                          // The grade in white on its band's colour, not a
+                          // dot beside grey text (user request, 2026-08-11:
+                          // "I liked the white number in coloured square
+                          // version for the grade in case of an ascent
+                          // better"). An ascent is ONE route at ONE grade, so
+                          // there is no span for a single pill to flatten —
+                          // that objection belongs to the topo row above,
+                          // which keeps its dot-per-band. See
+                          // [GradeBandPill]'s doc for the split.
+                          //
+                          // Gated on gradeBand, not gradeLabel: the two are
                           // set together (see SharedAscentEntry), but the
-                          // dot's COLOR needs a band, not just a label
-                          // string, so this is the one that actually gates
-                          // it.
-                          if (entry.gradeBand != null) ...[
-                            GradeBandDot(
-                              key: Key('community-ascent-row-$ascentId-grade-dot'),
-                              color: colorForGradeBand(entry.gradeBand!),
-                              radius: 5,
-                            ),
-                            const SizedBox(width: 4),
-                          ],
-                          Flexible(
-                            child: Text(
-                              entry.gradeLabel!,
-                              style: textTheme.titleSmall?.copyWith(
-                                color: colors.ink2,
+                          // pill's COLOUR needs a band, so that is the one
+                          // that actually decides whether it can render. A
+                          // label with no band falls through to the plain
+                          // text below rather than disappearing.
+                          if (entry.gradeBand != null)
+                            Flexible(
+                              child: GradeBandPill(
+                                key: Key(
+                                  'community-ascent-row-$ascentId-grade-pill',
+                                ),
+                                label: entry.gradeLabel!,
+                                color: colorForGradeBand(entry.gradeBand!),
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                            )
+                          else
+                            Flexible(
+                              child: Text(
+                                entry.gradeLabel!,
+                                style: textTheme.titleSmall?.copyWith(
+                                  color: colors.ink2,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
                         ],
                       ],
                     ),

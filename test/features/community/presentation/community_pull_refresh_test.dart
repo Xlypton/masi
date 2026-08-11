@@ -232,9 +232,14 @@ void main() {
     );
   });
 
-  group('#57: CommunityMapScreen manual refresh button', () {
+  group('CommunityMapScreen has no manual refresh button', () {
     testWidgets(
-      'tapping community-map-refresh calls pullNow() on the orchestrator',
+      'community-map-refresh is GONE (2026-08-11) — the map refreshes through '
+      'the same triggers every other surface uses (resume, connectivity '
+      'regain, sign-in, and the Topos home\'s pull-down), so a button that '
+      'existed only because this screen has no scrollable to pull is one more '
+      'control to learn for nothing. The find-me button beside it stays: that '
+      'one does something no gesture can.',
       (tester) async {
         final fakeOrchestrator = _FakeSyncOrchestrator();
         final container = _makeContainer(fakeOrchestrator: fakeOrchestrator);
@@ -247,19 +252,9 @@ void main() {
         );
         await _drain(tester);
 
-        expect(find.byKey(const Key('community-map-refresh')), findsOneWidget);
-        expect(fakeOrchestrator.pullNowCallCount, 0);
-
-        await tester.tap(find.byKey(const Key('community-map-refresh')));
-        await tester.pump();
-
+        expect(find.byKey(const Key('community-map-refresh')), findsNothing);
+        expect(find.byKey(const Key('community-map-find-me')), findsOneWidget);
         expect(tester.takeException(), isNull);
-        expect(fakeOrchestrator.pullNowCallCount, 1);
-
-        // A second tap starts another pull too (not a one-shot control).
-        await tester.tap(find.byKey(const Key('community-map-refresh')));
-        await tester.pump();
-        expect(fakeOrchestrator.pullNowCallCount, 2);
       },
     );
   });

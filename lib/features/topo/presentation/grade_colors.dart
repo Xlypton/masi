@@ -1,6 +1,20 @@
 import 'package:flutter/material.dart'
-    show BuildContext, CircleAvatar, Color, StatelessWidget, Widget;
+    show
+        BorderRadius,
+        BoxDecoration,
+        BuildContext,
+        CircleAvatar,
+        Color,
+        Container,
+        EdgeInsets,
+        FontWeight,
+        StatelessWidget,
+        Text,
+        TextOverflow,
+        Theme,
+        Widget;
 
+import 'package:masi/app/theme.dart' show MasiRadii;
 import 'package:masi/core/grades/grade_system.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/route_palette.dart';
@@ -98,4 +112,53 @@ class GradeBandDot extends StatelessWidget {
   @override
   Widget build(BuildContext context) =>
       CircleAvatar(backgroundColor: color, radius: radius);
+}
+
+/// The grade itself, set in white on its band's color — for the surfaces
+/// where a row is about ONE route with ONE grade.
+///
+/// This is the shape `community_feed_screen.dart`'s deleted `_GradePill` had,
+/// brought back by request (2026-08-11: "I liked the white number in coloured
+/// square version for the grade in case of an ascent better") and made public
+/// so it lives beside [GradeBandDot] and [colorForGradeBand] rather than as a
+/// third private copy of the band-colour convention.
+///
+/// **When to use which.** The pill and the dot are not interchangeable, and
+/// the distinction is what got `_GradePill` deleted from the TOPO row in the
+/// first place: a topo spans many routes, so a single pill there could only
+/// show the hardest one and made a 5a–7a wall call itself "7a". A dot per
+/// band present says the true thing in that case. An ASCENT is one route on
+/// one day at one grade — there is no span to flatten — so the pill states it
+/// outright instead of making the reader decode a colour.
+class GradeBandPill extends StatelessWidget {
+  const GradeBandPill({super.key, required this.label, required this.color});
+
+  /// The grade as it should read, e.g. `'6b'` — already formatted by the
+  /// caller in whatever system that surface displays.
+  final String label;
+
+  /// The band colour behind it — [colorForGradeBand]. White-on-band is fixed
+  /// (every band colour in this file is dark enough to carry white text), so
+  /// there is no foreground parameter to get wrong.
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+      decoration: BoxDecoration(
+        color: color,
+        borderRadius: BorderRadius.circular(MasiRadii.control),
+      ),
+      child: Text(
+        label,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+          color: const Color(0xFFFFFFFF),
+          fontWeight: FontWeight.w600,
+        ),
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
+      ),
+    );
+  }
 }

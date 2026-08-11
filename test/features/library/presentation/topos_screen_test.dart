@@ -7351,6 +7351,54 @@ void main() {
       },
     );
   });
+
+  group('pull-to-refresh (2026-08-11)', () {
+    testWidgets(
+      'pulling the topos list down runs a REAL remote pull — not just a local '
+      're-query, which can never recover rows that were never fetched',
+      (tester) async {
+        final fakeOrchestrator = _FakeSyncOrchestrator();
+        final container = _makeContainer(syncOrchestrator: fakeOrchestrator);
+        await container
+            .read(libraryCrudRepositoryProvider)
+            .createTopo('Kavics');
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester, until: find.text('Kavics'));
+
+        expect(find.byKey(const Key('topos-pull-to-refresh')), findsOneWidget);
+        expect(fakeOrchestrator.pullNowCallCount, 0);
+
+        await tester.fling(find.text('Kavics'), const Offset(0, 400), 1000);
+        await tester.pump();
+        await tester.pump(const Duration(seconds: 1));
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(
+          fakeOrchestrator.pullNowCallCount,
+          1,
+          reason: 'the gesture must reach syncOrchestrator.pullNow(), the '
+              'same work the Feed pull-down and the deleted map refresh '
+              'button ran',
+        );
+      },
+    );
+
+    testWidgets(
+      'the indicator wraps the WHOLE state stack, so it is present on an '
+      'EMPTY library too — the state where a climber most wants to yank the '
+      'list is the one where there is no list',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topos-pull-to-refresh')), findsOneWidget);
+      },
+    );
+  });
 }
 
 /// A repository whose [softDeleteWall] never answers, so a test can observe a
