@@ -27,13 +27,15 @@ const double kSymbolPaletteBarHeight = 68.0;
 /// [SymbolType.crux] use their own Masi equivalents.
 ///
 /// [SymbolType.disabledHold] (feature #43, per-route excluded hold) uses
-/// `MasiIcon('close')` -- the brand set has no dedicated "off/no/ban" glyph,
-/// so the "X" close glyph is the closest available match (a substitution,
-/// not a perfect semantic fit, but MasiIcon-only per this app's icon
-/// mandate: no `Icons.`/`CupertinoIcons.` allowed). The on-canvas marker
-/// itself (see `TopoPainter._paintSymbol`) is a distinct hand-drawn
-/// prohibition/no-entry sign (circle + diagonal slash) regardless of this
-/// palette glyph choice.
+/// `MasiIcon('ban')`. It used to borrow `MasiIcon('close')` because the brand
+/// set had no "off/no/ban" glyph — so the palette advertised an X while the
+/// marker it placed was a prohibition sign, and the tool did not look like
+/// what it drew (user report, 2026-08-11: "the off drawing too should have
+/// the same banned sign as on the drawing"). `masi_ban.svg` was added for
+/// this: a stroked circle with one NW->SE diagonal slash, the same geometry
+/// `TopoPainter._paintSymbol` hand-draws for this marker (radius 8 and a
+/// slash at 0.707r in a 24x24 box), so the palette and the canvas now show
+/// one symbol.
 Widget _symbolIconWidget(SymbolType type, {Color? color, double? size}) {
   switch (type) {
     case SymbolType.anchor:
@@ -45,7 +47,7 @@ Widget _symbolIconWidget(SymbolType type, {Color? color, double? size}) {
     case SymbolType.crux:
       return MasiIcon('crux', color: color, size: size);
     case SymbolType.disabledHold:
-      return MasiIcon('close', color: color, size: size);
+      return MasiIcon('ban', color: color, size: size);
   }
 }
 

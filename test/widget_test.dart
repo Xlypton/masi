@@ -132,10 +132,77 @@ void main() {
       await tester.pump();
       expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.draw);
 
-      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-      await tester.pump();
+      // Leaving draw mode is the explicit Save button now, not a second tap
+      // on a toggle: `topo-mode-toggle` is view mode's pencil only, and draw
+      // mode shows Cancel/Save in its place (see _topTrailingActions).
+      expect(find.byKey(const Key('topo-mode-toggle')), findsNothing);
+      await tester.tap(find.byKey(const Key('topo-edit-save-button')));
+      await tester.pumpAndSettle();
       expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
     });
+
+    testWidgets(
+      'draw mode Cancel discards the line in progress and returns to view mode, '
+      'leaving already-committed routes alone',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: const TopoCanvasScreen(wallId: 'test-wall'),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+        await tester.pumpAndSettle();
+
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
+        // Committed through the controller rather than the ✓ button, so no
+        // metadata sheet opens and the canvas stays in draw mode — what this
+        // test needs is the state, not the ceremony: one route committed, a
+        // second one half-drawn.
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        await notifier.commitRoute();
+        await tester.pumpAndSettle();
+        expect(
+          container.read(drawControllerProvider(_testWallId)).routes,
+          hasLength(1),
+        );
+
+        notifier.addPoint(const Offset(0.5, 0.5));
+        await tester.pump();
+        expect(
+          container.read(drawControllerProvider(_testWallId)).currentPoints,
+          isNotEmpty,
+        );
+
+        await tester.tap(find.byKey(const Key('topo-edit-cancel-button')));
+        await tester.pumpAndSettle();
+
+        final state = container.read(drawControllerProvider(_testWallId));
+        expect(state.mode, DrawMode.view);
+        expect(state.currentPoints, isEmpty);
+        // Cancel is scoped to the line in progress: this canvas persists a
+        // route the moment it is committed, so the committed one stays.
+        expect(state.routes.length, 1);
+      },
+    );
 
     testWidgets(
       'A3: undo/redo/commit toolbar buttons invoke the draw controller '
@@ -229,14 +296,15 @@ void main() {
     );
 
     testWidgets(
-      'M4 cleanup coverage: with a route selected, topo-edit-metadata-button '
-      'appears in the app bar and tapping it opens RouteMetadataSheet',
+      'M4 cleanup coverage: in DRAW mode with a route selected, '
+      'topo-edit-metadata-button appears in the top chrome and tapping it '
+      'opens RouteMetadataSheet — and it stays absent in view mode',
       (tester) async {
-        // The edit-metadata button lives in the app bar (see
-        // TopoCanvasScreen.build's AppBar.actions), gated only on
-        // drawState.selectedRouteId — independent of the image-load path —
-        // so this is exercised the same way as A1/A3 above: pumping the
-        // full screen without ever selecting an image.
+        // The edit-metadata button lives in the top chrome (see
+        // TopoCanvasScreen._topTrailingActions), gated on
+        // drawState.selectedRouteId AND DrawMode.draw — independent of the
+        // image-load path — so this is exercised the same way as A1/A3
+        // above: pumping the full screen without ever selecting an image.
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
         final container = ProviderContainer(
@@ -279,6 +347,14 @@ void main() {
 
         notifier.selectRoute(routeId);
         await tester.pump();
+
+        // Selection alone is no longer enough: editing a route's details is
+        // an edit-mode action (user request, 2026-08-11), so view mode's row
+        // stays free of it.
+        expect(find.byKey(const Key('topo-edit-metadata-button')), findsNothing);
+
+        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+        await tester.pumpAndSettle();
 
         expect(
           find.byKey(const Key('topo-edit-metadata-button')),

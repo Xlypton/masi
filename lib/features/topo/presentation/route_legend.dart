@@ -258,38 +258,18 @@ class RouteLegend extends ConsumerWidget {
             // second line whenever either is present, in BOTH read-only
             // and edit modes (unlike the trailing edit controls below,
             // these are display-only, so readOnly doesn't hide them).
-            subtitle: (route.styleTags.isEmpty && (route.stars ?? 0) <= 0)
-                ? null
-                : Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (route.styleTags.isNotEmpty)
-                          Wrap(
-                            spacing: 4,
-                            runSpacing: 4,
-                            children: [
-                              for (final tag in route.styleTags)
-                                _RouteStyleTagChip(routeId: route.id, tag: tag),
-                            ],
-                          ),
-                        if ((route.stars ?? 0) > 0)
-                          Row(
-                            key: Key('route-stars-${route.id}'),
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              for (var i = 0; i < route.stars!; i++)
-                                const Padding(
-                                  padding: EdgeInsets.only(right: 1),
-                                  child: MasiIcon('star_fill', size: 12),
-                                ),
-                            ],
-                          ),
-                      ],
-                    ),
-                  ),
+            //
+            // Selecting a route additionally expands its row to the details
+            // that don't fit on one line — its description, and its freeform
+            // style note when it has one (user request, 2026-08-11: "when a
+            // route is selected show the details like description etc").
+            // Only for the selected row, and only when there is something to
+            // say: a legend that showed every route's description would push
+            // the list past its own height cap on the second route and turn
+            // the panel into a wall of text. Everything here is display-only,
+            // so it renders in read-only mode too — this is the surface a
+            // climber reads a topo from.
+            subtitle: _buildRouteSubtitle(context, route, isSelected),
             // Beta-video button renders in BOTH read-only and edit modes
             // (display-only external launch, not an editing affordance);
             // the log-ascent/visibility/delete cluster after it stays
@@ -374,6 +354,93 @@ class RouteLegend extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// The second line of a legend row: style-tag chips, a star rating, and —
+/// for the SELECTED row only — the route's description and freeform style
+/// note. Returns null when there is nothing to show, so an unadorned route
+/// keeps its original single-line row height exactly.
+///
+/// Split out of [RouteLegend.build]'s `itemBuilder` (it was an inline
+/// conditional there) because selection added a third and fourth thing this
+/// slot has to decide between, and the nested ternary that produced was
+/// harder to read than the widget it built.
+Widget? _buildRouteSubtitle(
+  BuildContext context,
+  TopoRoute route,
+  bool isSelected,
+) {
+  final colors = MasiColors.of(context);
+  final description = route.description?.trim();
+  final style = route.style?.trim();
+  final showDescription =
+      isSelected && description != null && description.isNotEmpty;
+  final showStyle = isSelected && style != null && style.isNotEmpty;
+  final hasChips = route.styleTags.isNotEmpty;
+  final hasStars = (route.stars ?? 0) > 0;
+
+  if (!hasChips && !hasStars && !showDescription && !showStyle) return null;
+
+  final detailStyle = Theme.of(
+    context,
+  ).textTheme.bodySmall?.copyWith(color: colors.ink2);
+
+  return Padding(
+    padding: const EdgeInsets.only(top: 2),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (hasChips)
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              for (final tag in route.styleTags)
+                _RouteStyleTagChip(routeId: route.id, tag: tag),
+            ],
+          ),
+        if (hasStars)
+          Row(
+            key: Key('route-stars-${route.id}'),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < route.stars!; i++)
+                const Padding(
+                  padding: EdgeInsets.only(right: 1),
+                  child: MasiIcon('star_fill', size: 12),
+                ),
+            ],
+          ),
+        if (showStyle)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              style,
+              key: Key('route-style-${route.id}'),
+              style: detailStyle?.copyWith(fontStyle: FontStyle.italic),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        if (showDescription)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              description,
+              key: Key('route-description-${route.id}'),
+              style: detailStyle,
+              // Capped rather than unbounded: the legend has a hard height
+              // cap of its own (see [kLegendMaxHeightFraction]) and one long
+              // description would otherwise fill it entirely, hiding the
+              // routes either side of the one being read.
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 /// A small, non-interactive display chip for one of [TopoRoute.styleTags]:

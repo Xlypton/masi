@@ -498,9 +498,8 @@ void main() {
       addTearDown(tester.view.resetDevicePixelRatio);
     }
 
-    testWidgets('view mode: worst-case trailing row (edit-metadata + AR + '
-        'mode-toggle + locate-on-map + add-photo) does not '
-        'overflow', (tester) async {
+    testWidgets('view mode: worst-case trailing row (AR + mode-toggle + '
+        'locate-on-map) does not overflow', (tester) async {
       setViewportSize(tester, const Size(375, 812));
       final seeded = await _seedWallWithPhotoAndRoute(tester);
       addTearDown(seeded.db.close);
@@ -528,11 +527,9 @@ void main() {
       await tester.pumpAndSettle();
 
       for (final key in const [
-        'topo-edit-metadata-button',
         'topo-ar-button',
         'topo-mode-toggle',
         'topo-locate-on-map-button',
-        'topo-add-photo-button',
       ]) {
         expect(
           find.byKey(Key(key)),
@@ -544,8 +541,10 @@ void main() {
     });
 
     testWidgets(
-      'draw mode: worst-case trailing row (edit-metadata + mode-toggle + '
-      'edit-location + add-photo) does not overflow',
+      'draw mode: worst-case trailing row (edit-metadata + edit-location + '
+      'the Cancel/Save text pair) does not overflow — this is now the WIDER '
+      'of the two modes, since two words cost more than the glyph they '
+      'replaced',
       (tester) async {
         setViewportSize(tester, const Size(375, 812));
         final seeded = await _seedWallWithPhotoAndRoute(tester);
@@ -570,9 +569,9 @@ void main() {
 
         for (final key in const [
           'topo-edit-metadata-button',
-          'topo-mode-toggle',
           'topo-edit-location-button',
-          'topo-add-photo-button',
+          'topo-edit-cancel-button',
+          'topo-edit-save-button',
         ]) {
           expect(
             find.byKey(Key(key)),
@@ -580,16 +579,36 @@ void main() {
             reason: '$key must be present for this worst-case row',
           );
         }
-        // Draw mode never shows the AR glyph (view-mode-only — see
-        // `_topTrailingActions`), so the row here is never MORE crowded
-        // than view mode's; asserted anyway as a direct regression guard on
-        // this change.
+        // Draw mode never shows the AR glyph or the locate-on-map glyph
+        // (view-mode-only — see `_topTrailingActions`), and the pencil that
+        // ENTERS draw mode is replaced by the Cancel/Save pair rather than
+        // sitting alongside it.
         expect(find.byKey(const Key('topo-ar-button')), findsNothing);
         expect(
           find.byKey(const Key('topo-locate-on-map-button')),
           findsNothing,
         );
+        expect(find.byKey(const Key('topo-mode-toggle')), findsNothing);
         expect(tester.takeException(), isNull);
+
+        // Every control in the row is laid out inside the 375px viewport —
+        // the real claim, since `takeException` alone would miss a button
+        // pushed off-screen by an unbounded Row that happened not to assert.
+        for (final key in const [
+          'topo-back-button',
+          'topo-edit-metadata-button',
+          'topo-edit-location-button',
+          'topo-edit-cancel-button',
+          'topo-edit-save-button',
+        ]) {
+          final rect = tester.getRect(find.byKey(Key(key)));
+          expect(rect.left, greaterThanOrEqualTo(0), reason: '$key off-screen left');
+          expect(
+            rect.right,
+            lessThanOrEqualTo(375.0),
+            reason: '$key (rect=$rect) must not overflow a 375px viewport',
+          );
+        }
       },
     );
   });
