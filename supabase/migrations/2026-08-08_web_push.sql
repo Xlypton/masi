@@ -116,7 +116,7 @@ create or replace function public.send_push_for_notification()
 returns trigger
 language plpgsql
 security definer
-set search_path = public, extensions
+set search_path = public, extensions, net
 as $$
 declare
   cfg private.push_config%rowtype;
@@ -126,7 +126,16 @@ begin
     return null;
   end if;
 
-  perform extensions.net.http_post(
+  -- `net.http_post`, NOT `extensions.net.http_post`. pg_net registers the
+  -- EXTENSION in `extensions` but installs its FUNCTIONS into a schema of its
+  -- own called `net`, so the three-part form is parsed as
+  -- database.schema.function and dies with "cross-database references are not
+  -- implemented" on every single call. Together with the blanket handler below
+  -- that silently discarded every push for a day: notification rows were
+  -- created normally, nothing was ever sent, and — because the call never got
+  -- as far as pg_net — there was no queue entry, no response row and no
+  -- function log to find it by.
+  perform net.http_post(
     url := cfg.hook_url,
     body := jsonb_build_object('notificationId', NEW.id),
     headers := jsonb_build_object(
@@ -139,7 +148,12 @@ begin
   return null;
 exception when others then
   -- A push nobody receives is a worse outcome than no push, and both are far
-  -- better than a comment that fails to post.
+  -- better than a comment that fails to post — so this still swallows.
+  -- It no longer swallows SILENTLY, though: the warning is what turns the next
+  -- occurrence into a one-line grep of the Postgres log instead of a day spent
+  -- guessing which of four hops dropped the message.
+  raise warning 'send_push_for_notification failed for %: % (%)',
+    NEW.id, sqlerrm, sqlstate;
   return null;
 end;
 $$;
