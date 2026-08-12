@@ -151,8 +151,10 @@ void main() {
         reason: 'add-photo must still be reachable while drawing',
       );
 
-      // Back to view, then tap the tile and confirm it invokes _pickImage.
-      await tester.tap(find.byKey(const Key('topo-edit-save-button')));
+      // Back to view (the bottom cluster's ✓ is the way out of draw mode
+      // since 2026-08-12), then tap the tile and confirm it invokes
+      // _pickImage.
+      await tester.tap(find.byKey(const Key('topo-commit-button')));
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(const Key('photo-strip-add')));
       await tester.pumpAndSettle();

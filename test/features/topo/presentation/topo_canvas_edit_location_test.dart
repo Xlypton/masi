@@ -541,10 +541,10 @@ void main() {
     });
 
     testWidgets(
-      'draw mode: worst-case trailing row (edit-metadata + edit-location + '
-      'the Cancel/Save text pair) does not overflow — this is now the WIDER '
-      'of the two modes, since two words cost more than the glyph they '
-      'replaced',
+      'draw mode: the trailing row is down to the edit-location glyph alone '
+      'and does not overflow — the Cancel/Save text pair that briefly made '
+      'this the wider of the two modes moved into the bottom cluster, and '
+      'the edit-metadata pencil moved onto the route itself (2026-08-12)',
       (tester) async {
         setViewportSize(tester, const Size(375, 812));
         final seeded = await _seedWallWithPhotoAndRoute(tester);
@@ -567,28 +567,26 @@ void main() {
         seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
         await tester.pumpAndSettle();
 
-        for (final key in const [
-          'topo-edit-metadata-button',
-          'topo-edit-location-button',
-          'topo-edit-cancel-button',
-          'topo-edit-save-button',
-        ]) {
-          expect(
-            find.byKey(Key(key)),
-            findsOneWidget,
-            reason: '$key must be present for this worst-case row',
-          );
-        }
-        // Draw mode never shows the AR glyph or the locate-on-map glyph
-        // (view-mode-only — see `_topTrailingActions`), and the pencil that
-        // ENTERS draw mode is replaced by the Cancel/Save pair rather than
-        // sitting alongside it.
+        expect(
+          find.byKey(const Key('topo-edit-location-button')),
+          findsOneWidget,
+          reason: 'setting the wall location is a draw-mode action',
+        );
+        // Draw mode shows neither the AR glyph nor the locate-on-map glyph
+        // (view-mode-only — see `_topTrailingActions`), carries no mode
+        // control at all (the bottom ✗/✓ is the way out), and no longer
+        // carries the route-metadata pencil (it lives on the route's own
+        // legend row now).
         expect(find.byKey(const Key('topo-ar-button')), findsNothing);
         expect(
           find.byKey(const Key('topo-locate-on-map-button')),
           findsNothing,
         );
         expect(find.byKey(const Key('topo-mode-toggle')), findsNothing);
+        expect(
+          find.byKey(const Key('topo-edit-metadata-button')),
+          findsNothing,
+        );
         expect(tester.takeException(), isNull);
 
         // Every control in the row is laid out inside the 375px viewport —
@@ -596,10 +594,7 @@ void main() {
         // pushed off-screen by an unbounded Row that happened not to assert.
         for (final key in const [
           'topo-back-button',
-          'topo-edit-metadata-button',
           'topo-edit-location-button',
-          'topo-edit-cancel-button',
-          'topo-edit-save-button',
         ]) {
           final rect = tester.getRect(find.byKey(Key(key)));
           expect(rect.left, greaterThanOrEqualTo(0), reason: '$key off-screen left');

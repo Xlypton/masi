@@ -950,14 +950,33 @@ class _FeedRow extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Flexible(
-                          child: Text(
-                            '♥ ${topo.likeCount}',
+                          // The brand glyph, not the literal '♥' character
+                          // this used to print (user request, 2026-08-12:
+                          // "make the heart icon on the feed the purple masi
+                          // icon not a red emoji"). U+2665 has an emoji
+                          // presentation on iOS, so the platform rendered it
+                          // as a full-colour red heart that ignored every
+                          // colour this row asked for — sitting directly
+                          // above an ascent row that already used
+                          // `MasiIcon('heart')` and beside a comment counter
+                          // that already used `MasiIcon('comment')`. Now all
+                          // three agree.
+                          child: Row(
                             key: Key('community-topo-row-$wallId-likes'),
-                            style: textTheme.titleSmall?.copyWith(
-                              color: colors.ink2,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              MasiIcon('heart', size: 16, color: colors.ink3),
+                              const SizedBox(width: 2),
+                              Text(
+                                '${topo.likeCount}',
+                                style: textTheme.titleSmall?.copyWith(
+                                  color: colors.ink2,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(width: MasiSpacing.sm),

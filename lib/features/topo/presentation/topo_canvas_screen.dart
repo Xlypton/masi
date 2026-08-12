@@ -431,16 +431,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     unawaited(_openMetadataSheet(routes.last));
   }
 
-  /// The "Save" half of draw mode's Cancel/Save pair (see
-  /// [_topTrailingActions]): commit whatever line is in progress, then leave
-  /// edit mode regardless of whether there WAS one.
+  /// The bottom cluster's ✓. Commits whatever line is in progress and then
+  /// leaves edit mode — the "save and I'm done" action.
   ///
   /// [_handleCommitRoute] already returns to [DrawMode.view] when it actually
-  /// commits, but it no-ops on fewer than two points — and "Save" with nothing
-  /// half-drawn must still close the editor, or the button looks dead on the
-  /// overwhelmingly common path (draw a route, hit ✓ in the bottom cluster,
-  /// then hit Save). So the mode is re-asserted here unconditionally; it is
-  /// idempotent when the commit already did it.
+  /// commits, but it no-ops on fewer than two points, and ✓ with nothing
+  /// half-drawn must still close the editor rather than looking dead. That is
+  /// the whole reason this wrapper exists: the ✓/✗ pair is now the ONLY way
+  /// out of edit mode (2026-08-12 — the top row's Cancel/Save was the same
+  /// thing said twice), so neither may be inert in any state. The mode is
+  /// re-asserted unconditionally; it is idempotent when the commit already
+  /// did it.
   Future<void> _handleFinishEditing() async {
     if (widget.readOnly) return;
     await _handleCommitRoute();
@@ -448,6 +449,52 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     ref
         .read(drawControllerProvider(widget.wallId).notifier)
         .setMode(DrawMode.view);
+  }
+
+  /// The bottom cluster's ✗, which does one of two things depending on
+  /// whether there is a line in progress — and the split is deliberate, not
+  /// an accident of implementation.
+  ///
+  ///  * **Something half-drawn** -> discard just that line and STAY in edit
+  ///    mode. Scrapping a bad line and immediately drawing another is the
+  ///    single most common thing anyone does on this screen, and kicking them
+  ///    back to view mode every time would make drawing a wall of ten routes
+  ///    an exercise in re-entering the editor.
+  ///  * **Nothing half-drawn** -> leave edit mode. There is nothing to
+  ///    discard, so the only reading left for "✗" is "cancel out of editing",
+  ///    and a button that does nothing at all in a state you can sit in
+  ///    indefinitely is worse than one that does the obvious thing.
+  ///
+  /// Committed routes are untouched either way: this canvas persists a route
+  /// the moment it is committed (see [DrawController.commitRoute]'s
+  /// write-through), so there is no edit session to roll back and this makes
+  /// no pretence of rolling one back. The tooltip says which of the two it
+  /// currently is.
+  void _handleCancelEditing() {
+    if (widget.readOnly) return;
+    final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+    if (ref.read(drawControllerProvider(widget.wallId)).currentPoints.isEmpty) {
+      notifier.setMode(DrawMode.view);
+      return;
+    }
+    notifier.clearCurrent();
+  }
+
+  /// [_openMetadataSheet] by [TopoRoute.id] — what [RouteLegend.onEditRoute]
+  /// hands back, since a legend row knows its route's id and nothing else.
+  ///
+  /// Silently does nothing if that id is no longer in [DrawState.routes]
+  /// (a race with a concurrent delete, or a photo switch landing between the
+  /// tap and this call). `firstWhere` without an `orElse` would throw there,
+  /// and a crash is a poor answer to "the row you tapped just went away".
+  void _openMetadataSheetForId(int routeId) {
+    final routes = ref.read(drawControllerProvider(widget.wallId)).routes;
+    for (final route in routes) {
+      if (route.id == routeId) {
+        unawaited(_openMetadataSheet(route));
+        return;
+      }
+    }
   }
 
   /// Opens [RouteMetadataSheet] as a modal bottom sheet for [route],
@@ -1584,7 +1631,21 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                         noticeKey: const Key('topo-storage-blocked'),
                         message: storageBlocked,
                       ),
-                    _buildBottomChrome(colors, drawNotifier, drawState.mode),
+                    _buildBottomChrome(
+                      colors,
+                      drawNotifier,
+                      drawState.mode,
+                      // Read off the ONE-SHOT `drawState` read rather than
+                      // the `.select` watch above, on purpose: adding
+                      // `currentPoints` to that record would rebuild this
+                      // whole screen's chrome on every single `addPoint`
+                      // during a drag — the exact rebuild storm that watch
+                      // exists to prevent. The two tooltips this drives are
+                      // worth a frame's staleness; the cluster itself
+                      // rebuilds whenever anything in the record changes,
+                      // which includes entering and leaving draw mode.
+                      hasCurrentLine: drawState.currentPoints.isNotEmpty,
+                    ),
                   ],
                 ),
               ),
@@ -1798,29 +1859,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       );
 
-  /// The text counterpart of [_topRowIconStyle], for draw mode's Cancel/Save
-  /// pair. Same 44pt height floor and same `shrinkWrap` footprint rule as
-  /// every glyph beside it, so the row's rhythm doesn't change when the two
-  /// words replace the glyph that used to sit there.
-  ///
-  /// Horizontal padding is [MasiSpacing.xs], not the `sm` that would look
-  /// better on its own, because draw mode's row is the width worst case on
-  /// this screen and these two labels are the reason: back chevron +
-  /// edit-metadata + Cancel + Save + edit-location have to fit the ~331pt
-  /// available inside the top pill at this project's 375pt minimum width
-  /// (see [_topRowIconStyle] for that budget's derivation). The margin is
-  /// real but thin — `topo_canvas_edit_location_test.dart`'s draw-mode
-  /// overflow test measures it, and does so under `flutter_test`'s
-  /// fixed-pitch test font, where every glyph is a full em wide and "Cancel"
-  /// is therefore about twice its real Roboto width. Passing there means
-  /// passing on a device with a good deal of room to spare; widening this
-  /// padding fails there first.
-  ButtonStyle _topRowTextStyle(Color foreground) => TextButton.styleFrom(
-        foregroundColor: foreground,
-        minimumSize: const Size(0, 44),
-        padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.xs),
-        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-      );
+  // A `_topRowTextStyle` lived here for draw mode's Cancel/Save text pair.
+  // Both went when the bottom cluster absorbed those two jobs (2026-08-12),
+  // and with them the width worst case they created — draw mode's row is
+  // back to glyphs only.
 
   /// Mode-aware trailing glyphs for [_buildTopChromeRow] — this is what keeps
   /// the top chrome from ever becoming the old crowded AR/X/check/pencil
@@ -1839,34 +1881,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     final colors = MasiColors.of(context);
     final actions = <Widget>[];
 
-    // Editing a route's details is an EDIT-MODE action (user request,
-    // 2026-08-11: "remove the route edit button here which shows up when a
-    // route [is] selected — the routes should be editable from the
-    // drawing/edit screen"). It used to render in both modes, which put a
-    // mutating control in the middle of view mode's otherwise read-only row
-    // and gave the climber two different places to change the same thing.
-    // The glyph is the plain pencil now, matching the pencil that ENTERS
-    // edit mode, so "pen = edit this" is one idea on this screen rather than
-    // two.
-    if (!widget.readOnly &&
-        drawState.mode == DrawMode.draw &&
-        drawState.selectedRouteId != null) {
-      actions.add(
-        IconButton(
-          key: const Key('topo-edit-metadata-button'),
-          icon: MasiIcon('edit'),
-          tooltip: 'Edit route details',
-          onPressed: () {
-            final selected = drawState.routes.firstWhere(
-              (r) => r.id == drawState.selectedRouteId,
-            );
-            _openMetadataSheet(selected);
-          },
-          color: colors.accent,
-          style: _topRowIconStyle(),
-        ),
-      );
-    }
+    // The `topo-edit-metadata-button` pencil used to sit here, in the top
+    // chrome, whenever a route was selected in draw mode. It moved ONTO the
+    // route (2026-08-12) — see `RouteLegend.onEditRoute`, which renders it on
+    // the selected row itself. A control that edits one route belongs next to
+    // that route, not a screen away in a row of canvas-wide actions.
 
     // Only meaningful once the wall has a photo AND at least one committed,
     // VISIBLE route: with nothing to align (or every route hidden), AR
@@ -1932,56 +1951,20 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     if (!widget.readOnly &&
         drawState.lastLoadFailure == null &&
         storageBlockedNotice(ref.watch(storageDurabilityProvider)) == null) {
-      if (drawState.mode == DrawMode.draw) {
-        // Leaving edit mode is now an explicit Cancel/Save pair rather than
-        // the single eye glyph that used to sit here (user request,
-        // 2026-08-11: "closing the edit should have a save and a cancel
-        // option instead of the eye icon"). The eye was a mode MIRROR — it
-        // said "preview" but read as a view-only badge, and it gave no way
-        // to back out of a line you were part-way through.
-        //
-        // What each actually does, given this canvas persists a route the
-        // moment it is committed (see [DrawController.commitRoute]'s
-        // write-through) — there is no transactional edit session to roll
-        // back, and inventing one is well outside this change:
-        //  * Cancel — throw away the line currently being drawn
-        //    ([DrawController.clearCurrent]) and go back to viewing.
-        //    Committed routes stay committed; the tooltip says so.
-        //  * Save — commit the line in progress if there is one (which also
-        //    opens its metadata sheet, exactly as the bottom cluster's ✓
-        //    does) and go back to viewing.
-        // Text, not glyphs, on purpose: the bottom draw cluster already owns
-        // an ✗/✓ pair for the CURRENT LINE, and a second identical-looking
-        // pair up here meaning "the whole editing session" would be
-        // indistinguishable from it.
-        actions.add(
-          TextButton(
-            key: const Key('topo-edit-cancel-button'),
-            onPressed: () {
-              drawNotifier.clearCurrent();
-              drawNotifier.setMode(DrawMode.view);
-            },
-            style: _topRowTextStyle(colors.ink2),
-            child: const Text('Cancel'),
-          ),
-        );
-        actions.add(
-          TextButton(
-            key: const Key('topo-edit-save-button'),
-            onPressed: _handleFinishEditing,
-            style: _topRowTextStyle(colors.accent),
-            child: const Text('Save'),
-          ),
-        );
-      } else {
+      // VIEW MODE ONLY. Draw mode carries no mode control up here at all any
+      // more: the Cancel/Save text pair that briefly lived here was, in the
+      // user's words (2026-08-12), the same thing as "the x and check button
+      // on the bottom" — two identical-looking pairs on one screen, one
+      // meaning the current line and one meaning the session. The bottom
+      // cluster absorbed both jobs instead; see [_buildBottomChrome].
+      if (drawState.mode == DrawMode.view) {
         actions.add(
           IconButton(
             key: const Key('topo-mode-toggle'),
             // Bug fix ("topo opens showing an eye, reads as read-only"): the
             // glyph is the AFFORDANCE for what tapping it does, not a mirror
             // of the current mode — in view mode (the mode every topo opens
-            // in) it shows the edit/pencil glyph ("tap to edit"). Draw mode
-            // has no counterpart glyph any more; it has Cancel/Save above.
+            // in) it shows the edit/pencil glyph ("tap to edit").
             icon: MasiIcon('edit'),
             tooltip: 'Edit',
             onPressed: drawNotifier.toggleMode,
@@ -2161,8 +2144,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   Widget _buildBottomChrome(
     MasiColors colors,
     DrawController drawNotifier,
-    DrawMode mode,
-  ) {
+    DrawMode mode, {
+    required bool hasCurrentLine,
+  }) {
     // readOnly: no bottom chrome at all — the draw cluster is already
     // unreachable, since draw mode itself is unreachable (see
     // `_topTrailingActions`'s mode-toggle gate).
@@ -2197,8 +2181,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           IconButton(
             key: const Key('topo-clear-button'),
             icon: MasiIcon('close'),
-            tooltip: 'Discard current route',
-            onPressed: drawNotifier.clearCurrent,
+            // Two jobs, one glyph — see [_handleCancelEditing] for why the
+            // split is deliberate. The tooltip has to track it, or the
+            // control lies about what a tap will do.
+            tooltip: hasCurrentLine
+                ? 'Discard current route'
+                : 'Stop editing',
+            onPressed: _handleCancelEditing,
             color: colors.accent,
             style: IconButton.styleFrom(shape: const CircleBorder()),
           ),
@@ -2213,10 +2202,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           // has no tooltip slot of its own) with the Key still on the button
           // itself, so `find.byKey`/`find.byTooltip` both keep working.
           Tooltip(
-            message: 'Commit route',
+            message: hasCurrentLine ? 'Save route' : 'Done editing',
             child: MasiPendingButton.text(
               key: const Key('topo-commit-button'),
-              onPressed: _handleCommitRoute,
+              onPressed: _handleFinishEditing,
               style: TextButton.styleFrom(
                 backgroundColor: colors.accent.withValues(alpha: 0.16),
                 foregroundColor: colors.accent,
@@ -2452,6 +2441,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // CommunityTopoDetailScreen — see RouteLegend.onLogAscent's doc for
       // why this widget's own copy must stay hidden there.
       onLogAscent: widget.readOnly ? null : _openLogAscentSheet,
+      // Edit a route's details FROM the route (2026-08-12) — the pencil that
+      // used to sit in the top chrome. `TopoCanvasBody` narrows this to draw
+      // mode; `RouteLegend` narrows it further to the selected row.
+      onEditRoute: widget.readOnly ? null : _openMetadataSheetForId,
       // The route panel's own way into the community/feed view of this same
       // wall, replacing the top row's removed speech-bubble glyph. Null when
       // the wall was never published — `hasCommunityPage` is
@@ -2487,6 +2480,7 @@ class TopoCanvasBody extends ConsumerWidget {
     this.readOnly = false,
     this.embedded = false,
     this.onLogAscent,
+    this.onEditRoute,
     this.onOpenCommunity,
   });
 
@@ -2529,6 +2523,11 @@ class TopoCanvasBody extends ConsumerWidget {
   /// passes when [readOnly] is `true`) hides the per-route log-ascent
   /// button entirely.
   final void Function(int routeId)? onLogAscent;
+
+  /// Passed to [RouteLegend.onEditRoute] — but only in [DrawMode.draw] (see
+  /// [build]). Editing a route's details is an edit-mode action, and the
+  /// legend is a read surface in view mode.
+  final void Function(int routeId)? onEditRoute;
 
   /// Opens the community/feed view of this same wall
   /// (`/community/topo/:wallId`). Non-null only for a wall that actually has
@@ -2708,6 +2707,16 @@ class TopoCanvasBody extends ConsumerWidget {
                                           drawState.mode == DrawMode.draw
                                           ? null
                                           : onLogAscent,
+                                      // The mirror image of the line above:
+                                      // editing a route is an EDIT-mode
+                                      // action, logging an ascent is a
+                                      // VIEW-mode one, so the two swap over
+                                      // at the same boundary and the row
+                                      // never carries both.
+                                      onEditRoute:
+                                          drawState.mode == DrawMode.draw
+                                          ? onEditRoute
+                                          : null,
                                     ),
                                     if (community != null)
                                       _CommunityRow(onTap: community),

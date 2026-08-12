@@ -96,6 +96,10 @@ void main() {
       await tester.pump();
 
       final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+      // The beta launch is a row-menu action now (2026-08-12), not an inline
+      // globe button.
+      await tester.tap(find.byKey(Key('topo-route-menu-$routeId')));
+      await tester.pumpAndSettle();
       expect(find.byKey(Key('route-beta-$routeId')), findsOneWidget);
     });
 
@@ -114,6 +118,8 @@ void main() {
       await tester.pump();
 
       final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+      await tester.tap(find.byKey(Key('topo-route-menu-$routeId')));
+      await tester.pumpAndSettle();
       expect(find.byKey(Key('route-beta-$routeId')), findsNothing);
     });
   });

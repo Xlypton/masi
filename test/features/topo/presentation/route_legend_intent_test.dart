@@ -134,6 +134,15 @@ Future<ProviderContainer> _seedRoutes(
   return container;
 }
 
+/// Opens a legend row's `⋯` action sheet, which is where hide/delete/log-
+/// ascent/edit moved on 2026-08-12 (they used to be inline glyphs on the
+/// row). Every test below that acts on one of those has to go through here
+/// first — that is the behaviour change, not an accident of the harness.
+Future<void> _openRouteMenu(WidgetTester tester, int routeId) async {
+  await tester.tap(find.byKey(Key('topo-route-menu-$routeId')));
+  await tester.pumpAndSettle();
+}
+
 Future<void> _pumpLegend(WidgetTester tester, ProviderContainer container) {
   return tester.pumpWidget(
     UncontrolledProviderScope(
@@ -281,8 +290,9 @@ void main() {
         reason: 'sanity check: every seeded route starts visible',
       );
 
+      await _openRouteMenu(tester, target.id);
       await tester.tap(find.byKey(Key('topo-route-visibility-${target.id}')));
-      await tester.pump();
+      await tester.pumpAndSettle();
 
       final after = container.read(drawControllerProvider(_testWallId)).routes;
       for (final r in after) {
@@ -389,8 +399,14 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
+      await _openRouteMenu(tester, target.id);
       await tester.tap(find.byKey(Key('topo-route-delete-${target.id}')));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      // Delete now confirms before it destroys — see `_showRouteActions`.
+      await tester.tap(
+        find.byKey(Key('topo-route-delete-confirm-${target.id}')),
+      );
+      await tester.pumpAndSettle();
 
       final after = container.read(drawControllerProvider(_testWallId)).routes;
       expect(after, hasLength(2));
@@ -439,26 +455,18 @@ void main() {
             '44pt touch-target floor the visibility/delete buttons need',
       );
 
-      final visibilityButton = tester.widget<IconButton>(
-        find.byKey(Key('topo-route-visibility-$firstId')),
+      // The row's ONE remaining control is the '⋯' menu, and it keeps the
+      // 44pt floor the visibility/delete pair used to need. The mis-tap
+      // hazard those two had — reversible and destructive sharing an edge —
+      // is gone by construction now that both live behind labelled rows in a
+      // sheet (2026-08-12), but the target itself still has to be hittable.
+      final menuButton = tester.widget<IconButton>(
+        find.byKey(Key('topo-route-menu-$firstId')),
       );
       expect(
-        visibilityButton.constraints,
+        menuButton.constraints,
         const BoxConstraints(minWidth: 44, minHeight: 44),
-        reason:
-            'the visibility toggle must keep a 44pt minimum tap-target '
-            'constraint — shrinking it back below that reintroduces the '
-            'mis-tap-into-Delete bug this was fixed for',
-      );
-      final deleteButton = tester.widget<IconButton>(
-        find.byKey(Key('topo-route-delete-$firstId')),
-      );
-      expect(
-        deleteButton.constraints,
-        const BoxConstraints(minWidth: 44, minHeight: 44),
-        reason:
-            'the delete button must keep the same 44pt minimum tap-target '
-            'constraint as the visibility toggle',
+        reason: 'the row menu must keep a 44pt minimum tap target',
       );
 
       // Keys must be unchanged (still findable, still functional — see the
