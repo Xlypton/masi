@@ -9,6 +9,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:masi/core/coordinates/coordinate_transformer.dart';
 import 'package:masi/core/db/database_provider.dart' show photoFilesProvider;
 import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/data/photo_path_resolution.dart'
+    show thumbKeyFor;
 import 'package:masi/features/topo/domain/route_hit_test.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/grade_colors.dart';
@@ -1290,8 +1292,66 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
             height: _effectiveImageSize.height,
             child: Stack(
               children: [
+                // PROGRESSIVE LOAD, layer 1 of 2: the 512px thumbnail this
+                // photo already has, painted underneath the original.
+                //
+                // The original is the largest decode in the app by a wide
+                // margin — the user's own library has 7-9 MB originals whose
+                // thumbnails are 52-65 KB — and on web every one of those
+                // megabytes is an IndexedDB read, a blob URL and a
+                // full-resolution decode before a single pixel appears. That
+                // is the whole of the reported slowness ("images still load
+                // very slowly", 2026-08-11), and it is worse the better the
+                // photo, which is why some topos felt fine and others did not.
+                //
+                // The thumbnail costs ~1% of that, is written at import time
+                // for every photo (see `PhotoFiles.importPhoto`), and is
+                // usually already decoded — it is what the row the climber
+                // just tapped was showing. So it paints essentially at once
+                // and the original replaces it, in place, the moment it is
+                // ready: the standard progressive-image swap.
+                //
+                // Geometry is identical by construction and the swap cannot
+                // jump: the thumbnail is a proportional downscale of the same
+                // photo, laid out in the same box under the same
+                // `BoxFit.contain`. It is blurry until the original lands,
+                // which is the entire trade being made.
+                //
+                // `thumbKeyFor` takes the RESOLVED original path and returns
+                // the relative `thumbs/<id>.jpg` storage key; `PhotoImage`
+                // re-resolves that through `PhotoFiles.resolvePhotoPathSync`
+                // (a docs-dir join on native, a passthrough on web), exactly
+                // as `LibraryCrudRepository._resolveThumbnail` does for the
+                // list rows. A photo with no thumbnail (one imported before
+                // that tier, or whose best-effort write failed) resolves to
+                // nothing and falls through to the skeleton below, which is
+                // precisely the behaviour this call site had before.
+                PhotoImage(
+                  thumbKeyFor(widget.imagePath),
+                  key: const Key('topo-canvas-photo-thumb'),
+                  fit: BoxFit.contain,
+                  width: _effectiveImageSize.width,
+                  height: _effectiveImageSize.height,
+                  placeholder: () => const SizedBox.shrink(),
+                  // The skeleton lives HERE now rather than on the original
+                  // below — this is the layer that arrives first, so it is
+                  // the honest place to say "coming". Square corners and the
+                  // photo's exact box: this photo is full-bleed (see build's
+                  // doc), so a rounded or differently sized placeholder would
+                  // move the moment the real frame arrived.
+                  loadingPlaceholder: () => PhotoLoadingFill(
+                    width: _effectiveImageSize.width,
+                    height: _effectiveImageSize.height,
+                  ),
+                ),
+                // PROGRESSIVE LOAD, layer 2 of 2: the real, full-resolution
+                // photo, painted over the thumbnail and covering it entirely
+                // once it has a frame.
                 PhotoImage(
                   widget.imagePath,
+                  // Keyed so a test can name THIS layer rather than
+                  // `find.byType(PhotoImage)`, which now matches two.
+                  key: const Key('topo-canvas-photo'),
                   fit: BoxFit.contain,
                   width: _effectiveImageSize.width,
                   height: _effectiveImageSize.height,
@@ -1324,27 +1384,21 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                   // doc for why tests can pump this widget without a real
                   // image file.
                   placeholder: () => const SizedBox.shrink(),
-                  // #56's separate "still resolving" slot, which this call site
-                  // never filled: with only the `SizedBox.shrink()` above, a
-                  // photo that is being decoded (or, on web, read out of
-                  // IndexedDB — or fetched on demand for a public photo whose
-                  // bytes this device does not have, see
-                  // `missing_photo_byte_resolver.dart`) rendered the canvas as
-                  // nothing at all. That is invisible on the first paint, when
-                  // the screen's own placeholder is still up, but not on a
-                  // RE-decode: the image cache evicting this bitmap, or a
-                  // photo-switch back, blanked a canvas the climber was already
-                  // looking at, with the route overlay left floating over the
-                  // backdrop. A skeleton in the photo's exact box says "coming"
-                  // instead, and stops the moment a frame exists.
-                  // Square corners and the photo's exact box: this photo is
-                  // full-bleed (see build's doc), so a rounded or differently
-                  // sized placeholder would move the moment the real frame
-                  // arrived.
-                  loadingPlaceholder: () => PhotoLoadingFill(
-                    width: _effectiveImageSize.width,
-                    height: _effectiveImageSize.height,
-                  ),
+                  // TRANSPARENT while the original resolves — the thumbnail
+                  // underneath is what the climber looks at for that window,
+                  // and a skeleton here would paint straight over it and
+                  // undo the whole point.
+                  //
+                  // The "never blank" property #56 added this slot for is not
+                  // lost, it is improved: the case it was written against —
+                  // the image cache evicting this bitmap, or a photo-switch
+                  // back, blanking a canvas the climber was already looking
+                  // at with the route overlay floating over the backdrop —
+                  // now falls back to the thumbnail rather than to a
+                  // skeleton, and only to the skeleton if the thumbnail is
+                  // missing too (see the layer below's own
+                  // `loadingPlaceholder`).
+                  loadingPlaceholder: () => const SizedBox.shrink(),
                 ),
                 // Wrapped in a ListenableBuilder on the transformation
                 // controller (bug fix: "lines are super thin until you tap

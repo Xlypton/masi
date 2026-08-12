@@ -138,16 +138,23 @@ void main() {
         // specifically for the OBSERVABLE effect of the correction: the
         // `PhotoImage` widget's own `width` being handed the REAL decoded
         // width instead of the stale declared one.
+        //
+        // Keyed to the full-resolution layer (`topo-canvas-photo`): the
+        // canvas now paints the photo's thumbnail beneath it as a
+        // progressive placeholder, so `find.byType(PhotoImage)` matches two.
+        // The claim under test is about the size BOTH are laid out at, and
+        // naming the one that carries the decoded size keeps this reading
+        // the value it means to.
         await pumpUntil(
           tester,
           () =>
-              tester.widget<PhotoImage>(find.byType(PhotoImage)).width ==
+              tester.widget<PhotoImage>(find.byKey(const Key('topo-canvas-photo'))).width ==
               realImageSize.width,
         );
         await drainAsync(tester, settle: false);
 
         // (a) The paint box itself now uses the REAL decoded size.
-        final photoImage = tester.widget<PhotoImage>(find.byType(PhotoImage));
+        final photoImage = tester.widget<PhotoImage>(find.byKey(const Key('topo-canvas-photo')));
         expect(photoImage.width, realImageSize.width);
         expect(photoImage.height, realImageSize.height);
 
