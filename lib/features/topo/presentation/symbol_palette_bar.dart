@@ -60,19 +60,25 @@ const Map<SymbolType, String> _symbolLabels = {
   SymbolType.disabledHold: 'Off',
 };
 
-/// A row with a leading "Route" tool (keyed `symbol-tool-route`) followed by
-/// one control per [SymbolType]. The Route tool represents the route-LINE
-/// draw action -- [DrawState.activeSymbol] == null -- rather than a new
-/// [SymbolType] member (there's deliberately no such member: adding one
-/// would ripple into [TopoPainter]/`topo_route.dart`'s symbol-rendering
-/// switches for a tool that isn't a placeable symbol at all). It renders
-/// SELECTED whenever `activeSymbol == null`, which is also [DrawState]'s
-/// default, so a topo freshly switched into draw mode shows Route selected
-/// with no explicit wiring needed. Tapping a [SymbolType] control makes it
-/// the active symbol (see [DrawController.setActiveSymbol]) and visibly
-/// deselects Route; tapping the already-active control clears it (falling
-/// back to Route); tapping Route itself calls `setActiveSymbol(null)`
-/// directly and re-selects it. Exactly one control is ever selected.
+/// A row with a leading "Route" tool (keyed `symbol-tool-route`), one control
+/// per [SymbolType], and a trailing eraser tool (keyed `symbol-tool-eraser`,
+/// ROUTE_EDITING_PLAN.md §3.3). Neither Route nor the eraser is a
+/// [SymbolType] member (there's deliberately no such member for either:
+/// adding one would ripple into [TopoPainter]/`topo_route.dart`'s
+/// symbol-rendering switches for tools that are never actually drawn onto a
+/// photo). Selection across all three KINDS of control is driven by
+/// [DrawState.activeTool] -- see [DrawTool]'s doc for why `activeSymbol ==
+/// null` alone stopped being enough once a third tool existed. Route renders
+/// SELECTED whenever `activeTool == DrawTool.route`, which is also
+/// [DrawState]'s default, so a topo freshly switched into draw mode shows
+/// Route selected with no explicit wiring needed. Tapping a [SymbolType]
+/// control makes it the active symbol (see [DrawController.setActiveSymbol])
+/// and visibly deselects Route AND the eraser; tapping the already-active
+/// control clears it (falling back to Route); tapping Route itself calls
+/// `setActiveSymbol(null)` directly and re-selects it. Tapping the eraser
+/// calls [DrawController.setEraserActive] and toggles the same way the
+/// SymbolType controls do: tapping it again returns to Route. Exactly one
+/// control is ever selected.
 ///
 /// Bug fix ("the symbol palette buttons are unlabeled and users can't tell
 /// what they do"): each control is now icon-over-TEXT-LABEL (in addition to
@@ -103,6 +109,15 @@ class SymbolPaletteBar extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // ROUTE_EDITING_PLAN.md §3.3: "exactly one control is ever lit" needs a
+    // third state (eraser) that `activeSymbol == null` alone can no longer
+    // express -- see [DrawTool]'s doc. `activeTool` is the source of truth
+    // for which of the three KINDS of control (Route / a SymbolType / the
+    // eraser) is selected; `activeSymbol` narrows that to WHICH SymbolType
+    // when the kind is [DrawTool.symbol].
+    final activeTool = ref.watch(
+      drawControllerProvider(wallId).select((s) => s.activeTool),
+    );
     final activeSymbol = ref.watch(
       drawControllerProvider(wallId).select((s) => s.activeSymbol),
     );
@@ -120,14 +135,14 @@ class SymbolPaletteBar extends ConsumerWidget {
             // see the class doc. It has no `SymbolType` of its own, so
             // unlike the loop below it calls `setActiveSymbol(null)`
             // directly on tap (rather than toggling against a `type`) and
-            // is marked active by the absence of any active symbol.
+            // is marked active by `activeTool == DrawTool.route`.
             Expanded(
               child: _SymbolButton(
                 buttonKey: const Key('symbol-tool-route'),
                 iconBuilder: (color, size) =>
                     MasiIcon('route', color: color, size: size),
                 label: 'Route',
-                isActive: activeSymbol == null,
+                isActive: activeTool == DrawTool.route,
                 colorScheme: colorScheme,
                 labelColor: colors.ink2,
                 onTap: () => notifier.setActiveSymbol(null),
@@ -140,7 +155,7 @@ class SymbolPaletteBar extends ConsumerWidget {
                   iconBuilder: (color, size) =>
                       _symbolIconWidget(type, color: color, size: size),
                   label: _symbolLabels[type] ?? '',
-                  isActive: activeSymbol == type,
+                  isActive: activeTool == DrawTool.symbol && activeSymbol == type,
                   colorScheme: colorScheme,
                   labelColor: colors.ink2,
                   onTap: () => notifier.setActiveSymbol(
@@ -148,6 +163,26 @@ class SymbolPaletteBar extends ConsumerWidget {
                   ),
                 ),
               ),
+            // The eraser tool (ROUTE_EDITING_PLAN.md §3.3), trailing the
+            // symbol controls. Like the Route tool it has no `SymbolType` of
+            // its own; unlike Route it's a genuine on/off toggle (mirroring
+            // the SymbolType controls' toggle-back-to-Route behaviour above)
+            // rather than an always-select-me tap, since re-tapping an
+            // already-active eraser has an obvious "turn it back off"
+            // meaning a bare "select Route" tap doesn't.
+            Expanded(
+              child: _SymbolButton(
+                buttonKey: const Key('symbol-tool-eraser'),
+                iconBuilder: (color, size) =>
+                    MasiIcon('eraser', color: color, size: size),
+                label: 'Eraser',
+                isActive: activeTool == DrawTool.eraser,
+                colorScheme: colorScheme,
+                labelColor: colors.ink2,
+                onTap: () =>
+                    notifier.setEraserActive(activeTool != DrawTool.eraser),
+              ),
+            ),
           ],
         ),
       ),
