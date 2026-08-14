@@ -127,6 +127,18 @@ avoids the awkwardness of long-pressing a target you are also meant to drag.
 baseline, two facets at 0.28/0.14 opacity, 1.8px strokes, round caps and miter
 joins per `ICONS-README.md`.
 
+**Selecting the eraser deselects every other palette tool** — exactly one control
+is ever lit, and the eraser participates in that rule like anything else. In
+particular, activating it must CLEAR `activeSymbol`, not merely shadow it: a
+symbol left active underneath would silently return when the eraser is switched
+off, and a tap would place a marker where the user expected to remove one.
+
+**What it does NOT clear is the selected ROUTE**, and that is deliberate rather
+than an oversight. A committed route's markers render only while that route is
+selected (feature #43), and its point handles only appear for the selected route
+(§4.2). Clearing the selection would leave the eraser with nothing visible to act
+on. So: the eraser clears the palette, and keeps the route.
+
 **The palette invariant this breaks, and the fix.** Today "exactly one tool is
 selected" is expressed as `activeSymbol == null` meaning the Route tool. An
 eraser is a third kind — a tool, not a placeable `SymbolType` — so
@@ -136,6 +148,10 @@ eraser`) and derive the palette's selected state from it, rather than adding an
 `eraser` member to `SymbolType` — that enum feeds `TopoPainter`'s and
 `topo_route.dart`'s symbol-rendering switches, and an eraser is never a thing
 that gets drawn on a photo.
+
+A test pins the mutual exclusion directly: activating the eraser leaves no symbol
+active and no other palette control rendering selected, and switching back to
+Route or a symbol turns the eraser off again.
 
 ### 3.4 Scope of "remove it"
 
