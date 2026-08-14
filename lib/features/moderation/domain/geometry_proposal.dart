@@ -4,6 +4,8 @@ library;
 
 import 'dart:ui';
 
+import 'package:flutter/foundation.dart' show listEquals;
+
 import '../../topo/domain/topo_route.dart';
 
 /// The most points a proposed line may carry, mirroring
@@ -39,9 +41,56 @@ class GeometryProposal {
   /// this phase can express and nothing should.
   final List<TopoSymbol>? symbols;
 
+  /// Builds a proposal from an edit made directly on the canvas — the
+  /// non-owner half of `ROUTE_EDITING_PLAN.md` §3.2, where a visitor drags an
+  /// existing route's points and markers rather than tapping out a fresh line.
+  ///
+  /// The whole reason this is a named constructor rather than a plain call is
+  /// [symbols]' null-versus-empty rule, which is easy to get wrong and
+  /// destructive when it is. [originalSymbols] is what the route had before
+  /// the edit, and it is compared, not assumed:
+  ///
+  ///  - **markers untouched → `null`.** Says nothing about them, so accepting
+  ///    the proposal leaves the owner's bolts and anchors exactly as they are.
+  ///  - **markers changed, including emptied → the new list.** An empty list
+  ///    here is a real, deliberate "I removed these", which the phase-7b
+  ///    tap-out-a-line screen could not express but this editor can.
+  ///
+  /// Collapsing those two cases in either direction is a data-loss bug: send
+  /// `[]` for an untouched route and accepting a line correction silently
+  /// wipes every marker on it; send `null` for an emptied one and the removal
+  /// the suggester actually made is dropped on the floor.
+  factory GeometryProposal.fromEdit({
+    required List<Offset> points,
+    required List<TopoSymbol> symbols,
+    required List<TopoSymbol> originalSymbols,
+  }) {
+    final markersChanged = !listEquals(symbols, originalSymbols);
+    return GeometryProposal(
+      points: List.of(points),
+      symbols: markersChanged ? List.of(symbols) : null,
+    );
+  }
+
   /// Two points make a line. One is a tap, and renders as a dot nobody reads
   /// as a route — the server refuses it too.
   bool get isDrawable => points.length >= 2;
+
+  /// Whether this fits inside the limits [fromPatch] and the server both
+  /// enforce.
+  ///
+  /// Checked on the way OUT, not just on the way in: a proposal built from a
+  /// canvas edit can exceed a cap that a hand-tapped line realistically never
+  /// would, and the failure without this is the worst shape available — the
+  /// suggester does the work, taps send, and the server refuses it. Better to
+  /// know before the note is written.
+  bool get isWithinLimits =>
+      points.length <= kMaxProposedPoints &&
+      (symbols?.length ?? 0) <= kMaxProposedSymbols;
+
+  /// Whether this proposal actually says anything — a sendable line that
+  /// differs from what it would replace.
+  bool get isSendable => isDrawable && isWithinLimits;
 
   Map<String, Object?> toPatch() => {
     'points': [

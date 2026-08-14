@@ -9,6 +9,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:masi/core/coordinates/coordinate_transformer.dart';
 import 'package:masi/core/db/database_provider.dart' show photoFilesProvider;
 import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/application/wall_route_edit_permission.dart';
 import 'package:masi/features/topo/data/photo_path_resolution.dart'
     show thumbKeyFor;
 import 'package:masi/features/topo/domain/route_hit_test.dart';
@@ -388,6 +389,53 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     if (widget.imagePath != oldWidget.imagePath) {
       _maybeProbeDecodedSize();
     }
+    if (widget.wallId != oldWidget.wallId) {
+      // A different wall means a different [DrawController] instance, which
+      // has never been told anything by this widget. Forgetting what we told
+      // the PREVIOUS one is what keeps [_syncProposalOnlyGeometryEdits]'s
+      // no-op check from swallowing the first push to the new one.
+      _pushedProposalOnlyGeometryEdits = null;
+    }
+  }
+
+  /// The last value this widget pushed to
+  /// [DrawController.setProposalOnlyGeometryEdits], or null if it has pushed
+  /// nothing to the CURRENT wall's controller yet.
+  ///
+  /// Exists purely to make [_syncProposalOnlyGeometryEdits] idempotent: it is
+  /// called from every build, and this canvas rebuilds on every draw-state
+  /// change (i.e. on every frame of a drag).
+  bool? _pushedProposalOnlyGeometryEdits;
+
+  /// Tells this wall's [DrawController] whether committed-route geometry
+  /// edits here are the owner's own writes or a non-owner's proposal
+  /// (`ROUTE_EDITING_PLAN.md` §3.2).
+  ///
+  /// The gestures themselves are identical either way — a non-owner drags a
+  /// point and watches it move exactly as the owner does — and
+  /// [DrawController.endRouteGeometryEdit] is the single place the two paths
+  /// diverge, into a database write or an in-memory edit awaiting submission.
+  /// This canvas' only job is to answer the question, which is why the answer
+  /// is pushed as state rather than checked at each of the gesture sites.
+  ///
+  /// Deferred to after the frame because it is called FROM [build], and
+  /// mutating another provider mid-build is exactly what Riverpod's
+  /// `debugCanModifyProviders` guard exists to catch ("Tried to modify a
+  /// provider while the widget tree was building"). It is driven from build
+  /// rather than a `ref.listen` because a listener only fires on a CHANGE,
+  /// and a [DrawController] can outlive this widget — both providers are
+  /// family+autoDispose and the owning screen holds them alive across a photo
+  /// switch — so the flag has to be asserted on mount, never assumed to still
+  /// sit at its default.
+  void _syncProposalOnlyGeometryEdits({required bool proposalOnly}) {
+    if (_pushedProposalOnlyGeometryEdits == proposalOnly) return;
+    _pushedProposalOnlyGeometryEdits = proposalOnly;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      ref
+          .read(drawControllerProvider(widget.wallId).notifier)
+          .setProposalOnlyGeometryEdits(proposalOnly);
+    });
   }
 
   @override
@@ -1231,6 +1279,14 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     // Markers before points, for the reason given on [_eraseAt]: a marker is
     // the smaller target and sits on the line, so testing points first would
     // make any marker near a point impossible to grab.
+    //
+    // Deliberately NOT gated on who owns the wall. Editing someone else's line
+    // is allowed here and produces a proposal instead of a write — the canvas
+    // says which of those two it is by pushing ownership into the controller
+    // (see [build]'s [canEditWallRoutesProvider] listener), and
+    // [DrawController.endRouteGeometryEdit] is where the two paths diverge.
+    // Putting the fork there rather than in this hit-test funnel is what lets
+    // a non-owner drag a point, see it move, and then decide to submit it.
     if (selectedRoute != null) {
       final symbolIndex = _hitTestRouteSymbol(scene, selectedRoute);
       if (symbolIndex != null) {
@@ -1462,6 +1518,36 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   Widget build(BuildContext context) {
     final drawState = ref.watch(drawControllerProvider(widget.wallId));
     final isDrawMode = drawState.mode == DrawMode.draw;
+    // Whether this wall's committed routes are ours to WRITE, or only ours to
+    // propose changes to (`ROUTE_EDITING_PLAN.md` §3.2) — pushed into the
+    // controller by [_syncProposalOnlyGeometryEdits] below.
+    //
+    // ## An unresolved answer pushes NOTHING, deliberately
+    //
+    // Ownership is a database read, so it is `AsyncLoading` for the first
+    // frame(s). Staying silent leaves the controller at its own default
+    // (`proposalOnlyGeometryEdits: false` — writes persist), so "don't know
+    // yet" fails OPEN, towards owner. That direction is chosen, not
+    // incidental: at worst a not-yet-classified foreign wall persists one
+    // gesture locally, a write that RLS refuses to push and the next sync pull
+    // overwrites; the other direction would silently reroute an owner's first
+    // edit on their OWN topo into a proposal to themselves, which is a
+    // data-loss shape. Same keep-by-default posture as `PublicPhotoPruner`:
+    // act only on what is positively proven foreign. Pushing an explicit
+    // `false` while unknown would be worse than pushing nothing, since
+    // [DrawController.setProposalOnlyGeometryEdits] discards pending
+    // baselines on the way down — a flap through `false` would throw away
+    // edits a returning non-owner had not submitted yet.
+    //
+    // `hasValue`/`requireValue`, NOT `asData?.value`, for the reason
+    // `account_screen.dart` records: in Riverpod v3 a REFRESHING provider is
+    // an `AsyncLoading` that still carries its previous value, and reading
+    // through `asData` would throw a settled answer away on every re-emission
+    // — here, silently reverting a foreign wall to "ours to write" mid-edit.
+    final mayEdit = ref.watch(canEditWallRoutesProvider(widget.wallId));
+    if (mayEdit.hasValue) {
+      _syncProposalOnlyGeometryEdits(proposalOnly: !mayEdit.requireValue);
+    }
 
     return LayoutBuilder(
       builder: (context, constraints) {

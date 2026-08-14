@@ -396,6 +396,8 @@ class DrawState {
     this.selectedRouteId,
     this.activeSymbol,
     this.activeTool = DrawTool.route,
+    this.proposalOnlyGeometryEdits = false,
+    this.pendingProposalBaselines = const {},
     this.nextId = 1,
     this.nextNumber = 1,
     this.activeWallId,
@@ -556,6 +558,44 @@ class DrawState {
   /// the invariant tying the two together.
   final DrawTool activeTool;
 
+  /// Whether geometry edits to a committed route must become a
+  /// `GeometryProposal` for the owner to accept, instead of being written
+  /// (`ROUTE_EDITING_PLAN.md` §3.2). Set by the canvas from the answer to "do
+  /// I own this wall".
+  ///
+  /// When true, [DrawController.endRouteGeometryEdit] still applies the edit
+  /// in memory and still records an undo entry — so a suggester can draw,
+  /// look at what they drew, adjust it and undo it exactly like an owner —
+  /// but it does NOT persist. Somebody else's topo must not change on disk
+  /// because a visitor dragged a point.
+  ///
+  /// Deliberately a flag rather than an ownership check inside this
+  /// controller. The controller knows about routes and photos; teaching it
+  /// about auth would make every one of its tests need a signed-in identity
+  /// to say anything about drawing.
+  final bool proposalOnlyGeometryEdits;
+
+  /// For each route edited under [proposalOnlyGeometryEdits], the geometry it
+  /// had BEFORE the first such edit — keyed by route id.
+  ///
+  /// Two jobs, both of which need the ORIGINAL rather than the previous
+  /// gesture's result, which is why an entry is written once and then left
+  /// alone:
+  ///
+  ///  - **Discarding.** [discardPendingGeometryProposals] puts the routes back
+  ///    exactly as the owner has them. Since nothing was ever written, that is
+  ///    a complete undo of the visit.
+  ///  - **Deciding what a proposal actually says about markers.**
+  ///    [GeometryProposal.symbols] is null when a proposal says nothing about
+  ///    them, and null is NOT the same as `[]` — accepting a proposal carrying
+  ///    `[]` would wipe every bolt the owner had placed as a side effect of
+  ///    fixing a line's shape. Comparing against the original is the only way
+  ///    to tell "I did not touch the markers" from "I removed them all".
+  ///
+  /// Empty whenever there is nothing pending, which is what the canvas watches
+  /// to decide whether to offer a submit action at all.
+  final Map<int, RouteGeometry> pendingProposalBaselines;
+
   /// The id to assign to the next committed route.
   final int nextId;
 
@@ -574,6 +614,8 @@ class DrawState {
     SymbolType? activeSymbol,
     bool activeSymbolSet = false,
     DrawTool? activeTool,
+    bool? proposalOnlyGeometryEdits,
+    Map<int, RouteGeometry>? pendingProposalBaselines,
     int? nextId,
     int? nextNumber,
     String? activeWallId,
@@ -603,6 +645,10 @@ class DrawState {
           ? activeSymbol
           : (activeSymbol ?? this.activeSymbol),
       activeTool: activeTool ?? this.activeTool,
+      proposalOnlyGeometryEdits:
+          proposalOnlyGeometryEdits ?? this.proposalOnlyGeometryEdits,
+      pendingProposalBaselines:
+          pendingProposalBaselines ?? this.pendingProposalBaselines,
       nextId: nextId ?? this.nextId,
       nextNumber: nextNumber ?? this.nextNumber,
       activeWallId: activeWallIdSet
@@ -1206,6 +1252,24 @@ class DrawController extends Notifier<DrawState> {
       redoStack: const [],
     );
 
+    if (state.proposalOnlyGeometryEdits) {
+      // Somebody else's topo (§3.2). The edit stays in memory so the suggester
+      // can see and refine what they are proposing; it never reaches disk.
+      //
+      // The baseline is recorded only on the FIRST edit to a route, so a
+      // second gesture does not overwrite the owner's real geometry with this
+      // visit's intermediate state — see [DrawState.pendingProposalBaselines].
+      if (!state.pendingProposalBaselines.containsKey(routeId)) {
+        state = state.copyWith(
+          pendingProposalBaselines: {
+            ...state.pendingProposalBaselines,
+            routeId: baseline,
+          },
+        );
+      }
+      return;
+    }
+
     final wallId = state.activeWallId;
     final photoId = state.activePhotoId;
     if (wallId == null || photoId == null) return;
@@ -1291,6 +1355,77 @@ class DrawController extends Notifier<DrawState> {
       currentSymbols: const [],
       undoStack: const [],
       redoStack: const [],
+    );
+  }
+
+  /// Declares whether geometry edits must become proposals rather than writes
+  /// — see [DrawState.proposalOnlyGeometryEdits]. Called by the canvas once
+  /// the "do I own this wall" answer resolves.
+  ///
+  /// Turning it OFF discards any pending baselines, because they describe
+  /// edits that were never written and now have no submit path. That only
+  /// happens when the answer itself changes (a sign-in completing, a switch to
+  /// a wall you do own), and in both cases the pending edits belong to the
+  /// previous context.
+  void setProposalOnlyGeometryEdits(bool proposalOnly) {
+    if (state.proposalOnlyGeometryEdits == proposalOnly) return;
+    state = state.copyWith(
+      proposalOnlyGeometryEdits: proposalOnly,
+      pendingProposalBaselines: const {},
+    );
+  }
+
+  /// The geometry of route [routeId] as it stood before this visit's first
+  /// proposal-only edit, or null if that route has not been edited.
+  RouteGeometry? pendingProposalBaselineFor(int routeId) =>
+      state.pendingProposalBaselines[routeId];
+
+  /// Restores every route edited under [DrawState.proposalOnlyGeometryEdits]
+  /// to the geometry it had before, and forgets the pending set.
+  ///
+  /// Complete by construction: proposal-only edits are never written, so
+  /// putting the in-memory routes back is the whole of the undo. Nothing needs
+  /// to be re-read from disk, which also means this works with no network and
+  /// no database round-trip.
+  ///
+  /// The undo/redo stacks are cleared of the edits it reverses, so pressing
+  /// undo afterwards cannot re-apply a change to a route that has just been
+  /// put back.
+  ///
+  /// [routeIds] narrows it to a subset, which is what a PARTIAL send needs:
+  /// suggestions are filed one route at a time and there is no outbox
+  /// (decision D-4), so if the third of four calls throws, the first two are
+  /// genuinely filed and the last two are not. Clearing all four would lose
+  /// two edits the owner never received; clearing none would re-send the two
+  /// that landed on the next attempt. Only the ones that actually went are
+  /// cleared. Passing null means all of them.
+  void discardPendingGeometryProposals([Iterable<int>? routeIds]) {
+    if (state.pendingProposalBaselines.isEmpty) return;
+    final requested = routeIds?.toSet();
+    final baselines = requested == null
+        ? state.pendingProposalBaselines
+        : {
+            for (final entry in state.pendingProposalBaselines.entries)
+              if (requested.contains(entry.key)) entry.key: entry.value,
+          };
+    if (baselines.isEmpty) return;
+    final remaining = {
+      for (final entry in state.pendingProposalBaselines.entries)
+        if (!baselines.containsKey(entry.key)) entry.key: entry.value,
+    };
+
+    final routes = [
+      for (final route in state.routes)
+        baselines[route.id]?.applyTo(route) ?? route,
+    ];
+    bool isReverted(DrawOp op) =>
+        op is EditRouteGeometryOp && baselines.containsKey(op.routeId);
+
+    state = state.copyWith(
+      routes: routes,
+      pendingProposalBaselines: remaining,
+      undoStack: state.undoStack.where((op) => !isReverted(op)).toList(),
+      redoStack: state.redoStack.where((op) => !isReverted(op)).toList(),
     );
   }
 

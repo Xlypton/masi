@@ -92,6 +92,46 @@ Two different paths, and only one of them is new work:
   owner accepts or rejects. The new editing UI must route into that flow rather
   than writing directly whenever the current user is not the owner. **No new
   moderation design needed** — wire to what exists.
+
+  > **Built 2026-08-14, and the premise was wrong in one important way.** ⚠️
+  > "Whenever the current user is not the owner" **was not computable** — that
+  > predicate existed nowhere in the codebase. `readOnly` on the canvas route is
+  > a URL query parameter (`router.dart`), a call-site convention that at least
+  > six pushers omit, and `_wallQuery` has no owner predicate, so Library →
+  > Organize → Areas → Sectors → Walls opens any locally-cached wall — including
+  > other people's synced-down topos — in the fully editable canvas. So this
+  > section's gate had to be *built*, not wired.
+  >
+  > What was built:
+  > - `mayEditWallRoutes` / `canEditWallRoutesProvider`
+  >   (`lib/features/topo/application/wall_route_edit_permission.dart`), matching
+  >   `LibraryCrudRepository._ownOrUnowned`'s **own-OR-unowned** semantics. The
+  >   unowned arm is load-bearing: rows drawn before a first sign-in carry a null
+  >   `ownerId` until `claimOwnership` stamps them, so treating null as foreign
+  >   would lock people out of their own topos — a worse failure than the one
+  >   being fixed. Every ambiguous answer (missing row, failed read, not yet
+  >   resolved) resolves to *editable*: refuse only what is positively proven
+  >   foreign, the same posture as `PublicPhotoPruner`.
+  > - **The gestures are identical for a non-owner.** They drag a point and watch
+  >   it move exactly as an owner does; `endRouteGeometryEdit` is the single
+  >   place the paths diverge, via `DrawState.proposalOnlyGeometryEdits` — into a
+  >   write, or into an in-memory edit awaiting submission. Refusing the gesture
+  >   was considered and rejected: you cannot judge a line you are not allowed to
+  >   draw.
+  > - A **suggest/discard bar** (`topo-proposal-bar`) files one
+  >   `SuggestionKind.routeGeometry` per edited route through the existing
+  >   `SuggestionService`, then restores the owner's geometry — the suggestion
+  >   lives on the server, and a line left on screen that exists nowhere else
+  >   reads as "accepted". It says **"not saved"** out loud, because the edit
+  >   looks identical to an owner's and silence would read as saved.
+  > - `GeometryProposal.fromEdit` decides `symbols` **null vs `[]` by comparison**
+  >   against the pre-edit markers. Null means "says nothing about them"; `[]` is
+  >   a deliberate removal this editor can now express and the phase-7b screen
+  >   could not. Collapsing either direction is silent data loss.
+  >
+  > **Still open, deliberately out of scope** and filed separately: drawing a
+  > *new* route on a foreign wall, renaming it, and the admin queue's five
+  > unadorned pushes to an editable canvas. Only route GEOMETRY is gated here.
 - **Editing your own published topo** → **blocks nothing.** No admin approval, no
   queue, no trust gate. This preserves the deliberate C-5c/C-5d design: publication
   is a one-time gate, and a structural change posts a *notice* to the admin queue

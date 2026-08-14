@@ -18,6 +18,9 @@ import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/logbook/presentation/log_ascent_sheet.dart';
 import 'package:masi/features/moderation/application/moderation_providers.dart';
+import 'package:masi/features/moderation/application/suggestion_providers.dart';
+import 'package:masi/features/moderation/domain/edit_suggestion.dart';
+import 'package:masi/features/moderation/domain/geometry_proposal.dart';
 import 'package:masi/features/moderation/presentation/moderation_banner.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/data/image_dimensions.dart';
@@ -34,6 +37,7 @@ import 'package:masi/features/topo/presentation/topo_canvas.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_gps.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_photo_ops.dart';
 import 'package:masi/shared/presentation/masi_async_view.dart';
+import 'package:masi/shared/presentation/masi_dialogs.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:masi/shared/presentation/masi_loading_gate.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
@@ -1311,6 +1315,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           // rebuild here — otherwise the canvas would keep presenting itself
           // as a complete-but-empty topo until some unrelated field changed.
           lastLoadFailure: s.lastLoadFailure,
+          // §3.2: drives the suggest/discard bar. `routes` above would
+          // already catch an edit, but not the two cases where this map
+          // changes on its OWN — a send clearing the routes it filed, and
+          // `setProposalOnlyGeometryEdits` clearing everything when the
+          // ownership answer changes. Without it the bar would linger over a
+          // topo with nothing left to suggest.
+          pendingProposalBaselines: s.pendingProposalBaselines,
         ),
       ),
     );
@@ -1631,6 +1642,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                         noticeKey: const Key('topo-storage-blocked'),
                         message: storageBlocked,
                       ),
+                    // §3.2: edits to somebody else's route were kept in
+                    // memory and never written, so this is the ONLY way they
+                    // can go anywhere. It sits above the draw cluster rather
+                    // than replacing it because the suggester is still
+                    // editing — they may want to adjust the line again before
+                    // sending it.
+                    if (drawState.pendingProposalBaselines.isNotEmpty)
+                      _buildProposalBar(context, colors, drawState),
                     _buildBottomChrome(
                       colors,
                       drawNotifier,
@@ -1709,6 +1728,189 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// The suggest/discard bar for edits made to somebody else's route
+  /// (`ROUTE_EDITING_PLAN.md` §3.2).
+  ///
+  /// It says "not saved" out loud, and that wording is the point rather than
+  /// hedging. The edits ARE on screen and they look exactly like an owner's
+  /// would, so without a standing statement to the contrary the reasonable
+  /// reading is that they were saved — and the visitor closes the topo
+  /// believing they have corrected it when they have neither corrected it nor
+  /// told anyone.
+  Widget _buildProposalBar(
+    BuildContext context,
+    MasiColors colors,
+    DrawState drawState,
+  ) {
+    final count = drawState.pendingProposalBaselines.length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MasiSpacing.sm),
+      child: GlassChrome(
+        key: const Key('topo-proposal-bar'),
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.md,
+          vertical: MasiSpacing.sm,
+        ),
+        child: Row(
+          children: [
+            MasiIcon('edit', size: 18, color: colors.ink2),
+            const SizedBox(width: MasiSpacing.sm),
+            Expanded(
+              child: Text(
+                count == 1
+                    ? "This is someone else's topo — your change is not saved"
+                    : "This is someone else's topo — your $count changes are "
+                          'not saved',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: colors.ink2),
+              ),
+            ),
+            TextButton(
+              key: const Key('topo-proposal-discard'),
+              onPressed: _discardGeometryProposals,
+              child: const Text('Discard'),
+            ),
+            MasiPendingButton.text(
+              key: const Key('topo-proposal-send'),
+              onPressed: _submitGeometryProposals,
+              child: const Text('Suggest'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Puts the owner's geometry back. Nothing was ever written, so this is a
+  /// complete undo of the visit — no reload, no network.
+  void _discardGeometryProposals() {
+    ref
+        .read(drawControllerProvider(widget.wallId).notifier)
+        .discardPendingGeometryProposals();
+  }
+
+  /// Files one `SuggestionKind.routeGeometry` suggestion per edited route, then
+  /// restores the owner's geometry locally.
+  ///
+  /// Restoring on SUCCESS is not throwing the work away — the suggestion now
+  /// lives on the server, and the local copy's job is to show what the owner
+  /// actually has. Leaving the edit on screen would mean the canvas keeps
+  /// displaying a line that exists nowhere, which reads as "accepted".
+  ///
+  /// Sends sequentially and stops at the first failure. There is no outbox
+  /// (decision D-4), so each call either filed or did not, and only the ones
+  /// that filed are cleared — see [DrawController.discardPendingGeometryProposals].
+  Future<void> _submitGeometryProposals() async {
+    final drawState = ref.read(drawControllerProvider(widget.wallId));
+    final baselines = drawState.pendingProposalBaselines;
+    final photoId = drawState.activePhotoId;
+    if (baselines.isEmpty || photoId == null) return;
+
+    // Built BEFORE the note is asked for: a proposal the server would refuse
+    // should be reported now, not after the suggester has written an
+    // explanation for it.
+    final proposals = <int, GeometryProposal>{};
+    for (final route in drawState.routes) {
+      final baseline = baselines[route.id];
+      if (baseline == null) continue;
+      final proposal = GeometryProposal.fromEdit(
+        points: route.points,
+        symbols: route.symbols,
+        originalSymbols: baseline.symbols,
+      );
+      if (!proposal.isSendable) {
+        await showMasiAlert(
+          context,
+          title: 'That line is too long to suggest',
+          message:
+              'Route ${route.number} has more points or markers than a '
+              'suggestion can carry. Remove some and try again.',
+          dialogKey: const Key('topo-proposal-too-large'),
+        );
+        return;
+      }
+      proposals[route.id] = proposal;
+    }
+    if (proposals.isEmpty) return;
+
+    final note = await showMasiTextPrompt(
+      context,
+      title: proposals.length == 1
+          ? 'Suggest this change'
+          : 'Suggest these ${proposals.length} changes',
+      submitLabel: 'Send',
+      placeholder: 'Why this line? Optional — but it is what gets one accepted',
+      allowEmpty: true,
+      dialogKey: const Key('topo-proposal-note'),
+      fieldKey: const Key('topo-proposal-note-field'),
+      submitKey: const Key('topo-proposal-note-send'),
+    );
+    // Dismissed: keep every edit exactly where it is, so backing out of the
+    // note does not also throw away the line they drew.
+    if (note == null || !mounted) return;
+
+    final trimmedNote = note.trim();
+    final repository = ref.read(routeRepositoryProvider);
+    final service = ref.read(suggestionServiceProvider);
+    final sent = <int>[];
+    Object? failure;
+
+    try {
+      final dbIds = await repository.routeDbIdsByNumber(
+        widget.wallId,
+        photoId,
+      );
+      for (final entry in proposals.entries) {
+        final route = drawState.routes.firstWhere((r) => r.id == entry.key);
+        final dbId = dbIds[route.number];
+        // The route it targets is gone — the owner deleted it, or a pull
+        // removed it, while this visit was editing. Filing against nothing
+        // would produce a suggestion the owner can never act on.
+        if (dbId == null) continue;
+        await service.suggest(
+          wallId: widget.wallId,
+          kind: SuggestionKind.routeGeometry,
+          patch: entry.value.toPatch(),
+          note: trimmedNote.isEmpty ? null : trimmedNote,
+          routeId: dbId,
+          photoId: photoId,
+        );
+        sent.add(entry.key);
+      }
+    } catch (error) {
+      failure = error;
+    }
+
+    if (!mounted) return;
+    if (sent.isNotEmpty) {
+      ref
+          .read(drawControllerProvider(widget.wallId).notifier)
+          .discardPendingGeometryProposals(sent);
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    if (failure != null) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            sent.isEmpty
+                ? 'That could not be sent. Your changes are still here — try '
+                      'again.'
+                : 'Sent ${sent.length}, but the rest could not be sent. Those '
+                      'changes are still here — try again.',
+          ),
+        ),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      const SnackBar(
+        key: Key('topo-proposal-sent'),
+        content: Text('Sent to the owner'),
       ),
     );
   }
