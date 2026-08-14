@@ -180,6 +180,17 @@ compile until updated — a feature, not a chore): `MoveRoutePointOp`,
 `RemoveRouteSymbolOp`. Each stores routeId + index + before/after, so `undo` is a
 straight inversion.
 
+> **Built differently — one op, not five.** ⚠️ Implemented 2026-08-14 as a single
+> `EditRouteGeometryOp` carrying routeId + a whole-geometry `before`/`after` pair.
+> The five-op family contradicts §3.1 one section earlier: dragging out of the
+> middle of a segment *inserts* a point and then *moves* it as one continuous
+> motion, so a per-edit family records one gesture as two undo entries and the
+> climber's first undo leaves a stray point on the line. A whole-geometry pair is
+> correct for any gesture without index arithmetic, and undo/redo become plain
+> assignment. Cost is memory proportional to the route, which is bounded by what
+> a person draws by hand. The full argument is on the class itself in
+> `draw_controller.dart`.
+
 Plus the `activeTool` change from §3.3.
 
 ### 4.2 Painting (`topo_painter.dart`)
@@ -202,6 +213,29 @@ priority order has to be explicit or it will regress the existing draw flow:
 4. selected route's **point**
 5. tap-to-select a different route
 6. place a symbol / add a point (unchanged, lowest)
+
+> **Built differently — two departures, both deliberate.** ⚠️ Implemented
+> 2026-08-14 in `_beginInteraction`:
+>
+> - **Symbol placement stayed at the TOP, not at 6.** The list above assumed it
+>   was already the lowest-priority fallback ("unchanged, lowest"); it is not —
+>   `activeSymbol != null` has always short-circuited the whole method before
+>   any handle hit-test. Demoting it below the draft handle would silently
+>   change an existing, tested behaviour (placing a marker near a draft handle
+>   would start dragging the handle instead) for no gain in this feature. It is
+>   moot against the eraser in any case: `setEraserActive` clears
+>   `activeSymbol`, so the two branches can never both be live.
+> - **Tap-to-select-a-different-route (5) was NOT added in draw mode.** It does
+>   not exist there today — a tap on empty canvas in draw mode ADDS A POINT,
+>   which is the mode's primary action. Adding proximity-select above it would
+>   make drawing a second line alongside an existing one select the old route
+>   instead of drawing, which is a real regression against a common thing to
+>   draw. Selection in draw mode comes from tapping the legend row, which
+>   already works and is unambiguous. Tap-to-select stays what it is: a
+>   **view**-mode gesture, in `_endViewTap`.
+>
+> So the order as built is: eraser → place symbol → draft handle → selected
+> route's symbol → selected route's point → add a point.
 
 ### 4.4 Entry point
 

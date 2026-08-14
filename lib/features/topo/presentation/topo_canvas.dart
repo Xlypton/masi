@@ -462,6 +462,26 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// if the user isn't mid-drag on an existing handle.
   int? _draggingIndex;
 
+  /// The COMMITTED route whose geometry the current drag is editing, or null
+  /// when the drag (if any) is on the draft line instead — see
+  /// `ROUTE_EDITING_PLAN.md`.
+  ///
+  /// Held alongside exactly one of [_draggingRoutePointIndex] /
+  /// [_draggingRouteSymbolIndex]; all three are cleared together. Kept as a
+  /// route ID rather than an index into `DrawState.routes` for the same reason
+  /// the controller's own operations are: a delete arriving mid-drag shifts
+  /// every later index, and a drag that silently retargeted itself onto a
+  /// different route would be very hard to explain afterwards.
+  int? _draggingRouteId;
+
+  /// Index into the dragged committed route's `points`, or null when the drag
+  /// is on one of its symbols instead (or when there is no such drag).
+  int? _draggingRoutePointIndex;
+
+  /// Index into the dragged committed route's `symbols`, or null when the drag
+  /// is on one of its points instead (or when there is no such drag).
+  int? _draggingRouteSymbolIndex;
+
   /// The pointer id that started the current down/move/up interaction, or
   /// null when no interaction is in progress. Guards against a second
   /// finger touching down mid-drag/mid-tap from hijacking it: only
@@ -998,6 +1018,111 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     return nearestIndex;
   }
 
+  /// The [SymbolType] marker of [route] under [sceneTap], if any — the
+  /// marker-side twin of [_hitTestHandle], with the same zoom-adjusted radius
+  /// and the same nearest-wins rule.
+  ///
+  /// Separate from [_hitTestHandle] only because a symbol's position lives on
+  /// [TopoSymbol.position] rather than being an [Offset] in a flat list; the
+  /// geometry is deliberately identical, so a marker and a point are equally
+  /// easy to grab.
+  int? _hitTestRouteSymbol(Offset sceneTap, TopoRoute route) {
+    final scale = _currentScale;
+    final thresholdScenePx = _handleHitRadiusPx / (scale == 0 ? 1 : scale);
+    int? nearestIndex;
+    var nearestDistance = double.infinity;
+    for (var i = 0; i < route.symbols.length; i++) {
+      final scenePoint = CoordinateTransformer.percentToScene(
+        route.symbols[i].position,
+        _effectiveImageSize,
+      );
+      final distance = (scenePoint - sceneTap).distance;
+      if (distance <= thresholdScenePx && distance < nearestDistance) {
+        nearestIndex = i;
+        nearestDistance = distance;
+      }
+    }
+    return nearestIndex;
+  }
+
+  /// The committed route currently selected, or null if none is (or the
+  /// selection points at a route that no longer exists).
+  ///
+  /// Selection is what makes a committed route editable at all: its markers
+  /// render only while it is selected (feature #43) and so do its point
+  /// handles, so an unselected route has nothing on screen to grab. That is
+  /// also the feature's entry point — see [_beginInteraction].
+  TopoRoute? _selectedCommittedRoute(DrawState drawState) {
+    final selectedId = drawState.selectedRouteId;
+    if (selectedId == null) return null;
+    for (final route in drawState.routes) {
+      if (route.id == selectedId) return route;
+    }
+    return null;
+  }
+
+  /// Removes whatever [scene] lands on in [route] — a marker first, then a
+  /// point — and closes the resulting one-tap edit gesture.
+  ///
+  /// Markers are tested before points because a marker is the smaller target
+  /// and sits ON the line: testing points first would make a marker placed
+  /// near a point unreachable, since the point would always win.
+  void _eraseAt(Offset scene, TopoRoute route) {
+    final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+
+    final symbolIndex = _hitTestRouteSymbol(scene, route);
+    if (symbolIndex != null) {
+      unawaited(HapticFeedback.selectionClick());
+      notifier.removeRouteSymbol(route.id, symbolIndex);
+      unawaited(notifier.endRouteGeometryEdit(route.id));
+      return;
+    }
+
+    final pointIndex = _hitTestHandle(scene, route.points);
+    if (pointIndex == null) return;
+
+    if (route.points.length <= 2) {
+      // [DrawController.removeRoutePoint] refuses below two points, because a
+      // one-point route draws no line at all while still holding a number and
+      // a legend row. Refusing SILENTLY is the part worth avoiding: the
+      // climber taps a handle with the eraser, watches nothing happen, and has
+      // no way to tell a floor from a broken tool.
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('A route needs at least two points. Delete the route '
+              'instead to remove it.'),
+        ),
+      );
+      return;
+    }
+
+    unawaited(HapticFeedback.selectionClick());
+    notifier.removeRoutePoint(route.id, pointIndex);
+    unawaited(notifier.endRouteGeometryEdit(route.id));
+  }
+
+  /// Clears the committed-route drag fields and closes the controller-side
+  /// edit gesture, persisting everything the drag did as ONE change and ONE
+  /// undo entry (`ROUTE_EDITING_PLAN.md` §3.1).
+  ///
+  /// Called from every exit path a drag has — pointer-up, pointer-cancel, and
+  /// the second-finger abort — because the moves are already applied and
+  /// already on screen by the time any of them run. Leaving one of those paths
+  /// out would not undo the drag; it would leave it visible and unsaved, which
+  /// is the failure mode this whole layer exists to avoid.
+  void _endRouteGeometryDrag() {
+    final routeId = _draggingRouteId;
+    _draggingRouteId = null;
+    _draggingRoutePointIndex = null;
+    _draggingRouteSymbolIndex = null;
+    if (routeId == null) return;
+    unawaited(
+      ref
+          .read(drawControllerProvider(widget.wallId).notifier)
+          .endRouteGeometryEdit(routeId),
+    );
+  }
+
   /// Handles a pointer going down: hit-test against existing points and
   /// either begin dragging the hit point, or record a PENDING tap-to-add at
   /// the tapped location (resolved later, on pointer-up, by
@@ -1028,6 +1153,11 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // `_pendingTapDownPosition` here is what actually neutralizes it.
       _draggingIndex = null;
       _pendingTapDownPosition = null;
+      // The committed-route drag is settled rather than merely dropped: its
+      // moves are already applied and on screen, so abandoning the fields
+      // without closing the gesture would leave that edit unpersisted and
+      // absent from the undo stack. See [_endRouteGeometryDrag].
+      _endRouteGeometryDrag();
       return;
     }
     _activePointer = pointerId;
@@ -1035,6 +1165,19 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       viewportLocalPosition,
     );
     final drawState = ref.read(drawControllerProvider(widget.wallId));
+    final selectedRoute = _selectedCommittedRoute(drawState);
+
+    // PRIORITY 1 — the eraser. An explicitly-chosen tool is the most explicit
+    // intent available, so it outranks everything below it. It is also
+    // mutually exclusive with symbol placement by construction:
+    // [DrawController.setEraserActive] CLEARS `activeSymbol`, so the branch
+    // just below cannot also be live.
+    if (drawState.activeTool == DrawTool.eraser) {
+      _draggingIndex = null;
+      _pendingTapDownPosition = null;
+      if (selectedRoute != null) _eraseAt(scene, selectedRoute);
+      return;
+    }
 
     if (drawState.activeSymbol != null) {
       // Symbol-placement mode: a tap places a symbol of the active type
@@ -1068,6 +1211,10 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       return;
     }
 
+    // PRIORITY 3 — a handle of the DRAFT line. An active draw always beats
+    // editing a committed route: the line being drawn right now is the thing
+    // the climber is looking at, and its handles are the ones under their
+    // finger.
     final hitIndex = _hitTestHandle(scene, drawState.currentPoints);
     if (hitIndex != null) {
       _draggingIndex = hitIndex;
@@ -1075,7 +1222,40 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       unawaited(HapticFeedback.selectionClick());
       return;
     }
-    // No handle hit: this MIGHT be a tap-to-add, but don't commit it yet —
+
+    // PRIORITIES 4 and 5 — the selected committed route's own geometry. This
+    // is the feature's entry point: there is no menu item and no separate
+    // edit mode, because selecting a route in draw mode already makes its
+    // handles and markers appear, and grabbing one is the affordance.
+    //
+    // Markers before points, for the reason given on [_eraseAt]: a marker is
+    // the smaller target and sits on the line, so testing points first would
+    // make any marker near a point impossible to grab.
+    if (selectedRoute != null) {
+      final symbolIndex = _hitTestRouteSymbol(scene, selectedRoute);
+      if (symbolIndex != null) {
+        _draggingIndex = null;
+        _pendingTapDownPosition = null;
+        _draggingRouteId = selectedRoute.id;
+        _draggingRouteSymbolIndex = symbolIndex;
+        _draggingRoutePointIndex = null;
+        unawaited(HapticFeedback.selectionClick());
+        return;
+      }
+
+      final routePointIndex = _hitTestHandle(scene, selectedRoute.points);
+      if (routePointIndex != null) {
+        _draggingIndex = null;
+        _pendingTapDownPosition = null;
+        _draggingRouteId = selectedRoute.id;
+        _draggingRoutePointIndex = routePointIndex;
+        _draggingRouteSymbolIndex = null;
+        unawaited(HapticFeedback.selectionClick());
+        return;
+      }
+    }
+
+    // PRIORITY 6 — no handle hit: this MIGHT be a tap-to-add, but don't commit it yet —
     // record it as pending and decide on pointer-up (mirroring
     // [_beginViewTap]/[_endViewTap]'s view-mode tap semantics). This is
     // what lets a single-finger DRAG starting on empty space (moved past
@@ -1110,6 +1290,35 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       return;
     }
 
+    // A committed route's point or marker. Every frame mutates in-memory
+    // state and NOTHING else — no database write, no undo entry — which is
+    // the whole reason [DrawController.endRouteGeometryEdit] exists as a
+    // separate boundary. See its doc: a two-second drag is roughly 120 of
+    // these.
+    final draggingRouteId = _draggingRouteId;
+    if (draggingRouteId != null) {
+      final scene = widget.transformationController.toScene(
+        viewportLocalPosition,
+      );
+      final percent = CoordinateTransformer.sceneToPercent(
+        scene,
+        _effectiveImageSize,
+      );
+      final notifier = ref.read(
+        drawControllerProvider(widget.wallId).notifier,
+      );
+      final symbolIndex = _draggingRouteSymbolIndex;
+      if (symbolIndex != null) {
+        notifier.moveRouteSymbol(draggingRouteId, symbolIndex, percent);
+      } else {
+        final pointIndex = _draggingRoutePointIndex;
+        if (pointIndex != null) {
+          notifier.moveRoutePoint(draggingRouteId, pointIndex, percent);
+        }
+      }
+      return;
+    }
+
     final downPosition = _pendingTapDownPosition;
     if (downPosition == null) return;
     final movement = (viewportLocalPosition - downPosition).distance;
@@ -1133,7 +1342,11 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     _draggingIndex = null;
     final pendingTapDownPosition = _pendingTapDownPosition;
     _pendingTapDownPosition = null;
+    final wasEditingRoute = _draggingRouteId != null;
+    // Persists the whole drag as one change and one undo entry.
+    _endRouteGeometryDrag();
 
+    if (wasEditingRoute) return;
     if (draggingIndex != null) return; // Handle drag: already applied.
     if (pendingTapDownPosition == null) {
       return; // Cancelled: moved past the slop, or aborted by a 2nd finger.
@@ -1160,6 +1373,14 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     _activePointer = null;
     _draggingIndex = null;
     _pendingTapDownPosition = null;
+    // A cancelled committed-route drag is still SETTLED rather than dropped.
+    // Unlike a pending tap-to-add — which has changed nothing yet, and so has
+    // nothing to save — the drag's moves have already been applied and the
+    // climber has already watched the line follow their finger. Discarding
+    // them here would silently unsave an edit that is visibly on screen; the
+    // honest close is to keep it, as one change and one undo entry they can
+    // reverse deliberately.
+    _endRouteGeometryDrag();
   }
 
   /// Records the pointer id and position that started a potential
@@ -1439,6 +1660,26 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
                         showHandles:
                             isDrawMode && drawState.activeSymbol == null,
                         selectedRouteId: drawState.selectedRouteId,
+                        // The selected committed route's own points get
+                        // handles too, in draw mode, which is the entire
+                        // affordance for editing it — there is no menu item
+                        // and no separate edit mode (`ROUTE_EDITING_PLAN.md`
+                        // §4.4). Selection is the gate rather than a
+                        // decoration: a committed route's markers already
+                        // render only while it is selected (feature #43), so
+                        // handles appearing on the same condition means
+                        // everything grabbable appears and disappears
+                        // together.
+                        //
+                        // Deliberately NOT gated on `activeSymbol == null` the
+                        // way `showHandles` above is. That gate exists so the
+                        // draft's handles stop competing with symbol
+                        // PLACEMENT taps; here the opposite is wanted, because
+                        // the eraser's whole job is to hit these handles and
+                        // it would be unusable if selecting it hid them.
+                        editableRouteId: isDrawMode
+                            ? drawState.selectedRouteId
+                            : null,
                         palette: kRoutePalette,
                         // Live view-transform scale so TopoPainter can divide
                         // its scene-space sizes by it and render at a constant
