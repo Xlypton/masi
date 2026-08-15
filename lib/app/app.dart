@@ -175,8 +175,13 @@ class _MasiAppState extends ConsumerState<MasiApp>
     return MaterialApp.router(
       title: 'masi',
       debugShowCheckedModeBanner: false,
-      theme: MasiTheme.light,
-      darkTheme: MasiTheme.dark,
+      // `.withSnackBarSafeArea` is the seam for the global SnackBar fix (see
+      // its doc in theme.dart): it needs both a BuildContext (the real
+      // device bottom inset) and this WidgetRef (`pwaInstallStatusProvider`,
+      // the standalone-PWA floor), and MasiApp.build is the one place both
+      // are naturally available together.
+      theme: MasiTheme.withSnackBarSafeArea(MasiTheme.light, context, ref),
+      darkTheme: MasiTheme.withSnackBarSafeArea(MasiTheme.dark, context, ref),
       themeMode: ThemeMode.system,
       routerConfig: appRouter,
       // Global tap-to-dismiss-keyboard: a translucent GestureDetector over

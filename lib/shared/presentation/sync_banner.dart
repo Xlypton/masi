@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show Clipboard, ClipboardData;
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
+import 'bottom_safe_inset.dart';
 import 'masi_icon.dart';
 import 'masi_pending_button.dart';
 
@@ -444,17 +446,18 @@ Future<void> showSyncBannerDetails(
 /// wants only the URL out of a 400-character exception should be able to take
 /// that much — and it is the honest fallback if the clipboard write fails,
 /// which is the one thing the button cannot recover from itself.
-class _SyncBannerDetailsSheet extends StatefulWidget {
+class _SyncBannerDetailsSheet extends ConsumerStatefulWidget {
   const _SyncBannerDetailsSheet({required this.text});
 
   final String text;
 
   @override
-  State<_SyncBannerDetailsSheet> createState() =>
+  ConsumerState<_SyncBannerDetailsSheet> createState() =>
       _SyncBannerDetailsSheetState();
 }
 
-class _SyncBannerDetailsSheetState extends State<_SyncBannerDetailsSheet> {
+class _SyncBannerDetailsSheetState
+    extends ConsumerState<_SyncBannerDetailsSheet> {
   /// Latched, never un-latched on a timer. A `Future.delayed` that put the
   /// label back would leave a pending timer in every widget test that touches
   /// this sheet, and "Copied" going stale is not a problem anyone has.
@@ -482,6 +485,11 @@ class _SyncBannerDetailsSheetState extends State<_SyncBannerDetailsSheet> {
 
     return SafeArea(
       key: const Key('sync-banner-details-sheet'),
+      // The floor alone, handed to `minimum:` — `SafeArea` already maxes it
+      // per-edge against the real device inset, which is zero on the bottom
+      // in an installed iOS PWA (the platform never reports a home-indicator
+      // inset there).
+      minimum: EdgeInsets.only(bottom: standaloneBottomFloorOf(ref)),
       child: Padding(
         padding: const EdgeInsets.all(MasiSpacing.lg),
         child: Column(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
@@ -38,7 +39,12 @@ class TopoHistorySheet extends ConsumerWidget {
     final colors = MasiColors.of(context);
     final versions = ref.watch(topoVersionsProvider(wallId));
     final isAdmin = ref.watch(isAdminProvider).asData?.value ?? false;
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    // Two callers, one inside `NavShell` (`topos_row.dart`, where the
+    // measured nav-bar padding already exceeds the floor and wins
+    // unchanged) and one outside it (`CommunityTopoDetailScreen`, where the
+    // device inset is otherwise zero in a standalone PWA) — `masiBottomInset`
+    // maxes against both, so this one call is correct for either world.
+    final bottomInset = masiBottomInset(context, ref);
 
     return Container(
       key: const Key('topo-history-sheet'),

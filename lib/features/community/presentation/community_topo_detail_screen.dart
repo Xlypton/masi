@@ -9,6 +9,7 @@ import '../../../app/theme.dart';
 import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../../core/routes/route_styles.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
@@ -996,7 +997,23 @@ class _CommunityTopoDetailScreenState
               ),
             ),
             SliverPadding(
-              padding: const EdgeInsets.all(MasiSpacing.lg),
+              // Keyed so tests can target this padding's bottom value
+              // unambiguously.
+              key: const Key('community-detail-body-padding'),
+              // The comment composer is the practical tail of this scroll
+              // view (routes section aside), and `body: SafeArea(...)`
+              // above already consumes the real device inset — so on a
+              // standalone iOS PWA (device inset 0) nothing here reserves
+              // the home-indicator floor without this. `masiBottomInset`'s
+              // device term reads 0 in that already-consumed subtree, so
+              // this only ever ADDS the floor; it never double-counts a
+              // real device inset.
+              padding: EdgeInsets.fromLTRB(
+                MasiSpacing.lg,
+                MasiSpacing.lg,
+                MasiSpacing.lg,
+                MasiSpacing.lg + masiBottomInset(context, ref),
+              ),
               sliver: SliverList(
                 delegate: SliverChildListDelegate([
                   Row(

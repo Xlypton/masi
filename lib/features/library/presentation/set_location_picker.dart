@@ -11,6 +11,7 @@ import 'package:latlong2/latlong.dart';
 import '../../../app/theme.dart';
 import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../backup/application/reachability_providers.dart';
@@ -242,6 +243,20 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
       return await ref.read(reachabilityProvider.notifier).refresh();
     } catch (_) {
       return Reachability.unknown;
+    }
+  }
+
+  /// [standaloneBottomFloorOf] guarded the same way [_safeRefreshReachability]
+  /// is: this is a `ref.watch`, called from `build`, so an unguarded call
+  /// throws synchronously (not just degrades) for the same container-less
+  /// test harness described on [_safeRefreshReachability]. 0.0 is the safe
+  /// degrade -- it reproduces the FAB's pre-fix (unpadded) position, which is
+  /// exactly what every container-less test already expects.
+  double _safeStandaloneBottomFloor() {
+    try {
+      return standaloneBottomFloorOf(ref);
+    } catch (_) {
+      return 0.0;
     }
   }
 
@@ -875,22 +890,37 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
       // [_useMyLocation], `onPressed: null` while it runs, and the icon slot
       // swapped for the shared gated cue at its exact 24 px size so the label
       // beside it cannot shift.
-      floatingActionButton: FloatingActionButton.extended(
-        key: const Key('set-location-my-location'),
-        onPressed: _locating ? null : _useMyLocation,
-        icon: SizedBox(
-          width: 24,
-          height: 24,
-          child: Center(
-            child: MasiLoadingIndicator.inline(
-              key: const Key('set-location-locating'),
-              isLoading: _locating,
-              semanticLabel: 'Finding your location',
-              child: MasiIcon('my_location'),
+      // A standalone iOS PWA reports safe-area-inset-bottom = 0, and this
+      // FAB's default position (`FloatingActionButtonLocation.endFloat`)
+      // reads exactly that MediaQuery value to keep clear of the home
+      // indicator — so on that platform it reads zero and the FAB sits on
+      // top of it. `standaloneBottomFloorOf` is 0 everywhere else (a real
+      // device inset, or a desktop browser with no home indicator at all),
+      // so this only ever adds space in the one world that needs it.
+      // Guarded the same way `_safeRefreshReachability` is, and for the same
+      // reason (see that method's doc): S-L5/S-L6/S-L7 in
+      // `topos_screen_test.dart` deliberately mount this picker with no
+      // `ProviderScope` container at all, and this call must not crash over
+      // it -- 0.0 degrades to exactly the pre-fix (unpadded) layout.
+      floatingActionButton: Padding(
+        padding: EdgeInsets.only(bottom: _safeStandaloneBottomFloor()),
+        child: FloatingActionButton.extended(
+          key: const Key('set-location-my-location'),
+          onPressed: _locating ? null : _useMyLocation,
+          icon: SizedBox(
+            width: 24,
+            height: 24,
+            child: Center(
+              child: MasiLoadingIndicator.inline(
+                key: const Key('set-location-locating'),
+                isLoading: _locating,
+                semanticLabel: 'Finding your location',
+                child: MasiIcon('my_location'),
+              ),
             ),
           ),
+          label: const Text('Use my location'),
         ),
-        label: const Text('Use my location'),
       ),
     );
   }

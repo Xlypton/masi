@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -387,7 +388,19 @@ class _AscentDetailBody extends ConsumerWidget {
 
     return ListView(
       key: const Key('ascent-detail-body'),
-      padding: const EdgeInsets.all(MasiSpacing.lg),
+      // The comment field is the literal last widget in this list, and
+      // `body: SafeArea(...)` in the parent screen already consumes the
+      // real device inset — so on a standalone iOS PWA (device inset 0)
+      // nothing reserves the home-indicator floor without this.
+      // `masiBottomInset`'s device term reads 0 in that already-consumed
+      // subtree, so this only ever ADDS the floor; it never double-counts
+      // a real device inset.
+      padding: EdgeInsets.fromLTRB(
+        MasiSpacing.lg,
+        MasiSpacing.lg,
+        MasiSpacing.lg,
+        MasiSpacing.lg + masiBottomInset(context, ref),
+      ),
       children: [
         // The subject of the screen, first: the line this climber actually
         // did, on the rock they did it on. Collapses to nothing when the art

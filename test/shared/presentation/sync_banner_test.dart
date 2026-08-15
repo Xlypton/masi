@@ -2,15 +2,23 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:masi/shared/presentation/sync_banner.dart';
 
-Widget _wrap(Widget child) => MaterialApp(
-  theme: MasiTheme.light,
-  home: Scaffold(body: Column(children: [child])),
+// `_SyncBannerDetailsSheet` reads `pwaInstallStatusProvider` (the
+// standalone-PWA bottom-inset floor), so it now needs a `ProviderScope`
+// ancestor — the default (unoverridden) provider resolves to
+// `isStandalone: false` on the native/test backend, matching this suite's
+// prior assumption of zero extra bottom inset.
+Widget _wrap(Widget child) => ProviderScope(
+  child: MaterialApp(
+    theme: MasiTheme.light,
+    home: Scaffold(body: Column(children: [child])),
+  ),
 );
 
 void setViewportSize(WidgetTester tester, Size size) {

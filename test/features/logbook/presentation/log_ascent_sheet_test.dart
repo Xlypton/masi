@@ -17,15 +17,19 @@
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
+import 'package:masi/features/account/application/pwa_install_providers.dart';
+import 'package:masi/features/account/application/pwa_install_types.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/logbook/application/ascents_providers.dart';
 import 'package:masi/features/logbook/data/ascents_repository.dart';
 import 'package:masi/features/logbook/presentation/log_ascent_sheet.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/shared/presentation/bottom_safe_inset.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -43,12 +47,16 @@ void main() {
       String routeDbId,
     })
   >
-  seedWallWithRoute(WidgetTester tester) async {
+  seedWallWithRoute(
+    WidgetTester tester, {
+    List<Override> extraOverrides = const [],
+  }) async {
     final db = AppDatabase(NativeDatabase.memory());
     final container = ProviderContainer(
       overrides: [
         appDatabaseProvider.overrideWithValue(db),
         nowMsProvider.overrideWithValue(() => 1000),
+        ...extraOverrides,
       ],
     );
 
@@ -357,6 +365,111 @@ void main() {
       expect(ascents, hasLength(1));
       expect(ascents.single.visibility, 'shared');
       expect(ascents.single.isShared, isTrue);
+    },
+  );
+
+  group(
+    'bottom inset: keyboard vs. the standalone-PWA home-indicator floor '
+    'combine with max, never a sum',
+    () {
+      // FakeViewPadding-driven "keyboard" simulation, mirroring
+      // `snack_bar_safe_area_test.dart`'s `tester.view.padding` idiom but for
+      // `viewInsets` (the keyboard) instead of `padding` (the device
+      // safe-area inset).
+      testWidgets(
+        'keyboard open (300px) + standalone PWA (32px floor): bottom '
+        'clearance is max(300, 32) + spacing = 300 + spacing, NOT '
+        '300 + 32 + spacing',
+        (tester) async {
+          // `viewInsets`/`padding` on `TestFlutterView` are PHYSICAL pixels,
+          // scaled by `devicePixelRatio` before `MediaQuery` sees them —
+          // pin the ratio to 1.0 so the 300 set below is also 300 logical,
+          // matching `snack_bar_safe_area_test.dart`'s idiom for `padding`.
+          tester.view.devicePixelRatio = 1.0;
+          addTearDown(tester.view.resetDevicePixelRatio);
+          addTearDown(tester.view.resetViewInsets);
+          tester.view.viewInsets = const FakeViewPadding(bottom: 300);
+
+          final seeded = await seedWallWithRoute(
+            tester,
+            extraOverrides: [
+              pwaInstallStatusProvider.overrideWithValue(
+                const PwaInstallStatus(
+                  isStandalone: true,
+                  canPrompt: false,
+                  platform: PwaPlatform.ios,
+                ),
+              ),
+            ],
+          );
+          addTearDown(seeded.db.close);
+          addTearDown(seeded.container.dispose);
+
+          await pumpHarness(
+            tester,
+            seeded.container,
+            routeId: seeded.routeDbId,
+            wallId: seeded.wallId,
+          );
+
+          await tester.tap(find.byKey(const Key('open-log-ascent-sheet')));
+          await tester.pumpAndSettle();
+
+          final padding = tester
+              .widget<Padding>(find.byKey(const Key('test-log-ascent-sheet')))
+              .padding as EdgeInsets;
+
+          expect(
+            padding.bottom,
+            300 + MasiSpacing.lg,
+            reason:
+                'the keyboard inset (300) already exceeds the 32px floor, so '
+                'it alone plus the deliberate spacing gap must win — adding '
+                'the floor on top would wrongly jump the sheet by 32px the '
+                'moment the keyboard opens',
+          );
+        },
+      );
+
+      testWidgets(
+        'keyboard closed (0px) + standalone PWA (32px floor): bottom '
+        'clearance falls back to the floor + spacing',
+        (tester) async {
+          addTearDown(tester.view.resetViewInsets);
+          tester.view.viewInsets = const FakeViewPadding();
+
+          final seeded = await seedWallWithRoute(
+            tester,
+            extraOverrides: [
+              pwaInstallStatusProvider.overrideWithValue(
+                const PwaInstallStatus(
+                  isStandalone: true,
+                  canPrompt: false,
+                  platform: PwaPlatform.ios,
+                ),
+              ),
+            ],
+          );
+          addTearDown(seeded.db.close);
+          addTearDown(seeded.container.dispose);
+
+          await pumpHarness(
+            tester,
+            seeded.container,
+            routeId: seeded.routeDbId,
+            wallId: seeded.wallId,
+          );
+
+          await tester.tap(find.byKey(const Key('open-log-ascent-sheet')));
+          await tester.pumpAndSettle();
+
+          final padding = tester
+              .widget<Padding>(find.byKey(const Key('test-log-ascent-sheet')))
+              .padding as EdgeInsets;
+
+          expect(padding.bottom, kStandaloneBottomFloor + MasiSpacing.lg);
+        },
+      );
     },
   );
 }

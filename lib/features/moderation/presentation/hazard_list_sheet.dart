@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../account/application/auth_providers.dart';
 import '../application/community_facts_providers.dart';
@@ -47,10 +48,13 @@ class HazardListSheet extends ConsumerWidget {
     final hazards = ref.watch(wallHazardsProvider(wallId)).asData?.value ?? [];
     final uid = ref.watch(effectiveUidProvider);
 
-    // Measured bottom-bar height. Padding the SCROLL VIEW rather than wrapping
-    // the sheet in a SafeArea keeps the surface colour running under the nav
-    // bar instead of stopping short of it.
-    final bottomInset = MediaQuery.paddingOf(context).bottom;
+    // NOT "the measured bottom-bar height" (this sheet's only caller,
+    // `CommunityTopoDetailScreen`, is a top-level route outside `NavShell` —
+    // see `nav_shell.dart`'s class doc) — this is the standalone-PWA
+    // home-indicator floor. Padding the SCROLL VIEW rather than wrapping the
+    // sheet in a SafeArea keeps the surface colour running under the home
+    // indicator instead of stopping short of it.
+    final bottomInset = masiBottomInset(context, ref);
 
     return Container(
       key: const Key('hazard-list-sheet'),

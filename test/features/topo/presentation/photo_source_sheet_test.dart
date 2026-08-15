@@ -1,12 +1,18 @@
 import 'package:masi/app/theme.dart';
 import 'package:masi/features/topo/presentation/photo_source_sheet.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
 /// Harness: a single button whose `onPressed` calls [showPhotoSourceSheet]
 /// and stashes the returned future so the test can await its resolution
 /// after driving the sheet's actions.
+///
+/// `ProviderScope`-wrapped: the sheet reads `pwaInstallStatusProvider` (the
+/// standalone-PWA bottom-inset floor) — unoverridden here, which resolves
+/// to `isStandalone: false` on the native/test backend, i.e. no behavior
+/// change for this suite.
 class _Harness extends StatefulWidget {
   const _Harness({required this.onFuture});
 
@@ -19,17 +25,19 @@ class _Harness extends StatefulWidget {
 class _HarnessState extends State<_Harness> {
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      theme: MasiTheme.light,
-      home: Scaffold(
-        body: Center(
-          child: Builder(
-            builder: (buttonContext) => ElevatedButton(
-              key: const Key('open-photo-source-sheet'),
-              onPressed: () {
-                widget.onFuture(showPhotoSourceSheet(buttonContext));
-              },
-              child: const Text('Add a photo'),
+    return ProviderScope(
+      child: MaterialApp(
+        theme: MasiTheme.light,
+        home: Scaffold(
+          body: Center(
+            child: Builder(
+              builder: (buttonContext) => ElevatedButton(
+                key: const Key('open-photo-source-sheet'),
+                onPressed: () {
+                  widget.onFuture(showPhotoSourceSheet(buttonContext));
+                },
+                child: const Text('Add a photo'),
+              ),
             ),
           ),
         ),

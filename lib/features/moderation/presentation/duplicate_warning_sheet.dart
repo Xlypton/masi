@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../domain/nearby_topo.dart';
 
 /// "3 topos already exist here", shown BEFORE a submission (community editing
@@ -43,7 +45,7 @@ Future<bool> showDuplicateWarning(
   return result ?? false;
 }
 
-class _DuplicateWarningSheet extends StatelessWidget {
+class _DuplicateWarningSheet extends ConsumerWidget {
   const _DuplicateWarningSheet({
     required this.nearby,
     required this.topoName,
@@ -59,7 +61,7 @@ class _DuplicateWarningSheet extends StatelessWidget {
   final bool trusted;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
     final count = nearby.length;
@@ -134,7 +136,13 @@ class _DuplicateWarningSheet extends StatelessWidget {
               MasiSpacing.lg,
               MasiSpacing.sm,
               MasiSpacing.lg,
-              MasiSpacing.lg + MediaQuery.paddingOf(context).bottom,
+              // Currently fine as-is — this sheet's only caller
+              // (`topos_row.dart`) is inside `NavShell`, where the measured
+              // nav-bar padding already exceeds the standalone floor. Using
+              // the helper anyway rather than the raw `MediaQuery` read is
+              // preventative, not a bug fix: it stops this from silently
+              // breaking if a second, non-shell caller is ever added.
+              MasiSpacing.lg + masiBottomInset(context, ref),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -8,6 +10,7 @@ import '../../topo/presentation/grade_colors.dart' show colorForGradeBand;
 import '../../../shared/filtering/ascent_type_filter_chips.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -133,7 +136,16 @@ class _LogbookFilterSheet extends ConsumerWidget {
         left: MasiSpacing.lg,
         right: MasiSpacing.lg,
         top: MasiSpacing.lg,
-        bottom: MediaQuery.viewInsetsOf(context).bottom + MasiSpacing.lg,
+        // max, not +: keyboard inset vs. the standalone-PWA home-indicator
+        // floor are alternatives, not a sum — this sheet has no text field
+        // today, but the filter chips can gain a search field later, so
+        // this stays correct rather than merely currently-correct.
+        bottom:
+            math.max(
+              MediaQuery.viewInsetsOf(context).bottom,
+              masiBottomInset(context, ref),
+            ) +
+            MasiSpacing.lg,
       ),
       child: SingleChildScrollView(
         child: Column(
@@ -283,17 +295,26 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-class _LogbookList extends StatelessWidget {
+class _LogbookList extends ConsumerWidget {
   const _LogbookList({required this.entries});
 
   final List<LogbookEntry> entries;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return ListView.separated(
-      padding: const EdgeInsets.symmetric(
-        horizontal: MasiSpacing.lg,
-        vertical: MasiSpacing.md,
+      // `body: SafeArea(...)` on the parent Scaffold already consumes the
+      // real device inset (default `bottom: true`), so a standalone iOS
+      // PWA (device inset 0) leaves the last row flush on the home
+      // indicator with nothing reserving the floor. `masiBottomInset`'s
+      // device term reads 0 in this already-consumed subtree, so adding it
+      // to the existing `vertical: md` bottom only ever contributes the
+      // floor — it never double-counts a real device inset.
+      padding: EdgeInsets.fromLTRB(
+        MasiSpacing.lg,
+        MasiSpacing.md,
+        MasiSpacing.lg,
+        MasiSpacing.md + masiBottomInset(context, ref),
       ),
       itemCount: entries.length,
       separatorBuilder: (context, index) =>

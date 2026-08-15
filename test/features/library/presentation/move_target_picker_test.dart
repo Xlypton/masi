@@ -1,32 +1,40 @@
 import 'package:masi/app/theme.dart';
 import 'package:masi/features/library/presentation/move_target_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// Wraps a trigger button that opens [showMoveTargetPicker] on tap, keyed
 /// 'open', and records the returned selection into [onResult].
+///
+/// `ProviderScope`-wrapped: the sheet reads `pwaInstallStatusProvider` (the
+/// standalone-PWA bottom-inset floor) — unoverridden here, which resolves
+/// to `isStandalone: false` on the native/test backend, i.e. no behavior
+/// change for this suite.
 Widget _harness({
   required List<MoveTargetOption> options,
   required void Function(String? result) onResult,
   String emptyMessage = 'No candidates',
 }) {
-  return MaterialApp(
-    theme: MasiTheme.light,
-    home: Scaffold(
-      body: Builder(
-        builder: (context) => ElevatedButton(
-          key: const Key('open'),
-          onPressed: () async {
-            final result = await showMoveTargetPicker(
-              context,
-              title: 'Move to…',
-              options: options,
-              keyPrefix: 'move-target-test',
-              emptyMessage: emptyMessage,
-            );
-            onResult(result);
-          },
-          child: const Text('Open'),
+  return ProviderScope(
+    child: MaterialApp(
+      theme: MasiTheme.light,
+      home: Scaffold(
+        body: Builder(
+          builder: (context) => ElevatedButton(
+            key: const Key('open'),
+            onPressed: () async {
+              final result = await showMoveTargetPicker(
+                context,
+                title: 'Move to…',
+                options: options,
+                keyPrefix: 'move-target-test',
+                emptyMessage: emptyMessage,
+              );
+              onResult(result);
+            },
+            child: const Text('Open'),
+          ),
         ),
       ),
     ),

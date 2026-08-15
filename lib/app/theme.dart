@@ -1,7 +1,9 @@
 import 'package:flutter/cupertino.dart' show CupertinoPageTransitionsBuilder;
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../shared/presentation/bottom_safe_inset.dart';
 import 'is_safari.dart';
 
 /// Semantic color tokens for the MASI design language (see `DESIGN.md`).
@@ -371,6 +373,77 @@ PageTransitionsTheme? _webPageTransitions() {
 abstract final class MasiTheme {
   static ThemeData light = _build(MasiColors.light, Brightness.light);
   static ThemeData dark = _build(MasiColors.dark, Brightness.dark);
+
+  /// Applies the app's one global `SnackBar` fix to [base] (`MasiTheme.light`
+  /// / `.dark`): every toast clears the home indicator, on every route,
+  /// including an installed iOS PWA where the device reports a zero bottom
+  /// safe-area inset.
+  ///
+  /// ## The bug
+  ///
+  /// There is no `SnackBarThemeData` anywhere else in the app, so every
+  /// `SnackBar` is unstyled Material default: `SnackBarBehavior.fixed`, which
+  /// wraps itself in `SafeArea(top: false)` — bottom INCLUDED — reading
+  /// `MediaQuery.paddingOf(context).bottom` at the SnackBar's own build
+  /// context. In an installed iOS PWA that reads zero, so every toast sits
+  /// flush on the home indicator.
+  ///
+  /// It cannot be fixed by theming `fixed` in place: `SnackBarThemeData` has
+  /// no margin/inset field that applies to `fixed` mode — the only lever
+  /// `fixed` exposes is the ambient `MediaQuery`, and overriding that
+  /// globally (e.g. wrapping `MaterialApp.router`'s `child`) would change
+  /// `MediaQuery.paddingOf` for every descendant — every `SafeArea`, every
+  /// screen's own inset math — not just the SnackBar. That is a much bigger
+  /// blast radius than "give the SnackBar clearance", and this app already
+  /// has ~70 call sites individually reasoning about their own bottom inset
+  /// (see `masiBottomInset`'s doc) that must not be double-adjusted.
+  ///
+  /// ## The fix: switch to `floating`
+  ///
+  /// `SnackBarBehavior.floating` does NOT read the ambient safe-area inset at
+  /// all — it wraps itself in `SafeArea(top: false, bottom: false)` and
+  /// relies entirely on `SnackBarThemeData.insetPadding` for its margin
+  /// (verified against the Flutter SDK's `snack_bar.dart`). That makes it the
+  /// one behavior where a THEME-level fix is possible: this computes
+  /// `insetPadding` once, here, using the exact same `masiBottomInset` helper
+  /// every other bottom-anchored element in the app already uses — so a
+  /// SnackBar gets the same `max(deviceInset, floor)` treatment as the nav
+  /// bar, the topo canvas's route panel, etc.
+  ///
+  /// **This is a visible restyle of every `SnackBar` in the app**, not just
+  /// the ones near the bug: floating SnackBars are inset from all four edges
+  /// and get Material 3's floating shape/elevation (a rounded, shadowed
+  /// pill), instead of a full-width bar flush with the screen edges. That
+  /// trade was made deliberately over the alternative (a global `MediaQuery`
+  /// override) because it is the only option that touches SnackBars ONLY —
+  /// see the module doc above.
+  ///
+  /// The `10.0` added to the floored inset is the M3 default floating
+  /// `insetPadding`'s own bottom margin (`_SnackBarDefaultsM3.insetPadding`),
+  /// preserved so the safe-area floor is additive breathing room on top of
+  /// the existing default look, not a replacement for it.
+  ///
+  /// Needs a [BuildContext] (for the real device inset) and a [WidgetRef]
+  /// (`pwaInstallStatusProvider`, read once at app boot — see its doc), so
+  /// this is applied in `MasiApp.build`, the one place both are naturally
+  /// available, rather than baked into the static [light]/[dark] fields.
+  static ThemeData withSnackBarSafeArea(
+    ThemeData base,
+    BuildContext context,
+    WidgetRef ref,
+  ) {
+    return base.copyWith(
+      snackBarTheme: base.snackBarTheme.copyWith(
+        behavior: SnackBarBehavior.floating,
+        insetPadding: EdgeInsets.fromLTRB(
+          15,
+          5,
+          15,
+          10 + masiBottomInset(context, ref),
+        ),
+      ),
+    );
+  }
 
   static ThemeData _build(MasiColors colors, Brightness brightness) {
     final base = ColorScheme.fromSeed(

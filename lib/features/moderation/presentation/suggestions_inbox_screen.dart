@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/db/database_provider.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
@@ -90,14 +91,21 @@ class _InboxEmpty extends StatelessWidget {
   }
 }
 
-class _InboxList extends StatelessWidget {
+class _InboxList extends ConsumerWidget {
   const _InboxList({required this.list});
 
   final List<EditSuggestion> list;
 
   @override
-  Widget build(BuildContext context) => ListView.builder(
-    padding: const EdgeInsets.only(bottom: MasiSpacing.xxl),
+  Widget build(BuildContext context, WidgetRef ref) => ListView.builder(
+    // No SafeArea wraps this screen's body (just a bare `RefreshIndicator`),
+    // so a standalone iOS PWA (safe-area-inset-bottom = 0) leaves the last
+    // row flush on the home indicator with nothing reserving the floor.
+    // `masiBottomInset` adds it on top of the existing `MasiSpacing.xxl`
+    // breathing room.
+    padding: EdgeInsets.only(
+      bottom: MasiSpacing.xxl + masiBottomInset(context, ref),
+    ),
     itemCount: list.length,
     itemBuilder: (context, i) => _SuggestionRow(suggestion: list[i]),
   );

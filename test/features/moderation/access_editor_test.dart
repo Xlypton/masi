@@ -7,6 +7,7 @@
 
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -26,23 +27,28 @@ Future<AccessEdit?> _drive(
   var returned = false;
 
   await tester.pumpWidget(
-    MaterialApp(
-      theme: MasiTheme.light,
-      home: Scaffold(
-        body: Builder(
-          builder: (context) => Center(
-            child: TextButton(
-              key: const Key('open'),
-              onPressed: () async {
-                result = await showAccessEditor(
-                  context,
-                  targetLabel: 'Csobánka',
-                  current: current,
-                  currentNote: currentNote,
-                );
-                returned = true;
-              },
-              child: const Text('open'),
+    // ProviderScope: `showMasiActionSheet` (`masi_dialogs.dart:111`) wraps
+    // its `CupertinoActionSheet` in a `Consumer` now, to read the
+    // standalone-PWA bottom-inset floor — see `bottom_safe_inset.dart`.
+    ProviderScope(
+      child: MaterialApp(
+        theme: MasiTheme.light,
+        home: Scaffold(
+          body: Builder(
+            builder: (context) => Center(
+              child: TextButton(
+                key: const Key('open'),
+                onPressed: () async {
+                  result = await showAccessEditor(
+                    context,
+                    targetLabel: 'Csobánka',
+                    current: current,
+                    currentNote: currentNote,
+                  );
+                  returned = true;
+                },
+                child: const Text('open'),
+              ),
             ),
           ),
         ),

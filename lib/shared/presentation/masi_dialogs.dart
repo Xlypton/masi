@@ -30,8 +30,10 @@ library;
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../app/theme.dart';
+import 'bottom_safe_inset.dart';
 
 /// A single row in a [showMasiActionSheet], carrying the [value] that the
 /// sheet resolves to when tapped.
@@ -101,47 +103,71 @@ Future<T?> showMasiActionSheet<T>(
   return showCupertinoModalPopup<T>(
     context: context,
     barrierColor: _barrierColor,
-    builder: (sheetContext) => CupertinoActionSheet(
-      key: sheetKey,
-      title: title == null ? null : Text(title),
-      message: message == null ? null : Text(message),
-      actions: [
-        for (final action in actions)
-          CupertinoActionSheetAction(
-            key: action.key,
-            isDestructiveAction: action.isDestructive,
-            // A disabled action still needs a tap target that does nothing —
-            // see [MasiSheetAction.enabled].
-            onPressed: action.enabled
-                ? () => Navigator.of(sheetContext).pop(action.value)
-                : () {},
-            child: action.subtitle == null
-                ? Text(
-                    action.label,
-                    style: _actionLabelStyle(action, colors),
-                  )
-                : Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text(
-                        action.label,
-                        style: _actionLabelStyle(action, colors),
-                      ),
-                      Text(
-                        action.subtitle!,
-                        style: textTheme.labelSmall?.copyWith(
-                          color: colors.ink3,
-                        ),
-                      ),
-                    ],
-                  ),
+    // `useRootNavigator: true` is `showCupertinoModalPopup`'s default, so
+    // this route always lands ABOVE `NavShell` — never inside it. That means
+    // there is no "already-inside-the-bar" case to worry about here (unlike
+    // `masiBottomInset`'s usual double-count concern): the floor below is
+    // the only bottom inset in play, uniformly, for every caller.
+    builder: (sheetContext) => Consumer(
+      builder: (consumerContext, ref, _) {
+        // Cupertino's own `CupertinoActionSheet` wraps itself in
+        // `SafeArea(minimum: EdgeInsets.only(bottom: 8))`, which reads the
+        // ambient `MediaQuery.padding.bottom` — zero in an installed iOS
+        // PWA, where the platform never reports a safe-area inset. Override
+        // that ambient value to our floor so the sheet's own `SafeArea`
+        // maxes against 32px instead of the real (zero) device inset,
+        // rather than adding a second inset alongside it.
+        final media = MediaQuery.of(consumerContext);
+        return MediaQuery(
+          data: media.copyWith(
+            padding: media.padding.copyWith(
+              bottom: masiBottomInset(consumerContext, ref),
+            ),
           ),
-      ],
-      cancelButton: CupertinoActionSheetAction(
-        key: cancelKey,
-        onPressed: () => Navigator.of(sheetContext).pop(),
-        child: Text(cancelLabel),
-      ),
+          child: CupertinoActionSheet(
+            key: sheetKey,
+            title: title == null ? null : Text(title),
+            message: message == null ? null : Text(message),
+            actions: [
+              for (final action in actions)
+                CupertinoActionSheetAction(
+                  key: action.key,
+                  isDestructiveAction: action.isDestructive,
+                  // A disabled action still needs a tap target that does
+                  // nothing — see [MasiSheetAction.enabled].
+                  onPressed: action.enabled
+                      ? () => Navigator.of(sheetContext).pop(action.value)
+                      : () {},
+                  child: action.subtitle == null
+                      ? Text(
+                          action.label,
+                          style: _actionLabelStyle(action, colors),
+                        )
+                      : Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              action.label,
+                              style: _actionLabelStyle(action, colors),
+                            ),
+                            Text(
+                              action.subtitle!,
+                              style: textTheme.labelSmall?.copyWith(
+                                color: colors.ink3,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+            ],
+            cancelButton: CupertinoActionSheetAction(
+              key: cancelKey,
+              onPressed: () => Navigator.of(sheetContext).pop(),
+              child: Text(cancelLabel),
+            ),
+          ),
+        );
+      },
     ),
   );
 }

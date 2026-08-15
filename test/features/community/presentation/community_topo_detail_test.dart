@@ -2,6 +2,8 @@ import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart' hide Comment;
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
+import 'package:masi/features/account/application/pwa_install_providers.dart';
+import 'package:masi/features/account/application/pwa_install_types.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
 import 'package:masi/features/community/application/comments_providers.dart';
 import 'package:masi/features/community/application/community_topo_detail_providers.dart';
@@ -16,10 +18,12 @@ import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/topo_canvas.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:masi/features/topo/presentation/topo_painter.dart';
+import 'package:masi/shared/presentation/bottom_safe_inset.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/misc.dart' show Override;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:image_picker/image_picker.dart';
 
@@ -67,7 +71,10 @@ void main() {
       String routeDbId,
     })
   >
-  seedWallWithRoute(WidgetTester tester) async {
+  seedWallWithRoute(
+    WidgetTester tester, {
+    List<Override> extraOverrides = const [],
+  }) async {
     final db = AppDatabase(NativeDatabase.memory());
     final container = ProviderContainer(
       overrides: [
@@ -78,6 +85,7 @@ void main() {
             const AuthSessionState.signedIn('climber@example.com'),
           ),
         ),
+        ...extraOverrides,
       ],
     );
 
@@ -1369,6 +1377,98 @@ void main() {
       expect(
         tester.getRect(button).right,
         moreOrLessEquals(tester.getRect(row).right, epsilon: 0.01),
+      );
+    },
+  );
+
+  group(
+    'standalone-PWA bottom-safe-area floor around the comment composer '
+    '(bottom_safe_inset.dart)',
+    () {
+      testWidgets(
+        'a non-standalone session (every real device except an installed '
+        'iOS PWA) leaves the body padding at the plain MasiSpacing.lg gap',
+        (tester) async {
+          final seeded = await seedWallWithRoute(
+            tester,
+            extraOverrides: [
+              pwaInstallStatusProvider.overrideWithValue(
+                const PwaInstallStatus(
+                  isStandalone: false,
+                  canPrompt: false,
+                  platform: PwaPlatform.other,
+                ),
+              ),
+            ],
+          );
+          addTearDown(seeded.db.close);
+          addTearDown(seeded.container.dispose);
+
+          await tester.pumpWidget(
+            wrap(
+              seeded.container,
+              CommunityTopoDetailScreen(
+                wallId: seeded.wallId,
+                debugInitialImageSize: const Size(1000, 2000),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final sliverPadding = tester.widget<SliverPadding>(
+            find.byKey(
+              const Key('community-detail-body-padding'),
+              skipOffstage: false,
+            ),
+          );
+          expect(sliverPadding.padding.resolve(TextDirection.ltr).bottom, MasiSpacing.lg);
+        },
+      );
+
+      testWidgets(
+        'a standalone session (installed iOS PWA, where '
+        'safe-area-inset-bottom reads 0 and this SafeArea(...)-wrapped body '
+        'already consumed it) adds kStandaloneBottomFloor on top of the '
+        'MasiSpacing.lg gap, so the comment composer clears the home '
+        'indicator instead of sitting on it',
+        (tester) async {
+          final seeded = await seedWallWithRoute(
+            tester,
+            extraOverrides: [
+              pwaInstallStatusProvider.overrideWithValue(
+                const PwaInstallStatus(
+                  isStandalone: true,
+                  canPrompt: false,
+                  platform: PwaPlatform.ios,
+                ),
+              ),
+            ],
+          );
+          addTearDown(seeded.db.close);
+          addTearDown(seeded.container.dispose);
+
+          await tester.pumpWidget(
+            wrap(
+              seeded.container,
+              CommunityTopoDetailScreen(
+                wallId: seeded.wallId,
+                debugInitialImageSize: const Size(1000, 2000),
+              ),
+            ),
+          );
+          await tester.pumpAndSettle();
+
+          final sliverPadding = tester.widget<SliverPadding>(
+            find.byKey(
+              const Key('community-detail-body-padding'),
+              skipOffstage: false,
+            ),
+          );
+          expect(
+            sliverPadding.padding.resolve(TextDirection.ltr).bottom,
+            MasiSpacing.lg + kStandaloneBottomFloor,
+          );
+        },
       );
     },
   );

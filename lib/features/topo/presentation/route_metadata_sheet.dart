@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -7,6 +9,7 @@ import 'package:masi/core/grades/grade_system.dart';
 import 'package:masi/core/routes/route_styles.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
+import 'package:masi/shared/presentation/bottom_safe_inset.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// Free-form climbing style options offered by [RouteMetadataSheet], by
@@ -270,7 +273,17 @@ class _RouteMetadataSheetState extends ConsumerState<RouteMetadataSheet> {
           left: MasiSpacing.lg,
           right: MasiSpacing.lg,
           top: MasiSpacing.sm,
-          bottom: MediaQuery.of(context).viewInsets.bottom + MasiSpacing.lg,
+          // The keyboard inset and the home-indicator floor are mutually
+          // exclusive, not additive — take the larger, or the sheet jumps
+          // by a floor's worth the instant the keyboard opens. Zero device
+          // safe-area inset (a standalone iOS PWA never reports one) is the
+          // case `masiBottomInset` covers with its own floor.
+          bottom:
+              math.max(
+                MediaQuery.of(context).viewInsets.bottom,
+                masiBottomInset(context, ref),
+              ) +
+              MasiSpacing.lg,
         ),
         child: SingleChildScrollView(
           child: Column(

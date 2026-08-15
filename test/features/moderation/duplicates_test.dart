@@ -233,17 +233,22 @@ void main() {
       (tester) async {
         bool? result;
         await tester.pumpWidget(
-          MaterialApp(
-            theme: MasiTheme.light,
-            home: Builder(
-              builder: (context) => TextButton(
-                onPressed: () async => result = await showDuplicateWarning(
-                  context,
-                  nearby: [_nearby('a'), _nearby('b', distanceM: 44)],
-                  topoName: 'Mine',
-                  trusted: false,
+          // ProviderScope: `_DuplicateWarningSheet` is a `ConsumerWidget`
+          // now (reads `pwaInstallStatusProvider` for the standalone-PWA
+          // bottom-inset floor) — see `bottom_safe_inset.dart`.
+          ProviderScope(
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: Builder(
+                builder: (context) => TextButton(
+                  onPressed: () async => result = await showDuplicateWarning(
+                    context,
+                    nearby: [_nearby('a'), _nearby('b', distanceM: 44)],
+                    topoName: 'Mine',
+                    trusted: false,
+                  ),
+                  child: const Text('go'),
                 ),
-                child: const Text('go'),
               ),
             ),
           ),
@@ -265,17 +270,19 @@ void main() {
     testWidgets('backing out returns false', (tester) async {
       bool? result;
       await tester.pumpWidget(
-        MaterialApp(
-          theme: MasiTheme.light,
-          home: Builder(
-            builder: (context) => TextButton(
-              onPressed: () async => result = await showDuplicateWarning(
-                context,
-                nearby: [_nearby('a')],
-                topoName: 'Mine',
-                trusted: true,
+        ProviderScope(
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async => result = await showDuplicateWarning(
+                  context,
+                  nearby: [_nearby('a')],
+                  topoName: 'Mine',
+                  trusted: true,
+                ),
+                child: const Text('go'),
               ),
-              child: const Text('go'),
             ),
           ),
         ),
@@ -300,16 +307,22 @@ void main() {
     }) async {
       ReportDraft? draft;
       await tester.pumpWidget(
-        MaterialApp(
-          theme: MasiTheme.light,
-          home: Builder(
-            builder: (context) => TextButton(
-              onPressed: () async => draft = await showReportReporter(
-                context,
-                targetLabel: 'Alpha',
-                duplicateCandidates: candidates,
+        // ProviderScope: `showReportReporter` reaches `showMasiActionSheet`
+        // (`report_reporter.dart:54,94`), which reads `ref` internally now
+        // (the standalone-PWA bottom-inset floor) — see
+        // `bottom_safe_inset.dart`.
+        ProviderScope(
+          child: MaterialApp(
+            theme: MasiTheme.light,
+            home: Builder(
+              builder: (context) => TextButton(
+                onPressed: () async => draft = await showReportReporter(
+                  context,
+                  targetLabel: 'Alpha',
+                  duplicateCandidates: candidates,
+                ),
+                child: const Text('go'),
               ),
-              child: const Text('go'),
             ),
           ),
         ),

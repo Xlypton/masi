@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 
 /// A single labelled candidate destination in [showMoveTargetPicker]'s list:
 /// an [id] (returned to the caller on tap) paired with a display [label].
@@ -45,7 +47,7 @@ Future<String?> showMoveTargetPicker(
   );
 }
 
-class _MoveTargetPickerSheet extends StatelessWidget {
+class _MoveTargetPickerSheet extends ConsumerWidget {
   const _MoveTargetPickerSheet({
     required this.title,
     required this.options,
@@ -59,11 +61,17 @@ class _MoveTargetPickerSheet extends StatelessWidget {
   final String emptyMessage;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
 
     return SafeArea(
+      // The floor alone, handed to `minimum:` rather than folded into a
+      // computed padding value — `SafeArea` already takes a per-edge max
+      // against the real device inset (zero on the bottom, in an installed
+      // iOS PWA), so this never double-counts against the two real callers'
+      // own worlds (one inside `NavShell`, one outside it).
+      minimum: EdgeInsets.only(bottom: standaloneBottomFloorOf(ref)),
       child: Container(
         padding: const EdgeInsets.all(MasiSpacing.lg),
         decoration: BoxDecoration(

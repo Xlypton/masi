@@ -1,7 +1,10 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../account/application/profile_providers.dart';
 import '../application/ascents_providers.dart';
@@ -102,7 +105,16 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
         left: MasiSpacing.lg,
         right: MasiSpacing.lg,
         top: MasiSpacing.lg,
-        bottom: MediaQuery.viewInsetsOf(context).bottom + MasiSpacing.lg,
+        // max, not +: the keyboard inset and the standalone-PWA home-
+        // indicator floor are two different reasons for bottom clearance,
+        // never both at once. Summing them would jump the sheet 32px the
+        // moment the keyboard opens.
+        bottom:
+            math.max(
+              MediaQuery.viewInsetsOf(context).bottom,
+              masiBottomInset(context, ref),
+            ) +
+            MasiSpacing.lg,
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

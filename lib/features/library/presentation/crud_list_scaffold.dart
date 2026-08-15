@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
 import '../../../app/web_back_button.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -15,13 +16,13 @@ import '../../../shared/presentation/masi_skeleton.dart';
 /// (Areas / Sectors / Walls), driven by an [AsyncValue] the caller already
 /// obtained from `ref.watch(...)`.
 ///
-/// This widget is intentionally NOT a [ConsumerWidget]: it knows nothing
-/// about Riverpod's `ref`. The three screens (AreasScreen / SectorsScreen /
-/// WallsScreen) each watch their own scoped provider and pass the resulting
-/// [AsyncValue] plus a handful of callbacks (create/rename/delete/retry/tap)
-/// in, which keeps this widget trivially testable and reusable. (The
-/// [AsyncValue] *type* itself comes from Riverpod, same as before this
-/// restyle — only `ref`/`ConsumerWidget` are off-limits here.)
+/// A [ConsumerWidget] only for [masiBottomInset] (the standalone-PWA
+/// bottom-safe-area floor on the pinned create button below) — the three
+/// screens (AreasScreen / SectorsScreen / WallsScreen) still each watch
+/// their own scoped provider and pass the resulting [AsyncValue] plus a
+/// handful of callbacks (create/rename/delete/retry/tap) in, which keeps
+/// this widget otherwise trivially testable and reusable. (The [AsyncValue]
+/// *type* itself comes from Riverpod, same as before this restyle.)
 ///
 /// Visually this mirrors `topos_screen.dart`'s "Topos home" patterns (large
 /// title nav, grouped-inset card rows, bottom-pinned filled create button,
@@ -52,7 +53,7 @@ import '../../../shared/presentation/masi_skeleton.dart';
 ///  - `crud-name-field` / `crud-name-submit`: the text field and submit
 ///    button inside the shared add/rename name dialog (only one such dialog
 ///    is ever on screen at a time, so this key is reused across entities).
-class CrudListScaffold<T> extends StatelessWidget {
+class CrudListScaffold<T> extends ConsumerWidget {
   const CrudListScaffold({
     super.key,
     required this.title,
@@ -133,7 +134,7 @@ class CrudListScaffold<T> extends StatelessWidget {
   String get _loadFailedMessage => "Couldn't load your ${entityKey}s";
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final colors = MasiColors.of(context);
     final textTheme = Theme.of(context).textTheme;
 
@@ -168,6 +169,16 @@ class CrudListScaffold<T> extends StatelessWidget {
         centerTitle: false,
       ),
       body: SafeArea(
+        // Keyed so tests can target THIS SafeArea unambiguously (the
+        // Material/Cupertino widgets underneath add their own).
+        key: const Key('crud-scaffold-safe-area'),
+        // A standalone iOS PWA reports safe-area-inset-bottom = 0, so this
+        // SafeArea's own device read is zero and the pinned "New …" button
+        // below would land flush on the home indicator. `minimum` takes
+        // `max(deviceInset, floor)` per-edge, so it is a no-op everywhere
+        // else (the device inset already wins) and only applies the floor
+        // in the one world that needs it.
+        minimum: EdgeInsets.only(bottom: standaloneBottomFloorOf(ref)),
         child: Column(
           children: [
             Expanded(

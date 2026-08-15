@@ -1,7 +1,10 @@
 import 'dart:async';
 
 import 'package:masi/app/theme.dart';
+import 'package:masi/features/account/application/pwa_install_providers.dart';
+import 'package:masi/features/account/application/pwa_install_types.dart';
 import 'package:masi/features/library/presentation/crud_list_scaffold.dart';
+import 'package:masi/shared/presentation/bottom_safe_inset.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:masi/shared/presentation/masi_pending_button.dart';
 import 'package:flutter/cupertino.dart';
@@ -13,6 +16,14 @@ import 'package:flutter_test/flutter_test.dart';
 /// app's real light theme — `MasiColors.of(context)` null-check-crashes
 /// without a registered `MasiTheme`. `T` is plain `String` here since the
 /// scaffold only ever calls [idOf]/[nameOf] on it.
+///
+/// [ProviderScope] is required now that [CrudListScaffold] is a
+/// [ConsumerWidget] (reads `pwaInstallStatusProvider` for the standalone-PWA
+/// bottom-safe-area floor) — see `bottom_safe_inset.dart`. [standalone]
+/// mirrors the override idiom `storage_pressure_banner_test.dart` uses for
+/// the same provider; `false` (the default) matches every real device except
+/// an installed iOS PWA, and reproduces the pre-fix behavior these other
+/// tests were written against.
 Widget _harness({
   required Future<void> Function(String item) onDelete,
   List<String> items = const ['Test Area'],
@@ -25,25 +36,37 @@ Widget _harness({
   Future<void> Function(String item, String newName)? onRename,
   Future<void> Function(String name)? onCreate,
   bool? isWeb,
+  bool standalone = false,
 }) {
-  return MaterialApp(
-    theme: MasiTheme.light,
-    home: CrudListScaffold<String>(
-      title: 'Areas',
-      entityKey: 'area',
-      asyncItems: AsyncValue.data(items),
-      idOf: (item) => item,
-      nameOf: (item) => item,
-      emptyMessage: 'No areas yet',
-      addDialogTitle: 'New Area',
-      renameDialogTitle: 'Rename Area',
-      onRetry: () {},
-      onTap: (_) {},
-      onCreate: onCreate ?? (_) async {},
-      onRename: onRename ?? (item, name) async {},
-      onDelete: onDelete,
-      onMove: onMove,
-      isWeb: isWeb,
+  return ProviderScope(
+    overrides: [
+      pwaInstallStatusProvider.overrideWithValue(
+        PwaInstallStatus(
+          isStandalone: standalone,
+          canPrompt: false,
+          platform: PwaPlatform.other,
+        ),
+      ),
+    ],
+    child: MaterialApp(
+      theme: MasiTheme.light,
+      home: CrudListScaffold<String>(
+        title: 'Areas',
+        entityKey: 'area',
+        asyncItems: AsyncValue.data(items),
+        idOf: (item) => item,
+        nameOf: (item) => item,
+        emptyMessage: 'No areas yet',
+        addDialogTitle: 'New Area',
+        renameDialogTitle: 'Rename Area',
+        onRetry: () {},
+        onTap: (_) {},
+        onCreate: onCreate ?? (_) async {},
+        onRename: onRename ?? (item, name) async {},
+        onDelete: onDelete,
+        onMove: onMove,
+        isWeb: isWeb,
+      ),
     ),
   );
 }
@@ -54,35 +77,46 @@ Widget _harness({
 /// top-level `GoRoute`s) actually has, so `Navigator.canPop` is `true` —
 /// unlike [_harness]'s `home:`, which is always the sole/first route.
 Widget _pushedHarness({bool? isWeb}) {
-  return MaterialApp(
-    theme: MasiTheme.light,
-    home: Builder(
-      builder: (context) => Scaffold(
-        key: const Key('first-screen'),
-        body: Center(
-          child: ElevatedButton(
-            key: const Key('push-areas'),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute<void>(
-                builder: (_) => CrudListScaffold<String>(
-                  title: 'Areas',
-                  entityKey: 'area',
-                  asyncItems: const AsyncValue.data(['Test Area']),
-                  idOf: (item) => item,
-                  nameOf: (item) => item,
-                  emptyMessage: 'No areas yet',
-                  addDialogTitle: 'New Area',
-                  renameDialogTitle: 'Rename Area',
-                  onRetry: () {},
-                  onTap: (_) {},
-                  onCreate: (_) async {},
-                  onRename: (item, name) async {},
-                  onDelete: (_) async {},
-                  isWeb: isWeb,
+  return ProviderScope(
+    overrides: [
+      pwaInstallStatusProvider.overrideWithValue(
+        const PwaInstallStatus(
+          isStandalone: false,
+          canPrompt: false,
+          platform: PwaPlatform.other,
+        ),
+      ),
+    ],
+    child: MaterialApp(
+      theme: MasiTheme.light,
+      home: Builder(
+        builder: (context) => Scaffold(
+          key: const Key('first-screen'),
+          body: Center(
+            child: ElevatedButton(
+              key: const Key('push-areas'),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => CrudListScaffold<String>(
+                    title: 'Areas',
+                    entityKey: 'area',
+                    asyncItems: const AsyncValue.data(['Test Area']),
+                    idOf: (item) => item,
+                    nameOf: (item) => item,
+                    emptyMessage: 'No areas yet',
+                    addDialogTitle: 'New Area',
+                    renameDialogTitle: 'Rename Area',
+                    onRetry: () {},
+                    onTap: (_) {},
+                    onCreate: (_) async {},
+                    onRename: (item, name) async {},
+                    onDelete: (_) async {},
+                    isWeb: isWeb,
+                  ),
                 ),
               ),
+              child: const Text('Push'),
             ),
-            child: const Text('Push'),
           ),
         ),
       ),
@@ -619,6 +653,40 @@ void main() {
 
         expect(find.byKey(const Key('web-back-button')), findsNothing);
         expect(find.byType(BackButtonIcon), findsOneWidget);
+      },
+    );
+  });
+
+  group('standalone-PWA bottom-safe-area floor (bottom_safe_inset.dart)', () {
+    testWidgets(
+      'a non-standalone session (every real device except an installed iOS '
+      'PWA) applies no extra floor — the SafeArea carrying the pinned '
+      "create button asks for nothing beyond the device's own inset",
+      (tester) async {
+        await tester.pumpWidget(
+          _harness(onDelete: (_) async {}, standalone: false),
+        );
+
+        final safeArea = tester.widget<SafeArea>(
+          find.byKey(const Key('crud-scaffold-safe-area')),
+        );
+        expect(safeArea.minimum.bottom, 0);
+      },
+    );
+
+    testWidgets(
+      'a standalone session (installed iOS PWA, where safe-area-inset-bottom '
+      'reads 0) applies the kStandaloneBottomFloor minimum, so the pinned '
+      '"New area" button clears the home indicator instead of sitting on it',
+      (tester) async {
+        await tester.pumpWidget(
+          _harness(onDelete: (_) async {}, standalone: true),
+        );
+
+        final safeArea = tester.widget<SafeArea>(
+          find.byKey(const Key('crud-scaffold-safe-area')),
+        );
+        expect(safeArea.minimum.bottom, kStandaloneBottomFloor);
       },
     );
   });

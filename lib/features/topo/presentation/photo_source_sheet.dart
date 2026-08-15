@@ -1,8 +1,10 @@
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 
 /// Whether [showPhotoSourceSheet] should offer the "Take photo" (camera)
 /// option, or only "Choose from library".
@@ -54,28 +56,48 @@ Future<ImageSource?> showPhotoSourceSheet(BuildContext context) {
 
   return showCupertinoModalPopup<ImageSource>(
     context: context,
-    builder: (sheetContext) => CupertinoActionSheet(
-      title: const Text('Add a photo'),
-      actions: [
-        if (showCameraOption())
-          CupertinoActionSheetAction(
-            key: const Key('photo-source-camera'),
-            onPressed: () =>
-                Navigator.pop(sheetContext, ImageSource.camera),
-            child: Text('Take photo', style: actionTextStyle),
+    // Same fix and the same reasoning as `showMasiActionSheet` (used by
+    // every other action sheet in the app): `CupertinoActionSheet`'s own
+    // `SafeArea(minimum: bottom 8)` reads the ambient `MediaQuery.padding`,
+    // which is zero in an installed iOS PWA, so this sheet lands only 8px
+    // above the home indicator. Override the ambient bottom padding to our
+    // floor so that built-in `SafeArea` maxes against it instead.
+    // `showCupertinoModalPopup` uses `useRootNavigator: true`, so this route
+    // is always outside `NavShell` — the floor applies uniformly.
+    builder: (sheetContext) => Consumer(
+      builder: (consumerContext, ref, _) {
+        final media = MediaQuery.of(consumerContext);
+        return MediaQuery(
+          data: media.copyWith(
+            padding: media.padding.copyWith(
+              bottom: masiBottomInset(consumerContext, ref),
+            ),
           ),
-        CupertinoActionSheetAction(
-          key: const Key('photo-source-library'),
-          onPressed: () =>
-              Navigator.pop(sheetContext, ImageSource.gallery),
-          child: Text('Choose from library', style: actionTextStyle),
-        ),
-      ],
-      cancelButton: CupertinoActionSheetAction(
-        key: const Key('photo-source-cancel'),
-        onPressed: () => Navigator.pop(sheetContext, null),
-        child: Text('Cancel', style: cancelTextStyle),
-      ),
+          child: CupertinoActionSheet(
+            title: const Text('Add a photo'),
+            actions: [
+              if (showCameraOption())
+                CupertinoActionSheetAction(
+                  key: const Key('photo-source-camera'),
+                  onPressed: () =>
+                      Navigator.pop(sheetContext, ImageSource.camera),
+                  child: Text('Take photo', style: actionTextStyle),
+                ),
+              CupertinoActionSheetAction(
+                key: const Key('photo-source-library'),
+                onPressed: () =>
+                    Navigator.pop(sheetContext, ImageSource.gallery),
+                child: Text('Choose from library', style: actionTextStyle),
+              ),
+            ],
+            cancelButton: CupertinoActionSheetAction(
+              key: const Key('photo-source-cancel'),
+              onPressed: () => Navigator.pop(sheetContext, null),
+              child: Text('Cancel', style: cancelTextStyle),
+            ),
+          ),
+        );
+      },
     ),
   );
 }

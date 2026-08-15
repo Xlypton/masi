@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../topo/domain/topo_route.dart';
@@ -178,6 +179,10 @@ class _ProposeLineScreenState extends ConsumerState<ProposeLineScreen> {
           onReplacingChanged: (number) => setState(() => _replacing = number),
           onSend: () => _send(data),
           note: _note,
+          // Computed here, not inside `_Editor`, because that widget is a
+          // plain `StatelessWidget` with no `ref` of its own — this State
+          // already has one (`ConsumerState`).
+          bottomInset: masiBottomInset(context, ref),
         ),
         // A published topo with no photo has nothing to draw on. Not an
         // error — a real, if odd, state — so it says so instead of offering a
@@ -215,6 +220,7 @@ class _Editor extends StatelessWidget {
     required this.onReplacingChanged,
     required this.onSend,
     required this.note,
+    required this.bottomInset,
   });
 
   final TopoGeometry geometry;
@@ -224,6 +230,11 @@ class _Editor extends StatelessWidget {
   final void Function(int?) onReplacingChanged;
   final Future<void> Function() onSend;
   final TextEditingController note;
+
+  /// `masiBottomInset(context, ref)`, computed by the parent State (which
+  /// has the `ref` this plain `StatelessWidget` does not) — see the call
+  /// site's doc.
+  final double bottomInset;
 
   @override
   Widget build(BuildContext context) {
@@ -291,11 +302,17 @@ class _Editor extends StatelessWidget {
           ),
         ),
         Padding(
+          // Standalone iOS PWA reports safe-area-inset-bottom = 0, so a bare
+          // `MediaQuery.paddingOf(context).bottom` read here evaluates to
+          // zero and the note field + submit button land on the home
+          // indicator. `bottomInset` replaces that term outright (it is
+          // already `max(deviceInset, floor)`) rather than being added
+          // alongside it — the `MasiSpacing.lg` stays the deliberate gap.
           padding: EdgeInsets.fromLTRB(
             MasiSpacing.lg,
             0,
             MasiSpacing.lg,
-            MasiSpacing.lg + MediaQuery.paddingOf(context).bottom,
+            MasiSpacing.lg + bottomInset,
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,

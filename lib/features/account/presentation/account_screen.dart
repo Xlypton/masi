@@ -12,6 +12,7 @@ import '../../../core/db/database_provider.dart';
 import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/storage/storage_persistence_providers.dart';
 import '../../../core/storage/storage_persistence_types.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_avatar.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -291,6 +292,13 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       // us the part we do want — the anti-flash reveal delay and the
       // minimum-visible hold around the first-resolve skeleton.
       body: SafeArea(
+        // A standalone iOS PWA reports safe-area-inset-bottom = 0, so this
+        // SafeArea's own device read is zero and the settings list (its
+        // last row, or the sign-in card) lands flush on the home indicator.
+        // `minimum` takes `max(deviceInset, floor)` per-edge, so it is a
+        // no-op everywhere else and only applies the floor in the one
+        // world that needs it.
+        minimum: EdgeInsets.only(bottom: standaloneBottomFloorOf(ref)),
         child: MasiLoadingGate(
           isLoading:
               asyncAuth.isLoading && !asyncAuth.hasValue && !asyncAuth.hasError,

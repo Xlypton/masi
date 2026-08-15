@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../app/theme.dart';
+import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
 import '../../account/application/profile_providers.dart';
@@ -196,14 +197,23 @@ class _NotificationsEmpty extends StatelessWidget {
   }
 }
 
-class _NotificationsList extends StatelessWidget {
+class _NotificationsList extends ConsumerWidget {
   const _NotificationsList({required this.list});
 
   final List<AppNotification> list;
 
   @override
-  Widget build(BuildContext context) => ListView.builder(
-    padding: const EdgeInsets.only(bottom: MasiSpacing.xxl),
+  Widget build(BuildContext context, WidgetRef ref) => ListView.builder(
+    // The parent's `body: SafeArea(bottom: false, ...)` deliberately does
+    // NOT consume the bottom edge (see that screen's doc), so
+    // `MediaQuery.paddingOf(context).bottom` here is still the real,
+    // unconsumed device value — 0 in a standalone iOS PWA. `masiBottomInset`
+    // adds the standalone floor on top of the existing `MasiSpacing.xxl`
+    // breathing room so the last row doesn't land flush on the home
+    // indicator.
+    padding: EdgeInsets.only(
+      bottom: MasiSpacing.xxl + masiBottomInset(context, ref),
+    ),
     itemCount: list.length,
     itemBuilder: (context, i) => _NotificationRow(notification: list[i]),
   );
