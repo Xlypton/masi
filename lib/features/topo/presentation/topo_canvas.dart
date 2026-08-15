@@ -7,8 +7,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 
 import 'package:masi/core/coordinates/coordinate_transformer.dart';
-import 'package:masi/core/db/database_provider.dart' show photoFilesProvider;
+import 'package:masi/core/db/database_provider.dart'
+    show photoFilesProvider, nowMsProvider;
 import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/application/draw_hint_providers.dart';
 import 'package:masi/features/topo/application/wall_route_edit_permission.dart';
 import 'package:masi/features/topo/data/photo_path_resolution.dart'
     show thumbKeyFor;
@@ -529,6 +531,16 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// Index into the dragged committed route's `symbols`, or null when the drag
   /// is on one of its points instead (or when there is no such drag).
   int? _draggingRouteSymbolIndex;
+
+  /// Whether the current interaction started as a possible tap-to-add and was
+  /// cancelled because the finger MOVED — i.e. the climber dragged across the
+  /// photo, which in draw mode does nothing whatsoever.
+  ///
+  /// Cleared at the start of every interaction and by the second-finger abort,
+  /// so a pinch-zoom (which also clears the pending tap) is never mistaken for
+  /// someone trying and failing to draw. Consumed on pointer-up/cancel by
+  /// [_maybeHintTapToDraw].
+  bool _tapCancelledByDrag = false;
 
   /// The pointer id that started the current down/move/up interaction, or
   /// null when no interaction is in progress. Guards against a second
@@ -1201,6 +1213,10 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // `_pendingTapDownPosition` here is what actually neutralizes it.
       _draggingIndex = null;
       _pendingTapDownPosition = null;
+      // A second finger means a pinch/pan, not a failed attempt to draw. The
+      // pending tap is cancelled either way, so without this the zoom gesture
+      // would be answered with "dragging does not draw".
+      _tapCancelledByDrag = false;
       // The committed-route drag is settled rather than merely dropped: its
       // moves are already applied and on screen, so abandoning the fields
       // without closing the gesture would leave that edit unpersisted and
@@ -1209,6 +1225,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       return;
     }
     _activePointer = pointerId;
+    _tapCancelledByDrag = false;
     final scene = widget.transformationController.toScene(
       viewportLocalPosition,
     );
@@ -1380,6 +1397,13 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     final movement = (viewportLocalPosition - downPosition).distance;
     if (movement > _tapMovementSlopPx) {
       _pendingTapDownPosition = null;
+      // Remember WHY the tap was cancelled. This is the gesture that does
+      // nothing at all — draw mode disables panning, so a single-finger drag
+      // across the photo neither draws nor moves the view — and it is the
+      // instinctive way to try to draw a line. The hint fires on pointer-up
+      // rather than here: mid-drag the finger is still on the photo, and
+      // popping a message under it while it moves reads as an error.
+      _tapCancelledByDrag = true;
     }
   }
 
@@ -1405,7 +1429,10 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     if (wasEditingRoute) return;
     if (draggingIndex != null) return; // Handle drag: already applied.
     if (pendingTapDownPosition == null) {
-      return; // Cancelled: moved past the slop, or aborted by a 2nd finger.
+      // Cancelled: moved past the slop, or aborted by a 2nd finger. Only the
+      // first of those is someone trying to draw by dragging.
+      _maybeHintTapToDraw();
+      return;
     }
 
     final scene = widget.transformationController.toScene(
@@ -1417,6 +1444,22 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     );
     unawaited(HapticFeedback.selectionClick());
     ref.read(drawControllerProvider(widget.wallId).notifier).addPoint(percent);
+    // A point landed, so whatever the hint was saying has been answered.
+    ref.read(drawHintProvider.notifier).dismiss();
+  }
+
+  /// Shows the "tap, don't drag" hint if the interaction that just ended was a
+  /// drag across empty canvas that added nothing.
+  ///
+  /// The guard is [_tapCancelledByDrag] rather than "the pending tap is gone",
+  /// because a second finger clears the pending tap too and a pinch must not
+  /// be answered with drawing advice.
+  void _maybeHintTapToDraw() {
+    if (!_tapCancelledByDrag) return;
+    _tapCancelledByDrag = false;
+    ref
+        .read(drawHintProvider.notifier)
+        .reportFruitlessDrag(ref.read(nowMsProvider)());
   }
 
   /// Clears any in-progress draw interaction (pending tap-to-add or handle
@@ -1429,6 +1472,10 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     _activePointer = null;
     _draggingIndex = null;
     _pendingTapDownPosition = null;
+    // A pointer-cancel after a fruitless drag is the same confusion as a
+    // pointer-up after one — the finger left the glass either way, and nothing
+    // was drawn.
+    _maybeHintTapToDraw();
     // A cancelled committed-route drag is still SETTLED rather than dropped.
     // Unlike a pending tap-to-add — which has changed nothing yet, and so has
     // nothing to save — the drag's moves have already been applied and the

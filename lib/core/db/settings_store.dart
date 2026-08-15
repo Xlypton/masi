@@ -39,6 +39,17 @@ class SettingsStore {
   static String feedLastSeenKey(String? uid) =>
       'feedLastSeenAt:${uid ?? 'anon'}';
 
+  /// Whether this device has ever finished drawing a route, which is what
+  /// retires the draw-mode "tap to place points" hint.
+  ///
+  /// Deliberately NOT keyed by uid, unlike [feedLastSeenKey]. Knowing how to
+  /// draw is a property of the PERSON holding the phone, not of the account
+  /// they happen to be signed into — showing a climber the beginner hint again
+  /// because they switched accounts would be telling them something they
+  /// visibly already know. Device-scoped is also the honest default for a
+  /// local-only store: it survives sign-out, which is exactly right here.
+  static const String hasDrawnRouteKey = 'hasDrawnRoute';
+
   Future<String?> read(String key) async {
     final row = await (_db.select(_db.appSettings)
           ..where((t) => t.settingKey.equals(key)))

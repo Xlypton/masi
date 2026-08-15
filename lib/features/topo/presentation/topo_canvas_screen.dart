@@ -23,6 +23,7 @@ import 'package:masi/features/moderation/domain/edit_suggestion.dart';
 import 'package:masi/features/moderation/domain/geometry_proposal.dart';
 import 'package:masi/features/moderation/presentation/moderation_banner.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
+import 'package:masi/features/topo/application/draw_hint_providers.dart';
 import 'package:masi/features/topo/data/image_dimensions.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/data/photo_write_exception.dart';
@@ -37,6 +38,7 @@ import 'package:masi/features/topo/presentation/topo_canvas.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_gps.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_photo_ops.dart';
 import 'package:masi/shared/presentation/masi_async_view.dart';
+import 'package:masi/shared/presentation/bottom_safe_inset.dart';
 import 'package:masi/shared/presentation/masi_dialogs.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:masi/shared/presentation/masi_loading_gate.dart';
@@ -448,11 +450,17 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// did it.
   Future<void> _handleFinishEditing() async {
     if (widget.readOnly) return;
+    final hint = ref.read(drawHintProvider.notifier);
     await _handleCommitRoute();
     if (!mounted) return;
     ref
         .read(drawControllerProvider(widget.wallId).notifier)
         .setMode(DrawMode.view);
+    // They have drawn a route, so the beginner nudge has done its job and
+    // retires for good. Also clears any hint still on screen — leaving draw
+    // mode means the advice no longer applies.
+    hint.dismiss();
+    unawaited(hint.markRouteDrawn());
   }
 
   /// The bottom cluster's ✗, which does one of two things depending on
@@ -1334,6 +1342,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // method runs.
     final drawState = ref.read(drawControllerProvider(widget.wallId));
     final drawNotifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+    // See `bottom_safe_inset.dart`: an installed iOS PWA reports a zero bottom
+    // inset, so every SafeArea on this screen was contributing nothing.
+    final standaloneBottomFloor = standaloneBottomFloorOf(ref);
+    final drawHint = ref.watch(drawHintProvider);
     // The topo/wall name backs the canvas title (DESIGN.md "Topo canvas").
     // "Topo" is the fallback for a wall that genuinely has no name (or doesn't
     // exist — see router_test.dart's nonexistent-wall-id smoke test), so the
@@ -1609,6 +1621,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             bottom: 0,
             child: SafeArea(
               top: false,
+              // An installed iOS PWA reports a zero bottom inset, so this
+              // `SafeArea` contributed nothing and the whole bottom cluster —
+              // undo/redo/✗/✓, the standing notices, the proposal bar — sat
+              // 12px off the screen edge. `minimum` is a per-edge `max`, so a
+              // device that reports a real inset still wins — and the floor is
+              // gated on standalone so a desktop browser, which has no home
+              // indicator to clear, gets no dead space.
+              minimum: EdgeInsets.only(bottom: standaloneBottomFloor),
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(
                   MasiSpacing.lg,
@@ -1642,6 +1662,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                         noticeKey: const Key('topo-storage-blocked'),
                         message: storageBlocked,
                       ),
+                    // The draw-mode tutorial (user request, 2026-08-15). Sits
+                    // directly above the draw cluster, so the advice and the
+                    // controls it is about are in the same place.
+                    if (drawHintMessage(drawHint) case final hint?)
+                      _buildDrawHint(context, colors, hint),
                     // §3.2: edits to somebody else's route were kept in
                     // memory and never written, so this is the ONLY way they
                     // can go anywhere. It sits above the draw cluster rather
@@ -1727,6 +1752,47 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// The draw-mode hint pill — the whole of the "minimal tutorial".
+  ///
+  /// A pill rather than an overlay with a spotlight, deliberately: the thing
+  /// being taught is one sentence long, and a dimmed backdrop would hide the
+  /// photo the climber is trying to draw on, which is the one thing they need
+  /// to see. Tapping it dismisses it, so it can never be in the way.
+  Widget _buildDrawHint(
+    BuildContext context,
+    MasiColors colors,
+    String message,
+  ) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MasiSpacing.sm),
+      child: GestureDetector(
+        onTap: () => ref.read(drawHintProvider.notifier).dismiss(),
+        child: GlassChrome(
+          key: const Key('topo-draw-hint'),
+          padding: const EdgeInsets.symmetric(
+            horizontal: MasiSpacing.md,
+            vertical: MasiSpacing.sm,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              MasiIcon('route', size: 18, color: colors.ink2),
+              const SizedBox(width: MasiSpacing.sm),
+              Flexible(
+                child: Text(
+                  message,
+                  style: Theme.of(
+                    context,
+                  ).textTheme.bodySmall?.copyWith(color: colors.ink2),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -2169,7 +2235,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             // in) it shows the edit/pencil glyph ("tap to edit").
             icon: MasiIcon('edit'),
             tooltip: 'Edit',
-            onPressed: drawNotifier.toggleMode,
+            onPressed: () {
+              drawNotifier.toggleMode();
+              // Entering draw mode is the only moment the unprompted nudge is
+              // welcome: the climber has just said they intend to draw, and
+              // has not yet had a chance to get it wrong. `offerFirstTime`
+              // retires itself once a route has ever been drawn on this
+              // device.
+              ref.read(drawHintProvider.notifier).offerFirstTime();
+            },
             color: colors.accent,
             style: _topRowIconStyle(),
           ),
@@ -2771,13 +2845,24 @@ class TopoCanvasBody extends ConsumerWidget {
     // The switch cue (below) occupies the same floating slot as the legend, so
     // it needs the same clearance — otherwise it would sit under the bottom
     // chrome/safe area on exactly the walls where `routes` is empty.
+    // `masiBottomInset` rather than `MediaQuery.paddingOf(...).bottom`: an
+    // installed iOS PWA reports a zero bottom inset, which left this panel
+    // sitting 12px off the screen edge, on the home indicator (user report,
+    // 2026-08-15). The helper floors it at the same value the nav bar has
+    // always used, and takes a `max` so nothing double-counts.
     final legendBottomPadding =
         (hasRoutes || drawState.isSwitchingPhoto || community != null)
-        ? MediaQuery.paddingOf(context).bottom +
+        ? masiBottomInset(context, ref) +
               MasiSpacing.md +
               (drawState.mode == DrawMode.draw
                   ? kBottomChromeClusterHeight + MasiSpacing.sm
-                  : 0.0)
+                  : 0.0) +
+              // The draw hint shares this band, and without its height the
+              // pill sits ON TOP of the collapsed legend chip — tapping the
+              // chip hits the hint instead, which is how this was found.
+              (drawHintMessage(ref.watch(drawHintProvider)) == null
+                  ? 0.0
+                  : kDrawHintHeight)
         : 0.0;
 
     return Column(
