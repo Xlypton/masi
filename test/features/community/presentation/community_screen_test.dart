@@ -608,6 +608,19 @@ Finder _commentGlyphFinder(Key commentsKey) => find.descendant(
   ),
 );
 
+/// The like counter's brand glyph, scoped to one row's `-likes` key.
+///
+/// The topo row used to print a literal `'♥ <count>'`, which iOS rendered as
+/// a full-colour red emoji ignoring every colour the row asked for — while
+/// the ascent row directly above it already used `MasiIcon('heart')`. Fixed
+/// 2026-08-12; this finder is what stops the character creeping back.
+Finder _heartGlyphFinder(Key likesKey) => find.descendant(
+  of: find.byKey(likesKey),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is MasiIcon && widget.name == 'heart',
+  ),
+);
+
 /// Matches the top-level `Material` feed row for a shared topo
 /// (`community-topo-row-<wallId>`) — used to count "exactly N rows" (D2a).
 ///
@@ -731,11 +744,17 @@ void main() {
         expect(_feedRowFinder(), findsNWidgets(2));
 
         // wall-shared-1 has 2 likes, 1 comment.
+        const shared1Likes = Key('community-topo-row-wall-shared-1-likes');
+        expect(find.byKey(shared1Likes), findsOneWidget);
+        // The like counter is a MasiIcon + a bare count now, matching the
+        // comment counter beside it — no '♥' character, which iOS drew as a
+        // red emoji (2026-08-12).
+        expect(_heartGlyphFinder(shared1Likes), findsOneWidget);
         expect(
-          find.byKey(const Key('community-topo-row-wall-shared-1-likes')),
+          find.descendant(of: find.byKey(shared1Likes), matching: find.text('2')),
           findsOneWidget,
         );
-        expect(find.text('♥ 2'), findsOneWidget);
+        expect(find.textContaining('♥'), findsNothing);
         // C1d: the comment glyph is now a `MasiIcon('comment')` + a bare
         // count (no more emoji text) -- scoped to each row's
         // `-comments` key so the two rows' counts (1 vs 0) can't collide.
@@ -751,7 +770,12 @@ void main() {
           findsOneWidget,
         );
         // wall-shared-2 has 0 likes, 0 comments.
-        expect(find.text('♥ 0'), findsOneWidget);
+        const shared2Likes = Key('community-topo-row-wall-shared-2-likes');
+        expect(_heartGlyphFinder(shared2Likes), findsOneWidget);
+        expect(
+          find.descendant(of: find.byKey(shared2Likes), matching: find.text('0')),
+          findsOneWidget,
+        );
         const shared2Comments = Key(
           'community-topo-row-wall-shared-2-comments',
         );

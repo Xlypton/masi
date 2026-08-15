@@ -628,11 +628,36 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                   onTap: () => _showToposFiltersSheet(context),
                 ),
                 Expanded(
-                  // The sync/offline banner is a SLIVER of this scroll view,
-                  // not a `Column` sibling above it — see
-                  // [_withSyncBannerHeader]. As a sibling it cost the list
-                  // ~122 px that scrolling could never reclaim.
-                  child: _withSyncBannerHeader(
+                  // Pull-to-refresh (user request, 2026-08-11), wrapping the
+                  // WHOLE loading/error/empty/list stack rather than
+                  // `_ToposList` alone — for the same reason
+                  // [_withSyncBannerHeader] wraps all of it: the states where
+                  // a climber most wants to yank the list (a failed sync, an
+                  // offline empty library) are exactly the ones that render
+                  // INSTEAD of a list, and an indicator attached to the list
+                  // would be missing from every one of them.
+                  //
+                  // The gesture reaches whatever scrollable those states
+                  // actually build; a state with nothing scrollable simply
+                  // never triggers it, and every such state already carries
+                  // its own retry button.
+                  child: RefreshIndicator(
+                    key: const Key('topos-pull-to-refresh'),
+                    // The same work the Feed's pull-to-refresh and the Map's
+                    // (now deleted) refresh button did: re-run the real remote
+                    // pull, then invalidate the local list so a row that
+                    // arrived through it shows up. `pullNow()` never throws
+                    // and is a safe no-op signed out, so no guard is needed.
+                    onRefresh: () async {
+                      await ref.read(syncOrchestratorProvider.notifier).pullNow();
+                      if (!context.mounted) return;
+                      ref.invalidate(toposProvider);
+                    },
+                    // The sync/offline banner is a SLIVER of this scroll view,
+                    // not a `Column` sibling above it — see
+                    // [_withSyncBannerHeader]. As a sibling it cost the list
+                    // ~122 px that scrolling could never reclaim.
+                    child: _withSyncBannerHeader(
                     banner: syncBannerWidget,
                     // Defect-D fix (the reported screenshot): a hard load
                     // error caused by the SAME unopenable-database condition
@@ -775,6 +800,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                               widget.setLocationLocationService,
                         );
                       },
+                    ),
                     ),
                   ),
                 ),

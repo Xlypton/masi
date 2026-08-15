@@ -108,6 +108,13 @@ Future<void> _pumpLegend(
   );
 }
 
+/// Opens a legend row's `⋯` action sheet — where log-ascent, hide, delete
+/// and edit moved on 2026-08-12.
+Future<void> _openRouteMenu(WidgetTester tester, int routeId) async {
+  await tester.tap(find.byKey(Key('topo-route-menu-$routeId')));
+  await tester.pumpAndSettle();
+}
+
 void _setViewportSize(WidgetTester tester, Size size) {
   tester.view.physicalSize = size;
   tester.view.devicePixelRatio = 1.0;
@@ -131,31 +138,35 @@ void main() {
     );
     await tester.pump();
 
+    // Log-ascent lives in each row's '⋯' menu now (2026-08-12), so the
+    // per-row affordance to look for is the menu button.
     for (final route in routes) {
       expect(
-        find.byKey(Key('topo-log-ascent-${route.id}')),
+        find.byKey(Key('topo-route-menu-${route.id}')),
         findsOneWidget,
-        reason: 'route ${route.id} must show its own log-ascent button',
+        reason: 'route ${route.id} must show its own actions menu',
       );
     }
 
     final target = routes[1];
+    await _openRouteMenu(tester, target.id);
     await tester.tap(find.byKey(Key('topo-log-ascent-${target.id}')));
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(
       tapped,
       [target.id],
       reason:
-          'tapping row ${target.id}\'s log-ascent button must invoke the '
+          'choosing Log ascent from row ${target.id}\'s menu must invoke the '
           'callback with exactly that id, not an index or a different '
           "route's id",
     );
 
-    // Tapping a different row's button passes THAT row's id.
+    // A different row's menu passes THAT row's id.
     final other = routes[0];
+    await _openRouteMenu(tester, other.id);
     await tester.tap(find.byKey(Key('topo-log-ascent-${other.id}')));
-    await tester.pump();
+    await tester.pumpAndSettle();
     expect(tapped, [target.id, other.id]);
   });
 
@@ -167,11 +178,14 @@ void main() {
     await _pumpLegend(tester, container, readOnly: true, onLogAscent: (_) {});
     await tester.pump();
 
+    // With every action gone, the row has no menu to open at all — a sheet
+    // that opens onto nothing is worse than no button (see
+    // `RouteLegend`'s `hasRowActions`). These routes carry no beta video,
+    // which is the one thing a read-only viewer could still be offered.
     for (final route in routes) {
+      expect(find.byKey(Key('topo-route-menu-${route.id}')), findsNothing);
       expect(find.byKey(Key('topo-log-ascent-${route.id}')), findsNothing);
     }
-    // The other two editing affordances stay hidden too (existing
-    // readOnly contract, unaffected by this change).
     expect(
       find.byKey(Key('topo-route-visibility-${routes.first.id}')),
       findsNothing,
@@ -192,11 +206,13 @@ void main() {
       await _pumpLegend(tester, container);
       await tester.pump();
 
+      await _openRouteMenu(tester, routes.single.id);
       expect(
         find.byKey(Key('topo-log-ascent-${routes.single.id}')),
         findsNothing,
       );
-      // The pre-existing controls are untouched.
+      // The owner's own controls are untouched — the menu still carries
+      // them, it just has no Log ascent row.
       expect(
         find.byKey(Key('topo-route-visibility-${routes.single.id}')),
         findsOneWidget,
@@ -246,16 +262,14 @@ void main() {
       expect(tester.takeException(), isNull);
 
       final routes = container.read(drawControllerProvider(_testWallId)).routes;
+      // One trailing control now, not three (2026-08-12) — which makes this
+      // row STRICTLY roomier than the case the test was written against, so
+      // the height assertion below is if anything easier to satisfy. It is
+      // kept as-is deliberately: it pins the `maxLines: 1` + ellipsis on the
+      // title, which is what actually stops the wrap, and that guard must
+      // survive the trailing slot getting narrower or wider again.
       expect(
-        find.byKey(Key('topo-log-ascent-${routes.single.id}')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(Key('topo-route-visibility-${routes.single.id}')),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(Key('topo-route-delete-${routes.single.id}')),
+        find.byKey(Key('topo-route-menu-${routes.single.id}')),
         findsOneWidget,
       );
 

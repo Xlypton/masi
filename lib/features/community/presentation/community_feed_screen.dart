@@ -5,7 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../app/theme.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../topo/presentation/grade_colors.dart'
-    show GradeBandDot, colorForGradeBand;
+    show GradeBandDot, GradeBandPill, colorForGradeBand;
 import '../../../shared/presentation/masi_icon.dart';
 import '../../../shared/filtering/grade_range_picker.dart';
 import '../../../shared/filtering/style_filter_chips.dart';
@@ -950,14 +950,33 @@ class _FeedRow extends ConsumerWidget {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Flexible(
-                          child: Text(
-                            '♥ ${topo.likeCount}',
+                          // The brand glyph, not the literal '♥' character
+                          // this used to print (user request, 2026-08-12:
+                          // "make the heart icon on the feed the purple masi
+                          // icon not a red emoji"). U+2665 has an emoji
+                          // presentation on iOS, so the platform rendered it
+                          // as a full-colour red heart that ignored every
+                          // colour this row asked for — sitting directly
+                          // above an ascent row that already used
+                          // `MasiIcon('heart')` and beside a comment counter
+                          // that already used `MasiIcon('comment')`. Now all
+                          // three agree.
+                          child: Row(
                             key: Key('community-topo-row-$wallId-likes'),
-                            style: textTheme.titleSmall?.copyWith(
-                              color: colors.ink2,
-                            ),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              MasiIcon('heart', size: 16, color: colors.ink3),
+                              const SizedBox(width: 2),
+                              Text(
+                                '${topo.likeCount}',
+                                style: textTheme.titleSmall?.copyWith(
+                                  color: colors.ink2,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
                           ),
                         ),
                         const SizedBox(width: MasiSpacing.sm),
@@ -1099,31 +1118,43 @@ class _AscentFeedRow extends ConsumerWidget {
                         ),
                         if (entry.gradeLabel != null) ...[
                           const SizedBox(width: MasiSpacing.xs),
-                          // Same hardness-signal dot as the owner's own
-                          // RouteLegend (route_legend.dart) — gated on
-                          // gradeBand rather than gradeLabel: the two are
+                          // The grade in white on its band's colour, not a
+                          // dot beside grey text (user request, 2026-08-11:
+                          // "I liked the white number in coloured square
+                          // version for the grade in case of an ascent
+                          // better"). An ascent is ONE route at ONE grade, so
+                          // there is no span for a single pill to flatten —
+                          // that objection belongs to the topo row above,
+                          // which keeps its dot-per-band. See
+                          // [GradeBandPill]'s doc for the split.
+                          //
+                          // Gated on gradeBand, not gradeLabel: the two are
                           // set together (see SharedAscentEntry), but the
-                          // dot's COLOR needs a band, not just a label
-                          // string, so this is the one that actually gates
-                          // it.
-                          if (entry.gradeBand != null) ...[
-                            GradeBandDot(
-                              key: Key('community-ascent-row-$ascentId-grade-dot'),
-                              color: colorForGradeBand(entry.gradeBand!),
-                              radius: 5,
-                            ),
-                            const SizedBox(width: 4),
-                          ],
-                          Flexible(
-                            child: Text(
-                              entry.gradeLabel!,
-                              style: textTheme.titleSmall?.copyWith(
-                                color: colors.ink2,
+                          // pill's COLOUR needs a band, so that is the one
+                          // that actually decides whether it can render. A
+                          // label with no band falls through to the plain
+                          // text below rather than disappearing.
+                          if (entry.gradeBand != null)
+                            Flexible(
+                              child: GradeBandPill(
+                                key: Key(
+                                  'community-ascent-row-$ascentId-grade-pill',
+                                ),
+                                label: entry.gradeLabel!,
+                                color: colorForGradeBand(entry.gradeBand!),
                               ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                            )
+                          else
+                            Flexible(
+                              child: Text(
+                                entry.gradeLabel!,
+                                style: textTheme.titleSmall?.copyWith(
+                                  color: colors.ink2,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
-                          ),
                         ],
                       ],
                     ),
@@ -1392,7 +1423,18 @@ class _Thumbnail extends StatelessWidget {
     // #56: decode at display size, not the original's full resolution —
     // the tile is 52 LOGICAL px, so the decode target is that times the
     // device's pixel ratio.
-    final cachePx = (52 * MediaQuery.of(context).devicePixelRatio).round();
+    //
+    // WIDTH ONLY. This used to pass the same value as `cacheHeight` too,
+    // which made `ResizeImage` (default policy `exact`) scale the bitmap to
+    // exactly 52x52 whatever the source's aspect ratio was — `BoxFit.fill`,
+    // performed in the decoder. Every portrait photo therefore arrived here
+    // already squashed (~1.33x for a 4:3) and the `BoxFit.cover` below had
+    // nothing left to crop, because by then the bitmap really was square.
+    // With the width alone the height follows the intrinsic ratio and `cover`
+    // centre-crops the tile as intended. `topos_row.dart`'s `_Thumbnail` was
+    // fixed for exactly this; the feed's copy was missed and kept the bug.
+    // See [PhotoImage]'s doc.
+    final cacheWidthPx = (52 * MediaQuery.of(context).devicePixelRatio).round();
 
     final child = thumbnailPath == null
         ? _GradientFallback(colors: colors)
@@ -1401,8 +1443,7 @@ class _Thumbnail extends StatelessWidget {
             width: 52,
             height: 52,
             fit: BoxFit.cover,
-            cacheWidth: cachePx,
-            cacheHeight: cachePx,
+            cacheWidth: cacheWidthPx,
             placeholder: () => _GradientFallback(colors: colors),
             loadingPlaceholder: () => const MasiShimmer(),
           );

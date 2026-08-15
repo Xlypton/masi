@@ -132,10 +132,95 @@ void main() {
       await tester.pump();
       expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.draw);
 
-      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-      await tester.pump();
+      // Leaving draw mode is the bottom cluster's ✓ now, not a second tap on
+      // a toggle: `topo-mode-toggle` is view mode's pencil only, and draw
+      // mode carries no mode control in the top row at all (2026-08-12).
+      expect(find.byKey(const Key('topo-mode-toggle')), findsNothing);
+      await tester.tap(find.byKey(const Key('topo-commit-button')));
+      await tester.pumpAndSettle();
       expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
     });
+
+    testWidgets(
+      'the bottom ✗ discards the line in progress and STAYS in draw mode, '
+      'then exits draw mode when pressed with nothing left to discard — '
+      'leaving already-committed routes alone either way',
+      (tester) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: MaterialApp(
+              theme: MasiTheme.light,
+              home: const TopoCanvasScreen(wallId: 'test-wall'),
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+        await tester.pumpAndSettle();
+
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
+        // Committed through the controller rather than the ✓ button, so no
+        // metadata sheet opens and the canvas stays in draw mode — what this
+        // test needs is the state, not the ceremony: one route committed, a
+        // second one half-drawn.
+        notifier.addPoint(const Offset(0.1, 0.1));
+        notifier.addPoint(const Offset(0.2, 0.2));
+        await notifier.commitRoute();
+        await tester.pumpAndSettle();
+        expect(
+          container.read(drawControllerProvider(_testWallId)).routes,
+          hasLength(1),
+        );
+
+        notifier.addPoint(const Offset(0.5, 0.5));
+        await tester.pump();
+        expect(
+          container.read(drawControllerProvider(_testWallId)).currentPoints,
+          isNotEmpty,
+        );
+
+        // First ✗ — something IS half-drawn, so it scraps that line and
+        // leaves the editor open. Kicking the user back to view mode here
+        // would make drawing ten routes an exercise in re-entering the
+        // editor (see `_handleCancelEditing`).
+        await tester.tap(find.byKey(const Key('topo-clear-button')));
+        await tester.pumpAndSettle();
+
+        var state = container.read(drawControllerProvider(_testWallId));
+        expect(state.currentPoints, isEmpty);
+        expect(
+          state.mode,
+          DrawMode.draw,
+          reason: 'scrapping a line must not close the editor',
+        );
+
+        // Second ✗ — nothing left to discard, so now it means "stop
+        // editing". A control that did nothing at all in a state you can sit
+        // in indefinitely would be worse.
+        await tester.tap(find.byKey(const Key('topo-clear-button')));
+        await tester.pumpAndSettle();
+
+        state = container.read(drawControllerProvider(_testWallId));
+        expect(state.mode, DrawMode.view);
+        // Neither press touches committed routes: this canvas persists a
+        // route the moment it is committed.
+        expect(state.routes.length, 1);
+      },
+    );
 
     testWidgets(
       'A3: undo/redo/commit toolbar buttons invoke the draw controller '
@@ -229,14 +314,14 @@ void main() {
     );
 
     testWidgets(
-      'M4 cleanup coverage: with a route selected, topo-edit-metadata-button '
-      'appears in the app bar and tapping it opens RouteMetadataSheet',
+      'M4 cleanup coverage: in DRAW mode, a route\'s own row menu offers '
+      '"Edit route details" and choosing it opens RouteMetadataSheet — and '
+      'that action is absent in view mode',
       (tester) async {
-        // The edit-metadata button lives in the app bar (see
-        // TopoCanvasScreen.build's AppBar.actions), gated only on
-        // drawState.selectedRouteId — independent of the image-load path —
-        // so this is exercised the same way as A1/A3 above: pumping the
-        // full screen without ever selecting an image.
+        // The edit-metadata control lives ON the route now (2026-08-12):
+        // `RouteLegend`'s row menu, supplied by `TopoCanvasBody` in draw mode
+        // only. It used to be a glyph in the top chrome, a whole screen away
+        // from the thing it edits.
         final db = AppDatabase(NativeDatabase.memory());
         addTearDown(db.close);
         final container = ProviderContainer(
@@ -247,45 +332,77 @@ void main() {
         );
         addTearDown(container.dispose);
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        // A photo is required, unlike the A1/A3 tests above: the legend (and
+        // therefore the row menu) lives inside `TopoCanvasBody`, which the
+        // screen only builds once a photo is selected. `debugInitialImageSize`
+        // supplies the natural size so no codec decode is driven.
+        final crud = container.read(libraryCrudRepositoryProvider);
+        final area = await crud.createArea('Area');
+        final sector = await crud.createSector(area.id, 'Sector');
+        final wall = await crud.createWall(sector.id, 'Wall');
+        await db.into(db.photos).insert(
+              PhotosCompanion.insert(
+                id: 'row-menu-photo',
+                createdAt: 1000,
+                updatedAt: 1000,
+                wallId: wall.id,
+                localPath: '/tmp/row-menu.jpg',
+                kind: 'original',
+                width: 400,
+                height: 300,
+              ),
+            );
+
+        final notifier = container.read(drawControllerProvider(wall.id).notifier);
 
         await tester.pumpWidget(
           UncontrolledProviderScope(
             container: container,
             child: MaterialApp(
-            theme: MasiTheme.light,
-            home: const TopoCanvasScreen(wallId: 'test-wall'),
-          ),
+              theme: MasiTheme.light,
+              home: TopoCanvasScreen(
+                wallId: wall.id,
+                debugInitialImageSize: const Size(400, 300),
+              ),
+            ),
           ),
         );
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('topo-edit-metadata-button')), findsNothing);
-
-        // Drawn/committed AFTER the screen has mounted (and its microtask-
-        // deferred enter-wall reset — see TopoCanvasScreen.initState's doc —
-        // has already run): drawControllerProvider is an app-lifetime
-        // global, and TopoCanvasScreen now unconditionally resets it for
-        // the wall it's mounted for (even when, as here, 'test-wall' has no
-        // persisted photo) — see loadWallOriginalPhoto's doc for the M6
-        // cross-wall-leak fix this closes. A route committed BEFORE mount
-        // would therefore be cleared by that reset; committing here instead
-        // matches how a real user actually creates a route: after opening
-        // the wall's canvas, not before.
+        // Committed AFTER the screen has mounted (and its microtask-deferred
+        // enter-wall reset — see TopoCanvasScreen.initState's doc — has
+        // already run): a route committed BEFORE mount would be cleared by
+        // that reset. This also matches how a real user creates one.
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
-        notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        await notifier.commitRoute();
+        await tester.pumpAndSettle();
+        final routeId = container.read(drawControllerProvider(wall.id)).routes.single.id;
 
-        notifier.selectRoute(routeId);
-        await tester.pump();
+        // VIEW mode: the row's menu offers Log ascent, never Edit — editing
+        // a route is an edit-mode action.
+        await tester.tap(find.byKey(Key('topo-route-menu-$routeId')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(Key('topo-route-edit-$routeId')), findsNothing);
+        // The sheet's own Cancel row (showMasiActionSheet's default label —
+        // it takes an optional `cancelKey` that this call site does not set).
+        await tester.tap(find.text('Cancel'));
+        await tester.pumpAndSettle();
 
-        expect(
-          find.byKey(const Key('topo-edit-metadata-button')),
-          findsOneWidget,
-        );
+        // DRAW mode: the two swap over.
+        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+        await tester.pumpAndSettle();
+        // Draw mode collapses the legend by default; expand it to reach the
+        // rows (see LegendExpandedController.setForMode).
+        await tester.tap(find.byKey(const Key('topo-route-legend-chip')));
+        await tester.pumpAndSettle();
 
-        await tester.tap(find.byKey(const Key('topo-edit-metadata-button')));
+        await tester.tap(find.byKey(Key('topo-route-menu-$routeId')));
+        await tester.pumpAndSettle();
+        expect(find.byKey(Key('topo-log-ascent-$routeId')), findsNothing);
+        expect(find.byKey(Key('topo-route-edit-$routeId')), findsOneWidget);
+
+        await tester.tap(find.byKey(Key('topo-route-edit-$routeId')));
         await tester.pumpAndSettle();
 
         expect(find.byType(RouteMetadataSheet), findsOneWidget);
@@ -1367,17 +1484,26 @@ void main() {
         isTrue,
       );
 
+      // Hide and Delete are row-menu actions now (2026-08-12), reached
+      // through the row's '⋯' button.
+      await tester.tap(find.byKey(Key('topo-route-menu-${route.id}')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('topo-route-visibility-${route.id}')));
-      await tester.pump();
+      await tester.pumpAndSettle();
 
       expect(
         container.read(drawControllerProvider(_testWallId)).routes.single.visible,
         isFalse,
       );
 
-      // Delete control removes the route entirely.
+      // Delete removes the route entirely — behind a confirmation, since a
+      // menu row is one tap from destroying a drawn line and there is no undo.
+      await tester.tap(find.byKey(Key('topo-route-menu-${route.id}')));
+      await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('topo-route-delete-${route.id}')));
-      await tester.pump();
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(Key('topo-route-delete-confirm-${route.id}')));
+      await tester.pumpAndSettle();
 
       expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
     });

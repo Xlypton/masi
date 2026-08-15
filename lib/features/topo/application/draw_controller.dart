@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
@@ -11,6 +12,69 @@ import 'package:masi/features/topo/domain/topo_route.dart';
 /// Whether the topo canvas is in passive viewing mode or active route
 /// drawing mode.
 enum DrawMode { view, draw }
+
+/// Which palette tool a tap on the canvas means — the thing the symbol
+/// palette lights exactly one of.
+///
+/// This exists because "exactly one tool is selected" used to be expressed
+/// entirely as `DrawState.activeSymbol == null` meaning the Route tool, and an
+/// eraser is a third kind: a tool, not a placeable [SymbolType]. With only the
+/// old encoding, `activeSymbol == null` could no longer tell Route from eraser.
+///
+/// Deliberately NOT modelled as an extra [SymbolType] member. That enum feeds
+/// `TopoPainter`'s and `topo_route.dart`'s symbol-rendering switches, and an
+/// eraser is never a thing that gets drawn onto a photo — adding it there would
+/// force every one of those switches to carry a case that must never be
+/// reached.
+///
+/// Invariant, maintained by [DrawController.setActiveSymbol] and
+/// [DrawController.setEraserActive] (the only two writers):
+/// `activeTool == DrawTool.symbol` **iff** `activeSymbol != null`.
+enum DrawTool {
+  /// Taps extend the line being drawn. The resting state.
+  route,
+
+  /// Taps place a marker of [DrawState.activeSymbol]'s type.
+  symbol,
+
+  /// Taps REMOVE whatever they hit on the selected route — one of its points
+  /// or one of its markers.
+  eraser,
+}
+
+/// A route's editable geometry — the points of its line plus the markers
+/// placed along it — snapshotted away from the rest of [TopoRoute].
+///
+/// Deliberately not a whole [TopoRoute]: an [EditRouteGeometryOp] captures a
+/// before/after pair, and if that pair carried name/grade/description too then
+/// undoing a *line* edit would also silently revert any metadata the climber
+/// typed in between. Geometry undo must move geometry and nothing else.
+@immutable
+class RouteGeometry {
+  const RouteGeometry({required this.points, required this.symbols});
+
+  /// Snapshots [route]'s current geometry. The lists are copied, so later
+  /// mutation of [route] (or of the state it lives in) cannot reach back into
+  /// a snapshot already taken.
+  factory RouteGeometry.of(TopoRoute route) => RouteGeometry(
+    points: List<Offset>.unmodifiable(route.points),
+    symbols: List<TopoSymbol>.unmodifiable(route.symbols),
+  );
+
+  final List<Offset> points;
+  final List<TopoSymbol> symbols;
+
+  /// Whether [other] describes the same geometry, element by element. Used to
+  /// decide whether a finished gesture actually changed anything worth
+  /// persisting or pushing onto the undo stack.
+  bool sameAs(RouteGeometry other) =>
+      listEquals(points, other.points) && listEquals(symbols, other.symbols);
+
+  /// Returns [route] with this geometry applied, leaving every other field
+  /// (id, number, colour, visibility, all metadata) exactly as it is.
+  TopoRoute applyTo(TopoRoute route) =>
+      route.copyWith(points: points, symbols: symbols);
+}
 
 /// The result of a [DrawController.placeSymbol] call, distinguishing the
 /// four cases callers (currently just `_TopoCanvasState._beginInteraction`)
@@ -73,6 +137,51 @@ class AddCommittedSymbolOp extends DrawOp {
   final TopoSymbol symbol;
 }
 
+/// One completed edit of an already-committed route's geometry — the whole
+/// gesture, not a step of it.
+///
+/// ## Why ONE op instead of one per kind of edit
+///
+/// The obvious shape is a family (`MoveRoutePointOp`, `InsertRoutePointOp`,
+/// `RemoveRoutePointOp`, …), each carrying an index and a before/after value.
+/// That is what `ROUTE_EDITING_PLAN.md` §4.1 first sketched, and it is the
+/// wrong shape for the boundary the plan itself demands two sections earlier.
+///
+/// §3.1 requires **one gesture, one undo**. A single gesture is routinely more
+/// than one edit: dragging out of the middle of a segment INSERTS a point and
+/// then MOVES it, continuously, as one motion. A per-edit op family records
+/// that as two undo entries, so the climber's first undo leaves a stray point
+/// sitting on the line — the exact "undo does something nobody asked for"
+/// outcome §3.1 exists to prevent. It would also have to represent a
+/// hypothetical mixed gesture, and a sequence of indices is only invertible if
+/// every one of them is replayed in exact reverse order.
+///
+/// A whole-geometry before/after pair sidesteps all of it: undo assigns
+/// [before], redo assigns [after], and both are correct for any gesture
+/// whatsoever without reasoning about index arithmetic. The cost is memory
+/// proportional to the route's own size, which is bounded by what a climber
+/// draws by hand (the server caps a *proposed* line at 200 points for
+/// comparison) — a rounding error against the photo the route sits on.
+class EditRouteGeometryOp extends DrawOp {
+  const EditRouteGeometryOp({
+    required this.routeId,
+    required this.before,
+    required this.after,
+  });
+
+  /// The route edited, identified by id rather than by index into
+  /// [DrawState.routes] — indices shift when a route is deleted, ids do not.
+  final int routeId;
+
+  /// The geometry as it was when the gesture STARTED. [DrawController.undo]
+  /// restores this.
+  final RouteGeometry before;
+
+  /// The geometry as it was when the gesture ENDED. [DrawController.redo]
+  /// restores this.
+  final RouteGeometry after;
+}
+
 /// Shared by [DrawController.commitRoute]'s undo/redo-stack filtering (FIX
 /// #9): `true` for the two [DrawOp] variants that describe the CURRENT,
 /// not-yet-committed draft ([DrawState.currentPoints]/
@@ -112,6 +221,10 @@ enum RouteWriteOperation {
   /// [DrawController.setRouteMetadata] — name, grade, style, description,
   /// beta video, tags, stars: text the climber typed.
   setRouteMetadata,
+
+  /// [DrawController.endRouteGeometryEdit] — a finished edit of a committed
+  /// route's line or markers. One per gesture, never one per frame.
+  editRouteGeometry,
 
   /// [DrawController.undo] of an [AddCommittedSymbolOp].
   undo,
@@ -282,6 +395,9 @@ class DrawState {
     this.redoStack = const [],
     this.selectedRouteId,
     this.activeSymbol,
+    this.activeTool = DrawTool.route,
+    this.proposalOnlyGeometryEdits = false,
+    this.pendingProposalBaselines = const {},
     this.nextId = 1,
     this.nextNumber = 1,
     this.activeWallId,
@@ -437,6 +553,49 @@ class DrawState {
   /// [DrawController.placeSymbol], or null if no symbol is active.
   final SymbolType? activeSymbol;
 
+  /// Which palette tool is selected. See [DrawTool] for why this is a separate
+  /// field rather than something derived from [activeSymbol] alone, and for
+  /// the invariant tying the two together.
+  final DrawTool activeTool;
+
+  /// Whether geometry edits to a committed route must become a
+  /// `GeometryProposal` for the owner to accept, instead of being written
+  /// (`ROUTE_EDITING_PLAN.md` §3.2). Set by the canvas from the answer to "do
+  /// I own this wall".
+  ///
+  /// When true, [DrawController.endRouteGeometryEdit] still applies the edit
+  /// in memory and still records an undo entry — so a suggester can draw,
+  /// look at what they drew, adjust it and undo it exactly like an owner —
+  /// but it does NOT persist. Somebody else's topo must not change on disk
+  /// because a visitor dragged a point.
+  ///
+  /// Deliberately a flag rather than an ownership check inside this
+  /// controller. The controller knows about routes and photos; teaching it
+  /// about auth would make every one of its tests need a signed-in identity
+  /// to say anything about drawing.
+  final bool proposalOnlyGeometryEdits;
+
+  /// For each route edited under [proposalOnlyGeometryEdits], the geometry it
+  /// had BEFORE the first such edit — keyed by route id.
+  ///
+  /// Two jobs, both of which need the ORIGINAL rather than the previous
+  /// gesture's result, which is why an entry is written once and then left
+  /// alone:
+  ///
+  ///  - **Discarding.** [discardPendingGeometryProposals] puts the routes back
+  ///    exactly as the owner has them. Since nothing was ever written, that is
+  ///    a complete undo of the visit.
+  ///  - **Deciding what a proposal actually says about markers.**
+  ///    [GeometryProposal.symbols] is null when a proposal says nothing about
+  ///    them, and null is NOT the same as `[]` — accepting a proposal carrying
+  ///    `[]` would wipe every bolt the owner had placed as a side effect of
+  ///    fixing a line's shape. Comparing against the original is the only way
+  ///    to tell "I did not touch the markers" from "I removed them all".
+  ///
+  /// Empty whenever there is nothing pending, which is what the canvas watches
+  /// to decide whether to offer a submit action at all.
+  final Map<int, RouteGeometry> pendingProposalBaselines;
+
   /// The id to assign to the next committed route.
   final int nextId;
 
@@ -454,6 +613,9 @@ class DrawState {
     bool selectedRouteIdSet = false,
     SymbolType? activeSymbol,
     bool activeSymbolSet = false,
+    DrawTool? activeTool,
+    bool? proposalOnlyGeometryEdits,
+    Map<int, RouteGeometry>? pendingProposalBaselines,
     int? nextId,
     int? nextNumber,
     String? activeWallId,
@@ -482,6 +644,11 @@ class DrawState {
       activeSymbol: activeSymbolSet
           ? activeSymbol
           : (activeSymbol ?? this.activeSymbol),
+      activeTool: activeTool ?? this.activeTool,
+      proposalOnlyGeometryEdits:
+          proposalOnlyGeometryEdits ?? this.proposalOnlyGeometryEdits,
+      pendingProposalBaselines:
+          pendingProposalBaselines ?? this.pendingProposalBaselines,
       nextId: nextId ?? this.nextId,
       nextNumber: nextNumber ?? this.nextNumber,
       activeWallId: activeWallIdSet
@@ -719,6 +886,42 @@ class DrawController extends Notifier<DrawState> {
               .upsertRoute(wallId, photoId, updatedRoute),
         );
         return;
+
+      case EditRouteGeometryOp(routeId: final routeId, before: final before):
+        final index = state.routes.indexWhere((r) => r.id == routeId);
+        if (index == -1) {
+          // Route deleted since the edit; consume the op so the stacks stay
+          // consistent, exactly as the committed-symbol case does.
+          state = state.copyWith(
+            undoStack: undoStack,
+            redoStack: [...state.redoStack, op],
+          );
+          return;
+        }
+
+        final restoredRoute = before.applyTo(state.routes[index]);
+        final routes = [...state.routes];
+        routes[index] = restoredRoute;
+        state = state.copyWith(
+          routes: routes,
+          undoStack: undoStack,
+          redoStack: [...state.redoStack, op],
+        );
+
+        final wallId = state.activeWallId;
+        final photoId = state.activePhotoId;
+        if (wallId == null || photoId == null) return;
+        await _writeThrough(
+          operation: RouteWriteOperation.undo,
+          optimistic: state,
+          // The edited shape is what the database still holds, so the canvas
+          // must go back to showing it -- along with the op, un-consumed.
+          rollbackTo: beforeUndo,
+          write: () => ref
+              .read(routeRepositoryProvider)
+              .upsertRoute(wallId, photoId, restoredRoute),
+        );
+        return;
     }
   }
 
@@ -789,6 +992,41 @@ class DrawController extends Notifier<DrawState> {
               .upsertRoute(wallId, photoId, updatedRoute),
         );
         return;
+
+      case EditRouteGeometryOp(routeId: final routeId, after: final after):
+        final index = state.routes.indexWhere((r) => r.id == routeId);
+        if (index == -1) {
+          state = state.copyWith(
+            redoStack: redoStack,
+            undoStack: [...state.undoStack, op],
+          );
+          return;
+        }
+
+        final reappliedRoute = after.applyTo(state.routes[index]);
+        final routes = [...state.routes];
+        routes[index] = reappliedRoute;
+        state = state.copyWith(
+          routes: routes,
+          redoStack: redoStack,
+          undoStack: [...state.undoStack, op],
+        );
+
+        final wallId = state.activeWallId;
+        final photoId = state.activePhotoId;
+        if (wallId == null || photoId == null) return;
+        await _writeThrough(
+          operation: RouteWriteOperation.redo,
+          optimistic: state,
+          // The re-applied shape never reached the database, so the canvas
+          // must go back to the undone one -- and the op back onto the redo
+          // stack.
+          rollbackTo: beforeRedo,
+          write: () => ref
+              .read(routeRepositoryProvider)
+              .upsertRoute(wallId, photoId, reappliedRoute),
+        );
+        return;
     }
   }
 
@@ -800,6 +1038,251 @@ class DrawController extends Notifier<DrawState> {
     final points = [...state.currentPoints];
     points[index] = q;
     state = state.copyWith(currentPoints: points);
+  }
+
+  // ---------------------------------------------------------------------
+  // Editing a COMMITTED route's geometry (`ROUTE_EDITING_PLAN.md`)
+  //
+  // The five mutators below are in-memory only. They persist nothing and push
+  // nothing onto the undo stack; [endRouteGeometryEdit] is the single place
+  // that does either, and it runs once per GESTURE.
+  //
+  // That split is the whole design, and it is worth stating plainly because
+  // the obvious alternative — persist and record inside each mutator, the way
+  // [placeSymbol] does — looks more consistent and is a trap. A drag emits a
+  // move per frame, so a two-second drag is roughly 120 of them: 120 database
+  // round-trips for one edit, and an undo stack in which the climber's first
+  // undo rewinds a single frame of a motion they experienced as one action.
+  // §3.1 of the plan calls that out as the main performance trap in the
+  // feature, and this boundary is the answer to it.
+  //
+  // Routes are addressed by id throughout, never by index into
+  // [DrawState.routes]: a delete shifts every later index, and an edit landing
+  // on the wrong route because of it would be silent.
+  // ---------------------------------------------------------------------
+
+  /// The route an edit gesture is currently open on, or null when no gesture
+  /// is in flight. Paired with [_geometryEditBaseline].
+  ///
+  /// Deliberately NOT part of [DrawState]: it is scratch for the duration of
+  /// one touch, nothing renders from it, and putting it in the state would
+  /// mean a rebuild per frame of a drag for no observable benefit.
+  int? _geometryEditRouteId;
+
+  /// The edited route's geometry as it was before the current gesture began —
+  /// the `before` half of the [EditRouteGeometryOp] that
+  /// [endRouteGeometryEdit] will push, and the value a failed write reverts
+  /// to. Null exactly when [_geometryEditRouteId] is.
+  RouteGeometry? _geometryEditBaseline;
+
+  /// Opens an edit gesture on [route] if one is not already open on it,
+  /// snapshotting its geometry for [endRouteGeometryEdit] to diff against.
+  void _beginGeometryEdit(TopoRoute route) {
+    if (_geometryEditRouteId == route.id) return;
+    if (_geometryEditRouteId != null) {
+      // A gesture starting on a different route while one is still open. The
+      // UI cannot currently produce this (a touch belongs to one route), but
+      // the failure mode if it ever did is an edit that is never persisted and
+      // never undoable — so close the old one properly rather than dropping
+      // it. Not awaited: this is a synchronous mutator, and the flush's own
+      // write-through already handles its failure.
+      unawaited(endRouteGeometryEdit(_geometryEditRouteId!));
+    }
+    _geometryEditRouteId = route.id;
+    _geometryEditBaseline = RouteGeometry.of(route);
+  }
+
+  /// Looks up the route [routeId] names and opens an edit gesture on it,
+  /// returning `(index, route)` — or null if no such route exists, which every
+  /// caller treats as a no-op.
+  (int, TopoRoute)? _openGeometryEdit(int routeId) {
+    final index = state.routes.indexWhere((r) => r.id == routeId);
+    if (index == -1) return null;
+    final route = state.routes[index];
+    _beginGeometryEdit(route);
+    return (index, route);
+  }
+
+  /// Writes [route] back at [index] in [DrawState.routes]. In-memory only.
+  void _replaceRouteAt(int index, TopoRoute route) {
+    final routes = [...state.routes];
+    routes[index] = route;
+    state = state.copyWith(routes: routes);
+  }
+
+  /// Moves the point at [index] of the committed route [routeId] to [percent].
+  /// No-op if the route or the point does not exist.
+  ///
+  /// Called per frame of a drag. See the block comment above for why it
+  /// neither persists nor records anything.
+  void moveRoutePoint(int routeId, int index, Offset percent) {
+    final opened = _openGeometryEdit(routeId);
+    if (opened == null) return;
+    final (routeIndex, route) = opened;
+    if (index < 0 || index >= route.points.length) return;
+
+    final points = [...route.points];
+    points[index] = percent;
+    _replaceRouteAt(routeIndex, route.copyWith(points: points));
+  }
+
+  /// Inserts [percent] into the committed route [routeId] immediately AFTER
+  /// the point at [index], so the new point lands between [index] and its
+  /// successor rather than at the end of the line. No-op if the route or
+  /// [index] does not exist.
+  ///
+  /// Ordering matters here in a way it does not for symbols: a route's points
+  /// are a path, so appending a point the climber dropped in the middle of the
+  /// line would draw a spur back to it instead of bending the segment they
+  /// touched.
+  void insertRoutePointAfter(int routeId, int index, Offset percent) {
+    final opened = _openGeometryEdit(routeId);
+    if (opened == null) return;
+    final (routeIndex, route) = opened;
+    if (index < 0 || index >= route.points.length) return;
+
+    final points = [...route.points];
+    points.insert(index + 1, percent);
+    _replaceRouteAt(routeIndex, route.copyWith(points: points));
+  }
+
+  /// Removes the point at [index] from the committed route [routeId].
+  ///
+  /// **Refuses to go below two points.** A one-point route has no line to
+  /// draw: it would render as nothing, while still occupying a legend row and
+  /// a number, and the climber would have no handle left to grab to fix it.
+  /// Removing a whole route is a different, confirmed action that already
+  /// exists in the row menu ([removeRoute]) — this must not become a way to
+  /// reach it by accident, one tap at a time.
+  ///
+  /// No-op if the route or the point does not exist, or if the route is
+  /// already down to two points.
+  void removeRoutePoint(int routeId, int index) {
+    final opened = _openGeometryEdit(routeId);
+    if (opened == null) return;
+    final (routeIndex, route) = opened;
+    if (index < 0 || index >= route.points.length) return;
+    if (route.points.length <= 2) return;
+
+    final points = [...route.points];
+    points.removeAt(index);
+    _replaceRouteAt(routeIndex, route.copyWith(points: points));
+  }
+
+  /// Moves the marker at [symbolIndex] of the committed route [routeId] to
+  /// [percent]. No-op if the route or the marker does not exist.
+  void moveRouteSymbol(int routeId, int symbolIndex, Offset percent) {
+    final opened = _openGeometryEdit(routeId);
+    if (opened == null) return;
+    final (routeIndex, route) = opened;
+    if (symbolIndex < 0 || symbolIndex >= route.symbols.length) return;
+
+    final symbols = [...route.symbols];
+    symbols[symbolIndex] = symbols[symbolIndex].copyWith(position: percent);
+    _replaceRouteAt(routeIndex, route.copyWith(symbols: symbols));
+  }
+
+  /// Removes the marker at [symbolIndex] from the committed route [routeId].
+  /// No-op if the route or the marker does not exist.
+  ///
+  /// Unlike [removeRoutePoint] there is no floor: a route with no markers at
+  /// all is an ordinary, fully-drawable route.
+  void removeRouteSymbol(int routeId, int symbolIndex) {
+    final opened = _openGeometryEdit(routeId);
+    if (opened == null) return;
+    final (routeIndex, route) = opened;
+    if (symbolIndex < 0 || symbolIndex >= route.symbols.length) return;
+
+    final symbols = [...route.symbols];
+    symbols.removeAt(symbolIndex);
+    _replaceRouteAt(routeIndex, route.copyWith(symbols: symbols));
+  }
+
+  /// Closes the edit gesture open on [routeId]: persists the route ONCE and
+  /// pushes exactly ONE [EditRouteGeometryOp], covering everything the gesture
+  /// did. The drag boundary from `ROUTE_EDITING_PLAN.md` §3.1.
+  ///
+  /// Callers must invoke this at the end of every gesture that touched
+  /// geometry — the end of a drag, and equally the end of a single eraser tap,
+  /// which is a gesture containing one mutation. There is no separate
+  /// immediate-commit path for taps, because two commit paths is two things to
+  /// keep correct.
+  ///
+  /// No-op when no gesture is open on [routeId], so calling it defensively (on
+  /// a pointer-up that turned out to touch nothing, say) costs nothing.
+  ///
+  /// A gesture that ended where it started — a tap that hit no handle, a drag
+  /// returned to its origin — is also a no-op: nothing is written and nothing
+  /// is pushed. Undo must not contain entries that do nothing when inverted,
+  /// or the climber presses it and watches the canvas refuse to change.
+  ///
+  /// Route identity is untouched throughout. [id][TopoRoute.id],
+  /// [number][TopoRoute.number] and [colorIndex][TopoRoute.colorIndex] all
+  /// survive, and `RouteRepository.upsertRoute` keys on `(photoId, number)` so
+  /// the existing database row is UPDATED rather than replaced. That is the
+  /// property the rejected "re-open the route into the draft" model would have
+  /// broken, and it is why an ascent logged against this route still resolves
+  /// to it afterwards.
+  Future<void> endRouteGeometryEdit(int routeId) async {
+    final baseline = _geometryEditBaseline;
+    if (baseline == null || _geometryEditRouteId != routeId) return;
+    _geometryEditRouteId = null;
+    _geometryEditBaseline = null;
+
+    final index = state.routes.indexWhere((r) => r.id == routeId);
+    // The route was deleted while the gesture was in flight. There is nothing
+    // to persist and nothing an undo could restore geometry onto.
+    if (index == -1) return;
+
+    final route = state.routes[index];
+    final after = RouteGeometry.of(route);
+    if (after.sameAs(baseline)) return;
+
+    // Built BEFORE the op is pushed, so a refused write takes the undo entry
+    // back off with the edit it describes.
+    final rollbackTo = state.copyWith(
+      routes: [...state.routes]..[index] = baseline.applyTo(route),
+    );
+
+    state = state.copyWith(
+      undoStack: [
+        ...state.undoStack,
+        EditRouteGeometryOp(routeId: routeId, before: baseline, after: after),
+      ],
+      redoStack: const [],
+    );
+
+    if (state.proposalOnlyGeometryEdits) {
+      // Somebody else's topo (§3.2). The edit stays in memory so the suggester
+      // can see and refine what they are proposing; it never reaches disk.
+      //
+      // The baseline is recorded only on the FIRST edit to a route, so a
+      // second gesture does not overwrite the owner's real geometry with this
+      // visit's intermediate state — see [DrawState.pendingProposalBaselines].
+      if (!state.pendingProposalBaselines.containsKey(routeId)) {
+        state = state.copyWith(
+          pendingProposalBaselines: {
+            ...state.pendingProposalBaselines,
+            routeId: baseline,
+          },
+        );
+      }
+      return;
+    }
+
+    final wallId = state.activeWallId;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
+    await _writeThrough(
+      operation: RouteWriteOperation.editRouteGeometry,
+      optimistic: state,
+      // Puts the line back where the database still has it, rather than
+      // leaving the canvas showing a shape that was refused.
+      rollbackTo: rollbackTo,
+      write: () => ref
+          .read(routeRepositoryProvider)
+          .upsertRoute(wallId, photoId, route),
+    );
   }
 
   /// If there are at least 2 current points, moves them (and any
@@ -872,6 +1355,77 @@ class DrawController extends Notifier<DrawState> {
       currentSymbols: const [],
       undoStack: const [],
       redoStack: const [],
+    );
+  }
+
+  /// Declares whether geometry edits must become proposals rather than writes
+  /// — see [DrawState.proposalOnlyGeometryEdits]. Called by the canvas once
+  /// the "do I own this wall" answer resolves.
+  ///
+  /// Turning it OFF discards any pending baselines, because they describe
+  /// edits that were never written and now have no submit path. That only
+  /// happens when the answer itself changes (a sign-in completing, a switch to
+  /// a wall you do own), and in both cases the pending edits belong to the
+  /// previous context.
+  void setProposalOnlyGeometryEdits(bool proposalOnly) {
+    if (state.proposalOnlyGeometryEdits == proposalOnly) return;
+    state = state.copyWith(
+      proposalOnlyGeometryEdits: proposalOnly,
+      pendingProposalBaselines: const {},
+    );
+  }
+
+  /// The geometry of route [routeId] as it stood before this visit's first
+  /// proposal-only edit, or null if that route has not been edited.
+  RouteGeometry? pendingProposalBaselineFor(int routeId) =>
+      state.pendingProposalBaselines[routeId];
+
+  /// Restores every route edited under [DrawState.proposalOnlyGeometryEdits]
+  /// to the geometry it had before, and forgets the pending set.
+  ///
+  /// Complete by construction: proposal-only edits are never written, so
+  /// putting the in-memory routes back is the whole of the undo. Nothing needs
+  /// to be re-read from disk, which also means this works with no network and
+  /// no database round-trip.
+  ///
+  /// The undo/redo stacks are cleared of the edits it reverses, so pressing
+  /// undo afterwards cannot re-apply a change to a route that has just been
+  /// put back.
+  ///
+  /// [routeIds] narrows it to a subset, which is what a PARTIAL send needs:
+  /// suggestions are filed one route at a time and there is no outbox
+  /// (decision D-4), so if the third of four calls throws, the first two are
+  /// genuinely filed and the last two are not. Clearing all four would lose
+  /// two edits the owner never received; clearing none would re-send the two
+  /// that landed on the next attempt. Only the ones that actually went are
+  /// cleared. Passing null means all of them.
+  void discardPendingGeometryProposals([Iterable<int>? routeIds]) {
+    if (state.pendingProposalBaselines.isEmpty) return;
+    final requested = routeIds?.toSet();
+    final baselines = requested == null
+        ? state.pendingProposalBaselines
+        : {
+            for (final entry in state.pendingProposalBaselines.entries)
+              if (requested.contains(entry.key)) entry.key: entry.value,
+          };
+    if (baselines.isEmpty) return;
+    final remaining = {
+      for (final entry in state.pendingProposalBaselines.entries)
+        if (!baselines.containsKey(entry.key)) entry.key: entry.value,
+    };
+
+    final routes = [
+      for (final route in state.routes)
+        baselines[route.id]?.applyTo(route) ?? route,
+    ];
+    bool isReverted(DrawOp op) =>
+        op is EditRouteGeometryOp && baselines.containsKey(op.routeId);
+
+    state = state.copyWith(
+      routes: routes,
+      pendingProposalBaselines: remaining,
+      undoStack: state.undoStack.where((op) => !isReverted(op)).toList(),
+      redoStack: state.redoStack.where((op) => !isReverted(op)).toList(),
     );
   }
 
@@ -966,8 +1520,15 @@ class DrawController extends Notifier<DrawState> {
 
     final routes = state.routes.where((r) => r.id != id).toList();
     final clearSelection = state.selectedRouteId == id;
-    bool referencesRemovedRoute(DrawOp op) =>
-        op is AddCommittedSymbolOp && op.routeId == id;
+    // Every op kind that names a route by id, so a delete drops exactly the
+    // entries that would dangle and nothing else. `undo`/`redo` both no-op
+    // defensively on a missing route anyway; this is what keeps an undo press
+    // from silently doing nothing at all.
+    bool referencesRemovedRoute(DrawOp op) => switch (op) {
+      AddCommittedSymbolOp(routeId: final routeId) => routeId == id,
+      EditRouteGeometryOp(routeId: final routeId) => routeId == id,
+      AddPointOp() || AddCurrentSymbolOp() => false,
+    };
     state = state.copyWith(
       routes: routes,
       selectedRouteIdSet: clearSelection,
@@ -993,9 +1554,48 @@ class DrawController extends Notifier<DrawState> {
   }
 
   /// Sets the symbol type that will be placed by [placeSymbol]. Passing
-  /// null clears the active symbol.
+  /// null clears the active symbol, returning to the Route tool.
+  ///
+  /// Also moves [DrawState.activeTool] in lockstep — this and
+  /// [setEraserActive] are the only two writers of that field, and between
+  /// them they keep [DrawTool]'s invariant. Selecting a symbol (or Route) is
+  /// therefore also what switches the eraser back OFF: exactly one palette
+  /// control is ever lit.
   void setActiveSymbol(SymbolType? type) {
-    state = state.copyWith(activeSymbolSet: true, activeSymbol: type);
+    state = state.copyWith(
+      activeSymbolSet: true,
+      activeSymbol: type,
+      activeTool: type == null ? DrawTool.route : DrawTool.symbol,
+    );
+  }
+
+  /// Turns the eraser tool on or off (`ROUTE_EDITING_PLAN.md` §3.3).
+  ///
+  /// Activating it **clears** [DrawState.activeSymbol] rather than merely
+  /// shadowing it. That is the whole point of the call and not an incidental
+  /// tidy-up: a symbol left active underneath would come straight back the
+  /// moment the eraser was switched off, so the next tap would PLACE a marker
+  /// exactly where the climber had been expecting to remove one. Clearing it
+  /// also means [placeSymbol]'s existing `activeSymbol == null` guard already
+  /// makes placement impossible while erasing, with no second gate to keep in
+  /// sync.
+  ///
+  /// What it deliberately does NOT touch is [DrawState.selectedRouteId]. A
+  /// committed route's markers render only while that route is selected
+  /// (feature #43), and its point handles likewise, so clearing the selection
+  /// would leave the eraser with nothing visible to act on. The eraser clears
+  /// the palette and keeps the route.
+  ///
+  /// Passing `false` returns to [DrawTool.route]. It is a no-op unless the
+  /// eraser is actually active, so switching a symbol off is
+  /// [setActiveSymbol]'s job alone and cannot be done accidentally from here.
+  void setEraserActive(bool active) {
+    if (!active && state.activeTool != DrawTool.eraser) return;
+    state = state.copyWith(
+      activeSymbolSet: true,
+      activeSymbol: null,
+      activeTool: active ? DrawTool.eraser : DrawTool.route,
+    );
   }
 
   /// Appends a [TopoSymbol] of [DrawState.activeSymbol]'s type at [percent]

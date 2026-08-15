@@ -680,17 +680,12 @@ class _MapViewState extends ConsumerState<_MapView> {
     _mapController.move(LatLng(location.latitude, location.longitude), 14);
   }
 
-  /// `community-map-refresh`'s handler (#57): the map has no scrollable
-  /// surface to hang a `RefreshIndicator` off of (unlike
-  /// `CommunityFeedScreen`'s pull-to-refresh list), so this is a plain
-  /// button re-running the same remote pull instead. `sharedToposProvider`
-  /// is a `StreamProvider` watching Drift, so once the pull writes fresh
-  /// rows locally the marker set updates on its own — no explicit
-  /// invalidate needed here. `pullNow()` never throws (see its doc), so no
-  /// try/catch/SnackBar is needed the way `_onFindMePressed`'s
-  /// denied/unavailable case needs one.
-  Future<void> _onRefreshPressed() =>
-      ref.read(syncOrchestratorProvider.notifier).pullNow();
+  // `_onRefreshPressed` lived here — `community-map-refresh`'s handler (#57).
+  // It went with the button (see the map-controls column in `build`).
+  // `sharedToposProvider` is a `StreamProvider` watching Drift, so the markers
+  // still update on their own the moment any OTHER trigger's pull writes fresh
+  // rows locally; this screen never needed to run the pull itself, only to
+  // offer a way to ask for one.
 
   @override
   Widget build(BuildContext context) {
@@ -1345,18 +1340,17 @@ class _MapViewState extends ConsumerState<_MapView> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // #57: manual refresh — re-runs the same remote pull the
-              // signed-out -> signed-in edge used to be the only trigger
-              // for, so another user's newly-published/updated topo can
-              // show up without waiting for a resume or a fresh sign-in.
-              _MapControlButton(
-                mapControlKey: const Key('community-map-refresh'),
-                iconName: 'sync',
-                tooltip: 'Refresh',
-                colors: colors,
-                onPressed: _onRefreshPressed,
-              ),
-              const SizedBox(height: MasiSpacing.sm),
+              // `community-map-refresh` used to sit here (#57: a manual
+              // re-pull, because the map has no scrollable surface to hang a
+              // RefreshIndicator off). Removed 2026-08-11 by request, in the
+              // same breath as pull-to-refresh landing on the Topos home:
+              // every OTHER surface refreshes by gesture, and a button that
+              // exists only because this one screen cannot is a control the
+              // user has to learn separately. The pull it ran is not lost —
+              // it also runs on app resume, on connectivity regain, on the
+              // sign-in edge, and now from the Topos home's own pull-down,
+              // which shares one `pullNow()` and one set of shared rows with
+              // this map.
               _MapControlButton(
                 mapControlKey: const Key('community-map-find-me'),
                 iconName: 'my_location',

@@ -928,13 +928,19 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     );
   }
 
-  /// Pushes straight into `/community`'s Map tab, centered/zoomed on
-  /// [topo] (see `CommunityScreen`'s `initialTab`/`focusWallId` and
-  /// `_MapView`'s `focusWallId` doc). Only ever reachable when the menu
-  /// item is enabled (i.e. [topo] has coordinates) — see this row's
-  /// `itemBuilder`.
+  /// Switches to the bottom nav's Map branch, centered/zoomed on [topo]
+  /// (see `CommunityMapScreen`'s `focusWallId` doc). Only ever reachable
+  /// when the menu item is enabled (i.e. [topo] has coordinates) — see this
+  /// row's `itemBuilder`.
+  ///
+  /// `go`, NOT `push` (blank-screen bug, 2026-08-11 — the same one the topo
+  /// canvas's own `topo-locate-on-map-button` had; see that button for the
+  /// verbatim error and how it was root-caused). Short version: `/community`
+  /// redirects to `/map`, a route inside `StatefulShellRoute.indexedStack`,
+  /// and pushing it while the shell is already in the stack builds a second
+  /// `StatefulNavigationShell` with a duplicate root-navigator `GlobalKey`.
   void _handleShowOnMap(BuildContext context, TopoRef topo) {
-    context.push('/community?tab=map&focus=${topo.wallId}');
+    context.go('/community?tab=map&focus=${topo.wallId}');
   }
 
   /// "Set location"/"Edit location" flow: opens [showSetLocationPicker]

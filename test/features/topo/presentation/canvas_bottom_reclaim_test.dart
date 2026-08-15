@@ -77,9 +77,18 @@ void main() {
     );
   }
 
+  // A1/A2 note (2026-08-11): the top-bar `topo-add-photo-button` these two
+  // tests were originally written against is GONE — the user called it
+  // redundant, because the photo strip immediately below that row already
+  // ends in a '+' tile (`photo-strip-add`) wired to the same `_pickImage`,
+  // sitting right next to the thumbnails it adds to. The claim these tests
+  // defend is unchanged and still worth defending: there is no bottom-right
+  // FAB, and there is exactly ONE add-photo affordance on a canvas that has
+  // a photo. Only its identity moved.
+
   testWidgets(
-    'A1: view mode renders no bottom-right add-photo affordance — the '
-    'ONLY "Pick a photo" control anywhere on screen is the top-bar button',
+    'A1: view mode renders no bottom-right add-photo affordance — the ONLY '
+    'add-photo control anywhere on screen is the photo strip\'s "+" tile',
     (tester) async {
       final seeded = await seedWallWithPhotoAndRoute(tester);
       addTearDown(seeded.db.close);
@@ -97,19 +106,20 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
+      expect(find.byKey(const Key('photo-strip-add')), findsOneWidget);
       expect(
-        find.byTooltip('Pick a photo'),
-        findsOneWidget,
+        find.byKey(const Key('topo-add-photo-button')),
+        findsNothing,
         reason:
-            'the old floating bottom-right FAB must be gone — exactly one '
-            '"Pick a photo" control (the top-bar button) may remain',
+            'the top-bar image-plus glyph was removed as redundant with the '
+            'strip\'s own "+" tile — two controls for one action',
       );
-      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
+      expect(find.byTooltip('Pick a photo'), findsNothing);
     },
   );
 
   testWidgets(
-    'A2: topo-add-photo-button shows in view AND draw mode, and tapping it '
+    'A2: the strip\'s "+" tile shows in view AND draw mode, and tapping it '
     'invokes the same _pickImage handler the old FAB used (opens the '
     'photo-source action sheet)',
     (tester) async {
@@ -129,30 +139,32 @@ void main() {
       await tester.pumpAndSettle();
 
       // View mode.
-      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
+      expect(find.byKey(const Key('photo-strip-add')), findsOneWidget);
 
       // Draw mode.
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pumpAndSettle();
       expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.draw);
       expect(
-        find.byKey(const Key('topo-add-photo-button')),
+        find.byKey(const Key('photo-strip-add')),
         findsOneWidget,
         reason: 'add-photo must still be reachable while drawing',
       );
 
-      // Back to view, then tap add-photo and confirm it invokes _pickImage.
-      await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+      // Back to view (the bottom cluster's ✓ is the way out of draw mode
+      // since 2026-08-12), then tap the tile and confirm it invokes
+      // _pickImage.
+      await tester.tap(find.byKey(const Key('topo-commit-button')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('topo-add-photo-button')));
+      await tester.tap(find.byKey(const Key('photo-strip-add')));
       await tester.pumpAndSettle();
 
       expect(
         find.byType(CupertinoActionSheet),
         findsOneWidget,
         reason:
-            'tapping topo-add-photo-button must invoke the same _pickImage '
-            'handler the old FAB used (showPhotoSourceSheet)',
+            'tapping photo-strip-add must invoke the same _pickImage handler '
+            'the old FAB used (showPhotoSourceSheet)',
       );
 
       // Dismiss so the sheet doesn't leak into a later assertion/teardown.
@@ -265,17 +277,19 @@ void main() {
       expect(find.byKey(const Key('topo-clear-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-commit-button')), findsOneWidget);
 
-      // The add-photo control lives in the TOP bar now (still reachable
-      // while drawing) — exactly one 'Pick a photo' control exists anywhere,
-      // and it's the top-bar key, never a second bottom-right floating FAB
-      // alongside the cluster.
-      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
-      expect(find.byTooltip('Pick a photo'), findsOneWidget);
+      // The add-photo control lives in the photo strip (still reachable
+      // while drawing) — exactly one exists anywhere, never a second
+      // bottom-right floating FAB alongside the cluster.
+      expect(find.byKey(const Key('photo-strip-add')), findsOneWidget);
+      expect(find.byKey(const Key('topo-add-photo-button')), findsNothing);
     },
   );
 
   testWidgets('A5: with no photo yet, the empty state still offers a working '
-      'add-photo affordance (top-bar button) — the user is never stranded', (
+      'add-photo affordance — the user is never stranded. This is the case '
+      'the photo strip cannot cover: a wall with zero photos renders no '
+      'strip at all (see PhotoStrip\'s class doc), so the empty state\'s own '
+      'button is the sole entry point and must work.', (
     tester,
   ) async {
     final db = AppDatabase(NativeDatabase.memory());
@@ -296,15 +310,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('topo-empty-state')), findsOneWidget);
+    expect(find.byKey(const Key('photo-strip-add')), findsNothing);
     expect(
-      find.byKey(const Key('topo-add-photo-button')),
+      find.byKey(const Key('topo-empty-state-add-photo')),
       findsOneWidget,
       reason:
           'the user must never be stranded with no way to add a first '
           'photo once the bottom-right FAB is gone',
     );
 
-    await tester.tap(find.byKey(const Key('topo-add-photo-button')));
+    await tester.tap(find.byKey(const Key('topo-empty-state-add-photo')));
     await tester.pumpAndSettle();
     expect(find.byType(CupertinoActionSheet), findsOneWidget);
 
@@ -333,13 +348,13 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byKey(const Key('topo-add-photo-button')), findsNothing);
+      expect(find.byKey(const Key('photo-strip-add')), findsNothing);
       expect(find.byTooltip('Pick a photo'), findsNothing);
     },
   );
 
   testWidgets(
-    'top pill with route selected (5 trailing actions) does not overflow '
-    'at 375px width',
+    'top pill with route selected does not overflow at 375px width',
     (tester) async {
       // 375px is this project's supported minimum width (see CLAUDE.md /
       // DESIGN.md). 320px (older, narrower iPhones) is intentionally out
@@ -379,23 +394,24 @@ void main() {
       seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
-      // All 5 trailing glyphs are now simultaneously present: edit-metadata
-      // (route selected) + AR (photo + a visible route) + mode-toggle +
-      // locate-on-map + add-photo — the worst case for the top pill's
-      // trailing action row in view mode (the "locate on map" glyph is
-      // view mode's counterpart to the edit-location button, which moved
-      // to draw mode only — see topo_canvas_edit_location_test.dart).
-      expect(
-        find.byKey(const Key('topo-edit-metadata-button')),
-        findsOneWidget,
-      );
+      // View mode's full trailing set: AR (photo + a visible route) +
+      // mode-toggle + locate-on-map. Two glyphs lighter than it used to be —
+      // edit-metadata moved to draw mode and add-photo was removed entirely
+      // (2026-08-11) — so this is now the SMALLER of the two modes; draw
+      // mode's Cancel/Save pair is the width worst case, covered by
+      // topo_canvas_edit_location_test.dart.
       expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
       expect(
         find.byKey(const Key('topo-locate-on-map-button')),
         findsOneWidget,
       );
-      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
+      expect(
+        find.byKey(const Key('topo-edit-metadata-button')),
+        findsNothing,
+        reason: 'editing a route\'s details is an edit-mode action now',
+      );
+      expect(find.byKey(const Key('topo-add-photo-button')), findsNothing);
 
       // No RenderFlex overflow (or any other exception) from cramming the
       // back chevron + title + 5 icons into the top pill at the supported
@@ -411,9 +427,9 @@ void main() {
   );
 
   testWidgets(
-    'top pill with route selected (5 trailing actions) does not overflow '
-    'at 375px width even at a 3x text scale — MasiIcons are fixed-size, so '
-    'only the row\'s height should grow, never its width',
+    'top pill with route selected does not overflow at 375px width even at '
+    'a 3x text scale — MasiIcons are fixed-size, so only the row\'s height '
+    'should grow, never its width',
     (tester) async {
       const viewportSize = Size(375, 812);
       tester.view.physicalSize = viewportSize;
@@ -454,19 +470,14 @@ void main() {
       seeded.container.read(drawControllerProvider(seeded.wallId).notifier).selectRoute(1);
       await tester.pumpAndSettle();
 
-      // Same worst-case 5 trailing glyphs as the 1x test above, all still
-      // present under the 3x scale.
-      expect(
-        find.byKey(const Key('topo-edit-metadata-button')),
-        findsOneWidget,
-      );
+      // Same trailing set as the 1x test above, all still present under the
+      // 3x scale.
       expect(find.byKey(const Key('topo-ar-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-mode-toggle')), findsOneWidget);
       expect(
         find.byKey(const Key('topo-locate-on-map-button')),
         findsOneWidget,
       );
-      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
 
       // Selecting a route (needed so the AR/edit-metadata glyphs above are
       // both present, the worst case this test targets) also surfaces the
@@ -514,11 +525,9 @@ void main() {
       // are expected to respond to text scale at all.
       for (final key in const [
         'topo-back-button',
-        'topo-edit-metadata-button',
         'topo-ar-button',
         'topo-mode-toggle',
         'topo-locate-on-map-button',
-        'topo-add-photo-button',
       ]) {
         final rect = tester.getRect(find.byKey(Key(key)));
         expect(

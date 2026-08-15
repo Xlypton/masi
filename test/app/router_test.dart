@@ -523,6 +523,7 @@ void main() {
         expect(screen.focusWallId, 'wall-x');
       },
     );
+
   });
 
   group('N1/N4: persistent bottom-nav shell (NavShell)', () {

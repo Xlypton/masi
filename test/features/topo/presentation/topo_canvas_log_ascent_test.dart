@@ -54,6 +54,13 @@ class _SkipNumberRouteRepository extends RouteRepository {
   }
 }
 
+/// Opens a legend row's `⋯` action sheet — where Log ascent moved on
+/// 2026-08-12, along with hide/delete/edit.
+Future<void> _openRouteMenu(WidgetTester tester, int routeId) async {
+  await tester.tap(find.byKey(Key('topo-route-menu-$routeId')));
+  await tester.pumpAndSettle();
+}
+
 void main() {
   Future<
     ({
@@ -255,13 +262,14 @@ void main() {
       expect(routes, hasLength(1));
       final routeLocalId = routes.single.id;
 
+      await _openRouteMenu(tester, routeLocalId);
       final logAscentButton = find.byKey(Key('topo-log-ascent-$routeLocalId'));
       expect(
         logAscentButton,
         findsOneWidget,
         reason:
-            'the own (non-readOnly) canvas must show the log-ascent '
-            'button on its route legend row',
+            'the own (non-readOnly) canvas must offer Log ascent in its '
+            'route legend row menu',
       );
 
       await tester.tap(logAscentButton);
@@ -315,6 +323,12 @@ void main() {
 
       final routes = seeded.container.read(drawControllerProvider(seeded.wallId)).routes;
       expect(routes, hasLength(1));
+      // readOnly with no beta video leaves the row with no actions at all,
+      // so there is no menu to open — see `RouteLegend`'s `hasRowActions`.
+      expect(
+        find.byKey(Key('topo-route-menu-${routes.single.id}')),
+        findsNothing,
+      );
       expect(
         find.byKey(Key('topo-log-ascent-${routes.single.id}')),
         findsNothing,
@@ -360,6 +374,7 @@ void main() {
       expect(routes, hasLength(2));
       final unresolvedRoute = routes.firstWhere((r) => r.number == 2);
 
+      await _openRouteMenu(tester, unresolvedRoute.id);
       final logAscentButton = find.byKey(
         Key('topo-log-ascent-${unresolvedRoute.id}'),
       );
@@ -419,6 +434,7 @@ void main() {
       expect(routes, hasLength(3));
       final route2Local = routes.firstWhere((r) => r.number == 2);
 
+      await _openRouteMenu(tester, route2Local.id);
       final logAscentButton = find.byKey(
         Key('topo-log-ascent-${route2Local.id}'),
       );

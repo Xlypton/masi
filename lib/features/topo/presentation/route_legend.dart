@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'package:masi/app/theme.dart';
+import 'package:masi/shared/presentation/masi_dialogs.dart';
 import 'package:masi/core/routes/route_styles.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
@@ -99,12 +102,16 @@ final legendExpandedProvider =
 const double kLegendMaxHeightFraction = 0.4;
 
 /// Lists every route in [DrawState.routes]: a color swatch (see
-/// [colorForRoute] — [kRoutePalette] for an ungraded route, its grade
-/// band's color once graded) plus its number and grade (if set), a
-/// visibility toggle ([DrawController.toggleRouteVisibility]), a delete
-/// control ([DrawController.removeRoute]), and select-on-tap
-/// ([DrawController.selectRoute]). Renders nothing if there are no routes
-/// yet.
+/// [colorForRoute] — [kRoutePalette] for an ungraded route, its grade band's
+/// color once graded) plus its number and grade (if set), select-on-tap
+/// ([DrawController.selectRoute]), and a `⋯` menu carrying every action that
+/// applies to that one route. Renders nothing if there are no routes yet.
+///
+/// The menu ([_showRouteActions]) replaced a row of inline glyphs on
+/// 2026-08-12 — hide, delete, log-ascent and a beta-video launch, up to four
+/// tap targets squeezed into the right of a dense row. It is reachable by the
+/// `⋯` button and by long-pressing the row, matching `topos_row.dart`'s
+/// home-list menu.
 class RouteLegend extends ConsumerWidget {
   const RouteLegend({
     super.key,
@@ -112,6 +119,7 @@ class RouteLegend extends ConsumerWidget {
     this.maxHeight,
     this.readOnly = false,
     this.onLogAscent,
+    this.onEditRoute,
   });
 
   /// FIX #6: family key for [drawControllerProvider] — see that provider's
@@ -153,6 +161,16 @@ class RouteLegend extends ConsumerWidget {
   /// there. Null (the default) preserves every existing call site's
   /// behavior exactly (no button renders at all).
   final void Function(int routeId)? onLogAscent;
+
+  /// Invoked with a route's [TopoRoute.id] when "Edit route details" is
+  /// chosen from its row menu — the caller opens `RouteMetadataSheet` for it
+  /// (this widget has no repository access and never needs any).
+  ///
+  /// Offered only while this is non-null, which the canvas makes true in
+  /// draw mode alone. That is the user's own framing (2026-08-12: "the route
+  /// edit button should be on the route in edit mode") — the control used to
+  /// sit in the top chrome, a whole screen away from the thing it edits.
+  final void Function(int routeId)? onEditRoute;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -205,6 +223,12 @@ class RouteLegend extends ConsumerWidget {
           final route = legendState.routes[index];
           final isSelected = route.id == legendState.selectedRouteId;
           final color = colorForRoute(route, kRoutePalette);
+          // Whether this row has ANY action behind its menu. A read-only
+          // viewer of someone else's topo has none unless the route carries a
+          // beta video, and a menu that opens onto nothing is worse than no
+          // menu — so both the '⋯' button and the long-press are withheld in
+          // that case rather than offering an empty sheet.
+          final hasRowActions = !readOnly || route.betaVideoUrl != null;
 
           // Compact rows (refined alongside #15's floating-overlay legend):
           // `dense` + `VisualDensity.compact` shrink the ListTile's own
@@ -241,6 +265,19 @@ class RouteLegend extends ConsumerWidget {
             ),
             selected: isSelected,
             onTap: () => notifier.selectRoute(route.id),
+            // Long-press opens the same menu the '⋯' button does — the
+            // gesture the user asked for by name (2026-08-12), and the one
+            // `topos_row.dart` already trains on the home list.
+            onLongPress: hasRowActions
+                ? () => _showRouteActions(
+                    context,
+                    route: route,
+                    notifier: notifier,
+                    readOnly: readOnly,
+                    onEditRoute: onEditRoute,
+                    onLogAscent: onLogAscent,
+                  )
+                : null,
             leading: CircleAvatar(backgroundColor: color, radius: 8),
             title: Text(
               routeDisplayLabel(route),
@@ -258,88 +295,40 @@ class RouteLegend extends ConsumerWidget {
             // second line whenever either is present, in BOTH read-only
             // and edit modes (unlike the trailing edit controls below,
             // these are display-only, so readOnly doesn't hide them).
-            subtitle: (route.styleTags.isEmpty && (route.stars ?? 0) <= 0)
-                ? null
-                : Padding(
-                    padding: const EdgeInsets.only(top: 2),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (route.styleTags.isNotEmpty)
-                          Wrap(
-                            spacing: 4,
-                            runSpacing: 4,
-                            children: [
-                              for (final tag in route.styleTags)
-                                _RouteStyleTagChip(routeId: route.id, tag: tag),
-                            ],
-                          ),
-                        if ((route.stars ?? 0) > 0)
-                          Row(
-                            key: Key('route-stars-${route.id}'),
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              for (var i = 0; i < route.stars!; i++)
-                                const Padding(
-                                  padding: EdgeInsets.only(right: 1),
-                                  child: MasiIcon('star_fill', size: 12),
-                                ),
-                            ],
-                          ),
-                      ],
-                    ),
-                  ),
-            // Beta-video button renders in BOTH read-only and edit modes
-            // (display-only external launch, not an editing affordance);
-            // the log-ascent/visibility/delete cluster after it stays
-            // gated on `readOnly` exactly as before.
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (route.betaVideoUrl != null)
-                  IconButton(
-                    key: Key('route-beta-${route.id}'),
-                    tooltip: 'Watch beta video',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.all(4),
-                    constraints: const BoxConstraints(),
-                    icon: MasiIcon('globe'),
-                    onPressed: () => launchBetaVideo(route.betaVideoUrl!),
-                  ),
-                if (!readOnly) ...[
-                  if (onLogAscent != null)
-                    IconButton(
-                      key: Key('topo-log-ascent-${route.id}'),
-                      tooltip: 'Log ascent',
-                      iconSize: 18,
-                      visualDensity: VisualDensity.compact,
-                      padding: const EdgeInsets.all(4),
-                      constraints: const BoxConstraints(),
-                      icon: MasiIcon('send_check', size: 18),
-                      onPressed: () => onLogAscent!(route.id),
-                    ),
-                  // Hide and Delete are the only ADJACENT pair here that do
-                  // opposite things — one is reversible, one destroys a
-                  // route — and they used to share an edge with no gutter at
-                  // all, so a thumb landing a few pixels left of Delete hit
-                  // Delete anyway. They therefore opt out of the compact
-                  // sizing above and take the same 44pt floor the canvas's
-                  // own top chrome documents, plus a `MasiSpacing.sm` gutter
-                  // between them.
-                  //
-                  // `constraints` alone would NOT get there:
-                  // `VisualDensity.compact` subtracts 8 from a button's
-                  // minimum size (`VisualDensity.effectiveConstraints`, which
-                  // both the M2 and M3 `IconButton` paths apply), so a 44
-                  // constraint under compact density renders 36x36. Hence the
-                  // explicit `VisualDensity.standard` — pinned rather than
-                  // omitted, because an inherited/adaptive density would
-                  // silently reintroduce the same subtraction on desktop web.
-                  IconButton(
-                    key: Key('topo-route-visibility-${route.id}'),
-                    tooltip: route.visible ? 'Hide route' : 'Show route',
+            //
+            // Selecting a route additionally expands its row to the details
+            // that don't fit on one line — its description, and its freeform
+            // style note when it has one (user request, 2026-08-11: "when a
+            // route is selected show the details like description etc").
+            // Only for the selected row, and only when there is something to
+            // say: a legend that showed every route's description would push
+            // the list past its own height cap on the second route and turn
+            // the panel into a wall of text. Everything here is display-only,
+            // so it renders in read-only mode too — this is the surface a
+            // climber reads a topo from.
+            subtitle: _buildRouteSubtitle(context, route, isSelected),
+            // ONE control, not a row of them (user request, 2026-08-12: "the
+            // route quick actions like hide and delete log ascent should be
+            // in a longpress menu like the 3dot menu of the topos").
+            //
+            // What the row carried before: a beta-video globe, a log-ascent
+            // tick, a hide eye and a delete bin — up to four targets crammed
+            // into the right-hand third of a dense row, two of which
+            // (hide/delete) needed an explicit 44pt floor and a gutter
+            // between them precisely BECAUSE they were adjacent, reversible
+            // and destructive respectively, and a thumb landing a few pixels
+            // off hit the wrong one. Collapsing them into a menu removes that
+            // hazard rather than mitigating it, gives every action a readable
+            // label instead of a glyph, and leaves the row's width to the
+            // route name — which is what a climber actually reads.
+            //
+            // `topos_row.dart`'s home-list menu is the model, down to the
+            // `more_horiz` glyph and `showMasiActionSheet`, so the gesture
+            // learned on one list works on the other.
+            trailing: hasRowActions
+                ? IconButton(
+                    key: Key('topo-route-menu-${route.id}'),
+                    tooltip: 'Route actions',
                     iconSize: 18,
                     visualDensity: VisualDensity.standard,
                     padding: const EdgeInsets.all(4),
@@ -347,33 +336,195 @@ class RouteLegend extends ConsumerWidget {
                       minWidth: 44,
                       minHeight: 44,
                     ),
-                    icon: route.visible
-                        ? MasiIcon('eye')
-                        : MasiIcon('eye_off'),
-                    onPressed: () => notifier.toggleRouteVisibility(route.id),
-                  ),
-                  const SizedBox(width: MasiSpacing.sm),
-                  IconButton(
-                    key: Key('topo-route-delete-${route.id}'),
-                    tooltip: 'Delete route',
-                    iconSize: 18,
-                    visualDensity: VisualDensity.standard,
-                    padding: const EdgeInsets.all(4),
-                    constraints: const BoxConstraints(
-                      minWidth: 44,
-                      minHeight: 44,
+                    icon: MasiIcon('more_horiz'),
+                    onPressed: () => _showRouteActions(
+                      context,
+                      route: route,
+                      notifier: notifier,
+                      readOnly: readOnly,
+                      onEditRoute: onEditRoute,
+                      onLogAscent: onLogAscent,
                     ),
-                    icon: MasiIcon('delete'),
-                    onPressed: () => notifier.removeRoute(route.id),
-                  ),
-                ],
-              ],
-            ),
+                  )
+                : null,
           );
         },
       ),
     );
   }
+}
+
+/// Opens the per-route action sheet behind a legend row's `⋯` button and its
+/// long-press — the menu that replaced the row's inline glyph cluster
+/// (2026-08-12). Shaped after `topos_row.dart`'s home-list menu: the same
+/// [showMasiActionSheet], the same labelled rows, the same destructive
+/// styling on the one action that destroys something.
+///
+/// Which actions appear is decided by the callbacks the canvas supplies, and
+/// that is what keeps mode-awareness out of this widget: `onEditRoute` is
+/// non-null only in draw mode and `onLogAscent` only in view mode (see
+/// `TopoCanvasBody`), so "edit this route" and "log an ascent on it" are
+/// never offered together. Hide and Delete are the owner's own, present
+/// whenever the legend is not [RouteLegend.readOnly]; the beta-video launch
+/// is display-only and present for a read-only viewer too.
+///
+/// Delete goes through [showMasiConfirm] rather than firing on tap. It was
+/// previously a bare bin icon adjacent to the hide toggle, which is exactly
+/// the mis-tap this menu removes — but a menu row is still one tap from
+/// destroying a route somebody drew, and unlike a photo there is no undo.
+Future<void> _showRouteActions(
+  BuildContext context, {
+  required TopoRoute route,
+  required DrawController notifier,
+  required bool readOnly,
+  required void Function(int routeId)? onEditRoute,
+  required void Function(int routeId)? onLogAscent,
+}) async {
+  final betaUrl = route.betaVideoUrl;
+  final action = await showMasiActionSheet<String>(
+    context,
+    title: routeDisplayLabel(route),
+    actions: [
+      if (onEditRoute != null)
+        MasiSheetAction(
+          key: Key('topo-route-edit-${route.id}'),
+          label: 'Edit route details',
+          value: 'edit',
+        ),
+      if (onLogAscent != null)
+        MasiSheetAction(
+          key: Key('topo-log-ascent-${route.id}'),
+          label: 'Log ascent',
+          value: 'log-ascent',
+        ),
+      if (betaUrl != null)
+        MasiSheetAction(
+          key: Key('route-beta-${route.id}'),
+          label: 'Watch beta video',
+          value: 'beta',
+        ),
+      if (!readOnly) ...[
+        MasiSheetAction(
+          key: Key('topo-route-visibility-${route.id}'),
+          label: route.visible ? 'Hide route' : 'Show route',
+          value: 'visibility',
+        ),
+        MasiSheetAction(
+          key: Key('topo-route-delete-${route.id}'),
+          label: 'Delete route',
+          value: 'delete',
+          isDestructive: true,
+        ),
+      ],
+    ],
+  );
+  if (action == null || !context.mounted) return;
+  switch (action) {
+    case 'edit':
+      onEditRoute?.call(route.id);
+    case 'log-ascent':
+      onLogAscent?.call(route.id);
+    case 'beta':
+      if (betaUrl != null) unawaited(launchBetaVideo(betaUrl));
+    case 'visibility':
+      notifier.toggleRouteVisibility(route.id);
+    case 'delete':
+      final confirmed = await showMasiConfirm(
+        context,
+        title: 'Delete ${routeDisplayLabel(route)}?',
+        message: 'The line and its markers are removed from this photo.',
+        confirmLabel: 'Delete',
+        confirmKey: Key('topo-route-delete-confirm-${route.id}'),
+      );
+      if (confirmed) notifier.removeRoute(route.id);
+  }
+}
+
+/// The second line of a legend row: style-tag chips, a star rating, and —
+/// for the SELECTED row only — the route's description and freeform style
+/// note. Returns null when there is nothing to show, so an unadorned route
+/// keeps its original single-line row height exactly.
+///
+/// Split out of [RouteLegend.build]'s `itemBuilder` (it was an inline
+/// conditional there) because selection added a third and fourth thing this
+/// slot has to decide between, and the nested ternary that produced was
+/// harder to read than the widget it built.
+Widget? _buildRouteSubtitle(
+  BuildContext context,
+  TopoRoute route,
+  bool isSelected,
+) {
+  final colors = MasiColors.of(context);
+  final description = route.description?.trim();
+  final style = route.style?.trim();
+  final showDescription =
+      isSelected && description != null && description.isNotEmpty;
+  final showStyle = isSelected && style != null && style.isNotEmpty;
+  final hasChips = route.styleTags.isNotEmpty;
+  final hasStars = (route.stars ?? 0) > 0;
+
+  if (!hasChips && !hasStars && !showDescription && !showStyle) return null;
+
+  final detailStyle = Theme.of(
+    context,
+  ).textTheme.bodySmall?.copyWith(color: colors.ink2);
+
+  return Padding(
+    padding: const EdgeInsets.only(top: 2),
+    child: Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        if (hasChips)
+          Wrap(
+            spacing: 4,
+            runSpacing: 4,
+            children: [
+              for (final tag in route.styleTags)
+                _RouteStyleTagChip(routeId: route.id, tag: tag),
+            ],
+          ),
+        if (hasStars)
+          Row(
+            key: Key('route-stars-${route.id}'),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < route.stars!; i++)
+                const Padding(
+                  padding: EdgeInsets.only(right: 1),
+                  child: MasiIcon('star_fill', size: 12),
+                ),
+            ],
+          ),
+        if (showStyle)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              style,
+              key: Key('route-style-${route.id}'),
+              style: detailStyle?.copyWith(fontStyle: FontStyle.italic),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        if (showDescription)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text(
+              description,
+              key: Key('route-description-${route.id}'),
+              style: detailStyle,
+              // Capped rather than unbounded: the legend has a hard height
+              // cap of its own (see [kLegendMaxHeightFraction]) and one long
+              // description would otherwise fill it entirely, hiding the
+              // routes either side of the one being read.
+              maxLines: 4,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+      ],
+    ),
+  );
 }
 
 /// A small, non-interactive display chip for one of [TopoRoute.styleTags]:

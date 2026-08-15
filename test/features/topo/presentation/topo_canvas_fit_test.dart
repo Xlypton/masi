@@ -1247,7 +1247,24 @@ void main() {
           // natural size. With the `constrained: true` bug, this would
           // instead measure ~(400, 800) — the viewport it was wrongly
           // clamped to — rather than (1600, 1200).
-          final renderedSize = tester.getSize(find.byType(Image));
+          //
+          // Scoped to the THUMBNAIL layer, and that choice is load-bearing
+          // in a test with no real image bytes. The canvas paints the
+          // photo's thumbnail beneath the original as a progressive
+          // placeholder, so a bare `find.byType(Image)` now matches two —
+          // and of the two, only this one still fills its natural box while
+          // undecoded: its `loadingPlaceholder` is the full-size
+          // `PhotoLoadingFill`, whereas the original's is deliberately
+          // transparent (`SizedBox.shrink`) so the thumbnail shows through,
+          // which measures 0x0 here. Both layers are laid out in the SAME
+          // box, so this measures exactly the pre-transform layout size the
+          // assertion is about.
+          final renderedSize = tester.getSize(
+            find.descendant(
+              of: find.byKey(const Key('topo-canvas-photo-thumb')),
+              matching: find.byType(Image),
+            ),
+          );
           expect(renderedSize.width, closeTo(imageSize.width, 0.5));
           expect(renderedSize.height, closeTo(imageSize.height, 0.5));
         },

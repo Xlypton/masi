@@ -138,6 +138,32 @@ class _ThrowingSharedToposSyncRemote extends _CountingSyncRemote {
   }
 }
 
+/// A [_CountingSyncRemote] whose `fetchOwnRows` fails the way PostgREST
+/// fails a token it reads as issued in the future ([isClockSkewRejection]) —
+/// the cold-start "Couldn't sync" the user reported on 2026-08-11, which
+/// their own Retry tap always cleared.
+///
+/// [failuresRemaining] counts DOWN, so a test can say "the clock is two
+/// seconds fast" (fail twice, then succeed) rather than "fail forever".
+class _ClockSkewSyncRemote extends _CountingSyncRemote {
+  _ClockSkewSyncRemote({this.failuresRemaining = 1});
+
+  int failuresRemaining;
+
+  @override
+  Future<Map<String, List<Map<String, dynamic>>>> fetchOwnRows(String uid) async {
+    if (failuresRemaining > 0) {
+      failuresRemaining--;
+      pullCallCount++;
+      throw Exception(
+        'PostgrestException(message: JWT issued at future, code: PGRST303, '
+        'details: , hint: null)',
+      );
+    }
+    return super.fetchOwnRows(uid);
+  }
+}
+
 /// A [_CountingSyncRemote] whose `upsertOwnRows` reports EVERY attempted
 /// table as failed — the shape `SupabaseSyncRemote.upsertOwnRows` returns
 /// when each table's round trip throws (offline / captive portal / expired
@@ -1058,6 +1084,143 @@ void main() {
 
         expect(container.read(syncOrchestratorProvider).lastPullError, isNull);
       },
+    );
+  });
+
+  group('clock skew (PGRST303 "JWT issued at future") on the first pull', () {
+    test('isClockSkewRejection matches the code and the message, and nothing '
+        'else', () {
+      expect(
+        isClockSkewRejection(
+          'Sync failed: own rows fetch failed: PostgrestException(message: '
+          'JWT issued at future, code: PGRST303, details: , hint: null)',
+        ),
+        isTrue,
+      );
+      expect(isClockSkewRejection('code: pgrst303'), isTrue);
+      expect(isClockSkewRejection('JWT ISSUED AT FUTURE'), isTrue);
+      expect(isClockSkewRejection(null), isFalse);
+      expect(isClockSkewRejection('Sync failed: shared-topos-boom'), isFalse);
+      expect(
+        isClockSkewRejection('PostgrestException(message: JWT expired)'),
+        isFalse,
+        reason: 'an EXPIRED token is a real sign-in problem, not skew — it '
+            'must keep reaching the user',
+      );
+    });
+
+    test('clockSkewRetryDelay backs off 2s, 4s, 8s and then holds', () {
+      expect(clockSkewRetryDelay(1), const Duration(seconds: 2));
+      expect(clockSkewRetryDelay(2), const Duration(seconds: 4));
+      expect(clockSkewRetryDelay(3), const Duration(seconds: 8));
+      expect(clockSkewRetryDelay(9), const Duration(seconds: 8));
+    });
+
+    test(
+      'a skewed first pull reports NO error and leaves the status at syncing '
+      '— the red "Couldn\'t sync" banner must not appear for something that '
+      'clears itself in a second',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _ClockSkewSyncRemote(failuresRemaining: 1);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+
+        final state = container.read(syncOrchestratorProvider);
+        expect(
+          state.lastPullError,
+          isNull,
+          reason: 'a transient clock-skew rejection is not something to tell '
+              'the user about — it is something to wait out',
+        );
+        expect(
+          state.status,
+          SyncStatus.syncing,
+          reason: 'the sync genuinely IS still in progress: a retry is armed',
+        );
+      },
+    );
+
+    test(
+      'the armed retry actually runs and the pull then succeeds cleanly, with '
+      'no user-visible error at any point',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _ClockSkewSyncRemote(failuresRemaining: 1);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        await container.read(syncOrchestratorProvider.notifier).pullNow();
+        expect(container.read(syncOrchestratorProvider).lastPullError, isNull);
+
+        // Real time, not fake-async: the retry is a real `Timer`, and the
+        // first backoff step is 2s (see clockSkewRetryDelay).
+        await Future<void>.delayed(const Duration(seconds: 3));
+
+        final state = container.read(syncOrchestratorProvider);
+        expect(state.status, SyncStatus.idle);
+        expect(state.lastPullError, isNull);
+        expect(state.lastSyncedAt, isNotNull);
+        expect(
+          remote.pullCallCount,
+          greaterThanOrEqualTo(2),
+          reason: 'the retry must genuinely re-hit the backend',
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
+    );
+
+    test(
+      'a skew that OUTLASTS the retry budget is reported like any other '
+      'failure — a permanently broken backend must not stay silent forever',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _ClockSkewSyncRemote(failuresRemaining: 99);
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        // Drive the attempts directly rather than waiting out 2+4+8s of real
+        // backoff: each explicit pullNow() consumes one of the budget's
+        // attempts exactly as the armed timer would.
+        for (var i = 0; i <= kClockSkewPullRetryLimit; i++) {
+          await container.read(syncOrchestratorProvider.notifier).pullNow();
+        }
+
+        expect(
+          container.read(syncOrchestratorProvider).lastPullError,
+          allOf(contains('Sync failed:'), contains('PGRST303')),
+        );
+      },
+      timeout: const Timeout(Duration(seconds: 30)),
     );
   });
 

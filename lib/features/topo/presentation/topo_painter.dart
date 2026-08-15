@@ -137,6 +137,7 @@ class TopoPainter extends CustomPainter {
     this.routeColorResolver,
     this.scale = 1.0,
     this.symbolPictures = const {},
+    this.editableRouteId,
   });
 
   /// The natural size of the underlying topo image, used to convert percent
@@ -212,6 +213,23 @@ class TopoPainter extends CustomPainter {
   /// loading yet.
   final Map<SymbolType, Picture> symbolPictures;
 
+  /// The committed route whose points should be painted with drag handles, or
+  /// null for none.
+  ///
+  /// This is deliberately a SEPARATE field from [showHandles] rather than an
+  /// overload of it: [showHandles] means "paint handles for the in-progress
+  /// draft ([currentPoints])" and always has, so folding a committed route
+  /// into that same flag would make it mean two different things depending
+  /// on context. When [editableRouteId] matches a route in [routes] that is
+  /// also `visible`, that route's points are painted with the exact same
+  /// handle geometry [currentPoints] gets under [showHandles] (see
+  /// [_paintHandles]) -- same radius, same [handleColor], same 1/[scale]
+  /// on-screen-constant sizing. A route that doesn't exist, or exists but is
+  /// invisible, paints no handles even if its id is set here. Symbols need
+  /// no equivalent change: a committed route's markers already render only
+  /// while it's the selected route (feature #43, see the class doc above).
+  final int? editableRouteId;
+
   /// [scale] clamped to a small positive floor so dividing by it never
   /// produces a divide-by-zero (`double.infinity`) or a non-positive
   /// stroke/radius/font size.
@@ -265,6 +283,15 @@ class TopoPainter extends CustomPainter {
           _paintSymbol(canvas, CoordinateTransformer.percentToScene(symbol.position, imageSize), symbol.type, color);
         }
       }
+
+      // Step 2 of the route-editing plan (§4.2): paint drag handles for the
+      // committed route currently marked editable, using the SAME handle
+      // geometry the draft (currentPoints) already uses under showHandles
+      // below -- see _paintHandles. `visible` is already guaranteed here by
+      // the `continue` at the top of this loop.
+      if (route.id == editableRouteId) {
+        _paintHandles(canvas, scenePoints);
+      }
     }
 
     final currentScene = _toScene(currentPoints);
@@ -280,12 +307,23 @@ class TopoPainter extends CustomPainter {
     }
 
     if (showHandles) {
-      final handlePaint = Paint()
-        ..color = handleColor
-        ..style = PaintingStyle.fill;
-      for (final p in currentScene) {
-        canvas.drawCircle(p, _handleRadius / _safeScale, handlePaint);
-      }
+      _paintHandles(canvas, currentScene);
+    }
+  }
+
+  /// Paints one draggable-handle circle (see [_handleRadius], scaled by
+  /// 1/[_safeScale] like every other on-screen-constant size in this
+  /// painter) at each of [points], filled with [handleColor]. Shared by both
+  /// the in-progress draft (under [showHandles]) and a committed route
+  /// marked [editableRouteId] (step 2 of the route-editing plan), so the two
+  /// stay visually identical by construction rather than by two hand-synced
+  /// copies of the same geometry.
+  void _paintHandles(Canvas canvas, List<Offset> points) {
+    final handlePaint = Paint()
+      ..color = handleColor
+      ..style = PaintingStyle.fill;
+    for (final p in points) {
+      canvas.drawCircle(p, _handleRadius / _safeScale, handlePaint);
     }
   }
 
@@ -612,6 +650,7 @@ class TopoPainter extends CustomPainter {
         scale != oldDelegate.scale ||
         showHandles != oldDelegate.showHandles ||
         selectedRouteId != oldDelegate.selectedRouteId ||
+        editableRouteId != oldDelegate.editableRouteId ||
         currentColor != oldDelegate.currentColor ||
         handleColor != oldDelegate.handleColor ||
         routeColorResolver != oldDelegate.routeColorResolver ||

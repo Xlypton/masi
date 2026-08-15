@@ -1,8 +1,15 @@
-// The shared/feed hardness-signal dot on CommunityFeedScreen's
-// `_AscentFeedRow`: a `GradeBandDot` beside the grade text, colored via
-// `colorForGradeBand(entry.gradeBand)` — same band colors as the owner's own
-// RouteLegend, added purely as a rendering addition (the text stays exactly
-// as legible as before).
+// How CommunityFeedScreen states a grade — which is deliberately NOT the same
+// on both of its row types, and the split is the thing these tests pin:
+//
+//   * `_AscentFeedRow` -> a `GradeBandPill`: the grade itself, set in white on
+//     its band's colour (2026-08-11, by request). An ascent is one route at
+//     one grade, so a pill can state it outright with nothing to flatten.
+//   * `_FeedRow` (a topo) -> one `GradeBandDot` per band PRESENT. A topo spans
+//     many routes, and the single hardest-grade pill this row used to carry
+//     made a 5a-7a wall call itself "7a".
+//
+// Both draw their colour from `colorForGradeBand`, the same band colours as
+// the owner's own RouteLegend.
 //
 // Harness mirrors community_feed_union_test.dart's `_seedRoute`/`logAscent`
 // pattern (duplicated locally since those helpers are file-private there).
@@ -184,8 +191,8 @@ Future<String> _seedAscent(
 
 void main() {
   testWidgets(
-    'a graded shared-ascent row renders a community-ascent-row-<id>-grade-dot '
-    "with its grade band's color, beside the still-legible grade text",
+    'a graded shared-ascent row renders a community-ascent-row-<id>-grade-pill '
+    "— the grade set in white on its band's color",
     (tester) async {
       final container = _makeContainer(currentUid: 'climber-1');
       final ascentId = await _seedAscent(
@@ -200,18 +207,24 @@ void main() {
       await tester.pumpWidget(_wrap(container));
       await _drain(tester);
 
-      final dot = tester.widget<GradeBandDot>(
-        find.byKey(Key('community-ascent-row-$ascentId-grade-dot')),
+      final pill = tester.widget<GradeBandPill>(
+        find.byKey(Key('community-ascent-row-$ascentId-grade-pill')),
       );
-      expect(dot.color, colorForGradeBand(GradeBand.hard));
-      // The grade text itself is untouched — the dot is an addition, not a
-      // replacement.
+      expect(pill.color, colorForGradeBand(GradeBand.hard));
+      expect(pill.label, '7a');
+      // The grade still READS as the grade — the pill states it, rather than
+      // asking the reader to decode a colour (2026-08-11).
       expect(find.text('7a'), findsOneWidget);
+      expect(
+        find.byKey(Key('community-ascent-row-$ascentId-grade-dot')),
+        findsNothing,
+        reason: 'the dot it replaced must not linger beside it',
+      );
     },
   );
 
   testWidgets(
-    'two shared-ascent rows in different grade bands render DIFFERENT dot '
+    'two shared-ascent rows in different grade bands render DIFFERENT pill '
     'colors',
     (tester) async {
       final container = _makeContainer(currentUid: 'climber-1');
@@ -235,18 +248,18 @@ void main() {
       await tester.pumpWidget(_wrap(container));
       await _drain(tester);
 
-      final beginnerDot = tester.widget<GradeBandDot>(
-        find.byKey(Key('community-ascent-row-$beginnerAscentId-grade-dot')),
+      final beginnerPill = tester.widget<GradeBandPill>(
+        find.byKey(Key('community-ascent-row-$beginnerAscentId-grade-pill')),
       );
-      final eliteDot = tester.widget<GradeBandDot>(
-        find.byKey(Key('community-ascent-row-$eliteAscentId-grade-dot')),
+      final elitePill = tester.widget<GradeBandPill>(
+        find.byKey(Key('community-ascent-row-$eliteAscentId-grade-pill')),
       );
-      expect(beginnerDot.color, isNot(eliteDot.color));
+      expect(beginnerPill.color, isNot(elitePill.color));
     },
   );
 
   testWidgets(
-    'an ungraded shared ascent renders no grade text and no dot, and does '
+    'an ungraded shared ascent renders no grade text and no pill, and does '
     'not crash',
     (tester) async {
       final container = _makeContainer(currentUid: 'climber-1');
@@ -265,7 +278,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(Key('community-ascent-row-$ascentId-grade-dot')),
+        find.byKey(Key('community-ascent-row-$ascentId-grade-pill')),
         findsNothing,
       );
     },

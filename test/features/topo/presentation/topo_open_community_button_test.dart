@@ -1,17 +1,28 @@
-// Tests for the topo canvas's "open community page" shortcut
-// (`topo-open-community`) — the navigation requested in "add a navigation
-// shortcut from the topo to the feed version, so if one opens the topo they
-// can easily navigate to the info rich feed version".
+// Tests for the topo canvas's "open community page" shortcut — the
+// navigation requested in "add a navigation shortcut from the topo to the
+// feed version, so if one opens the topo they can easily navigate to the
+// info rich feed version".
 //
-// The assertion that matters most: a PRIVATE, never-published topo has no
-// `CommunityTopoDetailScreen` to open at all, so the button must be ABSENT
-// there (a visible-but-dead button would be the actual bug) — and present
-// for a topo that HAS been published (`visibility == 'shared'`, the real
-// backing condition `community_repository.dart`'s `sharedTopos` query
-// requires). See `wallVisibilityProvider`'s doc (library_providers.dart) and
-// `_topTrailingActions`'s `topo-open-community` block
-// (topo_canvas_screen.dart) for why this is read straight off the wall
-// (unscoped by owner) rather than through `TopoRef.visibility`.
+// It MOVED (user request, 2026-08-11: "the chat box icon we should remove
+// and add figure out a better way to reach the feed version, like swipe up
+// from the bottom"). It used to be a speech-bubble glyph in the top chrome;
+// it is now reached from the bottom of the screen, in three forms that all
+// go to the same place:
+//   * `topo-open-community` — the "Comments & ascents" footer row inside the
+//     expanded route panel (the discoverable one);
+//   * `topo-open-community-chip` — the standalone pill shown in the panel's
+//     slot when the photo has no routes yet, so the entry point does not
+//     vanish with the route list;
+//   * an upward drag on `topo-route-legend-handle` (the fast one).
+//
+// The assertion that matters most is unchanged: a PRIVATE, never-published
+// topo has no `CommunityTopoDetailScreen` to open at all, so none of these
+// may render there (a visible-but-dead affordance would be the actual bug) —
+// and they appear for a topo that HAS been published (`visibility ==
+// 'shared'`, the real backing condition `community_repository.dart`'s
+// `sharedTopos` query requires). See `wallVisibilityProvider`'s doc
+// (library_providers.dart) and `TopoCanvasBody.onOpenCommunity`
+// (topo_canvas_screen.dart).
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -24,15 +35,30 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:image_picker/image_picker.dart';
+
+const _imageSize = Size(400, 300);
 
 /// Creates a real in-memory DB + [ProviderContainer] + a persisted
-/// Area/Sector/Wall, mirroring the harness pattern used throughout this
-/// directory (e.g. `topo_canvas_edit_location_test.dart`'s `_seedWall`).
+/// Area/Sector/Wall WITH an attached photo (and, by default, one committed
+/// route), mirroring the harness pattern used throughout this directory.
+///
+/// The photo is what makes this different from the pre-move version of this
+/// file, which seeded a photo-less wall: the affordances under test now live
+/// inside `TopoCanvasBody`, and `TopoCanvasScreen` only builds that once a
+/// photo is selected (a photo-less wall renders `topo-empty-state` instead).
+/// [TopoCanvasScreen.debugInitialImageSize] then supplies the natural size so
+/// no real codec decode is driven — see that field's doc and the project
+/// CLAUDE.md's "never drive a real image-codec decode in widget tests".
+///
 /// [shared] publishes the wall (`visibility = 'shared'`) via the same
-/// `publishTopo` write path the Topos-home "Publish" menu item uses, when
-/// `true`; otherwise the wall stays at its `'private'` default.
+/// `publishTopo` write path the Topos-home "Publish" menu item uses.
 Future<({AppDatabase db, ProviderContainer container, String wallId})>
-_seedWall({bool shared = false}) async {
+_seedWall(
+  WidgetTester tester, {
+  bool shared = false,
+  bool withRoute = true,
+}) async {
   final db = AppDatabase(NativeDatabase.memory());
   final container = ProviderContainer(
     overrides: [
@@ -47,10 +73,35 @@ _seedWall({bool shared = false}) async {
   if (shared) {
     await crud.publishTopo(wall.id);
   }
+  // FIX #6 (autoDispose pending-timer gotcha, see route_legend_gap_test.dart's
+  // `_seedRoutes`): keep this family member alive for the whole test via a
+  // permanent listener -- otherwise every bare `container.read(...)` below
+  // (before any widget is pumped) schedules an autoDispose teardown
+  // `Timer(Duration.zero, ...)` that only fires on a duration-based
+  // `tester.pump`, tripping flutter_test's `!timersPending` invariant.
+  container.listen(drawControllerProvider(wall.id), (_, _) {});
+  late String photoId;
+  await tester.runAsync(() async {
+    photoId = await crud.attachPhotoToWall(
+      wall.id,
+      XFile('/tmp/open-community-test-photo.jpg'),
+      400,
+      300,
+    );
+  });
+
+  if (withRoute) {
+    final notifier = container.read(drawControllerProvider(wall.id).notifier);
+    await notifier.loadForWall(wall.id, photoId);
+    notifier.addPoint(const Offset(0.2, 0.3));
+    notifier.addPoint(const Offset(0.7, 0.6));
+    await notifier.commitRoute();
+  }
+
   return (db: db, container: container, wallId: wall.id);
 }
 
-/// Wraps [screen] in a real (minimal) [GoRouter] so `topo-open-community`'s
+/// Wraps [screen] in a real (minimal) [GoRouter] so the community affordance's
 /// `context.push('/community/topo/:wallId')` resolves against a real router
 /// instead of throwing for lack of one — mirrors
 /// `topo_canvas_edit_location_test.dart`'s own `_wrap`, with a keyed
@@ -79,19 +130,23 @@ Widget _wrap(ProviderContainer container, Widget screen) {
   );
 }
 
+Widget _canvas(String wallId, {bool readOnly = false}) => TopoCanvasScreen(
+  wallId: wallId,
+  readOnly: readOnly,
+  debugInitialImageSize: _imageSize,
+);
+
 void main() {
-  group('topo-open-community', () {
+  group('the canvas → community shortcut', () {
     testWidgets(
       'ABSENT on a private (never-published) topo — no feed version exists '
-      'to open, so this must never render as a dead button',
+      'to open, so this must never render as a dead affordance',
       (tester) async {
-        final seeded = await _seedWall();
+        final seeded = await _seedWall(tester);
         addTearDown(seeded.db.close);
         addTearDown(seeded.container.dispose);
 
-        await tester.pumpWidget(
-          _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
-        );
+        await tester.pumpWidget(_wrap(seeded.container, _canvas(seeded.wallId)));
         await tester.pumpAndSettle();
 
         expect(
@@ -101,24 +156,33 @@ void main() {
               'a private topo has no CommunityTopoDetailScreen to open — '
               'the shortcut must be absent, not merely disabled',
         );
+        expect(
+          find.byKey(const Key('topo-open-community-chip')),
+          findsNothing,
+        );
       },
     );
 
     testWidgets(
-      'PRESENT on a shared (published) topo, in view mode',
+      'PRESENT as the route panel\'s footer row on a shared (published) topo, '
+      'in view mode',
       (tester) async {
-        final seeded = await _seedWall(shared: true);
+        final seeded = await _seedWall(tester, shared: true);
         addTearDown(seeded.db.close);
         addTearDown(seeded.container.dispose);
 
-        await tester.pumpWidget(
-          _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
-        );
+        await tester.pumpWidget(_wrap(seeded.container, _canvas(seeded.wallId)));
         await tester.pumpAndSettle();
 
         expect(
           seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
           DrawMode.view,
+        );
+        expect(
+          find.byKey(const Key('topo-route-legend-overlay')),
+          findsOneWidget,
+          reason: 'view mode opens with the route panel expanded, which is '
+              'where the footer row lives',
         );
         expect(
           find.byKey(const Key('topo-open-community')),
@@ -132,18 +196,31 @@ void main() {
     );
 
     testWidgets(
+      'PRESENT as a standalone chip when the photo has no routes yet — the '
+      'entry point must not vanish with the route list',
+      (tester) async {
+        final seeded = await _seedWall(tester, shared: true, withRoute: false);
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
+
+        await tester.pumpWidget(_wrap(seeded.container, _canvas(seeded.wallId)));
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('topo-route-legend-overlay')), findsNothing);
+        expect(find.byKey(const Key('topo-open-community-chip')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
       'PRESENT even in readOnly mode, on a shared topo — the shortcut is a '
       'non-mutating navigation, not an editing affordance',
       (tester) async {
-        final seeded = await _seedWall(shared: true);
+        final seeded = await _seedWall(tester, shared: true);
         addTearDown(seeded.db.close);
         addTearDown(seeded.container.dispose);
 
         await tester.pumpWidget(
-          _wrap(
-            seeded.container,
-            TopoCanvasScreen(wallId: seeded.wallId, readOnly: true),
-          ),
+          _wrap(seeded.container, _canvas(seeded.wallId, readOnly: true)),
         );
         await tester.pumpAndSettle();
 
@@ -152,48 +229,30 @@ void main() {
     );
 
     testWidgets(
-      'ABSENT in draw mode even on a shared topo — stays out of the '
-      'drawing-tools cluster, alongside the locate-on-map glyph it sits '
-      'next to',
+      'ABSENT from the top chrome entirely — the speech-bubble glyph that '
+      'used to sit beside the mode toggle is gone, not merely relocated '
+      'within that row',
       (tester) async {
-        final seeded = await _seedWall(shared: true);
+        final seeded = await _seedWall(tester, shared: true);
         addTearDown(seeded.db.close);
         addTearDown(seeded.container.dispose);
 
-        await tester.pumpWidget(
-          _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
-        );
+        await tester.pumpWidget(_wrap(seeded.container, _canvas(seeded.wallId)));
         await tester.pumpAndSettle();
 
-        expect(find.byKey(const Key('topo-open-community')), findsOneWidget);
-
-        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
-        await tester.pumpAndSettle();
-        expect(
-          seeded.container.read(drawControllerProvider(seeded.wallId)).mode,
-          DrawMode.draw,
-        );
-
-        expect(
-          find.byKey(const Key('topo-open-community')),
-          findsNothing,
-          reason:
-              'draw mode is the drawing-tools cluster — this "jump '
-              'elsewhere" affordance must not compete with it',
-        );
+        expect(find.byTooltip('See comments and ascents'), findsNothing);
       },
     );
 
     testWidgets(
-      'tapping it navigates to /community/topo/<the CORRECT wallId>',
+      'tapping the footer row navigates to /community/topo/<the CORRECT '
+      'wallId>',
       (tester) async {
-        final seeded = await _seedWall(shared: true);
+        final seeded = await _seedWall(tester, shared: true);
         addTearDown(seeded.db.close);
         addTearDown(seeded.container.dispose);
 
-        await tester.pumpWidget(
-          _wrap(seeded.container, TopoCanvasScreen(wallId: seeded.wallId)),
-        );
+        await tester.pumpWidget(_wrap(seeded.container, _canvas(seeded.wallId)));
         await tester.pumpAndSettle();
 
         await tester.tap(find.byKey(const Key('topo-open-community')));
@@ -212,6 +271,28 @@ void main() {
               'the routed wallId must be THIS wall\'s id — a hardcoded or '
               'mismatched id would silently open the wrong topo\'s feed',
         );
+      },
+    );
+
+    testWidgets(
+      'dragging the route panel\'s handle UPWARD opens the same destination — '
+      'the "keep pulling for more detail" gesture',
+      (tester) async {
+        final seeded = await _seedWall(tester, shared: true);
+        addTearDown(seeded.db.close);
+        addTearDown(seeded.container.dispose);
+
+        await tester.pumpWidget(_wrap(seeded.container, _canvas(seeded.wallId)));
+        await tester.pumpAndSettle();
+
+        await tester.fling(
+          find.byKey(const Key('topo-route-legend-handle')),
+          const Offset(0, -120),
+          1000,
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.text('community-topo-${seeded.wallId}'), findsOneWidget);
       },
     );
   });

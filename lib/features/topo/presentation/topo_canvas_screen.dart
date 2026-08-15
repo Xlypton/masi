@@ -18,9 +18,11 @@ import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/logbook/presentation/log_ascent_sheet.dart';
 import 'package:masi/features/moderation/application/moderation_providers.dart';
+import 'package:masi/features/moderation/application/suggestion_providers.dart';
+import 'package:masi/features/moderation/domain/edit_suggestion.dart';
+import 'package:masi/features/moderation/domain/geometry_proposal.dart';
 import 'package:masi/features/moderation/presentation/moderation_banner.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
-import 'package:masi/features/topo/application/rock_highlight_controller.dart';
 import 'package:masi/features/topo/data/image_dimensions.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/data/photo_write_exception.dart';
@@ -35,6 +37,7 @@ import 'package:masi/features/topo/presentation/topo_canvas.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_gps.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_photo_ops.dart';
 import 'package:masi/shared/presentation/masi_async_view.dart';
+import 'package:masi/shared/presentation/masi_dialogs.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 import 'package:masi/shared/presentation/masi_loading_gate.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
@@ -430,6 +433,72 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
     notifier.setMode(DrawMode.view);
     unawaited(_openMetadataSheet(routes.last));
+  }
+
+  /// The bottom cluster's ✓. Commits whatever line is in progress and then
+  /// leaves edit mode — the "save and I'm done" action.
+  ///
+  /// [_handleCommitRoute] already returns to [DrawMode.view] when it actually
+  /// commits, but it no-ops on fewer than two points, and ✓ with nothing
+  /// half-drawn must still close the editor rather than looking dead. That is
+  /// the whole reason this wrapper exists: the ✓/✗ pair is now the ONLY way
+  /// out of edit mode (2026-08-12 — the top row's Cancel/Save was the same
+  /// thing said twice), so neither may be inert in any state. The mode is
+  /// re-asserted unconditionally; it is idempotent when the commit already
+  /// did it.
+  Future<void> _handleFinishEditing() async {
+    if (widget.readOnly) return;
+    await _handleCommitRoute();
+    if (!mounted) return;
+    ref
+        .read(drawControllerProvider(widget.wallId).notifier)
+        .setMode(DrawMode.view);
+  }
+
+  /// The bottom cluster's ✗, which does one of two things depending on
+  /// whether there is a line in progress — and the split is deliberate, not
+  /// an accident of implementation.
+  ///
+  ///  * **Something half-drawn** -> discard just that line and STAY in edit
+  ///    mode. Scrapping a bad line and immediately drawing another is the
+  ///    single most common thing anyone does on this screen, and kicking them
+  ///    back to view mode every time would make drawing a wall of ten routes
+  ///    an exercise in re-entering the editor.
+  ///  * **Nothing half-drawn** -> leave edit mode. There is nothing to
+  ///    discard, so the only reading left for "✗" is "cancel out of editing",
+  ///    and a button that does nothing at all in a state you can sit in
+  ///    indefinitely is worse than one that does the obvious thing.
+  ///
+  /// Committed routes are untouched either way: this canvas persists a route
+  /// the moment it is committed (see [DrawController.commitRoute]'s
+  /// write-through), so there is no edit session to roll back and this makes
+  /// no pretence of rolling one back. The tooltip says which of the two it
+  /// currently is.
+  void _handleCancelEditing() {
+    if (widget.readOnly) return;
+    final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+    if (ref.read(drawControllerProvider(widget.wallId)).currentPoints.isEmpty) {
+      notifier.setMode(DrawMode.view);
+      return;
+    }
+    notifier.clearCurrent();
+  }
+
+  /// [_openMetadataSheet] by [TopoRoute.id] — what [RouteLegend.onEditRoute]
+  /// hands back, since a legend row knows its route's id and nothing else.
+  ///
+  /// Silently does nothing if that id is no longer in [DrawState.routes]
+  /// (a race with a concurrent delete, or a photo switch landing between the
+  /// tap and this call). `firstWhere` without an `orElse` would throw there,
+  /// and a crash is a poor answer to "the row you tapped just went away".
+  void _openMetadataSheetForId(int routeId) {
+    final routes = ref.read(drawControllerProvider(widget.wallId)).routes;
+    for (final route in routes) {
+      if (route.id == routeId) {
+        unawaited(_openMetadataSheet(route));
+        return;
+      }
+    }
   }
 
   /// Opens [RouteMetadataSheet] as a modal bottom sheet for [route],
@@ -1246,6 +1315,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           // rebuild here — otherwise the canvas would keep presenting itself
           // as a complete-but-empty topo until some unrelated field changed.
           lastLoadFailure: s.lastLoadFailure,
+          // §3.2: drives the suggest/discard bar. `routes` above would
+          // already catch an edit, but not the two cases where this map
+          // changes on its OWN — a send clearing the routes it filed, and
+          // `setProposalOnlyGeometryEdits` clearing everything when the
+          // ownership answer changes. Without it the bar would linger over a
+          // topo with nothing left to suggest.
+          pendingProposalBaselines: s.pendingProposalBaselines,
         ),
       ),
     );
@@ -1425,7 +1501,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                 ? (photoPending
                       ? _buildPhotoPendingState(context, colors)
                       : _buildEmptyState(context))
-                : _buildCanvasArea(imagePath, drawState, wallPhotosAsync),
+                : _buildCanvasArea(
+                    imagePath,
+                    drawState,
+                    wallPhotosAsync,
+                    hasCommunityPage,
+                  ),
           ),
           // `embedded` gate (ghost-back-chevron fix — see
           // TopoCanvasScreen.embedded's doc): this whole block is the top
@@ -1477,7 +1558,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                               drawNotifier,
                               currentTopo,
                               locationUnknown,
-                              hasCommunityPage,
                             ),
                             PhotoStrip(
                               wallId: widget.wallId,
@@ -1562,7 +1642,29 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                         noticeKey: const Key('topo-storage-blocked'),
                         message: storageBlocked,
                       ),
-                    _buildBottomChrome(colors, drawNotifier, drawState.mode),
+                    // §3.2: edits to somebody else's route were kept in
+                    // memory and never written, so this is the ONLY way they
+                    // can go anywhere. It sits above the draw cluster rather
+                    // than replacing it because the suggester is still
+                    // editing — they may want to adjust the line again before
+                    // sending it.
+                    if (drawState.pendingProposalBaselines.isNotEmpty)
+                      _buildProposalBar(context, colors, drawState),
+                    _buildBottomChrome(
+                      colors,
+                      drawNotifier,
+                      drawState.mode,
+                      // Read off the ONE-SHOT `drawState` read rather than
+                      // the `.select` watch above, on purpose: adding
+                      // `currentPoints` to that record would rebuild this
+                      // whole screen's chrome on every single `addPoint`
+                      // during a drag — the exact rebuild storm that watch
+                      // exists to prevent. The two tooltips this drives are
+                      // worth a frame's staleness; the cluster itself
+                      // rebuilds whenever anything in the record changes,
+                      // which includes entering and leaving draw mode.
+                      hasCurrentLine: drawState.currentPoints.isNotEmpty,
+                    ),
                   ],
                 ),
               ),
@@ -1630,6 +1732,189 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     );
   }
 
+  /// The suggest/discard bar for edits made to somebody else's route
+  /// (`ROUTE_EDITING_PLAN.md` §3.2).
+  ///
+  /// It says "not saved" out loud, and that wording is the point rather than
+  /// hedging. The edits ARE on screen and they look exactly like an owner's
+  /// would, so without a standing statement to the contrary the reasonable
+  /// reading is that they were saved — and the visitor closes the topo
+  /// believing they have corrected it when they have neither corrected it nor
+  /// told anyone.
+  Widget _buildProposalBar(
+    BuildContext context,
+    MasiColors colors,
+    DrawState drawState,
+  ) {
+    final count = drawState.pendingProposalBaselines.length;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: MasiSpacing.sm),
+      child: GlassChrome(
+        key: const Key('topo-proposal-bar'),
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.md,
+          vertical: MasiSpacing.sm,
+        ),
+        child: Row(
+          children: [
+            MasiIcon('edit', size: 18, color: colors.ink2),
+            const SizedBox(width: MasiSpacing.sm),
+            Expanded(
+              child: Text(
+                count == 1
+                    ? "This is someone else's topo — your change is not saved"
+                    : "This is someone else's topo — your $count changes are "
+                          'not saved',
+                style: Theme.of(
+                  context,
+                ).textTheme.bodySmall?.copyWith(color: colors.ink2),
+              ),
+            ),
+            TextButton(
+              key: const Key('topo-proposal-discard'),
+              onPressed: _discardGeometryProposals,
+              child: const Text('Discard'),
+            ),
+            MasiPendingButton.text(
+              key: const Key('topo-proposal-send'),
+              onPressed: _submitGeometryProposals,
+              child: const Text('Suggest'),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// Puts the owner's geometry back. Nothing was ever written, so this is a
+  /// complete undo of the visit — no reload, no network.
+  void _discardGeometryProposals() {
+    ref
+        .read(drawControllerProvider(widget.wallId).notifier)
+        .discardPendingGeometryProposals();
+  }
+
+  /// Files one `SuggestionKind.routeGeometry` suggestion per edited route, then
+  /// restores the owner's geometry locally.
+  ///
+  /// Restoring on SUCCESS is not throwing the work away — the suggestion now
+  /// lives on the server, and the local copy's job is to show what the owner
+  /// actually has. Leaving the edit on screen would mean the canvas keeps
+  /// displaying a line that exists nowhere, which reads as "accepted".
+  ///
+  /// Sends sequentially and stops at the first failure. There is no outbox
+  /// (decision D-4), so each call either filed or did not, and only the ones
+  /// that filed are cleared — see [DrawController.discardPendingGeometryProposals].
+  Future<void> _submitGeometryProposals() async {
+    final drawState = ref.read(drawControllerProvider(widget.wallId));
+    final baselines = drawState.pendingProposalBaselines;
+    final photoId = drawState.activePhotoId;
+    if (baselines.isEmpty || photoId == null) return;
+
+    // Built BEFORE the note is asked for: a proposal the server would refuse
+    // should be reported now, not after the suggester has written an
+    // explanation for it.
+    final proposals = <int, GeometryProposal>{};
+    for (final route in drawState.routes) {
+      final baseline = baselines[route.id];
+      if (baseline == null) continue;
+      final proposal = GeometryProposal.fromEdit(
+        points: route.points,
+        symbols: route.symbols,
+        originalSymbols: baseline.symbols,
+      );
+      if (!proposal.isSendable) {
+        await showMasiAlert(
+          context,
+          title: 'That line is too long to suggest',
+          message:
+              'Route ${route.number} has more points or markers than a '
+              'suggestion can carry. Remove some and try again.',
+          dialogKey: const Key('topo-proposal-too-large'),
+        );
+        return;
+      }
+      proposals[route.id] = proposal;
+    }
+    if (proposals.isEmpty) return;
+
+    final note = await showMasiTextPrompt(
+      context,
+      title: proposals.length == 1
+          ? 'Suggest this change'
+          : 'Suggest these ${proposals.length} changes',
+      submitLabel: 'Send',
+      placeholder: 'Why this line? Optional — but it is what gets one accepted',
+      allowEmpty: true,
+      dialogKey: const Key('topo-proposal-note'),
+      fieldKey: const Key('topo-proposal-note-field'),
+      submitKey: const Key('topo-proposal-note-send'),
+    );
+    // Dismissed: keep every edit exactly where it is, so backing out of the
+    // note does not also throw away the line they drew.
+    if (note == null || !mounted) return;
+
+    final trimmedNote = note.trim();
+    final repository = ref.read(routeRepositoryProvider);
+    final service = ref.read(suggestionServiceProvider);
+    final sent = <int>[];
+    Object? failure;
+
+    try {
+      final dbIds = await repository.routeDbIdsByNumber(
+        widget.wallId,
+        photoId,
+      );
+      for (final entry in proposals.entries) {
+        final route = drawState.routes.firstWhere((r) => r.id == entry.key);
+        final dbId = dbIds[route.number];
+        // The route it targets is gone — the owner deleted it, or a pull
+        // removed it, while this visit was editing. Filing against nothing
+        // would produce a suggestion the owner can never act on.
+        if (dbId == null) continue;
+        await service.suggest(
+          wallId: widget.wallId,
+          kind: SuggestionKind.routeGeometry,
+          patch: entry.value.toPatch(),
+          note: trimmedNote.isEmpty ? null : trimmedNote,
+          routeId: dbId,
+          photoId: photoId,
+        );
+        sent.add(entry.key);
+      }
+    } catch (error) {
+      failure = error;
+    }
+
+    if (!mounted) return;
+    if (sent.isNotEmpty) {
+      ref
+          .read(drawControllerProvider(widget.wallId).notifier)
+          .discardPendingGeometryProposals(sent);
+    }
+    final messenger = ScaffoldMessenger.of(context);
+    if (failure != null) {
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(
+            sent.isEmpty
+                ? 'That could not be sent. Your changes are still here — try '
+                      'again.'
+                : 'Sent ${sent.length}, but the rest could not be sent. Those '
+                      'changes are still here — try again.',
+          ),
+        ),
+      );
+      return;
+    }
+    messenger.showSnackBar(
+      const SnackBar(
+        key: Key('topo-proposal-sent'),
+        content: Text('Sent to the owner'),
+      ),
+    );
+  }
+
   /// The top chrome row: a back chevron, the topo name (never truncated —
   /// [Expanded] + `maxLines: 1` + [TextOverflow.ellipsis] — see
   /// [_topTrailingActions]'s doc for why it was truncating to "ClimbT…"
@@ -1645,7 +1930,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     DrawController drawNotifier,
     TopoRef? currentTopo,
     bool locationUnknown,
-    bool hasCommunityPage,
   ) {
     return Row(
       children: [
@@ -1678,7 +1962,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           drawNotifier,
           currentTopo,
           locationUnknown,
-          hasCommunityPage,
         ),
       ],
     );
@@ -1778,6 +2061,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         tapTargetSize: MaterialTapTargetSize.shrinkWrap,
       );
 
+  // A `_topRowTextStyle` lived here for draw mode's Cancel/Save text pair.
+  // Both went when the bottom cluster absorbed those two jobs (2026-08-12),
+  // and with them the width worst case they created — draw mode's row is
+  // back to glyphs only.
+
   /// Mode-aware trailing glyphs for [_buildTopChromeRow] — this is what keeps
   /// the top chrome from ever becoming the old crowded AR/X/check/pencil
   /// jumble (which was also what forced the old long app-name title to
@@ -1791,28 +2079,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     DrawController drawNotifier,
     TopoRef? currentTopo,
     bool locationUnknown,
-    bool hasCommunityPage,
   ) {
     final colors = MasiColors.of(context);
     final actions = <Widget>[];
 
-    if (!widget.readOnly && drawState.selectedRouteId != null) {
-      actions.add(
-        IconButton(
-          key: const Key('topo-edit-metadata-button'),
-          icon: MasiIcon('edit_note'),
-          tooltip: 'Edit route metadata',
-          onPressed: () {
-            final selected = drawState.routes.firstWhere(
-              (r) => r.id == drawState.selectedRouteId,
-            );
-            _openMetadataSheet(selected);
-          },
-          color: colors.accent,
-          style: _topRowIconStyle(),
-        ),
-      );
-    }
+    // The `topo-edit-metadata-button` pencil used to sit here, in the top
+    // chrome, whenever a route was selected in draw mode. It moved ONTO the
+    // route (2026-08-12) — see `RouteLegend.onEditRoute`, which renders it on
+    // the selected row itself. A control that edits one route belongs next to
+    // that route, not a screen away in a row of canvas-wide actions.
 
     // Only meaningful once the wall has a photo AND at least one committed,
     // VISIBLE route: with nothing to align (or every route hidden), AR
@@ -1837,34 +2112,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
     }
 
-    // Rock-highlight toggle (#68): a sibling of the AR button, gated the
-    // same way (view mode, a photo loaded). Washes a route-derived box (see
-    // rock_box.dart's rockBoxFromRoutes) with a translucent tint under the
-    // routes (see rock_highlight_controller.dart / rock_mask_painter.dart's
-    // RockBoxPainter). Unlike the old Vision-segmentation flow, the box is a
-    // pure function of the routes already drawn on this photo, so this
-    // toggle needs no native call and works on every platform (no
-    // isArSupported gate).
-    if (drawState.mode == DrawMode.view && drawState.activePhotoId != null) {
-      final photoId = drawState.activePhotoId!;
-      final highlightOn = ref.watch(rockHighlightControllerProvider(photoId));
-      actions.add(
-        IconButton(
-          key: const Key('topo-highlight-rock-toggle'),
-          icon: MasiIcon(highlightOn ? 'boulder_fill' : 'boulder'),
-          tooltip: highlightOn ? 'Hide rock highlight' : 'Highlight rock',
-          onPressed: () => ref
-              .read(rockHighlightControllerProvider(photoId).notifier)
-              .toggle(),
-          color: colors.accent,
-          style: _topRowIconStyle(
-            backgroundColor: highlightOn
-                ? colors.accent.withValues(alpha: 0.16)
-                : null,
-          ),
-        ),
-      );
-    }
+    // The rock-highlight ("boulder") toggle used to live here, between the
+    // AR glyph and the mode toggle. Removed (user request, 2026-08-11): the
+    // route-derived wash never read as useful on the canvas and did nothing
+    // legible on web, so the whole feature went with it — the controller,
+    // the painter, and `TopoCanvas`'s overlay layer. Nothing else consumed
+    // it; the AR screen's own rock box is a separate path
+    // (`ar_controller.dart`'s `setRockBox`) and is untouched.
 
     // The mode toggle itself stays UNGATED (other than the readOnly check
     // below): flipping DrawState.mode (an app-lifetime-global) with no photo
@@ -1899,29 +2153,28 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     if (!widget.readOnly &&
         drawState.lastLoadFailure == null &&
         storageBlockedNotice(ref.watch(storageDurabilityProvider)) == null) {
-      actions.add(
-        IconButton(
-          key: const Key('topo-mode-toggle'),
-          // Bug fix ("topo opens showing an eye, reads as read-only"): the
-          // glyph is the AFFORDANCE for what tapping it does, not a mirror
-          // of the current mode — in view mode (the mode every topo opens
-          // in) it shows the edit/pencil glyph ("tap to edit"), and in draw
-          // mode it shows the eye glyph ("tap to preview"). This is the
-          // deliberate INVERSE of the naive `mode == draw ? edit : eye`
-          // reading.
-          icon: drawState.mode == DrawMode.draw
-              ? MasiIcon('eye')
-              : MasiIcon('edit'),
-          tooltip: drawState.mode == DrawMode.draw ? 'Preview' : 'Edit',
-          onPressed: drawNotifier.toggleMode,
-          color: colors.accent,
-          style: _topRowIconStyle(
-            backgroundColor: drawState.mode == DrawMode.draw
-                ? colors.accent.withValues(alpha: 0.16)
-                : null,
+      // VIEW MODE ONLY. Draw mode carries no mode control up here at all any
+      // more: the Cancel/Save text pair that briefly lived here was, in the
+      // user's words (2026-08-12), the same thing as "the x and check button
+      // on the bottom" — two identical-looking pairs on one screen, one
+      // meaning the current line and one meaning the session. The bottom
+      // cluster absorbed both jobs instead; see [_buildBottomChrome].
+      if (drawState.mode == DrawMode.view) {
+        actions.add(
+          IconButton(
+            key: const Key('topo-mode-toggle'),
+            // Bug fix ("topo opens showing an eye, reads as read-only"): the
+            // glyph is the AFFORDANCE for what tapping it does, not a mirror
+            // of the current mode — in view mode (the mode every topo opens
+            // in) it shows the edit/pencil glyph ("tap to edit").
+            icon: MasiIcon('edit'),
+            tooltip: 'Edit',
+            onPressed: drawNotifier.toggleMode,
+            color: colors.accent,
+            style: _topRowIconStyle(),
           ),
-        ),
-      );
+        );
+      }
     }
 
     // Set/edit this wall's map location — the canvas-screen counterpart to
@@ -1987,8 +2240,30 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           tooltip: locationUnknown
               ? 'Checking for a location…'
               : (hasCoords ? 'Show on map' : 'No location set'),
+          // `go`, NOT `push` — this is the blank-screen bug of 2026-08-11,
+          // root-caused by driving the real app in headless Chrome (the
+          // push path raises, verbatim:
+          //   "A GlobalKey was used multiple times inside one widget's child
+          //    list. The offending GlobalKey was:
+          //    [LabeledGlobalKey<NavigatorState>#… root]").
+          //
+          // `/community` redirects to `/map`, which lives inside the bottom
+          // nav's `StatefulShellRoute.indexedStack` (see router.dart). The
+          // canvas is itself reached by PUSHING `/walls/:id` on top of that
+          // shell, so the shell page is ALREADY in the stack; pushing a shell
+          // -branch route then builds a SECOND `StatefulNavigationShell`
+          // carrying the same root-navigator GlobalKey. In a debug build that
+          // is a red assertion screen; in release it is a torn tree that
+          // paints nothing — the blank screen as reported.
+          //
+          // `go` switches the existing shell to its Map branch, which is what
+          // "show this on the map" means anyway; the nav bar is then the way
+          // back. Widget tests cannot catch this on their own: pumping a
+          // pushed `/map` from a bare `/` builds `CommunityMapScreen` quite
+          // happily, because the duplicate only arises once the shell is
+          // under a pushed route.
           onPressed: hasCoords
-              ? () => context.push('/community?tab=map&focus=${widget.wallId}')
+              ? () => context.go('/community?tab=map&focus=${widget.wallId}')
               : null,
           color: colors.accent,
           style: _topRowIconStyle(),
@@ -2023,54 +2298,24 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // editing cluster. Not gated on `widget.readOnly` — opening the feed is
     // exactly as meaningful whether this canvas is the owner's editable
     // copy or a read-only viewer.
-    if (drawState.mode == DrawMode.view && hasCommunityPage) {
-      actions.add(
-        IconButton(
-          key: const Key('topo-open-community'),
-          icon: MasiIcon('comment'),
-          tooltip: 'See comments and ascents',
-          onPressed: () =>
-              context.push('/community/topo/${widget.wallId}'),
-          color: colors.accent,
-          style: _topRowIconStyle(),
-        ),
-      );
-    }
+    // The `topo-open-community` speech-bubble glyph used to sit here. It is
+    // gone from the top row (user request, 2026-08-11) and the same
+    // destination is now reached from the BOTTOM of the screen instead —
+    // pull the route panel up, or tap its "Comments & ascents" footer row.
+    // See `TopoCanvasBody`'s legend overlay: a bottom sheet you drag upward
+    // for progressively more detail is the pattern this screen already half
+    // had (the grab handle was there; it just did not respond to a drag),
+    // and it keeps the top row down to the few controls that act on the
+    // canvas itself.
 
-    // add-photo lives in the top chrome, alongside the other trailing
-    // glyphs, so it's reachable in BOTH view and draw mode — unconditional
-    // on mode (other than readOnly, matching every other editing affordance
-    // in this list) and, critically, NOT gated on `activePhotoId != null`
-    // like the AR button above: this is the one control that must still
-    // work with NO photo loaded yet (see `_buildEmptyState`) — the user's
-    // only way to attach a wall's first photo. There is no bottom FAB for
-    // this action; see `_buildBottomChrome`'s doc.
-    // Storage gate: attaching a photo writes a row AND photo bytes, so it is
-    // creation in the fullest sense — the one editing control that is NOT
-    // reachable only through draw mode, hence gated explicitly here.
-    if (!widget.readOnly &&
-        storageBlockedNotice(ref.watch(storageDurabilityProvider)) == null) {
-      actions.add(
-        IconButton(
-          key: const Key('topo-add-photo-button'),
-          // Progress for the attach chain, not for the OS picker — see
-          // [_attachInFlight]'s doc for why the cue starts after the sheet
-          // rather than at the tap.
-          icon: MasiLoadingIndicator.inline(
-            isLoading: _attachInFlight,
-            color: colors.accent,
-            semanticLabel: 'Adding the photo',
-            child: MasiIcon('image_add'),
-          ),
-          tooltip: _attachInFlight ? 'Adding photo…' : 'Pick a photo',
-          // Disabled for the duration: attaching twice in a row is the one
-          // double-tap on this screen that creates two rows and two files.
-          onPressed: _attachInFlight ? null : _pickImage,
-          color: colors.accent,
-          style: _topRowIconStyle(),
-        ),
-      );
-    }
+    // The `topo-add-photo-button` image-plus glyph used to sit here too, and
+    // was removed as redundant (user request, 2026-08-11): the photo strip
+    // directly below this row already ends in a '+' tile wired to the SAME
+    // `_pickImage`, right next to the thumbnails it adds to. `_pickImage`
+    // itself is unchanged and still has two live entry points — that '+'
+    // tile ([PhotoStrip.onAdd]) and the empty state's "Add a photo" button,
+    // which is what covers the one case the strip cannot: a wall with no
+    // photos at all renders no strip (see [PhotoStrip]'s class doc).
 
     return actions;
   }
@@ -2101,8 +2346,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   Widget _buildBottomChrome(
     MasiColors colors,
     DrawController drawNotifier,
-    DrawMode mode,
-  ) {
+    DrawMode mode, {
+    required bool hasCurrentLine,
+  }) {
     // readOnly: no bottom chrome at all — the draw cluster is already
     // unreachable, since draw mode itself is unreachable (see
     // `_topTrailingActions`'s mode-toggle gate).
@@ -2137,8 +2383,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           IconButton(
             key: const Key('topo-clear-button'),
             icon: MasiIcon('close'),
-            tooltip: 'Discard current route',
-            onPressed: drawNotifier.clearCurrent,
+            // Two jobs, one glyph — see [_handleCancelEditing] for why the
+            // split is deliberate. The tooltip has to track it, or the
+            // control lies about what a tap will do.
+            tooltip: hasCurrentLine
+                ? 'Discard current route'
+                : 'Stop editing',
+            onPressed: _handleCancelEditing,
             color: colors.accent,
             style: IconButton.styleFrom(shape: const CircleBorder()),
           ),
@@ -2153,10 +2404,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           // has no tooltip slot of its own) with the Key still on the button
           // itself, so `find.byKey`/`find.byTooltip` both keep working.
           Tooltip(
-            message: 'Commit route',
+            message: hasCurrentLine ? 'Save route' : 'Done editing',
             child: MasiPendingButton.text(
               key: const Key('topo-commit-button'),
-              onPressed: _handleCommitRoute,
+              onPressed: _handleFinishEditing,
               style: TextButton.styleFrom(
                 backgroundColor: colors.accent.withValues(alpha: 0.16),
                 foregroundColor: colors.accent,
@@ -2354,6 +2605,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     String imagePath,
     DrawState drawState,
     AsyncValue<List<PhotoRef>> wallPhotosAsync,
+    bool hasCommunityPage,
   ) {
     final imageSize = _imageSize;
     if (imageSize == null) {
@@ -2391,6 +2643,20 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // CommunityTopoDetailScreen — see RouteLegend.onLogAscent's doc for
       // why this widget's own copy must stay hidden there.
       onLogAscent: widget.readOnly ? null : _openLogAscentSheet,
+      // Edit a route's details FROM the route (2026-08-12) — the pencil that
+      // used to sit in the top chrome. `TopoCanvasBody` narrows this to draw
+      // mode; `RouteLegend` narrows it further to the selected row.
+      onEditRoute: widget.readOnly ? null : _openMetadataSheetForId,
+      // The route panel's own way into the community/feed view of this same
+      // wall, replacing the top row's removed speech-bubble glyph. Null when
+      // the wall was never published — `hasCommunityPage` is
+      // `wallVisibilityProvider == 'shared'`, the exact condition
+      // `community_repository.dart`'s `sharedTopos` needs for a
+      // `CommunityTopoDetailScreen` to exist at all, so this is never a dead
+      // affordance.
+      onOpenCommunity: hasCommunityPage
+          ? () => context.push('/community/topo/${widget.wallId}')
+          : null,
     );
   }
 }
@@ -2416,6 +2682,8 @@ class TopoCanvasBody extends ConsumerWidget {
     this.readOnly = false,
     this.embedded = false,
     this.onLogAscent,
+    this.onEditRoute,
+    this.onOpenCommunity,
   });
 
   /// FIX #6: family key for [drawControllerProvider]/[legendExpandedProvider]
@@ -2458,10 +2726,34 @@ class TopoCanvasBody extends ConsumerWidget {
   /// button entirely.
   final void Function(int routeId)? onLogAscent;
 
+  /// Passed to [RouteLegend.onEditRoute] — but only in [DrawMode.draw] (see
+  /// [build]). Editing a route's details is an edit-mode action, and the
+  /// legend is a read surface in view mode.
+  final void Function(int routeId)? onEditRoute;
+
+  /// Opens the community/feed view of this same wall
+  /// (`/community/topo/:wallId`). Non-null only for a wall that actually has
+  /// one (see [TopoCanvasScreen.build]'s `hasCommunityPage`), so this is
+  /// never a dead affordance; null (the default) renders no community
+  /// affordance at all, preserving every pre-existing call site exactly.
+  ///
+  /// This is where the top row's removed speech-bubble glyph went. The bottom
+  /// panel gets it in two forms, both wired here: the "Comments & ascents"
+  /// footer row inside the expanded card (the visible, discoverable one) and
+  /// an upward drag on the panel's grab handle (the fast one) — a bottom
+  /// sheet you keep pulling up for progressively more detail, which is also
+  /// what makes the handle mean something at last. See [_LegendHeader].
+  final VoidCallback? onOpenCommunity;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final hasRoutes = drawState.routes.isNotEmpty;
     final legendExpanded = ref.watch(legendExpandedProvider(wallId));
+    // A community entry point alone is enough to float the bottom panel: a
+    // published wall whose photo has no routes drawn on it yet still has
+    // comments and ascents to reach, and with the top-row glyph gone this is
+    // the only way there.
+    final community = embedded ? null : onOpenCommunity;
 
     // Bottom clearance reserved above the floating RouteLegend overlay, so
     // both the legend's Padding AND its maxHeight cap (below) can share the
@@ -2479,7 +2771,8 @@ class TopoCanvasBody extends ConsumerWidget {
     // The switch cue (below) occupies the same floating slot as the legend, so
     // it needs the same clearance — otherwise it would sit under the bottom
     // chrome/safe area on exactly the walls where `routes` is empty.
-    final legendBottomPadding = (hasRoutes || drawState.isSwitchingPhoto)
+    final legendBottomPadding =
+        (hasRoutes || drawState.isSwitchingPhoto || community != null)
         ? MediaQuery.paddingOf(context).bottom +
               MasiSpacing.md +
               (drawState.mode == DrawMode.draw
@@ -2554,6 +2847,16 @@ class TopoCanvasBody extends ConsumerWidget {
                   // finder for that key is a true "is the full card showing"
                   // signal — absent while only the collapsed chip
                   // (`topo-route-legend-chip`) is present.
+                  if (!hasRoutes && community != null)
+                    Positioned(
+                      left: MasiSpacing.md,
+                      right: MasiSpacing.md,
+                      bottom: effectiveLegendBottomPadding,
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: _CommunityChip(onTap: community),
+                      ),
+                    ),
                   if (hasRoutes && !embedded)
                     Positioned(
                       left: MasiSpacing.md,
@@ -2587,16 +2890,38 @@ class TopoCanvasBody extends ConsumerWidget {
                                   children: [
                                     _LegendHeader(
                                       routeCount: drawState.routes.length,
-                                      onToggle: () => ref
+                                      onCollapse: () => ref
                                           .read(legendExpandedProvider(wallId).notifier)
                                           .toggle(),
+                                      onOpenCommunity: community,
                                     ),
                                     RouteLegend(
                                       wallId: wallId,
                                       maxHeight: overlayLegendMaxHeight,
                                       readOnly: readOnly,
-                                      onLogAscent: onLogAscent,
+                                      // No logging an ascent while editing
+                                      // (user request, 2026-08-11): draw mode
+                                      // is for the drawing, and a per-row
+                                      // "send" button beside the hide/delete
+                                      // pair belongs to reading a topo, not
+                                      // building one.
+                                      onLogAscent:
+                                          drawState.mode == DrawMode.draw
+                                          ? null
+                                          : onLogAscent,
+                                      // The mirror image of the line above:
+                                      // editing a route is an EDIT-mode
+                                      // action, logging an ascent is a
+                                      // VIEW-mode one, so the two swap over
+                                      // at the same boundary and the row
+                                      // never carries both.
+                                      onEditRoute:
+                                          drawState.mode == DrawMode.draw
+                                          ? onEditRoute
+                                          : null,
                                     ),
+                                    if (community != null)
+                                      _CommunityRow(onTap: community),
                                   ],
                                 ),
                               ),
@@ -2606,7 +2931,7 @@ class TopoCanvasBody extends ConsumerWidget {
                               child: _LegendChip(
                                 key: const Key('topo-route-legend-chip'),
                                 routeCount: drawState.routes.length,
-                                onTap: () => ref
+                                onExpand: () => ref
                                     .read(legendExpandedProvider(wallId).notifier)
                                     .toggle(),
                               ),
@@ -2723,10 +3048,17 @@ String _routeCountLabel(int n) => '$n ${n == 1 ? 'route' : 'routes'}';
 /// or whenever the user has manually collapsed it, so the full route list
 /// never sits over the surface the user is actively drawing on.
 class _LegendChip extends StatelessWidget {
-  const _LegendChip({super.key, required this.routeCount, required this.onTap});
+  const _LegendChip({
+    super.key,
+    required this.routeCount,
+    required this.onExpand,
+  });
 
   final int routeCount;
-  final VoidCallback onTap;
+
+  /// Expands back to the full card. Wired to BOTH a tap and an upward drag —
+  /// see [_LegendHeader] for why the drag exists at all.
+  final VoidCallback onExpand;
 
   @override
   Widget build(BuildContext context) {
@@ -2742,7 +3074,17 @@ class _LegendChip extends StatelessWidget {
       ),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: onTap,
+        onTap: onExpand,
+        // An upward flick expands, the same gesture that works on the
+        // expanded card's handle — so "drag this panel up for more" is one
+        // rule across both of its states rather than a tap-only chip and a
+        // draggable card.
+        onVerticalDragEnd: (details) {
+          if (details.primaryVelocity != null &&
+              details.primaryVelocity! < -_kPanelFlickVelocity) {
+            onExpand();
+          }
+        },
         child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -2765,22 +3107,161 @@ class _LegendChip extends StatelessWidget {
   }
 }
 
-/// The expanded [RouteLegend] card's header (Fix 1/3): a grab handle, the
-/// route count, and a collapse chevron, tappable anywhere to collapse back to
-/// [_LegendChip] via [legendExpandedProvider]. Lives INSIDE the card's own
-/// `Material(type: transparency)` (see the legend-overlay build site) so its
-/// [InkWell] gets a splash.
-class _LegendHeader extends StatelessWidget {
-  const _LegendHeader({required this.routeCount, required this.onToggle});
+/// Vertical flick speed (logical px/s) past which a drag on the route panel
+/// counts as a deliberate up/down gesture rather than an inexact tap.
+/// Flutter's own bottom sheets use the same order of magnitude
+/// (`_minFlingVelocity` is 700 in `bottom_sheet.dart`); 300 is deliberately
+/// lower because this panel is small and its drags are short.
+const double _kPanelFlickVelocity = 300;
 
-  final int routeCount;
-  final VoidCallback onToggle;
+/// The full-width "Comments & ascents" row at the foot of the expanded route
+/// panel — the visible half of what replaced the top row's speech-bubble
+/// glyph (the other half is the handle's upward drag, see [_LegendHeader]).
+///
+/// A labelled row rather than another icon on purpose: the gesture is faster
+/// once you know it exists, and nothing on a canvas teaches you that it does.
+class _CommunityRow extends StatelessWidget {
+  const _CommunityRow({required this.onTap});
+
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
-    return InkWell(
-      onTap: onToggle,
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Divider(height: 1, thickness: 0.5, color: colors.ink3.withValues(alpha: 0.4)),
+        InkWell(
+          key: const Key('topo-open-community'),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              horizontal: MasiSpacing.sm,
+              vertical: MasiSpacing.sm,
+            ),
+            child: Row(
+              children: [
+                MasiIcon('comment', size: 18, color: colors.accent),
+                const SizedBox(width: MasiSpacing.sm),
+                Expanded(
+                  child: Text(
+                    'Comments & ascents',
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelLarge?.copyWith(color: colors.accent),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                MasiIcon('chevron_right', size: 18, color: colors.accent),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+/// The same destination as [_CommunityRow], standing alone as a frosted pill
+/// for the one case the route panel does not cover: a published wall whose
+/// active photo has no routes drawn on it yet, where there is no legend card
+/// for a footer row to sit in.
+class _CommunityChip extends StatelessWidget {
+  const _CommunityChip({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    return GlassChrome(
+      strong: true,
+      blur: true,
+      padding: const EdgeInsets.symmetric(
+        horizontal: MasiSpacing.md,
+        vertical: MasiSpacing.sm,
+      ),
+      child: GestureDetector(
+        key: const Key('topo-open-community-chip'),
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            MasiIcon('comment', size: 18, color: colors.accent),
+            const SizedBox(width: MasiSpacing.sm),
+            Flexible(
+              child: Text(
+                'Comments & ascents',
+                style: Theme.of(
+                  context,
+                ).textTheme.labelLarge?.copyWith(color: colors.accent),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The expanded route panel's header: a grab handle, the route count, and a
+/// collapse chevron. Lives INSIDE the card's own
+/// `Material(type: transparency)` (see the legend-overlay build site) so its
+/// [InkWell] gets a splash.
+///
+/// The grab handle used to be decoration and nothing else, which is the bug
+/// this rewrite fixes (user report, 2026-08-11: "the horizontal line suggests
+/// pulling but pulling doesn't do anything"). It is a real drag target now,
+/// and the panel behaves like the bottom sheet it has always looked like:
+///
+///  * drag/flick DOWN, or tap the chevron — collapse to [_LegendChip];
+///  * drag/flick UP — the next level of detail, i.e. the community view of
+///    this wall ([onOpenCommunity]), which is the same destination as the
+///    footer row below the list.
+///
+/// The chevron is a real [IconButton] now rather than a decorative glyph
+/// inside a tap-anywhere row, for the other half of the same report ("the
+/// down pointing arrow is random"): it points down because down is where it
+/// puts the panel, and it is the only thing in this header that a tap acts
+/// on. Tapping the label or the handle does nothing — the header is a drag
+/// surface, and a row that both drags and swallows taps is how you collapse
+/// a panel you meant to pull.
+class _LegendHeader extends StatelessWidget {
+  const _LegendHeader({
+    required this.routeCount,
+    required this.onCollapse,
+    this.onOpenCommunity,
+  });
+
+  final int routeCount;
+  final VoidCallback onCollapse;
+
+  /// Null when this wall has no community page — an upward drag then simply
+  /// does nothing rather than dead-ending somewhere. See
+  /// [TopoCanvasBody.onOpenCommunity].
+  final VoidCallback? onOpenCommunity;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final community = onOpenCommunity;
+    return GestureDetector(
+      key: const Key('topo-route-legend-handle'),
+      behavior: HitTestBehavior.opaque,
+      onVerticalDragEnd: (details) {
+        final velocity = details.primaryVelocity;
+        if (velocity == null) return;
+        if (velocity > _kPanelFlickVelocity) {
+          onCollapse();
+        } else if (velocity < -_kPanelFlickVelocity && community != null) {
+          community();
+        }
+      },
       child: Padding(
         padding: const EdgeInsets.fromLTRB(
           MasiSpacing.sm,
@@ -2815,7 +3296,19 @@ class _LegendHeader extends StatelessWidget {
                   ),
                 ),
                 const Spacer(),
-                MasiIcon('chevron_down', size: 18, color: colors.ink),
+                IconButton(
+                  key: const Key('topo-route-legend-collapse'),
+                  tooltip: 'Collapse the route list',
+                  onPressed: onCollapse,
+                  iconSize: 18,
+                  visualDensity: VisualDensity.compact,
+                  padding: const EdgeInsets.all(4),
+                  constraints: const BoxConstraints(
+                    minWidth: 36,
+                    minHeight: 36,
+                  ),
+                  icon: MasiIcon('chevron_down', size: 18, color: colors.ink),
+                ),
               ],
             ),
           ],
