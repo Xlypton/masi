@@ -1,101 +1,163 @@
 import { McpServer } from "@modelcontextprotocol/server";
+import OAuthProvider from "@cloudflare/workers-oauth-provider";
+import { WorkerEntrypoint } from "cloudflare:workers";
 import { createMcpHandler } from "agents/mcp/server";
 import { z } from "zod";
 
+import { SupabaseAuthHandler } from "./auth";
+import { accessTokenFor } from "./session";
+import { ReauthRequired, restGet, type SupabaseConfig } from "./supabase";
+import type { Env, Props } from "./types";
+
 /**
- * Masi's remote MCP server.
+ * Masi's remote MCP server — stage 2B-2.
  *
- * Phase 2 of the guidebook import (see MCP_SERVER_PLAN.md). It lets a chat app
- * photograph a guidebook page and put the routes into the user's topo without
- * the copy-paste that Phase 1 needs.
+ * Lets a chat app read a guidebook page and put the routes into the user's
+ * topo. See MCP_SERVER_PLAN.md for the whole design.
  *
- * ## Stage 2B-1 — this file, right now
+ * ## Authorization
  *
- * Deliberately AUTHLESS and deliberately unable to touch any data. It exists to
- * prove the deploy path end to end (build, upload, workers.dev route, MCP
- * handshake) before OAuth and Supabase are wired in, so that when the auth
- * chain misbehaves there is no doubt about whether the plumbing underneath it
- * works.
+ * `OAuthProvider` fronts everything. `/mcp` is reachable only with a token it
+ * issued, and every tool below acts as the **signed-in user's own Supabase
+ * session** — never a service role. So RLS is what stops one person's chat app
+ * reaching another person's library, and a tool cannot exceed the user's own
+ * permissions even if the model asks it to.
  *
- * That is only safe because there is nothing here to protect: the Worker holds
- * no credentials, has no Supabase binding, and its one tool returns a constant.
+ * ## Why tools return JSON text
  *
- * **Nothing that reads or writes user data may be added to this file until the
- * OAuth provider in stage 2B-2 is in front of it.** The moment a tool can reach
- * a Supabase row, an unauthenticated endpoint stops being a test fixture and
- * becomes a way for anyone on the internet to write to somebody's library.
- *
- * ## Why stateless
- *
- * `McpAgent` is deprecated and feature-frozen; `createMcpHandler` is the
- * current path. Nothing here needs per-session server state — each tool call is
- * a self-contained read or write against Supabase — so the stateless handler is
- * both the recommended and the simpler choice.
+ * Each tool answers with a JSON string rather than prose. The model is going to
+ * feed these values back into a later call (`wallId` into `get_wall_photo`,
+ * then into `create_import`), and prose invites it to paraphrase an id.
  */
 
-/** Server identity reported in the MCP handshake. */
 const SERVER_NAME = "masi";
-const SERVER_VERSION = "0.1.0";
+const SERVER_VERSION = "0.2.0";
 
-function createServer() {
-  const server = new McpServer({
-    name: SERVER_NAME,
-    version: SERVER_VERSION,
-  });
+/** Walls listed at once. Enough to find the boulder, short enough to read. */
+const WALL_PAGE_SIZE = 25;
 
-  // The only tool at this stage. It takes no input that reaches anything and
-  // returns no data that came from anywhere — it answers exactly one question:
-  // "is the deployed Worker speaking MCP?"
+interface WallRow {
+  id: string;
+  name: string | null;
+  updatedAt: number | null;
+}
+
+function cfgOf(env: Env): SupabaseConfig {
+  return { url: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY };
+}
+
+/** Wraps a tool body so a lost session reads as an instruction, not a crash. */
+async function tool(
+  run: () => Promise<unknown>,
+): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  try {
+    const value = await run();
+    return { content: [{ type: "text", text: JSON.stringify(value) }] };
+  } catch (err) {
+    if (err instanceof ReauthRequired) {
+      // Deliberately not thrown: a model that sees an exception tends to retry,
+      // and no number of retries fixes an expired session. Telling it plainly
+      // what the human must do is the only useful answer.
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ error: "reauth_required", message: err.message }),
+          },
+        ],
+      };
+    }
+    throw err;
+  }
+}
+
+function createServer(env: Env, props: Props) {
+  const server = new McpServer({ name: SERVER_NAME, version: SERVER_VERSION });
+
   server.registerTool(
     "ping",
     {
       description:
-        "Health check. Confirms the Masi MCP server is reachable and " +
-        "speaking MCP. Returns no user data.",
-      inputSchema: { note: z.string().optional() },
+        "Health check. Confirms the Masi connector is reachable and that " +
+        "you are signed in. Returns your Masi user id and no other data.",
+      inputSchema: {},
     },
-    async ({ note }) => ({
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify({
-            server: SERVER_NAME,
-            version: SERVER_VERSION,
-            stage: "2B-1 (authless scaffold; no data access)",
-            note: note ?? null,
-          }),
-        },
-      ],
-    }),
+    async () =>
+      tool(async () => ({
+        server: SERVER_NAME,
+        version: SERVER_VERSION,
+        signedInAs: props.uid,
+      })),
+  );
+
+  server.registerTool(
+    "list_recent_walls",
+    {
+      description:
+        "List the user's own boulders/walls (topos) in Masi, most recently " +
+        "updated first. Use this to find which boulder a guidebook page " +
+        "belongs to, then pass its id to get_wall_photo.",
+      inputSchema: {
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(WALL_PAGE_SIZE)
+          .optional()
+          .describe(`How many to return (default ${WALL_PAGE_SIZE}).`),
+      },
+    },
+    async ({ limit }) =>
+      tool(async () => {
+        const cfg = cfgOf(env);
+        const token = await accessTokenFor(env, props.uid, cfg);
+
+        // Scoped to the caller's OWN walls. RLS alone would also expose other
+        // people's PUBLISHED walls, which are not candidates for an import —
+        // you cannot draw on someone else's topo, so offering them here would
+        // only invite the model to pick one and fail later.
+        const rows = await restGet<WallRow[]>(
+          cfg,
+          token,
+          `walls?select=id,name,updatedAt` +
+            `&ownerId=eq.${encodeURIComponent(props.uid)}` +
+            `&deletedAt=is.null` +
+            `&order=updatedAt.desc` +
+            `&limit=${limit ?? WALL_PAGE_SIZE}`,
+        );
+
+        return {
+          walls: rows.map((r) => ({
+            wallId: r.id,
+            name: r.name ?? "(unnamed)",
+            updatedAt: r.updatedAt,
+          })),
+        };
+      }),
   );
 
   return server;
 }
 
-const mcp = createMcpHandler(createServer, { route: "/mcp" });
+/**
+ * The authenticated half. `OAuthProvider` routes `/mcp` here only after
+ * validating its own token, and hands the grant's props through `ctx.props`.
+ */
+export class MasiMcpHandler extends WorkerEntrypoint<Env, Props> {
+  override fetch(request: Request): Response | Promise<Response> {
+    const props = this.ctx.props;
+    const handler = createMcpHandler(() => createServer(this.env, props), {
+      route: "/mcp",
+    });
+    return handler(request, this.env, this.ctx);
+  }
+}
 
-// The Worker entrypoint stays an OBJECT. Wrangler treats a function default
-// export as a WorkerEntrypoint class, so `export default createMcpHandler(...)`
-// would be misread — the handler is callable for composition, not for exporting.
-export default {
-  async fetch(request: Request, env: unknown, ctx: ExecutionContext) {
-    const url = new URL(request.url);
-
-    // A plain browser-visitable page, so opening the host in a browser explains
-    // itself instead of returning an MCP protocol error to a human.
-    if (url.pathname === "/" || url.pathname === "/health") {
-      return new Response(
-        JSON.stringify({
-          server: SERVER_NAME,
-          version: SERVER_VERSION,
-          stage: "2B-1",
-          mcp: "/mcp",
-          note: "Authless scaffold. No data access. See MCP_SERVER_PLAN.md.",
-        }),
-        { headers: { "content-type": "application/json" } },
-      );
-    }
-
-    return mcp(request, env, ctx);
-  },
-} satisfies ExportedHandler;
+export default new OAuthProvider({
+  apiRoute: "/mcp",
+  apiHandler: MasiMcpHandler,
+  defaultHandler: SupabaseAuthHandler,
+  authorizeEndpoint: "/authorize",
+  tokenEndpoint: "/token",
+  clientRegistrationEndpoint: "/register",
+});

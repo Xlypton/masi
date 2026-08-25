@@ -6,6 +6,15 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
+  // Both are PUBLIC values, so they are vars rather than secrets: the anon key
+  // is the publishable one the Flutter client already ships, and it is safe
+  // precisely because RLS — not key secrecy — is what protects the data. There
+  // is deliberately no service-role key here; see MCP_SERVER_PLAN.md.
+  "vars": {
+    "SUPABASE_URL": "https://mnaipcqbkqzffgvxpato.supabase.co",
+    "SUPABASE_ANON_KEY": "sb_publishable_CjAxoGe0OSS0RrIK3nT6Ng_p0-uSPKC"
+  },
+
   // Where `@cloudflare/workers-oauth-provider` keeps OAuth state: registered
   // clients (Claude registers itself dynamically), authorization grants, and
   // issued tokens. Created ahead of stage 2B-2 so the auth work is not held up
