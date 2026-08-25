@@ -15,6 +15,7 @@ import 'package:masi/core/platform/ar_support.dart';
 import 'package:masi/core/location/location_service.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/import/application/pending_import_providers.dart';
 import 'package:masi/features/import/presentation/guidebook_import_sheet.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/logbook/presentation/log_ascent_sheet.dart';
@@ -648,11 +649,23 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   Future<void> _handleImportFromGuidebook(String photoId) async {
     if (widget.readOnly) return;
 
+    // A page queued from the chat app takes priority over the paste flow: the
+    // user already did the work elsewhere, so opening a "copy this prompt"
+    // screen on top of a waiting import would be asking them to repeat it.
+    final pending = ref.read(pendingImportsProvider(widget.wallId)).asData?.value;
+    final queued = (pending == null || pending.isEmpty) ? null : pending.first;
+
     final result = await showGuidebookImportSheet(
       context,
       wallId: widget.wallId,
-      photoId: photoId,
+      photoId: queued?.photoId ?? photoId,
+      initial: queued?.import,
+      pendingId: queued?.id,
     );
+
+    // Whether it was applied or discarded, the queue has moved on.
+    ref.invalidate(pendingImportsProvider(widget.wallId));
+
     if (result == null || !mounted) return;
 
     await ref
@@ -2332,11 +2345,39 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         drawState.mode == DrawMode.draw &&
         drawState.activePhotoId != null &&
         (ref.watch(isAdminProvider).asData?.value ?? false)) {
+      // A dot when a page queued from the chat app is waiting. Without it the
+      // MCP path dead-ends: the user finishes in Claude, is told to open Masi,
+      // and finds a screen that looks exactly as it did before.
+      final waiting =
+          ref.watch(pendingImportsProvider(widget.wallId)).asData?.value ??
+              const [];
       actions.add(
         IconButton(
           key: const Key('topo-import-guidebook-button'),
-          icon: MasiIcon('scan'),
-          tooltip: 'Import from guidebook',
+          icon: waiting.isEmpty
+              ? MasiIcon('scan')
+              : Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    MasiIcon('scan'),
+                    Positioned(
+                      right: -2,
+                      top: -2,
+                      child: Container(
+                        key: const Key('topo-import-waiting-dot'),
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: colors.accent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+          tooltip: waiting.isEmpty
+              ? 'Import from guidebook'
+              : '${waiting.length} import waiting',
           onPressed: () => _handleImportFromGuidebook(drawState.activePhotoId!),
           color: colors.accent,
           style: _topRowIconStyle(),

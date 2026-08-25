@@ -6,9 +6,40 @@ import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/grades/grade_system.dart';
+import 'package:masi/features/import/application/pending_import_providers.dart';
 import 'package:masi/features/import/data/guidebook_import_applier.dart';
+import 'package:masi/features/import/data/pending_import_remote.dart';
+import 'package:masi/features/import/domain/guidebook_import.dart';
 import 'package:masi/features/import/presentation/guidebook_import_sheet.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
+
+/// Stands in for the Supabase-backed remote so the sheet's bookkeeping can be
+/// observed without a network or a client.
+class _FakePendingRemote implements PendingImportRemote {
+  final List<String> consumed = [];
+
+  @override
+  Future<void> markConsumed(String id) async => consumed.add(id);
+
+  @override
+  Future<List<PendingImport>> pendingFor(String wallId, String uid) async =>
+      const [];
+}
+
+/// An import as the MCP server would have queued it.
+PendingImport _queuedImport() {
+  return PendingImport(
+    id: 'pending-1',
+    wallId: 'wall-1',
+    photoId: 'photo-1',
+    createdAt: DateTime.fromMillisecondsSinceEpoch(1000),
+    import: const GuidebookImport(
+      boulder: 'From the chat app',
+      gradeSystem: GradeSystem.french,
+      routes: [ImportedRoute(number: 1, name: 'Queued Route', gradeRaw: '6a')],
+    ),
+  );
+}
 
 /// Drives the sheet the way a user does — paste the chat app's reply, look at
 /// what it says, tap Add — against a real in-memory database, so "it imported"
@@ -78,7 +109,11 @@ void main() {
 
   ImportApplyResult? applied;
 
-  Future<void> openSheet(WidgetTester tester) async {
+  Future<void> openSheet(
+    WidgetTester tester, {
+    _FakePendingRemote? pendingRemote,
+    PendingImport? queued,
+  }) async {
     applied = null;
     // The default 800x600 test surface is shorter than this sheet, which puts
     // its buttons outside the render tree and makes every tap miss. Use a
@@ -89,7 +124,11 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [routeRepositoryProvider.overrideWithValue(routes)],
+        overrides: [
+          routeRepositoryProvider.overrideWithValue(routes),
+          if (pendingRemote != null)
+            pendingImportRemoteProvider.overrideWithValue(pendingRemote),
+        ],
         child: MaterialApp(
           theme: MasiTheme.light,
           home: Builder(
@@ -101,6 +140,8 @@ void main() {
                       context,
                       wallId: wallId,
                       photoId: photoId,
+                      initial: queued?.import,
+                      pendingId: queued?.id,
                     );
                   },
                   child: const Text('open'),
@@ -272,6 +313,48 @@ void main() {
 
       expect(find.byKey(const Key('import-paste-field')), findsOneWidget);
       expect(await routes.loadRoutes(wallId, photoId), isEmpty);
+    });
+
+    testWidgets('an import queued by the MCP server opens at the review',
+        (tester) async {
+      final remote = _FakePendingRemote();
+      await openSheet(tester, pendingRemote: remote, queued: _queuedImport());
+
+      // The user pasted nothing — they did the work in their chat app — so a
+      // paste box here would be asking them to repeat it.
+      expect(find.byKey(const Key('import-paste-field')), findsNothing);
+      expect(find.byKey(const Key('import-apply')), findsOneWidget);
+      expect(find.text('Queued Route'), findsOneWidget);
+      // And the escape hatch discards rather than going "back" to a step the
+      // user was never on.
+      expect(find.byKey(const Key('import-dismiss')), findsOneWidget);
+      expect(find.byKey(const Key('import-back')), findsNothing);
+    });
+
+    testWidgets('applying a queued import writes routes and retires the row',
+        (tester) async {
+      final remote = _FakePendingRemote();
+      await openSheet(tester, pendingRemote: remote, queued: _queuedImport());
+
+      await tester.tap(find.byKey(const Key('import-apply')));
+      await tester.pumpAndSettle();
+
+      expect((await routes.loadRoutes(wallId, photoId)).map((r) => r.name),
+          ['Queued Route']);
+      expect(remote.consumed, ['pending-1'],
+          reason: 'an applied import must not be offered again');
+    });
+
+    testWidgets('discarding a queued import retires it and writes nothing',
+        (tester) async {
+      final remote = _FakePendingRemote();
+      await openSheet(tester, pendingRemote: remote, queued: _queuedImport());
+
+      await tester.tap(find.byKey(const Key('import-dismiss')));
+      await tester.pumpAndSettle();
+
+      expect(await routes.loadRoutes(wallId, photoId), isEmpty);
+      expect(remote.consumed, ['pending-1']);
     });
 
     testWidgets('dismissing the sheet writes nothing', (tester) async {

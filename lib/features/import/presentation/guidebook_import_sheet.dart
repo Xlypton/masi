@@ -7,6 +7,7 @@ import '../../../app/theme.dart';
 import '../../../core/db/database_provider.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
+import '../application/pending_import_providers.dart';
 import '../data/guidebook_import_applier.dart';
 import '../data/guidebook_import_codec.dart';
 import '../domain/guidebook_import.dart';
@@ -18,28 +19,47 @@ import '../domain/guidebook_import_prompt.dart';
 /// already settled — there is no target picker, and no question about which
 /// photo the model's coordinates belong to.
 ///
+/// [initial] skips straight to the review step with an already-decoded import,
+/// which is how an import queued by the MCP server arrives — the user did not
+/// paste anything, so showing them a paste box first would be nonsense.
+/// [pendingId] is that import's row id, retired once it has been dealt with.
+///
 /// Returns the applied result, or null if the user backed out.
 Future<ImportApplyResult?> showGuidebookImportSheet(
   BuildContext context, {
   required String wallId,
   required String photoId,
+  GuidebookImport? initial,
+  String? pendingId,
 }) {
   return showModalBottomSheet<ImportApplyResult>(
     context: context,
     isScrollControlled: true,
     useSafeArea: true,
     backgroundColor: Colors.transparent,
-    builder: (_) => _GuidebookImportSheet(wallId: wallId, photoId: photoId),
+    builder: (_) => _GuidebookImportSheet(
+      wallId: wallId,
+      photoId: photoId,
+      initial: initial,
+      pendingId: pendingId,
+    ),
   );
 }
 
 enum _Step { brief, review }
 
 class _GuidebookImportSheet extends ConsumerStatefulWidget {
-  const _GuidebookImportSheet({required this.wallId, required this.photoId});
+  const _GuidebookImportSheet({
+    required this.wallId,
+    required this.photoId,
+    this.initial,
+    this.pendingId,
+  });
 
   final String wallId;
   final String photoId;
+  final GuidebookImport? initial;
+  final String? pendingId;
 
   @override
   ConsumerState<_GuidebookImportSheet> createState() =>
@@ -63,6 +83,20 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
   String? _rejected;
 
   bool _busy = false;
+
+  /// Whether this import came from the MCP server rather than a paste.
+  bool get _fromServer => widget.pendingId != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final initial = widget.initial;
+    if (initial != null) {
+      _import = initial;
+      _system = initial.gradeSystem;
+      _step = _Step.review;
+    }
+  }
 
   @override
   void dispose() {
@@ -129,6 +163,12 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
         photoId: widget.photoId,
         system: _system,
       );
+      // Retire the queued row only after the routes are safely written. If
+      // this throws the import stays pending, which re-offers work the user
+      // has already had done — annoying, but recoverable. Marking it consumed
+      // first and then failing to write would lose the import silently.
+      await _retirePending();
+
       if (!mounted) return;
       Navigator.of(context).pop(result);
     } catch (_) {
@@ -141,6 +181,31 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
         ),
       );
     }
+  }
+
+  /// Marks the queued import dealt with, if there is one.
+  ///
+  /// Never rethrows: retiring the row is bookkeeping, and a failure here must
+  /// not turn a successful import into a reported failure. The cost of it
+  /// failing is that the import is offered again, which is visible and
+  /// harmless; the cost of surfacing it is telling the user their routes did
+  /// not land when they did.
+  Future<void> _retirePending() async {
+    final id = widget.pendingId;
+    if (id == null) return;
+    try {
+      await ref.read(pendingImportRemoteProvider).markConsumed(id);
+    } catch (_) {
+      // Deliberately swallowed — see above.
+    }
+  }
+
+  /// Discards a server-queued import without applying it.
+  Future<void> _dismiss() async {
+    setState(() => _busy = true);
+    await _retirePending();
+    if (!mounted) return;
+    Navigator.of(context).pop();
   }
 
   @override
@@ -382,9 +447,16 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
           children: [
             Expanded(
               child: OutlinedButton(
-                key: const Key('import-back'),
-                onPressed: _busy ? null : () => setState(() => _step = _Step.brief),
-                child: const Text('Back'),
+                key: Key(_fromServer ? 'import-dismiss' : 'import-back'),
+                onPressed: _busy
+                    ? null
+                    // A server-queued import has no paste step behind it, so
+                    // the escape hatch discards it instead of going "back" to
+                    // a screen the user was never on.
+                    : (_fromServer
+                        ? _dismiss
+                        : () => setState(() => _step = _Step.brief)),
+                child: Text(_fromServer ? 'Discard' : 'Back'),
               ),
             ),
             const SizedBox(width: MasiSpacing.sm),
