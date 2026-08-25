@@ -81,13 +81,27 @@ The payload is stored **exactly as the model sent it** and validated by the exis
 decoder on the client. Validating on the server as well would mean two decoders that must agree
 forever, and the client's is the one whose verdict actually reaches the user.
 
-## Stages
+## Stages — all built
 
-- **2A** `guidebook_imports` table + RLS, applied live and verified.
-- **2B** Worker scaffold + `workers-oauth-provider` + Supabase auth handler + `list_recent_walls`.
-  This stage proves the whole auth chain; the remaining tools are easy once `auth.uid()` is real.
-- **2C** `get_wall_photo` + `create_import`.
-- **2D** Client: surface pending imports on the canvas, opening the Phase 1 review sheet.
+- **2A** ✅ `guidebook_imports` table + RLS, applied live, RLS proved in a rolled-back transaction.
+- **2B** ✅ Worker + `workers-oauth-provider` + Supabase PKCE auth handler + `list_recent_walls`.
+- **2C** ✅ `get_wall_photo` + `create_import`.
+- **2D** ✅ Client picks up pending imports on the canvas, opening the Phase 1 review sheet.
+
+### What is verified, and what is not
+
+Verified against the deployed Worker: `/mcp` refuses unauthenticated and bogus-token calls (401);
+discovery metadata advertises the endpoints with S256; dynamic client registration issues a client;
+`/authorize` redirects to Supabase with correct PKCE parameters; and Supabase in turn redirects to
+Google, which is what proves the callback really is on the redirect allowlist.
+
+**Not verified, and not verifiable from a terminal:** the leg where a human signs in with Google,
+and therefore the end-to-end chain with a real model. Both need a browser and a person. Until
+someone adds the connector and completes a sign-in, `auth.uid()` has never actually been real in a
+tool call — every assertion above concerns the machinery in front of it.
+
+The client half is committed but **not deployed** at time of writing: production still runs the
+build from before 2D, so the waiting-import dot does not appear there yet.
 
 ## Assertions
 

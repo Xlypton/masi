@@ -152,11 +152,15 @@ Fully usable with zero infra and nothing leaving the device but text the user pa
 already handles this (`decodeGuidebookImportLink`); what is missing is the route and a target
 picker, since a link arriving cold has no wall context the way the canvas entry does.
 
-### Phase 2 — MCP server
+### Phase 2 — MCP server ✅ built
 
-Cloudflare Worker, OAuth against Supabase. Tools: `list_recent_walls`, `get_wall_photo`,
-`create_import`. Writes a pending-import row and returns the deep link; it does **not** write
-routes directly, so the review step is never bypassed.
+Cloudflare Worker at `https://masi-mcp.xlypton.workers.dev`, OAuth against Supabase. Tools:
+`list_recent_walls`, `get_wall_photo`, `create_import`. It writes a pending-import row and does
+**not** write routes directly, so the review step is never bypassed — the connected path ends
+exactly like the pasted one.
+
+Full design, stage status, and the split between what is verified and what still needs a human:
+**`MCP_SERVER_PLAN.md`**.
 
 ### Phase 3 — book page as on-screen reference
 
