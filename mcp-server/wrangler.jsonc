@@ -6,6 +6,12 @@
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
 
+  // Cloudflare Images, used ONLY to shrink a photo before it reaches the model.
+  // Originals here are 3024x4032 and 4-7 MB, which cannot be sent as tool
+  // output at all — and the model has no way to fetch a URL, so the picture has
+  // to travel inside the response.
+  "images": { "binding": "IMAGES" },
+
   // Both are PUBLIC values, so they are vars rather than secrets: the anon key
   // is the publishable one the Flutter client already ships, and it is safe
   // precisely because RLS — not key secrecy — is what protects the data. There

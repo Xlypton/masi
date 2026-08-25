@@ -60,8 +60,29 @@ interface PhotoRow {
 /** Storage bucket holding each user's own photos, under `<uid>/`. */
 const PHOTO_BUCKET = "topo-photos";
 
-/** How long a photo URL handed to the model stays valid. */
-const PHOTO_URL_TTL_SECONDS = 900;
+/** How long the internal signed URL stays valid. Only this Worker uses it. */
+const PHOTO_URL_TTL_SECONDS = 300;
+
+/**
+ * Longest edge of the photo actually sent to the model.
+ *
+ * Originals are 3024x4032 and 4-7 MB, which cannot be sent as tool output at
+ * all. 1500 keeps the long edge just under the point where the model would
+ * downscale it again anyway, so nothing is spent encoding detail that gets
+ * thrown away — while leaving enough resolution to tell one line from the next.
+ */
+const PHOTO_MAX_EDGE = 1500;
+
+/** Base64 for an ArrayBuffer, chunked so a large photo cannot blow the stack. */
+function toBase64(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
 
 /**
  * One route as read off a guidebook page.
@@ -101,12 +122,33 @@ function cfgOf(env: Env): SupabaseConfig {
   return { url: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY };
 }
 
-/** Wraps a tool body so a lost session reads as an instruction, not a crash. */
+type ContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
+/**
+ * Wraps a tool body so a lost session reads as an instruction, not a crash.
+ *
+ * A result may carry `_imagePayload`, which is lifted out into a real MCP image
+ * content block. Returning a picture as a base64 string inside JSON would just
+ * be a very long string to the model — it has to be its own block to be seen.
+ */
 async function tool(
-  run: () => Promise<unknown>,
-): Promise<{ content: Array<{ type: "text"; text: string }> }> {
+  run: () => Promise<Record<string, unknown> | unknown>,
+): Promise<{ content: ContentBlock[] }> {
   try {
     const value = await run();
+    const content: ContentBlock[] = [];
+
+    if (value && typeof value === "object" && "_imagePayload" in value) {
+      const rest = { ...(value as Record<string, unknown>) };
+      const image = rest._imagePayload as { data: string; mimeType: string };
+      delete rest._imagePayload;
+      content.push({ type: "text", text: JSON.stringify(rest) });
+      content.push({ type: "image", data: image.data, mimeType: image.mimeType });
+      return { content };
+    }
+
     return { content: [{ type: "text", text: JSON.stringify(value) }] };
   } catch (err) {
     if (err instanceof ReauthRequired) {
@@ -251,16 +293,48 @@ function createServer(env: Env, props: Props) {
           };
         }
 
+        // Hand back the IMAGE, not a link to it.
+        //
+        // This tool used to return the signed URL and stop there, which was
+        // useless: the model has no way to fetch an arbitrary URL, so it never
+        // saw the rock and every import came back with `withLines: 0`. The
+        // whole photo-first design — coordinates in the user's frame, not the
+        // book's — depends on the model actually looking at this picture.
+        const source = await fetch(url);
+        if (!source.ok || !source.body) {
+          return {
+            error: "photo_unreadable",
+            message:
+              "Masi could not read that photo's image. Open Masi while " +
+              "online so it re-uploads, then try again.",
+          };
+        }
+
+        const shrunk = await env.IMAGES.input(source.body)
+          // scale-down never upscales, and bounds BOTH edges, so portrait and
+          // landscape photos are handled by one rule.
+          .transform({
+            width: PHOTO_MAX_EDGE,
+            height: PHOTO_MAX_EDGE,
+            fit: "scale-down",
+          })
+          .output({ format: "image/jpeg", quality: 80 });
+
+        const bytes = await shrunk.response().arrayBuffer();
+
         return {
+          _imagePayload: {
+            data: toBase64(bytes),
+            mimeType: "image/jpeg",
+          },
           wallId,
           photoId: photo.id,
-          width: photo.width,
-          height: photo.height,
-          url,
-          expiresInSeconds: PHOTO_URL_TTL_SECONDS,
+          originalWidth: photo.width,
+          originalHeight: photo.height,
           note:
-            "Place route lines in THIS photo's coordinate space: [0,0] is its " +
-            "top-left, [1,1] its bottom-right.",
+            "This is the user's own photo of the boulder. Place route lines " +
+            "in ITS coordinate space: [0,0] top-left, [1,1] bottom-right. Do " +
+            "not use coordinates read off the guidebook's picture.",
         };
       }),
   );

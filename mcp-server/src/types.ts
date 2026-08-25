@@ -30,6 +30,12 @@ export interface Env {
   SUPABASE_URL: string;
   /** The publishable anon key — safe to ship, RLS-protected. */
   SUPABASE_ANON_KEY: string;
+  /**
+   * Cloudflare Images, used only to shrink a photo before handing it to the
+   * model. Originals here are 3-4k px and 4-7 MB, which is far past what can
+   * be sent as tool output.
+   */
+  IMAGES: ImagesBinding;
 }
 
 export const sessionKey = (uid: string) => `session:${uid}`;
