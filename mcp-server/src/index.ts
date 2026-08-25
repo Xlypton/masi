@@ -6,7 +6,12 @@ import { z } from "zod";
 
 import { SupabaseAuthHandler } from "./auth";
 import { accessTokenFor } from "./session";
-import { gradeSortKey, isValidGrade, normalizeGrade } from "./grades";
+import {
+  gradeSortKey,
+  isValidGrade,
+  normalizeGrade,
+  type GradeSystem,
+} from "./grades";
 import {
   ReauthRequired,
   restGet,
@@ -140,6 +145,73 @@ const importedRoute = z.object({
         "seconds to draw, a wrong one takes longer to find and fix.",
     ),
 });
+
+/** One route as read off a guidebook page, for comparison against the topo. */
+const comparableRoute = importedRoute.omit({
+  points: true,
+  positionHint: true,
+});
+
+/**
+ * Folds a route name to a form two sources can be matched on: lowercased,
+ * de-accented, punctuation flattened to single spaces.
+ *
+ * Name is the match key rather than the route NUMBER, which is the obvious
+ * alternative and the wrong one: a guidebook numbers routes across a whole
+ * crag page, a Masi topo numbers them per photo left-to-right, and a route
+ * inserted into either renumbers everything after it. Names are what actually
+ * survive between the two. `Café Crème` / `cafe creme` / `Cafe  Creme!` are
+ * the same route to every climber, and must be here too.
+ */
+function foldName(raw: string): string {
+  return raw
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function isBlank(value: string | null | undefined): boolean {
+  return value === null || value === undefined || value.trim() === "";
+}
+
+/** A single field where the page and the topo do not agree. */
+interface FieldDelta {
+  field: "name" | "grade" | "stars" | "description";
+  inMasi: string | number | null;
+  inGuidebook: string | number | null;
+}
+
+/**
+ * Whether two grades disagree ENOUGH to be worth reporting.
+ *
+ * Within one ladder this is exact: same shared-scale key means the same grade,
+ * however it was typed (`6C` vs `6c`), and a different key is a real conflict.
+ *
+ * ACROSS ladders it is deliberately fuzzy. The UIAA axis is mapped onto the
+ * French one by a two-point linear fit (see `grades.ts`), so the conversion is
+ * lossy by construction — French `6a+` lands at 8 while UIAA `VII-` lands at
+ * 8.5, and those are the same climb to anyone holding the book. Reporting that
+ * half-step as a disagreement would emit a "conflict" on nearly every
+ * cross-system page, which is exactly the noise this feature exists to avoid.
+ * So across systems only a gap of more than one full French step counts.
+ */
+function gradesDisagree(
+  masiRaw: string,
+  masiSystem: GradeSystem,
+  bookRaw: string,
+  bookSystem: GradeSystem,
+): boolean {
+  const masiKey = gradeSortKey(masiSystem, masiRaw);
+  const bookKey = gradeSortKey(bookSystem, bookRaw);
+  // An unreadable grade on either side is not a disagreement — it is a thing
+  // we cannot compare, and guessing would be worse than staying quiet.
+  if (masiKey === null || bookKey === null) return false;
+  if (masiSystem === bookSystem) return masiKey !== bookKey;
+  return Math.abs(masiKey - bookKey) > 1.0;
+}
 
 function cfgOf(env: Env): SupabaseConfig {
   return { url: env.SUPABASE_URL, anonKey: env.SUPABASE_ANON_KEY };
@@ -369,10 +441,19 @@ function createServer(env: Env, props: Props) {
         "Send the routes you read off a guidebook page to Masi, for the user " +
         "to review. This does NOT change their topo — it queues an import " +
         "which they approve in the app, where they can correct the lines. " +
-        "Call get_wall_photo first and place points against that photo.",
+        "Call get_wall_photo first and place points against that photo. If " +
+        "the boulder already has routes, call compare_routes first and import " +
+        "only the ones it reports as genuinely new.",
       inputSchema: {
         wallId: z.string().describe("From list_recent_walls."),
         photoId: z.string().describe("From get_wall_photo."),
+        knownExisting: z
+          .boolean()
+          .optional()
+          .describe(
+            "Set true only AFTER compare_routes, to confirm these routes are " +
+              "the new ones and not the whole page re-imported.",
+          ),
         boulder: z
           .string()
           .optional()
@@ -390,10 +471,39 @@ function createServer(env: Env, props: Props) {
           .describe("The routes, in left-to-right order as they sit on the rock."),
       },
     },
-    async ({ wallId, photoId, boulder, gradeSystem, routes }) =>
+    async ({ wallId, photoId, boulder, gradeSystem, routes, knownExisting }) =>
       tool(async () => {
         const cfg = cfgOf(env);
         const token = await accessTokenFor(env, props.uid, cfg);
+
+        // Re-importing a page onto a topo that already has routes is the one
+        // way this tool can make a mess the user has to clean up by hand: the
+        // review sheet fills with duplicates of routes they already drew, and
+        // the duplicates look exactly like the originals. A description alone
+        // does not reliably stop it, so the door is actually shut — and opened
+        // again by `knownExisting`, which the model can only sensibly set once
+        // it has seen what is there.
+        if (!knownExisting) {
+          const existing = await restGet<{ id: string }[]>(
+            cfg,
+            token,
+            `routes?select=id` +
+              `&wallId=eq.${encodeURIComponent(wallId)}` +
+              `&ownerId=eq.${encodeURIComponent(props.uid)}` +
+              `&deletedAt=is.null&limit=1`,
+          );
+          if (existing.length > 0) {
+            return {
+              error: "wall_has_routes",
+              message:
+                "This boulder already has routes, so importing the whole page " +
+                "would queue duplicates. Call compare_routes with the same " +
+                "routes first: it reports which are genuinely new, which " +
+                "fields the topo is missing, and where the page disagrees. " +
+                "Then import only the new ones with knownExisting: true.",
+            };
+          }
+        }
 
         // `v` is stamped here rather than asked of the model: it is the
         // contract's framing, not data the model has any way to know. Nothing
@@ -461,6 +571,200 @@ function createServer(env: Env, props: Props) {
             // were already there.
             description: r.description,
           })),
+        };
+      }),
+  );
+
+  server.registerTool(
+    "compare_routes",
+    {
+      description:
+        "Compare the routes on a guidebook page against what the user's topo " +
+        "ALREADY records, and get back only what is actually worth changing. " +
+        "Call this INSTEAD of create_import whenever the boulder already has " +
+        "routes. Returns routes the page has that the topo does not, fields " +
+        "the topo is missing that the page can fill, and real disagreements " +
+        "(e.g. the book says 7a, the topo says 6c). Routes that already " +
+        "agree are left out entirely — if it returns nothing, there is " +
+        "nothing to suggest and you should say so rather than inventing " +
+        "work. Apply what the user approves with update_route.",
+      inputSchema: {
+        wallId: z.string().describe("From list_recent_walls."),
+        gradeSystem: z
+          .enum(["french", "uiaa"])
+          .optional()
+          .describe(
+            "Which ladder the BOOK uses. Font grades (6a, 7b+) are " +
+              "'french'. Defaults to french.",
+          ),
+        routes: z
+          .array(comparableRoute)
+          .min(1)
+          .describe("The routes exactly as the page prints them."),
+      },
+    },
+    async ({ wallId, gradeSystem, routes }) =>
+      tool(async () => {
+        const cfg = cfgOf(env);
+        const token = await accessTokenFor(env, props.uid, cfg);
+        const bookSystem: GradeSystem = gradeSystem ?? "french";
+
+        const existing = await restGet<RouteRow[]>(
+          cfg,
+          token,
+          `routes?select=id,number,name,gradeRaw,gradeSystem,stars,description` +
+            `&wallId=eq.${encodeURIComponent(wallId)}` +
+            `&ownerId=eq.${encodeURIComponent(props.uid)}` +
+            `&deletedAt=is.null&order=number.asc`,
+        );
+
+        // An empty topo has nothing to compare against, and saying so plainly
+        // is more useful than returning every route as "new" — the caller's
+        // next step is a straight create_import, not a diff.
+        if (existing.length === 0) {
+          return {
+            comparable: false,
+            reason: "no_existing_routes",
+            message:
+              "This boulder has no routes yet, so there is nothing to " +
+              "compare. Use create_import to add the whole page.",
+          };
+        }
+
+        const byName = new Map<string, RouteRow>();
+        for (const row of existing) {
+          if (isBlank(row.name)) continue;
+          byName.set(foldName(row.name!), row);
+        }
+
+        const newRoutes: unknown[] = [];
+        const suggestions: unknown[] = [];
+        const matchedIds = new Set<string>();
+
+        for (const book of routes) {
+          const match = isBlank(book.name)
+            ? undefined
+            : byName.get(foldName(book.name!));
+
+          // Unnamed on the page, or a name the topo has never heard of. Either
+          // way it cannot be matched, so it is a candidate to ADD — never a
+          // silent edit to whichever route happened to sit at that number.
+          if (!match) {
+            newRoutes.push({
+              name: book.name ?? "(unnamed on the page)",
+              grade: book.gradeRaw ?? null,
+              stars: book.stars ?? null,
+            });
+            continue;
+          }
+          matchedIds.add(match.id);
+
+          const additions: FieldDelta[] = [];
+          const conflicts: FieldDelta[] = [];
+          const patch: Record<string, unknown> = {};
+
+          if (!isBlank(book.gradeRaw)) {
+            if (isBlank(match.gradeRaw)) {
+              additions.push({
+                field: "grade",
+                inMasi: null,
+                inGuidebook: book.gradeRaw!,
+              });
+              patch.gradeRaw = book.gradeRaw;
+              patch.gradeSystem = bookSystem;
+            } else if (
+              gradesDisagree(
+                match.gradeRaw!,
+                (match.gradeSystem as GradeSystem) ?? "french",
+                book.gradeRaw!,
+                bookSystem,
+              )
+            ) {
+              conflicts.push({
+                field: "grade",
+                inMasi: match.gradeRaw,
+                inGuidebook: book.gradeRaw!,
+              });
+            }
+          }
+
+          if (!isBlank(book.description)) {
+            if (isBlank(match.description)) {
+              additions.push({
+                field: "description",
+                inMasi: null,
+                inGuidebook: book.description!,
+              });
+              patch.description = book.description;
+            }
+            // A description that is merely WORDED differently is not reported.
+            // Two prose paragraphs about the same climb never match literally,
+            // so flagging that would fire on essentially every matched route
+            // and drown the deltas that matter. An empty one is a real gap; a
+            // different one is a rewrite nobody asked for.
+          }
+
+          if (book.stars !== undefined) {
+            if (match.stars === null) {
+              additions.push({
+                field: "stars",
+                inMasi: null,
+                inGuidebook: book.stars,
+              });
+              patch.stars = book.stars;
+            } else if (match.stars !== book.stars) {
+              conflicts.push({
+                field: "stars",
+                inMasi: match.stars,
+                inGuidebook: book.stars,
+              });
+            }
+          }
+
+          if (additions.length === 0 && conflicts.length === 0) continue;
+
+          suggestions.push({
+            routeId: match.id,
+            route: match.name ?? `#${match.number}`,
+            number: match.number,
+            additions,
+            conflicts,
+            // Ready-to-send `update_route` arguments for the ADDITIONS only.
+            // Conflicts are deliberately excluded: overwriting a grade the
+            // user themselves recorded, because a book disagrees, is a
+            // judgement call that belongs to them. Present those and let them
+            // choose.
+            applyAdditions:
+              Object.keys(patch).length > 0
+                ? { routeId: match.id, ...patch }
+                : null,
+          });
+        }
+
+        const onlyInMasi = existing
+          .filter((row) => !matchedIds.has(row.id))
+          .map((row) => row.name ?? `#${row.number}`);
+
+        const nothingToDo =
+          newRoutes.length === 0 && suggestions.length === 0;
+
+        return {
+          comparable: true,
+          nothingToDo,
+          message: nothingToDo
+            ? "The page agrees with the topo — nothing to add or correct. " +
+              "Tell the user that plainly; do not invent changes."
+            : `${newRoutes.length} route(s) on the page are not in the topo, ` +
+              `and ${suggestions.length} recorded route(s) have something ` +
+              "to add or a disagreement.",
+          newRoutes,
+          suggestions,
+          // Reported, but NOT a suggestion: a guidebook page routinely covers
+          // part of a boulder, so a route the topo has and the page omits is
+          // usually just outside the page's scope — never evidence it should
+          // be deleted. Named so the model can mention it if asked, not act
+          // on it.
+          onlyInMasi,
         };
       }),
   );
