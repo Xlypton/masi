@@ -123,6 +123,47 @@ void main() {
       },
     );
 
+    test(
+      'a list that already fits is never tiered, fix or no fix — grouping a '
+      'three-topo library into one row is a screen of emptiness and an extra '
+      'tap per topo, for nothing',
+      () {
+        final entries = [
+          for (var i = 0; i < 3; i++)
+            _own('w$i', sectorId: 's', areaId: 'a'),
+        ];
+
+        for (final hasFix in [true, false]) {
+          final nodes = buildToposTree(
+            entries: entries,
+            hasFix: hasFix,
+            expandedWalls: 8,
+          );
+          expect(
+            nodes,
+            hasLength(3),
+            reason: 'three topos must stay three rows (hasFix: $hasFix)',
+          );
+          expect(nodes.every((n) => n is ToposWallNode), isTrue);
+        }
+      },
+    );
+
+    test('tiers as soon as the list is longer than the expanded head', () {
+      final entries = [
+        for (var i = 0; i < 9; i++) _own('w$i', sectorId: 's', areaId: 'a'),
+      ];
+
+      final nodes = buildToposTree(
+        entries: entries,
+        hasFix: false,
+        expandedWalls: 8,
+      );
+
+      expect(nodes, hasLength(1));
+      expect(nodes.single, isA<ToposGroupNode>());
+    });
+
     test('an ungroupable topo still renders as its own row without a fix', () {
       // A fresh library filed entirely under the `__default__` sentinel has no
       // nameable ancestry at all, and must look exactly as it always did.
@@ -316,7 +357,13 @@ void main() {
         _own('oldest', sectorId: 's1', areaId: 'a'),
       ];
 
-      final nodes = buildToposTree(entries: entries, hasFix: false);
+      final nodes = buildToposTree(
+        entries: entries,
+        hasFix: false,
+        // Explicit, because four entries would otherwise fall under the
+        // "already fits, do not tier" short-circuit and come back flat.
+        expandedWalls: 0,
+      );
 
       expect(nodes, hasLength(2));
       expect(_wallIds(nodes[0]), ['newest', 'oldest']);
@@ -374,7 +421,8 @@ void main() {
       ];
 
       final group =
-          buildToposTree(entries: entries, hasFix: false).single
+          buildToposTree(entries: entries, hasFix: false, expandedWalls: 0)
+                  .single
               as ToposGroupNode;
 
       expect(group.distanceKm, isNull);

@@ -182,6 +182,24 @@ List<ToposNode> buildToposTree({
 }) {
   if (entries.isEmpty) return const [];
 
+  // A list that already fits is never tiered, fix or no fix.
+  //
+  // Grouping exists to tame a list too long to scan; applied to a short one it
+  // is pure loss — a library of three topos collapsed to a single "3 topos"
+  // row is one line of text and a screen of emptiness, and every topo now costs
+  // a tap it did not cost before. This was visible the moment the feature first
+  // ran signed-in: the whole Topos home was one Sector row.
+  //
+  // The threshold is [expandedWalls] because that is already the definition of
+  // "as much as we are willing to show flat" — below it, tiering could not
+  // shorten the list anyway, since every entry would have been expanded.
+  if (entries.length <= expandedWalls) {
+    return [
+      for (var i = 0; i < entries.length; i++)
+        ToposWallNode(entry: entries[i], rank: i),
+    ];
+  }
+
   final headCount = hasFix ? expandedWalls.clamp(0, entries.length) : 0;
   final nodes = <ToposNode>[
     for (var i = 0; i < headCount; i++)
