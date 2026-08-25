@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "masi-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true }
+
+  // No KV binding yet. `@cloudflare/workers-oauth-provider` needs an OAUTH_KV
+  // namespace to store grants and tokens; that arrives with stage 2B-2 (see
+  // MCP_SERVER_PLAN.md) together with the Supabase auth handler.
+}

@@ -84,3 +84,8 @@ skills-lock.json
 # Windows box two goldens fail permanently (they were generated on macOS, and
 # font rasterization differs), so these regenerate on every run.
 **/failures/
+
+# Node deps for the MCP server Worker (mcp-server/). The lockfile IS committed;
+# the tree is not.
+mcp-server/node_modules/
+mcp-server/.wrangler/
