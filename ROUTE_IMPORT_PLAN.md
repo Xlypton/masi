@@ -24,25 +24,46 @@ Three things already exist on `main` and carry most of the weight:
 
 Every payload field maps 1:1 onto an existing `TopoRoute` field. **No schema change, no migration.**
 
-## The ordering that makes AI placement work
+## The flow
 
 The model must place lines against **the user's photo**, never the book's — different angle,
-different framing, curved glossy page. So the photo comes *first*:
+different framing, curved glossy page. So the photo comes *first*, and the import is reached from
+inside the topo you are already editing:
 
-1. **In Masi:** photograph the boulder, create the wall, no routes yet. It syncs.
-   (`SyncService._uploadOwnPhotos` puts a private, owner-scoped copy in Supabase storage.)
-2. **In the chat:** photograph the guidebook page. The model calls `masi.list_recent_walls()`,
-   the user names the boulder, it calls `masi.get_wall_photo(wallId)` → a signed URL to the
-   user's *actual* photo.
-3. The model now sees both images and emits polylines **in the user's photo's coordinate space**.
-4. It calls `masi.create_import(...)` → gets back `https://climb-masi.pages.dev/import/<id>`.
-5. User taps → review sheet → approve → routes land as committed routes, correctable by hand.
+1. **New topo as usual:** photograph the boulder, or pick one from the gallery. That creates the
+   Area→Sector→Wall→Photo chain (the existing photo-first flow,
+   `library_crud_repository.dart:1916`).
+2. **Enter edit mode on the canvas.** An **Import from guidebook** button sits in the draw-mode
+   action row, beside `topo-edit-location-button`.
+3. It hands over the prompt and opens the chat app, where the user photographs the guidebook page.
+4. The reply returns to Masi — pasted in Phase 1, written directly by the MCP server in Phase 2.
+5. Review sheet → approve → routes land as committed routes on this photo, correctable with the
+   drag handles that already exist.
 
-No photo mismatch is possible, because the model is looking at the file Masi will draw on. This is
-the difference between "roughly the right place" and "random lines".
+**Entering from the canvas is what keeps this simple.** The wall and photo are already chosen, so
+there is no target picker, no wall matching, and no ambiguity about which photo the coordinates
+belong to. It also means Phase 1 needs no deep link at all: the user never leaves the wall's
+context, so the reply is pasted on the same screen. A deep link only matters when a *chat app*
+initiates the write, which is Phase 2.
 
-**Phase 1 constraint:** the photo must have synced before the chat can see it. This is a couch
-activity, not a crag activity. The UI must say so rather than silently failing.
+**Phase 2 constraint:** the photo must have synced before a chat app can fetch it
+(`SyncService._uploadOwnPhotos` puts a private, owner-scoped copy in Supabase storage). That makes
+the MCP path a couch activity, not a crag activity, and the UI must say so rather than failing
+silently. Phase 1 has no such constraint — nothing leaves the device but text the user pastes.
+
+## Admin-only, for now
+
+The button is gated on `isAdminProvider` via the established idiom
+(`ref.watch(isAdminProvider).asData?.value ?? false`), which **fails closed**: false while loading,
+false on error.
+
+Be precise about what that gate is. Every other admin surface in this app fronts a
+`SECURITY DEFINER` RPC that re-checks `is_admin()` server-side, so hiding the control there is
+mere convenience. **Here there is no server call to re-check.** An import writes the user's own
+routes to their own wall through the ordinary local repository — exactly what they are already
+entitled to do by drawing by hand. So this gate hides an unfinished feature; it does not protect a
+privileged one, and nothing is at risk if it is bypassed. That is the right level for "not ready
+for ordinary people yet", and it must not be mistaken for a security boundary later.
 
 ## One contract, three doors
 
@@ -51,8 +72,8 @@ screen.
 
 | Door | Mechanism | Phase |
 |---|---|---|
-| **Deep link** | `/import?d=<base64url json>` — the model builds the URL | 1 |
-| **Prompt template** | Copy-paste prompt for any LLM; output pastes into an import box | 1 |
+| **Prompt + paste** | Copy the prompt, photograph the page in the chat app, paste the reply back on the canvas | 1 |
+| **Deep link** | `/import?d=<base64url json>` — the model builds the URL | 1b |
 | **MCP server** | Cloudflare Worker + OAuth against Supabase | 2 |
 
 Cloudflare hosts Phase 2: Pages is already the deploy target, the `agents-sdk` skill has
@@ -114,15 +135,22 @@ Extracting names and grades is fine; they are facts. The book's *photo and drawn
 
 ## Phases
 
-### Phase 1 — deep link + prompt template + review (no infra)
+### Phase 1 — prompt, paste, review, apply (no infra) ✅ logic done
 
-- **1A** `GuidebookImport` / `ImportedRoute` domain model + decoder/validator + unit tests.
-- **1B** `/import` route in `lib/app/router.dart`, `?d=` base64url payload, plus a paste box.
-- **1C** Review screen: boulder name, grade-system dropdown, per-route rows, flagged fields.
-- **1D** Apply: pick target wall + photo, then N × `RouteRepository.upsertRoute` numbered 1..N.
-- **1E** Prompt-template screen with a copy button.
+- **1A** ✅ `GuidebookImport` / `ImportedRoute` domain model + decoder/validator + unit tests.
+- **1D** ✅ `GuidebookImportApplier` — N × `RouteRepository.upsertRoute`, appending.
+- **1E** ✅ Prompt template, its example checked against the production decoder.
+- **1C** Import sheet on the canvas: hand over the prompt → open the chat app → paste the reply →
+  review (boulder name, grade-system dropdown, per-route rows, problems vs advisory) → apply.
+- **1B** Admin-gated **Import from guidebook** button in the draw-mode action row.
 
-Fully usable with zero infra.
+Fully usable with zero infra and nothing leaving the device but text the user pastes.
+
+### Phase 1b — deep link
+
+`/import?d=<base64url>` in `lib/app/router.dart`, landing on the same review sheet. The decoder
+already handles this (`decodeGuidebookImportLink`); what is missing is the route and a target
+picker, since a link arriving cold has no wall context the way the canvas entry does.
 
 ### Phase 2 — MCP server
 
@@ -163,7 +191,16 @@ A change is done when all of these hold, checked by an agent that did not write 
 
 ## Open questions
 
-- **Wall targeting in Phase 1.** Deep link has no wall id. Simplest: review screen asks the user
-  to pick an existing wall+photo, or create a new wall and attach a photo inline. Phase 2's MCP
-  path carries the `wallId` and skips the picker.
-- **Multi-photo walls.** Routes are per-photo. The picker must choose a *photo*, not just a wall.
+- **Handing off to the chat app.** Opening ChatGPT/Claude from a PWA with a *pre-filled prompt and
+  two attached images* is not something either app supports. `https://claude.ai/new?q=…` and
+  `https://chatgpt.com/?q=…` prefill text on web and may deep-link into the installed app, but the
+  photos still have to be attached by hand. So Phase 1 copies the prompt to the clipboard and opens
+  the app; the user pastes and attaches. Worth confirming on the actual phone which of those URLs
+  opens the app rather than a browser tab.
+- **MCP on mobile.** Claude's mobile apps do support connectors on paid plans, which is what Phase
+  2 would target — but this needs confirming on the user's own phone and plan before the Worker is
+  built, because it decides whether Phase 2 is worth it at all. If mobile MCP turns out not to
+  work, Phase 1b (deep link) is the fallback that still avoids copy-paste in one direction.
+- **Wall targeting for the deep link (1b).** A link arriving cold has no wall context, so it needs
+  a picker that the canvas entry does not. Routes are per-photo, so it must pick a *photo*, not
+  just a wall.
