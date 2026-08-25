@@ -147,7 +147,16 @@ A change is done when all of these hold, checked by an agent that did not write 
 5. `v: 2` (or absent) is rejected with a readable message and writes nothing.
 6. Applying an import to a wall produces routes numbered `1..N` in payload order, each round-
    tripping through `loadRoutes` with its metadata intact.
-7. Applying the *same* import twice does not duplicate routes (upsert on `(photoId, number)`).
+7. Applying an import to a photo that already has routes **appends after them and overwrites
+   none** — numbered above the existing maximum, not the existing count.
+
+   *Revised during 1D.* This assertion originally demanded idempotency ("applying the same
+   import twice does not duplicate"). That turned out to be the wrong guarantee: `upsertRoute`
+   keys on `(photoId, number)`, so any scheme that made a re-import land on the same numbers
+   would also make a *first* import land on top of the user's hand-drawn routes and destroy
+   them silently, with no undo. Protecting existing work beats de-duplicating a button press —
+   a doubled import is visible immediately and deleted in a few taps, whereas overwritten
+   routes are neither. The review screen guards the double tap instead.
 8. The guidebook reference image never acquires a `photoId` and never enters the sync set.
 9. A route imported without `points` is created unplaced and is drawable from the queue.
 10. `flutter build web` still passes `tool/build_web.sh`'s gates (no `dart:io` leak).

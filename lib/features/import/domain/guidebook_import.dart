@@ -191,16 +191,24 @@ class ImportedRoute {
   /// Converts to the domain route that gets persisted, with [system] the
   /// import-wide grading ladder chosen in the review sheet.
   ///
+  /// [as] overrides the persisted route number, defaulting to this route's
+  /// own [number]. The applier passes an offset value so an import lands
+  /// *after* the routes already on the photo rather than overwriting them —
+  /// see `GuidebookImportApplier.apply`. The colour index follows the final
+  /// number, so an appended import keeps cycling the palette rather than
+  /// restarting it and repeating a neighbour's colour.
+  ///
   /// `style` is hardcoded to `'boulder'`: this feature imports bouldering
   /// guidebook pages, and `TopoRoute.style` is free-form by design (see its
   /// doc), so a wrong guess here is user-correctable in the metadata sheet.
-  TopoRoute toTopoRoute({required int id, GradeSystem? system}) {
+  TopoRoute toTopoRoute({required int id, GradeSystem? system, int? as}) {
     final resolved = resolvedGradeRaw(system);
+    final finalNumber = as ?? number;
     return TopoRoute(
       id: id,
-      number: number,
+      number: finalNumber,
       points: List.unmodifiable(points),
-      colorIndex: routeColorIndexFor(number),
+      colorIndex: routeColorIndexFor(finalNumber),
       name: name,
       gradeSystem: resolved == null ? null : system,
       gradeRaw: resolved,
