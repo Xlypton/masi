@@ -76,6 +76,17 @@ class ImportWarning {
   /// warning is about the payload as a whole.
   final int? routeNumber;
 
+  /// Whether this is expected, normal news rather than something the model
+  /// got wrong.
+  ///
+  /// [ImportWarningKind.unplacedGeometry] is the only advisory kind: the
+  /// prompt explicitly tells the model to omit a line it cannot place, so an
+  /// unplaced route is the design working, not a defect. The review sheet
+  /// shows advisory warnings as "you'll draw these" and the rest as "check
+  /// these" — collapsing the two would make a clean import of a hard-to-match
+  /// page look like a page full of errors.
+  bool get isAdvisory => kind == ImportWarningKind.unplacedGeometry;
+
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
@@ -251,6 +262,11 @@ class GuidebookImport {
   /// Everything the decoder changed about the model's payload, in the order
   /// it was noticed.
   final List<ImportWarning> warnings;
+
+  /// Warnings that mean the model got something wrong, excluding the expected
+  /// news that a route needs drawing. See [ImportWarning.isAdvisory].
+  Iterable<ImportWarning> get problems =>
+      warnings.where((w) => !w.isAdvisory);
 
   /// Routes the model could not place, which the user will draw by hand.
   Iterable<ImportedRoute> get unplacedRoutes =>
