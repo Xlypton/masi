@@ -6,10 +6,12 @@ import { z } from "zod";
 
 import { SupabaseAuthHandler } from "./auth";
 import { accessTokenFor } from "./session";
+import { gradeSortKey, isValidGrade, normalizeGrade } from "./grades";
 import {
   ReauthRequired,
   restGet,
   restInsert,
+  restPatch,
   signedUrl,
   type SupabaseConfig,
 } from "./supabase";
@@ -46,6 +48,26 @@ interface WallRow {
   id: string;
   name: string | null;
   updatedAt: number | null;
+}
+
+interface RouteRow {
+  id: string;
+  number: number;
+  name: string | null;
+  wallId: string;
+  gradeRaw: string | null;
+  gradeSystem: string | null;
+  stars: number | null;
+}
+
+interface AscentRow {
+  id: string;
+  routeId: string;
+  wallId: string;
+  climbedAt: number;
+  style: string;
+  notes: string | null;
+  gradeOpinion: string | null;
 }
 
 interface PhotoRow {
@@ -396,6 +418,273 @@ function createServer(env: Env, props: Props) {
           message:
             `Sent ${routes.length} route(s) to Masi. Open the topo in Masi to ` +
             "review and approve them — nothing has changed yet.",
+        };
+      }),
+  );
+
+  server.registerTool(
+    "list_routes",
+    {
+      description:
+        "List the routes on one of the user's boulders, with their ids, " +
+        "numbers and grades. Use this to find the route the user means " +
+        "before logging an ascent or correcting a grade.",
+      inputSchema: { wallId: z.string().describe("From list_recent_walls.") },
+    },
+    async ({ wallId }) =>
+      tool(async () => {
+        const cfg = cfgOf(env);
+        const token = await accessTokenFor(env, props.uid, cfg);
+        const rows = await restGet<RouteRow[]>(
+          cfg,
+          token,
+          `routes?select=id,number,name,gradeRaw,gradeSystem,stars` +
+            `&wallId=eq.${encodeURIComponent(wallId)}` +
+            `&ownerId=eq.${encodeURIComponent(props.uid)}` +
+            `&deletedAt=is.null&order=number.asc`,
+        );
+        return {
+          routes: rows.map((r) => ({
+            routeId: r.id,
+            number: r.number,
+            name: r.name ?? "(unnamed)",
+            grade: r.gradeRaw,
+            gradeSystem: r.gradeSystem,
+            stars: r.stars,
+          })),
+        };
+      }),
+  );
+
+  server.registerTool(
+    "log_ascent",
+    {
+      description:
+        "Record that the user climbed a route. Writes straight to their " +
+        "logbook — no review step, because deleting a wrong entry is one tap " +
+        "in the app. Use list_routes first to get the routeId.",
+      inputSchema: {
+        routeId: z.string().describe("From list_routes."),
+        style: z
+          .enum(["onsight", "flash", "redpoint", "repeat", "attempt"])
+          .describe(
+            "onsight: first try, no prior knowledge. flash: first try, with " +
+              "beta. redpoint: sent after previous attempts. repeat: done " +
+              "before. attempt: tried, not sent.",
+          ),
+        climbedAt: z
+          .string()
+          .optional()
+          .describe("ISO-8601 date, e.g. '2026-08-25'. Defaults to today."),
+        notes: z.string().max(2000).optional(),
+        gradeOpinion: z
+          .string()
+          .optional()
+          .describe(
+            "What the user thought it was worth, if they said — e.g. '7b'. " +
+              "Their opinion, NOT the route's recorded grade.",
+          ),
+      },
+    },
+    async ({ routeId, style, climbedAt, notes, gradeOpinion }) =>
+      tool(async () => {
+        const cfg = cfgOf(env);
+        const token = await accessTokenFor(env, props.uid, cfg);
+
+        // The ascent needs its wall, and looking it up also proves the route
+        // is really the caller's — a routeId invented by the model, or
+        // belonging to someone else, finds nothing here rather than producing
+        // an orphan ascent row.
+        const routes = await restGet<RouteRow[]>(
+          cfg,
+          token,
+          `routes?select=id,number,name,wallId` +
+            `&id=eq.${encodeURIComponent(routeId)}` +
+            `&ownerId=eq.${encodeURIComponent(props.uid)}` +
+            `&deletedAt=is.null&limit=1`,
+        );
+        const route = routes[0];
+        if (!route) {
+          return {
+            error: "no_such_route",
+            message:
+              "No route of yours has that id. Call list_routes on the " +
+              "boulder and use an id from there.",
+          };
+        }
+
+        const when = climbedAt ? Date.parse(climbedAt) : Date.now();
+        if (Number.isNaN(when)) {
+          return {
+            error: "bad_date",
+            message: `Could not read '${climbedAt}' as a date. Use YYYY-MM-DD.`,
+          };
+        }
+
+        const now = Date.now();
+        await restInsert(cfg, token, "ascents", {
+          id: crypto.randomUUID(),
+          ownerId: props.uid,
+          routeId: route.id,
+          wallId: route.wallId,
+          climbedAt: when,
+          style,
+          notes: notes ?? null,
+          gradeOpinion: gradeOpinion ?? null,
+          // Private by default. Sharing a send is a deliberate act, and a tool
+          // that published to the community feed because a sentence was
+          // ambiguous would be a genuinely bad surprise.
+          visibility: "private",
+          createdAt: now,
+          updatedAt: now,
+          // Not dirty: this row was born on the server, so there is nothing
+          // for the client to push back.
+          dirty: false,
+        });
+
+        return {
+          logged: true,
+          route: route.name ?? `#${route.number}`,
+          style,
+          climbedAt: new Date(when).toISOString().slice(0, 10),
+          message: "Logged, privately. It appears in your Masi logbook.",
+        };
+      }),
+  );
+
+  server.registerTool(
+    "list_ascents",
+    {
+      description:
+        "The user's own logbook — what they have climbed, most recent first. " +
+        "Use for questions like 'what did I climb this year' or 'what have I " +
+        "tried but not sent'.",
+      inputSchema: {
+        limit: z.number().int().min(1).max(200).optional(),
+        sinceDays: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("Only ascents from the last N days."),
+        style: z
+          .enum(["onsight", "flash", "redpoint", "repeat", "attempt"])
+          .optional(),
+      },
+    },
+    async ({ limit, sinceDays, style }) =>
+      tool(async () => {
+        const cfg = cfgOf(env);
+        const token = await accessTokenFor(env, props.uid, cfg);
+
+        let filter =
+          `ascents?select=id,routeId,wallId,climbedAt,style,notes,gradeOpinion` +
+          `&ownerId=eq.${encodeURIComponent(props.uid)}` +
+          `&deletedAt=is.null&order=climbedAt.desc&limit=${limit ?? 50}`;
+        if (sinceDays) {
+          filter += `&climbedAt=gte.${Date.now() - sinceDays * 86400000}`;
+        }
+        if (style) filter += `&style=eq.${style}`;
+
+        const rows = await restGet<AscentRow[]>(cfg, token, filter);
+        if (rows.length === 0) return { ascents: [] };
+
+        // Resolve route names in one round trip rather than N.
+        const ids = [...new Set(rows.map((r) => r.routeId))];
+        const routes = await restGet<RouteRow[]>(
+          cfg,
+          token,
+          `routes?select=id,number,name,gradeRaw,gradeSystem` +
+            `&id=in.(${ids.map(encodeURIComponent).join(",")})`,
+        );
+        const byId = new Map(routes.map((r) => [r.id, r]));
+
+        return {
+          ascents: rows.map((a) => {
+            const r = byId.get(a.routeId);
+            return {
+              route: r?.name ?? "(unknown route)",
+              grade: r?.gradeRaw ?? null,
+              style: a.style,
+              climbedAt: new Date(a.climbedAt).toISOString().slice(0, 10),
+              gradeOpinion: a.gradeOpinion,
+              notes: a.notes,
+            };
+          }),
+        };
+      }),
+  );
+
+  server.registerTool(
+    "update_route",
+    {
+      description:
+        "Correct a route's name, grade, description or stars. Most useful " +
+        "right after an import, when you still have the guidebook page in " +
+        "context. Only the fields you pass are changed.",
+      inputSchema: {
+        routeId: z.string().describe("From list_routes."),
+        name: z.string().max(120).optional(),
+        gradeRaw: z
+          .string()
+          .optional()
+          .describe("e.g. '7b'. Must be a real grade on the chosen ladder."),
+        gradeSystem: z.enum(["french", "uiaa"]).optional(),
+        description: z.string().max(2000).optional(),
+        stars: z.number().int().min(0).max(3).optional(),
+      },
+    },
+    async ({ routeId, name, gradeRaw, gradeSystem, description, stars }) =>
+      tool(async () => {
+        const cfg = cfgOf(env);
+        const token = await accessTokenFor(env, props.uid, cfg);
+
+        const patch: Record<string, unknown> = { updatedAt: Date.now() };
+        if (name !== undefined) patch.name = name;
+        if (description !== undefined) patch.description = description;
+        if (stars !== undefined) patch.stars = stars;
+
+        if (gradeRaw !== undefined) {
+          const system = gradeSystem ?? "french";
+          if (!isValidGrade(system, gradeRaw)) {
+            return {
+              error: "bad_grade",
+              message:
+                `'${gradeRaw}' is not a ${system} grade, so nothing was ` +
+                "changed. Pass the grade exactly as the ladder writes it.",
+            };
+          }
+          // The sort key is ALWAYS recomputed, never taken on trust — it is
+          // what every difficulty sort and filter reads, and a wrong one is
+          // invisible because the grade still displays correctly.
+          patch.gradeRaw = normalizeGrade(system, gradeRaw);
+          patch.gradeSystem = system;
+          patch.gradeSortKey = gradeSortKey(system, gradeRaw);
+        }
+
+        if (Object.keys(patch).length === 1) {
+          return { error: "nothing_to_do", message: "No fields were given." };
+        }
+
+        const updated = await restPatch<RouteRow[]>(
+          cfg,
+          token,
+          "routes",
+          `id=eq.${encodeURIComponent(routeId)}` +
+            `&ownerId=eq.${encodeURIComponent(props.uid)}&deletedAt=is.null`,
+          patch,
+        );
+        if (updated.length === 0) {
+          return {
+            error: "no_such_route",
+            message: "No route of yours has that id. Call list_routes first.",
+          };
+        }
+
+        return {
+          updated: true,
+          route: updated[0].name ?? `#${updated[0].number}`,
+          changed: Object.keys(patch).filter((k) => k !== "updatedAt"),
         };
       }),
   );

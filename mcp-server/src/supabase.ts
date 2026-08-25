@@ -145,6 +145,31 @@ export async function restInsert<T>(
   return (await res.json()) as T;
 }
 
+/** A PostgREST update as the user. `filter` is a PostgREST predicate string. */
+export async function restPatch<T>(
+  cfg: SupabaseConfig,
+  accessToken: string,
+  table: string,
+  filter: string,
+  patch: Record<string, unknown>,
+): Promise<T> {
+  const res = await fetch(`${cfg.url}/rest/v1/${table}?${filter}`, {
+    method: "PATCH",
+    headers: {
+      apikey: cfg.anonKey,
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+      prefer: "return=representation",
+    },
+    body: JSON.stringify(patch),
+  });
+  if (res.status === 401) throw new ReauthRequired();
+  if (!res.ok) {
+    throw new Error(`Supabase update failed (${res.status}): ${await res.text()}`);
+  }
+  return (await res.json()) as T;
+}
+
 /**
  * A short-lived signed URL for an object in a private storage bucket.
  *
