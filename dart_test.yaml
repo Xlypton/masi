@@ -1,0 +1,24 @@
+# Test tags for this package.
+#
+# `flutter test` locally still runs EVERYTHING, including goldens. CI runs
+# `flutter test --exclude-tags golden` (see .github/workflows/ci.yml).
+
+tags:
+  golden:
+    # Golden-image tests. Their master PNGs were rendered on macOS, and
+    # `matchesGoldenFile` compares byte-exactly with no tolerance — there is no
+    # `flutter_test_config.dart` installing a fuzzy comparator. Font
+    # rasterization differs per platform, so a golden that paints any text
+    # fails on every host except the one its master came from.
+    #
+    # That made the analyze+test CI job permanently red on `main`, which is
+    # worse than not running these at all: a job that is always failing stops
+    # being read, and takes the ~3600 tests that DO work cross-platform down
+    # with it. So goldens are excluded from CI and stay a local gate on the
+    # platform that generated them.
+    #
+    # The cost is real and worth naming: visual regressions are no longer
+    # caught automatically. If that starts to bite, the principled fix is a
+    # macos-latest job running `flutter test --tags golden` — the masters and
+    # the runner would then agree.
+    skip: false

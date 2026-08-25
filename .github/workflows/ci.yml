@@ -33,7 +33,12 @@ jobs:
           channel: stable
       - run: flutter pub get
       - run: flutter analyze
-      - run: flutter test
+      # Goldens are excluded: their masters were rendered on macOS and
+      # `matchesGoldenFile` compares byte-exactly, so font rasterization on any
+      # other host fails them and kept this job permanently red. They remain a
+      # local gate on the platform that generated them — see dart_test.yaml for
+      # the full reasoning and the principled fix.
+      - run: flutter test --exclude-tags golden
 
   dart-io-gate:
     name: dart:io gate
