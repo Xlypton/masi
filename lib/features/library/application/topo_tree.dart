@@ -160,29 +160,35 @@ final class ToposGroupNode extends ToposNode {
 ///
 /// [entries] must already be in the order the caller wants read top-to-bottom
 /// — nearest-first from `sortedByProximityToposProvider` when a fix exists,
-/// each source's newest-first order when it does not. This function never
-/// re-sorts by distance itself; it sorts by [ToposNode.rank], which preserves
-/// whichever order it was handed (see that field's doc).
+/// own-topos-then-newest when it does not. This function never re-sorts by
+/// distance itself; it sorts by [ToposNode.rank], which preserves whichever
+/// order it was handed (see that field's doc).
 ///
-/// [hasFix] gates only the FIRST tier. Without a location fix "the nearest
-/// eight" is not a fact the app has, so pinning eight arbitrary topos open and
-/// calling them nearest would be a lie; the whole list tiers instead, which is
-/// also the more organized reading and what the feature is for. Topos that
-/// cannot be grouped at all still render as their own rows in that case, so a
-/// fresh library filed entirely under the hidden `__default__` sentinel looks
-/// exactly as it always did.
+/// **The head is the top [expandedWalls] entries in that order, whether or not
+/// a location fix exists.** This function deliberately takes no `hasFix` flag.
+/// It had one, which zeroed the head when no fix was available, on the
+/// reasoning that "the nearest eight" is not a fact the app has without one.
+/// That reasoning was wrong twice over, and the signed-in E2E caught both:
+///
+/// - It buried the user's OWN topos. `mergeAndSortByProximity` puts own
+///   entries first and community ones after, so with no fix the head is "your
+///   own topos, newest first" — a perfectly honest and useful head. Zeroing it
+///   folded the user's entire working set into a group, taking every per-topo
+///   action (publish, rename, set location) with it.
+/// - It was never needed. The head is not a claim about distance; it is "the
+///   top N of whatever order the caller handed us", which is true in both
+///   cases. [ToposNode.rank] already says exactly this.
 ///
 /// Pure and top-level — no `ref`, no I/O, no widget — so the tiering rules are
 /// unit-testable directly, without a [ProviderContainer] or a pumped tree.
 List<ToposNode> buildToposTree({
   required List<ProximityTopoEntry> entries,
-  required bool hasFix,
   int expandedWalls = kExpandedWallCount,
   int expandedSectors = kExpandedSectorCount,
 }) {
   if (entries.isEmpty) return const [];
 
-  // A list that already fits is never tiered, fix or no fix.
+  // A list that already fits is never tiered.
   //
   // Grouping exists to tame a list too long to scan; applied to a short one it
   // is pure loss — a library of three topos collapsed to a single "3 topos"
@@ -200,7 +206,7 @@ List<ToposNode> buildToposTree({
     ];
   }
 
-  final headCount = hasFix ? expandedWalls.clamp(0, entries.length) : 0;
+  final headCount = expandedWalls.clamp(0, entries.length);
   final nodes = <ToposNode>[
     for (var i = 0; i < headCount; i++)
       ToposWallNode(entry: entries[i], rank: i),

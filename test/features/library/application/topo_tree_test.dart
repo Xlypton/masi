@@ -73,7 +73,7 @@ void main() {
   group('buildToposTree — expanded head', () {
     test('empty input yields no nodes', () {
       expect(
-        buildToposTree(entries: const [], hasFix: true),
+        buildToposTree(entries: const []),
         isEmpty,
       );
     });
@@ -86,7 +86,6 @@ void main() {
 
       final nodes = buildToposTree(
         entries: entries,
-        hasFix: true,
         expandedWalls: 3,
       );
 
@@ -103,65 +102,66 @@ void main() {
     });
 
     test(
-      'expands nothing without a location fix — "nearest N" is not a fact '
-      'the app has, so the whole list tiers instead',
+      'the head is kept even when NO entry has a distance — with no fix the '
+      'list leads with the user\'s own topos, and burying those takes every '
+      'per-topo action with them',
       () {
+        // Regression guard. This function used to zero the head whenever no
+        // location fix was available, which folded the user's entire own
+        // library into a group — the signed-in E2E caught it as "timed out
+        // waiting for the draft topo's overflow menu", because the menu only
+        // exists on a rendered wall row. `mergeAndSortByProximity` puts own
+        // entries first, so the head is meaningful with or without a fix.
         final entries = [
+          for (var i = 0; i < 3; i++) _own('mine$i'),
           for (var i = 0; i < 6; i++)
-            _own('w$i', sectorId: 's', areaId: 'a'),
+            _community('theirs$i', sectorId: 's', areaId: 'a'),
         ];
 
-        final nodes = buildToposTree(
-          entries: entries,
-          hasFix: false,
-          expandedWalls: 3,
-        );
+        final nodes = buildToposTree(entries: entries, expandedWalls: 3);
 
-        expect(nodes, hasLength(1));
-        expect(nodes.single, isA<ToposGroupNode>());
-        expect(_wallIds(nodes.single), hasLength(6));
+        expect(_wallIds(nodes[0]), ['mine0']);
+        expect(_wallIds(nodes[1]), ['mine1']);
+        expect(_wallIds(nodes[2]), ['mine2']);
+        expect(
+          nodes.take(3).every((n) => n is ToposWallNode),
+          isTrue,
+          reason: 'the head must stay expanded with no distances at all',
+        );
+        // The community tail still tiers — that half is unchanged.
+        expect(nodes[3], isA<ToposGroupNode>());
+        expect(_wallIds(nodes[3]), hasLength(6));
       },
     );
 
     test(
-      'a list that already fits is never tiered, fix or no fix — grouping a '
-      'three-topo library into one row is a screen of emptiness and an extra '
-      'tap per topo, for nothing',
+      'a list that already fits is never tiered — grouping a three-topo '
+      'library into one row is a screen of emptiness and an extra tap per '
+      'topo, for nothing',
       () {
         final entries = [
-          for (var i = 0; i < 3; i++)
-            _own('w$i', sectorId: 's', areaId: 'a'),
+          for (var i = 0; i < 3; i++) _own('w$i', sectorId: 's', areaId: 'a'),
         ];
 
-        for (final hasFix in [true, false]) {
-          final nodes = buildToposTree(
-            entries: entries,
-            hasFix: hasFix,
-            expandedWalls: 8,
-          );
-          expect(
-            nodes,
-            hasLength(3),
-            reason: 'three topos must stay three rows (hasFix: $hasFix)',
-          );
-          expect(nodes.every((n) => n is ToposWallNode), isTrue);
-        }
+        final nodes = buildToposTree(entries: entries, expandedWalls: 8);
+
+        expect(nodes, hasLength(3));
+        expect(nodes.every((n) => n is ToposWallNode), isTrue);
       },
     );
 
-    test('tiers as soon as the list is longer than the expanded head', () {
+    test('tiers only what sits past the expanded head', () {
       final entries = [
-        for (var i = 0; i < 9; i++) _own('w$i', sectorId: 's', areaId: 'a'),
+        for (var i = 0; i < 12; i++) _own('w$i', sectorId: 's', areaId: 'a'),
       ];
 
-      final nodes = buildToposTree(
-        entries: entries,
-        hasFix: false,
-        expandedWalls: 8,
-      );
+      final nodes = buildToposTree(entries: entries, expandedWalls: 8);
 
-      expect(nodes, hasLength(1));
-      expect(nodes.single, isA<ToposGroupNode>());
+      // 8 expanded wall rows, then the remaining 4 folded into one Sector.
+      expect(nodes, hasLength(9));
+      expect(nodes.take(8).every((n) => n is ToposWallNode), isTrue);
+      expect(nodes[8], isA<ToposGroupNode>());
+      expect(_wallIds(nodes[8]), ['w8', 'w9', 'w10', 'w11']);
     });
 
     test('an ungroupable topo still renders as its own row without a fix', () {
@@ -169,7 +169,7 @@ void main() {
       // nameable ancestry at all, and must look exactly as it always did.
       final entries = [for (var i = 0; i < 4; i++) _own('w$i')];
 
-      final nodes = buildToposTree(entries: entries, hasFix: false);
+      final nodes = buildToposTree(entries: entries);
 
       expect(nodes, hasLength(4));
       expect(nodes.every((n) => n is ToposWallNode), isTrue);
@@ -193,7 +193,6 @@ void main() {
 
       final nodes = buildToposTree(
         entries: entries,
-        hasFix: true,
         expandedWalls: 1,
       );
 
@@ -217,7 +216,6 @@ void main() {
 
         final nodes = buildToposTree(
           entries: entries,
-          hasFix: true,
           expandedWalls: 1,
         );
 
@@ -236,7 +234,6 @@ void main() {
 
       final nodes = buildToposTree(
         entries: entries,
-        hasFix: true,
         expandedWalls: 0,
       );
 
@@ -258,7 +255,6 @@ void main() {
 
       final nodes = buildToposTree(
         entries: entries,
-        hasFix: true,
         expandedWalls: 0,
         expandedSectors: 2,
       );
@@ -289,7 +285,6 @@ void main() {
 
         final nodes = buildToposTree(
           entries: entries,
-          hasFix: true,
           expandedWalls: 0,
           expandedSectors: 1,
         );
@@ -312,7 +307,6 @@ void main() {
 
       final nodes = buildToposTree(
         entries: entries,
-        hasFix: true,
         expandedWalls: 0,
         expandedSectors: 1,
       );
@@ -337,7 +331,6 @@ void main() {
 
         final nodes = buildToposTree(
           entries: entries,
-          hasFix: true,
           expandedWalls: 0,
         );
 
@@ -359,7 +352,6 @@ void main() {
 
       final nodes = buildToposTree(
         entries: entries,
-        hasFix: false,
         // Explicit, because four entries would otherwise fall under the
         // "already fits, do not tier" short-circuit and come back flat.
         expandedWalls: 0,
@@ -393,7 +385,7 @@ void main() {
       ];
 
       final group =
-          buildToposTree(entries: entries, hasFix: true, expandedWalls: 0).single
+          buildToposTree(entries: entries, expandedWalls: 0).single
               as ToposGroupNode;
 
       expect(group.topoCount, 2);
@@ -408,7 +400,7 @@ void main() {
       ];
 
       final group =
-          buildToposTree(entries: entries, hasFix: true, expandedWalls: 0).single
+          buildToposTree(entries: entries, expandedWalls: 0).single
               as ToposGroupNode;
 
       expect(group.distanceKm, 4);
@@ -421,7 +413,7 @@ void main() {
       ];
 
       final group =
-          buildToposTree(entries: entries, hasFix: false, expandedWalls: 0)
+          buildToposTree(entries: entries, expandedWalls: 0)
                   .single
               as ToposGroupNode;
 
@@ -442,7 +434,7 @@ void main() {
       ];
 
       final group =
-          buildToposTree(entries: entries, hasFix: true, expandedWalls: 0).single
+          buildToposTree(entries: entries, expandedWalls: 0).single
               as ToposGroupNode;
 
       expect(group.thumbnailPaths(), ['/one.jpg', '/two.jpg', '/three.jpg']);
@@ -461,7 +453,6 @@ void main() {
       final area =
           buildToposTree(
                 entries: entries,
-                hasFix: true,
                 expandedWalls: 0,
                 expandedSectors: 0,
               ).single
@@ -481,7 +472,7 @@ void main() {
       ];
 
       final group =
-          buildToposTree(entries: entries, hasFix: true, expandedWalls: 0).single
+          buildToposTree(entries: entries, expandedWalls: 0).single
               as ToposGroupNode;
 
       expect(_wallIds(group), ['mine', 'theirs']);

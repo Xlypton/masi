@@ -38,8 +38,6 @@ import '../../topo/presentation/topo_canvas_screen.dart'
         captureWallGpsFromPhoto,
         gpsCaptureResultSnackBar,
         photoWriteFailureSnackBar;
-import '../../community/application/community_providers.dart'
-    show myLocationProvider;
 import '../application/library_providers.dart';
 import '../application/proximity_topos_provider.dart';
 import '../application/topo_tree.dart';
@@ -826,18 +824,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                                 for (var i = 0; i < filtered.length; i++)
                                   ToposWallNode(entry: filtered[i], rank: i),
                               ]
-                            : buildToposTree(
-                                entries: filtered,
-                                // `.value`, not `.asData?.value` — the RETAINED
-                                // value, for the same reason
-                                // `sortedByProximityToposProvider` documents at
-                                // length: a merely-reloading provider is an
-                                // `AsyncLoading` that still holds its fix, and
-                                // reading it as "no fix" would collapse the
-                                // whole list for a frame on every auth tick.
-                                hasFix:
-                                    ref.watch(myLocationProvider).value != null,
-                              );
+                            : buildToposTree(entries: filtered);
                         return _ToposList(
                           nodes: nodes,
                           expandedGroupIds: _expandedGroupIds,

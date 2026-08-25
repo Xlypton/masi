@@ -58,6 +58,7 @@ interface RouteRow {
   gradeRaw: string | null;
   gradeSystem: string | null;
   stars: number | null;
+  description: string | null;
 }
 
 interface AscentRow {
@@ -426,9 +427,10 @@ function createServer(env: Env, props: Props) {
     "list_routes",
     {
       description:
-        "List the routes on one of the user's boulders, with their ids, " +
-        "numbers and grades. Use this to find the route the user means " +
-        "before logging an ascent or correcting a grade.",
+        "List the routes already recorded on one of the user's boulders, " +
+        "with their ids, numbers, grades and descriptions. Use this to find " +
+        "the route the user means before logging an ascent, and to see what " +
+        "the topo already knows before reading a guidebook page onto it.",
       inputSchema: { wallId: z.string().describe("From list_recent_walls.") },
     },
     async ({ wallId }) =>
@@ -438,7 +440,7 @@ function createServer(env: Env, props: Props) {
         const rows = await restGet<RouteRow[]>(
           cfg,
           token,
-          `routes?select=id,number,name,gradeRaw,gradeSystem,stars` +
+          `routes?select=id,number,name,gradeRaw,gradeSystem,stars,description` +
             `&wallId=eq.${encodeURIComponent(wallId)}` +
             `&ownerId=eq.${encodeURIComponent(props.uid)}` +
             `&deletedAt=is.null&order=number.asc`,
@@ -451,6 +453,13 @@ function createServer(env: Env, props: Props) {
             grade: r.gradeRaw,
             gradeSystem: r.gradeSystem,
             stars: r.stars,
+            // Projected so a caller holding a guidebook page can tell an
+            // EMPTY field (the book has something to add) from a filled one
+            // (it does not). Without it, "does this page add anything?" is
+            // unanswerable for the most commonly-missing field, and the only
+            // safe move would be to suggest overwriting descriptions that
+            // were already there.
+            description: r.description,
           })),
         };
       }),
