@@ -578,7 +578,8 @@ void main() {
       final ascentsRepo = seeded.container.read(ascentsRepositoryProvider);
       final ascents = await ascentsRepo.ascentsForRoute(seeded.routeDbId);
       expect(ascents, hasLength(1));
-      expect(ascents.single.style, AscentStyle.redpoint);
+      // The sheet's default style — neutral 'send', not a specific claim.
+      expect(ascents.single.style, AscentStyle.send);
       expect(ascents.single.wallId, seeded.wallId);
     },
   );

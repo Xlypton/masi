@@ -59,13 +59,30 @@ class LogAscentSheet extends ConsumerStatefulWidget {
 }
 
 class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
-  AscentStyle _style = AscentStyle.redpoint;
+  /// Defaults to [AscentStyle.send] — "I climbed it", asserting nothing about
+  /// how. It used to default to [AscentStyle.redpoint], which claims "sent
+  /// after previous attempts": a specific, frequently-wrong statement that a
+  /// climber got simply by not choosing. A neutral default cannot be wrong in
+  /// that way, and the five specific styles are all still one tap away.
+  AscentStyle _style = AscentStyle.send;
   final _notesController = TextEditingController();
 
-  /// Feature #12 opt-in: whether this ascent should be visible on the
-  /// public community feed (`Ascent.visibility == 'shared'`). Defaults to
-  /// `false` ('private') — sharing is opt-in, never on by default.
-  bool _shared = false;
+  /// Whether this ascent is visible on the public community feed
+  /// (`Ascent.visibility == 'shared'`).
+  ///
+  /// **Defaults to `true`** (user request, 2026-08-25). This reverses feature
+  /// #12's original "sharing is opt-in, never on by default": logging a send
+  /// is the social act this app is for, and the toggle sits in plain sight
+  /// directly above Save with its consequence spelled out, so a climber who
+  /// wants an entry kept private sees and flips it in the same glance.
+  ///
+  /// The reversal is deliberately scoped to THIS sheet, where a person is
+  /// looking at the switch. `log_ascent` in the MCP connector still writes
+  /// `visibility: 'private'` unconditionally, and should: there the actor is a
+  /// model acting on a sentence, nobody is looking at a toggle, and publishing
+  /// to the feed because a phrase was ambiguous would be a genuinely bad
+  /// surprise.
+  bool _shared = true;
 
   @override
   void dispose() {

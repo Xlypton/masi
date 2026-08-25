@@ -475,11 +475,12 @@ function createServer(env: Env, props: Props) {
       inputSchema: {
         routeId: z.string().describe("From list_routes."),
         style: z
-          .enum(["onsight", "flash", "redpoint", "repeat", "attempt"])
+          .enum(["send", "onsight", "flash", "redpoint", "repeat", "attempt"])
           .describe(
-            "onsight: first try, no prior knowledge. flash: first try, with " +
-              "beta. redpoint: sent after previous attempts. repeat: done " +
-              "before. attempt: tried, not sent.",
+            "send: climbed it, no claim about how — USE THIS unless the user " +
+              "actually said which. onsight: first try, no prior knowledge. " +
+              "flash: first try, with beta. redpoint: sent after previous " +
+              "attempts. repeat: done before. attempt: tried, not sent.",
           ),
         climbedAt: z
           .string()
