@@ -15,6 +15,8 @@ import 'package:masi/core/platform/ar_support.dart';
 import 'package:masi/core/location/location_service.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/import/application/pending_import_providers.dart';
+import 'package:masi/features/import/presentation/guidebook_import_sheet.dart';
 import 'package:masi/features/library/presentation/set_location_picker.dart';
 import 'package:masi/features/logbook/presentation/log_ascent_sheet.dart';
 import 'package:masi/features/moderation/application/moderation_providers.dart';
@@ -634,6 +636,54 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// this button is pressed, `currentTopo` (and therefore both the
   /// tooltip's "Set location"/"Edit location" label and the picker's
   /// `initial` center) already reflects the new coordinates.
+  /// Opens the guidebook-import sheet for [photoId] and, if routes were
+  /// added, reloads this photo's route set.
+  ///
+  /// The reload is not optional. The import writes through
+  /// [RouteRepository.upsertRoute] directly rather than through
+  /// [DrawController], so the controller's in-memory `routes` list — and the
+  /// "next number" counter it seeds from that list — are both stale the moment
+  /// the sheet returns. Without [DrawController.loadForWall] the new routes
+  /// simply would not appear, and the next hand-drawn route would be numbered
+  /// on top of one of them.
+  Future<void> _handleImportFromGuidebook(String photoId) async {
+    if (widget.readOnly) return;
+
+    // A page queued from the chat app takes priority over the paste flow: the
+    // user already did the work elsewhere, so opening a "copy this prompt"
+    // screen on top of a waiting import would be asking them to repeat it.
+    final pending = ref.read(pendingImportsProvider(widget.wallId)).asData?.value;
+    final queued = (pending == null || pending.isEmpty) ? null : pending.first;
+
+    final result = await showGuidebookImportSheet(
+      context,
+      wallId: widget.wallId,
+      photoId: queued?.photoId ?? photoId,
+      initial: queued?.import,
+      pendingId: queued?.id,
+    );
+
+    // Whether it was applied or discarded, the queue has moved on.
+    ref.invalidate(pendingImportsProvider(widget.wallId));
+
+    if (result == null || !mounted) return;
+
+    await ref
+        .read(drawControllerProvider(widget.wallId).notifier)
+        .loadForWall(widget.wallId, photoId);
+    if (!mounted) return;
+
+    final drawn = result.unplaced > 0 ? ' · ${result.unplaced} to draw' : '';
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        key: const Key('topo-import-applied'),
+        content: Text(
+          'Added ${result.added} route${result.added == 1 ? '' : 's'}$drawn',
+        ),
+      ),
+    );
+  }
+
   Future<void> _handleEditLocation(TopoRef? currentTopo) async {
     if (widget.readOnly) return;
     final initial =
@@ -2270,6 +2320,65 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           icon: MasiIcon('pin'),
           tooltip: hasCoords ? 'Edit location' : 'Set location',
           onPressed: () => _handleEditLocation(currentTopo),
+          color: colors.accent,
+          style: _topRowIconStyle(),
+        ),
+      );
+    }
+
+    // Import a photographed guidebook page onto THIS photo.
+    //
+    // Draw mode, like every other mutating control in this row. Gated on an
+    // active photo because the import writes routes in that photo's percent
+    // space — there is nothing for the coordinates to mean without one.
+    //
+    // ADMIN-ONLY while the flow is still being shaped. Note what this gate is
+    // and is not: every other admin surface in this app fronts a
+    // `SECURITY DEFINER` RPC that re-checks `is_admin()` server-side, so
+    // hiding the control there is convenience. There is no server call here at
+    // all — an import writes the user's own routes to their own wall through
+    // the same repository their finger already reaches by drawing. So this
+    // hides an unfinished feature; it does not protect a privileged one, and
+    // nothing is at risk if it is bypassed. `isAdminProvider` fails closed
+    // (false while loading, false on error), matching every other admin gate.
+    if (!widget.readOnly &&
+        drawState.mode == DrawMode.draw &&
+        drawState.activePhotoId != null &&
+        (ref.watch(isAdminProvider).asData?.value ?? false)) {
+      // A dot when a page queued from the chat app is waiting. Without it the
+      // MCP path dead-ends: the user finishes in Claude, is told to open Masi,
+      // and finds a screen that looks exactly as it did before.
+      final waiting =
+          ref.watch(pendingImportsProvider(widget.wallId)).asData?.value ??
+              const [];
+      actions.add(
+        IconButton(
+          key: const Key('topo-import-guidebook-button'),
+          icon: waiting.isEmpty
+              ? MasiIcon('scan')
+              : Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                    MasiIcon('scan'),
+                    Positioned(
+                      right: -2,
+                      top: -2,
+                      child: Container(
+                        key: const Key('topo-import-waiting-dot'),
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: colors.accent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+          tooltip: waiting.isEmpty
+              ? 'Import from guidebook'
+              : '${waiting.length} import waiting',
+          onPressed: () => _handleImportFromGuidebook(drawState.activePhotoId!),
           color: colors.accent,
           style: _topRowIconStyle(),
         ),

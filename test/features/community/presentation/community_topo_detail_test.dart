@@ -1324,6 +1324,10 @@ void main() {
           matchesGoldenFile('goldens/community_topo_detail.png'),
         );
       },
+      // Excluded from CI (`--exclude-tags golden`). The master was rendered on
+      // macOS and `matchesGoldenFile` demands a byte-exact match, so any other
+      // host's font rasterization fails it. See dart_test.yaml.
+      tags: 'golden',
     );
   });
 

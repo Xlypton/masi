@@ -740,6 +740,12 @@ void main() {
           matchesGoldenFile('goldens/ar_overlay_painter_route.png'),
         );
       },
+      // Excluded from CI (`--exclude-tags golden`) with the other goldens.
+      // This one currently passes off-macOS — it paints no glyphs — but the
+      // exemption is luck, not a property: anti-aliasing is free to differ per
+      // host too, and one rule for all goldens beats a per-file exception
+      // nobody will remember to re-check. See dart_test.yaml.
+      tags: 'golden',
     );
   });
 }

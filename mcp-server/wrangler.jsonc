@@ -1,0 +1,35 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "masi-mcp",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  // Both are PUBLIC values, so they are vars rather than secrets: the anon key
+  // is the publishable one the Flutter client already ships, and it is safe
+  // precisely because RLS — not key secrecy — is what protects the data. There
+  // is deliberately no service-role key here; see MCP_SERVER_PLAN.md.
+  "vars": {
+    "SUPABASE_URL": "https://mnaipcqbkqzffgvxpato.supabase.co",
+    "SUPABASE_ANON_KEY": "sb_publishable_CjAxoGe0OSS0RrIK3nT6Ng_p0-uSPKC"
+  },
+
+  // Where `@cloudflare/workers-oauth-provider` keeps OAuth state: registered
+  // clients (Claude registers itself dynamically), authorization grants, and
+  // issued tokens. Created ahead of stage 2B-2 so the auth work is not held up
+  // behind resource provisioning.
+  //
+  // This namespace will hold the user's Supabase REFRESH TOKEN inside each
+  // grant's props. That is the most sensitive thing this Worker touches, and
+  // it is deliberately still far less dangerous than the alternative: a
+  // service-role key would bypass RLS for every user at once, whereas a
+  // refresh token is one user's, revocable from Supabase, and still subject to
+  // RLS on every call. See MCP_SERVER_PLAN.md.
+  "kv_namespaces": [
+    {
+      "binding": "OAUTH_KV",
+      "id": "44150dcbf4c04f24819699c6fd60f8de"
+    }
+  ]
+}

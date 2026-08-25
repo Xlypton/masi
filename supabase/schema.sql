@@ -1258,3 +1258,54 @@ GRANT SELECT ON public.notifications TO authenticated;
 -- the same admin, on the same wall, in the same transaction, was still refused
 -- (the GUC is cleared); an unknown id raised. Row counts before and after were
 -- identical.
+
+
+-- ============================================================================
+-- guidebook_imports — pending guidebook-page imports (MCP server, Phase 2)
+-- ============================================================================
+--
+-- Applied live 2026-08-25 (migration
+-- `supabase/migrations/2026-08-25_guidebook_imports.sql`). Written by the MCP
+-- server at https://masi-mcp.xlypton.workers.dev when a chat app reads a
+-- guidebook page; consumed by the app, which runs the payload through the same
+-- decoder and review sheet a PASTED import uses before any route is written.
+--
+-- The MCP server deliberately does not write routes. A model that misreads a
+-- page would otherwise silently mutate a topo with no undo, so both the pasted
+-- and the connected path end with a human looking at what is about to land.
+--
+-- No foreign keys onto walls/photos, matching the other sync tables: rows here
+-- arrive from a different client than the one that created the wall, and the
+-- sync engine re-pushes full state in an order it does not promise, so an FK
+-- would reject a legitimate import purely for arriving early.
+
+create table if not exists public.guidebook_imports (
+  id           text primary key,
+  "ownerId"    text   not null,
+  "wallId"     text   not null,
+  "photoId"    text   not null,
+  payload      jsonb  not null,   -- stored exactly as the model sent it
+  "createdAt"  bigint not null,
+  "consumedAt" bigint             -- set once applied or dismissed
+);
+
+alter table public.guidebook_imports enable row level security;
+
+-- The whole authorization story for the MCP server: it calls Supabase with the
+-- USER'S token, never a service-role key, so this policy is what stops one
+-- person's chat app reaching another person's library.
+drop policy if exists guidebook_imports_owner_all on public.guidebook_imports;
+create policy guidebook_imports_owner_all
+  on public.guidebook_imports
+  for all
+  using ("ownerId" = (auth.uid())::text)
+  with check ("ownerId" = (auth.uid())::text);
+
+create index if not exists guidebook_imports_owner_pending_idx
+  on public.guidebook_imports ("ownerId", "consumedAt");
+
+-- Verified live in a rolled-back transaction on 2026-08-25: A saw its own row;
+-- A could NOT forge a row owned by B (with-check refused it); B saw 0 of A's
+-- rows and its UPDATE and DELETE against A's row both affected 0 rows; anon saw
+-- 0 rows. The probe ended in a RAISE so nothing persisted, and the table was
+-- confirmed empty afterwards.

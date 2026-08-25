@@ -1665,6 +1665,11 @@ void main() {
           matchesGoldenFile('goldens/topo_painter_multiroute.png'),
         );
       },
+      // Excluded from CI (`--exclude-tags golden`). The master was rendered on
+      // macOS and `matchesGoldenFile` demands a byte-exact match, so any other
+      // host's font rasterization fails it — this one paints route numbers.
+      // See dart_test.yaml.
+      tags: 'golden',
     );
   });
 
