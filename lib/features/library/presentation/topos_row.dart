@@ -1,20 +1,50 @@
 part of 'topos_screen.dart';
 
-/// The proximity-sorted Topos-home list (see `sortedByProximityToposProvider`
-/// / [ToposScreen.build]): each [ProximityTopoEntry] renders as either an
-/// own [_TopoRow] ([ProximityTopoEntry.source] `own`) or a nearby
-/// [_CommunityProximityRow] (`community`), nearest-first — [entries] is
-/// already filtered/sorted by the caller.
+/// One rendered line of the tiered Topos home — a [ToposNode] paired with the
+/// nesting depth it should be indented to.
+///
+/// The tree is flattened to this before it reaches [ListView.separated] rather
+/// than nesting real widgets, so the whole list stays ONE lazily-built
+/// scrollable however deep a group is expanded. Nested `Column`s inside
+/// expanded groups would build every descendant row eagerly, which is exactly
+/// what tiering exists to avoid.
+class _ToposDisplayRow {
+  const _ToposDisplayRow({required this.node, required this.depth});
+
+  final ToposNode node;
+
+  /// 0 for a top-level row, 1 for a row revealed by expanding a top-level
+  /// group, 2 for a topo revealed by expanding a Sector inside an Area.
+  final int depth;
+}
+
+/// The tiered Topos-home list (see `buildToposTree` / [ToposScreen.build]):
+/// the nearest topos as individual [_TopoRow]/[_CommunityProximityRow] rows,
+/// then collapsed Sector and Area rows ([_TopoGroupRow]) for everything
+/// further out. [nodes] is already tiered/filtered/sorted by the caller.
+///
+/// Expansion state lives in `_ToposScreenState` (see [expandedGroupIds]) and
+/// not here, so it survives this widget being rebuilt by an unrelated sync
+/// pull or location refresh — a group the user opened must not snap shut
+/// underneath them because a stream re-emitted.
 class _ToposList extends StatelessWidget {
   const _ToposList({
-    required this.entries,
+    required this.nodes,
+    required this.expandedGroupIds,
+    required this.onToggleGroup,
     this.bottomInset = 0,
     this.setLocationTileProvider,
     this.setLocationMapController,
     this.setLocationLocationService,
   });
 
-  final List<ProximityTopoEntry> entries;
+  final List<ToposNode> nodes;
+
+  /// The [ToposGroupNode.id]s currently expanded. Ids, not indices, so the set
+  /// stays meaningful when the tree is rebuilt and a group moves position.
+  final Set<String> expandedGroupIds;
+
+  final void Function(String groupId) onToggleGroup;
 
   /// Extra bottom clearance (the floating bottom bar's occupied height —
   /// see `ToposScreen.build`'s `bottomChromeInset`) folded into this list's
@@ -26,8 +56,43 @@ class _ToposList extends StatelessWidget {
   final MapController? setLocationMapController;
   final LocationService? setLocationLocationService;
 
+  /// Walks [nodes] into the flat, depth-stamped row list the [ListView]
+  /// actually builds, descending into a group only while it is expanded.
+  /// A collapsed group contributes exactly one row, which is the whole point
+  /// of the tiering.
+  List<_ToposDisplayRow> _flatten() {
+    final rows = <_ToposDisplayRow>[];
+    void visit(ToposNode node, int depth) {
+      rows.add(_ToposDisplayRow(node: node, depth: depth));
+      if (node is! ToposGroupNode) return;
+      if (!expandedGroupIds.contains(node.id)) return;
+      // An Area reveals its Sectors (each independently expandable, one level
+      // further); a Sector reveals its topos directly.
+      if (node.children.isNotEmpty) {
+        for (final child in node.children) {
+          visit(child, depth + 1);
+        }
+        return;
+      }
+      for (final entry in node.topos) {
+        rows.add(
+          _ToposDisplayRow(
+            node: ToposWallNode(entry: entry, rank: node.rank),
+            depth: depth + 1,
+          ),
+        );
+      }
+    }
+
+    for (final node in nodes) {
+      visit(node, 0);
+    }
+    return rows;
+  }
+
   @override
   Widget build(BuildContext context) {
+    final rows = _flatten();
     return ListView.separated(
       padding: EdgeInsets.fromLTRB(
         MasiSpacing.lg,
@@ -35,11 +100,32 @@ class _ToposList extends StatelessWidget {
         MasiSpacing.lg,
         MasiSpacing.md + bottomInset,
       ),
-      itemCount: entries.length,
+      itemCount: rows.length,
       separatorBuilder: (context, index) =>
           const SizedBox(height: MasiSpacing.sm),
       itemBuilder: (context, index) {
-        final entry = entries[index];
+        final row = rows[index];
+        // Indent per nesting level, so a topo inside an expanded Sector reads
+        // as belonging to it without needing a drawn connector line. Capped by
+        // construction: the tree is never deeper than Area -> Sector -> topo.
+        return Padding(
+          padding: EdgeInsets.only(left: row.depth * MasiSpacing.md),
+          child: _buildRow(row.node),
+        );
+      },
+    );
+  }
+
+  Widget _buildRow(ToposNode node) {
+    switch (node) {
+      case ToposGroupNode():
+        return _TopoGroupRow(
+          key: ValueKey(('group', node.id)),
+          node: node,
+          isExpanded: expandedGroupIds.contains(node.id),
+          onToggle: () => onToggleGroup(node.id),
+        );
+      case ToposWallNode(:final entry):
         if (entry.source == ProximityTopoSource.own) {
           return _TopoRow(
             key: ValueKey(('own', entry.wallId)),
@@ -54,8 +140,7 @@ class _ToposList extends StatelessWidget {
           key: ValueKey(('community', entry.wallId)),
           entry: entry,
         );
-      },
-    );
+    }
   }
 }
 
@@ -1352,6 +1437,242 @@ class _CommunityProximityRow extends ConsumerWidget {
 /// `loadingPlaceholder` (an animated [MasiShimmer]) covers the DISTINCT
 /// "still loading" window so a genuinely-missing photo never shimmers
 /// forever.
+/// A collapsed Sector or Area row (see [ToposGroupNode]).
+///
+/// Deliberately built to the SAME skeleton as a wall row — 52 px image on the
+/// left, title, then one wrapping line of facets — so the tiered list reads as
+/// one kind of thing at three scales rather than as two competing designs. A
+/// climber scanning down it sees the same colored difficulty dots and the same
+/// "N routes" in the same place whether the row stands for one boulder or a
+/// whole crag; only the leading mosaic and the type label say which.
+///
+/// The facets are chosen to answer "is this worth the drive?" in one glance and
+/// then stop: type, difficulty spread, how much climbing is there, and how far.
+/// Everything else a group could report (sector breakdown, per-topo names,
+/// publish state) is one tap away inside it, which is where it belongs — a row
+/// that tried to say all of it would be the cluttered thing this replaces.
+class _TopoGroupRow extends StatelessWidget {
+  const _TopoGroupRow({
+    super.key,
+    required this.node,
+    required this.isExpanded,
+    required this.onToggle,
+  });
+
+  final ToposGroupNode node;
+  final bool isExpanded;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    final isArea = node.kind == ToposGroupKind.area;
+    final typeLabel = isArea ? 'AREA' : 'SECTOR';
+    final topoCount = node.topoCount;
+    final routeCount = node.routeCount;
+    final bands = node.bands;
+    final distanceKm = node.distanceKm;
+
+    return Material(
+      key: Key('topo-group-${node.kind.name}-${node.id}'),
+      color: colors.surface,
+      borderRadius: BorderRadius.circular(MasiRadii.card),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        onTap: onToggle,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(
+            horizontal: MasiSpacing.md,
+            vertical: MasiSpacing.sm,
+          ),
+          child: Row(
+            children: [
+              _ThumbnailMosaic(paths: node.thumbnailPaths(), count: topoCount),
+              const SizedBox(width: MasiSpacing.md),
+              Expanded(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      node.name,
+                      style: textTheme.titleMedium,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 2),
+                    // Same order and same widgets as `_TopoRow` /
+                    // `_CommunityProximityRow`'s facet line, with the type
+                    // label leading: a `Wrap`, not a `Row`, so a large
+                    // `textScaler` reflows onto a second line instead of
+                    // overflowing (the exact bug those rows were fixed for).
+                    Wrap(
+                      spacing: MasiSpacing.xs,
+                      runSpacing: 2,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: [
+                        // A word, not an icon. It survives translation and a
+                        // screen reader, costs no new asset, and at
+                        // labelSmall/ink3 it reads as a quiet eyebrow rather
+                        // than competing with the name above it. Nesting alone
+                        // could not carry this: a Sector and an Area can both
+                        // sit at depth 0.
+                        Text(
+                          typeLabel,
+                          key: Key('topo-group-kind-${node.id}'),
+                          style: textTheme.labelSmall?.copyWith(
+                            color: colors.ink3,
+                            letterSpacing: 0.6,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        if (bands.isNotEmpty)
+                          _GradeBandDots(wallId: 'group-${node.id}', bands: bands),
+                        Text(
+                          '$topoCount topo${topoCount == 1 ? '' : 's'}',
+                          style: textTheme.titleSmall?.copyWith(
+                            color: colors.ink2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        Text(
+                          '$routeCount route${routeCount == 1 ? '' : 's'}',
+                          key: Key('topo-group-routes-${node.id}'),
+                          style: textTheme.titleSmall?.copyWith(
+                            color: colors.ink2,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        if (distanceKm != null)
+                          Text(
+                            '${distanceKm.toStringAsFixed(1)} km',
+                            key: Key('topo-group-distance-${node.id}'),
+                            style: textTheme.titleSmall?.copyWith(
+                              color: colors.ink2,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              // Down when open, right when closed — the standard disclosure
+              // affordance, and the one thing distinguishing this row's tap
+              // (expand in place) from a wall row's (open the topo). Wrapped in
+              // `Semantics` so a screen reader announces the state rather than
+              // just an unlabeled glyph.
+              Semantics(
+                label: isExpanded
+                    ? 'Collapse ${node.name}'
+                    : 'Expand ${node.name}',
+                button: true,
+                child: MasiIcon(
+                  isExpanded ? 'chevron_down' : 'chevron_right',
+                  color: colors.ink3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// The 52x52 leading tile of a [_TopoGroupRow]: up to three member thumbnails
+/// tiled into one square, at the exact footprint (and corner radius) of a wall
+/// row's single [_Thumbnail], so the list keeps one unbroken left rail no
+/// matter which kind of row you are looking at.
+///
+/// The tiling adapts to how many photos there actually are — one photo fills
+/// the square, two split it vertically, three or more give one a tall left half
+/// and stack two quarters beside it. That makes "this row stands for several
+/// topos" legible at a glance without a badge or a count chip to read.
+///
+/// A group whose topos have NO readable photos falls back to the same amethyst
+/// gradient a photoless wall row shows, rather than an empty box.
+class _ThumbnailMosaic extends StatelessWidget {
+  const _ThumbnailMosaic({required this.paths, required this.count});
+
+  /// Up to three resolved thumbnail paths, nearest-first.
+  final List<String> paths;
+
+  /// How many topos the group holds — announced to screen readers, which
+  /// otherwise get nothing from a purely decorative image cluster.
+  final int count;
+
+  static const double _size = 52;
+  static const double _gap = 2;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    // Each tile decodes at ITS OWN display width, not the full 52 — a quarter
+    // tile is ~25 logical px, so decoding it at 52 would cost 4x the bitmap for
+    // no visible gain. Width only, never height: see `_Thumbnail`'s doc for
+    // why passing both squashes every non-square photo in the decoder.
+    final dpr = MediaQuery.of(context).devicePixelRatio;
+
+    Widget tile(String path, double width) => PhotoImage(
+      path,
+      fit: BoxFit.cover,
+      cacheWidth: (width * dpr).round(),
+      placeholder: () => _GradientFallback(colors: colors),
+      loadingPlaceholder: () => const MasiShimmer(),
+    );
+
+    // Hoisted out of the switch below: Dart's switch CASES SHARE ONE SCOPE, so
+    // declaring this inside two of them would be a duplicate declaration.
+    const half = (_size - _gap) / 2;
+
+    final Widget content;
+    switch (paths.length) {
+      case 0:
+        content = _GradientFallback(colors: colors);
+      case 1:
+        content = tile(paths[0], _size);
+      case 2:
+        content = Row(
+          children: [
+            SizedBox(width: half, child: tile(paths[0], half)),
+            const SizedBox(width: _gap),
+            SizedBox(width: half, child: tile(paths[1], half)),
+          ],
+        );
+      default:
+        content = Row(
+          children: [
+            SizedBox(width: half, child: tile(paths[0], half)),
+            const SizedBox(width: _gap),
+            SizedBox(
+              width: half,
+              child: Column(
+                children: [
+                  SizedBox(height: half, child: tile(paths[1], half)),
+                  const SizedBox(height: _gap),
+                  SizedBox(height: half, child: tile(paths[2], half)),
+                ],
+              ),
+            ),
+          ],
+        );
+    }
+
+    return Semantics(
+      label: '$count topo${count == 1 ? '' : 's'}',
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: SizedBox(width: _size, height: _size, child: content),
+      ),
+    );
+  }
+}
+
 class _Thumbnail extends StatelessWidget {
   const _Thumbnail({required this.path});
 

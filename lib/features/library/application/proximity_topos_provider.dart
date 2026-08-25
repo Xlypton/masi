@@ -106,6 +106,42 @@ class ProximityTopoEntry {
 
   bool get hasCoordinates => latitude != null && longitude != null;
 
+  // --- Source-agnostic facets -------------------------------------------
+  //
+  // [ownTopo] and [communityTopo] carry the same handful of facts under two
+  // unrelated types, and exactly one of them is ever non-null. Everything that
+  // groups, counts or summarizes entries — `buildToposTree` and the group rows
+  // it feeds — needs those facts without caring which side an entry came from,
+  // so they are surfaced once here rather than re-branching on [source] at
+  // every call site. Each is a plain read of an already-fetched field; nothing
+  // here queries or computes.
+
+  /// This topo's ancestor Sector / Area, or `null` when it has none that can
+  /// be named (filed under the hidden `__default__` sentinel, or — for a
+  /// community entry constructed without a real ancestor chain — never
+  /// projected at all). An entry with a `null` [sectorId] can never be folded
+  /// into a group and always renders as its own loose wall row.
+  String? get sectorId => ownTopo?.sectorId ?? communityTopo?.sectorId;
+  String? get sectorName => ownTopo?.sectorName ?? communityTopo?.sectorName;
+  String? get areaId => ownTopo?.areaId ?? communityTopo?.areaId;
+  String? get areaName => ownTopo?.areaName ?? communityTopo?.areaName;
+
+  /// Live route count on this topo — summed across a group's members to give
+  /// a Sector/Area row its "N routes" figure.
+  int get routeCount => ownTopo?.routeCount ?? communityTopo?.routeCount ?? 0;
+
+  /// Every live graded route's shared-scale sort key on this topo. Unioned
+  /// across a group's members and passed to `gradeBandsFor` so a Sector/Area
+  /// row shows the same colored difficulty dots a wall row does, spanning
+  /// everything inside it.
+  List<double> get routeGradeKeys =>
+      ownTopo?.routeGradeKeys ?? communityTopo?.routeGradeKeys ?? const [];
+
+  /// The topo's resolved thumbnail path, or `null` when it has no readable
+  /// photo — a group row tiles its members' thumbnails into one mosaic.
+  String? get thumbnailPath =>
+      ownTopo?.thumbnailPath ?? communityTopo?.thumbnailPath;
+
   @override
   bool operator ==(Object other) =>
       other is ProximityTopoEntry &&

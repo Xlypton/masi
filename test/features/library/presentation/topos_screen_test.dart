@@ -7399,7 +7399,263 @@ void main() {
       },
     );
   });
+
+  // The distance-tiered Topos home: the nearest topos stay as individual wall
+  // rows, everything further out folds into its Sector, and Sectors past the
+  // nearest few fold again into their Area (see `buildToposTree`). The tiering
+  // RULES are unit-tested in `topo_tree_test.dart`; what is proved here is the
+  // half that file cannot reach — that a group actually RENDERS with the facets
+  // a climber reads it for, and that tapping it opens and closes in place.
+  group('tiered topos list (Area/Sector grouping)', () {
+    /// A TALL viewport for every test in this group.
+    ///
+    /// Not cosmetic — it is what makes the negative assertions mean anything.
+    /// `_ToposList` is a lazy `ListView`, so on the default 800x600 surface a
+    /// row past ~8 entries is never built, and `findsNothing` would pass
+    /// whether the row was collapsed away by the tiering (the thing under test)
+    /// or merely scrolled off (nothing to do with it). At this height every row
+    /// the tree produces is built, so "not found" can only mean "collapsed".
+    setUp(() {
+      final view = TestWidgetsFlutterBinding.instance.platformDispatcher.views
+          .first;
+      view.physicalSize = const Size(800, 2400);
+      view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        view.resetPhysicalSize();
+        view.resetDevicePixelRatio();
+      });
+    });
+
+    /// [count] topos filed under one Sector/Area, ordered so their ids read
+    /// `far-0`, `far-1`, ... in the order the list will see them.
+    List<TopoRef> filed({
+      required int count,
+      required String sectorId,
+      required String areaId,
+      String prefix = 'far',
+      int routesEach = 2,
+      List<double> gradeKeys = const [1, 15],
+    }) {
+      return [
+        for (var i = 0; i < count; i++)
+          TopoRef(
+            wallId: '$prefix-$i',
+            name: 'Topo $prefix $i',
+            thumbnailPath: null,
+            routeCount: routesEach,
+            createdAt: 1000 - i,
+            sectorId: sectorId,
+            sectorName: 'Bergell Slabs',
+            areaId: areaId,
+            areaName: 'Val Bregaglia',
+            routeGradeKeys: gradeKeys,
+          ),
+      ];
+    }
+
+    ProviderContainer tieredContainer(List<TopoRef> topos) {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          connectivityServiceProvider.overrideWithValue(
+            _ScriptedConnectivity(reachable: true),
+          ),
+          toposProvider.overrideWith((ref) => Stream.value(topos)),
+          // A fix is what switches the FIRST tier on — without one the whole
+          // list tiers instead of pinning the nearest few open (see
+          // `buildToposTree`'s `hasFix` doc). The topos themselves carry no
+          // coordinates, so every distance is null and the ordering falls back
+          // to the input's own; that is deliberate here, because this group is
+          // about grouping and rendering, not about distance arithmetic.
+          myLocationProvider.overrideWith(
+            (ref) async => (latitude: 46.3, longitude: 9.6),
+          ),
+        ],
+      );
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    testWidgets(
+      'topos past the expanded head collapse into ONE Sector row carrying the '
+      'summary a climber decides on — how many topos, how many routes, and '
+      'which difficulty bands are in there',
+      (tester) async {
+        // 12 topos in one sector: 8 stay expanded (kExpandedWallCount), the
+        // remaining 4 fold into a Sector row.
+        final container = tieredContainer(
+          filed(count: 12, sectorId: 'sec-1', areaId: 'area-1'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        final group = find.byKey(const Key('topo-group-sector-sec-1'));
+        expect(group, findsOneWidget);
+        expect(find.text('Bergell Slabs'), findsOneWidget);
+        expect(find.byKey(const Key('topo-group-kind-sec-1')), findsOneWidget);
+        expect(find.text('SECTOR'), findsOneWidget);
+        // 4 folded topos x 2 routes each.
+        expect(find.text('4 topos'), findsOneWidget);
+        expect(find.text('8 routes'), findsOneWidget);
+        // Both bands present across the folded topos render as dots, reusing
+        // the same widget a wall row uses.
+        expect(
+          find.byKey(const Key('topo-grade-dot-group-sec-1-beginner')),
+          findsOneWidget,
+        );
+        expect(
+          find.byKey(const Key('topo-grade-dot-group-sec-1-hard')),
+          findsOneWidget,
+        );
+
+        // The folded topos are NOT on screen while the group is closed — that
+        // is the entire point of the tiering.
+        expect(find.byKey(const Key('topo-item-far-11')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'tapping a Sector row expands it in place, revealing its topos, and '
+      'tapping again collapses it',
+      (tester) async {
+        final container = tieredContainer(
+          filed(count: 12, sectorId: 'sec-1', areaId: 'area-1'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        final group = find.byKey(const Key('topo-group-sector-sec-1'));
+        expect(find.byKey(const Key('topo-item-far-11')), findsNothing);
+
+        await tester.tap(group);
+        await _drain(tester);
+
+        // Expanded in place: the group row is still there, with its children
+        // now under it — never a navigation away.
+        expect(group, findsOneWidget);
+        expect(find.byKey(const Key('topo-item-far-11')), findsOneWidget);
+
+        await tester.tap(group);
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topo-item-far-11')), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'Sectors past the nearest few fold one tier further into their Area, '
+      'whose row aggregates across every Sector inside it',
+      (tester) async {
+        // Ten sectors of two topos each, all in one area. Tier 1 takes the
+        // first 8 topos (sec-0..sec-3); of the six sectors left, the nearest
+        // four (kExpandedSectorCount) stay as Sector rows and the last two
+        // — enough to clear kMinGroupSize — fold into the Area row.
+        final container = tieredContainer([
+          for (var s = 0; s < 10; s++)
+            ...filed(
+              count: 2,
+              sectorId: 'sec-$s',
+              areaId: 'area-1',
+              prefix: 's$s',
+              routesEach: 3,
+            ),
+        ]);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        final area = find.byKey(const Key('topo-group-area-area-1'));
+        expect(area, findsOneWidget);
+        expect(find.text('AREA'), findsOneWidget);
+        expect(find.text('Val Bregaglia'), findsOneWidget);
+        // 2 folded sectors x 2 topos x 3 routes.
+        expect(find.text('4 topos'), findsOneWidget);
+        expect(find.text('12 routes'), findsOneWidget);
+
+        // Expanding the Area reveals its Sectors — not its topos directly, so
+        // a big area does not dump a hundred rows on one tap.
+        await tester.tap(area);
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topo-group-sector-sec-9')), findsOneWidget);
+        expect(find.byKey(const Key('topo-item-s9-0')), findsNothing);
+
+        // ...and expanding one of THOSE reveals its topos.
+        await tester.tap(find.byKey(const Key('topo-group-sector-sec-9')));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topo-item-s9-0')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'an active SEARCH renders flat — a hit must never be buried inside a '
+      'collapsed group the climber would have to guess at',
+      (tester) async {
+        final container = tieredContainer(
+          filed(count: 12, sectorId: 'sec-1', areaId: 'area-1'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        // Collapsed before the search: topo 11 is inside the Sector row.
+        expect(find.byKey(const Key('topo-item-far-11')), findsNothing);
+
+        await tester.enterText(
+          find.byKey(const Key('topos-search-field')),
+          'far 11',
+        );
+        await _drain(tester);
+
+        expect(find.byKey(const Key('topo-group-sector-sec-1')), findsNothing);
+        expect(find.byKey(const Key('topo-item-far-11')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a library with no nameable ancestry (every topo under the hidden '
+      '__default__ sentinel, so sectorId is null) renders exactly as it '
+      'always did — one flat row per topo, nothing grouped',
+      (tester) async {
+        final container = tieredContainer([
+          for (var i = 0; i < 12; i++)
+            TopoRef(
+              wallId: 'plain-$i',
+              name: 'Topo $i',
+              thumbnailPath: null,
+              routeCount: 1,
+              createdAt: 1000 - i,
+            ),
+        ]);
+
+        await tester.pumpWidget(_wrap(container, const ToposScreen()));
+        await _drain(tester);
+
+        expect(_anyGroupRow, findsNothing);
+        expect(find.byKey(const Key('topo-item-plain-0')), findsOneWidget);
+        expect(find.byKey(const Key('topo-item-plain-11')), findsOneWidget);
+      },
+    );
+  });
 }
+
+/// Matches a group row of ANY kind and ANY id, by the `topo-group-<kind>-<id>`
+/// key `_TopoGroupRow` stamps on itself.
+///
+/// A keyed finder cannot express "no group row at all" (it needs the exact id),
+/// and `find.byType` cannot reach a library-private widget class from this
+/// file. Matching the key prefix says the intended thing directly — and,
+/// unlike a type stub, it genuinely fails if a group row IS present.
+final Finder _anyGroupRow = find.byWidgetPredicate((widget) {
+  final key = widget.key;
+  return key is ValueKey<String> && key.value.startsWith('topo-group-');
+}, description: 'any Sector/Area group row');
 
 /// A repository whose [softDeleteWall] never answers, so a test can observe a
 /// topo row DURING its own delete cascade rather than only after it.

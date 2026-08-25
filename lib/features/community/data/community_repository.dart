@@ -27,6 +27,10 @@ class SharedTopo {
     this.updatedAt = 0,
     this.ascentCount = 0,
     this.lastVerifiedAt,
+    this.areaId,
+    this.areaName,
+    this.sectorId,
+    this.sectorName,
   });
 
   final String wallId;
@@ -131,6 +135,31 @@ class SharedTopo {
   /// recently-confirmed because somebody just disputed it.
   final int? lastVerifiedAt;
 
+  /// This wall's ancestor Area / Sector (Wall -> Sector -> Area), or `null`
+  /// when that ancestor is the hidden `__default__` sentinel a photo-first
+  /// topo is filed under (see `LibraryCrudRepository.createTopo`) — never the
+  /// sentinel's own id or its literal `'__default__'` name, which are nulled
+  /// out in [CommunityRepository.watchSharedTopos]'s projection exactly like
+  /// `watchTopos` already did for `TopoRef.areaId`/`areaName`.
+  ///
+  /// Projected purely so the Topos home can group a community entry into the
+  /// same distance-tiered Area/Sector tree as an own one (see
+  /// `buildToposTree` in `features/library/domain/topo_tree.dart`) — before
+  /// this, a shared topo carried no ancestry at all and could only ever
+  /// render as a loose wall row. The join to reach them was already in that
+  /// query (it has always been an inner `JOIN sectors`/`JOIN areas`); only
+  /// the four projected columns are new, so no row can appear or disappear
+  /// from the feed because of this.
+  ///
+  /// Nullable-and-defaulted (rather than required) so the many tests that
+  /// construct a [SharedTopo] directly without a real ancestor chain keep
+  /// compiling — an ungrouped entry degrades to a loose wall row, which is
+  /// exactly the pre-existing behaviour.
+  final String? areaId;
+  final String? areaName;
+  final String? sectorId;
+  final String? sectorName;
+
   /// Whether this topo has known coordinates and can be placed on the
   /// Community map. The map view must omit — not crash on — any topo where
   /// this is `false`.
@@ -155,7 +184,11 @@ class SharedTopo {
       _setEquals(other.routeStyleTags, routeStyleTags) &&
       other.createdAt == createdAt &&
       other.ascentCount == ascentCount &&
-      other.lastVerifiedAt == lastVerifiedAt;
+      other.lastVerifiedAt == lastVerifiedAt &&
+      other.areaId == areaId &&
+      other.areaName == areaName &&
+      other.sectorId == sectorId &&
+      other.sectorName == sectorName;
 
   @override
   int get hashCode => Object.hash(
@@ -175,6 +208,9 @@ class SharedTopo {
     createdAt,
     ascentCount,
     lastVerifiedAt,
+    // Object.hash's positional arity stops at 20; these four fold into one
+    // nested hash rather than pushing the outer call past it.
+    Object.hash(areaId, areaName, sectorId, sectorName),
   );
 
   @override
@@ -186,7 +222,8 @@ class SharedTopo {
       'longitude: $longitude, routeGradeKeys: $routeGradeKeys, '
       'routeStyles: $routeStyles, routeStyleTags: $routeStyleTags, '
       'createdAt: $createdAt, ascentCount: $ascentCount, '
-      'lastVerifiedAt: $lastVerifiedAt)';
+      'lastVerifiedAt: $lastVerifiedAt, areaId: $areaId, '
+      'areaName: $areaName, sectorId: $sectorId, sectorName: $sectorName)';
 }
 
 /// Order-sensitive element-wise equality for [SharedTopo.routeGradeKeys]
@@ -251,6 +288,22 @@ Set<String> _parseStyles(String? raw) {
 /// with real tag content -- unlike SQLite's own `group_concat` default
 /// separator (`,`), which would corrupt the JSON on split.
 const _kStyleTagsGroupSeparator = '\u001E';
+
+/// The hidden sentinel NAME that both the default Area and the default Sector
+/// carry — the one a photo-first topo is silently filed under (see
+/// `LibraryCrudRepository.createTopo`/`_ensureDefaultAreaId`). Interpolated
+/// into [CommunityRepository.watchSharedTopos]'s `area_*`/`sector_*`
+/// projections so a topo with no real ancestry reports `null` rather than the
+/// literal `'__default__'`, exactly as `watchTopos` has always done for
+/// `TopoRef.areaId`/`areaName`.
+///
+/// Deliberately a private copy of `LibraryCrudRepository`'s own
+/// `_defaultAreaName`/`_defaultSectorName` rather than a shared export: this
+/// feature must not take a dependency on the library feature's data layer for
+/// one string, and promoting the sentinel to a core constant would edit a
+/// third file to no other benefit. If the sentinel ever changes it has to
+/// change in both places — hence this note.
+const _kDefaultAncestorName = '__default__';
 
 /// Correlated subquery resolving a wall's PRIMARY live `kind: 'original'`
 /// photo id, ordered `is_primary DESC, created_at DESC, id DESC` -- the same
@@ -377,7 +430,11 @@ class CommunityRepository {
         (SELECT group_concat(r.style_tags_json, '$_kStyleTagsGroupSeparator') FROM routes r
            WHERE r.photo_id = $_kPrimaryPhotoIdSubquery
              AND r.deleted_at IS NULL
-             AND r.style_tags_json IS NOT NULL) AS route_style_tags_json
+             AND r.style_tags_json IS NOT NULL) AS route_style_tags_json,
+        CASE WHEN a.name = '$_kDefaultAncestorName' THEN NULL ELSE a.id END AS area_id,
+        CASE WHEN a.name = '$_kDefaultAncestorName' THEN NULL ELSE a.name END AS area_name,
+        CASE WHEN s.name = '$_kDefaultAncestorName' THEN NULL ELSE s.id END AS sector_id,
+        CASE WHEN s.name = '$_kDefaultAncestorName' THEN NULL ELSE s.name END AS sector_name
       FROM walls w
       JOIN sectors s ON s.id = w.sector_id
       JOIN areas a ON a.id = s.area_id
@@ -429,6 +486,10 @@ class CommunityRepository {
                 ownerId: row.readNullable<String>('owner_id'),
                 latitude: row.readNullable<double>('latitude'),
                 longitude: row.readNullable<double>('longitude'),
+                areaId: row.readNullable<String>('area_id'),
+                areaName: row.readNullable<String>('area_name'),
+                sectorId: row.readNullable<String>('sector_id'),
+                sectorName: row.readNullable<String>('sector_name'),
                 routeGradeKeys: _parseGradeKeys(
                   row.readNullable<String>('route_grade_keys'),
                 ),

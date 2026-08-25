@@ -102,6 +102,8 @@ class TopoRef {
     this.visibility = 'private',
     this.areaId,
     this.areaName,
+    this.sectorId,
+    this.sectorName,
     this.routeGradeKeys = const [],
     this.routeStars = const [],
     this.routeStyleTags = const [],
@@ -141,6 +143,20 @@ class TopoRef {
   /// The display name of [areaId]'s Area, or `null` under the same
   /// conditions as [areaId] (including when the wall has no area at all).
   final String? areaName;
+
+  /// The id/name of this topo's immediate parent Sector (Wall -> Sector), or
+  /// `null` when the wall is filed under the hidden `__default__` sentinel
+  /// Sector — the exact mirror of [areaId]/[areaName] one level down, nulled
+  /// out by the same sentinel-name `CASE` in [watchTopos]'s projection.
+  ///
+  /// Added so the Topos home can collapse distant topos into their Sector
+  /// (and those Sectors into their Area) rather than listing every wall flat
+  /// — see `buildToposTree` in `features/library/domain/topo_tree.dart`. A
+  /// `null` here means "cannot be grouped", and such a topo always renders as
+  /// its own loose wall row rather than disappearing into a group that does
+  /// not exist.
+  final String? sectorId;
+  final String? sectorName;
 
   /// The `gradeSortKey` of every live (non-deleted), graded route on this
   /// wall, deduplicated (via `group_concat(DISTINCT ...)`) and sorted
@@ -190,6 +206,8 @@ class TopoRef {
       other.visibility == visibility &&
       other.areaId == areaId &&
       other.areaName == areaName &&
+      other.sectorId == sectorId &&
+      other.sectorName == sectorName &&
       _listEquals(other.routeGradeKeys, routeGradeKeys) &&
       _listEquals(other.routeStars, routeStars) &&
       _listEquals(other.routeStyleTags, routeStyleTags) &&
@@ -212,6 +230,7 @@ class TopoRef {
     Object.hashAll(routeStars),
     Object.hashAll(routeStyleTags),
     Object.hash(latitude, longitude),
+    Object.hash(sectorId, sectorName),
   );
 
   @override
@@ -220,6 +239,7 @@ class TopoRef {
       'routeCount: $routeCount, createdAt: $createdAt, '
       'topGradeLabel: $topGradeLabel, topGradeBand: $topGradeBand, '
       'visibility: $visibility, areaId: $areaId, areaName: $areaName, '
+      'sectorId: $sectorId, sectorName: $sectorName, '
       'routeGradeKeys: $routeGradeKeys, routeStars: $routeStars, '
       'routeStyleTags: $routeStyleTags, latitude: $latitude, '
       'longitude: $longitude)';
