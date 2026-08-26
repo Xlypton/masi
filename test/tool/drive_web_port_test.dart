@@ -99,7 +99,8 @@ Object get _driveWebSkip {
 
 void main() {
   group('tool/drive_web.sh port hygiene', () {
-    test('every tool/*.sh is committed with its executable bit set', () {
+    test('every committed shell tool AND the git hook carry the executable bit',
+        () {
       // Checked against the GIT INDEX, not the working-tree stat, for two
       // reasons. It is the mode that actually ships — NTFS has no POSIX
       // execute bit at all, so a working-tree stat on Windows can only ever
@@ -110,11 +111,16 @@ void main() {
       // no output, `set -e` did not catch it, and the E2E suite ran under the
       // FAKE identity while reporting "All tests passed" — a green run that
       // had exercised none of RLS, sync or moderation.
+      // `tool/githooks/*` is in scope for exactly the same reason and fails
+      // even more quietly: git SILENTLY IGNORES a hook without the execute
+      // bit. There is no error and no output — the commit just goes through
+      // unscanned, and the secret gate everyone believes is running is not.
       final result = Process.runSync('git', [
         'ls-files',
         '-s',
         '--',
         'tool/*.sh',
+        'tool/githooks/*',
       ], workingDirectory: _repoRoot);
       expect(result.exitCode, 0, reason: 'git ls-files failed: ${result.stderr}');
 
@@ -124,6 +130,12 @@ void main() {
           .where((l) => l.trim().isNotEmpty)
           .toList();
       expect(lines, isNotEmpty, reason: 'no tool/*.sh found in the git index');
+      expect(
+        lines.any((l) => l.contains('tool/githooks/pre-commit')),
+        isTrue,
+        reason: 'the pre-commit hook is not tracked, so no clone can install '
+            'it with `git config core.hooksPath tool/githooks`',
+      );
 
       final nonExecutable = [
         for (final line in lines)
@@ -132,7 +144,8 @@ void main() {
       expect(
         nonExecutable,
         isEmpty,
-        reason: 'these shell tools are committed non-executable (mode 100644). '
+        reason: 'these are committed non-executable (mode 100644). A shell tool '
+            'fails loudly; a git hook fails SILENTLY — it is simply not run. '
             'Fix with: git update-index --chmod=+x <path>',
       );
     });
