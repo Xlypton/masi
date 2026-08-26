@@ -7,6 +7,20 @@ import '../../../core/grades/grade_system.dart';
 /// The manner in which a route was climbed, persisted as the enum's [name]
 /// (via [toDbString]/[fromDbString]) in the `Ascents.style` TEXT column.
 enum AscentStyle {
+  /// "I climbed it", with no claim about how.
+  ///
+  /// The everyday case, and the one the list used to have no word for: the
+  /// other five all assert something specific (first try, no beta, after
+  /// working it, done before, did not top out), so a climber who just wanted
+  /// to record a send had to pick a claim they might not mean. [redpoint] in
+  /// particular says "sent after previous attempts", which is wrong for a
+  /// boulder done second go — and it was the DEFAULT, so the wrong claim was
+  /// what you got by not choosing.
+  ///
+  /// Declared first so it leads the chip row, and it is the sheet's default.
+  /// Enum ORDER is safe to change: [toDbString] persists [name], never the
+  /// index, so no stored row is reinterpreted by inserting a value here.
+  send,
   onsight,
   flash,
   redpoint,

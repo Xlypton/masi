@@ -288,15 +288,18 @@ void main() {
       expect(ascents.single.notes, isNull);
       expect(
         ascents.single.style,
-        AscentStyle.redpoint,
-        reason: 'redpoint is the sheet\'s documented default style',
+        AscentStyle.send,
+        reason: "'send' is the sheet's documented default style — a neutral "
+            '"I climbed it" that cannot be a wrong claim, unlike the previous '
+            'redpoint default, which asserted "after previous attempts"',
       );
     },
   );
 
   testWidgets(
-    '#12 ST4: the share toggle defaults OFF and Save logs a private '
-    '(unshared) ascent when left untouched',
+    'the share toggle defaults ON and Save logs a SHARED ascent when left '
+    'untouched — logging a send is the social act the app is for, and the '
+    'switch sits in plain sight above Save for anyone who wants it private',
     (tester) async {
       final seeded = await seedWallWithRoute(tester);
       addTearDown(seeded.db.close);
@@ -317,8 +320,8 @@ void main() {
       );
       expect(
         toggle.value,
-        isFalse,
-        reason: 'sharing must be opt-in, off by default',
+        isTrue,
+        reason: 'sharing is on by default (user request, 2026-08-25)',
       );
 
       await tester.tap(find.byKey(const Key('test-ascent-save')));
@@ -327,13 +330,15 @@ void main() {
       final ascentsRepo = seeded.container.read(ascentsRepositoryProvider);
       final ascents = await ascentsRepo.ascentsForRoute(seeded.routeDbId);
       expect(ascents, hasLength(1));
-      expect(ascents.single.visibility, 'private');
-      expect(ascents.single.isShared, isFalse);
+      expect(ascents.single.visibility, 'shared');
+      expect(ascents.single.isShared, isTrue);
     },
   );
 
   testWidgets(
-    '#12 ST4: toggling the share switch ON and Save logs a shared ascent',
+    'toggling the share switch OFF and Save logs a PRIVATE ascent — the '
+    'opt-out still has to work, and it is the half a default-on switch can '
+    'silently break',
     (tester) async {
       final seeded = await seedWallWithRoute(tester);
       addTearDown(seeded.db.close);
@@ -355,7 +360,7 @@ void main() {
       final toggle = tester.widget<SwitchListTile>(
         find.byKey(const Key('log-ascent-share-toggle')),
       );
-      expect(toggle.value, isTrue);
+      expect(toggle.value, isFalse);
 
       await tester.tap(find.byKey(const Key('test-ascent-save')));
       await tester.pumpAndSettle();
@@ -363,8 +368,8 @@ void main() {
       final ascentsRepo = seeded.container.read(ascentsRepositoryProvider);
       final ascents = await ascentsRepo.ascentsForRoute(seeded.routeDbId);
       expect(ascents, hasLength(1));
-      expect(ascents.single.visibility, 'shared');
-      expect(ascents.single.isShared, isTrue);
+      expect(ascents.single.visibility, 'private');
+      expect(ascents.single.isShared, isFalse);
     },
   );
 

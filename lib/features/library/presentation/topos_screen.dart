@@ -40,6 +40,7 @@ import '../../topo/presentation/topo_canvas_screen.dart'
         photoWriteFailureSnackBar;
 import '../application/library_providers.dart';
 import '../application/proximity_topos_provider.dart';
+import '../application/topo_tree.dart';
 import '../data/library_crud_repository.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_avatar.dart';
@@ -253,6 +254,30 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
     if (query != _query) {
       setState(() => _query = query);
     }
+  }
+
+  /// The [ToposGroupNode.id]s the user has opened in the tiered list.
+  ///
+  /// Held here, on the SCREEN state, rather than inside `_ToposList` or the row
+  /// widgets: this list rebuilds constantly — every keystroke in the search
+  /// field, every sync pull re-emitting `toposProvider`, every location
+  /// refresh re-sorting the entries — and a group that snapped shut on any of
+  /// those would be unusable. Keyed by id rather than by list position for the
+  /// same reason: a group must stay open even when a fresh distance moves it
+  /// up or down the list.
+  ///
+  /// Deliberately NOT persisted across app launches. The tiering is a function
+  /// of where the climber is standing, so yesterday's expansions describe
+  /// yesterday's location; restoring them would reopen groups that are now far
+  /// away while the ones underfoot stayed shut.
+  final Set<String> _expandedGroupIds = <String>{};
+
+  void _toggleGroup(String groupId) {
+    setState(() {
+      if (!_expandedGroupIds.remove(groupId)) {
+        _expandedGroupIds.add(groupId);
+      }
+    });
   }
 
   /// Wall ids whose moderation state this screen has already asked the server
@@ -782,8 +807,28 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
                         // pay a round trip for every one of them to render a
                         // badge on ten.
                         _pullModerationFor(filtered);
+                        // Tier the list: nearest topos expanded, the rest
+                        // folded into their Sector, and everything past that
+                        // folded again into their Area — see `buildToposTree`.
+                        //
+                        // Suppressed entirely while a SEARCH is active. Someone
+                        // who typed a name is asking for a specific topo, and
+                        // burying the hit inside a collapsed group they then
+                        // have to guess at would defeat the search outright.
+                        // A query therefore renders flat, exactly as it did
+                        // before tiering existed. The facet filter is NOT
+                        // treated the same way: it narrows to a set the
+                        // climber still wants to browse by place.
+                        final nodes = _query.isNotEmpty
+                            ? [
+                                for (var i = 0; i < filtered.length; i++)
+                                  ToposWallNode(entry: filtered[i], rank: i),
+                              ]
+                            : buildToposTree(entries: filtered);
                         return _ToposList(
-                          entries: filtered,
+                          nodes: nodes,
+                          expandedGroupIds: _expandedGroupIds,
+                          onToggleGroup: _toggleGroup,
                           // The list now runs full-bleed behind the floating
                           // add button (see the `Positioned` button below), so
                           // its bottom padding must clear BOTH the floating nav

@@ -1603,7 +1603,9 @@ class LibraryCrudRepository {
            WHERE r.wall_id = w.id AND r.deleted_at IS NULL
              AND r.style_tags_json IS NOT NULL) AS route_style_tags,
         CASE WHEN a.name = '$_defaultAreaName' THEN NULL ELSE a.id END AS area_id,
-        CASE WHEN a.name = '$_defaultAreaName' THEN NULL ELSE a.name END AS area_name
+        CASE WHEN a.name = '$_defaultAreaName' THEN NULL ELSE a.name END AS area_name,
+        CASE WHEN s.name = '$_defaultSectorName' THEN NULL ELSE s.id END AS sector_id,
+        CASE WHEN s.name = '$_defaultSectorName' THEN NULL ELSE s.name END AS sector_name
       FROM walls w
       LEFT JOIN sectors s ON s.id = w.sector_id
       LEFT JOIN areas a ON a.id = s.area_id
@@ -1656,6 +1658,8 @@ class LibraryCrudRepository {
                       ),
                 areaId: row.readNullable<String>('area_id'),
                 areaName: row.readNullable<String>('area_name'),
+                sectorId: row.readNullable<String>('sector_id'),
+                sectorName: row.readNullable<String>('sector_name'),
                 routeGradeKeys: _parseGradeKeys(
                   row.readNullable<String>('route_grade_keys'),
                 ),

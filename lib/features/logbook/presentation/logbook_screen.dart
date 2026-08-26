@@ -521,6 +521,8 @@ Color _colorForGradeBand(MasiColors colors, GradeBand band) =>
 /// name (`style.name`, e.g. `'onsight'`).
 String styleLabel(AscentStyle style) {
   switch (style) {
+    case AscentStyle.send:
+      return 'Sent';
     case AscentStyle.onsight:
       return 'Onsight';
     case AscentStyle.flash:

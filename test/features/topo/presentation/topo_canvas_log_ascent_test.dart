@@ -294,7 +294,8 @@ void main() {
       );
       expect(ascents.single.routeId, seeded.routeDbId);
       expect(ascents.single.wallId, seeded.wallId);
-      expect(ascents.single.style, AscentStyle.redpoint);
+      // The sheet's default style — neutral 'send', not a specific claim.
+      expect(ascents.single.style, AscentStyle.send);
     },
   );
 

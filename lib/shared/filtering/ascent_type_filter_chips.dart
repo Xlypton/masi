@@ -2,16 +2,23 @@ import 'package:flutter/material.dart';
 
 import 'package:masi/app/theme.dart';
 import 'package:masi/features/logbook/data/ascents_repository.dart';
+import 'package:masi/features/logbook/presentation/logbook_screen.dart'
+    show styleLabel;
 import 'package:masi/shared/filtering/style_filter_chips.dart' show FilterChoiceChip;
 
-/// Capitalizes an [AscentStyle]'s `name` for display (e.g. `onsight` ->
-/// `Onsight`, `redpoint` -> `Redpoint`).
-String ascentStyleLabel(AscentStyle style) {
-  final name = style.name;
-  return '${name[0].toUpperCase()}${name.substring(1)}';
-}
+/// Display label for an [AscentStyle] on a filter chip.
+///
+/// Delegates to the logbook's [styleLabel] rather than capitalizing
+/// [AscentStyle.name] itself, which is what this used to do. Those two agreed
+/// for the original five styles purely by luck — every one of them happened to
+/// be its own label — and diverged the moment `send` was added, whose label is
+/// "Sent". A filter chip reading "Send" next to logbook rows reading "Sent" is
+/// the same thing under two names, so there is now exactly one function that
+/// decides. Same cross-feature import `community_feed_screen.dart` and
+/// `ascent_detail_screen.dart` already use for this symbol.
+String ascentStyleLabel(AscentStyle style) => styleLabel(style);
 
-/// A multi-select row of ascent-type chips (Onsight/Flash/Redpoint/
+/// A multi-select row of ascent-type chips (Sent/Onsight/Flash/Redpoint/
 /// Repeat/Attempt) for the Logbook filter sheet. Same controlled contract
 /// as [StyleFilterChips] (from `style_filter_chips.dart`): [selected] is
 /// the current chosen set, [onChanged] fires with the NEW set on every
