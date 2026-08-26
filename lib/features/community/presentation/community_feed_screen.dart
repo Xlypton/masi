@@ -21,6 +21,7 @@ import '../../logbook/data/ascents_repository.dart';
 import '../../logbook/presentation/logbook_screen.dart' show styleLabel;
 import '../../notifications/presentation/notification_bell.dart';
 import '../../../shared/presentation/masi_async_view.dart';
+import '../../../shared/presentation/masi_avatar.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_shimmer.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
@@ -95,6 +96,20 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
     final colors = MasiColors.of(context);
     final asyncFeedItems = ref.watch(feedItemsProvider);
 
+    // Same rule as `topos_screen.dart`'s account button, deliberately copied
+    // rather than reinvented: initials only once actually signed in with a
+    // real (non-empty) email; every other state of the auth stream —
+    // signed-out, still loading, or errored (e.g. Supabase never initialized)
+    // — degrades to the generic person icon rather than guessing, per
+    // `authStateProvider`'s doc comment.
+    final authSession = ref.watch(authStateProvider).asData?.value;
+    final signedInEmail =
+        (authSession != null &&
+            authSession.isSignedIn &&
+            authSession.email!.isNotEmpty)
+        ? authSession.email!
+        : null;
+
     return Scaffold(
       key: const Key('community-feed-screen'),
       appBar: AppBar(
@@ -120,6 +135,25 @@ class _CommunityFeedScreenState extends ConsumerState<CommunityFeedScreen> {
             icon: MasiIcon('logbook', color: colors.ink),
             tooltip: 'My logbook',
             onPressed: () => context.push('/logbook'),
+          ),
+          // The Feed is a permanent bottom-nav branch, and until now `/account`
+          // was reachable from the Topos tab ONLY — so a user sitting on the
+          // Feed had to leave the screen they were on to reach their profile,
+          // sign in/out, or read the build + storage diagnostics that live
+          // there. Last in the row, mirroring `topos_screen.dart`, so the
+          // account affordance sits in the same corner on both tabs.
+          IconButton(
+            key: const Key('feed-account-button'),
+            icon: signedInEmail != null
+                ? MasiAvatar(
+                    key: const Key('feed-account-avatar'),
+                    avatarUrl: ref.watch(myAvatarUrlProvider).asData?.value,
+                    email: signedInEmail,
+                    radius: 14,
+                  )
+                : MasiIcon('person', color: colors.ink),
+            tooltip: 'Account',
+            onPressed: () => context.push('/account'),
           ),
         ],
       ),

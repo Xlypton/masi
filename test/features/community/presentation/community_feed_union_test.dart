@@ -72,6 +72,13 @@ Widget _wrap(ProviderContainer container, Widget screen) {
           key: Key('logbook-placeholder'),
         ),
       ),
+      GoRoute(
+        path: '/account',
+        builder: (context, state) => const Text(
+          'account-placeholder',
+          key: Key('account-placeholder'),
+        ),
+      ),
     ],
   );
   return UncontrolledProviderScope(
@@ -336,6 +343,41 @@ void main() {
         await _drain(tester);
 
         expect(find.byKey(const Key('logbook-placeholder')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'feed-account-button is present and routes to /account. Until it '
+      'existed, /account was reachable from the Topos tab ONLY, so a user on '
+      'the Feed had to leave the screen to reach their profile or the build '
+      'and storage diagnostics that live there',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        final accountButton = find.byKey(const Key('feed-account-button'));
+        expect(accountButton, findsOneWidget);
+
+        await tester.tap(accountButton);
+        await _drain(tester);
+
+        expect(find.byKey(const Key('account-placeholder')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'signed OUT, the account button is the generic person icon, never an '
+      'avatar built from a guessed identity — same rule as topos_screen.dart',
+      (tester) async {
+        final container = _makeContainer();
+
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+        await _drain(tester);
+
+        expect(find.byKey(const Key('feed-account-button')), findsOneWidget);
+        expect(find.byKey(const Key('feed-account-avatar')), findsNothing);
       },
     );
   });
