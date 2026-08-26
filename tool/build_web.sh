@@ -22,10 +22,11 @@ export PATH="/opt/homebrew/bin:$PATH"
 cd "$(dirname "$0")/.."
 
 RENDERER_ARGS=(--wasm)
+BUILD_CHANNEL="web-wasm"
 GATE_ONLY=0
 for arg in "$@"; do
   case "$arg" in
-    --js)   RENDERER_ARGS=() ;;
+    --js)   RENDERER_ARGS=(); BUILD_CHANNEL="web-js" ;;
     --gate) GATE_ONLY=1 ;;
     *) echo "unknown arg: $arg" >&2; exit 2 ;;
   esac
@@ -73,6 +74,42 @@ if [[ "$GATE_ONLY" == "1" ]]; then
   exit 0
 fi
 
+echo "==> build stamp"
+# The five --dart-define values lib/core/diagnostics/build_info.dart reads back
+# and the Account screen renders. They answer the FIRST question of every web
+# bug report — "which build are you actually running?" — which nobody, user or
+# maintainer, could answer from inside the app before this existed, because a
+# stale service worker serving the previous build looks identical to a build
+# where the fix simply did not work (see CLAUDE.md's stale-SW trap).
+#
+# Every value degrades to an honest 'unknown' when it cannot be determined, and
+# NEVER to a plausible-looking default: a stamp that invents "built just now,
+# from main" is worse than no stamp, because it gets believed.
+APP_VERSION="$(awk '/^version:/{print $2; exit}' pubspec.yaml)"
+APP_VERSION="${APP_VERSION:-unknown}"
+# The `-dirty` suffix is load-bearing, not cosmetic: it is the difference between a bug
+# reproducible from a commit anyone can check out and one that only exists in
+# one working tree.
+GIT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+if [[ "$GIT_SHA" != "unknown" ]] && ! git diff --quiet HEAD 2>/dev/null; then
+  GIT_SHA="$GIT_SHA-dirty"
+fi
+GIT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)"
+# UTC, always. Two reports from two timezones have to be comparable by eye, and
+# build_info.dart normalises on read anyway — stamping local time would only
+# make the raw define misleading on its own.
+BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+echo "    version=$APP_VERSION commit=$GIT_SHA branch=$GIT_BRANCH"
+echo "    built=$BUILD_TIME channel=$BUILD_CHANNEL"
+
+STAMP_ARGS=(
+  "--dart-define=APP_VERSION=$APP_VERSION"
+  "--dart-define=GIT_SHA=$GIT_SHA"
+  "--dart-define=GIT_BRANCH=$GIT_BRANCH"
+  "--dart-define=BUILD_TIME=$BUILD_TIME"
+  "--dart-define=BUILD_CHANNEL=$BUILD_CHANNEL"
+)
+
 echo "==> flutter build web ${RENDERER_ARGS[*]:-(js/canvaskit)} --no-web-resources-cdn --pwa-strategy=none"
 # --no-web-resources-cdn: self-host the renderer. Without it, flutter_bootstrap.js
 # resolves skwasm.js/skwasm.wasm (and canvaskit.js/wasm for the dart2js fallback
@@ -91,7 +128,8 @@ echo "==> flutter build web ${RENDERER_ARGS[*]:-(js/canvaskit)} --no-web-resourc
 # client.navigate(client.url). That is bug #55's reload dance, permanently, plus no
 # offline shell at all. With `none`, generateServiceWorker() returns '' and
 # generateDefaultFlutterBootstrapScript() emits a bare `_flutter.loader.load();`.
-flutter build web "${RENDERER_ARGS[@]}" --no-web-resources-cdn --pwa-strategy=none
+flutter build web "${RENDERER_ARGS[@]}" "${STAMP_ARGS[@]}" \
+  --no-web-resources-cdn --pwa-strategy=none
 
 echo "==> emitted-bootstrap gate"
 BOOTSTRAP="build/web/flutter_bootstrap.js"

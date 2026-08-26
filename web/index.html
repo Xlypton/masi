@@ -320,6 +320,13 @@
           // renderer bug class, because it only ever becomes true on a load
           // that PAINTED.
           window.__masiShellWarmed = true;
+          // The running worker's own SHELL_VERSION, straight from its ack —
+          // the AUTHORITATIVE answer to "which build is this page being served
+          // from?", which lib/core/diagnostics/shell_info_web.dart reads and
+          // the Account screen's Build row renders. Its fallback is a scan of
+          // the masi-shell-* cache names, which cannot tell two surviving
+          // caches apart; this can, because the worker said it about itself.
+          window.__masiShellVersion = data.version;
           console.log(
             'masi/sw: warmed ' + data.cached + '/' + data.total +
             ' (version ' + data.version + ')'
@@ -339,6 +346,11 @@
             (window.__masiObservedCached || 0) + (data.cached || 0);
           window.__masiObservedStored =
             (window.__masiObservedStored || []).concat(data.stored || []);
+          // Same authoritative shell version as the warm ack above, but this
+          // one lands on EVERY load (the early reporter runs before first
+          // paint), so the Build row has a real version even on a load that
+          // never painted — which is exactly the load worth diagnosing.
+          window.__masiShellVersion = data.version;
           console.log(
             'masi/sw: observed ' + data.cached + '/' + data.total +
             ' (stored ' + (data.stored || []).length +
