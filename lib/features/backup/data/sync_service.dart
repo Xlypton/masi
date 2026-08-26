@@ -1775,6 +1775,20 @@ class SyncService {
     var budgetedDownloads = 0;
     final skippedCanonicalIds = <String>{};
 
+    // ONE batched read of every canonical id's stored path, up front, instead
+    // of a `SELECT ... WHERE id = ?` per photo inside the loop below.
+    //
+    // The per-photo form was an N+1 whose every round trip is individually
+    // bounded by `kDatabaseQueryTimeout` (30s), and a pull is precisely when
+    // the executor is busiest — it is importing rows, and every `watch()`-backed
+    // provider in the app re-runs behind each table update. One read losing that
+    // race aborts the WHOLE photo pass with "the local database did not answer a
+    // read within 30s", which is the failure this replaces.
+    final storedPaths = await _storedPhotoPaths({
+      for (final photo in ordered)
+        (photo['parentPhotoId'] as String?) ?? photo['id'] as String,
+    });
+
     for (final photo in ordered) {
       final canonicalId = (photo['parentPhotoId'] as String?) ?? photo['id'] as String;
       final localPath = photo['localPath'] as String? ?? '';
@@ -1782,7 +1796,9 @@ class SyncService {
 
       var newLocalPath = downloadedPaths[canonicalId];
       if (newLocalPath == null) {
-        final alreadyHere = await _localPhotoPathWithBytes(canonicalId);
+        final alreadyHere = await _localPathIfBytesPresent(
+          storedPaths[canonicalId],
+        );
         if (alreadyHere != null) {
           // Already on this device — no download, no write, no budget spent,
           // and NOT counted as "restored": nothing was restored.
@@ -1815,29 +1831,78 @@ class SyncService {
     );
   }
 
-  /// The LOCAL `localPath` for [canonicalId] when this device genuinely holds
-  /// that photo's bytes right now, else `null`.
+  /// How many ids one batched `id IN (...)` lookup carries.
   ///
-  /// Both halves are load-bearing. The row lookup alone would be a lie — L6:
-  /// metadata (drift) and pixels (a separate, non-transactional byte store)
-  /// can diverge, so a row can outlive its pixels. The byte read alone has no
-  /// path to read. Together they answer the only question the caller has:
-  /// "would downloading this actually give me anything I do not already have?"
-  Future<String?> _localPhotoPathWithBytes(String canonicalId) async {
-    final row =
-        await (_db.select(_db.photos)
-              ..where((t) => t.id.equals(canonicalId))
-              ..limit(1))
-            .getSingleOrNull();
-    final storedPath = row?.localPath;
+  /// Well under sqlite3's variable ceiling (999 on the conservative build
+  /// setting, 32766 on modern ones), so the chunking can never be the thing
+  /// that breaks: the point is to collapse hundreds of round trips into a
+  /// handful, and 250 already achieves that with room to spare.
+  static const int _photoPathLookupChunk = 250;
+
+  /// `canonicalId -> localPath` for every id in [canonicalIds] that has a
+  /// non-empty stored path, read in [_photoPathLookupChunk]-sized batches.
+  ///
+  /// Ids with no row, or a row whose `localPath` is empty, are simply absent
+  /// from the result — the same "nothing stored here" answer the per-id lookup
+  /// used to return as `null`.
+  Future<Map<String, String>> _storedPhotoPaths(
+    Set<String> canonicalIds,
+  ) async {
+    if (canonicalIds.isEmpty) return const <String, String>{};
+    final ids = canonicalIds.toList();
+    final paths = <String, String>{};
+    for (var start = 0; start < ids.length; start += _photoPathLookupChunk) {
+      final end = (start + _photoPathLookupChunk).clamp(0, ids.length);
+      final chunk = ids.sublist(start, end);
+      final rows = await (_db.select(
+        _db.photos,
+      )..where((t) => t.id.isIn(chunk))).get();
+      for (final row in rows) {
+        final storedPath = row.localPath;
+        if (storedPath.isEmpty) continue;
+        paths[row.id] = storedPath;
+      }
+    }
+    return paths;
+  }
+
+  /// [storedPath] when this device genuinely holds that photo's bytes right
+  /// now, else `null`.
+  ///
+  /// Both halves are load-bearing. The row lookup alone (which
+  /// [_storedPhotoPaths] does, and which supplies [storedPath]) would be a lie
+  /// — L6: metadata (drift) and pixels (a separate, non-transactional byte
+  /// store) can diverge, so a row can outlive its pixels. A presence probe
+  /// alone has no path to probe. Together they answer the only question the
+  /// caller has: "would downloading this actually give me anything I do not
+  /// already have?"
+  ///
+  /// `hasPhotoBytes`, NOT `readPhotoBytes`. This is a presence question, and
+  /// the previous code answered it by loading the entire — potentially
+  /// multi-megabyte — blob out of IndexedDB and then throwing it away, once per
+  /// photo in the batch. Tens of megabytes of pointless reads per pull, on the
+  /// main thread, competing with the very database reads the pull is bounded
+  /// on. `PhotoFiles.hasPhotoBytes`' own doc names this exact use ("looks the
+  /// key up without loading the blob, which is what makes it affordable to ask
+  /// about many keys in a row"); `PublicPhotoPruneService` already used it that
+  /// way and this path simply never did.
+  ///
+  /// Behaviour is unchanged on both backends: on web `exists` and
+  /// `readBytes != null` answer the same question, and on native
+  /// `resolvePhotoPathSync` runs the same resolution — legacy-absolute healing
+  /// branch included — as its async counterpart, given the docs path that
+  /// `bootApp` warms before the first frame. A cold cache there answers
+  /// "absent", which re-downloads: the safe direction, and exactly what an
+  /// unreadable store already did.
+  Future<String?> _localPathIfBytesPresent(String? storedPath) async {
     if (storedPath == null || storedPath.isEmpty) return null;
     try {
-      final bytes = await _photoFiles.readPhotoBytes(storedPath);
-      return bytes == null ? null : storedPath;
+      return await _photoFiles.hasPhotoBytes(storedPath) ? storedPath : null;
     } catch (_) {
       // An unreadable local store is indistinguishable from absent bytes for
       // this decision, and must never abort the pull — fall through to the
-      // download, which is the safe direction.
+      // download, which is the safe direction. (`hasPhotoBytes` is documented
+      // never to throw; the guard stays because this must hold regardless.)
       return null;
     }
   }

@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:typed_data' show Uint8List;
 
 import 'package:masi/features/backup/domain/shared_topo_scope.dart';
 import 'package:masi/core/db/app_database.dart';
@@ -14,7 +15,8 @@ import 'package:masi/core/storage/storage_persistence_service.dart';
 import 'package:masi/core/storage/storage_persistence_types.dart';
 import 'package:masi/features/topo/data/photo_files.dart';
 import 'package:masi/features/topo/data/public_photo_prune_service.dart';
-import 'package:drift/drift.dart' show Value;
+import 'package:drift/drift.dart'
+    show ApplyInterceptor, QueryExecutor, QueryInterceptor, Value;
 import 'package:drift/native.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -2901,6 +2903,117 @@ void main() {
     );
   });
 
+  group('the local-presence probe must stay cheap', () {
+    /// The reported field failure, and what it cost:
+    ///
+    ///   Couldn't sync — Sync failed: shared photo downloads failed:
+    ///   TimeoutException after 0:00:30.000000: the local database did not
+    ///   answer a read within 30s
+    ///
+    /// The photo pass asks, per photo, "do I already hold these bytes?". It
+    /// used to answer that twice as expensively as it needed to: a
+    /// `SELECT ... WHERE id = ?` per photo (each one individually bounded by
+    /// `kDatabaseQueryTimeout`), and then a FULL read of the — potentially
+    /// multi-megabyte — blob whose contents were immediately discarded. During
+    /// a pull the executor is at its busiest (it is importing rows, and every
+    /// `watch()`-backed provider re-runs behind each table update), so one of
+    /// those reads losing the race aborted the entire shared photo pass.
+    ///
+    /// Both halves are pinned here because both are invisible to the
+    /// behavioural tests above: those assert WHAT the pass decides, and this
+    /// asserts what the decision COSTS. A regression in either reads as
+    /// "correct, just occasionally times out on a real library" — which is
+    /// exactly how this shipped.
+    test(
+      'a pull that already holds every photo reads ZERO blobs, and does not '
+      'issue one database read per photo',
+      () async {
+        const photoCount = 6;
+        final remote = FakeSyncRemote();
+
+        // u2 publishes `photoCount` shared topos.
+        final u2 = makeContainer(
+          remote: remote,
+          auth: FakeAuthRepository(_signedInU2),
+        );
+        addTearDown(() => u2.db.close());
+        final u2Photos = Directory(p.join(u2.docsDir.path, 'photos'))
+          ..createSync(recursive: true);
+        for (var i = 0; i < photoCount; i++) {
+          final photoId = 'photo-probe$i';
+          writeFile(u2Photos, '$photoId.jpg', i + 1);
+          await seedWallHierarchy(
+            u2.db,
+            ownerId: _uidU2,
+            visibility: 'shared',
+            areaId: 'area-probe$i',
+            sectorId: 'sector-probe$i',
+            wallId: 'wall-probe$i',
+            photoId: photoId,
+            routeId: 'route-probe$i',
+            localPath: p.join('photos', '$photoId.jpg'),
+            updatedAt: 1000 + i,
+          );
+        }
+        await u2.service.pushOwn();
+
+        // u1: a fresh device whose photo store and executor both count.
+        final selects = _PhotoSelectCounter();
+        final db = AppDatabase(NativeDatabase.memory().interceptWith(selects));
+        addTearDown(db.close);
+        final docsDir = Directory(p.join(tmp.path, 'docs_probe'))..createSync();
+        final photoFiles = _CountingPhotoFiles(docsDir: () async => docsDir);
+        final service = SyncService(
+          db: db,
+          backupRepository: BackupRepository(db),
+          remote: remote,
+          authRepository: FakeAuthRepository(_signedInU1),
+          connectivity: FakeConnectivityService(NetworkStatus.wifi),
+          photoFiles: photoFiles,
+          // Native (unbounded) so the first pull really does fetch all of
+          // them — the budget is not what is under test here.
+          isWeb: false,
+        );
+
+        final first = await service.pullOwnAndShared();
+        expect(
+          first.photosDownloaded,
+          photoCount,
+          reason: 'the first pull genuinely has to fetch every photo',
+        );
+
+        photoFiles.reset();
+        selects.reset();
+        await service.pullOwnAndShared();
+
+        expect(
+          photoFiles.readPhotoBytesCalls,
+          0,
+          reason:
+              'every photo is already on this device, so the pass only needs '
+              'to know they EXIST. Loading each blob to answer that — and '
+              'discarding it — is tens of megabytes of pointless IndexedDB '
+              'reads per pull on web, competing for the main thread with the '
+              'very database reads this pull is bounded on',
+        );
+        expect(
+          photoFiles.hasPhotoBytesCalls,
+          greaterThanOrEqualTo(photoCount),
+          reason: 'the presence check must still actually happen, per photo',
+        );
+        expect(
+          selects.photoTableSelects,
+          lessThan(photoCount),
+          reason:
+              'the photos table must be read in BATCHES, not once per photo. '
+              'One read per photo is an N+1 whose every round trip carries its '
+              'own 30s bound, and a pull is when the executor is least able to '
+              'answer promptly',
+        );
+      },
+    );
+  });
+
   group('S7: the first public-photo pull is BOUNDED (bytes only)', () {
     /// Seeds [count] independent shared wall hierarchies owned by [ownerId],
     /// each with its own photo file and its own wall `updatedAt` (ascending
@@ -4864,4 +4977,57 @@ int _indexOfBytes(List<int> haystack, List<int> needle) {
     return i;
   }
   return -1;
+}
+
+/// Counts `SELECT`s against the `photos` table, so a test can assert that the
+/// photo pass reads it in batches rather than once per photo.
+///
+/// Matches on the quoted table name drift emits (`FROM "photos"`), not a bare
+/// substring: `"photos"` also appears inside column aliases and inside other
+/// tables' foreign-key clauses, and counting those would make the assertion
+/// pass or fail for reasons unrelated to what it is pinning.
+class _PhotoSelectCounter extends QueryInterceptor {
+  int photoTableSelects = 0;
+
+  void reset() => photoTableSelects = 0;
+
+  @override
+  Future<List<Map<String, Object?>>> runSelect(
+    QueryExecutor executor,
+    String statement,
+    List<Object?> args,
+  ) {
+    if (statement.contains('FROM "photos"')) photoTableSelects++;
+    return executor.runSelect(statement, args);
+  }
+}
+
+/// A real [PhotoFiles] (so the on-disk behaviour under test is genuine) that
+/// records how its two presence-related entry points were used.
+///
+/// `extends`, not `implements`: [PhotoFiles] is concrete and its unoverridden
+/// methods are exactly the behaviour these tests want — only the counting is
+/// added.
+class _CountingPhotoFiles extends PhotoFiles {
+  _CountingPhotoFiles({required super.docsDir});
+
+  int readPhotoBytesCalls = 0;
+  int hasPhotoBytesCalls = 0;
+
+  void reset() {
+    readPhotoBytesCalls = 0;
+    hasPhotoBytesCalls = 0;
+  }
+
+  @override
+  Future<Uint8List?> readPhotoBytes(String stored) {
+    readPhotoBytesCalls++;
+    return super.readPhotoBytes(stored);
+  }
+
+  @override
+  Future<bool> hasPhotoBytes(String stored) {
+    hasPhotoBytesCalls++;
+    return super.hasPhotoBytes(stored);
+  }
 }
