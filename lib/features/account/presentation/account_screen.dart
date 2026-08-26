@@ -8,8 +8,12 @@ import 'package:image_picker/image_picker.dart' show ImageSource;
 import 'package:supabase_flutter/supabase_flutter.dart' show AuthException;
 
 import '../../../app/theme.dart';
+import '../../../core/config/supabase_config.dart' show supabaseUrl;
 import '../../../core/db/database_provider.dart';
 import '../../../core/db/storage_durability_provider.dart';
+import '../../../core/diagnostics/build_info.dart';
+import '../../../core/diagnostics/shell_info_provider.dart';
+import '../../../core/diagnostics/shell_info_types.dart';
 import '../../../core/storage/storage_persistence_providers.dart';
 import '../../../core/storage/storage_persistence_types.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
@@ -639,12 +643,58 @@ class _SignedOutBody extends StatelessWidget {
                   textAlign: TextAlign.center,
                 ),
               ],
+              const _BuildStampFooter(),
             ],
           ),
         ),
       ),
     );
   }
+}
+
+/// The one-line build stamp under the SIGNED-OUT card.
+///
+/// The full [_BuildDiagnosticsSection] lives behind sign-in, and on web that is
+/// a wall: `webAuthGateEnabledProvider` bounces every route to `/account`, so a
+/// deploy that breaks sign-in itself leaves the user on this screen with no way
+/// to reach any diagnostic at all — which is precisely the deploy worth
+/// diagnosing. This is the smallest thing that still answers "is the new build
+/// even live?", at a size that does not turn the sign-in card into a console.
+///
+/// A [SelectableText] for the same reason the rows above are: on this screen
+/// there is no Copy button at all, so hand-selection is the ONLY way this
+/// string leaves the app.
+class _BuildStampFooter extends StatelessWidget {
+  const _BuildStampFooter();
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+    return Padding(
+      padding: const EdgeInsets.only(top: MasiSpacing.lg),
+      child: SelectableText(
+        buildStampFooterLabel(),
+        key: const Key('account-build-stamp-footer'),
+        textAlign: TextAlign.center,
+        style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+      ),
+    );
+  }
+}
+
+/// [_BuildStampFooter]'s text — `v1.0.0+1 · 2ca9051 · 2h ago`, dropping any
+/// segment that is unknown rather than printing the word "unknown" three times
+/// on a sign-in screen. The version alone always survives, so the line is never
+/// empty.
+@visibleForTesting
+String buildStampFooterLabel({DateTime? now}) {
+  final buildTime = BuildInfo.buildTime;
+  return <String>[
+    'v${BuildInfo.appVersion}',
+    if (BuildInfo.gitSha != BuildInfo.unknown) BuildInfo.gitSha,
+    if (buildTime != null) formatBuildAge(buildTime, now: now),
+  ].join(' · ');
 }
 
 /// Signed-in body: the current user's email + a "Sign out" action, same
@@ -1043,6 +1093,10 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
               const AccountSuggestionsEntryPoint(),
               const AccountAdminEntryPoint(),
               const _InstallSection(),
+              // Build BEFORE storage: "which build is this?" is the first
+              // question of every report, and the answer to it changes how the
+              // storage numbers underneath are read.
+              const _BuildDiagnosticsSection(),
               const _StorageDiagnosticsSection(),
             ],
           ),
@@ -1295,10 +1349,15 @@ class _InstallSection extends ConsumerWidget {
 ///    call site as exactly "the refresh path for the Account screen's
 ///    diagnostics row".
 ///
-/// Those two are the only providers this row WATCHES. The Copy button
-/// additionally READS three more at press time — `syncOrchestratorProvider`,
-/// `appDatabaseProvider` and `authStateProvider` — see [_handleCopy] for why
-/// that is a `ref.read` in the callback rather than a `ref.watch` in `build`.
+/// It also watches `appDatabaseProvider` and `authStateProvider` for the
+/// "Data schema" and "User" rows — two values that used to exist ONLY inside
+/// the clipboard blob, and so were unreadable to anyone the clipboard write
+/// failed for (which is the case the `SelectableText` fallback exists for).
+/// `syncOrchestratorProvider` is still deliberately NOT watched: its state
+/// object changes identity on every debounced push/pull tick, so watching it
+/// would rebuild this whole row to feed a string only the Copy button reads.
+/// That one, plus fresh reads of the other two, happen at press time — see
+/// [_handleCopy] for why that is a `ref.read` in the callback.
 ///
 /// Deliberately NOT `kIsWeb`-gated, unlike [_InstallSection]: on native every
 /// value here is still honest ([StorageBackend.nativeFile],
@@ -1327,6 +1386,18 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
     final errorReason = durability.unavailableReason;
     final evictionLabel = _evictionLabel(persistence);
     final spaceLabel = _spaceUsedLabel(persistence.estimate);
+
+    // `ref.watch` here (the Copy button below still `ref.read`s at press time)
+    // so the User row follows a sign-in/sign-out instead of stranding the
+    // previous account's digest on screen. Through `hasValue`/`requireValue`,
+    // never `asData?.value`, for the reason [AccountScreen.build] spells out:
+    // a REFRESHING provider is an `AsyncLoading` carrying its previous value,
+    // and the `asData` form would blank this to `none` for the whole of every
+    // token refresh.
+    final auth = ref.watch(authStateProvider);
+    final userDigest = shortUserIdHash(
+      auth.hasValue ? auth.requireValue.uid : null,
+    );
 
     return Column(
       key: const Key('account-storage-diagnostics'),
@@ -1363,6 +1434,27 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
           evictionLabel,
         ),
         _diagnosticsRow(textTheme, colors, 'Space used', spaceLabel),
+        // Both of these were already in the clipboard blob and nowhere else,
+        // which made them useless to anyone who could not get the clipboard to
+        // work — the exact users a `SelectableText` fallback exists for. The
+        // schema number is what a "my topos vanished after an update" report
+        // turns on (see `SchemaDowngradeException`), and the user digest is how
+        // two reports get matched to one account without the raw uid ever
+        // leaving the app (see [shortUserIdHash]).
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'Data schema',
+          'v${ref.watch(appDatabaseProvider).schemaVersion}',
+          rowKey: const Key('account-storage-schema'),
+        ),
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'User',
+          userDigest,
+          rowKey: const Key('account-storage-user'),
+        ),
         const SizedBox(height: MasiSpacing.sm),
         Row(
           children: [
@@ -1385,6 +1477,12 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
                   // touches no query.
                   schemaVersion: ref.read(appDatabaseProvider).schemaVersion,
                   userId: _currentUid(ref),
+                  // Whatever the Build section above has already resolved. Read
+                  // (not awaited) on purpose: this button must stay a single
+                  // synchronous clipboard write, and a shell probe that has not
+                  // answered yet is correctly stamped `unknown` rather than
+                  // holding the paste hostage to a browser call.
+                  shell: shellValueOrNull(ref.read(shellInfoProvider)),
                 ),
                 child: const Text('Copy diagnostics'),
               ),
@@ -1396,56 +1494,21 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
                 // `refresh()`, NEVER `requestPersistenceOnce()`: looking at
                 // this row must never re-trigger the browser's persistence
                 // prompt as a side effect.
-                onPressed: () =>
-                    ref.read(storagePersistenceProvider.notifier).refresh(),
+                onPressed: () {
+                  ref.read(storagePersistenceProvider.notifier).refresh();
+                  // The shell probe re-runs too: "did my reload pick up the new
+                  // build?" is the question this button is actually pressed
+                  // for, and the answer lives in the Build section above.
+                  // `invalidate` is the whole refresh mechanism there — see
+                  // `shellInfoProvider`'s doc for why it owns no state.
+                  ref.invalidate(shellInfoProvider);
+                },
                 child: const Text('Refresh'),
               ),
             ),
           ],
         ),
       ],
-    );
-  }
-
-  Widget _diagnosticsRow(
-    TextTheme textTheme,
-    MasiColors colors,
-    String label,
-    String value, {
-    Key? rowKey,
-  }) {
-    return Padding(
-      key: rowKey,
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Text(
-              label,
-              style: textTheme.bodySmall?.copyWith(color: colors.ink2),
-            ),
-          ),
-          const SizedBox(width: MasiSpacing.sm),
-          // `SelectableText`, not `Text`: this is the honest fallback for
-          // when [_handleCopy] fails (permissions-policy, an unfocused
-          // document, a non-secure context — see that method's doc) — a
-          // support-diagnostics row whose ONLY job is "get this string out of
-          // the app" must still let the user copy it by hand if the
-          // clipboard API itself won't cooperate. `find.textContaining` still
-          // matches it (`_MatchTextFinder` special-cases `EditableText`,
-          // which `SelectableText` builds internally), so no existing
-          // assertion needed to change.
-          Expanded(
-            flex: 2,
-            child: SelectableText(
-              value,
-              textAlign: TextAlign.end,
-              style: textTheme.bodySmall,
-            ),
-          ),
-        ],
-      ),
     );
   }
 
@@ -1476,6 +1539,7 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
     SyncOrchestratorState? sync,
     int? schemaVersion,
     String? userId,
+    ShellInfo? shell,
   }) async {
     final messenger = ScaffoldMessenger.of(context);
     try {
@@ -1487,6 +1551,7 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
             sync: sync,
             schemaVersion: schemaVersion,
             userId: userId,
+            shell: shell,
           ),
         ),
       );
@@ -1505,6 +1570,195 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
       const SnackBar(content: Text('Diagnostics copied.')),
     );
   }
+}
+
+/// One `label ......... value` line, shared by [_StorageDiagnosticsSection]
+/// and [_BuildDiagnosticsSection].
+///
+/// A top-level function rather than a method on either widget so the two
+/// sections cannot drift into rendering the same kind of fact two different
+/// ways — a support screen whose rows do not line up is a support screen that
+/// gets screenshotted wrong.
+Widget _diagnosticsRow(
+  TextTheme textTheme,
+  MasiColors colors,
+  String label,
+  String value, {
+  Key? rowKey,
+}) {
+  return Padding(
+    key: rowKey,
+    padding: const EdgeInsets.symmetric(vertical: 2),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: textTheme.bodySmall?.copyWith(color: colors.ink2),
+          ),
+        ),
+        const SizedBox(width: MasiSpacing.sm),
+        // `SelectableText`, not `Text`: this is the honest fallback for when
+        // [_StorageDiagnosticsSection._handleCopy] fails (permissions-policy,
+        // an unfocused document, a non-secure context — see that method's
+        // doc) — a support-diagnostics row whose ONLY job is "get this string
+        // out of the app" must still let the user copy it by hand if the
+        // clipboard API itself won't cooperate. `find.textContaining` still
+        // matches it (`_MatchTextFinder` special-cases `EditableText`, which
+        // `SelectableText` builds internally), so no existing assertion needed
+        // to change.
+        Expanded(
+          flex: 2,
+          child: SelectableText(
+            value,
+            textAlign: TextAlign.end,
+            style: textTheme.bodySmall,
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+/// "Which build am I actually running?" — the build stamp
+/// (`lib/core/diagnostics/build_info.dart`), what is executing it, which
+/// backend it talks to, and what the offline shell
+/// (`lib/core/diagnostics/shell_info.dart`) is doing underneath it.
+///
+/// This is the section that exists because of a specific, repeated failure:
+/// on web the running bundle and the deployed bundle routinely disagree — a
+/// stale service worker keeps serving the previous build out of its precache
+/// — and from inside the app that is indistinguishable from a deploy whose fix
+/// simply did not work (`CLAUDE.md`: "a stale service worker serves the
+/// PREVIOUS build and you will debug a ghost"). Every row here is chosen to
+/// separate those two cases:
+///
+///  - **Version / Built / Commit** identify the bundle. A build time that is
+///    older than the last deploy IS the stale-shell diagnosis, with no console
+///    access required.
+///  - **Channel** carries both what was built (`BuildInfo.channel`) and what is
+///    actually executing ([BuildInfo.runtimeLabel]) — a wasm build falling back
+///    to the dart2js/canvaskit path takes genuinely different renderer and
+///    plugin code, so a bug that reproduces on one and not the other is a
+///    different bug.
+///  - **Offline shell** names the worker's own content-derived version and,
+///    crucially, whether an update is already waiting — the difference between
+///    "the fix isn't there" and "the fix is one reload away".
+///  - **Backend** is the Supabase host. Every RLS, sync and moderation report
+///    is meaningless without knowing which project produced it, and the URL is
+///    `--dart-define`-overridable, so it is not derivable from the version.
+///
+/// Deliberately NOT `kIsWeb`-gated, for the same reason
+/// [_StorageDiagnosticsSection] isn't: every value is still honest on native
+/// (the shell row reports "not applicable" through the inert stub), so gating
+/// would only hide the section from every widget test with nothing gained on a
+/// real native build.
+class _BuildDiagnosticsSection extends ConsumerWidget {
+  const _BuildDiagnosticsSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final colors = MasiColors.of(context);
+    final textTheme = Theme.of(context).textTheme;
+
+    return Column(
+      key: const Key('account-build-diagnostics'),
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: MasiSpacing.lg),
+        Text('Build', style: textTheme.titleMedium),
+        const SizedBox(height: MasiSpacing.sm),
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'Version',
+          BuildInfo.appVersion,
+          rowKey: const Key('account-build-version'),
+        ),
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'Built',
+          formatBuildStamp(BuildInfo.buildTime),
+          rowKey: const Key('account-build-time'),
+        ),
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'Commit',
+          BuildInfo.commitLabel,
+          rowKey: const Key('account-build-commit'),
+        ),
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'Channel',
+          '${BuildInfo.channel} · ${BuildInfo.runtimeLabel} · '
+              '${BuildInfo.modeLabel}',
+          rowKey: const Key('account-build-channel'),
+        ),
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'Offline shell',
+          shellRowLabel(ref.watch(shellInfoProvider)),
+          rowKey: const Key('account-build-shell'),
+        ),
+        _diagnosticsRow(
+          textTheme,
+          colors,
+          'Backend',
+          supabaseHostLabel(supabaseUrl),
+          rowKey: const Key('account-build-backend'),
+        ),
+      ],
+    );
+  }
+}
+
+/// The "Offline shell" row's value for [shellInfoProvider]'s current state.
+///
+/// Three distinct answers, never collapsed: a probe still in flight says so, a
+/// probe that THREW says so (a failed read is a fact about the browser, not
+/// evidence about the worker), and only a real answer renders
+/// [ShellInfo.summary].
+///
+/// Reads through `hasValue`/`requireValue` rather than `asData?.value` for the
+/// reason [AccountScreen.build] already spells out: in Riverpod v3 a
+/// re-running provider is an `AsyncLoading` that still carries its previous
+/// value and whose `asData` is null, so the `asData` form would flash this row
+/// back to "checking…" on every refresh.
+/// [shell]'s value when it has one, else `null` — the shape
+/// [diagnosticsClipboardLine]'s optional `shell` parameter wants.
+///
+/// `hasValue`/`requireValue`, so a provider that is RE-RUNNING still yields
+/// the value it already has: a blob copied during a refresh must carry the
+/// shell version rather than stamping `shellVersion=unknown`, since a refresh
+/// is exactly the moment a user is most likely to be reporting a problem in.
+@visibleForTesting
+ShellInfo? shellValueOrNull(AsyncValue<ShellInfo> shell) =>
+    shell.hasValue ? shell.requireValue : null;
+
+@visibleForTesting
+String shellRowLabel(AsyncValue<ShellInfo> shell) {
+  if (shell.hasValue) return shell.requireValue.summary;
+  if (shell.hasError) return "couldn't be read (${shell.error})";
+  return 'checking…';
+}
+
+/// [supabaseUrl]'s host — `mnaipcqbkqzffgvxpato.supabase.co` — or the raw
+/// value when it will not parse.
+///
+/// The host, not the whole URL: the scheme and trailing slash are constant
+/// noise in a row that has to fit beside its label, and the project ref (the
+/// first label of the host) is the part anyone actually compares. Never
+/// silently blank — a build pointed at a URL that does not parse is exactly
+/// the build whose "sync does nothing" report this row has to explain.
+@visibleForTesting
+String supabaseHostLabel(String url) {
+  final host = Uri.tryParse(url)?.host ?? '';
+  return host.isEmpty ? url : host;
 }
 
 /// [_diagnosticsRow]'s "Eviction protection" value. [StoragePersistOutcome
@@ -1567,20 +1821,17 @@ String _humanizeBytes(int? bytes) {
 
 /// The app version stamped into [diagnosticsClipboardLine].
 ///
-/// A compile-time constant rather than a runtime lookup: this project has no
-/// `package_info_plus` dependency, and adding one to read back a number that
-/// is already known at build time would buy a plugin, an async call and a
-/// loading state for nothing. A build that passes
-/// `--dart-define=APP_VERSION=…` wins; the fallback mirrors `pubspec.yaml`'s
-/// own `version:` line, which is the same value a `package_info` lookup
-/// would have returned.
+/// Now just [BuildInfo.appVersion] under its original name — the const itself
+/// moved to `lib/core/diagnostics/build_info.dart` when the rest of the build
+/// stamp (commit, branch, build time, channel) joined it there and the two had
+/// to be able to travel together. Kept as an alias rather than deleted because
+/// it is the name this screen's tests already assert against, and renaming a
+/// diagnostic constant buys nothing.
 ///
-/// KEEP IN SYNC with `pubspec.yaml`'s `version:` — or, better, teach the
-/// build script to pass the define and this literal stops mattering.
-const String kMasiAppVersion = String.fromEnvironment(
-  'APP_VERSION',
-  defaultValue: '1.0.0+1',
-);
+/// `tool/build_web.sh` now passes `--dart-define=APP_VERSION=…` read straight
+/// out of `pubspec.yaml`, so the literal fallback in [BuildInfo] no longer
+/// matters on any web build — see that class's doc.
+const String kMasiAppVersion = BuildInfo.appVersion;
 
 /// The signed-in user's Supabase uid, for [diagnosticsClipboardLine]'s
 /// [shortUserIdHash].
@@ -1696,6 +1947,15 @@ String _errorToken(String key, String? message) =>
 /// gets a valid line, and each absent value renders the honest `unknown`
 /// rather than a plausible-looking default. [userId] is hashed on the way in
 /// (see [shortUserIdHash]) and never appears raw.
+///
+/// Also carries the BUILD STAMP (`commit`/`branch`/`buildTime`/`channel`/
+/// `runtime`/`mode`, read straight from [BuildInfo] — see the inline comment
+/// at the return for why those are not parameters) and the OFFLINE SHELL's
+/// state ([shell]). Those two answer the question that has to be settled
+/// before any of the tokens above mean anything on web: whether this report
+/// even describes the build that was deployed. A stale service worker serving
+/// the previous bundle produces a perfectly healthy-looking storage blob for a
+/// build the reader has already replaced.
 @visibleForTesting
 String diagnosticsClipboardLine(
   StorageDurability durability,
@@ -1704,6 +1964,7 @@ String diagnosticsClipboardLine(
   int? schemaVersion,
   String? userId,
   String appVersion = kMasiAppVersion,
+  ShellInfo? shell,
 }) {
   final backendLabel =
       durability.measuredBackend?.name ??
@@ -1739,6 +2000,32 @@ String diagnosticsClipboardLine(
             'lastSyncedAt='
             '${sync.lastSyncedAt?.toUtc().toIso8601String() ?? 'never'}';
 
+  // The build stamp, straight from [BuildInfo] rather than through parameters,
+  // because unlike everything else here it is a COMPILE-TIME fact: there is no
+  // caller-supplied variant of "which commit is this bundle", and threading it
+  // through would only create a way for a caller to stamp a build this is not.
+  // `runtimeToken`, not `runtimeLabel` — the label has a space in it and would
+  // end the token early (see that accessor's doc). An unstamped build renders
+  // `unknown`/an empty `buildTime`, which is the honest answer and is itself
+  // the finding: the bundle did not come out of `tool/build_web.sh`.
+  final buildTokens =
+      'commit=${BuildInfo.gitSha} '
+      'branch=${BuildInfo.gitBranch} '
+      'buildTime=${BuildInfo.buildTimeRaw.isEmpty ? 'unknown' : BuildInfo.buildTimeRaw} '
+      'channel=${BuildInfo.channel} '
+      'runtime=${BuildInfo.runtimeToken} '
+      'mode=${BuildInfo.modeLabel}';
+
+  // `unknown`-shaped tokens (not absent ones) when the shell probe has not
+  // answered, for the same reason [syncTokens] does it: on web the offline
+  // shell is never "not a thing", so a missing answer is a fact about the
+  // probe, and silently dropping the tokens would read as "no service worker".
+  final shellTokens =
+      shell?.clipboardTokens ??
+      'shellVersion=unknown shellRegistered=unknown '
+          'shellControlling=unknown shellUpdatePending=unknown '
+          'shellStaleCaches=';
+
   return 'masi/storage: backend=$backendLabel '
       'missingFeatures=${missing.join(',')} '
       'persistOutcome=${persistence.outcome.name} '
@@ -1748,6 +2035,8 @@ String diagnosticsClipboardLine(
       'usedPct=$usedPct '
       'schemaVersion=${schemaVersion ?? 'unknown'} '
       'appVersion=$appVersion '
+      '$buildTokens '
+      '$shellTokens '
       'user=${shortUserIdHash(userId)} '
       '$syncTokens'
       '${_errorToken('pullError', sync?.lastPullError)}'

@@ -2,7 +2,11 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:masi/app/theme.dart';
+import 'package:masi/core/config/supabase_config.dart' show supabaseUrl;
 import 'package:masi/core/db/app_database.dart';
+import 'package:masi/core/diagnostics/build_info.dart';
+import 'package:masi/core/diagnostics/shell_info_provider.dart';
+import 'package:masi/core/diagnostics/shell_info_types.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/db/storage_durability_provider.dart';
 import 'package:masi/core/storage/storage_persistence_providers.dart';
@@ -2105,6 +2109,201 @@ void main() {
         },
       );
     }
+  });
+
+  group('build-diagnostics section', () {
+    /// Same signed-in scaffolding as the storage group above, plus an
+    /// overridable [shellInfoReaderProvider] — a browser shell state is
+    /// unreachable from `flutter test` (the real reader is the inert stub
+    /// here), so the seam is the only way to assert the rows that matter.
+    ProviderContainer makeContainer({ShellInfoReader? shellReader}) {
+      final fakeRepo = FakeAuthRepository(
+        const AuthSessionState.signedIn('climber@example.com'),
+      );
+      addTearDown(fakeRepo.dispose);
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [
+          authRepositoryProvider.overrideWithValue(fakeRepo),
+          appDatabaseProvider.overrideWithValue(db),
+          syncOrchestratorProvider.overrideWith(
+            () => _FixedSyncOrchestrator(const SyncOrchestratorState()),
+          ),
+          if (shellReader != null)
+            shellInfoReaderProvider.overrideWithValue(shellReader),
+        ],
+      );
+      addTearDown(container.dispose);
+      return container;
+    }
+
+    testWidgets(
+      'renders the build stamp: version, built, commit, channel, shell and '
+      'backend — the six facts a web bug report cannot be read without',
+      (tester) async {
+        await tester.pumpWidget(
+          _wrap(makeContainer(), const AccountScreen()),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('account-build-diagnostics')),
+          findsOneWidget,
+        );
+        for (final key in [
+          'account-build-version',
+          'account-build-time',
+          'account-build-commit',
+          'account-build-channel',
+          'account-build-shell',
+          'account-build-backend',
+        ]) {
+          expect(find.byKey(Key(key)), findsOneWidget, reason: key);
+        }
+      },
+    );
+
+    testWidgets(
+      'an UNSTAMPED build (which is exactly what flutter test is) says so, '
+      'rather than inventing a build time that would then be believed',
+      (tester) async {
+        await tester.pumpWidget(
+          _wrap(makeContainer(), const AccountScreen()),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining('build not stamped'),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets(
+      'the backend row names the Supabase HOST, so a report can be matched to '
+      'the project that produced it',
+      (tester) async {
+        await tester.pumpWidget(
+          _wrap(makeContainer(), const AccountScreen()),
+        );
+        await tester.pumpAndSettle();
+
+        expect(
+          find.textContaining(supabaseHostLabel(supabaseUrl)),
+          findsOneWidget,
+        );
+        // The host, not the whole URL — the scheme is constant noise in a row
+        // that has to fit beside its label.
+        expect(find.textContaining('https://'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'a waiting service-worker update surfaces on screen — the difference '
+      'between "the fix is not there" and "the fix is one reload away"',
+      (tester) async {
+        final container = makeContainer(
+          shellReader: () async => const ShellInfo(
+            supported: true,
+            registered: true,
+            controlling: true,
+            updatePending: true,
+            version: 'a1b2c3d4',
+          ),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining('a1b2c3d4'), findsOneWidget);
+        expect(find.textContaining('update ready'), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      'a shell probe that THREW says it could not be read, and never renders '
+      'as "no service worker" — a failed read is a fact about the browser, '
+      'not evidence about the worker',
+      (tester) async {
+        final container = makeContainer(
+          shellReader: () async => throw StateError('probe exploded'),
+        );
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(find.textContaining("couldn't be read"), findsOneWidget);
+        expect(find.textContaining('not registered'), findsNothing);
+      },
+    );
+
+    testWidgets(
+      'the SIGNED-OUT card still carries a one-line stamp. On web the auth '
+      'gate bounces every route to /account, so a deploy that breaks sign-in '
+      'leaves this screen as the only reachable diagnostic',
+      (tester) async {
+        final fakeRepo = FakeAuthRepository(const AuthSessionState.signedOut());
+        addTearDown(fakeRepo.dispose);
+        final container = ProviderContainer(
+          overrides: [authRepositoryProvider.overrideWithValue(fakeRepo)],
+        );
+        addTearDown(container.dispose);
+
+        await tester.pumpWidget(_wrap(container, const AccountScreen()));
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('account-build-stamp-footer')),
+          findsOneWidget,
+        );
+        expect(find.textContaining('v${BuildInfo.appVersion}'), findsOneWidget);
+      },
+    );
+
+    test(
+      'buildStampFooterLabel DROPS unknown segments rather than printing the '
+      'word "unknown" three times on a sign-in screen, and never goes empty',
+      () {
+        final label = buildStampFooterLabel();
+        expect(label, startsWith('v${BuildInfo.appVersion}'));
+        expect(label, isNot(contains('unknown')));
+      },
+    );
+
+    test('shellRowLabel keeps the three states distinct', () {
+      expect(shellRowLabel(const AsyncLoading<ShellInfo>()), 'checking…');
+      expect(
+        shellRowLabel(AsyncError<ShellInfo>(StateError('x'), StackTrace.empty)),
+        contains("couldn't be read"),
+      );
+      expect(
+        shellRowLabel(const AsyncData(ShellInfo.notApplicable)),
+        'not applicable',
+      );
+    });
+
+    test(
+      'shellValueOrNull yields a value whenever the provider HAS one, and '
+      'null only when it genuinely has none — so a blob copied while the '
+      'probe is re-running still carries the shell version instead of '
+      'stamping unknown',
+      () {
+        expect(
+          shellValueOrNull(
+            const AsyncData(ShellInfo(supported: true, version: 'a1b2c3d4')),
+          )?.version,
+          'a1b2c3d4',
+        );
+        expect(shellValueOrNull(const AsyncLoading<ShellInfo>()), isNull);
+        expect(
+          shellValueOrNull(
+            AsyncError<ShellInfo>(StateError('x'), StackTrace.empty),
+          ),
+          isNull,
+        );
+      },
+    );
   });
 
   group('shortUserIdHash: stable across compilers', () {
