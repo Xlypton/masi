@@ -206,8 +206,12 @@ void main() {
       fake.rows['photos'] = [
         {..._validRow('photos', 'p1'), 'wallId': 'w1'},
       ];
+      // `photoId` is pinned to the seeded photo rather than left to
+      // `_validRow`'s generated `photoId-of-r1`, which named a photo that was
+      // never in the batch. `routes.photoId -> photos` is a NOT NULL FK, so
+      // that fixture described a batch the importer could not actually write.
       fake.rows['routes'] = [
-        {..._validRow('routes', 'r1'), 'wallId': 'w1'},
+        {..._validRow('routes', 'r1'), 'wallId': 'w1', 'photoId': 'p1'},
       ];
       fake.rows['comments'] = [
         {..._validRow('comments', 'c1'), 'wallId': 'w1'},
@@ -238,6 +242,46 @@ void main() {
             'feed. fetchSharedAscents is the separate, opt-in path.',
       );
     });
+
+    test(
+      'drops a shared route whose photo row is absent, so a permanently '
+      'orphaned route cannot wedge every pull on "parent row missing"',
+      () async {
+        // Observed live on 2026-08-26: four shared routes across two walls
+        // referenced `photos` ids with no row at all — one of the walls had no
+        // photos on the server whatsoever. `routes.photoId -> photos` is a
+        // NOT NULL FK locally, so the importer deferred them and SyncService
+        // reported `shared rows deferred (parent row missing)` on EVERY pull.
+        // Unlike a fetch race, this never heals on its own: the same routes
+        // come back and the same photo is still gone.
+        seedSharedWall();
+        fake.rows['routes'] = [
+          {..._validRow('routes', 'r1'), 'wallId': 'w1', 'photoId': 'p1'},
+          {
+            ..._validRow('routes', 'orphan'),
+            'wallId': 'w1',
+            'photoId': 'photo-that-does-not-exist',
+          },
+        ];
+
+        final result = await remote.fetchSharedTopos();
+
+        expect(
+          [for (final r in result['routes']!) r['id']],
+          ['r1'],
+          reason: 'the route with a resolvable photo survives; the orphan is '
+              'dropped rather than handed to the importer, which could only '
+              'defer it',
+        );
+        // The batch that comes back must be internally consistent — that is
+        // what lets any REMAINING deferral still be treated as a real defect
+        // rather than routine noise (#72).
+        final photoIds = {for (final p in result['photos']!) p['id']};
+        for (final route in result['routes']!) {
+          expect(photoIds, contains(route['photoId']));
+        }
+      },
+    );
 
     test('collapses the wall-derived queries into one wave', () async {
       seedSharedWall();

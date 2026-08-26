@@ -1114,7 +1114,48 @@ class SupabaseSyncRemote implements SyncRemote {
     final rawRoutes = <Map<String, dynamic>>[
       for (final row in wave2[2]) Map<String, dynamic>.from(row),
     ];
-    final routeRows = filterValidSyncRows(rawRoutes, const ['id'], debugLabel: 'shared route');
+    // A route whose `photoId` names a photo this batch does not contain cannot
+    // be written: `routes.photoId -> photos` is a NOT NULL FK locally, so the
+    // importer defers the row and `SyncService` reports `shared rows deferred
+    // (parent row missing)` — the red "Couldn't sync" banner. Unlike the
+    // race [consistentSharedAscentBatch] guards, this one does NOT heal on the
+    // next pull when the photo row is simply gone from the server: the same
+    // routes come back, the same photo is still absent, and the user is told
+    // their sync is broken forever.
+    //
+    // Observed live on 2026-08-26: four shared routes across two walls pointing
+    // at two `photos` ids with no row at all — one wall had no photos on the
+    // server whatsoever. The underlying defect is upstream (a photo row that
+    // never reached the server while its routes did) and is worth fixing at the
+    // source, but no client can insert a row whose parent does not exist, and a
+    // route with no photo cannot be drawn or displayed even if it could.
+    //
+    // So it is dropped here rather than deferred. This deliberately does NOT
+    // weaken the deferral report (#72): the batch this returns is internally
+    // consistent, so any deferral the importer still reports is a real defect.
+    // And it destroys nothing — these are OTHER people's published rows being
+    // cached locally; the authoritative copy stays on the server untouched, so
+    // the moment the missing photo does arrive, the route imports normally.
+    final photoIds = {
+      for (final p in photoRows)
+        if (p['id'] case final String id) id,
+    };
+    final routeRows = <Map<String, dynamic>>[];
+    for (final row in filterValidSyncRows(
+      rawRoutes,
+      const ['id'],
+      debugLabel: 'shared route',
+    )) {
+      final photoId = row['photoId'];
+      if (photoId is String && photoIds.contains(photoId)) {
+        routeRows.add(row);
+        continue;
+      }
+      debugPrint(
+        'sync: dropping shared route ${row['id']} — its photo $photoId is '
+        'not in this batch',
+      );
+    }
 
     final rawComments = <Map<String, dynamic>>[
       for (final row in wave2[3]) Map<String, dynamic>.from(row),
