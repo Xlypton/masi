@@ -96,9 +96,11 @@ file/line brief: `WEB_PORT_BRIEF.md`.
   because the seam files' doc comments legitimately name `dart:io` while explaining the conditional-import
   split. That false-positive form is what used to keep this gate red on code that was already correct. Keep
   the regex byte-identical across `tool/build_web.sh:40` and `.github/workflows/ci.yml`.
-- **CI floor:** `.github/workflows/ci.yml` — analyze, test, **and the `dart:io` gate** are required jobs; only
-  `web-build` is still `continue-on-error`. Repo is local-first; the workflow is the spec, `tool/build_web.sh`
-  is the local gate.
+- **CI floor:** `.github/workflows/ci.yml` — **four required jobs, none advisory**: analyze + test, the
+  `dart:io` gate, the **secret scan**, and **web build + bundle gates** (which runs `tool/build_web.sh`
+  itself, so the emitted-bundle guarantees are enforced rather than merely available). `web-build` lost
+  its `continue-on-error` on 2026-08-27 once the offline-shell work was verified green end to end.
+  `dart run tool/gate.dart` is the local equivalent of the first three.
 - **`dart:io` on web COMPILES (it's stubbed), it does not fail the build.** `flutter build web` and
   `flutter build web --wasm` both succeed even with `import 'dart:io'` present — Dart 3.12 stubs the library
   and throws at *runtime*. So the grep gate is a **runtime-correctness guardrail, not a compile gate**: a

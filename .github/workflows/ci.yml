@@ -1,17 +1,17 @@
 name: CI
 
-# CI floor for the Masi web port (v2 plan, Phase 0).
-# The repo is local-first and not currently pushed to a remote; this workflow is
-# the enforceable spec for when one exists. The same gates run locally via
-# `tool/build_web.sh` and the standard `flutter analyze` / `flutter test`.
+# CI floor for the Masi web port.
+# The same gates run locally, in one command: `dart run tool/gate.dart`.
 #
-# NOTE: the `dart:io` gate is enforceable today — it matches import/export
-# DIRECTIVES only, exactly as `tool/build_web.sh` does. A raw substring grep
-# flags the seam files' doc comments (which legitimately mention `dart:io` when
-# explaining the wasm conditional-import split) and can never be empty; that
-# false-positive form is what used to keep this gate red on clean code.
-# The `web-build` job stays continue-on-error until the Stage 2 offline-shell
-# work lands, so a build regression can't block the analyze/test floor.
+# ALL FOUR JOBS ARE REQUIRED. Nothing here is advisory any more — a job that
+# cannot fail the build is a job nobody reads the output of.
+#
+# NOTE: the `dart:io` gate matches import/export DIRECTIVES only, exactly as
+# `tool/build_web.sh` does. A raw substring grep flags the seam files' doc
+# comments (which legitimately mention `dart:io` when explaining the wasm
+# conditional-import split) and can never be empty; that false-positive form is
+# what used to keep this gate red on clean code. `test/tool/dart_io_gate_test.dart`
+# pins this file's regex byte-identical to the one in `tool/build_web.sh`.
 
 on:
   push:
