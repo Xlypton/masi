@@ -5,7 +5,8 @@
 // CLAUDE.md makes `git push` the DEFAULT for every agent working this repo,
 // and it lists five real credentials that live in plain files on the dev box
 // (`~/.config/climbtopo-mgmt-token`, `cf-pages-token`, `masi-e2e-password`,
-// `masi-push-hook-secret`, `masi-vapid-private`). Those two facts multiply:
+// `masi-push-hook-secret`, `masi-vapid-private`) — or, in a cloud/dispatched
+// session, arrive as the matching env vars. Those two facts multiply:
 // pushing PUBLISHES, so a secret that reaches a commit is on GitHub the moment
 // the branch goes up, and rewriting history does not un-publish it. The window
 // between "staged by mistake" and "public" used to be a single command with
@@ -25,7 +26,9 @@
 //      unremarkable — the E2E password is just a random string, and no regex
 //      can distinguish it from a test fixture. This is the layer that matters
 //      most here, and it is only possible because the scanner runs on the
-//      machine that holds the secrets.
+//      machine that holds the secrets. In a cloud/dispatched session the same
+//      secrets arrive as env vars instead of files; those are folded into this
+//      layer too (see `_localSecretEnvVars`).
 //   3. PATHS. A file whose NAME says it is a credential store, regardless of
 //      what is inside it.
 //
@@ -127,6 +130,20 @@ const List<String> _localSecretFiles = [
   '.config/masi-push-hook-secret',
   '.config/masi-vapid-private',
 ];
+
+/// The same secrets as [_localSecretFiles], but as a cloud / dispatched session
+/// receives them: environment variables instead of files. Layer 2 folds these
+/// into the same verbatim blocklist so the gate still catches an accidental
+/// commit on a machine that has no `~/.config` files at all. The map value is
+/// the `_localSecretFiles` key it stands in for, so a finding names the same
+/// credential either way.
+const Map<String, String> _localSecretEnvVars = {
+  'SUPABASE_MGMT_TOKEN': '.config/climbtopo-mgmt-token',
+  'CLOUDFLARE_API_TOKEN': '.config/cf-pages-token',
+  'MASI_E2E_PASSWORD': '.config/masi-e2e-password',
+  'MASI_PUSH_HOOK_SECRET': '.config/masi-push-hook-secret',
+  'MASI_VAPID_PRIVATE': '.config/masi-vapid-private',
+};
 
 /// Paths the scanner will not read. Generated/vendored bulk only — never a
 /// source directory, and never anything that could hold a hand-written value.
@@ -251,6 +268,14 @@ void main(List<String> argv) {
       }
     }
   }
+  // Cloud / dispatched sessions: the same secrets, delivered as env vars. A
+  // file already read for a given credential wins (it is the source of truth on
+  // a dev box); otherwise take the env var.
+  _localSecretEnvVars.forEach((envName, rel) {
+    if (localSecrets.containsKey(rel)) return;
+    final value = (Platform.environment[envName] ?? '').trim();
+    if (value.length >= 12) localSecrets[rel] = value;
+  });
 
   final findings = <_Finding>[];
 
@@ -307,7 +332,8 @@ void main(List<String> argv) {
           path: path,
           line: i + 1,
           rule: 'local-secret-verbatim',
-          why: 'This line contains the literal contents of ~/${entry.key}. '
+          why: 'This line contains the literal value of the credential '
+              'stored at ~/${entry.key} (or its matching env var). '
               'Its shape may look harmless; the value is a live credential.',
           excerpt: _redact(line, entry.value),
         ));
@@ -328,11 +354,11 @@ void main(List<String> argv) {
 
   stdout.writeln('==> secret scan ($mode, ${paths.length} file(s))');
   if (localSecrets.isEmpty) {
-    stdout.writeln('    note: no local credential files found — shape and path '
-        'rules only (expected on CI).');
+    stdout.writeln('    note: no local credential files or env vars found — '
+        'shape and path rules only (expected on a bare CI runner).');
   } else {
-    stdout.writeln('    ${localSecrets.length} local credential file(s) loaded '
-        'for verbatim matching (values never printed).');
+    stdout.writeln('    ${localSecrets.length} local credential(s) loaded '
+        'for verbatim matching (from ~/.config or env; values never printed).');
   }
 
   if (findings.isEmpty) {

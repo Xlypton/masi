@@ -332,19 +332,23 @@ endpoint the Supabase Dashboard's SQL editor uses. Project ref:
 `mnaipcqbkqzffgvxpato`.
 
 **Token.** A personal access token (`sbp_…`), admin-only — the app itself
-only ever uses the anon key baked into `supabase_config.dart` (§2). On the
-reference Mac it lives at `~/.config/climbtopo-mgmt-token`. On Windows, the
-equivalent path is:
-```
-%USERPROFILE%\.config\climbtopo-mgmt-token
-```
-or, from Git Bash, `$HOME/.config/climbtopo-mgmt-token` (Git Bash maps
-`$HOME` to the same user profile directory). **Never print, log, echo, or
-commit this token's contents** — read it straight into a variable and use it
-only as an `Authorization: Bearer` header value, exactly as
-`tool/supabase_query.sh` does. This file does not exist on a fresh clone or a
-fresh machine (per `docs/MIGRATION.md`, it is explicitly machine-local) — a
-new one must be issued from the Supabase dashboard if the workflow is needed.
+only ever uses the anon key baked into `supabase_config.dart` (§2).
+
+- **Cloud / dispatched session:** it is already in the environment as
+  `$SUPABASE_MGMT_TOKEN`. Nothing to set up; `tool/supabase_query.sh` uses it
+  automatically.
+- **Local dev box:** it lives at `~/.config/climbtopo-mgmt-token`. On Windows
+  that is `%USERPROFILE%\.config\climbtopo-mgmt-token`, or from Git Bash
+  `$HOME/.config/climbtopo-mgmt-token` (Git Bash maps `$HOME` to the same user
+  profile directory). This file does not exist on a fresh clone or a fresh
+  machine (per `docs/MIGRATION.md`, it is explicitly machine-local) — issue a
+  new one from the Supabase dashboard if the workflow is needed, or export it as
+  `SUPABASE_MGMT_TOKEN` for the session instead.
+
+Every script checks `$SUPABASE_MGMT_TOKEN` first, then the file (see `CLAUDE.md`
+"Cloud vs local: how secrets arrive"). **Never print, log, echo, or commit this
+token's contents** — read it straight into a variable and use it only as an
+`Authorization: Bearer` header value, exactly as `tool/supabase_query.sh` does.
 
 **Recipe** (`tool/supabase_query.sh` — see §6, this one should run under Git
 Bash given `curl` and `jq` on `PATH`):
@@ -355,7 +359,7 @@ tool/supabase_query.sh path/to/migration.sql   # whole-file DDL
 Raw form, if you need it inline instead of the script (bash, incl. Git Bash):
 ```bash
 REF=mnaipcqbkqzffgvxpato
-TOKEN="$(tr -d '[:space:]' < "$HOME/.config/climbtopo-mgmt-token")"
+TOKEN="${SUPABASE_MGMT_TOKEN:-$(tr -d '[:space:]' < "$HOME/.config/climbtopo-mgmt-token")}"
 API="https://api.supabase.com/v1/projects/$REF/database/query"
 curl -sS -X POST "$API" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   --data "$(jq -n --arg q 'SELECT 1;' '{query:$q}')"

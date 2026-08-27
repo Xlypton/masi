@@ -139,11 +139,12 @@ const String e2eRealEmail = String.fromEnvironment(
 
 /// The real E2E account's password, or `''` when REAL mode was not requested.
 ///
-/// Supplied as `--dart-define=E2E_PASSWORD=…`, sourced from
-/// `~/.config/masi-e2e-password`. It is a throwaway credential for three
-/// `.test` accounts on a dev project and is never committed — but it IS baked
-/// into whatever bundle you build with it, which is one more reason such a
-/// bundle only ever goes to `build/web_e2e` and is never deployed.
+/// Supplied as `--dart-define=E2E_PASSWORD=…`, which `tool/e2e_accounts.sh env`
+/// fills from `$MASI_E2E_PASSWORD` (cloud) or `~/.config/masi-e2e-password`
+/// (local). It is a throwaway credential for three `.test` accounts on a dev
+/// project and is never committed — but it IS baked into whatever bundle you
+/// build with it, which is one more reason such a bundle only ever goes to
+/// `build/web_e2e` and is never deployed.
 const String e2eRealPassword = String.fromEnvironment('E2E_PASSWORD');
 
 /// Whether REAL mode was requested.

@@ -13,6 +13,10 @@
 #
 # Not executable on its own.
 
+# Secret resolution: a cloud/dispatched session receives credentials as env
+# vars ($SUPABASE_MGMT_TOKEN, $MASI_E2E_PASSWORD); a local dev box has them as
+# files under ~/.config. Env wins when set, the file is the fallback. See
+# CLAUDE.md "Cloud vs local: how secrets arrive".
 REF="${SUPABASE_PROJECT_REF:-mnaipcqbkqzffgvxpato}"
 MGMT_TOKEN_FILE="${SUPABASE_MGMT_TOKEN_FILE:-$HOME/.config/climbtopo-mgmt-token}"
 PASSWORD_FILE="${MASI_E2E_PASSWORD_FILE:-$HOME/.config/masi-e2e-password}"
@@ -43,8 +47,14 @@ E2E_PHOTO_PENDING="e2e-photo-pending-0001"
 E2E_PHOTO_DRAFT="e2e-photo-draft-0001"
 
 command -v jq >/dev/null 2>&1 || { echo "e2e: jq is required" >&2; exit 1; }
-[[ -f "$MGMT_TOKEN_FILE" ]] || { echo "e2e: token file not found: $MGMT_TOKEN_FILE" >&2; exit 1; }
-MGMT_TOKEN="$(tr -d '[:space:]' < "$MGMT_TOKEN_FILE")"
+if [[ -n "${SUPABASE_MGMT_TOKEN:-}" ]]; then
+  MGMT_TOKEN="$(printf '%s' "$SUPABASE_MGMT_TOKEN" | tr -d '[:space:]')"
+elif [[ -f "$MGMT_TOKEN_FILE" ]]; then
+  MGMT_TOKEN="$(tr -d '[:space:]' < "$MGMT_TOKEN_FILE")"
+else
+  echo "e2e: no Supabase management token — set \$SUPABASE_MGMT_TOKEN or create $MGMT_TOKEN_FILE" >&2
+  exit 1
+fi
 
 # Runs SQL as the project superuser via the Management API (the same endpoint
 # the Dashboard SQL editor uses). Returns JSON: `[]` for DDL/DML, rows for
@@ -75,8 +85,12 @@ uid_for() {
 }
 
 e2e_password() {
+  if [[ -n "${MASI_E2E_PASSWORD:-}" ]]; then
+    printf '%s' "$MASI_E2E_PASSWORD" | tr -d '\r\n'
+    return
+  fi
   [[ -s "$PASSWORD_FILE" ]] || {
-    echo "e2e: no password at $PASSWORD_FILE — run tool/e2e_accounts.sh ensure" >&2
+    echo "e2e: no E2E password — set \$MASI_E2E_PASSWORD, or run tool/e2e_accounts.sh ensure ($PASSWORD_FILE)" >&2
     exit 1
   }
   tr -d '\r\n' < "$PASSWORD_FILE"

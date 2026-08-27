@@ -58,8 +58,9 @@ if [[ "$FAKE" == "0" ]]; then
     echo "FATAL: no E2E_PASSWORD dart-define — tool/e2e_accounts.sh produced" >&2
     echo "  nothing usable, so this run would silently use the FAKE identity" >&2
     echo "  and report success without touching the backend. Refusing." >&2
-    echo "  Check: ~/.config/masi-e2e-password exists, and tool/e2e_*.sh are" >&2
-    echo "  executable (git ls-files -s tool/e2e_accounts.sh -> 100755)." >&2
+    echo "  Check: \$MASI_E2E_PASSWORD is set, or ~/.config/masi-e2e-password" >&2
+    echo "  exists; and tool/e2e_*.sh are executable" >&2
+    echo "  (git ls-files -s tool/e2e_accounts.sh -> 100755)." >&2
     exit 3
   fi
   echo "==> seeding the live fixture"

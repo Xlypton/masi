@@ -46,6 +46,28 @@ wrong platform.
   `runApp(UncontrolledProviderScope(container: container, child: const MasiApp()))` —
   not the plain `ProviderScope(child: ...)` pattern.
 
+## Cloud vs local: how secrets arrive
+
+**Both paths are supported and every credential-consuming script checks them in this order: env var
+first, then the `~/.config` file.** A local dev box keeps the secrets as plain files under
+`~/.config` (see the Management-API and E2E sections below). A **cloud / dispatched Claude Code
+session** has no such files — the same secrets are injected as environment variables instead. This
+is additive: setting nothing new keeps the local file workflow working exactly as before.
+
+| env var (cloud) | `~/.config` file (local) | consumed by |
+|---|---|---|
+| `SUPABASE_MGMT_TOKEN` | `climbtopo-mgmt-token` | `tool/supabase_query.sh`, `tool/e2e_common.sh`, `tool/e2e_accounts.sh` |
+| `MASI_E2E_PASSWORD` | `masi-e2e-password` | `tool/e2e_common.sh`, `tool/e2e_accounts.sh`, `tool/drive_e2e.sh` |
+| `CLOUDFLARE_API_TOKEN` | `cf-pages-token` | `wrangler` reads it natively — no script wraps it |
+| `CLOUDFLARE_ACCOUNT_ID` | `cf-account-id` | `wrangler` reads it natively — no script wraps it |
+| `MASI_PUSH_HOOK_SECRET` | `masi-push-hook-secret` | Supabase Edge Function secrets only — no repo script |
+| `MASI_VAPID_PRIVATE` | `masi-vapid-private` | Supabase Edge Function secrets only — no repo script |
+| `MASI_VAPID_PUBLIC` | `masi-vapid-public` | public; committed in `supabase_config.dart` |
+
+`tool/scan_secrets.dart` layer 2 reads whichever form is present, so the secret gate still catches an
+accidental commit in a cloud session with no `~/.config` files. Overrides for the file *locations*
+(`SUPABASE_MGMT_TOKEN_FILE`, `MASI_E2E_PASSWORD_FILE`) still work and still lose to a set env var.
+
 ## Web port (in progress — v2 plan)
 
 Porting to Flutter **web/PWA**, mobile-first (phone browsers + installed PWA are the primary target;
@@ -436,13 +458,15 @@ https://api.supabase.com/v1/projects/{ref}/database/query` (the same endpoint th
 which executes arbitrary SQL and returns JSON (`[]` for DDL success, rows for SELECT).
 
 - **Project ref:** `mnaipcqbkqzffgvxpato` (from `SUPABASE_URL` in `lib/core/config/supabase_config.dart`).
-- **Admin token:** a `sbp_…` personal access token in `~/.config/climbtopo-mgmt-token` — read it into a var,
-  **never print or commit it** (the app itself only ever uses the anon key; this token is admin-only, for
-  this workflow). `TOKEN="$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)"`.
+- **Admin token:** a `sbp_…` personal access token — **never print or commit it** (the app itself only
+  ever uses the anon key; this token is admin-only, for this workflow). In a cloud session it is
+  `$SUPABASE_MGMT_TOKEN`; on a local box it is `~/.config/climbtopo-mgmt-token`. **Prefer
+  `tool/supabase_query.sh`** (`-q "SELECT …"` or a `.sql` file path) — it resolves either form for you.
+  Raw: `TOKEN="${SUPABASE_MGMT_TOKEN:-$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)}"`.
 - **Recipe:**
   ```bash
   REF=mnaipcqbkqzffgvxpato
-  TOKEN="$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)"
+  TOKEN="${SUPABASE_MGMT_TOKEN:-$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)}"
   API="https://api.supabase.com/v1/projects/$REF/database/query"
   # inspect (SELECT):
   curl -sS -X POST "$API" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -519,9 +543,11 @@ by a settings allow rule.
 - **Node is a portable install at `C:\tools\nodejs`** and is NOT on PATH (`winget install` hangs forever
   on an invisible UAC elevation prompt; the official zip works). Prefix commands with
   `export PATH="/c/tools/nodejs:$PATH"`, or call `C:\tools\nodejs\npx.cmd` directly.
-- **A Pages-scoped API token lives at `~/.config/cf-pages-token`** — read it into `CLOUDFLARE_API_TOKEN`,
-  never print it. This replaces `wrangler login`, whose OAuth flow times out in well under the time it
-  takes to reach a remote-controlled desktop (it failed twice that way).
+- **The Pages-scoped API token** is `$CLOUDFLARE_API_TOKEN` directly in a cloud session, or
+  `~/.config/cf-pages-token` locally (read it into `CLOUDFLARE_API_TOKEN`) — never print it. `wrangler`
+  reads `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` from the env natively, so no wrapper script is
+  needed either way. This replaces `wrangler login`, whose OAuth flow times out in well under the time
+  it takes to reach a remote-controlled desktop (it failed twice that way).
 - **A `Pages:Edit`-only token cannot resolve its own account.** `wrangler whoami` fails with "Failed to
   automatically retrieve account IDs", and `/accounts`, `/memberships`, `/user` all come back empty or
   unauthorized — the token is valid, it just cannot enumerate. So **`CLOUDFLARE_ACCOUNT_ID` must be set
