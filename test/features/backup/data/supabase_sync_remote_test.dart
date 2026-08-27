@@ -431,6 +431,86 @@ void main() {
   });
 
   // ---------------------------------------------------------------------
+  // The write-side referential guard.
+  //
+  // What it prevents, observed on the live dev project on 2026-08-27: four
+  // live routes across two PUBLISHED walls pointing at two photo ids with no
+  // row at all. One of those walls has zero photo rows and one route, so it
+  // sits in the community feed and can never render. The Storage objects for
+  // both photos exist — the bytes uploaded and only the metadata row never
+  // landed — and with no outbox nothing revisits it.
+  //
+  // `syncTableNames` puts `photos` before `routes`, so a photo held back by
+  // the S5 bytes-before-metadata rule was routinely followed by the routes
+  // that point at it going up anyway.
+  // ---------------------------------------------------------------------
+  group('routesWithResolvablePhoto', () {
+    Map<String, dynamic> route(String id, String photoId) =>
+        {'id': id, 'photoId': photoId, 'wallId': 'w1'};
+
+    test('withholds exactly the routes whose photo this push held back', () {
+      final withheld = <String>[];
+      final kept = routesWithResolvablePhoto(
+        routes: [route('r1', 'p1'), route('r2', 'p2'), route('r3', 'p1')],
+        withheldPhotoIds: {'p1'},
+        onWithheld: (routeId, photoId) => withheld.add('$routeId->$photoId'),
+      );
+
+      expect(kept.map((r) => r['id']), ['r2']);
+      expect(withheld, ['r1->p1', 'r3->p1'],
+          reason: 'every withheld route must be REPORTED, not dropped with a '
+              'debugPrint — with no outbox, "excluded once" silently meant '
+              '"excluded forever" (the L5 lesson).');
+    });
+
+    test('is a no-op when nothing was held back — the overwhelmingly common '
+        'push must be untouched', () {
+      final routes = [route('r1', 'p1'), route('r2', 'p2')];
+      var called = 0;
+
+      final kept = routesWithResolvablePhoto(
+        routes: routes,
+        withheldPhotoIds: const {},
+        onWithheld: (_, __) => called++,
+      );
+
+      expect(identical(kept, routes), isTrue,
+          reason: 'not merely equal — the empty case returns the original '
+              'list without copying it');
+      expect(called, 0);
+    });
+
+    test('a photo merely ABSENT from the push is not a reason to withhold', () {
+      // The dirtyOnly hazard. A clean, long-since-synced photo is absent from
+      // the push by design; treating absence as danger would stop ordinary
+      // route edits from ever syncing.
+      final kept = routesWithResolvablePhoto(
+        routes: [route('r1', 'photo-synced-last-week')],
+        withheldPhotoIds: {'some-other-photo'},
+      );
+
+      expect(kept.map((r) => r['id']), ['r1']);
+    });
+
+    test('a route with a null or non-String photoId is kept, and left to the '
+        'required-field guard', () {
+      final kept = routesWithResolvablePhoto(
+        routes: [
+          {'id': 'r1', 'photoId': null},
+          {'id': 'r2'},
+        ],
+        withheldPhotoIds: {'p1'},
+      );
+
+      expect(kept.map((r) => r['id']), ['r1', 'r2'],
+          reason: 'this guard answers one question — is the photo being held '
+              'back. A malformed row is syncRequiredFields\' job, and having '
+              'two guards silently cover for each other is how a gap opens '
+              'when one of them moves.');
+    });
+  });
+
+  // ---------------------------------------------------------------------
   // `IN`-filter chunking.
   //
   // The bug these pin: PostgREST puts an `IN` list in the QUERY STRING, so an

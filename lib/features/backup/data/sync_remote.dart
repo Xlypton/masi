@@ -645,6 +645,61 @@ class SharedThumbBackfill {
   }
 }
 
+/// The subset of [routes] safe to push, given that [withheldPhotoIds] are the
+/// photo rows this same push is NOT going to put on the server.
+///
+/// THE WRITE-SIDE MIRROR OF THE READ-SIDE DROP. `fetchSharedTopos` already
+/// refuses to import a shared route whose photo is absent from the batch,
+/// because `routes.photoId -> photos` is a NOT NULL FK locally and such a row
+/// simply cannot be inserted. That guard is the LAST line of defence; this is
+/// the first. Nothing stopped the push from creating the inconsistency in the
+/// first place, and `syncTableNames` puts `photos` before `routes`, so a photo
+/// held back by the S5 bytes-before-metadata rule was routinely followed by the
+/// routes that point at it going up regardless.
+///
+/// OBSERVED, not theorised (dev project, 2026-08-27): four live routes across
+/// two PUBLISHED walls referencing two photo ids with no row at all. One of
+/// those walls has zero photo rows on the server and one route, so it sits in
+/// the community feed and can never render; the other loses three of its nine
+/// lines for every viewer. The Storage objects for both photos exist, so the
+/// bytes uploaded and only the metadata row never landed — and with no outbox
+/// (D-4), nothing revisits it.
+///
+/// WHAT THIS DOES AND DOES NOT COVER. It withholds a route whose photo was
+/// offered to THIS push and rejected by it. It cannot know whether a photo
+/// absent from this push already exists remotely — under
+/// `PushScope.dirtyOnly` a clean, long-since-synced photo is absent by design,
+/// and treating that as dangerous would stop ordinary edits from syncing at
+/// all. So this closes the window the push itself opens; a photo row lost by
+/// some other route still needs the read-side drop behind it.
+///
+/// Withholding costs nothing permanent: `pushOwn` re-reads a full own-row
+/// snapshot every call, so the route goes up on the next push in which its
+/// photo lands. The route also stays `dirty` by construction, because the
+/// dirty flag is only cleared for rows that were actually sent.
+///
+/// [onWithheld] is called once per withheld route so the caller can report it
+/// in `rowsFailed`/`errors` rather than dropping it with a `debugPrint` — the
+/// L5 lesson: with no outbox, "excluded once" used to mean "excluded forever,
+/// and invisibly".
+List<Map<String, dynamic>> routesWithResolvablePhoto({
+  required List<Map<String, dynamic>> routes,
+  required Set<String> withheldPhotoIds,
+  void Function(String routeId, String photoId)? onWithheld,
+}) {
+  if (withheldPhotoIds.isEmpty) return routes;
+  final kept = <Map<String, dynamic>>[];
+  for (final route in routes) {
+    final photoId = route['photoId'];
+    if (photoId is String && withheldPhotoIds.contains(photoId)) {
+      onWithheld?.call('${route['id']}', photoId);
+      continue;
+    }
+    kept.add(route);
+  }
+  return kept;
+}
+
 /// True when a LOCAL row (with `updatedAt` [localUpdatedAt]) should be
 /// pushed up to the cloud, given the cloud's current `updatedAt` for that
 /// same row ([remoteUpdatedAt], `null` if no cloud row exists yet) — i.e. a

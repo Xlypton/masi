@@ -733,6 +733,32 @@ class SyncService {
       return split.valid;
     }
 
+    // Hoisted OUT of the `tablesToRows` literal below because the routes entry
+    // now depends on it: a route may not be pushed ahead of the photo it points
+    // at (see [routesWithResolvablePhoto]).
+    final photoRows = guard('photos', [
+      for (final row in pushablePhotos) stripLocalOnlySyncColumns(row.toJson()),
+    ]);
+
+    // Photo ids that WERE candidates this push and are NOT going to land —
+    // whether held back by the S5 bytes-before-metadata rule or dropped by the
+    // required-field guard just above. Derived by differencing the candidate
+    // set against what actually survived, so it captures both causes (and any
+    // future third) without either having to remember to report itself.
+    //
+    // Deliberately NOT "every photo absent from this push": under
+    // [PushScope.dirtyOnly] a clean, long-since-synced photo is absent by
+    // design, and withholding its routes would stop ordinary edits from
+    // syncing at all. Only a photo that was offered and rejected counts.
+    final pushedPhotoIds = {
+      for (final row in photoRows)
+        if (row['id'] case final String id) id,
+    };
+    final withheldPhotoIds = <String>{
+      for (final photo in photos)
+        if (!pushedPhotoIds.contains(photo.id)) photo.id,
+    };
+
     final tablesToRows = <String, List<Map<String, dynamic>>>{
       'profiles': guard('profiles', [
         for (final row in profiles) stripLocalOnlySyncColumns(row.toJson()),
@@ -748,14 +774,27 @@ class SyncService {
       ]),
       // `pushablePhotos`, NOT `photos`: a photo whose bytes did not land this
       // push is withheld from the metadata upsert (S5 — see the
-      // bytes-before-metadata block above).
-      'photos': guard('photos', [
-        for (final row in pushablePhotos)
-          stripLocalOnlySyncColumns(row.toJson()),
-      ]),
-      'routes': guard('routes', [
-        for (final row in routes) stripLocalOnlySyncColumns(row.toJson()),
-      ]),
+      // bytes-before-metadata block above). Computed above as `photoRows`.
+      'photos': photoRows,
+      // Filtered before the field guard: a route may not be pushed ahead of
+      // the photo it points at (see [routesWithResolvablePhoto]).
+      'routes': guard(
+        'routes',
+        routesWithResolvablePhoto(
+          routes: [
+            for (final row in routes) stripLocalOnlySyncColumns(row.toJson()),
+          ],
+          withheldPhotoIds: withheldPhotoIds,
+          onWithheld: (routeId, photoId) {
+            rowsFailed += 1;
+            errors.add(
+              'routes: route $routeId withheld — its photo $photoId was held '
+              'back by this same push, so pushing the route would publish a '
+              'line pointing at a photo row that does not exist',
+            );
+          },
+        ),
+      ),
       'comments': guard('comments', [
         for (final row in comments) stripLocalOnlySyncColumns(row.toJson()),
       ]),
