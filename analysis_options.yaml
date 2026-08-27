@@ -12,6 +12,13 @@ include: package:flutter_lints/flutter.yaml
 analyzer:
   exclude:
     - "**.g.dart"
+    - build/**
+    - android/**
+    - ios/**
+    - web/**
+    - windows/**
+    - macos/**
+    - linux/**
 
   # STRICT LANGUAGE MODES. These are not lints — they close holes in the type
   # system itself, so what they catch is a would-be RUNTIME failure, not a
