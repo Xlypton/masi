@@ -688,20 +688,42 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
     // flipping to `syncing`/`idle` here would clobber a real `error` status or
     // a live `lastPullError`/`lastPushError` with the outcome of a push that
     // never happened.
-    // NOT gated on `scope == dirtyOnly`. It used to be, which made the
+    // This used to be gated on `scope == dirtyOnly`, which made the
     // termination guarantee far narrower than it sounded: `_fullResyncDue` is
     // armed on every app start AND every connectivity regain, so a
     // FULLY-SYNCED device with a failing backend — a phone on a plane —
     // retried every 5 minutes forever with nothing whatsoever to send.
     //
-    // "Nothing is dirty" means "nothing to push" in EITHER scope, and that is
-    // sound because `_clearDirty` only ever clears tables the remote
-    // CONFIRMED (§1d/§1e, plus the fail-closed fix in `sync_service.dart`) and
-    // every push-worthy writer sets the flag. `_fullResyncDue` is left ARMED
-    // here on purpose: no full push actually ran, so the safety net has not
-    // been spent, and the next push that does have something to send will
-    // still be full scope.
-    if (!await service.hasPendingLocalChanges()) {
+    // It then swung too far the other way. "Nothing is dirty" was taken to
+    // mean "nothing to push" in EITHER scope, justified by `_clearDirty` only
+    // ever clearing tables the remote CONFIRMED (§1d/§1e, plus the fail-closed
+    // fix in `sync_service.dart`) and every push-worthy writer setting the
+    // flag. Both of those hold, and the conclusion still does not: they are
+    // statements about ROWS, and a push also delivers BYTES. See the condition
+    // below for the gap that left, and how letting an armed full resync
+    // through closes it without reopening the plane case.
+    // NOT `!hasPendingLocalChanges()` alone. That predicate is row-`dirty`
+    // only, and the STORAGE BYTE CHANNEL has no representation in it: a photo
+    // whose row landed and was confirmed clean, but whose `<uid>/...` or
+    // `shared/...` object never did, leaves nothing dirty anywhere. Taking the
+    // early-out in that state skips `pushOwn` entirely, and with it
+    // `_uploadOwnPhotos` — the ONLY place `needsPrivate`/`needsShared` are
+    // evaluated — so a byte-only gap could never be reconciled by anything.
+    //
+    // That is not hypothetical. Two PUBLISHED photos sat with no `shared/`
+    // object for five days of app starts and connectivity regains, invisible
+    // to every push, because nothing about them was dirty; their topos
+    // rendered a placeholder for every viewer the whole time. See
+    // `supabase/migrations/20260827_repair_orphan_photo_rows.sql`.
+    //
+    // So an ARMED full resync is let through even with nothing dirty:
+    // reconciling Storage against the library is precisely the safety net
+    // [_fullResyncDue] exists to be, and it is the half `dirty` cannot speak
+    // for. It stays bounded — the `pushed` arm below retires the flag whether
+    // or not everything landed, so the very next push takes this early-out
+    // again.
+    final nothingDirty = !await service.hasPendingLocalChanges();
+    if (nothingDirty && !_fullResyncDue) {
       _consecutivePushFailures = 0;
       _retryTimer?.cancel();
       // "Nothing is pending" makes a live push error STALE BY DEFINITION: it
@@ -791,7 +813,14 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
               lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
               lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
             );
-            _scheduleRetry();
+            // Only when there was something dirty to deliver. A push that ran
+            // PURELY to reconcile Storage has already spent [_fullResyncDue]
+            // above, so its retry would come back `dirtyOnly`, hit the
+            // early-out, and clear this very error without doing any work.
+            // Reconciliation is opportunistic housekeeping with no user data
+            // at risk: it waits for the next natural arm (app start or
+            // connectivity regain) instead of spinning the backoff loop.
+            if (!nothingDirty) _scheduleRetry();
           }
         case SyncPushOutcome.skippedSignedOut:
           _consecutivePushFailures = 0;
@@ -830,7 +859,11 @@ class SyncOrchestrator extends Notifier<SyncOrchestratorState> {
         lastSharedPhotoBytesSkipped: state.lastSharedPhotoBytesSkipped,
         lastSharedPhotoBudgetReason: state.lastSharedPhotoBudgetReason,
       );
-      _scheduleRetry();
+      // Guarded for the same reason as the `!fullyLanded` arm above — and here
+      // it also closes the one path that could still spin: a throw skips the
+      // `pushed` arm, so [_fullResyncDue] would still be armed and every retry
+      // would re-run full scope and throw again.
+      if (!nothingDirty) _scheduleRetry();
     }
   }
 

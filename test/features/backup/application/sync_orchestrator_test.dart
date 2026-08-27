@@ -386,6 +386,19 @@ class _MissingPhotoBytesSyncService extends SyncService {
 /// waits out a production interval, and the tests that need N cycles drive
 /// them with N explicit `await pushNow()` calls while [fixed] is set long
 /// enough that the armed timer can never fire on its own.
+/// Counts calls to [SyncRemote.listSharedPhotoObjectPaths] — the skip-set
+/// lookup that opens `SyncService._uploadOwnPhotos`, and therefore a precise
+/// probe for "did this push reach the Storage byte channel at all?".
+class _ByteReconcilingSyncRemote extends _CountingSyncRemote {
+  int sharedListCallCount = 0;
+
+  @override
+  Future<Set<String>> listSharedPhotoObjectPaths() async {
+    sharedListCallCount++;
+    return {};
+  }
+}
+
 class _RecordingRetrySchedule extends SyncRetrySchedule {
   _RecordingRetrySchedule(this.fixed)
     : super(base: fixed, ceiling: fixed, random: Random(1));
@@ -2104,13 +2117,119 @@ void main() {
 
         expect(
           remote.pushCallCount,
-          0,
-          reason: 'there is nothing to push, whatever the scope says',
+          1,
+          reason:
+              'an ARMED full resync runs exactly once even with nothing '
+              'dirty: it is the only thing that reconciles the STORAGE BYTE '
+              'channel, which `hasPendingLocalChanges` cannot see. This '
+              'expectation used to be 0, which is what let a published photo '
+              'with no `shared/` object stay broken through five days of app '
+              'starts',
         );
         expect(
           schedule.attempts,
           isEmpty,
-          reason: 'and therefore nothing to retry',
+          reason:
+              'and it must NOT arm the backoff loop — that is the property '
+              'this test is really about. Nothing is dirty, so no user data '
+              'is at risk and a retry would come back dirtyOnly and early-out '
+              'anyway; the next reconciliation waits for the next natural arm',
+        );
+
+        await notifier.pushNow();
+        expect(
+          remote.pushCallCount,
+          1,
+          reason:
+              'and it stays retired: the `pushed` arm spends _fullResyncDue '
+              'whether or not everything landed, so the next push takes the '
+              'early-out again. This is what keeps the phone-on-a-plane case '
+              'closed',
+        );
+      },
+    );
+
+    test(
+      'a CLEAN photo whose shared object is missing still gets its Storage '
+      'reconciled — the byte channel has no dirty flag, so gating the push on '
+      'hasPendingLocalChanges() alone made a failed shared upload permanent',
+      () async {
+        final db = AppDatabase(NativeDatabase.memory());
+        addTearDown(db.close);
+        final remote = _ByteReconcilingSyncRemote();
+        final container = makeContainer(
+          db: db,
+          remote: remote,
+          syncServiceAuth: _FakeAuthRepository(
+            const AuthSessionState.signedIn('u1@example.com', uid: 'u1'),
+          ),
+          debounce: const Duration(seconds: 30),
+          retrySchedule: _RecordingRetrySchedule(const Duration(hours: 1)),
+        );
+
+        primeOrchestrator(container);
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+
+        // A fully-synced library: every row CLEAN, exactly the state the
+        // owner's device was in. The wall is published, and the photo's
+        // `shared/` object does not exist remotely.
+        await db.into(db.areas).insert(
+          AreasCompanion.insert(
+            id: 'a1',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value('u1'),
+            name: 'Area',
+          ),
+        );
+        await db.into(db.sectors).insert(
+          SectorsCompanion.insert(
+            id: 's1',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value('u1'),
+            areaId: 'a1',
+            name: 'Sector',
+            sortOrder: 0,
+          ),
+        );
+        await db.into(db.walls).insert(
+          WallsCompanion.insert(
+            id: 'w1',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value('u1'),
+            sectorId: 's1',
+            name: 'Wall',
+            sortOrder: 0,
+            visibility: const Value('shared'),
+          ),
+        );
+        await db.into(db.photos).insert(
+          PhotosCompanion.insert(
+            id: 'p1',
+            createdAt: 100,
+            updatedAt: 100,
+            ownerId: const Value('u1'),
+            wallId: 'w1',
+            localPath: 'photos/p1.jpg',
+            kind: 'original',
+            width: 4032,
+            height: 3024,
+          ),
+        );
+
+        final notifier = container.read(syncOrchestratorProvider.notifier);
+        await notifier.pushNow();
+
+        expect(
+          remote.sharedListCallCount,
+          greaterThanOrEqualTo(1),
+          reason:
+              'the push must actually reach _uploadOwnPhotos, the ONLY place '
+              'needsShared is evaluated. Nothing here is dirty, so before the '
+              'fix the early-out returned first and this was 0 — the photo '
+              'bytes could never be reconciled by anything',
         );
       },
     );
