@@ -21,20 +21,52 @@
 #     this repo on machines nobody chose in advance, and a hook that hard-fails
 #     on a toolchain gap gets bypassed with `--no-verify` once and then always.
 #     The required CI job still covers that case.
+#
+# FINDING THE SDK. `command -v dart` alone is not enough, because git runs hooks
+# with a MINIMAL environment — not your login shell's. On the two boxes where
+# Flutter is deliberately kept off the default PATH (Homebrew on macOS, and
+# /opt/flutter in the Linux cloud container), `dart` is installed and working
+# and the hook still could not see it, so every commit took the warn-and-skip
+# path above and the scan silently never ran. That is the worst outcome
+# available here: a gate that reports "installed" while checking nothing. So
+# probe the known locations before giving up.
 set -uo pipefail
 
 cd "$(git rev-parse --show-toplevel)" || exit 0
 
-if ! command -v dart >/dev/null 2>&1; then
-  echo "pre-commit: WARNING — no \`dart\` on PATH, so the secret scan was" >&2
-  echo "  SKIPPED. The required CI job still runs it. Install a Dart/Flutter" >&2
-  echo "  SDK to get this check before the push instead of after it." >&2
+# Resolve a dart executable: PATH first, then the SDK locations CLAUDE.md
+# documents for each machine. $FLUTTER_ROOT is honoured ahead of the guesses so
+# an unusual install can point the hook at itself without editing this file.
+DART=""
+if command -v dart >/dev/null 2>&1; then
+  DART="$(command -v dart)"
+else
+  for candidate in \
+    ${FLUTTER_ROOT:+"$FLUTTER_ROOT/bin/dart"} \
+    /opt/flutter/bin/dart \
+    /opt/homebrew/bin/dart \
+    /usr/local/bin/dart \
+    "$HOME/flutter/bin/dart" \
+    /c/flutter/bin/dart.bat \
+    "C:/flutter/bin/dart.bat"; do
+    if [ -x "$candidate" ]; then
+      DART="$candidate"
+      break
+    fi
+  done
+fi
+
+if [ -z "$DART" ]; then
+  echo "pre-commit: WARNING — no \`dart\` on PATH or at any known SDK location," >&2
+  echo "  so the secret scan was SKIPPED. The required CI job still runs it." >&2
+  echo "  Set FLUTTER_ROOT, or install a Dart/Flutter SDK, to get this check" >&2
+  echo "  before the push instead of after it." >&2
   exit 0
 fi
 
 # Staged changes only: this is about what THIS commit introduces. The full-tree
 # sweep is CI's job (`dart tool/scan_secrets.dart --all`).
-dart tool/scan_secrets.dart || {
+"$DART" tool/scan_secrets.dart || {
   echo "" >&2
   echo "pre-commit: BLOCKED. Nothing was committed." >&2
   echo "  Remove the credential, then re-stage. If it is a false positive," >&2

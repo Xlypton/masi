@@ -19,6 +19,9 @@
 #      it, so the app boots OFFLINE in every driven test.
 #   6. Chrome does not trust the egress proxy's MITM CA (ERR_CERT_AUTHORITY_
 #      INVALID), and the proxy RESETS TLS 1.3 ClientHellos from Chrome.
+#   7. core.hooksPath is unset in a fresh clone, so the pre-commit secret scan
+#      never runs and CI becomes the only thing between a credential and
+#      GitHub -- which is AFTER the push that publishes it.
 #
 # Run once per session:  bash tool/setup_cloud_session.sh
 # Then, for driven web tests:  export CHROME_EXECUTABLE=/usr/local/bin/google-chrome
@@ -35,6 +38,19 @@ CHROME_SHIM="$BIN_DIR/google-chrome"
 say() { printf '==> %s\n' "$*"; }
 skip() { printf '    skip: %s\n' "$*"; }
 ok()   { printf '    ok: %s\n' "$*"; }
+
+# --- 0. Pre-commit secret hook ------------------------------------------------
+# Per-clone git config, and this container is a fresh clone every session. The
+# hook itself resolves the Dart SDK off PATH, so it works here once wired up.
+say "pre-commit secret hook"
+if [ ! -d tool/githooks ]; then
+  skip "not in the repo root — run this from the checkout"
+elif [ "$(git config --get core.hooksPath 2>/dev/null || true)" = "tool/githooks" ]; then
+  ok "core.hooksPath already set"
+else
+  git config core.hooksPath tool/githooks
+  ok "core.hooksPath set to tool/githooks"
+fi
 
 # --- 1. Flutter on PATH -------------------------------------------------------
 say "flutter on PATH"
