@@ -1,6 +1,38 @@
 -- Repair: reinstate two `photos` rows whose Storage objects exist but whose
 -- metadata rows never reached the server.
 --
+-- ## STATUS: APPLIED 2026-08-27
+--
+-- Applied to the live project (mnaipcqbkqzffgvxpato) and verified: both rows
+-- are present, `SELECT count(*)` of live routes whose `photoId` has no `photos`
+-- row is now 0 DB-wide, no wall has two primaries, and no `sortOrder` collides.
+--
+-- ## What this does NOT fix (found while applying)
+--
+-- A published photo has TWO Storage objects: the owner's private copy at
+-- `<uid>/<photoId><ext>`, and the EXIF-stripped public copy at
+-- `shared/<photoId><ext>` (plus `shared/thumbs/<photoId>.jpg`). Only the
+-- PRIVATE copies of these two photos exist. There is no `shared/` object for
+-- either, and `topo_photos_shared_read` only grants viewers the `shared/`
+-- prefix -- so restoring these metadata rows does NOT by itself put the photos
+-- back in front of viewers. `SharedMissingPhotoByteResolver` answers `null` and
+-- the topo renders a placeholder rather than an error.
+--
+-- That gap is deliberately NOT repairable from here. The public copy must be
+-- the output of `strippedForPublishing` (W-3); server-side copying the private
+-- object into `shared/` would publish the owner's untouched EXIF -- GPS
+-- included -- which is the exact leak that code fails closed to prevent. The
+-- bytes have to come from the owner's device.
+--
+-- Why the device has not already supplied them is unresolved. A
+-- `PushScope.full` push runs on every app start and connectivity regain and
+-- would upload both copies, so five days of not healing means either the device
+-- no longer holds these rows, or something withholds them on every push. The
+-- only indefinite-withhold path in `_uploadOwnPhotos` is a `strippedForPublishing`
+-- refusal (`unsupportedFormat`/`malformed`), which would fit the evidence --
+-- private object present, shared object never written -- but is UNVERIFIED: it
+-- needs the actual bytes, which are unreadable from here.
+--
 -- ## What was wrong
 --
 -- Four live routes across two PUBLISHED walls referenced two photo ids with no
