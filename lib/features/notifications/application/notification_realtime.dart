@@ -6,6 +6,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/config/supabase_providers.dart';
 import '../../account/application/auth_providers.dart';
+import 'coalescing_refresh.dart';
 import 'notification_providers.dart';
 
 /// Keeps a Realtime subscription open so a notification lands while the user is
@@ -35,7 +36,10 @@ import 'notification_providers.dart';
 /// is unavailable: this is an accelerator on top of a pull that still works.
 class NotificationRealtime extends Notifier<bool> {
   RealtimeChannel? _channel;
-  bool _refreshInFlight = false;
+
+  /// Built lazily on the first nudge, because it closes over [ref] and the
+  /// `Notifier`'s `ref` is not available at field-initialiser time.
+  CoalescingRefresh? _refresh;
 
   @override
   bool build() {
@@ -83,22 +87,21 @@ class NotificationRealtime extends Notifier<bool> {
   /// Pulls, coalescing bursts.
   ///
   /// Somebody liking five of your topos in a row is five events and one thing
-  /// worth knowing. Without the in-flight guard each would start its own fetch,
-  /// and they would race to write the same mirror rows.
+  /// worth knowing. Without a guard each would start its own fetch, and they
+  /// would race to write the same mirror rows.
+  ///
+  /// The guard used to be a bare `if (_refreshInFlight) return;`, which is
+  /// leading-edge only: an insert arriving after the refresh had read the
+  /// server but before it completed was DISCARDED, not coalesced, and the
+  /// badge lagged until the user opened a screen. [CoalescingRefresh] keeps
+  /// the leading edge (a badge must not wait out a debounce) and adds the
+  /// trailing run that "coalescing" actually means.
   void _nudge() {
-    if (_refreshInFlight) return;
-    _refreshInFlight = true;
-    unawaited(
-      refreshNotifications(ref)
-          .catchError((Object error) {
-            // A nudge that cannot be serviced is not worth surfacing: the
-            // screen's own refresh will try again, and the mirror still holds
-            // everything from the last successful pull.
-            debugPrint('masi/notifications: realtime refresh failed: $error');
-            return 0;
-          })
-          .whenComplete(() => _refreshInFlight = false),
-    );
+    (_refresh ??= CoalescingRefresh(
+      () => refreshNotifications(ref),
+      onError: (error) =>
+          debugPrint('masi/notifications: realtime refresh failed: $error'),
+    )).schedule();
   }
 
   void _teardown() {
