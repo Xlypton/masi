@@ -48,23 +48,113 @@ Future<int> _freePort() async {
   return port;
 }
 
+/// Whether a `chromedriver` binary is resolvable on this host.
+///
+/// Wrapped in a try/catch and platform-dispatched because this runs at GROUP
+/// DECLARATION time, before any test body: a throw here does not fail a test,
+/// it fails to LOAD THE FILE, which turns `flutter test` red for the whole
+/// repo. That is exactly what `Process.runSync('which', …)` did on Windows,
+/// where there is no `which` — one unportable probe made the second of the
+/// three gates permanently red for a reason that had nothing to do with the
+/// app, which is how a team learns to stop reading its own gates.
 bool get _hasChromedriver {
-  final result = Process.runSync('which', [
-    'chromedriver',
-  ], environment: {'PATH': '/opt/homebrew/bin:${Platform.environment['PATH']}'});
-  return result.exitCode == 0;
+  try {
+    final result = Process.runSync(
+      Platform.isWindows ? 'where' : 'which',
+      ['chromedriver'],
+      // Homebrew's bin is prepended for the macOS dev machine (see CLAUDE.md);
+      // harmless everywhere else, since a missing directory on PATH is simply
+      // not searched.
+      environment: {
+        'PATH': '/opt/homebrew/bin${Platform.isWindows ? ';' : ':'}'
+            '${Platform.environment['PATH']}',
+      },
+    );
+    return result.exitCode == 0;
+  } on ProcessException {
+    return false;
+  }
+}
+
+/// Why the port-hygiene cases below cannot run here, or `false` to run them.
+///
+/// Bash can run a `#!`-shebang script; `cmd.exe` cannot, and Dart's
+/// `Process.run` on Windows launches a file through the shell association. The
+/// cases below execute `tool/drive_web.sh` itself, so they are POSIX-only — the
+/// *committed executable bit*, which is the part that has actually broken here
+/// before, is checked separately and on every platform.
+///
+/// A SKIP, deliberately, rather than a silently-absent test: a run on Windows
+/// must say out loud which coverage it did not have, or "tests green" quietly
+/// means something weaker there than it does on the machine that ships.
+Object get _driveWebSkip {
+  if (Platform.isWindows) {
+    return 'POSIX-only: executes tool/drive_web.sh, and cmd.exe cannot run a '
+        '#! shebang script. Run on macOS/Linux (or under WSL) for this '
+        'coverage.';
+  }
+  if (!_hasChromedriver) return 'chromedriver not on PATH';
+  return false;
 }
 
 void main() {
   group('tool/drive_web.sh port hygiene', () {
-    test('the script exists and is executable', () {
-      final file = File(_script);
-      expect(file.existsSync(), isTrue, reason: 'expected $_script to exist');
-      final mode = file.statSync().mode;
+    test('every committed shell tool AND the git hook carry the executable bit',
+        () {
+      // Checked against the GIT INDEX, not the working-tree stat, for two
+      // reasons. It is the mode that actually ships — NTFS has no POSIX
+      // execute bit at all, so a working-tree stat on Windows can only ever
+      // report a synthesized one and this assertion would be a coin flip. And
+      // the committed mode is the thing that has genuinely gone wrong here:
+      // per the e2e-verify skill, `tool/e2e_*.sh` once shipped
+      // non-executable, the command substitution that invokes them produced
+      // no output, `set -e` did not catch it, and the E2E suite ran under the
+      // FAKE identity while reporting "All tests passed" — a green run that
+      // had exercised none of RLS, sync or moderation.
+      // `tool/githooks/*` is in scope for exactly the same reason and fails
+      // even more quietly: git SILENTLY IGNORES a hook without the execute
+      // bit. There is no error and no output — the commit just goes through
+      // unscanned, and the secret gate everyone believes is running is not.
+      final result = Process.runSync('git', [
+        'ls-files',
+        '-s',
+        '--',
+        'tool/*.sh',
+        'tool/githooks/*',
+      ], workingDirectory: _repoRoot);
+      expect(result.exitCode, 0, reason: 'git ls-files failed: ${result.stderr}');
+
+      final lines = result.stdout
+          .toString()
+          .split('\n')
+          .where((l) => l.trim().isNotEmpty)
+          .toList();
+      expect(lines, isNotEmpty, reason: 'no tool/*.sh found in the git index');
       expect(
-        mode & 0x40, // owner execute bit
-        isNonZero,
-        reason: '$_script must be executable',
+        lines.any((l) => l.contains('tool/githooks/pre-commit')),
+        isTrue,
+        reason: 'the pre-commit hook is not tracked, so no clone can install '
+            'it with `git config core.hooksPath tool/githooks`',
+      );
+
+      final nonExecutable = [
+        for (final line in lines)
+          if (!line.startsWith('100755')) line.split('\t').last,
+      ];
+      expect(
+        nonExecutable,
+        isEmpty,
+        reason: 'these are committed non-executable (mode 100644). A shell tool '
+            'fails loudly; a git hook fails SILENTLY — it is simply not run. '
+            'Fix with: git update-index --chmod=+x <path>',
+      );
+    });
+
+    test('the script exists', () {
+      expect(
+        File(_script).existsSync(),
+        isTrue,
+        reason: 'expected $_script to exist',
       );
     });
 
@@ -82,7 +172,7 @@ void main() {
         expect(result.stdout.toString(), contains('PREFLIGHT OK'));
       },
       timeout: const Timeout(Duration(minutes: 2)),
-      skip: _hasChromedriver ? false : 'chromedriver not on PATH',
+      skip: _driveWebSkip,
     );
 
     test(
@@ -147,7 +237,7 @@ void main() {
         );
       },
       timeout: const Timeout(Duration(minutes: 3)),
-      skip: _hasChromedriver ? false : 'chromedriver not on PATH',
+      skip: _driveWebSkip,
     );
 
     test(
@@ -193,7 +283,7 @@ void main() {
         await probe.close();
       },
       timeout: const Timeout(Duration(minutes: 2)),
-      skip: _hasChromedriver ? false : 'chromedriver not on PATH',
+      skip: _driveWebSkip,
     );
   });
 }

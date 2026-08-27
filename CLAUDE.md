@@ -5,15 +5,39 @@ iOS-primary. Local-first (Drift/SQLite). Riverpod **v3** (use `Notifier`, never 
 v1 (M0–M6) + v2 AR are code-complete on `main`. Supabase sync is implemented and live —
 a debounced, dirty-scoped **full-state re-push** + pull, with tombstoned soft-delete, in
 `lib/features/backup/` (`sync_service.dart`, `sync_orchestrator.dart`, `backup_repository.dart`),
-verified end-to-end. **There is no outbox** — `grep -rin outbox lib` returns zero hits, and building
-one is explicitly out of scope (decision D-4): the engine re-reads and re-sends own rows, which is
-what makes it idempotent and loss-proof.
+verified end-to-end. **There is no outbox**, and building one is explicitly out of scope (decision
+D-4): the engine re-reads and re-sends own rows, which is what makes it idempotent and loss-proof.
+
+> This used to say "`grep -rin outbox lib` returns zero hits". It does not, and has not for a long
+> time — it returns **28 hits across 18 files**, every one of them a doc comment explaining why
+> there is no outbox. An agent that runs the stated command and sees 28 concludes either that the
+> doc lies or that an outbox exists; both are worse than no command at all. What actually returns
+> zero, and proves the thing:
+> ```bash
+> grep -rniE "class [A-Za-z]*Outbox|[A-Za-z]*Outbox\(|outbox_" lib
+> ```
 
 ## Toolchain quirks (read first)
 
-- **Homebrew Flutter.** PATH does NOT persist between shell calls. Prefix EVERY flutter/dart/pod/xcrun
-  command with: `export PATH="/opt/homebrew/bin:$PATH" && `
-- Flutter 3.44.2 · Dart 3.12.2 · Xcode 26.6.
+**TWO machines work this repo, and most of this file was written for the first one.** Check which
+you are on before copying a command out of here — `uname`/`$PATH` answers it in one call, and the
+macOS-shaped commands below fail on Windows in ways that read like a broken toolchain rather than a
+wrong platform.
+
+| | macOS dev box | Windows dev box |
+|---|---|---|
+| repo | `/Users/kerip/Projects/masi` | `C:\Projects\masi` |
+| flutter/dart | Homebrew; **prefix every command** with `export PATH="/opt/homebrew/bin:$PATH" && ` | `C:\flutter\bin\flutter.bat` — already on PATH, **no prefix needed** |
+| shell | bash | PowerShell **and** Git Bash (MINGW64). `tool/*.sh` run fine under Git Bash |
+| chromedriver | `/opt/homebrew/bin/chromedriver` | `C:\tools\chromedriver.exe` (on PATH) |
+| jq / curl | Homebrew | `C:\tools\jq.exe`, `C:\Windows\System32\curl.exe` |
+| node / npx | Homebrew | portable at `C:\tools\nodejs`, **NOT on PATH** — `export PATH="/c/tools/nodejs:$PATH"` |
+| iOS sim / device / AR | yes | **no** — anything `xcrun`/`devicectl` is macOS-only |
+| headless-Chrome screenshots | real pixels | **flat theme background, ~4 KB every time** — CanvasKit does not composite here. Use `read_console_messages` / `javascript_tool` for evidence instead |
+
+- Flutter 3.44.2 · Dart 3.12.2 · Xcode 26.6 (macOS only).
+- **Prefer `dart run tool/<x>.dart` over `tool/<x>.sh` when both exist.** The Dart tools run
+  unchanged on both machines and in CI; the shell ones need bash and, on Windows, Git Bash.
 - **iOS uses Swift Package Manager, not CocoaPods** — there is intentionally no `ios/Podfile`.
   Don't try to `pod install`; it will fail with "No Podfile found" and that is expected.
 - Package name is `masi`; app entrypoint is `main()` in `lib/main.dart`. It builds a
@@ -21,6 +45,28 @@ what makes it idempotent and loss-proof.
   photo-path cache before the first frame, then calls
   `runApp(UncontrolledProviderScope(container: container, child: const MasiApp()))` —
   not the plain `ProviderScope(child: ...)` pattern.
+
+## Cloud vs local: how secrets arrive
+
+**Both paths are supported and every credential-consuming script checks them in this order: env var
+first, then the `~/.config` file.** A local dev box keeps the secrets as plain files under
+`~/.config` (see the Management-API and E2E sections below). A **cloud / dispatched Claude Code
+session** has no such files — the same secrets are injected as environment variables instead. This
+is additive: setting nothing new keeps the local file workflow working exactly as before.
+
+| env var (cloud) | `~/.config` file (local) | consumed by |
+|---|---|---|
+| `SUPABASE_MGMT_TOKEN` | `climbtopo-mgmt-token` | `tool/supabase_query.sh`, `tool/e2e_common.sh`, `tool/e2e_accounts.sh` |
+| `MASI_E2E_PASSWORD` | `masi-e2e-password` | `tool/e2e_common.sh`, `tool/e2e_accounts.sh`, `tool/drive_e2e.sh` |
+| `CLOUDFLARE_API_TOKEN` | `cf-pages-token` | `wrangler` reads it natively — no script wraps it |
+| `CLOUDFLARE_ACCOUNT_ID` | `cf-account-id` | `wrangler` reads it natively — no script wraps it |
+| `MASI_PUSH_HOOK_SECRET` | `masi-push-hook-secret` | Supabase Edge Function secrets only — no repo script |
+| `MASI_VAPID_PRIVATE` | `masi-vapid-private` | Supabase Edge Function secrets only — no repo script |
+| `MASI_VAPID_PUBLIC` | `masi-vapid-public` | public; committed in `supabase_config.dart` |
+
+`tool/scan_secrets.dart` layer 2 reads whichever form is present, so the secret gate still catches an
+accidental commit in a cloud session with no `~/.config` files. Overrides for the file *locations*
+(`SUPABASE_MGMT_TOKEN_FILE`, `MASI_E2E_PASSWORD_FILE`) still work and still lose to a set env var.
 
 ## Web port (in progress — v2 plan)
 
@@ -202,21 +248,68 @@ none of it shows up in a `grep -i dart:io`. Read this before touching sync, the 
   photos, which the pruner above is free to evict; only the user's own data gets the full-resolution/never-lose
   guarantee.
 - **Conflict policy on push is client-side last-writer-wins, local winning ties** (`shouldPushLww`,
-  `sync_remote.dart:303-315`): a local row is skipped only when a remote row exists AND is *strictly* newer.
+  the top-level `shouldPushLww` in `sync_remote.dart` — named, not line-numbered, because the line
+  moved the first time anyone edited that file): a local row is skipped only when a remote row
+  exists AND is *strictly* newer.
   Local wins on a tie because local is the side being pushed.
 - **No outbox** (decision D-4, already stated at the top of this file) is why the sections above can all be
   "best-effort, never throws, heals on the next pull" — the engine re-reading and re-sending its own rows on
   every pull is what makes a lossy prune/quota/offline event self-correcting instead of something that needs
   its own retry queue.
 
-## Fast checks (unit + widget)
+## Fast checks — ONE command, both machines
 
 ```bash
-export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutter analyze   # must be 0 issues
-export PATH="/opt/homebrew/bin:$PATH" && cd /Users/kerip/Projects/masi && flutter test        # 2500+ tests, must be green
+dart run tool/gate.dart
 ```
+
+That is gates 1 and 2 plus the guardrails, in dependency-free Dart — no bash, no `grep`, no PATH
+ritual, identical on macOS, Windows and CI. It runs, cheapest-first so a broken tree reports in
+seconds instead of after the test run:
+
+| check | what it proves |
+|---|---|
+| `dart-io` | no `dart:io` import/export outside `*_native.dart` (see the web-port section) |
+| `web-assets` | `web/sqlite3.wasm` + `drift_worker.js` present and matching `pubspec.lock`'s drift |
+| `secrets` | no credential in any tracked file — see below |
+| `analyze` | `flutter analyze` at 0 issues |
+| `test` | `flutter test --exclude-tags golden` green |
+
+```bash
+dart run tool/gate.dart --skip-tests    # the fast guards only, ~15s
+dart run tool/gate.dart --json          # machine-readable verdict
+```
+
+It deliberately does **not** run the signed-in E2E suite: that is gate 3, it mutates the live dev
+database, and it needs a decision first — see the `e2e-verify` skill. The runner prints a reminder
+rather than doing it for you.
+
+The individual commands still work (`flutter analyze`, `flutter test --exclude-tags golden`) — the
+runner is a convenience over them, not a replacement.
+
 **Never drive a real image-codec decode in widget tests** — it hangs under fake-async. Use the injected
 `imageSize` / `TopoCanvasBody` harness (see existing tests).
+
+### The secret gate — install the hook once per clone
+
+```bash
+git config core.hooksPath tool/githooks
+```
+
+`git push` is the default here (see Version control below) and **pushing publishes**: a credential
+that reaches a commit is on GitHub the moment the branch goes up, and rewriting history does not
+un-publish it — it has to be rotated. `tool/scan_secrets.dart` closes that window with three layers:
+known credential SHAPES (`sbp_…`, `sb_secret_…`, service-role JWTs, PEM blocks, `ghp_…`, AWS, an
+inline Cloudflare token), the VERBATIM contents of the five real credential files under `~/.config`
+(which no regex could recognise — the E2E password is just a random string), and forbidden
+FILENAMES. It never prints what it caught: excerpts are redacted to the first four characters.
+
+`sb_publishable_…` (the anon key in `supabase_config.dart`) and the VAPID **public** key are
+committed on purpose and are pinned as non-findings in `test/tool/scan_secrets_test.dart`.
+
+The hook blocks a commit on a finding, and warns-but-allows when there is no Dart SDK on PATH — the
+required CI job is the backstop for that case. If something is a false positive, narrow the rule;
+do not `--no-verify`.
 
 ## Running the app on a real screen so I can SEE and VERIFY it
 
@@ -306,10 +399,15 @@ The AR/camera path can ONLY be verified on the physical device, and the usual `f
   plan-with-assertions → implementer subagents → **independent clean-context verify gate**. The agent that
   wrote code never verifies it; verification re-runs assertions + the integration-test loop above.
 - Keep whole-project `flutter analyze` at 0 and `flutter test` green on every change.
-- **Three gates, not two.** `flutter analyze` (0 issues) → `flutter test` (green) → the **`e2e-verify`
-  skill**, signed in against a real session. The third is required before declaring done and before any
-  deploy whenever the change touched app behaviour, UI, routing, the data layer, or anything server-gated;
-  skip it only for pure refactors, docs, or tooling — and say which case you decided.
+- **Three gates, not two.** `dart run tool/gate.dart` (gates 1+2, plus the dart:io / web-asset /
+  secret guardrails) → the **`e2e-verify` skill**, signed in against a real session. The third is
+  required before declaring done and before any deploy whenever the change touched app behaviour, UI,
+  routing, the data layer, or anything server-gated; skip it only for pure refactors, docs, or
+  tooling — and say which case you decided.
+- **A skipped test is not a passed test.** `flutter test` reports skips as `~N`, and several exist by
+  design (goldens off-macOS, the POSIX-only `drive_web.sh` cases off-Linux/macOS). When reporting a
+  green run, say what was skipped and why — "tests green" means something weaker on Windows than on
+  the machine that ships, and the difference has to be visible rather than inferred.
 
 ## Version control — branch, commit, and push automatically
 
@@ -360,13 +458,15 @@ https://api.supabase.com/v1/projects/{ref}/database/query` (the same endpoint th
 which executes arbitrary SQL and returns JSON (`[]` for DDL success, rows for SELECT).
 
 - **Project ref:** `mnaipcqbkqzffgvxpato` (from `SUPABASE_URL` in `lib/core/config/supabase_config.dart`).
-- **Admin token:** a `sbp_…` personal access token in `~/.config/climbtopo-mgmt-token` — read it into a var,
-  **never print or commit it** (the app itself only ever uses the anon key; this token is admin-only, for
-  this workflow). `TOKEN="$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)"`.
+- **Admin token:** a `sbp_…` personal access token — **never print or commit it** (the app itself only
+  ever uses the anon key; this token is admin-only, for this workflow). In a cloud session it is
+  `$SUPABASE_MGMT_TOKEN`; on a local box it is `~/.config/climbtopo-mgmt-token`. **Prefer
+  `tool/supabase_query.sh`** (`-q "SELECT …"` or a `.sql` file path) — it resolves either form for you.
+  Raw: `TOKEN="${SUPABASE_MGMT_TOKEN:-$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)}"`.
 - **Recipe:**
   ```bash
   REF=mnaipcqbkqzffgvxpato
-  TOKEN="$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)"
+  TOKEN="${SUPABASE_MGMT_TOKEN:-$(tr -d '[:space:]' < ~/.config/climbtopo-mgmt-token)}"
   API="https://api.supabase.com/v1/projects/$REF/database/query"
   # inspect (SELECT):
   curl -sS -X POST "$API" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
@@ -443,9 +543,11 @@ by a settings allow rule.
 - **Node is a portable install at `C:\tools\nodejs`** and is NOT on PATH (`winget install` hangs forever
   on an invisible UAC elevation prompt; the official zip works). Prefix commands with
   `export PATH="/c/tools/nodejs:$PATH"`, or call `C:\tools\nodejs\npx.cmd` directly.
-- **A Pages-scoped API token lives at `~/.config/cf-pages-token`** — read it into `CLOUDFLARE_API_TOKEN`,
-  never print it. This replaces `wrangler login`, whose OAuth flow times out in well under the time it
-  takes to reach a remote-controlled desktop (it failed twice that way).
+- **The Pages-scoped API token** is `$CLOUDFLARE_API_TOKEN` directly in a cloud session, or
+  `~/.config/cf-pages-token` locally (read it into `CLOUDFLARE_API_TOKEN`) — never print it. `wrangler`
+  reads `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` from the env natively, so no wrapper script is
+  needed either way. This replaces `wrangler login`, whose OAuth flow times out in well under the time
+  it takes to reach a remote-controlled desktop (it failed twice that way).
 - **A `Pages:Edit`-only token cannot resolve its own account.** `wrangler whoami` fails with "Failed to
   automatically retrieve account IDs", and `/accounts`, `/memberships`, `/user` all come back empty or
   unauthorized — the token is valid, it just cannot enumerate. So **`CLOUDFLARE_ACCOUNT_ID` must be set

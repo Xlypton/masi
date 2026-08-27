@@ -50,6 +50,49 @@ const List<String> syncTableNames = [
   'likes',
 ];
 
+/// How many ids one PostgREST `IN` filter (or one `upsert` body) may carry.
+///
+/// PostgREST puts an `IN` list in the QUERY STRING, so `id=in.("…","…",…)`
+/// grows ~39 bytes per uuid id. The gateway in front of Supabase rejects a
+/// request line past roughly 8 KB, and it does so as an opaque **414**, not as
+/// anything the sync engine can diagnose — so ~200 ids is the point at which a
+/// perfectly correct query starts failing, and every id past that fails the
+/// WHOLE table's fetch or push, not just the overflow.
+///
+/// That ceiling is reachable in normal use, not in theory:
+///  * [SupabaseSyncRemote.upsertOwnRows]' last-writer-wins pre-check sends one
+///    id per row being pushed, and a `PushScope.full` push sends every own row
+///    in the library. A few hundred routes is an ordinary climber's logbook.
+///  * `fetchSharedTopos` fans out over up to `kSharedTopoLimit` (500) +
+///    `kSharedTopoUncoordinatedLimit` (50) wall ids — ~21 KB of query string,
+///    i.e. already over the line at the scope the app ships with.
+///
+/// 100 is the same size `SupabaseModerationRemote` already chunks at (see its
+/// `_chunkSize`, which documents this identical failure). Deliberately well
+/// under the limit rather than at it: ids are not the only thing in the request
+/// line, and a chunk that is merely *usually* small enough would fail as a
+/// function of library size, which is the worst possible time.
+///
+/// Note this costs nothing in the common case: below 100 ids the chunked path
+/// issues exactly ONE request, byte-identical to the unchunked one.
+const int kSyncInFilterChunkSize = 100;
+
+/// Splits [ids] into consecutive runs of at most [kSyncInFilterChunkSize].
+///
+/// Pure and top-level so the chunking rule can be tested directly, rather than
+/// only through a live PostgREST round trip.
+List<List<T>> chunkForInFilter<T>(
+  List<T> ids, {
+  int size = kSyncInFilterChunkSize,
+}) {
+  assert(size > 0, 'chunk size must be positive');
+  if (ids.length <= size) return ids.isEmpty ? const [] : [ids];
+  return [
+    for (var i = 0; i < ids.length; i += size)
+      ids.sublist(i, i + size > ids.length ? ids.length : i + size),
+  ];
+}
+
 /// Outcome of pushing ONE table's rows within a single
 /// [SyncRemote.upsertOwnRows] call.
 ///
@@ -602,6 +645,61 @@ class SharedThumbBackfill {
   }
 }
 
+/// The subset of [routes] safe to push, given that [withheldPhotoIds] are the
+/// photo rows this same push is NOT going to put on the server.
+///
+/// THE WRITE-SIDE MIRROR OF THE READ-SIDE DROP. `fetchSharedTopos` already
+/// refuses to import a shared route whose photo is absent from the batch,
+/// because `routes.photoId -> photos` is a NOT NULL FK locally and such a row
+/// simply cannot be inserted. That guard is the LAST line of defence; this is
+/// the first. Nothing stopped the push from creating the inconsistency in the
+/// first place, and `syncTableNames` puts `photos` before `routes`, so a photo
+/// held back by the S5 bytes-before-metadata rule was routinely followed by the
+/// routes that point at it going up regardless.
+///
+/// OBSERVED, not theorised (dev project, 2026-08-27): four live routes across
+/// two PUBLISHED walls referencing two photo ids with no row at all. One of
+/// those walls has zero photo rows on the server and one route, so it sits in
+/// the community feed and can never render; the other loses three of its nine
+/// lines for every viewer. The Storage objects for both photos exist, so the
+/// bytes uploaded and only the metadata row never landed — and with no outbox
+/// (D-4), nothing revisits it.
+///
+/// WHAT THIS DOES AND DOES NOT COVER. It withholds a route whose photo was
+/// offered to THIS push and rejected by it. It cannot know whether a photo
+/// absent from this push already exists remotely — under
+/// `PushScope.dirtyOnly` a clean, long-since-synced photo is absent by design,
+/// and treating that as dangerous would stop ordinary edits from syncing at
+/// all. So this closes the window the push itself opens; a photo row lost by
+/// some other route still needs the read-side drop behind it.
+///
+/// Withholding costs nothing permanent: `pushOwn` re-reads a full own-row
+/// snapshot every call, so the route goes up on the next push in which its
+/// photo lands. The route also stays `dirty` by construction, because the
+/// dirty flag is only cleared for rows that were actually sent.
+///
+/// [onWithheld] is called once per withheld route so the caller can report it
+/// in `rowsFailed`/`errors` rather than dropping it with a `debugPrint` — the
+/// L5 lesson: with no outbox, "excluded once" used to mean "excluded forever,
+/// and invisibly".
+List<Map<String, dynamic>> routesWithResolvablePhoto({
+  required List<Map<String, dynamic>> routes,
+  required Set<String> withheldPhotoIds,
+  void Function(String routeId, String photoId)? onWithheld,
+}) {
+  if (withheldPhotoIds.isEmpty) return routes;
+  final kept = <Map<String, dynamic>>[];
+  for (final route in routes) {
+    final photoId = route['photoId'];
+    if (photoId is String && withheldPhotoIds.contains(photoId)) {
+      onWithheld?.call('${route['id']}', photoId);
+      continue;
+    }
+    kept.add(route);
+  }
+  return kept;
+}
+
 /// True when a LOCAL row (with `updatedAt` [localUpdatedAt]) should be
 /// pushed up to the cloud, given the cloud's current `updatedAt` for that
 /// same row ([remoteUpdatedAt], `null` if no cloud row exists yet) — i.e. a
@@ -908,6 +1006,37 @@ class SupabaseSyncRemote implements SyncRemote {
   @visibleForTesting
   SharedThumbBackfill get thumbBackfill => _thumbBackfill;
 
+  /// `SELECT [columns] FROM [table] WHERE [column] IN (…[ids])`, split into
+  /// [kSyncInFilterChunkSize]-sized requests and concatenated.
+  ///
+  /// Every `IN`-filtered read in this class goes through here, so no call site
+  /// can reintroduce the unbounded form (see [kSyncInFilterChunkSize] for the
+  /// 414 it produces).
+  ///
+  /// Chunks are issued SEQUENTIALLY, unlike the sibling queries in the pull
+  /// waves, which are deliberately concurrent. The waves parallelise a fixed,
+  /// small number of independent tables; chunk count instead scales with
+  /// library size, so firing them together would turn a big pull into dozens of
+  /// simultaneous requests from a phone on a crag connection — trading one
+  /// failure mode for a worse one. Below the chunk size (the overwhelmingly
+  /// common case) this is a single request either way, so the sequencing costs
+  /// real users nothing.
+  Future<List<Map<String, dynamic>>> _selectIn(
+    String table,
+    String column,
+    List<String> ids, {
+    String columns = '*',
+  }) async {
+    final out = <Map<String, dynamic>>[];
+    for (final chunk in chunkForInFilter(ids)) {
+      final rows = await _client.from(table).select(columns).inFilter(column, chunk);
+      for (final row in rows) {
+        out.add(Map<String, dynamic>.from(row));
+      }
+    }
+    return out;
+  }
+
   @override
   Future<List<TablePushOutcome>> upsertOwnRows(
     String uid,
@@ -935,10 +1064,24 @@ class SupabaseSyncRemote implements SyncRemote {
         // batched round trip per table, not one per row), and drop any row a
         // strictly-newer remote row would otherwise get clobbered by. See
         // [shouldPushLww].
+        //
+        // Chunked (see [kSyncInFilterChunkSize]): a `PushScope.full` push sends
+        // every own row, so this id list is as long as the user's library and
+        // the unchunked form 414'd the entire table's push once that library
+        // passed a few hundred rows.
         final ids = [for (final row in rows) row['id'] as String];
-        final remoteRows = await _client.from(tableName).select('id, updatedAt').inFilter('id', ids);
+        final remoteRows = await _selectIn(tableName, 'id', ids, columns: 'id, updatedAt');
         final remoteUpdatedAt = <String, int>{
-          for (final r in remoteRows) r['id'] as String: r['updatedAt'] as int,
+          for (final r in remoteRows)
+            // A remote row whose `updatedAt` is null or non-numeric is treated
+            // as ABSENT rather than cast-thrown on. `shouldPushLww` answers
+            // "push it" for an absent remote row, which is the safe direction:
+            // the alternative is one malformed cloud row failing the whole
+            // table's push forever. This mirrors the null-tolerance every
+            // FETCH path here already has (`filterValidSyncRows`); the push
+            // path was the one place still doing a bare non-null cast.
+            if (r['id'] case final String id)
+              if (r['updatedAt'] case final int at) id: at,
         };
         final survivors = [
           for (final row in rows)
@@ -963,7 +1106,17 @@ class SupabaseSyncRemote implements SyncRemote {
         // Confirmed live: the real Postgres tables (see `supabase/schema.sql`)
         // use matching camelCase quoted columns (`"ownerId"`, `"wallId"`, ...)
         // for drift's `toJson()` keys — no snake_case mapping layer needed.
-        await _client.from(tableName).upsert(survivors);
+        //
+        // Chunked for a different reason than the pre-check above: an upsert is
+        // a POST, so it has no URL-length ceiling, but a full push of a large
+        // library is a single multi-megabyte body (route geometry is JSON) sent
+        // over a phone connection as one all-or-nothing request. Splitting it
+        // bounds what one timeout can cost. Sequential on purpose — these write
+        // to the same table, and the engine's idempotence (D-4) makes a
+        // half-applied push heal on the next one rather than corrupt anything.
+        for (final chunk in chunkForInFilter(survivors)) {
+          await _client.from(tableName).upsert(chunk);
+        }
         outcomes.add(
           TablePushOutcome.ok(
             table: tableName,
@@ -1090,11 +1243,11 @@ class SupabaseSyncRemote implements SyncRemote {
     // round-trips of latency for two round-trips of actual dependency depth.
     // See [fetchOwnRows] for why `Future.wait` runs without `eagerError`.
     final wave2 = await Future.wait(<Future<List<Map<String, dynamic>>>>[
-      _client.from('sectors').select().inFilter('id', sectorIds),
-      _client.from('photos').select().inFilter('wallId', wallIds),
-      _client.from('routes').select().inFilter('wallId', wallIds),
-      _client.from('comments').select().inFilter('wallId', wallIds),
-      _client.from('likes').select().inFilter('wallId', wallIds),
+      _selectIn('sectors', 'id', sectorIds),
+      _selectIn('photos', 'wallId', wallIds),
+      _selectIn('routes', 'wallId', wallIds),
+      _selectIn('comments', 'wallId', wallIds),
+      _selectIn('likes', 'wallId', wallIds),
     ]);
 
     final rawSectors = <Map<String, dynamic>>[
@@ -1171,10 +1324,7 @@ class SupabaseSyncRemote implements SyncRemote {
     // validated sector rows above, so it cannot be hoisted into wave 2.
     final areaIds = {for (final s in sectorRows) s['areaId'] as String}.toList();
 
-    final rawAreas = <Map<String, dynamic>>[
-      for (final row in await _client.from('areas').select().inFilter('id', areaIds))
-        Map<String, dynamic>.from(row),
-    ];
+    final rawAreas = await _selectIn('areas', 'id', areaIds);
     final areaRows = filterValidSyncRows(rawAreas, const ['id'], debugLabel: 'shared area');
 
     return {
@@ -1295,8 +1445,8 @@ class SupabaseSyncRemote implements SyncRemote {
     // level's queries together costs four. See [fetchOwnRows] for why
     // `Future.wait` runs without `eagerError`.
     final wave2 = await Future.wait(<Future<List<Map<String, dynamic>>>>[
-      _client.from('walls').select().inFilter('id', wallIds),
-      _client.from('routes').select().inFilter('id', routeIds),
+      _selectIn('walls', 'id', wallIds),
+      _selectIn('routes', 'id', routeIds),
     ]);
 
     final rawWalls = <Map<String, dynamic>>[
@@ -1320,8 +1470,8 @@ class SupabaseSyncRemote implements SyncRemote {
     final photoIds = {for (final r in routeRows) r['photoId'] as String}.toList();
 
     final wave3 = await Future.wait(<Future<List<Map<String, dynamic>>>>[
-      _client.from('sectors').select().inFilter('id', sectorIds),
-      _client.from('photos').select().inFilter('id', photoIds),
+      _selectIn('sectors', 'id', sectorIds),
+      _selectIn('photos', 'id', photoIds),
     ]);
 
     final rawSectors = <Map<String, dynamic>>[
@@ -1340,10 +1490,7 @@ class SupabaseSyncRemote implements SyncRemote {
 
     final areaIds = {for (final s in sectorRows) s['areaId'] as String}.toList();
 
-    final rawAreas = <Map<String, dynamic>>[
-      for (final row in await _client.from('areas').select().inFilter('id', areaIds))
-        Map<String, dynamic>.from(row),
-    ];
+    final rawAreas = await _selectIn('areas', 'id', areaIds);
     final areaRows = filterValidSyncRows(rawAreas, const ['id'], debugLabel: 'shared-ascent area');
 
     // Every wave above is RLS-filtered independently of the ascent query that
@@ -1549,14 +1696,16 @@ class SupabaseSyncRemote implements SyncRemote {
   @override
   Future<List<Map<String, dynamic>>> fetchProfiles(Set<String> uids) async {
     if (uids.isEmpty) return const [];
-    final rows = await _client.from('profiles').select().inFilter('id', uids.toList());
-    return [for (final row in rows) Map<String, dynamic>.from(row)];
+    return _selectIn('profiles', 'id', uids.toList());
   }
 
   @override
   Future<List<String>> fetchVisibleWallIds(List<String> ids) async {
     if (ids.isEmpty) return const [];
-    final rows = await _client.from('walls').select('id').inFilter('id', ids);
-    return [for (final row in rows) row['id'] as String];
+    final rows = await _selectIn('walls', 'id', ids, columns: 'id');
+    return [
+      for (final row in rows)
+        if (row['id'] case final String id) id,
+    ];
   }
 }

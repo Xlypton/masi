@@ -77,6 +77,10 @@ class _FakePostgrest {
     requested.add(table);
     queries.add(req.uri.query);
 
+    // Drain the body. GETs have none; an `upsert` POST does, and leaving it
+    // unread can stall the client mid-write on a keep-alive connection.
+    await req.drain<void>();
+
     // Held open so genuinely-concurrent requests are in flight at the same
     // moment. Sequential code cannot overlap here no matter how long this is.
     await Future<void>.delayed(holdFor);
@@ -424,5 +428,245 @@ void main() {
         expect(result['walls'], isEmpty);
       },
     );
+  });
+
+  // ---------------------------------------------------------------------
+  // The write-side referential guard.
+  //
+  // What it prevents, observed on the live dev project on 2026-08-27: four
+  // live routes across two PUBLISHED walls pointing at two photo ids with no
+  // row at all. One of those walls has zero photo rows and one route, so it
+  // sits in the community feed and can never render. The Storage objects for
+  // both photos exist — the bytes uploaded and only the metadata row never
+  // landed — and with no outbox nothing revisits it.
+  //
+  // `syncTableNames` puts `photos` before `routes`, so a photo held back by
+  // the S5 bytes-before-metadata rule was routinely followed by the routes
+  // that point at it going up anyway.
+  // ---------------------------------------------------------------------
+  group('routesWithResolvablePhoto', () {
+    Map<String, dynamic> route(String id, String photoId) =>
+        {'id': id, 'photoId': photoId, 'wallId': 'w1'};
+
+    test('withholds exactly the routes whose photo this push held back', () {
+      final withheld = <String>[];
+      final kept = routesWithResolvablePhoto(
+        routes: [route('r1', 'p1'), route('r2', 'p2'), route('r3', 'p1')],
+        withheldPhotoIds: {'p1'},
+        onWithheld: (routeId, photoId) => withheld.add('$routeId->$photoId'),
+      );
+
+      expect(kept.map((r) => r['id']), ['r2']);
+      expect(withheld, ['r1->p1', 'r3->p1'],
+          reason: 'every withheld route must be REPORTED, not dropped with a '
+              'debugPrint — with no outbox, "excluded once" silently meant '
+              '"excluded forever" (the L5 lesson).');
+    });
+
+    test('is a no-op when nothing was held back — the overwhelmingly common '
+        'push must be untouched', () {
+      final routes = [route('r1', 'p1'), route('r2', 'p2')];
+      var called = 0;
+
+      final kept = routesWithResolvablePhoto(
+        routes: routes,
+        withheldPhotoIds: const {},
+        onWithheld: (_, _) => called++,
+      );
+
+      expect(identical(kept, routes), isTrue,
+          reason: 'not merely equal — the empty case returns the original '
+              'list without copying it');
+      expect(called, 0);
+    });
+
+    test('a photo merely ABSENT from the push is not a reason to withhold', () {
+      // The dirtyOnly hazard. A clean, long-since-synced photo is absent from
+      // the push by design; treating absence as danger would stop ordinary
+      // route edits from ever syncing.
+      final kept = routesWithResolvablePhoto(
+        routes: [route('r1', 'photo-synced-last-week')],
+        withheldPhotoIds: {'some-other-photo'},
+      );
+
+      expect(kept.map((r) => r['id']), ['r1']);
+    });
+
+    test('a route with a null or non-String photoId is kept, and left to the '
+        'required-field guard', () {
+      final kept = routesWithResolvablePhoto(
+        routes: [
+          {'id': 'r1', 'photoId': null},
+          {'id': 'r2'},
+        ],
+        withheldPhotoIds: {'p1'},
+      );
+
+      expect(kept.map((r) => r['id']), ['r1', 'r2'],
+          reason: 'this guard answers one question — is the photo being held '
+              'back. A malformed row is syncRequiredFields\' job, and having '
+              'two guards silently cover for each other is how a gap opens '
+              'when one of them moves.');
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // `IN`-filter chunking.
+  //
+  // The bug these pin: PostgREST puts an `IN` list in the QUERY STRING, so an
+  // unbounded `inFilter` grows the request line ~39 bytes per uuid id and the
+  // gateway rejects it as an opaque 414 somewhere past ~200 ids. Both reachable
+  // call sites scale with the USER'S DATA — a full push sends one id per own
+  // row, and `fetchSharedTopos` fans out over up to 550 wall ids — so this was
+  // a failure that switched on as a library grew and then never healed.
+  //
+  // Asserted on the wire (`fake.queries`), not on an internal counter: the
+  // guarantee that matters is the length of the request PostgREST actually
+  // receives, and only the wire shows that.
+  // ---------------------------------------------------------------------
+  group('IN-filter chunking', () {
+    /// Every `id=in.(…)` query string the fake saw, in arrival order.
+    List<String> inQueries() =>
+        fake.queries.where((q) => q.contains('in.')).toList();
+
+    /// How many ids one `id=in.("a","b")` query string carries.
+    ///
+    /// Decoded first so the count is the same whether `Uri.query` handed back
+    /// the percent-encoded or the decoded form — the assertion is about the
+    /// number of ids on the wire, not about which escaping the client chose.
+    int idsIn(String query) {
+      final decoded = Uri.decodeComponent(query);
+      final start = decoded.indexOf('in.(');
+      expect(start, isNonNegative, reason: 'not an IN query: $query');
+      final end = decoded.indexOf(')', start);
+      final list = decoded.substring(
+        start + 'in.('.length,
+        end == -1 ? decoded.length : end,
+      );
+      return list.isEmpty ? 0 : list.split(',').length;
+    }
+
+    test('chunkForInFilter splits at the documented size and never emits an '
+        'empty or oversized chunk', () {
+      expect(chunkForInFilter(<String>[]), isEmpty,
+          reason: 'an empty id list must issue NO request at all, not one '
+              'request with an empty IN list (which PostgREST reads as '
+              '"match nothing" — same result, wasted round trip).');
+      expect(chunkForInFilter(['a']), [
+        ['a']
+      ]);
+
+      final ids = [for (var i = 0; i < 250; i++) 'id-$i'];
+      final chunks = chunkForInFilter(ids);
+
+      expect(chunks, hasLength(3));
+      expect(chunks.map((c) => c.length), [100, 100, 50]);
+      expect(chunks.expand((c) => c), orderedEquals(ids),
+          reason: 'chunking must partition — never drop, duplicate or '
+              'reorder an id. A dropped id in the push pre-check silently '
+              'clobbers a newer cloud row.');
+      expect(
+        chunks.every((c) => c.length <= kSyncInFilterChunkSize && c.isNotEmpty),
+        isTrue,
+      );
+    });
+
+    test('a push larger than one chunk splits BOTH the last-writer-wins '
+        'pre-check and the upsert, instead of 414ing the whole table',
+        () async {
+      // 250 rows: comfortably past the ~200-id point where the request line
+      // exceeds the gateway limit, and not a round multiple of the chunk size,
+      // so an off-by-one in the tail would show.
+      final rows = [
+        for (var i = 0; i < 250; i++)
+          {..._validRow('areas', 'a$i', ownerId: 'uid-1'), 'updatedAt': 5},
+      ];
+
+      final outcomes = await remote.upsertOwnRows('uid-1', {'areas': rows});
+
+      final selects = inQueries();
+      expect(selects, hasLength(3),
+          reason: 'the LWW pre-check must be split into ceil(250/100) '
+              'requests. One request means the unbounded form is back and '
+              'this table 414s for any library past ~200 rows.');
+      for (final q in selects) {
+        expect(idsIn(q), lessThanOrEqualTo(kSyncInFilterChunkSize));
+      }
+
+      // The upsert is a POST with no URL limit, but a full push of a large
+      // library is otherwise one multi-megabyte all-or-nothing body.
+      expect(
+        fake.requested.where((t) => t == 'areas'),
+        hasLength(6),
+        reason: '3 pre-check SELECTs + 3 upsert POSTs. A count of 4 means the '
+            'upsert body was never split.',
+      );
+
+      expect(outcomes, hasLength(1));
+      expect(outcomes.single.rowsUpserted, 250);
+      expect(outcomes.single.rowsFailed, 0);
+    });
+
+    test('a push at or below one chunk issues exactly one pre-check request — '
+        'chunking costs the common case nothing', () async {
+      final rows = [
+        for (var i = 0; i < kSyncInFilterChunkSize; i++)
+          {..._validRow('areas', 'a$i', ownerId: 'uid-1'), 'updatedAt': 5},
+      ];
+
+      await remote.upsertOwnRows('uid-1', {'areas': rows});
+
+      expect(inQueries(), hasLength(1));
+    });
+
+    test('a remote row with a null updatedAt is treated as absent, so ONE '
+        'malformed cloud row cannot fail the whole table forever', () async {
+      fake.rows['areas'] = [
+        {'id': 'a0', 'updatedAt': null},
+      ];
+      final rows = [
+        {..._validRow('areas', 'a0', ownerId: 'uid-1'), 'updatedAt': 5},
+      ];
+
+      final outcomes = await remote.upsertOwnRows('uid-1', {'areas': rows});
+
+      expect(outcomes.single.rowsFailed, 0,
+          reason: 'the pre-check used a bare `as int` cast, so a null '
+              'updatedAt threw and the catch reported EVERY row of the table '
+              'as failed — on every subsequent push too, since the bad row '
+              'stays.');
+      expect(outcomes.single.rowsUpserted, 1,
+          reason: 'absent remote knowledge means shouldPushLww says push, '
+              'which is the direction that cannot lose local work.');
+    });
+
+    test('fetchSharedTopos splits the wall-keyed fan-out — 550 walls is the '
+        'scope the app actually ships (kSharedTopoLimit + uncoordinated)',
+        () async {
+      fake.rows['walls'] = [
+        for (var i = 0; i < 550; i++)
+          {
+            ..._validRow('walls', 'w$i', ownerId: 'other'),
+            'sectorId': 's$i',
+            'visibility': 'shared',
+          },
+      ];
+
+      await remote.fetchSharedTopos();
+
+      final selects = inQueries();
+      expect(selects, isNotEmpty);
+      for (final q in selects) {
+        expect(idsIn(q), lessThanOrEqualTo(kSyncInFilterChunkSize),
+            reason: 'unchunked, 550 wall ids is ~21 KB of query string — over '
+                'the gateway limit at the default scope, i.e. broken for '
+                'everyone in a busy area, not an edge case.');
+      }
+      // photos/routes/comments/likes are all keyed on the 550 wall ids.
+      for (final table in ['photos', 'routes', 'comments', 'likes']) {
+        expect(fake.requested.where((t) => t == table), hasLength(6),
+            reason: '$table must be fetched in ceil(550/100) chunks');
+      }
+    });
   });
 }

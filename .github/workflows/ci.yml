@@ -57,11 +57,60 @@ jobs:
           fi
           echo "ok: no dart:io outside *_native.dart"
 
-  web-build:
-    name: web build (wasm)
+  secret-scan:
+    name: secret scan
     runs-on: ubuntu-latest
-    # Goes green with the Stage 2 offline-shell work; non-blocking until then.
-    continue-on-error: true
+    # Required, and deliberately its own fast job rather than a step inside
+    # analyze-test: `git push` is the DEFAULT for agents on this repo (see
+    # CLAUDE.md), pushing PUBLISHES, and rewriting history does not un-publish.
+    # A credential must be caught even on a branch whose analyze is red.
+    #
+    # Needs no Flutter toolchain — tool/scan_secrets.dart imports nothing
+    # outside `dart:` on purpose, exactly so this job stays seconds long.
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # `--range` needs both ends of the push present. Shallow-by-default
+          # would leave the base commit missing and the range empty, i.e. a
+          # green job that scanned nothing.
+          fetch-depth: 0
+      - uses: dart-lang/setup-dart@v1
+      - name: scan every tracked file for credentials
+        # `--all`, not `--range`: a secret introduced on an earlier commit of a
+        # long-lived branch is still a secret, and a range scan would only ever
+        # see the newest push. Full-tree costs about three seconds here.
+        run: dart tool/scan_secrets.dart --all
+
+  web-build:
+    name: web build (wasm) + bundle gates
+    runs-on: ubuntu-latest
+    # NOW REQUIRED (was continue-on-error), and it runs the REAL gate script
+    # instead of a bare `flutter build web --wasm`. Two separate changes:
+    #
+    # The raw build only ever proved the code compiles. Every guarantee that
+    # actually matters about the emitted bundle lived in tool/build_web.sh and
+    # was therefore enforced only when a human or agent remembered to run it:
+    #
+    #   * "useLocalCanvasKit":true — without it the renderer is fetched from
+    #     gstatic.com and an offline first paint dies on a cross-origin fetch;
+    #   * a bare `_flutter.loader.load();` — otherwise Flutter registers its
+    #     deprecated worker OVER web/sw.js and reloads every client (bug #55);
+    #   * the bundled Roboto family reaching FontManifest.json;
+    #   * NO `e2e@masi.test` / `masi-e2e-entrypoint-do-not-deploy` marker, i.e.
+    #     the auth-bypass entrypoint never ships;
+    #   * a stamped service worker, rather than SHELL_VERSION='dev' and an
+    #     empty precache list — an app that looks fine online with no offline
+    #     shell at all.
+    #
+    # `continue-on-error` was here because the Stage 2 offline-shell work had
+    # not landed. It has: a full `tool/build_web.sh` run passes end to end,
+    # exit 0, with sw.js stamped (115 files precached) and every gate above
+    # green. Measured on the Windows dev box on 2026-08-27 — NOT on
+    # ubuntu-latest, which is the one caveat on this flip. If it reddens here
+    # for a host reason rather than a code one, that is a one-line revert.
+    #
+    # Left advisory it was not a gate at all: a job that can never fail the
+    # build is a job nobody reads.
     steps:
       - uses: actions/checkout@v4
       - uses: subosito/flutter-action@v2
@@ -69,5 +118,5 @@ jobs:
           flutter-version: ${{ env.FLUTTER_VERSION }}
           channel: stable
       - run: flutter pub get
-      - name: build web (wasm)
-        run: flutter build web --wasm
+      - name: build web (wasm) and enforce the bundle gates
+        run: tool/build_web.sh

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+#
+# pre-commit — refuse to stage a credential.
+#
+# Install (once per clone; the gate runner and CLAUDE.md both point here):
+#
+#   git config core.hooksPath tool/githooks
+#
+# Committed rather than hand-installed into .git/hooks so every clone and every
+# agent worktree gets the same one, and so changing it is a reviewable diff.
+#
+# WHY A HOOK AND NOT JUST THE CI JOB. CI catches a leaked credential AFTER the
+# push, and pushing is what publishes it — by the time the red X appears the
+# token is on GitHub and must be rotated, not merely deleted. The CI job is the
+# backstop for anyone who has not installed this; this is the part that runs
+# while the secret is still local.
+#
+# FAILURE POLICY, deliberately asymmetric:
+#   * a FINDING blocks the commit (exit 1) — that is the whole point;
+#   * a MISSING DART SDK warns and lets the commit through. Several agents work
+#     this repo on machines nobody chose in advance, and a hook that hard-fails
+#     on a toolchain gap gets bypassed with `--no-verify` once and then always.
+#     The required CI job still covers that case.
+set -uo pipefail
+
+cd "$(git rev-parse --show-toplevel)" || exit 0
+
+if ! command -v dart >/dev/null 2>&1; then
+  echo "pre-commit: WARNING — no \`dart\` on PATH, so the secret scan was" >&2
+  echo "  SKIPPED. The required CI job still runs it. Install a Dart/Flutter" >&2
+  echo "  SDK to get this check before the push instead of after it." >&2
+  exit 0
+fi
+
+# Staged changes only: this is about what THIS commit introduces. The full-tree
+# sweep is CI's job (`dart tool/scan_secrets.dart --all`).
+dart tool/scan_secrets.dart || {
+  echo "" >&2
+  echo "pre-commit: BLOCKED. Nothing was committed." >&2
+  echo "  Remove the credential, then re-stage. If it is a false positive," >&2
+  echo "  narrow the rule in tool/scan_secrets.dart — do not use --no-verify." >&2
+  exit 1
+}

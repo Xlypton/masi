@@ -58,8 +58,9 @@ if [[ "$FAKE" == "0" ]]; then
     echo "FATAL: no E2E_PASSWORD dart-define — tool/e2e_accounts.sh produced" >&2
     echo "  nothing usable, so this run would silently use the FAKE identity" >&2
     echo "  and report success without touching the backend. Refusing." >&2
-    echo "  Check: ~/.config/masi-e2e-password exists, and tool/e2e_*.sh are" >&2
-    echo "  executable (git ls-files -s tool/e2e_accounts.sh -> 100755)." >&2
+    echo "  Check: \$MASI_E2E_PASSWORD is set, or ~/.config/masi-e2e-password" >&2
+    echo "  exists; and tool/e2e_*.sh are executable" >&2
+    echo "  (git ls-files -s tool/e2e_accounts.sh -> 100755)." >&2
     exit 3
   fi
   echo "==> seeding the live fixture"
@@ -68,6 +69,25 @@ if [[ "$FAKE" == "0" ]]; then
 else
   echo "==> FAKE identity: no JWT, every server-gated call will 403/401,"
   echo "    and the community suite will SKIP rather than pretend to pass."
+fi
+
+# Preflight the browser stack BEFORE the expensive part. chromedriver refuses a
+# session across a major-version gap with Chrome, and `flutter drive` surfaces
+# that as a WebDriver handshake error or an unexplained hang minutes in —
+# nothing that names the versions. This script had no chromedriver check of any
+# kind; it simply assumed something usable was listening on 4444.
+#
+# Placed AFTER the seed on purpose. Seeding is idempotent and re-runnable, so
+# the cost of having seeded before discovering a broken driver is one wasted
+# round trip; putting the check first would instead mean a run that reports a
+# browser problem while leaving the operator unsure whether the fixture is in
+# place. `tool/e2e_reset.sh` cleans up either way.
+echo "==> chromedriver/Chrome version preflight"
+if ! dart run tool/preflight_chromedriver.dart; then
+  echo "" >&2
+  echo "Refusing to drive: the browser automation stack cannot open a session," >&2
+  echo "so this run could only fail — slowly, and with a misleading message." >&2
+  exit 4
 fi
 
 for target in "${TARGETS[@]}"; do

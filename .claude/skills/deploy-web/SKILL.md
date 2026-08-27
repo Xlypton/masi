@@ -97,6 +97,10 @@ If any gate fails, fix the cause. Do not deploy `build/web` from a previous succ
 cd /Users/kerip/Projects/masi && npx wrangler pages deploy build/web --project-name=climb-masi --commit-dirty=true
 ```
 
+- Auth: `wrangler` reads `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` from the env. A cloud
+  session has them set already; locally, export them from `~/.config/cf-pages-token` and
+  `~/.config/cf-account-id` first (a `Pages:Edit` token can't self-resolve the account, so the ID is
+  not optional). See CLAUDE.md "Cloud vs local: how secrets arrive".
 - Check `npx wrangler whoami` first if auth is in doubt. It can be slow — background it rather than
   letting it eat a foreground timeout.
 - `--commit-dirty=true` suppresses the dirty-working-tree prompt. This repo routinely has

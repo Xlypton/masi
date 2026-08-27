@@ -23,8 +23,10 @@
 # SAFETY
 #   - Addresses are under `.test` (RFC 2606): they can never be a real mailbox,
 #     and `email_confirm: true` means no mail is ever sent.
-#   - The shared password lives in ~/.config/masi-e2e-password (0600) and is
-#     NEVER printed by `ensure`/`show`.
+#   - The shared password comes from $MASI_E2E_PASSWORD (cloud/dispatched
+#     sessions) or ~/.config/masi-e2e-password (0600) locally, and is NEVER
+#     printed by `ensure`/`show`. See CLAUDE.md "Cloud vs local: how secrets
+#     arrive".
 #   - The `service_role` key is fetched at runtime and used SHELL-SIDE ONLY.
 #   - This script creates users, one `public.admins` row, and three `profiles`
 #     rows. It never touches a row it did not create.
@@ -37,8 +39,10 @@ source "$(dirname "$0")/e2e_common.sh"
 # --- password ---------------------------------------------------------------
 # Generated once, then reused forever. Re-running must not rotate it: a
 # `--dart-define`d value in any running build would stop working mid-session.
+# When $MASI_E2E_PASSWORD is set (cloud/dispatched sessions) it is authoritative
+# and no file is written — e2e_password() already prefers the env var.
 ensure_password() {
-  if [[ ! -s "$PASSWORD_FILE" ]]; then
+  if [[ -z "${MASI_E2E_PASSWORD:-}" && ! -s "$PASSWORD_FILE" ]]; then
     mkdir -p "$(dirname "$PASSWORD_FILE")"
     if command -v openssl >/dev/null 2>&1; then
       openssl rand -base64 24 | tr -d '\n=+/' > "$PASSWORD_FILE"

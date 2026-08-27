@@ -1559,12 +1559,19 @@ void main() {
 
         expect(
           result.rowsFailed,
-          0,
+          1,
           reason:
-              'the ROW channel is genuinely clean — every row that was sent '
-              'landed, and the photo row was never sent',
+              'every row that was SENT landed. The 1 is the route withheld '
+              'alongside its photo — reported rather than dropped silently, '
+              'per the L5 rule that with no outbox "excluded once" must never '
+              'mean "excluded forever, and invisibly". This was 0 before the '
+              'route was withheld at all.',
         );
-        expect(result.errors, isEmpty, reason: 'and so is its error list');
+        expect(
+          result.errors.join(' '),
+          contains('withheld'),
+          reason: 'and the error names which route and which photo',
+        );
         expect(result.photosFailed, 1);
         expect(
           result.fullyLanded,
@@ -1707,10 +1714,12 @@ void main() {
         expect(result.photoErrors.join(' '), contains('simulated storage outage'));
         expect(
           result.rowsPushed,
-          4,
+          3,
           reason:
-              'area + sector + wall + route still land — a Storage outage has '
-              'nothing to do with them',
+              'area + sector + wall still land — a Storage outage has nothing '
+              'to do with them. The route does NOT: it points at the photo '
+              'the outage withheld, and pushing it would strand a line on a '
+              'photo row that does not exist (see routesWithResolvablePhoto).',
         );
 
         final ownRows = await remote.fetchOwnRows(_uidU1);
@@ -1800,8 +1809,12 @@ void main() {
         expect(first.photosFailed, 1);
         expect(
           first.rowsPushed,
-          4,
-          reason: 'area + sector + wall + route; the photo row is withheld',
+          3,
+          reason: 'area + sector + wall. This WAS 4 — the route used to go up '
+              'while the photo it points at was withheld, which is precisely '
+              'how the four orphaned routes on two published walls got onto '
+              'the live project (2026-08-27). The route is now withheld with '
+              'its photo; see routesWithResolvablePhoto.',
         );
 
         final afterFailure = await remote.fetchOwnRows(_uidU1);
@@ -1815,7 +1828,15 @@ void main() {
               'passthrough with no existence check',
         );
         expect(afterFailure['walls']!.map((r) => r['id']), ['wall-1']);
-        expect(afterFailure['routes']!.map((r) => r['id']), ['route-1']);
+        expect(
+          afterFailure['routes'],
+          isEmpty,
+          reason: 'THE ORPHAN, pinned: the route points at photo-1, and '
+              'photo-1 is not going to be on the server after this push. '
+              'Sending it anyway produces exactly what was found live — a '
+              'published line referencing a photo row that does not exist, '
+              'which the read side then has to drop on every pull forever.',
+        );
         expect(afterFailure['areas']!.map((r) => r['id']), ['area-1']);
 
         // The retry §1e schedules: uploads now succeed, so both the bytes AND
@@ -1828,6 +1849,14 @@ void main() {
         expect(second.photosUploaded, 1);
         final healed = await remote.fetchOwnRows(_uidU1);
         expect(healed['photos']!.map((r) => r['id']), ['photo-1']);
+        expect(
+          healed['routes']!.map((r) => r['id']),
+          ['route-1'],
+          reason: 'the withheld route is not lost — pushOwn re-reads a full '
+              'own-row snapshot every call (D-4), so it goes up on the push '
+              'where its photo finally lands. Withholding delays a route by '
+              'one push; sending it early breaks the topo permanently.',
+        );
         expect(remote.privateStorage.containsKey('$_uidU1/photo-1.jpg'), isTrue);
       },
     );

@@ -96,6 +96,22 @@ if ! command -v chromedriver >/dev/null 2>&1; then
   exit 2
 fi
 
+# Existence is not usability: chromedriver refuses a session unless its MAJOR
+# matches Chrome's, and `flutter drive` reports that as a handshake error or an
+# unexplained hang rather than as a version problem.
+#
+# A WARNING here, not a failure, whereas tool/drive_e2e.sh treats the same
+# condition as fatal. This script's preflight path is itself under test
+# (`DRIVE_WEB_PREFLIGHT_ONLY=1`, test/tool/drive_web_port_test.dart), and those
+# cases are about PORT hygiene — turning a version mismatch into an exit 2 here
+# would redden a test that has nothing to do with versions, on a machine whose
+# ports are behaving perfectly. The E2E driver has no such contract, so it can
+# refuse outright.
+if command -v dart >/dev/null 2>&1; then
+  dart run tool/preflight_chromedriver.dart || \
+    echo "WARN: continuing anyway — expect the drive to fail at the WebDriver handshake." >&2
+fi
+
 if [[ "$PREFLIGHT_ONLY" != "1" && ! -f "$TARGET" ]]; then
   echo "FAIL: target test file not found: $TARGET" >&2
   exit 2
