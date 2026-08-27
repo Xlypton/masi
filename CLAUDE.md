@@ -19,23 +19,67 @@ D-4): the engine re-reads and re-sends own rows, which is what makes it idempote
 
 ## Toolchain quirks (read first)
 
-**TWO machines work this repo, and most of this file was written for the first one.** Check which
-you are on before copying a command out of here — `uname`/`$PATH` answers it in one call, and the
-macOS-shaped commands below fail on Windows in ways that read like a broken toolchain rather than a
-wrong platform.
+**THREE environments work this repo, and most of this file was written for the first one.** Check
+which you are on before copying a command out of here — `uname`/`$PATH` answers it in one call, and
+the macOS-shaped commands below fail on the others in ways that read like a broken toolchain rather
+than a wrong platform. The third is the **Linux cloud container** (Claude Code on the web): it is
+ephemeral, rebuilt per session, and needs a one-time setup command — see the section right below the
+table.
 
-| | macOS dev box | Windows dev box |
-|---|---|---|
-| repo | `/Users/kerip/Projects/masi` | `C:\Projects\masi` |
-| flutter/dart | Homebrew; **prefix every command** with `export PATH="/opt/homebrew/bin:$PATH" && ` | `C:\flutter\bin\flutter.bat` — already on PATH, **no prefix needed** |
-| shell | bash | PowerShell **and** Git Bash (MINGW64). `tool/*.sh` run fine under Git Bash |
-| chromedriver | `/opt/homebrew/bin/chromedriver` | `C:\tools\chromedriver.exe` (on PATH) |
-| jq / curl | Homebrew | `C:\tools\jq.exe`, `C:\Windows\System32\curl.exe` |
-| node / npx | Homebrew | portable at `C:\tools\nodejs`, **NOT on PATH** — `export PATH="/c/tools/nodejs:$PATH"` |
-| iOS sim / device / AR | yes | **no** — anything `xcrun`/`devicectl` is macOS-only |
-| headless-Chrome screenshots | real pixels | **flat theme background, ~4 KB every time** — CanvasKit does not composite here. Use `read_console_messages` / `javascript_tool` for evidence instead |
+| | macOS dev box | Windows dev box | Linux cloud container |
+|---|---|---|---|
+| repo | `/Users/kerip/Projects/masi` | `C:\Projects\masi` | `/home/user/masi`, cloned fresh per session |
+| flutter/dart | Homebrew; **prefix every command** with `export PATH="/opt/homebrew/bin:$PATH" && ` | `C:\flutter\bin\flutter.bat` — already on PATH, **no prefix needed** | `/opt/flutter/bin` — installed but **NOT on PATH**, prefix with `export PATH="/opt/flutter/bin:$PATH" && ` |
+| shell | bash | PowerShell **and** Git Bash (MINGW64). `tool/*.sh` run fine under Git Bash | bash, as root |
+| chromedriver | `/opt/homebrew/bin/chromedriver` | `C:\tools\chromedriver.exe` (on PATH) | the one on PATH is the **wrong major version**; the setup script installs a matching one to `~/.local/bin` |
+| jq / curl | Homebrew | `C:\tools\jq.exe`, `C:\Windows\System32\curl.exe` | `/usr/bin/jq`, `/usr/bin/curl` |
+| node / npx | Homebrew | portable at `C:\tools\nodejs`, **NOT on PATH** — `export PATH="/c/tools/nodejs:$PATH"` | `/opt/node22/bin`, on PATH |
+| iOS sim / device / AR | yes | **no** — anything `xcrun`/`devicectl` is macOS-only | **no** |
+| headless-Chrome screenshots | real pixels | **flat theme background, ~4 KB every time** — CanvasKit does not composite here. Use `read_console_messages` / `javascript_tool` for evidence instead | real pixels (verified 2026-08-27), once the setup script has run |
 
 - Flutter 3.44.2 · Dart 3.12.2 · Xcode 26.6 (macOS only).
+
+### Linux cloud container — run this FIRST, once per session
+
+```bash
+bash tool/setup_cloud_session.sh
+export PATH="/opt/flutter/bin:$HOME/.local/bin:$PATH"
+export CHROME_EXECUTABLE=/usr/local/bin/google-chrome
+```
+
+The script is idempotent and no-ops on macOS/Windows-shaped machines. It exists because the image
+has six gaps that each fail as something other than what they are — the reason the script explains
+every one inline rather than just fixing it:
+
+- **Flutter is at `/opt/flutter` but not on PATH** — reads as "no Flutter installed".
+- **`flutter_web_sdk` is not precached.** Three guard tests read Flutter's own engine sources and
+  **fail rather than skip** when they can't find them (that is deliberate — see the reasons in
+  `test/web_font_source_test.dart`). Un-precached, `flutter test` reports **3 failures that are not
+  repo bugs**. `flutter precache --web` clears them.
+- **chromedriver on PATH is a major version ahead of the bundled Chromium**, which `flutter drive`
+  reports as an unexplained WebDriver handshake failure. `dart run tool/preflight_chromedriver.dart`
+  names it properly — run that first whenever a driven web test dies early.
+- **chromedriver can't find a browser at all**: Chromium lives at
+  `/opt/pw-browsers/chromium-*/chrome-linux/chrome`, which is not a name it searches. The script
+  writes a `/usr/local/bin/google-chrome` shim so it is found by name.
+- **Chrome does not read `HTTPS_PROXY`, and this sandbox gives it no direct egress.** Without
+  `--proxy-server` every driven test boots the app **offline** — you get a real screenshot of the
+  offline banner and can easily read it as an app bug. The shim passes the proxy.
+- **Chrome does not trust the egress proxy's MITM CA**, and the proxy **resets TLS 1.3
+  ClientHellos** from Chrome. Both surface identically as `ERR_CONNECTION_RESET`; only a net-log
+  (`--log-net-log=…`, then look for `net_error:-202`) separates them. The script imports the CA into
+  the NSS store and the shim caps at `--ssl-version-max=tls1.2`. **Certificate verification stays
+  fully on** — do not "fix" this with `--ignore-certificate-errors`.
+
+Two more things that are true here and nowhere else:
+
+- **`$SUPABASE_MGMT_TOKEN` may be present but revoked.** Check it before trusting any schema plan:
+  `tool/supabase_query.sh -q 'select 1;'` — a `401 Unauthorized` means the Management-API workflow
+  documented below is unavailable this session, even though the variable is set. The anon key and
+  the `.test` E2E accounts are on a different credential and can be fine while it is dead.
+- **The container is ephemeral.** Everything the setup script does lives outside the repo
+  (`/usr/local/bin`, `~/.local/bin`, the NSS store) and is gone next session — which is exactly why
+  it is a committed script and not a list of commands in this file.
 - **Prefer `dart run tool/<x>.dart` over `tool/<x>.sh` when both exist.** The Dart tools run
   unchanged on both machines and in CI; the shell ones need bash and, on Windows, Git Bash.
 - **iOS uses Swift Package Manager, not CocoaPods** — there is intentionally no `ios/Podfile`.
