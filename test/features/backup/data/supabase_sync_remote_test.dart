@@ -471,7 +471,7 @@ void main() {
       final kept = routesWithResolvablePhoto(
         routes: routes,
         withheldPhotoIds: const {},
-        onWithheld: (_, __) => called++,
+        onWithheld: (_, _) => called++,
       );
 
       expect(identical(kept, routes), isTrue,

@@ -36,11 +36,14 @@ import 'dart:async';
 ///   cleared in a `whenComplete`, and errors go to [onError] rather than
 ///   escaping into the zone.
 class CoalescingRefresh {
-  CoalescingRefresh(this._run, {void Function(Object error)? onError})
-    : _onError = onError;
+  CoalescingRefresh(this._run, {this.onError});
 
   final Future<void> Function() _run;
-  final void Function(Object error)? _onError;
+
+  /// Called with whatever a run threw. Public because a private named
+  /// parameter is not expressible in Dart, so the alternative is a redundant
+  /// field assignment the analyzer flags (`prefer_initializing_formals`).
+  final void Function(Object error)? onError;
 
   bool _inFlight = false;
   bool _queued = false;
@@ -70,7 +73,7 @@ class CoalescingRefresh {
             // screen's own refresh will try again and the mirror still holds
             // everything from the last successful pull. Reported, not thrown —
             // this runs detached, so an escaping error would land in the zone.
-            _onError?.call(error);
+            onError?.call(error);
           })
           .whenComplete(() {
             _inFlight = false;
