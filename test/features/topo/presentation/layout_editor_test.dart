@@ -278,4 +278,88 @@ void main() {
       reason: 'nothing has been dragged, so there is no pin to remove',
     );
   });
+
+  /// The pile-up the user photographed: four faces of a boulder, every
+  /// thumbnail stacked on top of the others in the middle of the ring. Two
+  /// separate defects made it — a normal sign that pointed inward on a
+  /// counter-clockwise stroke, and no collision handling at all — so the
+  /// assertion here is the visible outcome rather than either mechanism.
+  Future<void> expectNoOverlappingThumbnails(
+    WidgetTester tester,
+    String label,
+  ) async {
+    // PHONE width, and not the 800x600 test default. The pile-up is a
+    // function of how much canvas the thumbnails have to spread across, so
+    // asserting it on a desktop-sized surface passes on the broken code —
+    // which is exactly how this shipped.
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final container = makeContainer();
+    addTearDown(container.dispose);
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    final finder = find.byWidgetPredicate(
+      (w) =>
+          w is Container &&
+          w.key is ValueKey<String> &&
+          (w.key! as ValueKey<String>).value.startsWith('layout-face-') &&
+          !(w.key! as ValueKey<String>).value.contains('pinned'),
+    );
+    final rects = [
+      for (final element in finder.evaluate()) tester.getRect(find.byWidget(element.widget)),
+    ];
+    expect(rects, isNotEmpty, reason: '$label rendered no thumbnails');
+
+    for (var i = 0; i < rects.length; i++) {
+      for (var j = i + 1; j < rects.length; j++) {
+        expect(
+          rects[i].overlaps(rects[j]),
+          isFalse,
+          reason: '$label: ${rects[i]} overlaps ${rects[j]}',
+        );
+      }
+    }
+  }
+
+  testWidgets('no two thumbnails overlap on a ring', (tester) async {
+    await seed(photos: 4);
+    await (db.update(db.walls)..where((w) => w.id.equals(wallId))).write(
+      WallsCompanion(
+        // Counter-clockwise on purpose: this is the winding whose left normal
+        // points into the ring, which is what sent all four to the centre.
+        baselineJson: Value(
+          Baseline(const [
+            LayoutPoint(-6, -6),
+            LayoutPoint(6, -6),
+            LayoutPoint(6, 6),
+            LayoutPoint(-6, 6),
+          ], closed: true).encode(),
+        ),
+      ),
+    );
+
+    await expectNoOverlappingThumbnails(tester, 'ring');
+  });
+
+  testWidgets('no two thumbnails overlap on a crowded strip', (tester) async {
+    // Seven photos on a strip: more than fit in one row at phone width, so
+    // the arrangement has to stagger them rather than push sideways.
+    await seed(photos: 7);
+    await (db.update(db.walls)..where((w) => w.id.equals(wallId))).write(
+      WallsCompanion(
+        baselineJson: Value(
+          Baseline(const [
+            LayoutPoint(0, 0),
+            LayoutPoint(30, 0),
+          ]).encode(),
+        ),
+      ),
+    );
+
+    await expectNoOverlappingThumbnails(tester, 'strip');
+  });
 }

@@ -7,6 +7,7 @@ import 'package:flutter/material.dart' hide Baseline;
 import 'package:masi/features/topo/domain/face_layout/baseline.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
+import 'package:masi/features/topo/presentation/thumbnail_arrangement.dart';
 
 /// Draws the semantic baseline and the faces riding it.
 ///
@@ -25,6 +26,7 @@ class LayoutBaselinePainter extends CustomPainter {
     required this.pinnedColor,
     required this.handleColor,
     required this.selectedFaceId,
+    this.slots = const <ThumbnailSlot>[],
     this.showHandles = false,
     this.draft,
   });
@@ -37,6 +39,13 @@ class LayoutBaselinePainter extends CustomPainter {
   final Color pinnedColor;
   final Color handleColor;
   final String? selectedFaceId;
+
+  /// Where each face's thumbnail actually sits, from `arrangeThumbnails`.
+  ///
+  /// Passed in rather than recomputed here because the widget layer positions
+  /// the real thumbnails from the same list: a leader drawn to a box the
+  /// widget put somewhere else reads as a rendering bug.
+  final List<ThumbnailSlot> slots;
 
   /// Whether to draw the diamond reshape handles at each vertex.
   final bool showHandles;
@@ -87,17 +96,17 @@ class LayoutBaselinePainter extends CustomPainter {
 
     for (final face in layout.faces) {
       final at = fit.toCanvas(line.pointAt(face.t));
-      final normal = line.normalAt(face.t);
-      if (normal != null) {
-        final direction =
-            fit.directionToCanvas(normal * layout.thumbnailNormalSign);
-        final length = math.sqrt(
-          direction.dx * direction.dx + direction.dy * direction.dy,
-        );
-        if (length > 0) {
+      // A leader to wherever the arrangement pass ACTUALLY put this
+      // thumbnail, which is not in general the end of its own normal — see
+      // `arrangeThumbnails`. Without it a thumbnail that moved to avoid a
+      // collision would belong to no dot in particular.
+      final slot = _slotFor(face.id);
+      if (slot != null) {
+        final end = leaderEnd(at, slot.rect);
+        if (end != null) {
           canvas.drawLine(
             at,
-            at + direction * (stemLength / length),
+            end,
             Paint()
               ..color = (face.isPinned ? pinnedColor : dotColor).withValues(
                 alpha: 0.45,
@@ -126,28 +135,33 @@ class LayoutBaselinePainter extends CustomPainter {
     }
   }
 
-  /// Where face [id]'s thumbnail should sit, in canvas pixels, or `null` if
-  /// it has no position.
+  ThumbnailSlot? _slotFor(String id) {
+    for (final slot in slots) {
+      if (slot.id == id) return slot;
+    }
+    return null;
+  }
+
+  /// Where each face WANTS its thumbnail, before collision resolution.
   ///
   /// Shared with the widget layer rather than duplicated there: a thumbnail
-  /// drawn anywhere but the end of its own stem reads as a bug in the data.
-  static Offset? thumbnailAnchor(
+  /// drawn anywhere but at the end of its own leader reads as a bug in the
+  /// data.
+  static List<ThumbnailAnchor> anchorsFor(
     LayoutResult layout,
     LayoutPlaneFit fit,
-    String faceId,
   ) {
-    final face = layout.positionOf(faceId);
-    if (face == null || layout.baseline.points.length < 2) return null;
-    final at = fit.toCanvas(layout.baseline.pointAt(face.t));
-    final normal = layout.baseline.normalAt(face.t);
-    if (normal == null) return at;
-    final direction =
-        fit.directionToCanvas(normal * layout.thumbnailNormalSign);
-    final length = math.sqrt(
-      direction.dx * direction.dx + direction.dy * direction.dy,
-    );
-    if (length == 0) return at;
-    return at + direction * (stemLength / length);
+    if (layout.baseline.points.length < 2) return const <ThumbnailAnchor>[];
+    final out = <ThumbnailAnchor>[];
+    for (final face in layout.faces) {
+      final at = fit.toCanvas(layout.baseline.pointAt(face.t));
+      final normal = layout.baseline.normalAt(face.t);
+      final direction = normal == null
+          ? Offset.zero
+          : fit.directionToCanvas(normal * layout.thumbnailNormalSign);
+      out.add(ThumbnailAnchor(id: face.id, base: at, direction: direction));
+    }
+    return out;
   }
 
   Path _dashed(Path source) {
@@ -181,5 +195,6 @@ class LayoutBaselinePainter extends CustomPainter {
       old.draft != draft ||
       old.selectedFaceId != selectedFaceId ||
       old.showHandles != showHandles ||
+      old.slots != slots ||
       old.stroke != stroke;
 }

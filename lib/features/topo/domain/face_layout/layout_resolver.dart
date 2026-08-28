@@ -686,5 +686,28 @@ double _thumbnailSign(
   }
   if (sum > 0) return 1;
   if (sum < 0) return -1;
+
+  // No usable heading anywhere — the ordinary case, because most phones write
+  // no compass tag at all. On a CLOSED line the tie is still decidable from
+  // geometry alone: `normalAt` is the tangent turned left, which points INTO
+  // a counter-clockwise ring and out of a clockwise one. Left to a coin flip
+  // the sign follows whichever way the contributor happened to trace the
+  // boulder, and half of them get every thumbnail sent to the centre of the
+  // ring, where four photos land in one pile.
+  if (line.closed && _signedArea(line) > 0) return -1;
   return 1;
+}
+
+/// Twice the shoelace area of the closed baseline: positive counter-clockwise
+/// in the layout plane (x east, y north).
+double _signedArea(Baseline line) {
+  final points = line.points;
+  if (points.length < 3) return 0;
+  var sum = 0.0;
+  for (var i = 0; i < points.length; i++) {
+    final a = points[i];
+    final b = points[(i + 1) % points.length];
+    sum += a.x * b.y - b.x * a.y;
+  }
+  return sum;
 }

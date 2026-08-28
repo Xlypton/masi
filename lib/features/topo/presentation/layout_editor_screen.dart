@@ -14,6 +14,7 @@ import 'package:masi/features/topo/domain/face_layout/baseline_synthesis.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/layout_baseline_painter.dart';
 import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
+import 'package:masi/features/topo/presentation/thumbnail_arrangement.dart';
 import 'package:masi/features/topo/presentation/photo_image.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 
@@ -291,6 +292,14 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       final fit = _redrawFit ??
           LayoutPlaneFit.forBaseline(layout.baseline, size);
       final preview = _previewLayout(layout, photos);
+      // Resolved ONCE per build and shared by the painter (leaders) and the
+      // widgets (the boxes themselves) — two independent placements of the
+      // same thumbnail is exactly how a leader ends up pointing at nothing.
+      final slots = arrangeThumbnails(
+        anchors: LayoutBaselinePainter.anchorsFor(preview, fit),
+        canvas: size,
+        stem: LayoutBaselinePainter.stemLength,
+      );
 
       Offset toLocal(Offset global) {
         final box =
@@ -306,7 +315,12 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                 TapGestureRecognizer.new,
                 (instance) {
                   instance.onTapUp = (TapUpDetails details) =>
-                      _handleTap(toLocal(details.globalPosition), preview, fit);
+                      _handleTap(
+                        toLocal(details.globalPosition),
+                        preview,
+                        fit,
+                        slots,
+                      );
                 },
               ),
           _CanvasPanRecognizer:
@@ -316,7 +330,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                     if (_redrawing) return true;
                     final at = toLocal(global);
                     return _handleNear(at, preview, fit) != null ||
-                        _faceNear(at, preview, fit) != null;
+                        _faceNear(at, preview, fit, slots) != null;
                   },
                 ),
                 (instance) {
@@ -327,7 +341,12 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                   // that decides ring-or-wall: did it end where it began.
                   instance.dragStartBehavior = DragStartBehavior.down;
                   instance.onStart = (DragStartDetails details) =>
-                      _panStart(toLocal(details.globalPosition), preview, fit);
+                      _panStart(
+                        toLocal(details.globalPosition),
+                        preview,
+                        fit,
+                        slots,
+                      );
                   instance.onUpdate = (DragUpdateDetails details) =>
                       _panUpdate(toLocal(details.globalPosition), preview, fit);
                   instance.onEnd = (DragEndDetails details) => _panEnd();
@@ -356,6 +375,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                     pinnedColor: colors.accent,
                     handleColor: colors.amethyst400,
                     selectedFaceId: _selectedFaceId,
+                    slots: slots,
                     showHandles: !_redrawing,
                     draft: draft,
                   ),
@@ -363,7 +383,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
               ),
               if (!_redrawing)
                 for (final face in preview.faces)
-                  _thumbnail(colors, preview, fit, face, photos),
+                  _thumbnail(colors, face, photos, slots),
             ],
           ),
         ),
@@ -415,13 +435,15 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
 
   Widget _thumbnail(
     MasiColors colors,
-    LayoutResult layout,
-    LayoutPlaneFit fit,
     FacePosition face,
     List<PhotoRef> photos,
+    List<ThumbnailSlot> slots,
   ) {
-    final anchor = LayoutBaselinePainter.thumbnailAnchor(layout, fit, face.id);
-    if (anchor == null) return const SizedBox.shrink();
+    ThumbnailSlot? slot;
+    for (final candidate in slots) {
+      if (candidate.id == face.id) slot = candidate;
+    }
+    if (slot == null) return const SizedBox.shrink();
     final photo = _photoFor(photos, face.id);
     final selected = face.id == _selectedFaceId;
 
@@ -430,13 +452,13 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       // be. A square crop of a landscape photo of a crag throws away the
       // sides — which is precisely the part that tells one face from the
       // next — and at 44px what survived was unreadable.
-      left: anchor.dx - 32,
-      top: anchor.dy - 24,
+      left: slot.topLeft.dx,
+      top: slot.topLeft.dy,
       child: IgnorePointer(
         child: Container(
           key: Key('layout-face-${face.id}'),
-          width: 64,
-          height: 48,
+          width: slot.size.width,
+          height: slot.size.height,
           decoration: BoxDecoration(
             color: colors.surface,
             borderRadius: BorderRadius.circular(MasiRadii.control),
@@ -662,13 +684,23 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     return null;
   }
 
-  void _handleTap(Offset at, LayoutResult layout, LayoutPlaneFit fit) {
+  void _handleTap(
+    Offset at,
+    LayoutResult layout,
+    LayoutPlaneFit fit,
+    List<ThumbnailSlot> slots,
+  ) {
     if (_redrawing) return;
-    final hit = _faceNear(at, layout, fit);
+    final hit = _faceNear(at, layout, fit, slots);
     setState(() => _selectedFaceId = hit?.id);
   }
 
-  void _panStart(Offset at, LayoutResult layout, LayoutPlaneFit fit) {
+  void _panStart(
+    Offset at,
+    LayoutResult layout,
+    LayoutPlaneFit fit,
+    List<ThumbnailSlot> slots,
+  ) {
     if (_redrawing) {
       setState(() => _draftPoints = [fit.toPlane(at)]);
       return;
@@ -686,7 +718,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       });
       return;
     }
-    final hit = _faceNear(at, layout, fit);
+    final hit = _faceNear(at, layout, fit, slots);
     if (hit == null) return;
     setState(() {
       _selectedFaceId = hit.id;
@@ -745,24 +777,30 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     Offset at,
     LayoutResult layout,
     LayoutPlaneFit fit,
+    List<ThumbnailSlot> slots,
   ) {
+    // A thumbnail that the arrangement pass moved is grabbed where it IS,
+    // not where its normal would have put it — so the box under the finger is
+    // always the one that responds. The rect is tested directly rather than by
+    // distance-to-centre: a 64x48 box has corners a plain radius misses.
+    for (final slot in slots) {
+      if (slot.rect.inflate(6).contains(at)) {
+        final face = layout.positionOf(slot.id);
+        if (face != null) return face;
+      }
+    }
     FacePosition? best;
     var bestDistance = double.infinity;
     for (final face in layout.faces) {
-      for (final candidate in [
-        fit.toCanvas(layout.baseline.pointAt(face.t)),
-        LayoutBaselinePainter.thumbnailAnchor(layout, fit, face.id),
-      ]) {
-        if (candidate == null) continue;
-        final distance = (candidate - at).distance;
-        if (distance < bestDistance) {
-          bestDistance = distance;
-          best = face;
-        }
+      final distance =
+          (fit.toCanvas(layout.baseline.pointAt(face.t)) - at).distance;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = face;
       }
     }
-    // A generous radius, because the target is a 44px thumbnail on a phone
-    // and the alternative to hitting it is dragging the wrong photo.
+    // A generous radius, because the target is a dot on a phone and the
+    // alternative to hitting it is dragging the wrong photo.
     return bestDistance <= 34 ? best : null;
   }
 
