@@ -1200,10 +1200,14 @@ void main() {
         )..where((t) => t.wallId.equals('wall-no-photo'))).get();
         expect(noPhotoRows, isEmpty);
 
-        // --- the route unique index moved from wall-scoped to photo------
-        // --- scoped: a second photo on wall-two-originals can now reuse --
-        // --- route number 1 (previously would have violated the old ------
-        // --- wall_id+number index). -------------------------------------
+        // --- numbering is wall-scoped again (v16) -----------------------
+        // v6 moved the unique index to (photo_id, number) so each photo
+        // could own its own "route 1"; v16 moved it back to
+        // (wall_id, number) because a route became a CLIMB that can be drawn
+        // on several photos, and one climb with two numbers is unreadable at
+        // the rock. This database has been carried to current, so the
+        // wall-scoped rule is the one in force: a second photo on the same
+        // wall may NOT reuse a number that wall already has.
         await db
             .into(db.photos)
             .insert(
@@ -1227,26 +1231,44 @@ void main() {
                 updatedAt: 4000,
                 wallId: 'wall-two-originals',
                 photoId: 'photo-post-migration',
-                number: 1,
+                number: 2,
                 colorIndex: 0,
                 pointsJson: '[]',
                 symbolsJson: '[]',
                 sortOrder: 0,
               ),
             );
-        final bothNumberOnes = await (db.select(
+        final wallRoutes = await (db.select(
           db.routes,
         )..where((t) => t.wallId.equals('wall-two-originals'))).get();
         expect(
-          bothNumberOnes.map((r) => r.number).toList(),
-          [1, 1],
-          reason: 'two different photos on the same wall can each have '
-              'their own route 1 now that the unique index is photo-scoped',
+          wallRoutes.map((r) => r.number).toList()..sort(),
+          [1, 2],
+          reason: 'numbers are unique per wall, across photos',
         );
 
-        // The OLD wall-scoped index must be gone — a duplicate (wall_id,
-        // number) pair across DIFFERENT photos (proven above) would have
-        // violated it were it still present.
+        // And the constraint really is enforced, not merely declared: reusing
+        // the number on the other photo is refused.
+        await expectLater(
+          db.into(db.routes).insert(
+            RoutesCompanion.insert(
+              id: 'route-3',
+              createdAt: 4000,
+              updatedAt: 4000,
+              wallId: 'wall-two-originals',
+              photoId: 'photo-post-migration',
+              number: 1,
+              colorIndex: 0,
+              pointsJson: '[]',
+              symbolsJson: '[]',
+              sortOrder: 0,
+            ),
+          ),
+          throwsA(isA<Exception>()),
+        );
+
+        // The photo-scoped index must be gone — it is what allowed the
+        // duplicate the insert above is now refused.
         final indexNames = await db
             .customSelect(
               "SELECT name FROM sqlite_master WHERE type = 'index' "
@@ -1254,8 +1276,13 @@ void main() {
             )
             .map((row) => row.read<String>('name'))
             .get();
-        expect(indexNames, contains('idx_routes_photo_number_live'));
-        expect(indexNames, isNot(contains('idx_routes_wall_number_live')));
+        // v6 introduced photo-scoped numbering; v16 moved it to the wall,
+        // and this database has been carried all the way to current. So the
+        // assertion is about the END state of the chain, not v6's: the
+        // photo-scoped unique index is gone and the wall-scoped one has
+        // replaced it.
+        expect(indexNames, isNot(contains('idx_routes_photo_number_live')));
+        expect(indexNames, contains('idx_routes_wall_number_live'));
       },
     );
   });
@@ -1812,6 +1839,10 @@ void main() {
           'walls',
           'photos',
           'routes',
+          // The same climb drawn on another photo of the same rock (v16).
+          // A synced table like its parent: the line is the contributor's
+          // own work and travels with the rest of their library.
+          'route_lines',
           'comments',
           'likes',
           'ascents',
@@ -2098,7 +2129,12 @@ void main() {
       'idx_walls_sector_live': 'walls',
       'idx_photos_wall_live': 'photos',
       'idx_photos_parent_live': 'photos',
-      'idx_routes_wall_live': 'routes',
+      // v16 renamed this. `idx_routes_wall_number_live` leads with wall_id,
+      // so it serves the same `wall_id = ?` lookups as a prefix match, and
+      // `photo_id` — which used to ride the old photo-scoped unique index —
+      // needed its own index once numbering moved to the wall.
+      'idx_routes_wall_number_live': 'routes',
+      'idx_routes_photo_live': 'routes',
       'idx_comments_wall_live': 'comments',
       'idx_comments_ascent_live': 'comments',
       'idx_likes_wall_live': 'likes',
@@ -2217,8 +2253,11 @@ void main() {
       // The point of the migration is query plans, so assert on the plan.
       // Without an index, `EXPLAIN QUERY PLAN` for these reads says
       // "SCAN routes"; with it, "SEARCH routes USING INDEX
-      // idx_routes_wall_live". A test that only checks sqlite_master would
-      // pass for an index the planner never chooses.
+      // idx_routes_wall_number_live". A test that only checks sqlite_master
+      // would pass for an index the planner never chooses — and that is
+      // exactly what this asserts about the v16 rename: a compound index on
+      // (wall_id, number) is only a replacement for the single-column one if
+      // the planner really does use it for a bare wall_id lookup.
       final db = AppDatabase(NativeDatabase(dbFile));
       addTearDown(db.close);
 
@@ -2231,7 +2270,13 @@ void main() {
         await planFor(
           "SELECT * FROM routes WHERE wall_id = 'w' AND deleted_at IS NULL",
         ),
-        contains('idx_routes_wall_live'),
+        contains('idx_routes_wall_number_live'),
+      );
+      expect(
+        await planFor(
+          "SELECT * FROM routes WHERE photo_id = 'p' AND deleted_at IS NULL",
+        ),
+        contains('idx_routes_photo_live'),
       );
       expect(
         await planFor(
@@ -2814,7 +2859,7 @@ void main() {
 
         // The recovery actually STICKS: the version is stamped, so the next
         // open is an ordinary no-migration open rather than another retry.
-        expect(await userVersion(db), 15);
+        expect(await userVersion(db), 16);
 
         // And a re-added column is wired into the generated companion, not
         // merely physically present in SQLite.
@@ -2999,7 +3044,7 @@ void main() {
         expect(ascent.visibility, 'public');
         expect(ascent.authorName, isNull);
 
-        expect(await userVersion(db), 15);
+        expect(await userVersion(db), 16);
       },
     );
 
@@ -3097,7 +3142,7 @@ void main() {
         expect(photo.isPrimary, isTrue);
         expect(photo.sortOrder, 0);
 
-        expect(await userVersion(db), 15);
+        expect(await userVersion(db), 16);
       },
     );
   });

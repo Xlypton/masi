@@ -8,6 +8,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../app/shell_notice_dismissal.dart';
 import '../../../app/theme.dart';
+import '../../../core/db/database_provider.dart';
 import '../../../core/db/storage_durability_provider.dart';
 import '../../../core/grades/grade_system.dart';
 import '../../../core/location/location_service.dart';
@@ -1089,8 +1090,10 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       // guard, a drift serialization error — has no actionable detail to offer
       // and gets this file's house phrasing instead. Claiming "out of storage
       // space" for those would be a guess presented as a diagnosis.
+      String? attachedPhotoId;
       try {
-        await repo.attachPhotoToWall(wallId, xfile, width, height);
+        attachedPhotoId =
+            await repo.attachPhotoToWall(wallId, xfile, width, height);
       } catch (attachError, attachStack) {
         debugPrint(
           'Failed to attach the new topo\'s photo: $attachError\n$attachStack',
@@ -1157,6 +1160,10 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         wallId,
         xfile,
         locationService: ref.read(locationServiceProvider),
+        // See the canvas's own call site: this additionally records the
+        // photo's own fix/accuracy/heading, which the face layout reads.
+        photoId: attachedPhotoId,
+        photoRepo: ref.read(photoRepositoryProvider),
       );
 
       if (!mounted) return;

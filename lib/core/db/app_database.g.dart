@@ -1664,6 +1664,17 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     type: DriftSqlType.double,
     requiredDuringInsert: false,
   );
+  static const VerificationMeta _baselineJsonMeta = const VerificationMeta(
+    'baselineJson',
+  );
+  @override
+  late final GeneratedColumn<String> baselineJson = GeneratedColumn<String>(
+    'baseline_json',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -1681,6 +1692,7 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
     visibility,
     latitude,
     longitude,
+    baselineJson,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -1796,6 +1808,15 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
         longitude.isAcceptableOrUnknown(data['longitude']!, _longitudeMeta),
       );
     }
+    if (data.containsKey('baseline_json')) {
+      context.handle(
+        _baselineJsonMeta,
+        baselineJson.isAcceptableOrUnknown(
+          data['baseline_json']!,
+          _baselineJsonMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -1865,6 +1886,10 @@ class $WallsTable extends Walls with TableInfo<$WallsTable, Wall> {
         DriftSqlType.double,
         data['${effectivePrefix}longitude'],
       ),
+      baselineJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}baseline_json'],
+      ),
     );
   }
 
@@ -1908,6 +1933,23 @@ class Wall extends DataClass implements Insertable<Wall> {
   /// watchSharedTopos`).
   final double? latitude;
   final double? longitude;
+
+  /// The wall's semantic baseline — the rock's footprint seen from above, as
+  /// the JSON written by `face_layout/baseline.dart`'s `Baseline.encode`
+  /// (a polyline in metres east/north of [latitude]/[longitude], plus whether
+  /// it closes).
+  ///
+  /// `null` means nobody has authored one, NOT that the wall has no layout: a
+  /// provisional line is synthesised from the photos' own GPS and headings on
+  /// every read (`resolveLayout`), so a contributor who does nothing still
+  /// gets an arranged topo. Storing only the AUTHORED stroke is what makes
+  /// that possible — a stored provisional one would freeze a guess made
+  /// before half the photos existed, and §5's "recompute on every edit" could
+  /// never improve it.
+  ///
+  /// Whether the stroke closes is the only thing separating a boulder from a
+  /// wall in this model, which is why nothing in the UI ever asks.
+  final String? baselineJson;
   const Wall({
     required this.id,
     required this.createdAt,
@@ -1924,6 +1966,7 @@ class Wall extends DataClass implements Insertable<Wall> {
     required this.visibility,
     this.latitude,
     this.longitude,
+    this.baselineJson,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -1956,6 +1999,9 @@ class Wall extends DataClass implements Insertable<Wall> {
     }
     if (!nullToAbsent || longitude != null) {
       map['longitude'] = Variable<double>(longitude);
+    }
+    if (!nullToAbsent || baselineJson != null) {
+      map['baseline_json'] = Variable<String>(baselineJson);
     }
     return map;
   }
@@ -1991,6 +2037,9 @@ class Wall extends DataClass implements Insertable<Wall> {
       longitude: longitude == null && nullToAbsent
           ? const Value.absent()
           : Value(longitude),
+      baselineJson: baselineJson == null && nullToAbsent
+          ? const Value.absent()
+          : Value(baselineJson),
     );
   }
 
@@ -2015,6 +2064,7 @@ class Wall extends DataClass implements Insertable<Wall> {
       visibility: serializer.fromJson<String>(json['visibility']),
       latitude: serializer.fromJson<double?>(json['latitude']),
       longitude: serializer.fromJson<double?>(json['longitude']),
+      baselineJson: serializer.fromJson<String?>(json['baselineJson']),
     );
   }
   @override
@@ -2036,6 +2086,7 @@ class Wall extends DataClass implements Insertable<Wall> {
       'visibility': serializer.toJson<String>(visibility),
       'latitude': serializer.toJson<double?>(latitude),
       'longitude': serializer.toJson<double?>(longitude),
+      'baselineJson': serializer.toJson<String?>(baselineJson),
     };
   }
 
@@ -2055,6 +2106,7 @@ class Wall extends DataClass implements Insertable<Wall> {
     String? visibility,
     Value<double?> latitude = const Value.absent(),
     Value<double?> longitude = const Value.absent(),
+    Value<String?> baselineJson = const Value.absent(),
   }) => Wall(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -2071,6 +2123,7 @@ class Wall extends DataClass implements Insertable<Wall> {
     visibility: visibility ?? this.visibility,
     latitude: latitude.present ? latitude.value : this.latitude,
     longitude: longitude.present ? longitude.value : this.longitude,
+    baselineJson: baselineJson.present ? baselineJson.value : this.baselineJson,
   );
   Wall copyWithCompanion(WallsCompanion data) {
     return Wall(
@@ -2095,6 +2148,9 @@ class Wall extends DataClass implements Insertable<Wall> {
           : this.visibility,
       latitude: data.latitude.present ? data.latitude.value : this.latitude,
       longitude: data.longitude.present ? data.longitude.value : this.longitude,
+      baselineJson: data.baselineJson.present
+          ? data.baselineJson.value
+          : this.baselineJson,
     );
   }
 
@@ -2115,7 +2171,8 @@ class Wall extends DataClass implements Insertable<Wall> {
           ..write('sortOrder: $sortOrder, ')
           ..write('visibility: $visibility, ')
           ..write('latitude: $latitude, ')
-          ..write('longitude: $longitude')
+          ..write('longitude: $longitude, ')
+          ..write('baselineJson: $baselineJson')
           ..write(')'))
         .toString();
   }
@@ -2137,6 +2194,7 @@ class Wall extends DataClass implements Insertable<Wall> {
     visibility,
     latitude,
     longitude,
+    baselineJson,
   );
   @override
   bool operator ==(Object other) =>
@@ -2156,7 +2214,8 @@ class Wall extends DataClass implements Insertable<Wall> {
           other.sortOrder == this.sortOrder &&
           other.visibility == this.visibility &&
           other.latitude == this.latitude &&
-          other.longitude == this.longitude);
+          other.longitude == this.longitude &&
+          other.baselineJson == this.baselineJson);
 }
 
 class WallsCompanion extends UpdateCompanion<Wall> {
@@ -2175,6 +2234,7 @@ class WallsCompanion extends UpdateCompanion<Wall> {
   final Value<String> visibility;
   final Value<double?> latitude;
   final Value<double?> longitude;
+  final Value<String?> baselineJson;
   final Value<int> rowid;
   const WallsCompanion({
     this.id = const Value.absent(),
@@ -2192,6 +2252,7 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     this.visibility = const Value.absent(),
     this.latitude = const Value.absent(),
     this.longitude = const Value.absent(),
+    this.baselineJson = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   WallsCompanion.insert({
@@ -2210,6 +2271,7 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     this.visibility = const Value.absent(),
     this.latitude = const Value.absent(),
     this.longitude = const Value.absent(),
+    this.baselineJson = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -2233,6 +2295,7 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     Expression<String>? visibility,
     Expression<double>? latitude,
     Expression<double>? longitude,
+    Expression<String>? baselineJson,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -2251,6 +2314,7 @@ class WallsCompanion extends UpdateCompanion<Wall> {
       if (visibility != null) 'visibility': visibility,
       if (latitude != null) 'latitude': latitude,
       if (longitude != null) 'longitude': longitude,
+      if (baselineJson != null) 'baseline_json': baselineJson,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -2271,6 +2335,7 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     Value<String>? visibility,
     Value<double?>? latitude,
     Value<double?>? longitude,
+    Value<String?>? baselineJson,
     Value<int>? rowid,
   }) {
     return WallsCompanion(
@@ -2289,6 +2354,7 @@ class WallsCompanion extends UpdateCompanion<Wall> {
       visibility: visibility ?? this.visibility,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      baselineJson: baselineJson ?? this.baselineJson,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -2341,6 +2407,9 @@ class WallsCompanion extends UpdateCompanion<Wall> {
     if (longitude.present) {
       map['longitude'] = Variable<double>(longitude.value);
     }
+    if (baselineJson.present) {
+      map['baseline_json'] = Variable<String>(baselineJson.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -2365,6 +2434,7 @@ class WallsCompanion extends UpdateCompanion<Wall> {
           ..write('visibility: $visibility, ')
           ..write('latitude: $latitude, ')
           ..write('longitude: $longitude, ')
+          ..write('baselineJson: $baselineJson, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -2566,6 +2636,61 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
     ),
     defaultValue: const Constant(false),
   );
+  static const VerificationMeta _captureLatitudeMeta = const VerificationMeta(
+    'captureLatitude',
+  );
+  @override
+  late final GeneratedColumn<double> captureLatitude = GeneratedColumn<double>(
+    'capture_latitude',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _captureLongitudeMeta = const VerificationMeta(
+    'captureLongitude',
+  );
+  @override
+  late final GeneratedColumn<double> captureLongitude = GeneratedColumn<double>(
+    'capture_longitude',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _captureAccuracyMetersMeta =
+      const VerificationMeta('captureAccuracyMeters');
+  @override
+  late final GeneratedColumn<double> captureAccuracyMeters =
+      GeneratedColumn<double>(
+        'capture_accuracy_meters',
+        aliasedName,
+        true,
+        type: DriftSqlType.double,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _captureBearingDegreesMeta =
+      const VerificationMeta('captureBearingDegrees');
+  @override
+  late final GeneratedColumn<double> captureBearingDegrees =
+      GeneratedColumn<double>(
+        'capture_bearing_degrees',
+        aliasedName,
+        true,
+        type: DriftSqlType.double,
+        requiredDuringInsert: false,
+      );
+  static const VerificationMeta _layoutPinnedTMeta = const VerificationMeta(
+    'layoutPinnedT',
+  );
+  @override
+  late final GeneratedColumn<double> layoutPinnedT = GeneratedColumn<double>(
+    'layout_pinned_t',
+    aliasedName,
+    true,
+    type: DriftSqlType.double,
+    requiredDuringInsert: false,
+  );
   @override
   List<GeneratedColumn> get $columns => [
     id,
@@ -2585,6 +2710,11 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
     cropWidthPct,
     sortOrder,
     isPrimary,
+    captureLatitude,
+    captureLongitude,
+    captureAccuracyMeters,
+    captureBearingDegrees,
+    layoutPinnedT,
   ];
   @override
   String get aliasedName => _alias ?? actualTableName;
@@ -2719,6 +2849,51 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
         isPrimary.isAcceptableOrUnknown(data['is_primary']!, _isPrimaryMeta),
       );
     }
+    if (data.containsKey('capture_latitude')) {
+      context.handle(
+        _captureLatitudeMeta,
+        captureLatitude.isAcceptableOrUnknown(
+          data['capture_latitude']!,
+          _captureLatitudeMeta,
+        ),
+      );
+    }
+    if (data.containsKey('capture_longitude')) {
+      context.handle(
+        _captureLongitudeMeta,
+        captureLongitude.isAcceptableOrUnknown(
+          data['capture_longitude']!,
+          _captureLongitudeMeta,
+        ),
+      );
+    }
+    if (data.containsKey('capture_accuracy_meters')) {
+      context.handle(
+        _captureAccuracyMetersMeta,
+        captureAccuracyMeters.isAcceptableOrUnknown(
+          data['capture_accuracy_meters']!,
+          _captureAccuracyMetersMeta,
+        ),
+      );
+    }
+    if (data.containsKey('capture_bearing_degrees')) {
+      context.handle(
+        _captureBearingDegreesMeta,
+        captureBearingDegrees.isAcceptableOrUnknown(
+          data['capture_bearing_degrees']!,
+          _captureBearingDegreesMeta,
+        ),
+      );
+    }
+    if (data.containsKey('layout_pinned_t')) {
+      context.handle(
+        _layoutPinnedTMeta,
+        layoutPinnedT.isAcceptableOrUnknown(
+          data['layout_pinned_t']!,
+          _layoutPinnedTMeta,
+        ),
+      );
+    }
     return context;
   }
 
@@ -2796,6 +2971,26 @@ class $PhotosTable extends Photos with TableInfo<$PhotosTable, Photo> {
         DriftSqlType.bool,
         data['${effectivePrefix}is_primary'],
       )!,
+      captureLatitude: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}capture_latitude'],
+      ),
+      captureLongitude: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}capture_longitude'],
+      ),
+      captureAccuracyMeters: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}capture_accuracy_meters'],
+      ),
+      captureBearingDegrees: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}capture_bearing_degrees'],
+      ),
+      layoutPinnedT: attachedDatabase.typeMapping.read(
+        DriftSqlType.double,
+        data['${effectivePrefix}layout_pinned_t'],
+      ),
     );
   }
 
@@ -2850,6 +3045,52 @@ class Photo extends DataClass implements Insertable<Photo> {
   /// original on each wall is flagged primary — this SAFELY resolves the
   /// #46 bug's accumulated multi-original walls without deleting any row.
   final bool isPrimary;
+
+  /// Where this photo was taken, from its own EXIF GPS — the FACE-level fix,
+  /// deliberately distinct from [Walls.latitude]/[Walls.longitude], which is
+  /// the object-level pin shown on the map.
+  ///
+  /// The split is the whole of the layout spec's §5 signal hierarchy in two
+  /// columns. A fix that is 10 m out is useless for saying which side of a
+  /// 4 m boulder you are on and perfectly good for saying which valley the
+  /// boulder is in; keeping one number for each question means no code can
+  /// accidentally answer one with the other.
+  final double? captureLatitude;
+  final double? captureLongitude;
+
+  /// Reported horizontal accuracy of that fix, in metres, or `null` when the
+  /// photo did not say.
+  ///
+  /// `null` is treated as UNUSABLE rather than perfect (`FaceInput
+  /// .hasUsableGps`). An unlabelled fix taken under a cliff is exactly the
+  /// multipath case the hierarchy exists to distrust, and defaulting it to
+  /// "good" would let the worst data outrank capture order.
+  final double? captureAccuracyMeters;
+
+  /// Camera heading in degrees clockwise from true north, from EXIF
+  /// `GPSImgDirection`, or `null` — which is the common case, since many
+  /// phones and most cameras write no heading at all.
+  ///
+  /// A hint and a sort key, never ground truth: iron-bearing rock and
+  /// magnetic cases throw a magnetometer far enough off that a heading is
+  /// only ever allowed to REFINE spacing, and any heading contradicting
+  /// capture order is dropped as an outlier.
+  final double? captureBearingDegrees;
+
+  /// Where a human dragged this face to on the wall's baseline, as an
+  /// arc-length fraction, or `null` if nobody has.
+  ///
+  /// One nullable column rather than the spec's `t` + `t_pinned` pair. The
+  /// pair has a state nothing can arbitrate — a `t` with `t_pinned` false is
+  /// a stale computed value — and full-row last-writer-wins sync (decision
+  /// D-4) can land the two halves from different edits, producing a pin at a
+  /// position nobody chose. A single nullable value cannot disagree with
+  /// itself, and "unpinned" becomes the absence of a fact rather than a
+  /// stored one.
+  ///
+  /// Authoritative once set: the resolver never overrides it, and every
+  /// unpinned neighbour re-interpolates around it.
+  final double? layoutPinnedT;
   const Photo({
     required this.id,
     required this.createdAt,
@@ -2868,6 +3109,11 @@ class Photo extends DataClass implements Insertable<Photo> {
     this.cropWidthPct,
     required this.sortOrder,
     required this.isPrimary,
+    this.captureLatitude,
+    this.captureLongitude,
+    this.captureAccuracyMeters,
+    this.captureBearingDegrees,
+    this.layoutPinnedT,
   });
   @override
   Map<String, Expression> toColumns(bool nullToAbsent) {
@@ -2901,6 +3147,21 @@ class Photo extends DataClass implements Insertable<Photo> {
     }
     map['sort_order'] = Variable<int>(sortOrder);
     map['is_primary'] = Variable<bool>(isPrimary);
+    if (!nullToAbsent || captureLatitude != null) {
+      map['capture_latitude'] = Variable<double>(captureLatitude);
+    }
+    if (!nullToAbsent || captureLongitude != null) {
+      map['capture_longitude'] = Variable<double>(captureLongitude);
+    }
+    if (!nullToAbsent || captureAccuracyMeters != null) {
+      map['capture_accuracy_meters'] = Variable<double>(captureAccuracyMeters);
+    }
+    if (!nullToAbsent || captureBearingDegrees != null) {
+      map['capture_bearing_degrees'] = Variable<double>(captureBearingDegrees);
+    }
+    if (!nullToAbsent || layoutPinnedT != null) {
+      map['layout_pinned_t'] = Variable<double>(layoutPinnedT);
+    }
     return map;
   }
 
@@ -2935,6 +3196,21 @@ class Photo extends DataClass implements Insertable<Photo> {
           : Value(cropWidthPct),
       sortOrder: Value(sortOrder),
       isPrimary: Value(isPrimary),
+      captureLatitude: captureLatitude == null && nullToAbsent
+          ? const Value.absent()
+          : Value(captureLatitude),
+      captureLongitude: captureLongitude == null && nullToAbsent
+          ? const Value.absent()
+          : Value(captureLongitude),
+      captureAccuracyMeters: captureAccuracyMeters == null && nullToAbsent
+          ? const Value.absent()
+          : Value(captureAccuracyMeters),
+      captureBearingDegrees: captureBearingDegrees == null && nullToAbsent
+          ? const Value.absent()
+          : Value(captureBearingDegrees),
+      layoutPinnedT: layoutPinnedT == null && nullToAbsent
+          ? const Value.absent()
+          : Value(layoutPinnedT),
     );
   }
 
@@ -2961,6 +3237,15 @@ class Photo extends DataClass implements Insertable<Photo> {
       cropWidthPct: serializer.fromJson<double?>(json['cropWidthPct']),
       sortOrder: serializer.fromJson<int>(json['sortOrder']),
       isPrimary: serializer.fromJson<bool>(json['isPrimary']),
+      captureLatitude: serializer.fromJson<double?>(json['captureLatitude']),
+      captureLongitude: serializer.fromJson<double?>(json['captureLongitude']),
+      captureAccuracyMeters: serializer.fromJson<double?>(
+        json['captureAccuracyMeters'],
+      ),
+      captureBearingDegrees: serializer.fromJson<double?>(
+        json['captureBearingDegrees'],
+      ),
+      layoutPinnedT: serializer.fromJson<double?>(json['layoutPinnedT']),
     );
   }
   @override
@@ -2984,6 +3269,15 @@ class Photo extends DataClass implements Insertable<Photo> {
       'cropWidthPct': serializer.toJson<double?>(cropWidthPct),
       'sortOrder': serializer.toJson<int>(sortOrder),
       'isPrimary': serializer.toJson<bool>(isPrimary),
+      'captureLatitude': serializer.toJson<double?>(captureLatitude),
+      'captureLongitude': serializer.toJson<double?>(captureLongitude),
+      'captureAccuracyMeters': serializer.toJson<double?>(
+        captureAccuracyMeters,
+      ),
+      'captureBearingDegrees': serializer.toJson<double?>(
+        captureBearingDegrees,
+      ),
+      'layoutPinnedT': serializer.toJson<double?>(layoutPinnedT),
     };
   }
 
@@ -3005,6 +3299,11 @@ class Photo extends DataClass implements Insertable<Photo> {
     Value<double?> cropWidthPct = const Value.absent(),
     int? sortOrder,
     bool? isPrimary,
+    Value<double?> captureLatitude = const Value.absent(),
+    Value<double?> captureLongitude = const Value.absent(),
+    Value<double?> captureAccuracyMeters = const Value.absent(),
+    Value<double?> captureBearingDegrees = const Value.absent(),
+    Value<double?> layoutPinnedT = const Value.absent(),
   }) => Photo(
     id: id ?? this.id,
     createdAt: createdAt ?? this.createdAt,
@@ -3025,6 +3324,21 @@ class Photo extends DataClass implements Insertable<Photo> {
     cropWidthPct: cropWidthPct.present ? cropWidthPct.value : this.cropWidthPct,
     sortOrder: sortOrder ?? this.sortOrder,
     isPrimary: isPrimary ?? this.isPrimary,
+    captureLatitude: captureLatitude.present
+        ? captureLatitude.value
+        : this.captureLatitude,
+    captureLongitude: captureLongitude.present
+        ? captureLongitude.value
+        : this.captureLongitude,
+    captureAccuracyMeters: captureAccuracyMeters.present
+        ? captureAccuracyMeters.value
+        : this.captureAccuracyMeters,
+    captureBearingDegrees: captureBearingDegrees.present
+        ? captureBearingDegrees.value
+        : this.captureBearingDegrees,
+    layoutPinnedT: layoutPinnedT.present
+        ? layoutPinnedT.value
+        : this.layoutPinnedT,
   );
   Photo copyWithCompanion(PhotosCompanion data) {
     return Photo(
@@ -3049,6 +3363,21 @@ class Photo extends DataClass implements Insertable<Photo> {
           : this.cropWidthPct,
       sortOrder: data.sortOrder.present ? data.sortOrder.value : this.sortOrder,
       isPrimary: data.isPrimary.present ? data.isPrimary.value : this.isPrimary,
+      captureLatitude: data.captureLatitude.present
+          ? data.captureLatitude.value
+          : this.captureLatitude,
+      captureLongitude: data.captureLongitude.present
+          ? data.captureLongitude.value
+          : this.captureLongitude,
+      captureAccuracyMeters: data.captureAccuracyMeters.present
+          ? data.captureAccuracyMeters.value
+          : this.captureAccuracyMeters,
+      captureBearingDegrees: data.captureBearingDegrees.present
+          ? data.captureBearingDegrees.value
+          : this.captureBearingDegrees,
+      layoutPinnedT: data.layoutPinnedT.present
+          ? data.layoutPinnedT.value
+          : this.layoutPinnedT,
     );
   }
 
@@ -3071,13 +3400,18 @@ class Photo extends DataClass implements Insertable<Photo> {
           ..write('cropXpct: $cropXpct, ')
           ..write('cropWidthPct: $cropWidthPct, ')
           ..write('sortOrder: $sortOrder, ')
-          ..write('isPrimary: $isPrimary')
+          ..write('isPrimary: $isPrimary, ')
+          ..write('captureLatitude: $captureLatitude, ')
+          ..write('captureLongitude: $captureLongitude, ')
+          ..write('captureAccuracyMeters: $captureAccuracyMeters, ')
+          ..write('captureBearingDegrees: $captureBearingDegrees, ')
+          ..write('layoutPinnedT: $layoutPinnedT')
           ..write(')'))
         .toString();
   }
 
   @override
-  int get hashCode => Object.hash(
+  int get hashCode => Object.hashAll([
     id,
     createdAt,
     updatedAt,
@@ -3095,7 +3429,12 @@ class Photo extends DataClass implements Insertable<Photo> {
     cropWidthPct,
     sortOrder,
     isPrimary,
-  );
+    captureLatitude,
+    captureLongitude,
+    captureAccuracyMeters,
+    captureBearingDegrees,
+    layoutPinnedT,
+  ]);
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||
@@ -3116,7 +3455,12 @@ class Photo extends DataClass implements Insertable<Photo> {
           other.cropXpct == this.cropXpct &&
           other.cropWidthPct == this.cropWidthPct &&
           other.sortOrder == this.sortOrder &&
-          other.isPrimary == this.isPrimary);
+          other.isPrimary == this.isPrimary &&
+          other.captureLatitude == this.captureLatitude &&
+          other.captureLongitude == this.captureLongitude &&
+          other.captureAccuracyMeters == this.captureAccuracyMeters &&
+          other.captureBearingDegrees == this.captureBearingDegrees &&
+          other.layoutPinnedT == this.layoutPinnedT);
 }
 
 class PhotosCompanion extends UpdateCompanion<Photo> {
@@ -3137,6 +3481,11 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
   final Value<double?> cropWidthPct;
   final Value<int> sortOrder;
   final Value<bool> isPrimary;
+  final Value<double?> captureLatitude;
+  final Value<double?> captureLongitude;
+  final Value<double?> captureAccuracyMeters;
+  final Value<double?> captureBearingDegrees;
+  final Value<double?> layoutPinnedT;
   final Value<int> rowid;
   const PhotosCompanion({
     this.id = const Value.absent(),
@@ -3156,6 +3505,11 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     this.cropWidthPct = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.isPrimary = const Value.absent(),
+    this.captureLatitude = const Value.absent(),
+    this.captureLongitude = const Value.absent(),
+    this.captureAccuracyMeters = const Value.absent(),
+    this.captureBearingDegrees = const Value.absent(),
+    this.layoutPinnedT = const Value.absent(),
     this.rowid = const Value.absent(),
   });
   PhotosCompanion.insert({
@@ -3176,6 +3530,11 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     this.cropWidthPct = const Value.absent(),
     this.sortOrder = const Value.absent(),
     this.isPrimary = const Value.absent(),
+    this.captureLatitude = const Value.absent(),
+    this.captureLongitude = const Value.absent(),
+    this.captureAccuracyMeters = const Value.absent(),
+    this.captureBearingDegrees = const Value.absent(),
+    this.layoutPinnedT = const Value.absent(),
     this.rowid = const Value.absent(),
   }) : id = Value(id),
        createdAt = Value(createdAt),
@@ -3203,6 +3562,11 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     Expression<double>? cropWidthPct,
     Expression<int>? sortOrder,
     Expression<bool>? isPrimary,
+    Expression<double>? captureLatitude,
+    Expression<double>? captureLongitude,
+    Expression<double>? captureAccuracyMeters,
+    Expression<double>? captureBearingDegrees,
+    Expression<double>? layoutPinnedT,
     Expression<int>? rowid,
   }) {
     return RawValuesInsertable({
@@ -3223,6 +3587,13 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
       if (cropWidthPct != null) 'crop_width_pct': cropWidthPct,
       if (sortOrder != null) 'sort_order': sortOrder,
       if (isPrimary != null) 'is_primary': isPrimary,
+      if (captureLatitude != null) 'capture_latitude': captureLatitude,
+      if (captureLongitude != null) 'capture_longitude': captureLongitude,
+      if (captureAccuracyMeters != null)
+        'capture_accuracy_meters': captureAccuracyMeters,
+      if (captureBearingDegrees != null)
+        'capture_bearing_degrees': captureBearingDegrees,
+      if (layoutPinnedT != null) 'layout_pinned_t': layoutPinnedT,
       if (rowid != null) 'rowid': rowid,
     });
   }
@@ -3245,6 +3616,11 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     Value<double?>? cropWidthPct,
     Value<int>? sortOrder,
     Value<bool>? isPrimary,
+    Value<double?>? captureLatitude,
+    Value<double?>? captureLongitude,
+    Value<double?>? captureAccuracyMeters,
+    Value<double?>? captureBearingDegrees,
+    Value<double?>? layoutPinnedT,
     Value<int>? rowid,
   }) {
     return PhotosCompanion(
@@ -3265,6 +3641,13 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
       cropWidthPct: cropWidthPct ?? this.cropWidthPct,
       sortOrder: sortOrder ?? this.sortOrder,
       isPrimary: isPrimary ?? this.isPrimary,
+      captureLatitude: captureLatitude ?? this.captureLatitude,
+      captureLongitude: captureLongitude ?? this.captureLongitude,
+      captureAccuracyMeters:
+          captureAccuracyMeters ?? this.captureAccuracyMeters,
+      captureBearingDegrees:
+          captureBearingDegrees ?? this.captureBearingDegrees,
+      layoutPinnedT: layoutPinnedT ?? this.layoutPinnedT,
       rowid: rowid ?? this.rowid,
     );
   }
@@ -3323,6 +3706,25 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
     if (isPrimary.present) {
       map['is_primary'] = Variable<bool>(isPrimary.value);
     }
+    if (captureLatitude.present) {
+      map['capture_latitude'] = Variable<double>(captureLatitude.value);
+    }
+    if (captureLongitude.present) {
+      map['capture_longitude'] = Variable<double>(captureLongitude.value);
+    }
+    if (captureAccuracyMeters.present) {
+      map['capture_accuracy_meters'] = Variable<double>(
+        captureAccuracyMeters.value,
+      );
+    }
+    if (captureBearingDegrees.present) {
+      map['capture_bearing_degrees'] = Variable<double>(
+        captureBearingDegrees.value,
+      );
+    }
+    if (layoutPinnedT.present) {
+      map['layout_pinned_t'] = Variable<double>(layoutPinnedT.value);
+    }
     if (rowid.present) {
       map['rowid'] = Variable<int>(rowid.value);
     }
@@ -3349,6 +3751,11 @@ class PhotosCompanion extends UpdateCompanion<Photo> {
           ..write('cropWidthPct: $cropWidthPct, ')
           ..write('sortOrder: $sortOrder, ')
           ..write('isPrimary: $isPrimary, ')
+          ..write('captureLatitude: $captureLatitude, ')
+          ..write('captureLongitude: $captureLongitude, ')
+          ..write('captureAccuracyMeters: $captureAccuracyMeters, ')
+          ..write('captureBearingDegrees: $captureBearingDegrees, ')
+          ..write('layoutPinnedT: $layoutPinnedT, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -4684,6 +5091,688 @@ class RoutesCompanion extends UpdateCompanion<Route> {
           ..write('betaVideoUrl: $betaVideoUrl, ')
           ..write('styleTagsJson: $styleTagsJson, ')
           ..write('stars: $stars, ')
+          ..write('rowid: $rowid')
+          ..write(')'))
+        .toString();
+  }
+}
+
+class $RouteLinesTable extends RouteLines
+    with TableInfo<$RouteLinesTable, RouteLine> {
+  @override
+  final GeneratedDatabase attachedDatabase;
+  final String? _alias;
+  $RouteLinesTable(this.attachedDatabase, [this._alias]);
+  static const VerificationMeta _idMeta = const VerificationMeta('id');
+  @override
+  late final GeneratedColumn<String> id = GeneratedColumn<String>(
+    'id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _createdAtMeta = const VerificationMeta(
+    'createdAt',
+  );
+  @override
+  late final GeneratedColumn<int> createdAt = GeneratedColumn<int>(
+    'created_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _updatedAtMeta = const VerificationMeta(
+    'updatedAt',
+  );
+  @override
+  late final GeneratedColumn<int> updatedAt = GeneratedColumn<int>(
+    'updated_at',
+    aliasedName,
+    false,
+    type: DriftSqlType.int,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _deletedAtMeta = const VerificationMeta(
+    'deletedAt',
+  );
+  @override
+  late final GeneratedColumn<int> deletedAt = GeneratedColumn<int>(
+    'deleted_at',
+    aliasedName,
+    true,
+    type: DriftSqlType.int,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _remoteIdMeta = const VerificationMeta(
+    'remoteId',
+  );
+  @override
+  late final GeneratedColumn<String> remoteId = GeneratedColumn<String>(
+    'remote_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _dirtyMeta = const VerificationMeta('dirty');
+  @override
+  late final GeneratedColumn<bool> dirty = GeneratedColumn<bool>(
+    'dirty',
+    aliasedName,
+    false,
+    type: DriftSqlType.bool,
+    requiredDuringInsert: false,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'CHECK ("dirty" IN (0, 1))',
+    ),
+    defaultValue: const Constant(false),
+  );
+  static const VerificationMeta _ownerIdMeta = const VerificationMeta(
+    'ownerId',
+  );
+  @override
+  late final GeneratedColumn<String> ownerId = GeneratedColumn<String>(
+    'owner_id',
+    aliasedName,
+    true,
+    type: DriftSqlType.string,
+    requiredDuringInsert: false,
+  );
+  static const VerificationMeta _routeIdMeta = const VerificationMeta(
+    'routeId',
+  );
+  @override
+  late final GeneratedColumn<String> routeId = GeneratedColumn<String>(
+    'route_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES routes (id)',
+    ),
+  );
+  static const VerificationMeta _photoIdMeta = const VerificationMeta(
+    'photoId',
+  );
+  @override
+  late final GeneratedColumn<String> photoId = GeneratedColumn<String>(
+    'photo_id',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+    defaultConstraints: GeneratedColumn.constraintIsAlways(
+      'REFERENCES photos (id)',
+    ),
+  );
+  static const VerificationMeta _pointsJsonMeta = const VerificationMeta(
+    'pointsJson',
+  );
+  @override
+  late final GeneratedColumn<String> pointsJson = GeneratedColumn<String>(
+    'points_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  static const VerificationMeta _symbolsJsonMeta = const VerificationMeta(
+    'symbolsJson',
+  );
+  @override
+  late final GeneratedColumn<String> symbolsJson = GeneratedColumn<String>(
+    'symbols_json',
+    aliasedName,
+    false,
+    type: DriftSqlType.string,
+    requiredDuringInsert: true,
+  );
+  @override
+  List<GeneratedColumn> get $columns => [
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    routeId,
+    photoId,
+    pointsJson,
+    symbolsJson,
+  ];
+  @override
+  String get aliasedName => _alias ?? actualTableName;
+  @override
+  String get actualTableName => $name;
+  static const String $name = 'route_lines';
+  @override
+  VerificationContext validateIntegrity(
+    Insertable<RouteLine> instance, {
+    bool isInserting = false,
+  }) {
+    final context = VerificationContext();
+    final data = instance.toColumns(true);
+    if (data.containsKey('id')) {
+      context.handle(_idMeta, id.isAcceptableOrUnknown(data['id']!, _idMeta));
+    } else if (isInserting) {
+      context.missing(_idMeta);
+    }
+    if (data.containsKey('created_at')) {
+      context.handle(
+        _createdAtMeta,
+        createdAt.isAcceptableOrUnknown(data['created_at']!, _createdAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_createdAtMeta);
+    }
+    if (data.containsKey('updated_at')) {
+      context.handle(
+        _updatedAtMeta,
+        updatedAt.isAcceptableOrUnknown(data['updated_at']!, _updatedAtMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_updatedAtMeta);
+    }
+    if (data.containsKey('deleted_at')) {
+      context.handle(
+        _deletedAtMeta,
+        deletedAt.isAcceptableOrUnknown(data['deleted_at']!, _deletedAtMeta),
+      );
+    }
+    if (data.containsKey('remote_id')) {
+      context.handle(
+        _remoteIdMeta,
+        remoteId.isAcceptableOrUnknown(data['remote_id']!, _remoteIdMeta),
+      );
+    }
+    if (data.containsKey('dirty')) {
+      context.handle(
+        _dirtyMeta,
+        dirty.isAcceptableOrUnknown(data['dirty']!, _dirtyMeta),
+      );
+    }
+    if (data.containsKey('owner_id')) {
+      context.handle(
+        _ownerIdMeta,
+        ownerId.isAcceptableOrUnknown(data['owner_id']!, _ownerIdMeta),
+      );
+    }
+    if (data.containsKey('route_id')) {
+      context.handle(
+        _routeIdMeta,
+        routeId.isAcceptableOrUnknown(data['route_id']!, _routeIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_routeIdMeta);
+    }
+    if (data.containsKey('photo_id')) {
+      context.handle(
+        _photoIdMeta,
+        photoId.isAcceptableOrUnknown(data['photo_id']!, _photoIdMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_photoIdMeta);
+    }
+    if (data.containsKey('points_json')) {
+      context.handle(
+        _pointsJsonMeta,
+        pointsJson.isAcceptableOrUnknown(data['points_json']!, _pointsJsonMeta),
+      );
+    } else if (isInserting) {
+      context.missing(_pointsJsonMeta);
+    }
+    if (data.containsKey('symbols_json')) {
+      context.handle(
+        _symbolsJsonMeta,
+        symbolsJson.isAcceptableOrUnknown(
+          data['symbols_json']!,
+          _symbolsJsonMeta,
+        ),
+      );
+    } else if (isInserting) {
+      context.missing(_symbolsJsonMeta);
+    }
+    return context;
+  }
+
+  @override
+  Set<GeneratedColumn> get $primaryKey => {id};
+  @override
+  RouteLine map(Map<String, dynamic> data, {String? tablePrefix}) {
+    final effectivePrefix = tablePrefix != null ? '$tablePrefix.' : '';
+    return RouteLine(
+      id: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}id'],
+      )!,
+      createdAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}created_at'],
+      )!,
+      updatedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}updated_at'],
+      )!,
+      deletedAt: attachedDatabase.typeMapping.read(
+        DriftSqlType.int,
+        data['${effectivePrefix}deleted_at'],
+      ),
+      remoteId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}remote_id'],
+      ),
+      dirty: attachedDatabase.typeMapping.read(
+        DriftSqlType.bool,
+        data['${effectivePrefix}dirty'],
+      )!,
+      ownerId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}owner_id'],
+      ),
+      routeId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}route_id'],
+      )!,
+      photoId: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}photo_id'],
+      )!,
+      pointsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}points_json'],
+      )!,
+      symbolsJson: attachedDatabase.typeMapping.read(
+        DriftSqlType.string,
+        data['${effectivePrefix}symbols_json'],
+      )!,
+    );
+  }
+
+  @override
+  $RouteLinesTable createAlias(String alias) {
+    return $RouteLinesTable(attachedDatabase, alias);
+  }
+}
+
+class RouteLine extends DataClass implements Insertable<RouteLine> {
+  final String id;
+  final int createdAt;
+  final int updatedAt;
+  final int? deletedAt;
+  final String? remoteId;
+  final bool dirty;
+  final String? ownerId;
+
+  /// The climb this line depicts. Every piece of shared data — name, grade,
+  /// stars, tags, ascents — is read through here, which is what makes two
+  /// drawings of one climb genuinely one climb.
+  final String routeId;
+
+  /// The photo this line is drawn on. Never the route's home photo: that
+  /// line lives on the [Routes] row itself, and the partial unique index
+  /// above stops a duplicate landing here for it.
+  final String photoId;
+
+  /// Normalised points, in the same encoding [Routes.pointsJson] uses, so
+  /// both kinds of line render through one painter with no branch.
+  final String pointsJson;
+  final String symbolsJson;
+  const RouteLine({
+    required this.id,
+    required this.createdAt,
+    required this.updatedAt,
+    this.deletedAt,
+    this.remoteId,
+    required this.dirty,
+    this.ownerId,
+    required this.routeId,
+    required this.photoId,
+    required this.pointsJson,
+    required this.symbolsJson,
+  });
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    map['id'] = Variable<String>(id);
+    map['created_at'] = Variable<int>(createdAt);
+    map['updated_at'] = Variable<int>(updatedAt);
+    if (!nullToAbsent || deletedAt != null) {
+      map['deleted_at'] = Variable<int>(deletedAt);
+    }
+    if (!nullToAbsent || remoteId != null) {
+      map['remote_id'] = Variable<String>(remoteId);
+    }
+    map['dirty'] = Variable<bool>(dirty);
+    if (!nullToAbsent || ownerId != null) {
+      map['owner_id'] = Variable<String>(ownerId);
+    }
+    map['route_id'] = Variable<String>(routeId);
+    map['photo_id'] = Variable<String>(photoId);
+    map['points_json'] = Variable<String>(pointsJson);
+    map['symbols_json'] = Variable<String>(symbolsJson);
+    return map;
+  }
+
+  RouteLinesCompanion toCompanion(bool nullToAbsent) {
+    return RouteLinesCompanion(
+      id: Value(id),
+      createdAt: Value(createdAt),
+      updatedAt: Value(updatedAt),
+      deletedAt: deletedAt == null && nullToAbsent
+          ? const Value.absent()
+          : Value(deletedAt),
+      remoteId: remoteId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(remoteId),
+      dirty: Value(dirty),
+      ownerId: ownerId == null && nullToAbsent
+          ? const Value.absent()
+          : Value(ownerId),
+      routeId: Value(routeId),
+      photoId: Value(photoId),
+      pointsJson: Value(pointsJson),
+      symbolsJson: Value(symbolsJson),
+    );
+  }
+
+  factory RouteLine.fromJson(
+    Map<String, dynamic> json, {
+    ValueSerializer? serializer,
+  }) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return RouteLine(
+      id: serializer.fromJson<String>(json['id']),
+      createdAt: serializer.fromJson<int>(json['createdAt']),
+      updatedAt: serializer.fromJson<int>(json['updatedAt']),
+      deletedAt: serializer.fromJson<int?>(json['deletedAt']),
+      remoteId: serializer.fromJson<String?>(json['remoteId']),
+      dirty: serializer.fromJson<bool>(json['dirty']),
+      ownerId: serializer.fromJson<String?>(json['ownerId']),
+      routeId: serializer.fromJson<String>(json['routeId']),
+      photoId: serializer.fromJson<String>(json['photoId']),
+      pointsJson: serializer.fromJson<String>(json['pointsJson']),
+      symbolsJson: serializer.fromJson<String>(json['symbolsJson']),
+    );
+  }
+  @override
+  Map<String, dynamic> toJson({ValueSerializer? serializer}) {
+    serializer ??= driftRuntimeOptions.defaultSerializer;
+    return <String, dynamic>{
+      'id': serializer.toJson<String>(id),
+      'createdAt': serializer.toJson<int>(createdAt),
+      'updatedAt': serializer.toJson<int>(updatedAt),
+      'deletedAt': serializer.toJson<int?>(deletedAt),
+      'remoteId': serializer.toJson<String?>(remoteId),
+      'dirty': serializer.toJson<bool>(dirty),
+      'ownerId': serializer.toJson<String?>(ownerId),
+      'routeId': serializer.toJson<String>(routeId),
+      'photoId': serializer.toJson<String>(photoId),
+      'pointsJson': serializer.toJson<String>(pointsJson),
+      'symbolsJson': serializer.toJson<String>(symbolsJson),
+    };
+  }
+
+  RouteLine copyWith({
+    String? id,
+    int? createdAt,
+    int? updatedAt,
+    Value<int?> deletedAt = const Value.absent(),
+    Value<String?> remoteId = const Value.absent(),
+    bool? dirty,
+    Value<String?> ownerId = const Value.absent(),
+    String? routeId,
+    String? photoId,
+    String? pointsJson,
+    String? symbolsJson,
+  }) => RouteLine(
+    id: id ?? this.id,
+    createdAt: createdAt ?? this.createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+    deletedAt: deletedAt.present ? deletedAt.value : this.deletedAt,
+    remoteId: remoteId.present ? remoteId.value : this.remoteId,
+    dirty: dirty ?? this.dirty,
+    ownerId: ownerId.present ? ownerId.value : this.ownerId,
+    routeId: routeId ?? this.routeId,
+    photoId: photoId ?? this.photoId,
+    pointsJson: pointsJson ?? this.pointsJson,
+    symbolsJson: symbolsJson ?? this.symbolsJson,
+  );
+  RouteLine copyWithCompanion(RouteLinesCompanion data) {
+    return RouteLine(
+      id: data.id.present ? data.id.value : this.id,
+      createdAt: data.createdAt.present ? data.createdAt.value : this.createdAt,
+      updatedAt: data.updatedAt.present ? data.updatedAt.value : this.updatedAt,
+      deletedAt: data.deletedAt.present ? data.deletedAt.value : this.deletedAt,
+      remoteId: data.remoteId.present ? data.remoteId.value : this.remoteId,
+      dirty: data.dirty.present ? data.dirty.value : this.dirty,
+      ownerId: data.ownerId.present ? data.ownerId.value : this.ownerId,
+      routeId: data.routeId.present ? data.routeId.value : this.routeId,
+      photoId: data.photoId.present ? data.photoId.value : this.photoId,
+      pointsJson: data.pointsJson.present
+          ? data.pointsJson.value
+          : this.pointsJson,
+      symbolsJson: data.symbolsJson.present
+          ? data.symbolsJson.value
+          : this.symbolsJson,
+    );
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RouteLine(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('routeId: $routeId, ')
+          ..write('photoId: $photoId, ')
+          ..write('pointsJson: $pointsJson, ')
+          ..write('symbolsJson: $symbolsJson')
+          ..write(')'))
+        .toString();
+  }
+
+  @override
+  int get hashCode => Object.hash(
+    id,
+    createdAt,
+    updatedAt,
+    deletedAt,
+    remoteId,
+    dirty,
+    ownerId,
+    routeId,
+    photoId,
+    pointsJson,
+    symbolsJson,
+  );
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is RouteLine &&
+          other.id == this.id &&
+          other.createdAt == this.createdAt &&
+          other.updatedAt == this.updatedAt &&
+          other.deletedAt == this.deletedAt &&
+          other.remoteId == this.remoteId &&
+          other.dirty == this.dirty &&
+          other.ownerId == this.ownerId &&
+          other.routeId == this.routeId &&
+          other.photoId == this.photoId &&
+          other.pointsJson == this.pointsJson &&
+          other.symbolsJson == this.symbolsJson);
+}
+
+class RouteLinesCompanion extends UpdateCompanion<RouteLine> {
+  final Value<String> id;
+  final Value<int> createdAt;
+  final Value<int> updatedAt;
+  final Value<int?> deletedAt;
+  final Value<String?> remoteId;
+  final Value<bool> dirty;
+  final Value<String?> ownerId;
+  final Value<String> routeId;
+  final Value<String> photoId;
+  final Value<String> pointsJson;
+  final Value<String> symbolsJson;
+  final Value<int> rowid;
+  const RouteLinesCompanion({
+    this.id = const Value.absent(),
+    this.createdAt = const Value.absent(),
+    this.updatedAt = const Value.absent(),
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    this.routeId = const Value.absent(),
+    this.photoId = const Value.absent(),
+    this.pointsJson = const Value.absent(),
+    this.symbolsJson = const Value.absent(),
+    this.rowid = const Value.absent(),
+  });
+  RouteLinesCompanion.insert({
+    required String id,
+    required int createdAt,
+    required int updatedAt,
+    this.deletedAt = const Value.absent(),
+    this.remoteId = const Value.absent(),
+    this.dirty = const Value.absent(),
+    this.ownerId = const Value.absent(),
+    required String routeId,
+    required String photoId,
+    required String pointsJson,
+    required String symbolsJson,
+    this.rowid = const Value.absent(),
+  }) : id = Value(id),
+       createdAt = Value(createdAt),
+       updatedAt = Value(updatedAt),
+       routeId = Value(routeId),
+       photoId = Value(photoId),
+       pointsJson = Value(pointsJson),
+       symbolsJson = Value(symbolsJson);
+  static Insertable<RouteLine> custom({
+    Expression<String>? id,
+    Expression<int>? createdAt,
+    Expression<int>? updatedAt,
+    Expression<int>? deletedAt,
+    Expression<String>? remoteId,
+    Expression<bool>? dirty,
+    Expression<String>? ownerId,
+    Expression<String>? routeId,
+    Expression<String>? photoId,
+    Expression<String>? pointsJson,
+    Expression<String>? symbolsJson,
+    Expression<int>? rowid,
+  }) {
+    return RawValuesInsertable({
+      if (id != null) 'id': id,
+      if (createdAt != null) 'created_at': createdAt,
+      if (updatedAt != null) 'updated_at': updatedAt,
+      if (deletedAt != null) 'deleted_at': deletedAt,
+      if (remoteId != null) 'remote_id': remoteId,
+      if (dirty != null) 'dirty': dirty,
+      if (ownerId != null) 'owner_id': ownerId,
+      if (routeId != null) 'route_id': routeId,
+      if (photoId != null) 'photo_id': photoId,
+      if (pointsJson != null) 'points_json': pointsJson,
+      if (symbolsJson != null) 'symbols_json': symbolsJson,
+      if (rowid != null) 'rowid': rowid,
+    });
+  }
+
+  RouteLinesCompanion copyWith({
+    Value<String>? id,
+    Value<int>? createdAt,
+    Value<int>? updatedAt,
+    Value<int?>? deletedAt,
+    Value<String?>? remoteId,
+    Value<bool>? dirty,
+    Value<String?>? ownerId,
+    Value<String>? routeId,
+    Value<String>? photoId,
+    Value<String>? pointsJson,
+    Value<String>? symbolsJson,
+    Value<int>? rowid,
+  }) {
+    return RouteLinesCompanion(
+      id: id ?? this.id,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      deletedAt: deletedAt ?? this.deletedAt,
+      remoteId: remoteId ?? this.remoteId,
+      dirty: dirty ?? this.dirty,
+      ownerId: ownerId ?? this.ownerId,
+      routeId: routeId ?? this.routeId,
+      photoId: photoId ?? this.photoId,
+      pointsJson: pointsJson ?? this.pointsJson,
+      symbolsJson: symbolsJson ?? this.symbolsJson,
+      rowid: rowid ?? this.rowid,
+    );
+  }
+
+  @override
+  Map<String, Expression> toColumns(bool nullToAbsent) {
+    final map = <String, Expression>{};
+    if (id.present) {
+      map['id'] = Variable<String>(id.value);
+    }
+    if (createdAt.present) {
+      map['created_at'] = Variable<int>(createdAt.value);
+    }
+    if (updatedAt.present) {
+      map['updated_at'] = Variable<int>(updatedAt.value);
+    }
+    if (deletedAt.present) {
+      map['deleted_at'] = Variable<int>(deletedAt.value);
+    }
+    if (remoteId.present) {
+      map['remote_id'] = Variable<String>(remoteId.value);
+    }
+    if (dirty.present) {
+      map['dirty'] = Variable<bool>(dirty.value);
+    }
+    if (ownerId.present) {
+      map['owner_id'] = Variable<String>(ownerId.value);
+    }
+    if (routeId.present) {
+      map['route_id'] = Variable<String>(routeId.value);
+    }
+    if (photoId.present) {
+      map['photo_id'] = Variable<String>(photoId.value);
+    }
+    if (pointsJson.present) {
+      map['points_json'] = Variable<String>(pointsJson.value);
+    }
+    if (symbolsJson.present) {
+      map['symbols_json'] = Variable<String>(symbolsJson.value);
+    }
+    if (rowid.present) {
+      map['rowid'] = Variable<int>(rowid.value);
+    }
+    return map;
+  }
+
+  @override
+  String toString() {
+    return (StringBuffer('RouteLinesCompanion(')
+          ..write('id: $id, ')
+          ..write('createdAt: $createdAt, ')
+          ..write('updatedAt: $updatedAt, ')
+          ..write('deletedAt: $deletedAt, ')
+          ..write('remoteId: $remoteId, ')
+          ..write('dirty: $dirty, ')
+          ..write('ownerId: $ownerId, ')
+          ..write('routeId: $routeId, ')
+          ..write('photoId: $photoId, ')
+          ..write('pointsJson: $pointsJson, ')
+          ..write('symbolsJson: $symbolsJson, ')
           ..write('rowid: $rowid')
           ..write(')'))
         .toString();
@@ -10433,6 +11522,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
   late final $WallsTable walls = $WallsTable(this);
   late final $PhotosTable photos = $PhotosTable(this);
   late final $RoutesTable routes = $RoutesTable(this);
+  late final $RouteLinesTable routeLines = $RouteLinesTable(this);
   late final $AscentsTable ascents = $AscentsTable(this);
   late final $CommentsTable comments = $CommentsTable(this);
   late final $LikesTable likes = $LikesTable(this);
@@ -10465,13 +11555,21 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     'idx_photos_parent_live',
     'CREATE INDEX idx_photos_parent_live ON photos (parent_photo_id) WHERE deleted_at IS NULL',
   );
-  late final Index idxRoutesPhotoNumberLive = Index(
-    'idx_routes_photo_number_live',
-    'CREATE UNIQUE INDEX idx_routes_photo_number_live ON routes (photo_id, number) WHERE deleted_at IS NULL',
+  late final Index idxRoutesWallNumberLive = Index(
+    'idx_routes_wall_number_live',
+    'CREATE UNIQUE INDEX idx_routes_wall_number_live ON routes (wall_id, number) WHERE deleted_at IS NULL',
   );
-  late final Index idxRoutesWallLive = Index(
-    'idx_routes_wall_live',
-    'CREATE INDEX idx_routes_wall_live ON routes (wall_id) WHERE deleted_at IS NULL',
+  late final Index idxRoutesPhotoLive = Index(
+    'idx_routes_photo_live',
+    'CREATE INDEX idx_routes_photo_live ON routes (photo_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxRouteLinesRoutePhotoLive = Index(
+    'idx_route_lines_route_photo_live',
+    'CREATE UNIQUE INDEX idx_route_lines_route_photo_live ON route_lines (route_id, photo_id) WHERE deleted_at IS NULL',
+  );
+  late final Index idxRouteLinesPhotoLive = Index(
+    'idx_route_lines_photo_live',
+    'CREATE INDEX idx_route_lines_photo_live ON route_lines (photo_id) WHERE deleted_at IS NULL',
   );
   late final Index idxCommentsWallLive = Index(
     'idx_comments_wall_live',
@@ -10507,6 +11605,7 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     walls,
     photos,
     routes,
+    routeLines,
     ascents,
     comments,
     likes,
@@ -10521,8 +11620,10 @@ abstract class _$AppDatabase extends GeneratedDatabase {
     idxWallsSectorLive,
     idxPhotosWallLive,
     idxPhotosParentLive,
-    idxRoutesPhotoNumberLive,
-    idxRoutesWallLive,
+    idxRoutesWallNumberLive,
+    idxRoutesPhotoLive,
+    idxRouteLinesRoutePhotoLive,
+    idxRouteLinesPhotoLive,
     idxCommentsWallLive,
     idxCommentsAscentLive,
     idxLikesWallLive,
@@ -11535,6 +12636,7 @@ typedef $$WallsTableCreateCompanionBuilder =
       Value<String> visibility,
       Value<double?> latitude,
       Value<double?> longitude,
+      Value<String?> baselineJson,
       Value<int> rowid,
     });
 typedef $$WallsTableUpdateCompanionBuilder =
@@ -11554,6 +12656,7 @@ typedef $$WallsTableUpdateCompanionBuilder =
       Value<String> visibility,
       Value<double?> latitude,
       Value<double?> longitude,
+      Value<String?> baselineJson,
       Value<int> rowid,
     });
 
@@ -11749,6 +12852,11 @@ class $$WallsTableFilterComposer extends Composer<_$AppDatabase, $WallsTable> {
 
   ColumnFilters<double> get longitude => $composableBuilder(
     column: $table.longitude,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get baselineJson => $composableBuilder(
+    column: $table.baselineJson,
     builder: (column) => ColumnFilters(column),
   );
 
@@ -11980,6 +13088,11 @@ class $$WallsTableOrderingComposer
     builder: (column) => ColumnOrderings(column),
   );
 
+  ColumnOrderings<String> get baselineJson => $composableBuilder(
+    column: $table.baselineJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
   $$SectorsTableOrderingComposer get sectorId {
     final $$SectorsTableOrderingComposer composer = $composerBuilder(
       composer: this,
@@ -12060,6 +13173,11 @@ class $$WallsTableAnnotationComposer
 
   GeneratedColumn<double> get longitude =>
       $composableBuilder(column: $table.longitude, builder: (column) => column);
+
+  GeneratedColumn<String> get baselineJson => $composableBuilder(
+    column: $table.baselineJson,
+    builder: (column) => column,
+  );
 
   $$SectorsTableAnnotationComposer get sectorId {
     final $$SectorsTableAnnotationComposer composer = $composerBuilder(
@@ -12260,6 +13378,7 @@ class $$WallsTableTableManager
                 Value<String> visibility = const Value.absent(),
                 Value<double?> latitude = const Value.absent(),
                 Value<double?> longitude = const Value.absent(),
+                Value<String?> baselineJson = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => WallsCompanion(
                 id: id,
@@ -12277,6 +13396,7 @@ class $$WallsTableTableManager
                 visibility: visibility,
                 latitude: latitude,
                 longitude: longitude,
+                baselineJson: baselineJson,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -12296,6 +13416,7 @@ class $$WallsTableTableManager
                 Value<String> visibility = const Value.absent(),
                 Value<double?> latitude = const Value.absent(),
                 Value<double?> longitude = const Value.absent(),
+                Value<String?> baselineJson = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => WallsCompanion.insert(
                 id: id,
@@ -12313,6 +13434,7 @@ class $$WallsTableTableManager
                 visibility: visibility,
                 latitude: latitude,
                 longitude: longitude,
+                baselineJson: baselineJson,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -12490,6 +13612,11 @@ typedef $$PhotosTableCreateCompanionBuilder =
       Value<double?> cropWidthPct,
       Value<int> sortOrder,
       Value<bool> isPrimary,
+      Value<double?> captureLatitude,
+      Value<double?> captureLongitude,
+      Value<double?> captureAccuracyMeters,
+      Value<double?> captureBearingDegrees,
+      Value<double?> layoutPinnedT,
       Value<int> rowid,
     });
 typedef $$PhotosTableUpdateCompanionBuilder =
@@ -12511,6 +13638,11 @@ typedef $$PhotosTableUpdateCompanionBuilder =
       Value<double?> cropWidthPct,
       Value<int> sortOrder,
       Value<bool> isPrimary,
+      Value<double?> captureLatitude,
+      Value<double?> captureLongitude,
+      Value<double?> captureAccuracyMeters,
+      Value<double?> captureBearingDegrees,
+      Value<double?> layoutPinnedT,
       Value<int> rowid,
     });
 
@@ -12566,6 +13698,24 @@ final class $$PhotosTableReferences
     ).filter((f) => f.photoId.id.sqlEquals($_itemColumn<String>('id')!));
 
     final cache = $_typedResult.readTableOrNull(_routesRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
+    );
+  }
+
+  static MultiTypedResultKey<$RouteLinesTable, List<RouteLine>>
+  _routeLinesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.routeLines,
+    aliasName: 'photos__id__route_lines__photo_id',
+  );
+
+  $$RouteLinesTableProcessedTableManager get routeLinesRefs {
+    final manager = $$RouteLinesTableTableManager(
+      $_db,
+      $_db.routeLines,
+    ).filter((f) => f.photoId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_routeLinesRefsTable($_db));
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: cache),
     );
@@ -12656,6 +13806,31 @@ class $$PhotosTableFilterComposer
     builder: (column) => ColumnFilters(column),
   );
 
+  ColumnFilters<double> get captureLatitude => $composableBuilder(
+    column: $table.captureLatitude,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get captureLongitude => $composableBuilder(
+    column: $table.captureLongitude,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get captureAccuracyMeters => $composableBuilder(
+    column: $table.captureAccuracyMeters,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get captureBearingDegrees => $composableBuilder(
+    column: $table.captureBearingDegrees,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<double> get layoutPinnedT => $composableBuilder(
+    column: $table.layoutPinnedT,
+    builder: (column) => ColumnFilters(column),
+  );
+
   $$WallsTableFilterComposer get wallId {
     final $$WallsTableFilterComposer composer = $composerBuilder(
       composer: this,
@@ -12718,6 +13893,31 @@ class $$PhotosTableFilterComposer
           }) => $$RoutesTableFilterComposer(
             $db: $db,
             $table: $db.routes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
+  Expression<bool> routeLinesRefs(
+    Expression<bool> Function($$RouteLinesTableFilterComposer f) f,
+  ) {
+    final $$RouteLinesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.routeLines,
+      getReferencedColumn: (t) => t.photoId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RouteLinesTableFilterComposer(
+            $db: $db,
+            $table: $db.routeLines,
             $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
             joinBuilder: joinBuilder,
             $removeJoinBuilderFromRootComposer:
@@ -12809,6 +14009,31 @@ class $$PhotosTableOrderingComposer
 
   ColumnOrderings<bool> get isPrimary => $composableBuilder(
     column: $table.isPrimary,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get captureLatitude => $composableBuilder(
+    column: $table.captureLatitude,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get captureLongitude => $composableBuilder(
+    column: $table.captureLongitude,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get captureAccuracyMeters => $composableBuilder(
+    column: $table.captureAccuracyMeters,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get captureBearingDegrees => $composableBuilder(
+    column: $table.captureBearingDegrees,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<double> get layoutPinnedT => $composableBuilder(
+    column: $table.layoutPinnedT,
     builder: (column) => ColumnOrderings(column),
   );
 
@@ -12915,6 +14140,31 @@ class $$PhotosTableAnnotationComposer
   GeneratedColumn<bool> get isPrimary =>
       $composableBuilder(column: $table.isPrimary, builder: (column) => column);
 
+  GeneratedColumn<double> get captureLatitude => $composableBuilder(
+    column: $table.captureLatitude,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get captureLongitude => $composableBuilder(
+    column: $table.captureLongitude,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get captureAccuracyMeters => $composableBuilder(
+    column: $table.captureAccuracyMeters,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get captureBearingDegrees => $composableBuilder(
+    column: $table.captureBearingDegrees,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<double> get layoutPinnedT => $composableBuilder(
+    column: $table.layoutPinnedT,
+    builder: (column) => column,
+  );
+
   $$WallsTableAnnotationComposer get wallId {
     final $$WallsTableAnnotationComposer composer = $composerBuilder(
       composer: this,
@@ -12985,6 +14235,31 @@ class $$PhotosTableAnnotationComposer
     );
     return f(composer);
   }
+
+  Expression<T> routeLinesRefs<T extends Object>(
+    Expression<T> Function($$RouteLinesTableAnnotationComposer a) f,
+  ) {
+    final $$RouteLinesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.routeLines,
+      getReferencedColumn: (t) => t.photoId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RouteLinesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.routeLines,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
 }
 
 class $$PhotosTableTableManager
@@ -13004,6 +14279,7 @@ class $$PhotosTableTableManager
             bool wallId,
             bool parentPhotoId,
             bool routesRefs,
+            bool routeLinesRefs,
           })
         > {
   $$PhotosTableTableManager(_$AppDatabase db, $PhotosTable table)
@@ -13036,6 +14312,11 @@ class $$PhotosTableTableManager
                 Value<double?> cropWidthPct = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> isPrimary = const Value.absent(),
+                Value<double?> captureLatitude = const Value.absent(),
+                Value<double?> captureLongitude = const Value.absent(),
+                Value<double?> captureAccuracyMeters = const Value.absent(),
+                Value<double?> captureBearingDegrees = const Value.absent(),
+                Value<double?> layoutPinnedT = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PhotosCompanion(
                 id: id,
@@ -13055,6 +14336,11 @@ class $$PhotosTableTableManager
                 cropWidthPct: cropWidthPct,
                 sortOrder: sortOrder,
                 isPrimary: isPrimary,
+                captureLatitude: captureLatitude,
+                captureLongitude: captureLongitude,
+                captureAccuracyMeters: captureAccuracyMeters,
+                captureBearingDegrees: captureBearingDegrees,
+                layoutPinnedT: layoutPinnedT,
                 rowid: rowid,
               ),
           createCompanionCallback:
@@ -13076,6 +14362,11 @@ class $$PhotosTableTableManager
                 Value<double?> cropWidthPct = const Value.absent(),
                 Value<int> sortOrder = const Value.absent(),
                 Value<bool> isPrimary = const Value.absent(),
+                Value<double?> captureLatitude = const Value.absent(),
+                Value<double?> captureLongitude = const Value.absent(),
+                Value<double?> captureAccuracyMeters = const Value.absent(),
+                Value<double?> captureBearingDegrees = const Value.absent(),
+                Value<double?> layoutPinnedT = const Value.absent(),
                 Value<int> rowid = const Value.absent(),
               }) => PhotosCompanion.insert(
                 id: id,
@@ -13095,6 +14386,11 @@ class $$PhotosTableTableManager
                 cropWidthPct: cropWidthPct,
                 sortOrder: sortOrder,
                 isPrimary: isPrimary,
+                captureLatitude: captureLatitude,
+                captureLongitude: captureLongitude,
+                captureAccuracyMeters: captureAccuracyMeters,
+                captureBearingDegrees: captureBearingDegrees,
+                layoutPinnedT: layoutPinnedT,
                 rowid: rowid,
               ),
           withReferenceMapper: (p0) => p0
@@ -13104,10 +14400,18 @@ class $$PhotosTableTableManager
               )
               .toList(),
           prefetchHooksCallback:
-              ({wallId = false, parentPhotoId = false, routesRefs = false}) {
+              ({
+                wallId = false,
+                parentPhotoId = false,
+                routesRefs = false,
+                routeLinesRefs = false,
+              }) {
                 return PrefetchHooks(
                   db: db,
-                  explicitlyWatchedTables: [if (routesRefs) db.routes],
+                  explicitlyWatchedTables: [
+                    if (routesRefs) db.routes,
+                    if (routeLinesRefs) db.routeLines,
+                  ],
                   addJoins:
                       <
                         T extends TableManagerState<
@@ -13168,6 +14472,27 @@ class $$PhotosTableTableManager
                               ),
                           typedResults: items,
                         ),
+                      if (routeLinesRefs)
+                        await $_getPrefetchedData<
+                          Photo,
+                          $PhotosTable,
+                          RouteLine
+                        >(
+                          currentTable: table,
+                          referencedTable: $$PhotosTableReferences
+                              ._routeLinesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$PhotosTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).routeLinesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.photoId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                     ];
                   },
                 );
@@ -13188,7 +14513,12 @@ typedef $$PhotosTableProcessedTableManager =
       $$PhotosTableUpdateCompanionBuilder,
       (Photo, $$PhotosTableReferences),
       Photo,
-      PrefetchHooks Function({bool wallId, bool parentPhotoId, bool routesRefs})
+      PrefetchHooks Function({
+        bool wallId,
+        bool parentPhotoId,
+        bool routesRefs,
+        bool routeLinesRefs,
+      })
     >;
 typedef $$RoutesTableCreateCompanionBuilder =
     RoutesCompanion Function({
@@ -13282,6 +14612,24 @@ final class $$RoutesTableReferences
     if (item == null) return manager;
     return ProcessedTableManager(
       manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static MultiTypedResultKey<$RouteLinesTable, List<RouteLine>>
+  _routeLinesRefsTable(_$AppDatabase db) => MultiTypedResultKey.fromTable(
+    db.routeLines,
+    aliasName: 'routes__id__route_lines__route_id',
+  );
+
+  $$RouteLinesTableProcessedTableManager get routeLinesRefs {
+    final manager = $$RouteLinesTableTableManager(
+      $_db,
+      $_db.routeLines,
+    ).filter((f) => f.routeId.id.sqlEquals($_itemColumn<String>('id')!));
+
+    final cache = $_typedResult.readTableOrNull(_routeLinesRefsTable($_db));
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: cache),
     );
   }
 
@@ -13468,6 +14816,31 @@ class $$RoutesTableFilterComposer
           ),
     );
     return composer;
+  }
+
+  Expression<bool> routeLinesRefs(
+    Expression<bool> Function($$RouteLinesTableFilterComposer f) f,
+  ) {
+    final $$RouteLinesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.routeLines,
+      getReferencedColumn: (t) => t.routeId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RouteLinesTableFilterComposer(
+            $db: $db,
+            $table: $db.routeLines,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
   }
 
   Expression<bool> ascentsRefs(
@@ -13799,6 +15172,31 @@ class $$RoutesTableAnnotationComposer
     return composer;
   }
 
+  Expression<T> routeLinesRefs<T extends Object>(
+    Expression<T> Function($$RouteLinesTableAnnotationComposer a) f,
+  ) {
+    final $$RouteLinesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.id,
+      referencedTable: $db.routeLines,
+      getReferencedColumn: (t) => t.routeId,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RouteLinesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.routeLines,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return f(composer);
+  }
+
   Expression<T> ascentsRefs<T extends Object>(
     Expression<T> Function($$AscentsTableAnnotationComposer a) f,
   ) {
@@ -13838,7 +15236,12 @@ class $$RoutesTableTableManager
           $$RoutesTableUpdateCompanionBuilder,
           (Route, $$RoutesTableReferences),
           Route,
-          PrefetchHooks Function({bool wallId, bool photoId, bool ascentsRefs})
+          PrefetchHooks Function({
+            bool wallId,
+            bool photoId,
+            bool routeLinesRefs,
+            bool ascentsRefs,
+          })
         > {
   $$RoutesTableTableManager(_$AppDatabase db, $RoutesTable table)
     : super(
@@ -13966,10 +15369,18 @@ class $$RoutesTableTableManager
               )
               .toList(),
           prefetchHooksCallback:
-              ({wallId = false, photoId = false, ascentsRefs = false}) {
+              ({
+                wallId = false,
+                photoId = false,
+                routeLinesRefs = false,
+                ascentsRefs = false,
+              }) {
                 return PrefetchHooks(
                   db: db,
-                  explicitlyWatchedTables: [if (ascentsRefs) db.ascents],
+                  explicitlyWatchedTables: [
+                    if (routeLinesRefs) db.routeLines,
+                    if (ascentsRefs) db.ascents,
+                  ],
                   addJoins:
                       <
                         T extends TableManagerState<
@@ -14017,6 +15428,27 @@ class $$RoutesTableTableManager
                       },
                   getPrefetchedDataCallback: (items) async {
                     return [
+                      if (routeLinesRefs)
+                        await $_getPrefetchedData<
+                          Route,
+                          $RoutesTable,
+                          RouteLine
+                        >(
+                          currentTable: table,
+                          referencedTable: $$RoutesTableReferences
+                              ._routeLinesRefsTable(db),
+                          managerFromTypedResult: (p0) =>
+                              $$RoutesTableReferences(
+                                db,
+                                table,
+                                p0,
+                              ).routeLinesRefs,
+                          referencedItemsForCurrentItem:
+                              (item, referencedItems) => referencedItems.where(
+                                (e) => e.routeId == item.id,
+                              ),
+                          typedResults: items,
+                        ),
                       if (ascentsRefs)
                         await $_getPrefetchedData<Route, $RoutesTable, Ascent>(
                           currentTable: table,
@@ -14054,7 +15486,533 @@ typedef $$RoutesTableProcessedTableManager =
       $$RoutesTableUpdateCompanionBuilder,
       (Route, $$RoutesTableReferences),
       Route,
-      PrefetchHooks Function({bool wallId, bool photoId, bool ascentsRefs})
+      PrefetchHooks Function({
+        bool wallId,
+        bool photoId,
+        bool routeLinesRefs,
+        bool ascentsRefs,
+      })
+    >;
+typedef $$RouteLinesTableCreateCompanionBuilder =
+    RouteLinesCompanion Function({
+      required String id,
+      required int createdAt,
+      required int updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      required String routeId,
+      required String photoId,
+      required String pointsJson,
+      required String symbolsJson,
+      Value<int> rowid,
+    });
+typedef $$RouteLinesTableUpdateCompanionBuilder =
+    RouteLinesCompanion Function({
+      Value<String> id,
+      Value<int> createdAt,
+      Value<int> updatedAt,
+      Value<int?> deletedAt,
+      Value<String?> remoteId,
+      Value<bool> dirty,
+      Value<String?> ownerId,
+      Value<String> routeId,
+      Value<String> photoId,
+      Value<String> pointsJson,
+      Value<String> symbolsJson,
+      Value<int> rowid,
+    });
+
+final class $$RouteLinesTableReferences
+    extends BaseReferences<_$AppDatabase, $RouteLinesTable, RouteLine> {
+  $$RouteLinesTableReferences(super.$_db, super.$_table, super.$_typedResult);
+
+  static $RoutesTable _routeIdTable(_$AppDatabase db) =>
+      db.routes.createAlias('route_lines__route_id__routes__id');
+
+  $$RoutesTableProcessedTableManager get routeId {
+    final $_column = $_itemColumn<String>('route_id')!;
+
+    final manager = $$RoutesTableTableManager(
+      $_db,
+      $_db.routes,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_routeIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+
+  static $PhotosTable _photoIdTable(_$AppDatabase db) =>
+      db.photos.createAlias('route_lines__photo_id__photos__id');
+
+  $$PhotosTableProcessedTableManager get photoId {
+    final $_column = $_itemColumn<String>('photo_id')!;
+
+    final manager = $$PhotosTableTableManager(
+      $_db,
+      $_db.photos,
+    ).filter((f) => f.id.sqlEquals($_column));
+    final item = $_typedResult.readTableOrNull(_photoIdTable($_db));
+    if (item == null) return manager;
+    return ProcessedTableManager(
+      manager.$state.copyWith(prefetchedData: [item]),
+    );
+  }
+}
+
+class $$RouteLinesTableFilterComposer
+    extends Composer<_$AppDatabase, $RouteLinesTable> {
+  $$RouteLinesTableFilterComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnFilters<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get pointsJson => $composableBuilder(
+    column: $table.pointsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  ColumnFilters<String> get symbolsJson => $composableBuilder(
+    column: $table.symbolsJson,
+    builder: (column) => ColumnFilters(column),
+  );
+
+  $$RoutesTableFilterComposer get routeId {
+    final $$RoutesTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.routeId,
+      referencedTable: $db.routes,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RoutesTableFilterComposer(
+            $db: $db,
+            $table: $db.routes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$PhotosTableFilterComposer get photoId {
+    final $$PhotosTableFilterComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.photoId,
+      referencedTable: $db.photos,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$PhotosTableFilterComposer(
+            $db: $db,
+            $table: $db.photos,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$RouteLinesTableOrderingComposer
+    extends Composer<_$AppDatabase, $RouteLinesTable> {
+  $$RouteLinesTableOrderingComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  ColumnOrderings<String> get id => $composableBuilder(
+    column: $table.id,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get createdAt => $composableBuilder(
+    column: $table.createdAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get updatedAt => $composableBuilder(
+    column: $table.updatedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<int> get deletedAt => $composableBuilder(
+    column: $table.deletedAt,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get remoteId => $composableBuilder(
+    column: $table.remoteId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<bool> get dirty => $composableBuilder(
+    column: $table.dirty,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get ownerId => $composableBuilder(
+    column: $table.ownerId,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get pointsJson => $composableBuilder(
+    column: $table.pointsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  ColumnOrderings<String> get symbolsJson => $composableBuilder(
+    column: $table.symbolsJson,
+    builder: (column) => ColumnOrderings(column),
+  );
+
+  $$RoutesTableOrderingComposer get routeId {
+    final $$RoutesTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.routeId,
+      referencedTable: $db.routes,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RoutesTableOrderingComposer(
+            $db: $db,
+            $table: $db.routes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$PhotosTableOrderingComposer get photoId {
+    final $$PhotosTableOrderingComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.photoId,
+      referencedTable: $db.photos,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$PhotosTableOrderingComposer(
+            $db: $db,
+            $table: $db.photos,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$RouteLinesTableAnnotationComposer
+    extends Composer<_$AppDatabase, $RouteLinesTable> {
+  $$RouteLinesTableAnnotationComposer({
+    required super.$db,
+    required super.$table,
+    super.joinBuilder,
+    super.$addJoinBuilderToRootComposer,
+    super.$removeJoinBuilderFromRootComposer,
+  });
+  GeneratedColumn<String> get id =>
+      $composableBuilder(column: $table.id, builder: (column) => column);
+
+  GeneratedColumn<int> get createdAt =>
+      $composableBuilder(column: $table.createdAt, builder: (column) => column);
+
+  GeneratedColumn<int> get updatedAt =>
+      $composableBuilder(column: $table.updatedAt, builder: (column) => column);
+
+  GeneratedColumn<int> get deletedAt =>
+      $composableBuilder(column: $table.deletedAt, builder: (column) => column);
+
+  GeneratedColumn<String> get remoteId =>
+      $composableBuilder(column: $table.remoteId, builder: (column) => column);
+
+  GeneratedColumn<bool> get dirty =>
+      $composableBuilder(column: $table.dirty, builder: (column) => column);
+
+  GeneratedColumn<String> get ownerId =>
+      $composableBuilder(column: $table.ownerId, builder: (column) => column);
+
+  GeneratedColumn<String> get pointsJson => $composableBuilder(
+    column: $table.pointsJson,
+    builder: (column) => column,
+  );
+
+  GeneratedColumn<String> get symbolsJson => $composableBuilder(
+    column: $table.symbolsJson,
+    builder: (column) => column,
+  );
+
+  $$RoutesTableAnnotationComposer get routeId {
+    final $$RoutesTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.routeId,
+      referencedTable: $db.routes,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$RoutesTableAnnotationComposer(
+            $db: $db,
+            $table: $db.routes,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+
+  $$PhotosTableAnnotationComposer get photoId {
+    final $$PhotosTableAnnotationComposer composer = $composerBuilder(
+      composer: this,
+      getCurrentColumn: (t) => t.photoId,
+      referencedTable: $db.photos,
+      getReferencedColumn: (t) => t.id,
+      builder:
+          (
+            joinBuilder, {
+            $addJoinBuilderToRootComposer,
+            $removeJoinBuilderFromRootComposer,
+          }) => $$PhotosTableAnnotationComposer(
+            $db: $db,
+            $table: $db.photos,
+            $addJoinBuilderToRootComposer: $addJoinBuilderToRootComposer,
+            joinBuilder: joinBuilder,
+            $removeJoinBuilderFromRootComposer:
+                $removeJoinBuilderFromRootComposer,
+          ),
+    );
+    return composer;
+  }
+}
+
+class $$RouteLinesTableTableManager
+    extends
+        RootTableManager<
+          _$AppDatabase,
+          $RouteLinesTable,
+          RouteLine,
+          $$RouteLinesTableFilterComposer,
+          $$RouteLinesTableOrderingComposer,
+          $$RouteLinesTableAnnotationComposer,
+          $$RouteLinesTableCreateCompanionBuilder,
+          $$RouteLinesTableUpdateCompanionBuilder,
+          (RouteLine, $$RouteLinesTableReferences),
+          RouteLine,
+          PrefetchHooks Function({bool routeId, bool photoId})
+        > {
+  $$RouteLinesTableTableManager(_$AppDatabase db, $RouteLinesTable table)
+    : super(
+        TableManagerState(
+          db: db,
+          table: table,
+          createFilteringComposer: () =>
+              $$RouteLinesTableFilterComposer($db: db, $table: table),
+          createOrderingComposer: () =>
+              $$RouteLinesTableOrderingComposer($db: db, $table: table),
+          createComputedFieldComposer: () =>
+              $$RouteLinesTableAnnotationComposer($db: db, $table: table),
+          updateCompanionCallback:
+              ({
+                Value<String> id = const Value.absent(),
+                Value<int> createdAt = const Value.absent(),
+                Value<int> updatedAt = const Value.absent(),
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                Value<String> routeId = const Value.absent(),
+                Value<String> photoId = const Value.absent(),
+                Value<String> pointsJson = const Value.absent(),
+                Value<String> symbolsJson = const Value.absent(),
+                Value<int> rowid = const Value.absent(),
+              }) => RouteLinesCompanion(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                routeId: routeId,
+                photoId: photoId,
+                pointsJson: pointsJson,
+                symbolsJson: symbolsJson,
+                rowid: rowid,
+              ),
+          createCompanionCallback:
+              ({
+                required String id,
+                required int createdAt,
+                required int updatedAt,
+                Value<int?> deletedAt = const Value.absent(),
+                Value<String?> remoteId = const Value.absent(),
+                Value<bool> dirty = const Value.absent(),
+                Value<String?> ownerId = const Value.absent(),
+                required String routeId,
+                required String photoId,
+                required String pointsJson,
+                required String symbolsJson,
+                Value<int> rowid = const Value.absent(),
+              }) => RouteLinesCompanion.insert(
+                id: id,
+                createdAt: createdAt,
+                updatedAt: updatedAt,
+                deletedAt: deletedAt,
+                remoteId: remoteId,
+                dirty: dirty,
+                ownerId: ownerId,
+                routeId: routeId,
+                photoId: photoId,
+                pointsJson: pointsJson,
+                symbolsJson: symbolsJson,
+                rowid: rowid,
+              ),
+          withReferenceMapper: (p0) => p0
+              .map(
+                (e) => (
+                  e.readTable(table),
+                  $$RouteLinesTableReferences(db, table, e),
+                ),
+              )
+              .toList(),
+          prefetchHooksCallback: ({routeId = false, photoId = false}) {
+            return PrefetchHooks(
+              db: db,
+              explicitlyWatchedTables: [],
+              addJoins:
+                  <
+                    T extends TableManagerState<
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic,
+                      dynamic
+                    >
+                  >(state) {
+                    if (routeId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.routeId,
+                                referencedTable: $$RouteLinesTableReferences
+                                    ._routeIdTable(db),
+                                referencedColumn: $$RouteLinesTableReferences
+                                    ._routeIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+                    if (photoId) {
+                      state =
+                          state.withJoin(
+                                currentTable: table,
+                                currentColumn: table.photoId,
+                                referencedTable: $$RouteLinesTableReferences
+                                    ._photoIdTable(db),
+                                referencedColumn: $$RouteLinesTableReferences
+                                    ._photoIdTable(db)
+                                    .id,
+                              )
+                              as T;
+                    }
+
+                    return state;
+                  },
+              getPrefetchedDataCallback: (items) async {
+                return [];
+              },
+            );
+          },
+        ),
+      );
+}
+
+typedef $$RouteLinesTableProcessedTableManager =
+    ProcessedTableManager<
+      _$AppDatabase,
+      $RouteLinesTable,
+      RouteLine,
+      $$RouteLinesTableFilterComposer,
+      $$RouteLinesTableOrderingComposer,
+      $$RouteLinesTableAnnotationComposer,
+      $$RouteLinesTableCreateCompanionBuilder,
+      $$RouteLinesTableUpdateCompanionBuilder,
+      (RouteLine, $$RouteLinesTableReferences),
+      RouteLine,
+      PrefetchHooks Function({bool routeId, bool photoId})
     >;
 typedef $$AscentsTableCreateCompanionBuilder =
     AscentsCompanion Function({
@@ -17663,6 +19621,8 @@ class $AppDatabaseManager {
       $$PhotosTableTableManager(_db, _db.photos);
   $$RoutesTableTableManager get routes =>
       $$RoutesTableTableManager(_db, _db.routes);
+  $$RouteLinesTableTableManager get routeLines =>
+      $$RouteLinesTableTableManager(_db, _db.routeLines);
   $$AscentsTableTableManager get ascents =>
       $$AscentsTableTableManager(_db, _db.ascents);
   $$CommentsTableTableManager get comments =>

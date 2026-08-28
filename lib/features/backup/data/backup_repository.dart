@@ -324,6 +324,7 @@ class BackupRepository {
     final walls = await _db.select(_db.walls).get();
     final photos = await _db.select(_db.photos).get();
     final routes = await _db.select(_db.routes).get();
+    final routeLines = await _db.select(_db.routeLines).get();
     final comments = await _db.select(_db.comments).get();
     final likes = await _db.select(_db.likes).get();
     final ascents = await _db.select(_db.ascents).get();
@@ -337,6 +338,7 @@ class BackupRepository {
         'walls': [for (final row in walls) row.toJson()],
         'photos': [for (final row in photos) row.toJson()],
         'routes': [for (final row in routes) row.toJson()],
+        'route_lines': [for (final row in routeLines) row.toJson()],
         'comments': [for (final row in comments) row.toJson()],
         'likes': [for (final row in likes) row.toJson()],
         'ascents': [for (final row in ascents) row.toJson()],
@@ -405,6 +407,11 @@ class BackupRepository {
     await importTable(
       'routes',
       () => _importRoutes(_rowsOf(tables, 'routes'), mode, sink),
+    );
+    // After routes AND photos, both of which a line references.
+    await importTable(
+      'route_lines',
+      () => _importRouteLines(_rowsOf(tables, 'route_lines'), mode, sink),
     );
     // Ascents must be imported BEFORE Comments/Likes: Feature #12 (public
     // opt-in ascent logs) added `Comments.ascentId`/`Likes.ascentId` FKs
@@ -722,6 +729,47 @@ class BackupRepository {
         continue;
       }
       await _db.into(_db.routes).insertOnConflictUpdate(route);
+    }
+  }
+
+  Future<void> _importRouteLines(
+    List<Map<String, dynamic>> rows,
+    ConflictMode mode,
+    _DeferralSink sink,
+  ) async {
+    final existing = mode == ConflictMode.lww
+        ? {
+            for (final r in await _db.select(_db.routeLines).get())
+              r.id: r.updatedAt,
+          }
+        : const <String, int>{};
+    final routeIds = await _existingIds('routes');
+    final photoIds = await _existingIds('photos');
+
+    for (final json in rows) {
+      final line = db.RouteLine.fromJson(_notDirty(json));
+      if (mode == ConflictMode.lww &&
+          !_shouldWriteLww(
+            localUpdatedAt: existing[line.id],
+            incomingUpdatedAt: line.updatedAt,
+          )) {
+        continue;
+      }
+      final missing = _firstMissingFk([
+        ('routeId', line.routeId, routeIds),
+        ('photoId', line.photoId, photoIds),
+      ]);
+      if (missing != null) {
+        sink.defer(
+          table: 'route_lines',
+          id: line.id,
+          column: missing.$1,
+          missingParentId: missing.$2,
+          json: json,
+        );
+        continue;
+      }
+      await _db.into(_db.routeLines).insertOnConflictUpdate(line);
     }
   }
 

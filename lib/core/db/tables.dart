@@ -329,6 +329,23 @@ class Walls extends Table with SyncColumns, AccessColumns {
   RealColumn get latitude => real().nullable()();
   RealColumn get longitude => real().nullable()();
 
+  /// The wall's semantic baseline — the rock's footprint seen from above, as
+  /// the JSON written by `face_layout/baseline.dart`'s `Baseline.encode`
+  /// (a polyline in metres east/north of [latitude]/[longitude], plus whether
+  /// it closes).
+  ///
+  /// `null` means nobody has authored one, NOT that the wall has no layout: a
+  /// provisional line is synthesised from the photos' own GPS and headings on
+  /// every read (`resolveLayout`), so a contributor who does nothing still
+  /// gets an arranged topo. Storing only the AUTHORED stroke is what makes
+  /// that possible — a stored provisional one would freeze a guess made
+  /// before half the photos existed, and §5's "recompute on every edit" could
+  /// never improve it.
+  ///
+  /// Whether the stroke closes is the only thing separating a boulder from a
+  /// wall in this model, which is why nothing in the UI ever asks.
+  TextColumn get baselineJson => text().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
@@ -389,16 +406,71 @@ class Photos extends Table with SyncColumns {
   /// #46 bug's accumulated multi-original walls without deleting any row.
   BoolColumn get isPrimary => boolean().withDefault(const Constant(false))();
 
+  /// Where this photo was taken, from its own EXIF GPS — the FACE-level fix,
+  /// deliberately distinct from [Walls.latitude]/[Walls.longitude], which is
+  /// the object-level pin shown on the map.
+  ///
+  /// The split is the whole of the layout spec's §5 signal hierarchy in two
+  /// columns. A fix that is 10 m out is useless for saying which side of a
+  /// 4 m boulder you are on and perfectly good for saying which valley the
+  /// boulder is in; keeping one number for each question means no code can
+  /// accidentally answer one with the other.
+  RealColumn get captureLatitude => real().nullable()();
+  RealColumn get captureLongitude => real().nullable()();
+
+  /// Reported horizontal accuracy of that fix, in metres, or `null` when the
+  /// photo did not say.
+  ///
+  /// `null` is treated as UNUSABLE rather than perfect (`FaceInput
+  /// .hasUsableGps`). An unlabelled fix taken under a cliff is exactly the
+  /// multipath case the hierarchy exists to distrust, and defaulting it to
+  /// "good" would let the worst data outrank capture order.
+  RealColumn get captureAccuracyMeters => real().nullable()();
+
+  /// Camera heading in degrees clockwise from true north, from EXIF
+  /// `GPSImgDirection`, or `null` — which is the common case, since many
+  /// phones and most cameras write no heading at all.
+  ///
+  /// A hint and a sort key, never ground truth: iron-bearing rock and
+  /// magnetic cases throw a magnetometer far enough off that a heading is
+  /// only ever allowed to REFINE spacing, and any heading contradicting
+  /// capture order is dropped as an outlier.
+  RealColumn get captureBearingDegrees => real().nullable()();
+
+  /// Where a human dragged this face to on the wall's baseline, as an
+  /// arc-length fraction, or `null` if nobody has.
+  ///
+  /// One nullable column rather than the spec's `t` + `t_pinned` pair. The
+  /// pair has a state nothing can arbitrate — a `t` with `t_pinned` false is
+  /// a stale computed value — and full-row last-writer-wins sync (decision
+  /// D-4) can land the two halves from different edits, producing a pin at a
+  /// position nobody chose. A single nullable value cannot disagree with
+  /// itself, and "unpinned" becomes the absence of a fact rather than a
+  /// stored one.
+  ///
+  /// Authoritative once set: the resolver never overrides it, and every
+  /// unpinned neighbour re-interpolates around it.
+  RealColumn get layoutPinnedT => real().nullable()();
+
   @override
   Set<Column> get primaryKey => {id};
 }
 
 // Partial unique index enforcing that no two *live* (non-soft-deleted)
-// routes on the same PHOTO share a `number` — route numbers are scoped per
-// photo (each photo has its own overlay), not per wall, so two different
-// photos on the same wall may each have their own "route 1". Soft-deleted
-// tombstones (deletedAt IS NOT NULL) are excluded so a deleted route's old
-// number can be reused by a new route without violating uniqueness.
+// routes on the same WALL share a `number`.
+//
+// This used to be scoped per PHOTO, on the reasoning that each photo carries
+// its own overlay. That stopped being true when a route became a climb rather
+// than a drawing: one line can now be drawn on several photos of the same
+// rock (see [RouteLines]), and per-photo numbering meant the same physical
+// climb could be "3" on the south face and "5" on the arête — two numbers for
+// one thing, in a document whose entire job is to let someone at the rock say
+// which line they mean. The v15->v16 migration renumbers each wall's routes
+// sequentially to adopt it.
+//
+// Soft-deleted tombstones (deletedAt IS NOT NULL) are excluded so a deleted
+// route's old number can be reused by a new route without violating
+// uniqueness.
 // `TableIndex` in this drift version has no `where:` parameter on its
 // column-list constructor, so the partial index is expressed via the
 // raw-SQL `TableIndex.sql` variant instead (still validated by drift_dev at
@@ -412,14 +484,17 @@ class Photos extends Table with SyncColumns {
 // covers only live rows, and lets the tombstones a long-lived library
 // accumulates sit outside the index entirely instead of bloating it.
 //
-// `idx_routes_photo_number_live` below leads with `photo_id`, so it already
-// serves plain `photoId.equals(...)` lookups on Routes as a prefix match —
-// there is deliberately no separate single-column index for that.
+// `idx_routes_wall_number_live` leads with `wall_id`, so it also serves plain
+// `wallId.equals(...)` lookups as a prefix match — which is why the separate
+// single-column wall index it replaced is gone rather than kept alongside it.
+// `photo_id` needs its own index again for the same reason it used to get one
+// for free: reading "the routes whose home photo is this one" is still a real
+// access path, and it is no longer any index's prefix.
 @TableIndex.sql(
-  'CREATE UNIQUE INDEX idx_routes_photo_number_live ON routes (photo_id, number) WHERE deleted_at IS NULL',
+  'CREATE UNIQUE INDEX idx_routes_wall_number_live ON routes (wall_id, number) WHERE deleted_at IS NULL',
 )
 @TableIndex.sql(
-  'CREATE INDEX idx_routes_wall_live ON routes (wall_id) '
+  'CREATE INDEX idx_routes_photo_live ON routes (photo_id) '
   'WHERE deleted_at IS NULL',
 )
 class Routes extends Table with SyncColumns {
@@ -454,6 +529,58 @@ class Routes extends Table with SyncColumns {
   /// 0-3 star quality rating. `null` means unrated (distinct from `0`,
   /// which is an explicit "0 stars" rating).
   IntColumn get stars => integer().nullable()();
+
+  @override
+  Set<Column> get primaryKey => {id};
+}
+
+/// The same climb, drawn on another photo of the same rock.
+///
+/// A route is a CLIMB — a name, a grade, the thing ascents and grade opinions
+/// and hazards all point at — and a climb that wraps an arête is one climb
+/// photographed twice, not two problems. [Routes] carries the climb and the
+/// line on its home photo ([Routes.photoId]); this table carries the same
+/// climb's line as drawn on every OTHER photo, with its own points and
+/// symbols because the same rock from 90 degrees round is a different shape.
+///
+/// **Why the home line stays on [Routes] instead of moving here.** Full
+/// normalisation — every line in this table, [Routes] holding no geometry —
+/// is the tidier model and was not chosen. `Routes.photoId` and
+/// `Routes.pointsJson` are NOT NULL, so emptying them needs a SQLite
+/// table-recreate; the recreate would have to be mirrored in the live shared
+/// Supabase project, which is not branched, so it would land for every user
+/// of every other branch at the moment it ran. The asymmetry it avoids is one
+/// this schema already carries deliberately elsewhere — `Photos.isPrimary`
+/// designates one of a set the same way — and it keeps every existing read
+/// path, sync mapping and moderation flow working untouched.
+///
+/// Consequences worth knowing rather than discovering: deleting a photo that
+/// holds a route's home line promotes one of these rows in its place (exactly
+/// as deleting a wall's primary photo promotes another), and "the lines on
+/// photo P" is a union of `routes.photoId = P` and `route_lines.photoId = P`,
+/// never one table alone.
+@TableIndex.sql(
+  'CREATE UNIQUE INDEX idx_route_lines_route_photo_live ON route_lines (route_id, photo_id) WHERE deleted_at IS NULL',
+)
+@TableIndex.sql(
+  'CREATE INDEX idx_route_lines_photo_live ON route_lines (photo_id) '
+  'WHERE deleted_at IS NULL',
+)
+class RouteLines extends Table with SyncColumns {
+  /// The climb this line depicts. Every piece of shared data — name, grade,
+  /// stars, tags, ascents — is read through here, which is what makes two
+  /// drawings of one climb genuinely one climb.
+  TextColumn get routeId => text().references(Routes, #id)();
+
+  /// The photo this line is drawn on. Never the route's home photo: that
+  /// line lives on the [Routes] row itself, and the partial unique index
+  /// above stops a duplicate landing here for it.
+  TextColumn get photoId => text().references(Photos, #id)();
+
+  /// Normalised points, in the same encoding [Routes.pointsJson] uses, so
+  /// both kinds of line render through one painter with no branch.
+  TextColumn get pointsJson => text()();
+  TextColumn get symbolsJson => text()();
 
   @override
   Set<Column> get primaryKey => {id};

@@ -49,15 +49,15 @@ class GuidebookImportApplier {
   final RouteRepository _routes;
 
   /// Writes every route in [import] onto [photoId], numbered consecutively
-  /// **after any routes already on that photo**.
+  /// **after every climb already on the wall**.
   ///
   /// Appending rather than starting at 1 is a safety property, not a
   /// convenience. [RouteRepository.upsertRoute] identifies a route by
-  /// `(photoId, number)`, so importing five routes onto a photo that already
-  /// carried three hand-drawn ones would overwrite all three — silently, and
-  /// with no undo, destroying work the user spent far longer on than the
-  /// import saved. Numbering after the existing maximum makes an import
-  /// purely additive.
+  /// `(wallId, number)`, so importing five routes numbered from 1 onto a wall
+  /// that already carried three hand-drawn ones would fold the import into
+  /// those three — silently renaming and regrading work the user spent far
+  /// longer on than the import saved. Numbering after the wall's existing
+  /// maximum makes an import purely additive.
   ///
   /// The cost of that choice is that applying the same import twice writes
   /// the routes twice. That is the right trade: a double import is visible
@@ -80,8 +80,15 @@ class GuidebookImportApplier {
     required String photoId,
     GradeSystem? system,
   }) async {
-    final existing = await _routes.loadRoutes(wallId, photoId);
-    final base = existing.fold<int>(0, (max, r) => r.number > max ? r.number : max);
+    // Numbered above every climb on the WALL, not just the ones drawn on
+    // this photo. Since v16 a number identifies a climb across the whole rock,
+    // so restarting per photo would hand an imported route the number of an
+    // existing climb — and `upsertRoute` would read that as "the same climb,
+    // drawn again over here" and quietly fold the import into it, renaming
+    // somebody's route from a guidebook page. Wall-wide numbering makes an
+    // import what it is: new climbs.
+    final existing = await _routes.routeDbIdsByNumber(wallId);
+    final base = existing.keys.fold<int>(0, (max, n) => n > max ? n : max);
 
     var placed = 0;
     var unplaced = 0;

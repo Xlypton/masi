@@ -72,7 +72,13 @@ CREATE TABLE IF NOT EXISTS public.walls (
   "latitude" DOUBLE PRECISION,
   "longitude" DOUBLE PRECISION,
   "accessState" TEXT,
-  "accessNote" TEXT
+  "accessNote" TEXT,
+  -- The authored semantic baseline: the rock's footprint as a polyline in
+  -- metres east/north of the wall anchor, plus whether it closes. NULL means
+  -- nobody drew one, not that there is no layout -- a provisional line is
+  -- synthesised client-side from the photos' own GPS and headings on every
+  -- read, so only the AUTHORED stroke is ever stored.
+  "baselineJson" TEXT
 );
 
 -- ---------- LIVE-DATABASE MIGRATION (P0 backend already applied) ----------
@@ -106,7 +112,20 @@ CREATE TABLE IF NOT EXISTS public.photos (
   "cropXpct" DOUBLE PRECISION,
   "cropWidthPct" DOUBLE PRECISION,
   "sortOrder" INTEGER NOT NULL DEFAULT 0,
-  "isPrimary" BOOLEAN NOT NULL DEFAULT false
+  "isPrimary" BOOLEAN NOT NULL DEFAULT false,
+  -- Per-FACE capture sensors (schema v16). Deliberately distinct from the
+  -- wall's own lat/long, which is the object-level map pin: a fix 10 m out is
+  -- useless for saying which side of a boulder you are on and fine for saying
+  -- which valley it is in. "captureAccuracyMeters" NULL means the photo did
+  -- not say, and is treated as unusable rather than perfect.
+  "captureLatitude" DOUBLE PRECISION,
+  "captureLongitude" DOUBLE PRECISION,
+  "captureAccuracyMeters" DOUBLE PRECISION,
+  "captureBearingDegrees" DOUBLE PRECISION,
+  -- Where a human dragged this face on the wall's baseline, or NULL if nobody
+  -- has. One nullable column rather than a value/flag pair, which full-row
+  -- last-writer-wins sync can land in halves.
+  "layoutPinnedT" DOUBLE PRECISION
 );
 
 CREATE TABLE IF NOT EXISTS public.routes (
@@ -136,10 +155,40 @@ CREATE TABLE IF NOT EXISTS public.routes (
   "stars" INTEGER
 );
 
+-- The same climb drawn on another photo of the same rock (schema v16).
+--
+-- A route is a CLIMB -- the thing ascents, grade opinions and hazards point
+-- at -- and a climb that wraps an arete is one climb photographed twice. The
+-- line on the route's HOME photo stays on public.routes ("photoId" /
+-- "pointsJson"); this table carries the same climb as drawn on every other
+-- photo, with its own points because the same rock from 90 degrees round is a
+-- different shape.
+CREATE TABLE IF NOT EXISTS public.route_lines (
+  "id" TEXT PRIMARY KEY NOT NULL,
+  "createdAt" BIGINT NOT NULL,
+  "updatedAt" BIGINT NOT NULL,
+  "deletedAt" BIGINT,
+  "remoteId" TEXT,
+  "dirty" BOOLEAN NOT NULL DEFAULT false,
+  "ownerId" TEXT,
+  "routeId" TEXT NOT NULL,
+  "photoId" TEXT NOT NULL,
+  "pointsJson" TEXT NOT NULL DEFAULT '[]',
+  "symbolsJson" TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS route_lines_route_photo_live
+  ON public.route_lines ("routeId", "photoId") WHERE "deletedAt" IS NULL;
+CREATE INDEX IF NOT EXISTS route_lines_photo_live
+  ON public.route_lines ("photoId") WHERE "deletedAt" IS NULL;
+CREATE INDEX IF NOT EXISTS route_lines_route_live
+  ON public.route_lines ("routeId") WHERE "deletedAt" IS NULL;
+
 -- ---------- PRIVILEGES (RLS still restricts WHICH rows) ----------
 GRANT USAGE ON SCHEMA public TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE
-  ON public.areas, public.sectors, public.walls, public.photos, public.routes
+  ON public.areas, public.sectors, public.walls, public.photos, public.routes,
+     public.route_lines
   TO authenticated;
 
 -- ---------- ENABLE ROW LEVEL SECURITY ----------
@@ -148,6 +197,7 @@ ALTER TABLE public.sectors ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.walls   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.photos  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.routes  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.route_lines ENABLE ROW LEVEL SECURITY;
 
 -- ---------- ROW POLICIES ----------
 -- Owner: full CRUD on own rows. Shared: SELECT-only on rows of a published topo.
@@ -204,6 +254,20 @@ CREATE POLICY "routes_shared_select" ON public.routes FOR SELECT TO authenticate
   USING (EXISTS (
     SELECT 1 FROM public.walls w
     WHERE w."id" = routes."wallId" AND w."visibility" = 'shared'
+  ));
+
+-- route_lines: same two-policy shape as routes. The shared-select predicate
+-- walks route -> wall rather than trusting anything on the line itself, so
+-- publishing state has exactly one home.
+DROP POLICY IF EXISTS "route_lines_owner_all"     ON public.route_lines;
+DROP POLICY IF EXISTS "route_lines_shared_select" ON public.route_lines;
+CREATE POLICY "route_lines_owner_all" ON public.route_lines FOR ALL TO authenticated
+  USING ("ownerId" = auth.uid()::text) WITH CHECK ("ownerId" = auth.uid()::text);
+CREATE POLICY "route_lines_shared_select" ON public.route_lines FOR SELECT TO authenticated
+  USING (EXISTS (
+    SELECT 1 FROM public.routes r
+    JOIN public.walls w ON w."id" = r."wallId"
+    WHERE r."id" = route_lines."routeId" AND w."visibility" = 'shared'
   ));
 
 -- ---------- STORAGE POLICIES (bucket: topo-photos) ----------

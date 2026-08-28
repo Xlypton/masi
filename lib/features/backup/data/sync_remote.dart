@@ -45,6 +45,10 @@ const List<String> syncTableNames = [
   'walls',
   'photos',
   'routes',
+  // After 'routes' and 'photos', both of which it references. The list is
+  // pushed in order, so a line can never reach the cloud before the climb it
+  // depicts or the photo it is drawn on.
+  'route_lines',
   'ascents',
   'comments',
   'likes',
@@ -784,6 +788,15 @@ const Map<String, List<String>> syncRequiredFields = {
     'pointsJson',
     'symbolsJson',
     'sortOrder',
+  ],
+  'route_lines': [
+    'id',
+    'createdAt',
+    'updatedAt',
+    'routeId',
+    'photoId',
+    'pointsJson',
+    'symbolsJson',
   ],
   'ascents': ['id', 'createdAt', 'updatedAt', 'routeId', 'wallId', 'climbedAt', 'style', 'visibility'],
   'comments': ['id', 'createdAt', 'updatedAt', 'body'],

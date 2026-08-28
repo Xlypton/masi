@@ -16,6 +16,11 @@ class PhotoRef {
     this.parentPhotoId,
     this.sortOrder = 0,
     this.isPrimary = false,
+    this.captureLatitude,
+    this.captureLongitude,
+    this.captureAccuracyMeters,
+    this.captureBearingDegrees,
+    this.layoutPinnedT,
   });
 
   final String id;
@@ -36,6 +41,22 @@ class PhotoRef {
   /// doc). Defaults to `false`.
   final bool isPrimary;
 
+  /// Where this photo was taken and which way the camera pointed — the
+  /// per-FACE signals the layout engine reads (see `Photos.captureLatitude`
+  /// and friends). All default to `null`, which is the honest value for every
+  /// photo taken before the feature existed and for most photos taken since:
+  /// plenty of cameras record no heading at all.
+  ///
+  /// Carried on the ref rather than re-read per face so laying out a wall is
+  /// one query, not one plus N.
+  final double? captureLatitude;
+  final double? captureLongitude;
+  final double? captureAccuracyMeters;
+  final double? captureBearingDegrees;
+
+  /// Where a human dragged this face on the wall's baseline, or `null`.
+  final double? layoutPinnedT;
+
   @override
   bool operator ==(Object other) {
     if (identical(this, other)) return true;
@@ -48,7 +69,12 @@ class PhotoRef {
         other.height == height &&
         other.parentPhotoId == parentPhotoId &&
         other.sortOrder == sortOrder &&
-        other.isPrimary == isPrimary;
+        other.isPrimary == isPrimary &&
+        other.captureLatitude == captureLatitude &&
+        other.captureLongitude == captureLongitude &&
+        other.captureAccuracyMeters == captureAccuracyMeters &&
+        other.captureBearingDegrees == captureBearingDegrees &&
+        other.layoutPinnedT == layoutPinnedT;
   }
 
   @override
@@ -62,6 +88,11 @@ class PhotoRef {
         parentPhotoId,
         sortOrder,
         isPrimary,
+        captureLatitude,
+        captureLongitude,
+        captureAccuracyMeters,
+        captureBearingDegrees,
+        layoutPinnedT,
       );
 
   @override
@@ -350,6 +381,59 @@ class PhotoRepository {
     });
   }
 
+  /// Pins a face to [t] on its wall's baseline, or unpins it with `null`.
+  ///
+  /// A pin is the top of the layout engine's signal hierarchy — nothing
+  /// recomputed ever overrides it — so this is the one write in the whole
+  /// feature that permanently overrules the sensors. Unpinning is equally a
+  /// real operation: it hands the face back to the engine, which is what a
+  /// contributor who dragged the wrong thumbnail wants.
+  Future<void> setFacePin(String photoId, double? t) async {
+    final now = nowMs();
+    await (_db.update(_db.photos)
+          ..where((tbl) => tbl.id.equals(photoId) & tbl.deletedAt.isNull()))
+        .write(
+          db.PhotosCompanion(
+            // `Value(null)` is an explicit write of NULL; `Value.absent()`
+            // would leave the old pin in place, which would make "unpin" a
+            // silent no-op.
+            layoutPinnedT: Value(t),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+          ),
+        );
+  }
+
+  /// Records what a photo's EXIF said about where it was taken and which way
+  /// the camera pointed.
+  ///
+  /// Called once when a photo is attached. Writing all four together (rather
+  /// than each as it is parsed) keeps a face from ever being half-described:
+  /// a fix with no accuracy beside it is exactly the shape the engine refuses
+  /// to trust, and arriving at that state through a partial write would look
+  /// identical to a camera that genuinely reported no accuracy.
+  Future<void> setFaceCaptureMetadata(
+    String photoId, {
+    double? latitude,
+    double? longitude,
+    double? accuracyMeters,
+    double? bearingDegrees,
+  }) async {
+    final now = nowMs();
+    await (_db.update(_db.photos)
+          ..where((tbl) => tbl.id.equals(photoId) & tbl.deletedAt.isNull()))
+        .write(
+          db.PhotosCompanion(
+            captureLatitude: Value(latitude),
+            captureLongitude: Value(longitude),
+            captureAccuracyMeters: Value(accuracyMeters),
+            captureBearingDegrees: Value(bearingDegrees),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+          ),
+        );
+  }
+
   /// Resolves [row]'s stored `localPath` to an absolute path and self-heals
   /// the DB row's `localPath` (and ONLY `localPath` — not
   /// `dirty`/`updatedAt`/`remoteId`, since this is a local-only self-heal,
@@ -385,6 +469,11 @@ class PhotoRepository {
       parentPhotoId: row.parentPhotoId,
       sortOrder: row.sortOrder,
       isPrimary: row.isPrimary,
+      captureLatitude: row.captureLatitude,
+      captureLongitude: row.captureLongitude,
+      captureAccuracyMeters: row.captureAccuracyMeters,
+      captureBearingDegrees: row.captureBearingDegrees,
+      layoutPinnedT: row.layoutPinnedT,
     );
   }
 }

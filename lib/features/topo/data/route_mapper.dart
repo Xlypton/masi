@@ -90,12 +90,17 @@ List<TopoSymbol> decodeSymbols(String json) {
 /// [intId] is the caller-assigned, in-memory sequential id (routes have no
 /// stable int id in the database — only a uuid `id` column — so the
 /// repository assigns 1..n on every load; see [rowToDomain] callers).
-TopoRoute rowToDomain(db.Route row, int intId) {
+/// [lineOverride], when given, supplies the geometry INSTEAD of the row's
+/// own: the same climb drawn on a different photo of the same rock (see
+/// `RouteLines`). Everything else — name, grade, stars, tags — still comes
+/// from the climb, which is the entire point of the split. The same rock from
+/// 90 degrees round is a different shape, and it is still the same climb.
+TopoRoute rowToDomain(db.Route row, int intId, {db.RouteLine? lineOverride}) {
   return TopoRoute(
     id: intId,
     number: row.number,
-    points: decodePoints(row.pointsJson),
-    symbols: decodeSymbols(row.symbolsJson),
+    points: decodePoints(lineOverride?.pointsJson ?? row.pointsJson),
+    symbols: decodeSymbols(lineOverride?.symbolsJson ?? row.symbolsJson),
     colorIndex: row.colorIndex,
     visible: row.visible,
     name: row.name,

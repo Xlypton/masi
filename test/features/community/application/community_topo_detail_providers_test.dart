@@ -38,10 +38,9 @@ void main() {
   });
 
   test(
-    'on a 2-photo wall, both carrying a "number: 1" route, '
-    'routeEntriesForWallProvider resolves the dbId belonging to the '
-    'PRIMARY photo (the same one loadRoutes read from) — not the other '
-    "photo's same-numbered route",
+    'on a 2-photo wall where one climb is drawn on both, '
+    'routeEntriesForWallProvider resolves the ONE climb id — the ambiguity '
+    'this used to have to pick a winner for cannot arise any more',
     () async {
       final container = makeContainer();
       final crud = container.read(libraryCrudRepositoryProvider);
@@ -66,8 +65,12 @@ void main() {
       );
 
       final routeRepo = RouteRepository(db, nowMs: () => 1000);
-      // Same `number` (1) on BOTH photos -- valid, since numbering is
-      // scoped per-photo, not per-wall (see RouteRepository's class doc).
+      // Drawing `number: 1` on BOTH photos. Before v16 that produced two
+      // unrelated routes that happened to share a number, and this test
+      // existed to pin down WHICH of them the provider picked — a choice it
+      // should never have had to make. Since v16 it is one climb drawn twice
+      // (the second call writes a `route_lines` row), so there is one id and
+      // nothing to disambiguate.
       await routeRepo.upsertRoute(
         wall.id,
         primaryPhotoId,
@@ -79,25 +82,26 @@ void main() {
         const TopoRoute(id: 1, number: 1, points: [Offset(0.9, 0.9)]),
       );
 
-      final expectedDbIds = await routeRepo.routeDbIdsByNumber(
+      final fromPrimary = await routeRepo.routeDbIdsByNumber(
         wall.id,
         primaryPhotoId,
       );
-      final wrongDbIds = await routeRepo.routeDbIdsByNumber(
+      final fromSecondary = await routeRepo.routeDbIdsByNumber(
         wall.id,
         secondaryPhotoId,
       );
-      // Sanity: the two photos' same-numbered routes really do have
-      // different DB ids, so the assertion below is meaningful.
-      expect(expectedDbIds[1], isNot(equals(wrongDbIds[1])));
+      // The guarantee that replaced the old disambiguation: whichever photo
+      // you ask from, route 1 is the same climb. An ascent logged from the
+      // second photo therefore lands on the route the first photo shows.
+      expect(fromPrimary[1], isNotNull);
+      expect(fromPrimary[1], fromSecondary[1]);
 
       final entries = await container.read(
         routeEntriesForWallProvider(wall.id).future,
       );
 
       expect(entries, hasLength(1));
-      expect(entries.single.dbId, expectedDbIds[1]);
-      expect(entries.single.dbId, isNot(equals(wrongDbIds[1])));
+      expect(entries.single.dbId, fromPrimary[1]);
     },
   );
 }

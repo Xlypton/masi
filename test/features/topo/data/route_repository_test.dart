@@ -258,10 +258,10 @@ void main() {
 
   test(
     'fix (c): the partial unique index rejects two live rows for the same '
-    '(photoId, number) inserted directly (bypassing the repository) — '
-    'wallId is held constant here too, but it is photoId+number that is '
-    'actually enforced (see T-route-per-photo below, where the SAME '
-    'number is allowed across two DIFFERENT photos on the same wall)',
+    '(wallId, number) inserted directly (bypassing the repository). Since '
+    'v16 it is wall+number that is enforced — see T-route-is-a-climb '
+    'below, where redrawing the same number on another photo produces a '
+    'LINE rather than a second row',
     () async {
       final v1 = TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]);
       await repo.upsertRoute(wallId, photoId, v1);
@@ -659,7 +659,8 @@ void main() {
     );
   });
 
-  group('T-route-per-photo: routes are scoped per photo, not per wall', () {
+  group('T-route-is-a-climb: numbering is wall-scoped, lines are per photo',
+      () {
     const photoIdB = 'photo-2';
 
     setUp(() async {
@@ -680,77 +681,58 @@ void main() {
     });
 
     test(
-      'the SAME number is allowed on two different photos of the same '
-      'wall, and loadRoutes(wallId, photoId) returns only that photo\'s '
-      'route',
+      'drawing the same number on a second photo records a LINE, leaving '
+      'the home drawing untouched — one climb, two drawings',
       () async {
-        final routeA = TopoRoute(
-          id: 1,
-          number: 1,
-          points: const [Offset(0, 0)],
-          name: 'Route on A',
+        await repo.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(
+            id: 1,
+            number: 1,
+            points: const [Offset(0, 0)],
+            name: 'Arete',
+          ),
         );
-        final routeB = TopoRoute(
-          id: 1,
-          number: 1,
-          points: const [Offset(1, 1)],
-          name: 'Route on B',
+        await repo.upsertRoute(
+          wallId,
+          photoIdB,
+          TopoRoute(
+            id: 1,
+            number: 1,
+            points: const [Offset(9, 9)],
+            name: 'Arete',
+          ),
         );
 
-        await repo.upsertRoute(wallId, photoId, routeA);
-        await repo.upsertRoute(wallId, photoIdB, routeB);
-
-        final loadedA = await repo.loadRoutes(wallId, photoId);
-        final loadedB = await repo.loadRoutes(wallId, photoIdB);
-
-        expect(loadedA, hasLength(1));
-        expect(loadedA.single.name, 'Route on A');
-        expect(loadedB, hasLength(1));
-        expect(loadedB.single.name, 'Route on B');
-
-        final raw = await db.select(db.routes).get();
+        final routeRows = await db.select(db.routes).get();
         expect(
-          raw,
-          hasLength(2),
-          reason: 'both photos\' number-1 routes are distinct live rows',
+          routeRows.where((r) => r.deletedAt == null).length,
+          1,
+          reason: 'a second drawing must not create a second climb',
         );
+        expect(routeRows.single.photoId, photoId, reason: 'home is unchanged');
+
+        final lines = await db.select(db.routeLines).get();
+        expect(lines.length, 1);
+        expect(lines.single.photoId, photoIdB);
+        expect(lines.single.routeId, routeRows.single.id);
+
+        // Each photo shows its own geometry...
+        final onA = await repo.loadRoutes(wallId, photoId);
+        final onB = await repo.loadRoutes(wallId, photoIdB);
+        expect(onA.single.points, const [Offset(0, 0)]);
+        expect(onB.single.points, const [Offset(9, 9)]);
+        // ...and both are the same climb.
+        expect(onA.single.number, onB.single.number);
+        expect(onA.single.name, 'Arete');
+        expect(onB.single.name, 'Arete');
       },
     );
 
     test(
-      'upsertRoute\'s existing-row lookup is (photoId, number): updating '
-      'photo A\'s route 1 never touches photo B\'s route 1',
-      () async {
-        await repo.upsertRoute(
-          wallId,
-          photoId,
-          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)], name: 'A v1'),
-        );
-        await repo.upsertRoute(
-          wallId,
-          photoIdB,
-          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)], name: 'B v1'),
-        );
-
-        await repo.upsertRoute(
-          wallId,
-          photoId,
-          TopoRoute(id: 1, number: 1, points: const [Offset(5, 5)], name: 'A v2'),
-        );
-
-        final loadedA = await repo.loadRoutes(wallId, photoId);
-        final loadedB = await repo.loadRoutes(wallId, photoIdB);
-        expect(loadedA.single.name, 'A v2');
-        expect(loadedB.single.name, 'B v1');
-
-        final raw = await db.select(db.routes).get();
-        expect(raw, hasLength(2));
-      },
-    );
-
-    test(
-      'softDeleteRoute(wallId, photoId, number) only tombstones the named '
-      'photo\'s route, leaving the other photo\'s same-numbered route live',
+      'editing shared data from the second photo changes the one climb, '
+      'not a copy of it',
       () async {
         await repo.upsertRoute(
           wallId,
@@ -760,125 +742,118 @@ void main() {
         await repo.upsertRoute(
           wallId,
           photoIdB,
+          TopoRoute(
+            id: 1,
+            number: 1,
+            points: const [Offset(9, 9)],
+            name: 'Renamed from the other photo',
+            stars: 3,
+          ),
+        );
+
+        final onA = await repo.loadRoutes(wallId, photoId);
+        expect(onA.single.name, 'Renamed from the other photo');
+        expect(onA.single.stars, 3);
+        expect(
+          onA.single.points,
+          const [Offset(0, 0)],
+          reason: 'shared data travels, geometry does not',
+        );
+      },
+    );
+
+    test(
+      'an ascent logged from either photo resolves to the same climb id',
+      () async {
+        await repo.upsertRoute(
+          wallId,
+          photoId,
           TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+        await repo.upsertRoute(
+          wallId,
+          photoIdB,
+          TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
+        );
+
+        final fromA = await repo.routeDbIdsByNumber(wallId, photoId);
+        final fromB = await repo.routeDbIdsByNumber(wallId, photoIdB);
+        expect(fromA[1], isNotNull);
+        expect(
+          fromA[1],
+          fromB[1],
+          reason: 'this is the whole point of one climb, two drawings',
+        );
+      },
+    );
+
+    test(
+      'deleting on a non-home photo removes only that line; the climb and '
+      'its home drawing survive',
+      () async {
+        await repo.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+        await repo.upsertRoute(
+          wallId,
+          photoIdB,
+          TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
+        );
+
+        await repo.softDeleteRoute(wallId, photoIdB, 1);
+
+        expect(await repo.loadRoutes(wallId, photoIdB), isEmpty);
+        expect(await repo.loadRoutes(wallId, photoId), hasLength(1));
+      },
+    );
+
+    test(
+      'deleting on the home photo tombstones the climb AND its lines — no '
+      'orphan drawing of a climb that no longer exists',
+      () async {
+        await repo.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+        await repo.upsertRoute(
+          wallId,
+          photoIdB,
+          TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
         );
 
         await repo.softDeleteRoute(wallId, photoId, 1);
 
-        final loadedA = await repo.loadRoutes(wallId, photoId);
-        final loadedB = await repo.loadRoutes(wallId, photoIdB);
-        expect(loadedA, isEmpty);
-        expect(loadedB, hasLength(1));
+        expect(await repo.loadRoutes(wallId, photoId), isEmpty);
+        expect(await repo.loadRoutes(wallId, photoIdB), isEmpty);
+        final lines = await db.select(db.routeLines).get();
+        expect(lines.single.deletedAt, isNotNull);
+      },
+    );
+
+    test(
+      'a different number on another photo is a different climb, and both '
+      'are visible on their own photo',
+      () async {
+        await repo.upsertRoute(
+          wallId,
+          photoId,
+          TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+        );
+        await repo.upsertRoute(
+          wallId,
+          photoIdB,
+          TopoRoute(id: 1, number: 2, points: const [Offset(5, 5)]),
+        );
+
+        final routeRows = await db.select(db.routes).get();
+        expect(routeRows.length, 2);
+        expect(await db.select(db.routeLines).get(), isEmpty);
+        expect((await repo.loadRoutes(wallId, photoId)).single.number, 1);
+        expect((await repo.loadRoutes(wallId, photoIdB)).single.number, 2);
       },
     );
   });
-
-  group(
-    '§1e gap: route writes must mark `dirty` so a route-only edit pushes '
-    'immediately (SyncService.hasPendingLocalChanges / PushScope.dirtyOnly '
-    'both gate on `ownerId == uid & dirty == true` — see sync_service.dart)',
-    () {
-      const uid = 'u1';
-
-      // Mirrors exactly the WHERE clause `SyncService.hasPendingLocalChanges`
-      // and `PushScope.dirtyOnly` use for the `routes` table (sync_service.dart),
-      // so this test proves the real push-scheduling SIGNAL, not just the
-      // column value.
-      Future<bool> hasPendingRouteChanges() async {
-        final row = await (db.select(db.routes)
-              ..where((t) => t.ownerId.equals(uid) & t.dirty.equals(true))
-              ..limit(1))
-            .getSingleOrNull();
-        return row != null;
-      }
-
-      late RouteRepository ownedRepo;
-
-      setUp(() {
-        ownedRepo = RouteRepository(db, nowMs: () => 1000, currentUid: () => uid);
-      });
-
-      test(
-        'upsertRoute (insert path) marks the new row dirty and owned, so '
-        'hasPendingLocalChanges-equivalent reports pending work',
-        () async {
-          expect(
-            await hasPendingRouteChanges(),
-            isFalse,
-            reason: 'baseline: no routes exist yet',
-          );
-
-          await ownedRepo.upsertRoute(
-            wallId,
-            photoId,
-            TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
-          );
-
-          expect(
-            await hasPendingRouteChanges(),
-            isTrue,
-            reason:
-                'a freshly inserted route must be visible to the dirty-scoped '
-                'push immediately, not just on the next full push',
-          );
-        },
-      );
-
-      test(
-        'upsertRoute (update path) re-marks an already-synced row dirty',
-        () async {
-          await ownedRepo.upsertRoute(
-            wallId,
-            photoId,
-            TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
-          );
-          // Simulate a confirmed push having already cleared the flag (the
-          // same idiom `topo_canvas_gps_test.dart`/`topos_screen_test.dart`
-          // use for walls) so this test proves the UPDATE path re-dirties a
-          // row, not merely that insert leaves it dirty.
-          await db.customStatement('UPDATE routes SET dirty = 0');
-          expect(await hasPendingRouteChanges(), isFalse);
-
-          await ownedRepo.upsertRoute(
-            wallId,
-            photoId,
-            TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)]),
-          );
-
-          expect(
-            await hasPendingRouteChanges(),
-            isTrue,
-            reason:
-                'editing an already-synced route must re-mark it dirty so '
-                'the edit pushes immediately',
-          );
-        },
-      );
-
-      test(
-        'softDeleteRoute re-marks an already-synced row dirty (the '
-        'tombstone itself must sync promptly, or a locally-deleted route '
-        'reappears from the cloud)',
-        () async {
-          await ownedRepo.upsertRoute(
-            wallId,
-            photoId,
-            TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
-          );
-          await db.customStatement('UPDATE routes SET dirty = 0');
-          expect(await hasPendingRouteChanges(), isFalse);
-
-          await ownedRepo.softDeleteRoute(wallId, photoId, 1);
-
-          expect(
-            await hasPendingRouteChanges(),
-            isTrue,
-            reason:
-                'a local soft-delete must push promptly or the route '
-                'reappears from a later cloud pull',
-          );
-        },
-      );
-    },
-  );
 }

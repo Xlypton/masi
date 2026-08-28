@@ -167,6 +167,14 @@ enum _GuardOutcome {
 /// so a future sync layer can still see tombstones. All cascades run inside
 /// a single [db.AppDatabase.transaction] so a crash mid-cascade can't leave
 /// a subtree half soft-deleted.
+/// The wall columns the Face Layout System reads: the authored baseline
+/// stroke and the anchor its plane coordinates are relative to.
+typedef WallLayoutAnchor = ({
+  String? baselineJson,
+  double? latitude,
+  double? longitude,
+});
+
 class LibraryCrudRepository {
   LibraryCrudRepository(
     this._db, {
@@ -842,15 +850,15 @@ class LibraryCrudRepository {
       return;
     }
 
-    // A NEW line. Numbering is per-photo (see `RouteRepository`'s class doc:
-    // a wall with three photos can have three route 1s), so the next number
-    // comes from this photo's live routes and not the wall's.
+    // A NEW line. Numbering is per-WALL since v16 (see `RouteRepository`'s
+    // class doc: a route is a climb, and a climb has one number across every
+    // photo of the rock), so the next number comes from the whole wall. Taking
+    // it from this photo alone would collide with a climb already numbered
+    // that on another photo, and the partial unique index would refuse the
+    // insert — turning an accepted community suggestion into a silent failure.
     final existing =
         await (_db.select(_db.routes)..where(
-              (t) =>
-                  t.wallId.equals(wallId) &
-                  t.photoId.equals(photoId) &
-                  t.deletedAt.isNull(),
+              (t) => t.wallId.equals(wallId) & t.deletedAt.isNull(),
             ))
             .get();
     // Guard the wall itself before inserting: the insert below carries no
@@ -1120,6 +1128,65 @@ class LibraryCrudRepository {
             ),
           ),
     );
+  }
+
+  /// Stores (or clears, with `null`) the wall's AUTHORED baseline stroke —
+  /// the JSON from `Baseline.encode`.
+  ///
+  /// Clearing is a real operation, not a degraded one: it drops back to the
+  /// provisional line synthesised from the photos on every read, which is
+  /// what "Redraw" leaves behind before the contributor draws anything, and
+  /// what a contributor who decides their stroke was worse than the guess
+  /// should be able to get back to.
+  ///
+  /// Same wall-row update shape as [setWallCoordinates] — guarded to live,
+  /// own-or-unowned rows, `updatedAt` bumped and `dirty` set so the stroke
+  /// rides the ordinary push.
+  Future<void> setWallBaseline(String wallId, String? baselineJson) async {
+    final now = nowMs();
+    await _guardedWrite(
+      operation: 'setWallBaseline',
+      id: wallId,
+      table: _db.walls,
+      idColumn: _db.walls.id,
+      ownerColumn: _db.walls.ownerId,
+      deletedAtColumn: _db.walls.deletedAt,
+      write: (_db.update(_db.walls)..where(
+            (t) =>
+                t.id.equals(wallId) &
+                t.deletedAt.isNull() &
+                _ownOrUnowned(t.ownerId),
+          ))
+          .write(
+            db.WallsCompanion(
+              baselineJson: Value(baselineJson),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          ),
+    );
+  }
+
+  /// Live view of the two wall columns the layout engine needs: the authored
+  /// baseline and the anchor its coordinates are measured from.
+  ///
+  /// Emits `null` for a wall that does not exist or has been soft-deleted, so
+  /// a caller watching a wall that gets deleted underneath it sees the layout
+  /// disappear rather than freeze on its last value.
+  Stream<WallLayoutAnchor?> watchWallLayoutAnchor(String wallId) {
+    return (_db.select(_db.walls)
+          ..where((t) => t.id.equals(wallId) & t.deletedAt.isNull())
+          ..limit(1))
+        .watch()
+        .map(
+          (rows) => rows.isEmpty
+              ? null
+              : (
+                  baselineJson: rows.first.baselineJson,
+                  latitude: rows.first.latitude,
+                  longitude: rows.first.longitude,
+                ),
+        );
   }
 
   /// Re-parents [wallId] to [newSectorId]: updates its `sectorId`,

@@ -130,6 +130,16 @@ void main() {
       sortOrder: 0,
       visible: true,
     ).toJson().keys.toSet(),
+    'route_lines': const RouteLine(
+      id: 'rl1',
+      createdAt: 0,
+      updatedAt: 0,
+      dirty: false,
+      routeId: 'r1',
+      photoId: 'p1',
+      pointsJson: '[]',
+      symbolsJson: '[]',
+    ).toJson().keys.toSet(),
     'ascents': const Ascent(
       id: 'as1',
       createdAt: 0,

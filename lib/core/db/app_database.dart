@@ -23,6 +23,7 @@ part 'app_database.g.dart';
     Walls,
     Photos,
     Routes,
+    RouteLines,
     Comments,
     Likes,
     Ascents,
@@ -51,7 +52,7 @@ class AppDatabase extends _$AppDatabase {
   final bool _flushAfterCommit;
 
   @override
-  int get schemaVersion => 15;
+  int get schemaVersion => 16;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
@@ -508,11 +509,137 @@ class AppDatabase extends _$AppDatabase {
         await addIfMissing(comments, comments.mentionedUids);
         await m.createTable(notificationRows);
       }
+      // v15 -> v16: the Face Layout System.
+      //
+      // Three separable things, in the order they must happen:
+      //
+      // 1. Per-face capture sensors and the manual pin on `photos`, plus the
+      //    authored baseline on `walls`. All nullable columns on existing
+      //    SyncColumns tables, so `addIfMissing` handles them and `null` on
+      //    every pre-existing row is exactly right: no photo taken before this
+      //    build recorded a heading, and nobody has dragged anything. Capture
+      //    ORDER needs no column — `Photos.sortOrder` already is it (it starts
+      //    as the upload sequence and is changed only by a human reordering
+      //    the rail, which is precisely the spec's rule that order changes
+      //    only by hand).
+      //
+      // 2. `route_lines`, the same climb drawn on another photo.
+      //
+      // 3. Route numbers move from per-PHOTO to per-WALL, which needs the old
+      //    unique index dropped, the rows renumbered, and the new one built —
+      //    strictly in that order, because the wall-scoped index cannot be
+      //    created while two photos on one wall still each hold a "1", and
+      //    that is the normal state of every existing multi-photo topo.
+      //
+      // The matching live Supabase migration is
+      // `supabase/migrations/2026-08-28_face_layout.sql` and must be applied
+      // BEFORE a build carrying v16 ships.
+      if (from < 16) {
+        await addIfMissing(walls, walls.baselineJson);
+        await addIfMissing(photos, photos.captureLatitude);
+        await addIfMissing(photos, photos.captureLongitude);
+        await addIfMissing(photos, photos.captureAccuracyMeters);
+        await addIfMissing(photos, photos.captureBearingDegrees);
+        await addIfMissing(photos, photos.layoutPinnedT);
+        await m.createTable(routeLines);
+        await _renumberRoutesPerWall(m);
+      }
     },
     beforeOpen: (details) async {
       await customStatement('PRAGMA foreign_keys = ON');
     },
   );
+
+  /// Moves route numbering from per-photo to per-wall (schema v16).
+  ///
+  /// Every live route on a wall is renumbered 1..n in a stable, explainable
+  /// order — by its photo's position in the strip, then by the number it
+  /// already had, then by id so the result is identical on every device that
+  /// runs it. That determinism is not decoration: the same rows are renumbered
+  /// independently on each of a user's devices, and sync reconciles the
+  /// results by last-writer-wins with no notion of "these two disagree". Two
+  /// devices computing different numbers for one route would settle it by
+  /// whoever pushed last.
+  ///
+  /// Renumbering is unconditional rather than collision-only. Preserving
+  /// existing numbers where they happen not to clash sounds gentler and
+  /// produces a topo numbered 1, 2, 5, 3, 4 — which is worse to read at the
+  /// rock than one numbered in the order you walk past the lines.
+  ///
+  /// The rows are NOT marked dirty. A renumber is a schema migration every
+  /// client performs for itself on first open of this build, so pushing it
+  /// would have every device upload its whole route table to agree on values
+  /// they all computed identically anyway.
+  Future<void> _renumberRoutesPerWall(Migrator m) async {
+    // All three indexes go first, the new one included. `onUpgrade` replays
+    // from whatever version the file claims, and a database that is already
+    // current — the interrupted-migration tests stamp exactly that back to
+    // v1 — still carries `idx_routes_wall_number_live`. Renumbering under it
+    // trips the very uniqueness the renumber exists to establish, and
+    // recreating it afterwards fails as "already exists".
+    await customStatement('DROP INDEX IF EXISTS idx_routes_photo_number_live');
+    await customStatement('DROP INDEX IF EXISTS idx_routes_wall_live');
+    await customStatement('DROP INDEX IF EXISTS idx_routes_wall_number_live');
+    await customStatement('DROP INDEX IF EXISTS idx_routes_photo_live');
+
+    // The ranking is computed from a SNAPSHOT rather than from `routes`
+    // itself. Ranking each row by counting the rows that sort before it means
+    // reading `number` while the same statement is writing `number`, and
+    // SQLite is free to show a subquery the already-updated value — which
+    // silently collapses several routes onto one new number and then fails on
+    // the unique index, if you are lucky enough for it to fail at all.
+    await customStatement('DROP TABLE IF EXISTS _route_renumber');
+    await customStatement("""
+      CREATE TEMP TABLE _route_renumber AS
+      SELECT r.id AS rid,
+             r.wall_id AS wid,
+             COALESCE(
+               (SELECT p.sort_order FROM photos p WHERE p.id = r.photo_id),
+               0) AS pso,
+             r.number AS onum
+        FROM routes r
+       WHERE r.deleted_at IS NULL
+    """);
+
+    await customStatement("""
+      UPDATE routes
+         SET number = (
+               SELECT COUNT(*) + 1
+                 FROM _route_renumber e
+                WHERE e.wid = (SELECT s.wid FROM _route_renumber s
+                                WHERE s.rid = routes.id)
+                  AND (
+                    e.pso < (SELECT s.pso FROM _route_renumber s
+                              WHERE s.rid = routes.id)
+                    OR (e.pso = (SELECT s.pso FROM _route_renumber s
+                                  WHERE s.rid = routes.id)
+                        AND (
+                          e.onum < (SELECT s.onum FROM _route_renumber s
+                                     WHERE s.rid = routes.id)
+                          OR (e.onum = (SELECT s.onum FROM _route_renumber s
+                                         WHERE s.rid = routes.id)
+                              AND e.rid < routes.id)
+                        ))
+                  )
+             )
+       WHERE deleted_at IS NULL
+    """);
+
+    await customStatement('DROP TABLE IF EXISTS _route_renumber');
+
+    // Created by hand rather than through `m.createIndex` so they carry
+    // IF NOT EXISTS — the same replay that made the drops necessary can reach
+    // here twice.
+    await customStatement(
+      'CREATE UNIQUE INDEX IF NOT EXISTS idx_routes_wall_number_live '
+      'ON routes (wall_id, number) WHERE deleted_at IS NULL',
+    );
+    await customStatement(
+      'CREATE INDEX IF NOT EXISTS idx_routes_photo_live '
+      'ON routes (photo_id) WHERE deleted_at IS NULL',
+    );
+  }
+
 
   /// Nesting depth of [transaction] calls made through this database.
   ///

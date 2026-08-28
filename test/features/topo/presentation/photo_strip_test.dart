@@ -87,12 +87,17 @@ void main() {
         gradeRaw: 'photo1-route',
       ),
     );
+    // A DIFFERENT number, so this is a second climb rather than the first
+    // one drawn again. Since v16 a number identifies a climb across the whole
+    // wall, so seeding `number: 1` here would make these two drawings of one
+    // route — which is a real and useful thing, but not what this test is
+    // about: it checks that switching photos loads the right OVERLAY.
     await routeRepo.upsertRoute(
       wall.id,
       photo2Id,
       const TopoRoute(
         id: 1,
-        number: 1,
+        number: 2,
         points: [Offset(0.3, 0.3), Offset(0.4, 0.4)],
         gradeRaw: 'photo2-route',
       ),

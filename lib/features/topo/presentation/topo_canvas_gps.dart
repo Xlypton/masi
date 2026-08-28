@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:masi/core/location/location_service.dart';
 import 'package:masi/core/location/photo_gps.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
+import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// The outcome of a single [captureWallGpsFromPhoto] call, surfaced to the
@@ -73,21 +74,44 @@ enum GpsCaptureResult {
 /// [extractGpsFromImageBytes] and [LocationService.currentLocation]
 /// themselves, so missing location data of either kind never blocks or
 /// breaks the surrounding photo attach/load flow.
+/// [photoId] and [photoRepo], when both are supplied, additionally record the
+/// FACE-level capture metadata (fix, reported accuracy and camera heading) on
+/// that photo row, from the same single EXIF parse.
+///
+/// Face metadata and the wall pin are deliberately separate writes of
+/// different things, not one value stored twice. The wall pin answers "where
+/// is this crag" and happily falls back to the device's current position; the
+/// face metadata answers "where was this photo taken from, and how good is
+/// that number", and must NEVER fall back to anything — a device location
+/// captured at home while attaching photos from the camera roll would place
+/// every face on top of every other, and the layout engine would treat it as
+/// signal.
 Future<GpsCaptureResult> captureWallGpsFromPhoto(
   LibraryCrudRepository libraryRepo,
   String wallId,
   XFile xfile, {
   LocationService? locationService,
+  String? photoId,
+  PhotoRepository? photoRepo,
 }) async {
   try {
     final bytes = await xfile.readAsBytes();
-    final gps = await extractGpsFromImageBytes(bytes);
-    if (gps != null) {
-      await libraryRepo.setWallCoordinates(
-        wallId,
-        gps.latitude,
-        gps.longitude,
+    final capture = await extractCaptureMetadataFromImageBytes(bytes);
+
+    if (photoId != null && photoRepo != null) {
+      await photoRepo.setFaceCaptureMetadata(
+        photoId,
+        latitude: capture.latitude,
+        longitude: capture.longitude,
+        accuracyMeters: capture.accuracyMeters,
+        bearingDegrees: capture.bearingDegrees,
       );
+    }
+
+    final latitude = capture.latitude;
+    final longitude = capture.longitude;
+    if (latitude != null && longitude != null) {
+      await libraryRepo.setWallCoordinates(wallId, latitude, longitude);
       return GpsCaptureResult.exif;
     }
 

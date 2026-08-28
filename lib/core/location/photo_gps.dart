@@ -6,6 +6,20 @@ import 'package:exif/exif.dart';
 /// [extractGpsFromImageBytes].
 typedef PhotoGps = ({double latitude, double longitude});
 
+/// Everything the Face Layout System can learn about WHERE a photo was taken
+/// and WHICH WAY the camera was pointed, from its EXIF GPS IFD.
+///
+/// A superset of [PhotoGps], read in the same single parse. [latitude] and
+/// [longitude] are null together or set together; [accuracyMeters] and
+/// [bearingDegrees] are independently null, because most cameras write
+/// neither and many phones write only one.
+typedef PhotoCaptureMetadata = ({
+  double? latitude,
+  double? longitude,
+  double? accuracyMeters,
+  double? bearingDegrees,
+});
+
 /// Extracts the GPS coordinates baked into [bytes]'s EXIF GPS IFD
 /// (`GPSLatitude`/`GPSLatitudeRef`/`GPSLongitude`/`GPSLongitudeRef`),
 /// converting EXIF's degrees-minutes-seconds + hemisphere-letter encoding
@@ -60,6 +74,108 @@ Future<PhotoGps?> extractGpsFromImageBytes(Uint8List bytes) async {
   } catch (_) {
     return null;
   }
+}
+
+/// Reads coordinates, reported accuracy and camera heading in one EXIF parse.
+///
+/// Same guarantees as [extractGpsFromImageBytes] — pure Dart, header-only, no
+/// pixel decode, never throws — and the same strictness: each value is
+/// returned only if it is present, well-formed and physically possible, and
+/// is otherwise `null` rather than clamped or defaulted. That matters more
+/// here than it looks, because the layout engine's whole signal hierarchy
+/// rests on being able to tell "no heading" from "heading 0", which is due
+/// north.
+///
+/// `GPSHPositioningError` is the accuracy tag, in metres. Its absence is
+/// deliberately NOT treated as "accurate": the engine refuses to position a
+/// face along a rock from a fix that will not say how good it is.
+///
+/// `GPSImgDirection` is the heading, with `GPSImgDirectionRef` saying whether
+/// it is true (`T`) or magnetic (`M`) north. Both are accepted and stored
+/// as-is: the difference is the local magnetic declination, up to a few
+/// degrees in the places this app is used, which is far inside the error the
+/// engine already assumes of any heading — and correcting it would need a
+/// world magnetic model this app has no reason to carry.
+Future<PhotoCaptureMetadata> extractCaptureMetadataFromImageBytes(
+  Uint8List bytes,
+) async {
+  const empty = (
+    latitude: null,
+    longitude: null,
+    accuracyMeters: null,
+    bearingDegrees: null,
+  );
+  try {
+    final tags = await readExifFromBytes(bytes);
+    if (tags.isEmpty) return empty;
+
+    final latitude = _decimalDegrees(
+      tags['GPS GPSLatitude'],
+      tags['GPS GPSLatitudeRef'],
+      positiveRef: 'N',
+      negativeRef: 'S',
+      limit: 90,
+    );
+    final longitude = _decimalDegrees(
+      tags['GPS GPSLongitude'],
+      tags['GPS GPSLongitudeRef'],
+      positiveRef: 'E',
+      negativeRef: 'W',
+      limit: 180,
+    );
+    final hasFix = latitude != null && longitude != null;
+
+    return (
+      latitude: hasFix ? latitude : null,
+      longitude: hasFix ? longitude : null,
+      // Accuracy without a fix describes nothing, so it is dropped with it.
+      accuracyMeters: hasFix
+          ? _positiveScalar(tags['GPS GPSHPositioningError'])
+          : null,
+      // A heading, unlike accuracy, stands on its own: a photo with a
+      // compass reading and no fix still says which way the camera looked,
+      // which is enough to order faces round a boulder.
+      bearingDegrees: _degrees(tags['GPS GPSImgDirection']),
+    );
+  } catch (_) {
+    return empty;
+  }
+}
+
+/// A single non-negative, finite EXIF rational, or `null`.
+double? _positiveScalar(IfdTag? tag) {
+  final value = _scalar(tag);
+  if (value == null || value < 0) return null;
+  return value;
+}
+
+/// A single EXIF rational normalised into `[0, 360)`, or `null`.
+///
+/// Wrapped rather than rejected out of range: a heading of 360 is due north
+/// written the long way, and cameras do write it.
+double? _degrees(IfdTag? tag) {
+  final value = _scalar(tag);
+  if (value == null) return null;
+  final wrapped = value % 360.0;
+  return wrapped < 0 ? wrapped + 360.0 : wrapped;
+}
+
+/// The single numeric component of [tag], or `null` if it has none, has more
+/// than one, or is not finite.
+double? _scalar(IfdTag? tag) {
+  if (tag == null || tag.values.length != 1) return null;
+  final raw = tag.values.toList().first;
+  final double value;
+  if (raw is Ratio) {
+    value = raw.toDouble();
+  } else if (raw is int) {
+    value = raw.toDouble();
+  } else if (raw is double) {
+    value = raw;
+  } else {
+    return null;
+  }
+  return value.isFinite ? value : null;
 }
 
 /// Converts one EXIF GPS coordinate — [value] the tag holding the 3-element

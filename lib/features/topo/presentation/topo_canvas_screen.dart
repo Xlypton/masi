@@ -891,6 +891,12 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         widget.wallId,
         xfile,
         locationService: ref.read(locationServiceProvider),
+        // Also records this photo's OWN fix, accuracy and heading, which is
+        // what the face layout is arranged from. Same parse, different
+        // question: the wall pin says which crag, the face metadata says
+        // where round the rock this shot was taken.
+        photoId: photoId,
+        photoRepo: ref.read(photoRepositoryProvider),
       );
       if (!mounted) return;
       // Surfaces the outcome regardless of the latest-path guard below —

@@ -9,22 +9,35 @@ import 'route_mapper.dart';
 /// Persists [TopoRoute] domain objects to the `Routes` table.
 ///
 /// Identity choice: a route is identified for upsert/delete purposes by the
-/// pair `(photoId, number)` rather than by a caller-managed uuid. The M2
+/// pair `(wallId, number)` rather than by a caller-managed uuid. The M2
 /// domain model's [TopoRoute.id] is a small sequential int reassigned on
 /// every [loadRoutes] call (1..n, in `number` order) — it is not a stable
-/// identity — so `number` (which the controller treats as stable per
-/// PHOTO — see the multi-photo-per-topo feature doc on `Routes`'
-/// `@TableIndex.sql` in `tables.dart`) is the natural key. Each route still
-/// gets its own uuid `id` column in the database; callers of this
-/// repository never need to see it.
+/// identity — so `number` is the natural key.
 ///
-/// Per-photo scoping: each photo on a wall has its OWN independent set of
-/// route overlays/numbering (a wall with 3 photos can have 3 different
-/// "route 1"s, one per photo) — [loadRoutes]/[upsertRoute]'s existing-row
-/// lookup/[softDeleteRoute] are all scoped by `photoId`, not just `wallId`.
-/// [wallId] is still carried on every row (denormalized) for cheap
-/// wall-wide aggregates (e.g. `LibraryCrudRepository.watchTopos`'s route
-/// count) that don't care which photo a route lives on.
+/// ## A route is a climb, not a drawing (schema v16)
+///
+/// This used to be scoped per PHOTO: each photo on a wall had its own
+/// independent set of overlays and its own numbering, so a wall with three
+/// photos could hold three different "route 1"s. That model could not express
+/// the thing the rock actually does. A line that wraps an arête is ONE climb
+/// photographed twice, and per-photo routes made it two — two names, two
+/// grades, two logbook entries, two sets of ascents, and no way for anybody
+/// to say which of them they climbed.
+///
+/// So `number` is now unique per WALL, and a `routes` row is the CLIMB: the
+/// name, the grade, the stars, and the thing `Ascents.routeId`,
+/// `GradeOpinionRows.routeId` and `TopoHazardRows.routeId` have always
+/// pointed at. Its geometry on its HOME photo lives on the row itself
+/// (`photoId`/`pointsJson`); the same climb drawn on any OTHER photo lives in
+/// `route_lines`, with its own points and symbols.
+///
+/// What that buys, concretely: drawing route 3 again on the south face does
+/// not overwrite the arête drawing, editing its grade from either photo
+/// changes one grade, and an ascent logged from either photo lands on one
+/// climb.
+///
+/// [wallId] is still carried on every row (denormalized) for cheap wall-wide
+/// aggregates (e.g. `LibraryCrudRepository.watchTopos`'s route count).
 class RouteRepository {
   RouteRepository(this._db, {required this.nowMs, this.currentUid = _noUid});
 
@@ -41,12 +54,27 @@ class RouteRepository {
 
   static const _uuid = Uuid();
 
-  /// Inserts a new route row, or updates the existing non-deleted row for
-  /// `(photoId, route.number)` if one exists. Sets `createdAt` only on
-  /// insert; always refreshes `updatedAt` to `nowMs()`. Always sets
-  /// `dirty: true` (§1e) so a route-only edit is visible to
-  /// `SyncService.hasPendingLocalChanges`/`PushScope.dirtyOnly` immediately,
-  /// instead of only reaching the cloud on the next `PushScope.full` push.
+  /// Inserts a new climb, updates an existing one, or records the same climb
+  /// as drawn on another photo — decided by where the climb already lives.
+  ///
+  /// Three cases, and the third is the whole point of the v16 split:
+  ///
+  ///  * no live route numbered `route.number` on this wall → insert one, with
+  ///    [photoId] as its home photo.
+  ///  * one exists and [photoId] IS its home photo → update it, geometry
+  ///    included. The pre-v16 behaviour, unchanged.
+  ///  * one exists and [photoId] is NOT its home photo → the contributor is
+  ///    drawing the same climb on a second photo. The geometry goes to a
+  ///    `route_lines` row for this photo, leaving the home drawing intact,
+  ///    while the SHARED data (name, grade, stars, tags, description, beta
+  ///    link, colour, visibility) is written to the climb, because editing a
+  ///    grade from the south face and from the arête must change one grade.
+  ///
+  /// Sets `createdAt` only on insert; always refreshes `updatedAt` to
+  /// `nowMs()`. Always sets `dirty: true` (§1e) so a route-only edit is
+  /// visible to `SyncService.hasPendingLocalChanges`/`PushScope.dirtyOnly`
+  /// immediately, instead of only reaching the cloud on the next
+  /// `PushScope.full` push.
   Future<void> upsertRoute(
     String wallId,
     String photoId,
@@ -54,11 +82,16 @@ class RouteRepository {
   ) async {
     final existing = await (_db.select(_db.routes)..where(
           (t) =>
-              t.photoId.equals(photoId) &
+              t.wallId.equals(wallId) &
               t.number.equals(route.number) &
               t.deletedAt.isNull(),
         ))
         .getSingleOrNull();
+
+    if (existing != null && existing.photoId != photoId) {
+      await _upsertRouteLine(existing, photoId, route);
+      return;
+    }
 
     final now = nowMs();
     final pointsJson = encodePoints(route.points);
@@ -125,96 +158,251 @@ class RouteRepository {
     }
   }
 
-  /// Loads every non-soft-deleted route for [wallId]'s [photoId] (a route
-  /// belongs to the photo it's overlaid on — see this class's doc), ordered
-  /// by `number`, assigning sequential in-memory ids `1..n`. Callers must
-  /// reseed their own "next id" / "next number" counters from the returned
-  /// list.
+  /// Records [route]'s geometry as [existing]'s line on [photoId], and folds
+  /// the edit's SHARED fields back onto the climb.
+  ///
+  /// The split of which columns go where is the feature: points and symbols
+  /// describe this photo, everything else describes the climb. Writing the
+  /// shared fields here rather than ignoring them is what makes "edit the
+  /// grade from whichever photo you happen to be looking at" work; writing
+  /// them to the climb rather than to the line is what stops two drawings
+  /// drifting into two different grades.
+  ///
+  /// Deliberately does NOT touch the climb's `photoId` or `pointsJson`.
+  /// Drawing on a second photo must leave the first drawing exactly as it
+  /// was — that is the difference between this feature and the overwrite it
+  /// replaces.
+  Future<void> _upsertRouteLine(
+    db.Route existing,
+    String photoId,
+    TopoRoute route,
+  ) async {
+    final now = nowMs();
+    final styleTagsJson =
+        route.styleTags.isEmpty ? null : encodeStyleTags(route.styleTags);
+
+    await _db.transaction(() async {
+      final line = await (_db.select(_db.routeLines)..where(
+            (t) =>
+                t.routeId.equals(existing.id) &
+                t.photoId.equals(photoId) &
+                t.deletedAt.isNull(),
+          ))
+          .getSingleOrNull();
+
+      final pointsJson = encodePoints(route.points);
+      final symbolsJson = encodeSymbols(route.symbols);
+
+      if (line == null) {
+        await _db
+            .into(_db.routeLines)
+            .insert(
+              db.RouteLinesCompanion.insert(
+                id: _uuid.v4(),
+                createdAt: now,
+                updatedAt: now,
+                routeId: existing.id,
+                photoId: photoId,
+                pointsJson: pointsJson,
+                symbolsJson: symbolsJson,
+                // Stamped from the climb rather than from `currentUid()`: a
+                // line is part of the climb's topo, and an owner mismatch
+                // between the two would leave the line unpushable by the
+                // person who owns the thing it belongs to.
+                ownerId: Value(existing.ownerId ?? currentUid()),
+                dirty: const Value(true),
+              ),
+            );
+      } else {
+        await (_db.update(
+          _db.routeLines,
+        )..where((t) => t.id.equals(line.id))).write(
+          db.RouteLinesCompanion(
+            updatedAt: Value(now),
+            pointsJson: Value(pointsJson),
+            symbolsJson: Value(symbolsJson),
+            dirty: const Value(true),
+          ),
+        );
+      }
+
+      await (_db.update(
+        _db.routes,
+      )..where((t) => t.id.equals(existing.id))).write(
+        db.RoutesCompanion(
+          updatedAt: Value(now),
+          name: Value(route.name),
+          gradeSystem: Value(route.gradeSystem?.name),
+          gradeRaw: Value(route.gradeRaw),
+          gradeSortKey: Value(route.gradeSortKey),
+          style: Value(route.style),
+          description: Value(route.description),
+          colorIndex: Value(route.colorIndex),
+          visible: Value(route.visible),
+          betaVideoUrl: Value(route.betaVideoUrl),
+          styleTagsJson: Value(styleTagsJson),
+          stars: Value(route.stars),
+          dirty: const Value(true),
+        ),
+      );
+    });
+  }
+
+  /// Loads every climb visible on [photoId] — the ones whose HOME photo it is
+  /// plus the ones merely DRAWN on it — ordered by `number`, assigning
+  /// sequential in-memory ids `1..n`. Callers must reseed their own "next id"
+  /// / "next number" counters from the returned list.
+  ///
+  /// The union is the read half of the v16 split, and skipping either half
+  /// makes a line silently vanish: a climb whose home photo is the arête is
+  /// invisible on the south face if only home rows are read, and every climb
+  /// disappears from its own home photo if only lines are.
   Future<List<TopoRoute>> loadRoutes(String wallId, String photoId) async {
-    final rows = await (_db.select(_db.routes)
+    final homeRows = await (_db.select(_db.routes)
           ..where(
             (t) =>
                 t.wallId.equals(wallId) &
                 t.photoId.equals(photoId) &
                 t.deletedAt.isNull(),
-          )
-          ..orderBy([(t) => OrderingTerm(expression: t.number)]))
+          ))
         .get();
 
+    final lineQuery = _db.select(_db.routeLines).join([
+      innerJoin(_db.routes, _db.routes.id.equalsExp(_db.routeLines.routeId)),
+    ])..where(
+        _db.routeLines.photoId.equals(photoId) &
+            _db.routeLines.deletedAt.isNull() &
+            _db.routes.wallId.equals(wallId) &
+            _db.routes.deletedAt.isNull(),
+      );
+    final lineRows = await lineQuery.get();
+
+    final combined = <({db.Route route, db.RouteLine? line})>[
+      for (final row in homeRows) (route: row, line: null),
+      for (final row in lineRows)
+        (
+          route: row.readTable(_db.routes),
+          line: row.readTable(_db.routeLines),
+        ),
+    ]..sort((a, b) => a.route.number.compareTo(b.route.number));
+
     return [
-      for (var i = 0; i < rows.length; i++) rowToDomain(rows[i], i + 1),
+      for (var i = 0; i < combined.length; i++)
+        rowToDomain(combined[i].route, i + 1, lineOverride: combined[i].line),
     ];
   }
 
-  /// Maps each non-deleted route's stable [TopoRoute.number] to its
-  /// underlying DB row `id` (a UUID) for [wallId] — optionally narrowed to
-  /// a single [photoId].
+  /// Maps each live climb's stable [TopoRoute.number] to its underlying DB row
+  /// `id` (a UUID) for [wallId] — optionally narrowed to the climbs VISIBLE on
+  /// a single [photoId] (home drawings plus lines).
   ///
   /// Unlike [TopoRoute.id] — a locally-reassigned sequential int, see class
   /// doc — a route's real `id` column is the only identity another table
   /// (e.g. `Ascents.routeId`) can reference. Exposed for callers (e.g. the
-  /// community feature's "log ascent" action) that need to resolve a
-  /// specific route's real id from the same `number` [loadRoutes] already
-  /// exposes, without leaking the full DB row shape.
+  /// community feature's "log ascent" action) that need to resolve a specific
+  /// route's real id from the same `number` [loadRoutes] already exposes,
+  /// without leaking the full DB row shape.
   ///
-  /// Multi-photo-per-topo fix: route `number` is only stable PER PHOTO (see
-  /// this class's doc) — a wall with 2+ photos can have several routes each
-  /// numbered `1`, one per photo. A [wallId]-only map (the original,
-  /// unscoped shape of this method) silently collides those into a single
-  /// entry, keyed by whichever row the query happened to return last. Pass
-  /// the CURRENTLY ACTIVE photo's id (e.g. `DrawState.activePhotoId`) here
-  /// to scope the map to just that photo's routes and avoid the collision.
-  ///
-  /// [photoId] is optional (and defaults to `null`, meaning "every photo on
-  /// this wall" — the original, pre-multi-photo behavior) purely so
-  /// existing callers that only ever dealt with a single-photo wall (e.g.
-  /// the community detail screen's own log-ascent resolution) keep
-  /// compiling and behaving exactly as before, without every call site
-  /// needing to thread a photo id through immediately.
+  /// The [photoId] narrowing used to exist to avoid a COLLISION: numbering was
+  /// per-photo, so a wall with two photos held two routes numbered `1` and an
+  /// unscoped map silently kept whichever the query returned last. Since v16
+  /// numbering is wall-scoped and that collision cannot occur, so passing a
+  /// photo is now about RELEVANCE — "the climbs on the photo in front of me" —
+  /// rather than correctness, and every value in the map is the same climb id
+  /// either way. That is exactly why an ascent logged from the arête and one
+  /// logged from the south face now land on the same climb.
   Future<Map<int, String>> routeDbIdsByNumber(
     String wallId, [
     String? photoId,
   ]) async {
-    final rows = await (_db.select(_db.routes)..where((t) {
-          final predicate = t.wallId.equals(wallId) & t.deletedAt.isNull();
-          return photoId == null
-              ? predicate
-              : predicate & t.photoId.equals(photoId);
-        }))
+    if (photoId == null) {
+      final rows = await (_db.select(_db.routes)
+            ..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull()))
+          .get();
+      return {for (final row in rows) row.number: row.id};
+    }
+
+    final visible = await loadRoutes(wallId, photoId);
+    if (visible.isEmpty) return const {};
+
+    final numbers = visible.map((r) => r.number).toSet();
+    final rows = await (_db.select(_db.routes)
+          ..where(
+            (t) =>
+                t.wallId.equals(wallId) &
+                t.number.isIn(numbers) &
+                t.deletedAt.isNull(),
+          ))
         .get();
     return {for (final row in rows) row.number: row.id};
   }
 
-  /// Soft-deletes the non-deleted route identified by `(photoId, number)`
-  /// by setting `deletedAt`/`updatedAt` to `nowMs()`. The row remains
-  /// physically present (tombstone) for future sync. Also sets
-  /// `dirty: true` (§1e) so the tombstone pushes promptly — otherwise a
-  /// route deleted locally would keep reappearing from a stale cloud copy
-  /// until the next `PushScope.full` push.
+  /// Soft-deletes what the contributor is actually looking at.
   ///
-  /// Scoped by [photoId] (not just [wallId]): since route numbers are now
-  /// per-photo (see this class's doc), a `wallId`-only scope would soft-
-  /// delete every photo's route sharing that `number` on the wall instead
-  /// of just the one the caller meant.
+  /// On the climb's HOME photo that is the climb itself, tombstoned together
+  /// with every line of it on other photos — deleting the drawing you called
+  /// the climb by must not leave orphan lines of a climb that no longer
+  /// exists. On any OTHER photo it is just that photo's line: the climb, its
+  /// grade, its ascents and its home drawing all survive, which is what
+  /// "remove this line from this photo" has to mean once one climb can be
+  /// drawn several times.
+  ///
+  /// Rows stay physically present (tombstones) for future sync, and are
+  /// marked `dirty: true` (§1e) so they push promptly — otherwise a route
+  /// deleted locally would keep reappearing from a stale cloud copy until the
+  /// next `PushScope.full` push.
   Future<void> softDeleteRoute(
     String wallId,
     String photoId,
     int number,
   ) async {
     final now = nowMs();
-    await (_db.update(_db.routes)..where(
-          (t) =>
-              t.wallId.equals(wallId) &
-              t.photoId.equals(photoId) &
-              t.number.equals(number) &
-              t.deletedAt.isNull(),
-        ))
-        .write(
-          db.RoutesCompanion(
-            deletedAt: Value(now),
-            updatedAt: Value(now),
-            dirty: const Value(true),
-          ),
-        );
+    await _db.transaction(() async {
+      final route = await (_db.select(_db.routes)..where(
+            (t) =>
+                t.wallId.equals(wallId) &
+                t.number.equals(number) &
+                t.deletedAt.isNull(),
+          ))
+          .getSingleOrNull();
+      if (route == null) return;
+
+      if (route.photoId != photoId) {
+        await (_db.update(_db.routeLines)..where(
+              (t) =>
+                  t.routeId.equals(route.id) &
+                  t.photoId.equals(photoId) &
+                  t.deletedAt.isNull(),
+            ))
+            .write(
+              db.RouteLinesCompanion(
+                deletedAt: Value(now),
+                updatedAt: Value(now),
+                dirty: const Value(true),
+              ),
+            );
+        return;
+      }
+
+      await (_db.update(_db.routeLines)..where(
+            (t) => t.routeId.equals(route.id) & t.deletedAt.isNull(),
+          ))
+          .write(
+            db.RouteLinesCompanion(
+              deletedAt: Value(now),
+              updatedAt: Value(now),
+              dirty: const Value(true),
+            ),
+          );
+      await (_db.update(
+        _db.routes,
+      )..where((t) => t.id.equals(route.id))).write(
+        db.RoutesCompanion(
+          deletedAt: Value(now),
+          updatedAt: Value(now),
+          dirty: const Value(true),
+        ),
+      );
+    });
   }
 }

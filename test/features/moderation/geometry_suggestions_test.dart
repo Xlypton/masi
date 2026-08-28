@@ -484,8 +484,9 @@ void main() {
     });
 
     test(
-      'numbering is PER PHOTO, so a line added to the second photo starts at '
-      '1 even though the first photo already has a route 1',
+      'numbering is PER WALL, so a line added to the second photo takes the '
+      'next free number on the wall rather than colliding with the first '
+      "photo's route 1",
       () async {
         await repo.applyRouteGeometry(
           wallId: wallId,
@@ -497,7 +498,11 @@ void main() {
             await (db.select(db.routes)
                   ..where((t) => t.photoId.equals(otherPhotoId)))
                 .get();
-        expect(rows.single.number, 1);
+        expect(
+          rows.single.number,
+          2,
+          reason: 'the wall already has a route 1, on the other photo',
+        );
       },
     );
 

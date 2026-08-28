@@ -330,7 +330,8 @@ void main() {
   });
 
   group('scoping', () {
-    test('an import touches only the photo it targets', () async {
+    test('an import onto a second photo adds new climbs, never folding into '
+        'the ones already on the wall', () async {
       await applier.apply(
         import: importOf([route(1, name: 'On photo 1')]),
         wallId: wallId,
@@ -342,14 +343,21 @@ void main() {
         photoId: 'photo-2',
       );
 
+      // Each import produced its own climb, numbered across the wall, and
+      // each is drawn only on the photo it was imported onto.
       expect((await routes.loadRoutes(wallId, photoId)).map((r) => r.name),
           ['On photo 1']);
       expect((await routes.loadRoutes(wallId, 'photo-2')).map((r) => r.name),
           ['On photo 2']);
+      expect(
+        (await routes.routeDbIdsByNumber(wallId)).keys.toList()..sort(),
+        [1, 2],
+        reason: 'the second import took the next free number on the wall',
+      );
     });
 
-    test('routes on another photo do not shift this import\'s numbering',
-        () async {
+    test('climbs on another photo DO shift this import\'s numbering — one '
+        'number means one climb across the whole rock', () async {
       await routes.upsertRoute(
         wallId,
         'photo-2',
@@ -362,8 +370,13 @@ void main() {
         photoId: photoId,
       );
 
-      expect(result.firstNumber, 1,
-          reason: 'route numbers are per-photo, not per-wall');
+      expect(
+        result.firstNumber,
+        10,
+        reason: 'starting at 1 is safe per photo and wrong per wall: since '
+            'v16 a number identifies a climb across every photo of the rock, '
+            'so an import must clear the wall maximum, not this photo\'s',
+      );
     });
   });
 }
