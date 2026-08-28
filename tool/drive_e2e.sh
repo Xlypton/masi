@@ -98,6 +98,7 @@ for target in "${TARGETS[@]}"; do
     --driver=test_driver/integration_test.dart \
     --target="$target" \
     -d web-server --browser-name=chrome --driver-port=4444 --headless \
+    --web-browser-flag=--window-size=500,940 \
     --no-web-resources-cdn --timeout=900 \
     "${DEFINES[@]}"
 done

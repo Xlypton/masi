@@ -159,10 +159,16 @@ String? firstIdWithPrefix(WidgetTester tester, String prefix) {
 ///
 /// Headless Chrome floors its WINDOW at 500 CSS px, so the window cannot be
 /// made phone-sized; the Flutter view can, and that is what decides layout.
+///
+/// The pixel ratio is 1 ON PURPOSE, even though a real phone is 2 or 3. The
+/// screenshot is of the browser WINDOW, not of the Flutter view, so a ratio
+/// of 3 renders 390 logical px as 1170 physical ones and the capture is a
+/// zoomed-in corner of the app rather than the app. Layout is decided by the
+/// logical size either way, which is what these screenshots are read for.
 void usePhoneViewport(
   WidgetTester tester, {
   Size logical = const Size(390, 844),
-  double devicePixelRatio = 3,
+  double devicePixelRatio = 1,
 }) {
   tester.view.devicePixelRatio = devicePixelRatio;
   tester.view.physicalSize = Size(
