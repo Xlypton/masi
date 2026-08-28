@@ -56,6 +56,32 @@ class LayoutPlaneFit {
     );
   }
 
+  /// A fixed-scale fit for drawing a line when there is no line yet.
+  ///
+  /// [forBaseline] derives its scale from the stroke it is shown, which is
+  /// exactly wrong while one is being DRAWN: the draft grows with every
+  /// pointer move, so the scale would change under the finger and the same
+  /// screen position would mean a different place in the plane from one
+  /// frame to the next. A redraw therefore pins a scale up front — either
+  /// the outgoing line's, or this one when there is no outgoing line — and
+  /// keeps it for the whole stroke.
+  ///
+  /// [planeSpanMetres] is what the canvas's WIDTH represents, so the drawn
+  /// shape is the shape the finger made at a believable size for a crag.
+  factory LayoutPlaneFit.forSpan(
+    Size size,
+    double planeSpanMetres, {
+    double padding = 56,
+  }) {
+    final usableWidth = math.max(size.width - padding * 2, 1.0);
+    final span = planeSpanMetres > 0 ? planeSpanMetres : 1.0;
+    return LayoutPlaneFit._(
+      usableWidth / span,
+      const LayoutPoint(0, 0),
+      Offset(size.width / 2, size.height / 2),
+    );
+  }
+
   final double _scale;
   final LayoutPoint _planeCentre;
   final Offset _canvasCentre;

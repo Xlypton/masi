@@ -202,8 +202,9 @@ void main() {
     expect(selected?.id, 'photo-2');
   });
 
-  testWidgets('the minimap caption opens the layout editor — the thing that '
-      'shows a wrong arrangement is the thing that fixes it', (tester) async {
+  testWidgets('the minimap carries a LABELLED button into the editor — the '
+      'thing that shows a wrong arrangement is the thing that fixes it',
+      (tester) async {
     await seedWall(photos: 4, withGps: true);
     final container = makeContainer();
     addTearDown(container.dispose);
@@ -222,13 +223,16 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('edit'), findsOneWidget);
+    // A button with a word on it, not a 10px caption that is secretly
+    // tappable: the caption stays a caption and the control says 'Edit'.
+    expect(find.text('where each photo was taken'), findsOneWidget);
+    expect(find.text('Edit'), findsOneWidget);
     await tester.tap(find.byKey(const Key('face-pager-edit-layout')));
     await tester.pumpAndSettle();
     expect(opened, 1);
   });
 
-  testWidgets('without an editor to open, the caption makes no offer',
+  testWidgets('without an editor to open, no button is offered at all',
       (tester) async {
     await seedWall(photos: 4, withGps: true);
     final container = makeContainer();
@@ -243,6 +247,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('where each photo was taken'), findsOneWidget);
+    expect(find.text('Edit'), findsNothing);
+    expect(find.byKey(const Key('face-pager-edit-layout')), findsNothing);
   });
 
   testWidgets('long-pressing a dot raises the manage actions the strip tiles '

@@ -9,6 +9,7 @@ import 'package:masi/features/topo/application/face_layout_providers.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
+import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// The reader's way round a rock with several photos: a dot per face, and a
 /// minimap saying where each shot was taken from.
@@ -67,7 +68,7 @@ class FacePager extends ConsumerWidget {
   /// would spend that frame sitting on top of the dots — which is exactly the
   /// class of bug the draw-hint clearance beside it was added to fix.
   static const double dotsHeight = 35;
-  static const double minimapHeight = 110;
+  static const double minimapHeight = 122;
 
   /// Vertical space this widget will occupy, for callers that must clear it.
   static double reservedHeight({
@@ -246,21 +247,59 @@ class _Minimap extends StatelessWidget {
               ],
             ),
           ),
-          const SizedBox(height: 6),
-          GestureDetector(
-            key: const Key('face-pager-edit-layout'),
-            behavior: HitTestBehavior.opaque,
-            onTap: onEditLayout,
-            child: Text(
-              onEditLayout == null
-                  ? 'where each photo was taken'
-                  : 'where each photo was taken · edit',
-              style: TextStyle(
-                fontSize: 10,
-                letterSpacing: 0.6,
-                color: onEditLayout == null ? colors.ink2 : colors.accent,
+          const SizedBox(height: 4),
+          // A caption and a real button, not a caption that is secretly a
+          // button. The whole line used to be tappable at 10px with the word
+          // 'edit' appended — no affordance, no hit area worth the name, and
+          // the only discoverable way into the editor.
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Flexible(
+                child: Text(
+                  'where each photo was taken',
+                  style: TextStyle(
+                    fontSize: 10,
+                    letterSpacing: 0.6,
+                    color: colors.ink2,
+                  ),
+                ),
               ),
-            ),
+              if (onEditLayout != null)
+                GestureDetector(
+                  key: const Key('face-pager-edit-layout'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: onEditLayout,
+                  child: Container(
+                    // 32px tall with the padding: small for a control, but
+                    // this rides above the canvas and a 44px pill here eats
+                    // the topo. The label carries the affordance.
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 7,
+                    ),
+                    decoration: BoxDecoration(
+                      color: colors.accent.withValues(alpha: 0.14),
+                      borderRadius: BorderRadius.circular(MasiRadii.control),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        MasiIcon('edit', size: 12, color: colors.accent),
+                        const SizedBox(width: 5),
+                        Text(
+                          'Edit',
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: colors.accent,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
           ),
         ],
       ),

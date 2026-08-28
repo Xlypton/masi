@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
 import 'package:flutter/material.dart' hide Baseline;
@@ -84,6 +86,100 @@ void main() {
       home: const LayoutEditorScreen(wallId: wallId),
     ),
   );
+
+  /// The bug that shipped: the plane fit was derived from the DRAFT, so every
+  /// new point grew the draft's bounds, rescaled the mapping, and moved where
+  /// the earlier points had landed. A straight drag came out as a curve
+  /// accelerating away from its start, and a wall drawn end-to-end was stored
+  /// as a 135 m scribble that then tripped the ring test.
+  testWidgets('a straight drag records a STRAIGHT line', (tester) async {
+    await seed();
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.byKey(const Key('layout-redraw')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('layout-redraw')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('layout-redraw-hint')),
+      findsOneWidget,
+      reason: 'redrawing must say what to do — it is a blank box otherwise',
+    );
+
+    // Drag horizontally across the canvas, dead level.
+    final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final y = canvas.center.dy;
+    final gesture = await tester.startGesture(Offset(canvas.left + 30, y));
+    for (var x = canvas.left + 30; x <= canvas.right - 30; x += 12) {
+      await gesture.moveTo(Offset(x, y));
+      await tester.pump();
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    final wall = await (db.select(db.walls)
+          ..where((t) => t.id.equals(wallId)))
+        .getSingle();
+    final stored = Baseline.decode(wall.baselineJson);
+    expect(stored, isNotNull);
+    expect(
+      stored!.closed,
+      isFalse,
+      reason: 'a line drawn end to end is a wall, not a boulder',
+    );
+
+    final bounds = stored.bounds;
+    expect(
+      bounds.maxY - bounds.minY,
+      lessThan(0.5),
+      reason: 'the drag never moved in y, so the stored line must not either '
+          '— any thickness here is the mapping shifting mid-stroke',
+    );
+    expect(
+      bounds.maxX - bounds.minX,
+      greaterThan(1),
+      reason: 'and it must still have the length that was drawn',
+    );
+  });
+
+  testWidgets('a stroke that ends where it began IS a ring', (tester) async {
+    await seed();
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.byKey(const Key('layout-redraw')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('layout-redraw')));
+    await tester.pumpAndSettle();
+
+    final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final centre = canvas.center;
+    const radius = 50.0;
+    Offset at(double turns) => centre +
+        Offset(radius * math.cos(turns * 2 * math.pi),
+            radius * math.sin(turns * 2 * math.pi));
+
+    final gesture = await tester.startGesture(at(0));
+    for (var i = 1; i <= 24; i++) {
+      await gesture.moveTo(at(i / 24));
+      await tester.pump();
+    }
+    await gesture.up();
+    await tester.pumpAndSettle();
+
+    final wall = await (db.select(db.walls)
+          ..where((t) => t.id.equals(wallId)))
+        .getSingle();
+    expect(Baseline.decode(wall.baselineJson)!.closed, isTrue);
+  });
 
   testWidgets('a guessed line says so, and the notice can be dismissed '
       'without blocking anything', (tester) async {

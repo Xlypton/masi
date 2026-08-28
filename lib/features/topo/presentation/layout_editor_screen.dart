@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart' hide Baseline;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -33,6 +34,42 @@ class LayoutEditorScreen extends ConsumerStatefulWidget {
   ConsumerState<LayoutEditorScreen> createState() => _LayoutEditorScreenState();
 }
 
+/// A pan recognizer that will not hand the pointer to the scrolling list
+/// above it once it has decided the touch belongs to the canvas.
+///
+/// The editor's canvas lives inside a `ListView`, and a `ListView` claims any
+/// drag with a vertical component. So tracing a rock — which is a drag with a
+/// vertical component almost by definition — scrolled the page instead of
+/// drawing, and dragging a photo up the line scrolled it too. Only a
+/// dead-level horizontal drag ever reached the canvas, which is why this
+/// looked like "redraw does nothing" rather than like a gesture conflict.
+///
+/// [shouldClaim] keeps the theft narrow: the canvas takes the pointer only
+/// while redrawing, or when the touch lands on a handle or a face. A touch
+/// on empty canvas still scrolls the page, so the screen does not become a
+/// trap on a small phone.
+class _CanvasPanRecognizer extends PanGestureRecognizer {
+  _CanvasPanRecognizer({required this.shouldClaim});
+
+  final bool Function(Offset globalPosition) shouldClaim;
+  bool _claiming = false;
+
+  @override
+  void addAllowedPointer(PointerDownEvent event) {
+    _claiming = shouldClaim(event.position);
+    super.addAllowedPointer(event);
+  }
+
+  @override
+  void rejectGesture(int pointer) {
+    if (_claiming) {
+      acceptGesture(pointer);
+      return;
+    }
+    super.rejectGesture(pointer);
+  }
+}
+
 class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   String? _selectedFaceId;
   bool _bannerDismissed = false;
@@ -41,11 +78,57 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// not in redraw mode.
   List<LayoutPoint>? _draftPoints;
 
+  /// The mapping a redraw is being recorded through, pinned when the stroke
+  /// starts and held until it is committed.
+  ///
+  /// Deriving the fit from the draft — which is what this screen used to do —
+  /// rescales the plane on every pointer move as the draft's bounds grow, so
+  /// a straight drag records as a curve that accelerates away from its start,
+  /// and the finished stroke is a shape nobody drew. Pinning it is the whole
+  /// fix.
+  LayoutPlaneFit? _redrawFit;
+
+  /// The canvas's last laid-out size, so [_startRedraw] can pin a fit before
+  /// the next build. Written during build and never read to decide layout, so
+  /// it cannot drive a rebuild of its own.
+  Size? _canvasSize;
+
+  /// The canvas box, so a global pointer position can be turned into a
+  /// position on the plan.
+  final GlobalKey _canvasBoxKey = GlobalKey();
+
   /// The face being dragged along the line, and the position it has reached.
   String? _draggingFaceId;
   double? _draggingT;
 
+  /// The baseline vertex being dragged, and the whole stroke as edited so far.
+  ///
+  /// Reshaping by handle is the design's primary correction — 'diamond
+  /// handles reshape it' — and its absence is what left redrawing the entire
+  /// line as the only way to fix one that was slightly wrong.
+  int? _draggingHandle;
+  List<LayoutPoint>? _handlePoints;
+
+  /// Whether the stroke being reshaped is a ring. Reshaping never changes
+  /// that — only redrawing does — so it is carried across the drag rather
+  /// than re-derived from the moved points.
+  bool _handleClosed = false;
+
   bool get _redrawing => _draftPoints != null;
+
+  /// What the canvas's width stands for when drawing a line from scratch.
+  /// A crag-sized default: big enough that a boulder is not a dot, small
+  /// enough that a wall does not run off the edge.
+  static const double _blankSpanMetres = 40;
+
+  /// How close, IN PIXELS, a stroke's end must come to its start to be a ring.
+  /// Pixels rather than a fraction of the stroke's own size: proportional
+  /// thresholds grow with a messy stroke, which is how a wall drawn as a
+  /// 135 m scribble got a 16 m closure radius and became a boulder.
+  static const double _closeGapPx = 28;
+
+  /// Douglas-Peucker tolerance, in pixels of the canvas it was drawn on.
+  static const double _simplifyPx = 3;
 
   @override
   Widget build(BuildContext context) {
@@ -97,7 +180,10 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(12, 12, 12, 24),
       children: [
-        if (layout.isProvisional && !_bannerDismissed) _banner(colors),
+        if (_redrawing)
+          _redrawHint(colors)
+        else if (layout.isProvisional && !_bannerDismissed)
+          _banner(colors),
         const SizedBox(height: 12),
         _canvas(colors, layout, photos),
         const SizedBox(height: 10),
@@ -122,6 +208,41 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       ],
     );
   }
+
+  /// What to actually DO, while doing it.
+  ///
+  /// Redrawing used to start with no instruction anywhere on screen: the
+  /// button said 'Redraw line', the canvas cleared, and the contributor was
+  /// left to guess that this surface wants a finger dragged across it and
+  /// that ending where you started is what makes a boulder. Both facts are
+  /// unguessable and neither was written down.
+  Widget _redrawHint(MasiColors colors) => Container(
+    key: const Key('layout-redraw-hint'),
+    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+    decoration: BoxDecoration(
+      color: colors.amethyst100,
+      borderRadius: BorderRadius.circular(MasiRadii.card),
+      border: Border.all(color: colors.accent.withValues(alpha: 0.35)),
+    ),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        MasiIcon('edit', size: 18, color: colors.accent),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            (_draftPoints?.isEmpty ?? true)
+                ? 'Drag across the box to trace the rock, the way you walked '
+                      'it. Finish where you started and it becomes a boulder '
+                      'you can walk around.'
+                : 'Lift your finger to keep this line. Cancel leaves the old '
+                      'one alone.',
+            style: TextStyle(fontSize: 13, height: 1.4, color: colors.ink2),
+          ),
+        ),
+      ],
+    ),
+  );
 
   Widget _banner(MasiColors colors) => Container(
     key: const Key('layout-confidence-banner'),
@@ -162,22 +283,59 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   ) => LayoutBuilder(
     builder: (context, constraints) {
       final size = Size(constraints.maxWidth, 240);
+      _canvasSize = size;
       final draft = _draftPoints == null ? null : Baseline(_draftPoints!);
-      final fit = LayoutPlaneFit.forBaseline(
-        draft ?? layout.baseline,
-        size,
-      );
-      final preview = _previewLayout(layout);
+      // Never fitted to the draft: see _redrawFit. While redrawing, the
+      // pinned fit is the one the stroke is being recorded through, so what
+      // is painted and what is stored agree.
+      final fit = _redrawFit ??
+          LayoutPlaneFit.forBaseline(layout.baseline, size);
+      final preview = _previewLayout(layout, photos);
 
-      return GestureDetector(
+      Offset toLocal(Offset global) {
+        final box =
+            _canvasBoxKey.currentContext?.findRenderObject() as RenderBox?;
+        return box == null ? global : box.globalToLocal(global);
+      }
+
+      return RawGestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTapUp: (details) =>
-            _handleTap(details.localPosition, preview, fit),
-        onPanStart: (details) => _panStart(details.localPosition, preview, fit),
-        onPanUpdate: (details) =>
-            _panUpdate(details.localPosition, preview, fit),
-        onPanEnd: (_) => _panEnd(),
+        gestures: <Type, GestureRecognizerFactory>{
+          TapGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
+                TapGestureRecognizer.new,
+                (instance) {
+                  instance.onTapUp = (TapUpDetails details) =>
+                      _handleTap(toLocal(details.globalPosition), preview, fit);
+                },
+              ),
+          _CanvasPanRecognizer:
+              GestureRecognizerFactoryWithHandlers<_CanvasPanRecognizer>(
+                () => _CanvasPanRecognizer(
+                  shouldClaim: (global) {
+                    if (_redrawing) return true;
+                    final at = toLocal(global);
+                    return _handleNear(at, preview, fit) != null ||
+                        _faceNear(at, preview, fit) != null;
+                  },
+                ),
+                (instance) {
+                  // Report the position the finger actually landed on, not
+                  // the one ~18px later where the drag cleared touch slop.
+                  // Without this the stroke silently loses its first
+                  // centimetres, which matters most for the one comparison
+                  // that decides ring-or-wall: did it end where it began.
+                  instance.dragStartBehavior = DragStartBehavior.down;
+                  instance.onStart = (DragStartDetails details) =>
+                      _panStart(toLocal(details.globalPosition), preview, fit);
+                  instance.onUpdate = (DragUpdateDetails details) =>
+                      _panUpdate(toLocal(details.globalPosition), preview, fit);
+                  instance.onEnd = (DragEndDetails details) => _panEnd();
+                },
+              ),
+        },
         child: Container(
+          key: _canvasBoxKey,
           height: size.height,
           decoration: BoxDecoration(
             color: colors.surface2,
@@ -220,7 +378,18 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// dropping the finger somewhere the contributor did not mean would be
   /// unrecoverable. So the pin is applied locally for the duration and
   /// committed once, on release.
-  LayoutResult _previewLayout(LayoutResult layout) {
+  LayoutResult _previewLayout(LayoutResult layout, List<PhotoRef> photos) {
+    // A handle drag reshapes the LINE, so the faces have to be re-resolved
+    // against it rather than carried over: they ride the stroke, and a stroke
+    // that moved without them would show every photo hanging off it.
+    final edited = _handlePoints;
+    if (edited != null && edited.length >= 2) {
+      return resolveLayout(
+        faces: faceInputsFrom(photos),
+        baseline: Baseline(edited, closed: layout.baseline.closed),
+        origin: BaselineOrigin.authored,
+      );
+    }
     final draggingId = _draggingFaceId;
     final draggingT = _draggingT;
     if (draggingId == null || draggingT == null) return layout;
@@ -257,13 +426,17 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     final selected = face.id == _selectedFaceId;
 
     return Positioned(
-      left: anchor.dx - 22,
-      top: anchor.dy - 22,
+      // Landscape, and half again as large as the 44px square this used to
+      // be. A square crop of a landscape photo of a crag throws away the
+      // sides — which is precisely the part that tells one face from the
+      // next — and at 44px what survived was unreadable.
+      left: anchor.dx - 32,
+      top: anchor.dy - 24,
       child: IgnorePointer(
         child: Container(
           key: Key('layout-face-${face.id}'),
-          width: 44,
-          height: 44,
+          width: 64,
+          height: 48,
           decoration: BoxDecoration(
             color: colors.surface,
             borderRadius: BorderRadius.circular(MasiRadii.control),
@@ -418,12 +591,30 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     );
   }
 
-  Widget _actions(MasiColors colors, LayoutResult layout) => Row(
+  Widget _actions(MasiColors colors, LayoutResult layout) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      _actionRow(colors, layout),
+      // The way back. A stored line that came out wrong used to be
+      // unrecoverable without drawing an acceptable one first — and the
+      // reason to reach for this is usually that drawing went badly.
+      if (!layout.isProvisional && !_redrawing)
+        TextButton(
+          key: const Key('layout-reset'),
+          onPressed: () => ref
+              .read(libraryCrudRepositoryProvider)
+              .setWallBaseline(widget.wallId, null),
+          child: const Text('Use the automatic line instead'),
+        ),
+    ],
+  );
+
+  Widget _actionRow(MasiColors colors, LayoutResult layout) => Row(
     children: [
       Expanded(
         child: FilledButton.tonal(
           key: const Key('layout-redraw'),
-          onPressed: _redrawing ? _cancelRedraw : _startRedraw,
+          onPressed: _redrawing ? _cancelRedraw : () => _startRedraw(layout),
           child: Text(_redrawing ? 'Cancel' : 'Redraw line'),
         ),
       ),
@@ -482,6 +673,19 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       setState(() => _draftPoints = [fit.toPlane(at)]);
       return;
     }
+    // Handles win over faces: a handle sits ON the line and a thumbnail sits
+    // off it, so where they compete the finger is far likelier to be aiming
+    // at the line it is touching.
+    final handle = _handleNear(at, layout, fit);
+    if (handle != null) {
+      setState(() {
+        _selectedFaceId = null;
+        _draggingHandle = handle;
+        _handleClosed = layout.baseline.closed;
+        _handlePoints = [...layout.baseline.points];
+      });
+      return;
+    }
     final hit = _faceNear(at, layout, fit);
     if (hit == null) return;
     setState(() {
@@ -496,6 +700,14 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       setState(() => _draftPoints = [...?_draftPoints, fit.toPlane(at)]);
       return;
     }
+    final handle = _draggingHandle;
+    final points = _handlePoints;
+    if (handle != null && points != null && handle < points.length) {
+      setState(() {
+        _handlePoints = [...points]..[handle] = fit.toPlane(at);
+      });
+      return;
+    }
     if (_draggingFaceId == null) return;
     // Snapped onto the line rather than following the finger freely: a face
     // is a position ALONG the rock, and a thumbnail sitting off the stroke
@@ -506,6 +718,17 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   Future<void> _panEnd() async {
     if (_redrawing) {
       await _commitDraft();
+      return;
+    }
+    final reshaped = _handlePoints;
+    if (_draggingHandle != null) {
+      setState(() {
+        _draggingHandle = null;
+        _handlePoints = null;
+      });
+      if (reshaped != null && reshaped.length >= 2) {
+        await _storeBaseline(Baseline(reshaped, closed: _handleClosed));
+      }
       return;
     }
     final faceId = _draggingFaceId;
@@ -543,12 +766,44 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     return bestDistance <= 34 ? best : null;
   }
 
-  void _startRedraw() => setState(() {
+  /// The baseline vertex under the finger, if any.
+  int? _handleNear(Offset at, LayoutResult layout, LayoutPlaneFit fit) {
+    final points = layout.baseline.points;
+    if (points.length < 2) return null;
+    int? best;
+    var bestDistance = double.infinity;
+    for (var i = 0; i < points.length; i++) {
+      final distance = (fit.toCanvas(points[i]) - at).distance;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = i;
+      }
+    }
+    // Tighter than the face radius: handles can sit close together on a
+    // detailed stroke, and grabbing the wrong one silently deforms the rock.
+    return bestDistance <= 22 ? best : null;
+  }
+
+  Future<void> _storeBaseline(Baseline baseline) => ref
+      .read(libraryCrudRepositoryProvider)
+      .setWallBaseline(widget.wallId, baseline.encode());
+
+  void _startRedraw(LayoutResult layout) => setState(() {
     _draftPoints = const [];
     _selectedFaceId = null;
+    // Pinned BEFORE the first point, so the whole stroke is recorded through
+    // one mapping. Falls back to a fixed crag-sized span when there is no
+    // line to inherit a scale from.
+    final size = _canvasSize ?? const Size(360, 240);
+    _redrawFit = layout.baseline.isDegenerate
+        ? LayoutPlaneFit.forSpan(size, _blankSpanMetres)
+        : LayoutPlaneFit.forBaseline(layout.baseline, size);
   });
 
-  void _cancelRedraw() => setState(() => _draftPoints = null);
+  void _cancelRedraw() => setState(() {
+    _draftPoints = null;
+    _redrawFit = null;
+  });
 
   Future<void> _commitDraft() async {
     final points = _draftPoints;
@@ -559,25 +814,29 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
 
     // The closure gesture, and the only way this app has of being told
     // something is a boulder: if the stroke ends near where it began, it is a
-    // ring. Proportional to the stroke's own size so it means the same thing
-    // for a 4 m block and an 80 m sector.
-    final drawn = Baseline(points);
-    final closes =
+    // ring. Measured in PIXELS of the canvas it was drawn on — see
+    // _closeGapPx for why a proportional threshold was the wrong instrument.
+    final fit = _redrawFit;
+    final closes = fit != null &&
         points.length >= 3 &&
-        points.first.distanceTo(points.last) <= drawn.extent * 0.12;
+        (fit.toCanvas(points.first) - fit.toCanvas(points.last)).distance <=
+            _closeGapPx;
 
     // Simplified before storing: a finger produces hundreds of points, and
     // every one of them would ride the sync engine's full-row re-push on
-    // every future edit to any other column of this wall.
-    final simplified = Baseline(
-      points,
-      closed: closes,
-    ).simplified(math.max(drawn.extent * 0.01, 1e-6));
+    // every future edit to any other column of this wall. The tolerance is a
+    // few pixels of the stroke as drawn, so it removes what the eye cannot
+    // see and nothing else, whatever the rock's real size.
+    final tolerance = fit == null || fit.scale <= 0
+        ? 1e-6
+        : math.max(_simplifyPx / fit.scale, 1e-6);
+    final simplified = Baseline(points, closed: closes).simplified(tolerance);
 
-    setState(() => _draftPoints = null);
-    await ref
-        .read(libraryCrudRepositoryProvider)
-        .setWallBaseline(widget.wallId, simplified.encode());
+    setState(() {
+      _draftPoints = null;
+      _redrawFit = null;
+    });
+    await _storeBaseline(simplified);
   }
 
   Future<void> _accept(LayoutResult layout) => ref
