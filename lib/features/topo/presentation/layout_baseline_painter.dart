@@ -50,7 +50,7 @@ class LayoutBaselinePainter extends CustomPainter {
   static const double _handleRadius = 5;
 
   /// How far a thumbnail floats off the line, in pixels.
-  static const double stemLength = 34;
+  static const double stemLength = 52;
 
   @override
   void paint(Canvas canvas, Size size) {

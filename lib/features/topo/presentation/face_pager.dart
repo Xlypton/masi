@@ -104,8 +104,12 @@ class FacePager extends ConsumerWidget {
             colors: colors,
           ),
         const SizedBox(height: 10),
+        // Centred under the minimap rather than shoved into the far corner:
+        // the dots and the map are one control, and at phone width a
+        // left-pinned pill 200px from a right-pinned card reads as two
+        // unrelated widgets.
         Align(
-          alignment: Alignment.centerLeft,
+          alignment: Alignment.center,
           child: _Dots(
             photos: photos,
             layout: layout,
@@ -268,9 +272,14 @@ class _Minimap extends StatelessWidget {
               Flexible(
                 child: Text(
                   'where each photo was taken',
+                  // One line, always. Wrapped to two it pushed the Edit
+                  // button into a corner and made the card look broken.
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
                     fontSize: 10,
-                    letterSpacing: 0.6,
+                    letterSpacing: 0.4,
                     color: colors.ink2,
                   ),
                 ),
