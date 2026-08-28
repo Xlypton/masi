@@ -146,3 +146,29 @@ String? firstIdWithPrefix(WidgetTester tester, String prefix) {
   final keys = keysWithPrefix(tester, prefix);
   return keys.isEmpty ? null : keys.first.substring(prefix.length);
 }
+
+/// Forces the app to lay out at PHONE size, whatever the browser window is.
+///
+/// Masi is mobile-first — phone browsers and the installed PWA are the
+/// product, desktop is secondary — but a driven Chrome opens a desktop-shaped
+/// window, so every screenshot this harness produced was 1600px wide. A
+/// full-bleed regression that is obvious on a phone is invisible there, and
+/// one shipped exactly that way: a minimap card stretched across the whole
+/// topo, which reads as "a wide card" at 1600px and as "a band lying over
+/// your photo" at 390px.
+///
+/// Headless Chrome floors its WINDOW at 500 CSS px, so the window cannot be
+/// made phone-sized; the Flutter view can, and that is what decides layout.
+void usePhoneViewport(
+  WidgetTester tester, {
+  Size logical = const Size(390, 844),
+  double devicePixelRatio = 3,
+}) {
+  tester.view.devicePixelRatio = devicePixelRatio;
+  tester.view.physicalSize = Size(
+    logical.width * devicePixelRatio,
+    logical.height * devicePixelRatio,
+  );
+  addTearDown(tester.view.resetPhysicalSize);
+  addTearDown(tester.view.resetDevicePixelRatio);
+}

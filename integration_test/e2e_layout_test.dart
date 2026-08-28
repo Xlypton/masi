@@ -22,6 +22,9 @@ void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
   Future<void> openFacesWall(WidgetTester tester) async {
+    // Phone-shaped, always. See usePhoneViewport: a desktop-width window is
+    // not the product and hides exactly the layout faults that matter.
+    usePhoneViewport(tester);
     await e2eBoot();
     await settleNetwork(tester, budget: const Duration(seconds: 10));
     // `appRouter` is module-level, so navigation SURVIVES a re-boot: the
