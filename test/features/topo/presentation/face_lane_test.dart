@@ -10,10 +10,13 @@ import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/application/face_layout_providers.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
-import 'package:masi/features/topo/presentation/face_pager.dart';
+import 'package:masi/features/topo/presentation/face_lane.dart';
 
-/// [FacePager] is what replaced the 52px photo strip: the reader's way round a
-/// rock with several photos.
+/// [FaceDots] and [FaceMinimap] are what replaced the 52px photo strip: the
+/// reader's way round a rock with several photos. They live in the dock's
+/// pinned lane now (see `topo_dock_test.dart` for that composition); here they
+/// are exercised on their own, which is what they are built for — both take
+/// their data and read no provider.
 ///
 /// The behaviour worth pinning is what the strip could not do — say WHERE each
 /// photo was taken — and what it must not lose: switching photos, and the
@@ -86,6 +89,7 @@ void main() {
     ],
   );
 
+
   Widget wrap(ProviderContainer container, Widget child) =>
       UncontrolledProviderScope(
         container: container,
@@ -95,26 +99,24 @@ void main() {
         ),
       );
 
-  testWidgets('a single-photo topo renders no pager at all — there is '
-      'nothing to navigate', (tester) async {
-    await seedWall(photos: 1);
-    final container = makeContainer();
-    addTearDown(container.dispose);
+  /// Feeds the dumb lane widgets from the same two providers the dock reads,
+  /// in the same tree — rather than resolving them out of band first, which
+  /// hangs: `wallOriginalsProvider`'s drift stream only advances while
+  /// something in a pumped tree is listening to it.
+  Widget laneProbe(
+    Widget Function(BuildContext, List<PhotoRef>, LayoutResult) build,
+  ) => Consumer(
+    builder: (context, ref, _) {
+      final photos = ref.watch(wallOriginalsProvider(wallId)).value;
+      final layout = ref.watch(wallLayoutProvider(wallId)).value;
+      if (photos == null || layout == null) return const SizedBox.shrink();
+      return build(context, photos, layout);
+    },
+  );
 
-    await tester.pumpWidget(
-      wrap(
-        container,
-        FacePager(wallId: wallId, activePhotoId: 'photo-0', onSelect: (_) {}),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.byKey(const Key('face-pager-dots')), findsNothing);
-    expect(find.byKey(const Key('face-pager-minimap')), findsNothing);
-  });
-
-  testWidgets('one dot per photo, and tapping one switches to it',
-      (tester) async {
+  testWidgets('one dot per photo, and tapping one switches to it', (
+    tester,
+  ) async {
     await seedWall(photos: 3);
     final container = makeContainer();
     addTearDown(container.dispose);
@@ -123,10 +125,15 @@ void main() {
     await tester.pumpWidget(
       wrap(
         container,
-        FacePager(
-          wallId: wallId,
-          activePhotoId: 'photo-0',
-          onSelect: (photo) => selected = photo,
+        laneProbe(
+          (context, photos, layout) => FaceDots(
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-0',
+            onSelect: (photo) => selected = photo,
+            onManage: null,
+            colors: MasiColors.of(context),
+          ),
         ),
       ),
     );
@@ -142,7 +149,7 @@ void main() {
     expect(selected?.id, 'photo-2');
   });
 
-  testWidgets('with every sensor absent the pager still navigates — an '
+  testWidgets('with every sensor absent the lane still navigates — an '
       'ordered filmstrip is the product, not a degraded state', (tester) async {
     await seedWall(photos: 3);
     final container = makeContainer();
@@ -151,29 +158,75 @@ void main() {
     await tester.pumpWidget(
       wrap(
         container,
-        FacePager(wallId: wallId, activePhotoId: 'photo-0', onSelect: (_) {}),
+        laneProbe(
+          (context, photos, layout) => FaceDots(
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-0',
+            onSelect: (_) {},
+            onManage: null,
+            colors: MasiColors.of(context),
+          ),
+        ),
       ),
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('face-pager-dots')), findsOneWidget);
     expect(find.byKey(const Key('face-dot-photo-1')), findsOneWidget);
 
-    // A minimap still renders, because a synthesised capture-order strip is
-    // a real baseline. What must NOT appear is a view cone: a cone claims a
-    // direction, and with no heading anywhere there is no direction to
-    // claim — only an order. Asserted through the placements the engine
-    // reports, since the cones are painted rather than composed.
-    final layout = container.read(wallLayoutProvider(wallId)).value!;
+    // A minimap still has something to draw, because a synthesised
+    // capture-order strip is a real baseline. What must NOT appear is a view
+    // cone: a cone claims a direction, and with no heading anywhere there is
+    // no direction to claim — only an order. Asserted through the placements
+    // the engine reports, since the cones are painted rather than composed.
     expect(
-      layout.faces.every((f) => f.placement == FacePlacement.captureOrder),
+      container
+          .read(wallLayoutProvider(wallId))
+          .value!
+          .faces
+          .every((f) => f.placement == FacePlacement.captureOrder),
       isTrue,
       reason: 'nothing may claim a sensor placed it when no sensor spoke',
     );
   });
 
-  testWidgets('with real fixes the minimap renders and its marks select',
+  testWidgets('the dots carry no pill of their own when the dock frames them',
       (tester) async {
+    await seedWall(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => FaceDots(
+            framed: false,
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-0',
+            onSelect: (_) {},
+            onManage: null,
+            colors: MasiColors.of(context),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final box = tester.widget<Container>(
+      find.byKey(const Key('face-pager-dots')),
+    );
+    expect(
+      box.decoration,
+      isNull,
+      reason: 'a bordered pill on top of the dock reads as a loose control',
+    );
+  });
+
+  testWidgets('with real fixes the minimap renders and its marks select', (
+    tester,
+  ) async {
     await seedWall(photos: 4, withGps: true);
     final container = makeContainer();
     addTearDown(container.dispose);
@@ -182,10 +235,15 @@ void main() {
     await tester.pumpWidget(
       wrap(
         container,
-        FacePager(
-          wallId: wallId,
-          activePhotoId: 'photo-0',
-          onSelect: (photo) => selected = photo,
+        laneProbe(
+          (context, photos, layout) => FaceMinimap(
+            layout: layout,
+            photos: photos,
+            activePhotoId: 'photo-0',
+            onSelect: (photo) => selected = photo,
+            onEditLayout: null,
+            colors: MasiColors.of(context),
+          ),
         ),
       ),
     );
@@ -203,8 +261,9 @@ void main() {
   });
 
   testWidgets('the minimap carries a LABELLED button into the editor — the '
-      'thing that shows a wrong arrangement is the thing that fixes it',
-      (tester) async {
+      'thing that shows a wrong arrangement is the thing that fixes it', (
+    tester,
+  ) async {
     await seedWall(photos: 4, withGps: true);
     final container = makeContainer();
     addTearDown(container.dispose);
@@ -213,11 +272,15 @@ void main() {
     await tester.pumpWidget(
       wrap(
         container,
-        FacePager(
-          wallId: wallId,
-          activePhotoId: 'photo-0',
-          onSelect: (_) {},
-          onEditLayout: () => opened++,
+        laneProbe(
+          (context, photos, layout) => FaceMinimap(
+            layout: layout,
+            photos: photos,
+            activePhotoId: 'photo-0',
+            onSelect: (_) {},
+            onEditLayout: () => opened++,
+            colors: MasiColors.of(context),
+          ),
         ),
       ),
     );
@@ -232,8 +295,9 @@ void main() {
     expect(opened, 1);
   });
 
-  testWidgets('without an editor to open, no button is offered at all',
-      (tester) async {
+  testWidgets('without an editor to open, no button is offered at all', (
+    tester,
+  ) async {
     await seedWall(photos: 4, withGps: true);
     final container = makeContainer();
     addTearDown(container.dispose);
@@ -241,7 +305,16 @@ void main() {
     await tester.pumpWidget(
       wrap(
         container,
-        FacePager(wallId: wallId, activePhotoId: 'photo-0', onSelect: (_) {}),
+        laneProbe(
+          (context, photos, layout) => FaceMinimap(
+            layout: layout,
+            photos: photos,
+            activePhotoId: 'photo-0',
+            onSelect: (_) {},
+            onEditLayout: null,
+            colors: MasiColors.of(context),
+          ),
+        ),
       ),
     );
     await tester.pumpAndSettle();
@@ -261,11 +334,15 @@ void main() {
     await tester.pumpWidget(
       wrap(
         container,
-        FacePager(
-          wallId: wallId,
-          activePhotoId: 'photo-0',
-          onSelect: (_) {},
-          onManage: (photo) => managed = photo,
+        laneProbe(
+          (context, photos, layout) => FaceDots(
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-0',
+            onSelect: (_) {},
+            onManage: (photo) => managed = photo,
+            colors: MasiColors.of(context),
+          ),
         ),
       ),
     );

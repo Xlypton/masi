@@ -69,22 +69,43 @@ void main() {
     await settleNetwork(tester, budget: const Duration(seconds: 8));
   }
 
-  testWidgets('layout: four faces get a pager, a minimap and a way into the '
-      'editor', (tester) async {
+  testWidgets('layout: four faces get a dock lane, a map behind one tap, and '
+      'a way into the editor', (tester) async {
     await openFacesWall(tester);
     await binding.takeScreenshot('40-faces-canvas');
 
     await waitFor(
       tester,
       find.byKey(const Key('face-pager-dots')),
-      'the face pager on a four-photo wall',
+      'the dock face lane on a four-photo wall',
       timeout: const Duration(seconds: 20),
     );
+    expect(
+      find.byKey(const Key('topo-dock')),
+      findsOneWidget,
+      reason: 'the faces and the routes are one panel now, not two stacked '
+          'panels that have to clear each other',
+    );
+    expect(
+      find.byKey(const Key('face-pager-minimap')),
+      findsNothing,
+      reason: 'the map is a glance you ask for — mounting it permanently is '
+          'what put 153pt of card between the reader and the photo',
+    );
+
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('topo-dock-map-toggle')),
+      'the dock map toggle',
+    );
+    await settle(tester, frames: 20);
+    await binding.takeScreenshot('46-dock-map');
+
     expect(
       find.byKey(const Key('face-pager-minimap')),
       findsOneWidget,
       reason: 'four faces resolve to a capture-order strip, which is a real '
-          'line — the minimap must draw it',
+          'line — the map lane must draw it',
     );
     // The entry point is a labelled button, not a tappable caption.
     expect(find.text('Edit'), findsOneWidget);
@@ -96,8 +117,14 @@ void main() {
 
     await tapOrFail(
       tester,
+      find.byKey(const Key('topo-dock-map-toggle')),
+      'the dock map toggle',
+    );
+    await settle(tester, frames: 20);
+    await tapOrFail(
+      tester,
       find.byKey(const Key('face-pager-edit-layout')),
-      'the Edit button on the minimap',
+      'the Edit button on the map lane',
     );
     await settle(tester, frames: 30);
     await binding.takeScreenshot('41-layout-editor');
@@ -188,8 +215,14 @@ void main() {
 
     await tapOrFail(
       tester,
+      find.byKey(const Key('topo-dock-map-toggle')),
+      'the dock map toggle',
+    );
+    await settle(tester, frames: 20);
+    await tapOrFail(
+      tester,
       find.byKey(const Key('face-pager-edit-layout')),
-      'the Edit button on the minimap',
+      'the Edit button on the map lane',
     );
     await settle(tester, frames: 30);
     await tapOrFail(

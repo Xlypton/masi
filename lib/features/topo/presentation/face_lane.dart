@@ -1,24 +1,32 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart' hide Baseline;
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:masi/app/theme.dart';
-import 'package:masi/core/db/database_provider.dart';
-import 'package:masi/features/topo/application/face_layout_providers.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 
-/// The reader's way round a rock with several photos: a dot per face, and a
-/// minimap saying where each shot was taken from.
+/// The two parts of the reader's way round a rock with several photos: a dot
+/// per face ([FaceDots]), and a plan saying where each shot was taken from
+/// ([FaceMinimap]).
 ///
 /// Replaces the 52px thumbnail strip that used to sit in the top chrome. Six
 /// thumbnails in upload order carried no spatial meaning — a reader could not
 /// tell the north face from the right-hand half of the south face — and the
 /// answer is not a better thumbnail, it is putting the photos somewhere. The
 /// dots say how many and which one; the minimap says where.
+///
+/// Both are **dumb widgets**: they take their data and hand back taps, and
+/// they read no provider. That is what lets `TopoDock` compose them into one
+/// surface with the route list. The `FacePager` that used to own them was a
+/// third floating panel in the bottom band, and every panel down there had to
+/// reserve pixels for the next one by hand-maintained constant — a scheme that
+/// drifted out of true three times (the draw hint, the dot row, and finally
+/// the minimap, which ended up drawn ON TOP of the route legend). There is no
+/// clearance arithmetic left to get wrong because there is nothing left to
+/// clear.
 ///
 /// Everything sensor-derived degrades silently. With no GPS and no headings
 /// no view cone is drawn and the dots remain an ordered filmstrip, which is
@@ -33,99 +41,11 @@ import 'package:masi/shared/presentation/masi_icon.dart';
 /// heading). Adding one is a real decision, not an oversight to fill in
 /// quietly: it is a new runtime permission surface on both platforms. The
 /// screen is complete without it, which is the point of the hint being a hint.
-class FacePager extends ConsumerWidget {
-  const FacePager({
-    required this.wallId,
-    required this.activePhotoId,
-    required this.onSelect,
-    this.onManage,
-    this.onEditLayout,
+/// The dot row: one tap target per face, in the order you walk past the rock.
+class FaceDots extends StatelessWidget {
+  const FaceDots({
+    this.framed = true,
     super.key,
-  });
-
-  final String wallId;
-  final String? activePhotoId;
-  final void Function(PhotoRef photo) onSelect;
-
-  /// Long-press on a dot. Carries the photo-management actions (set cover,
-  /// delete, add) that used to hang off the strip's tiles — navigation moved,
-  /// but the actions still need a home, and the dot is the only thing on
-  /// screen that stands for one photo.
-  final void Function(PhotoRef photo)? onManage;
-
-  /// Opens the layout editor. Wired to the minimap's caption, which is the
-  /// one place on screen already saying "this is how your photos are
-  /// arranged" — so the thing that fixes a wrong arrangement is the thing
-  /// showing it, rather than a menu item behind a long-press nobody
-  /// discovers.
-  final VoidCallback? onEditLayout;
-
-  /// Height of the dot row, and of the minimap card above it.
-  ///
-  /// Fixed rather than measured because the route legend floats over the same
-  /// band and reserves its clearance from constants, one frame before this
-  /// widget exists. A measured height would arrive too late and the legend
-  /// would spend that frame sitting on top of the dots — which is exactly the
-  /// class of bug the draw-hint clearance beside it was added to fix.
-  static const double dotsHeight = 35;
-  static const double minimapHeight = 146;
-
-  /// Vertical space this widget will occupy, for callers that must clear it.
-  static double reservedHeight({
-    required int photoCount,
-    required bool hasMinimap,
-  }) {
-    if (photoCount < 2) return 0;
-    return dotsHeight + (hasMinimap ? minimapHeight + 10 : 0);
-  }
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final colors = MasiColors.of(context);
-    final photos =
-        ref.watch(wallOriginalsProvider(wallId)).value ?? const <PhotoRef>[];
-    // A single-photo topo has nothing to navigate; the whole control is noise
-    // there, which is exactly what the strip it replaces used to be.
-    if (photos.length < 2) return const SizedBox.shrink();
-
-    final layout = ref.watch(wallLayoutProvider(wallId)).value;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.end,
-      children: [
-        if (layout != null && !layout.baseline.isDegenerate)
-          _Minimap(
-            layout: layout,
-            photos: photos,
-            activePhotoId: activePhotoId,
-            onSelect: onSelect,
-            onEditLayout: onEditLayout,
-            colors: colors,
-          ),
-        const SizedBox(height: 10),
-        // Centred under the minimap rather than shoved into the far corner:
-        // the dots and the map are one control, and at phone width a
-        // left-pinned pill 200px from a right-pinned card reads as two
-        // unrelated widgets.
-        Align(
-          alignment: Alignment.center,
-          child: _Dots(
-            photos: photos,
-            layout: layout,
-            activePhotoId: activePhotoId,
-            onSelect: onSelect,
-            onManage: onManage,
-            colors: colors,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-class _Dots extends StatelessWidget {
-  const _Dots({
     required this.photos,
     required this.layout,
     required this.activePhotoId,
@@ -133,6 +53,12 @@ class _Dots extends StatelessWidget {
     required this.onManage,
     required this.colors,
   });
+
+  /// Whether to draw the pill around the dots.
+  ///
+  /// False inside `TopoDock`, where the dock itself is the surface and a
+  /// second bordered pill on top of it reads as a control that came loose.
+  final bool framed;
 
   final List<PhotoRef> photos;
   final LayoutResult? layout;
@@ -156,11 +82,13 @@ class _Dots extends StatelessWidget {
     return Container(
       key: const Key('face-pager-dots'),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: colors.chrome,
-        borderRadius: BorderRadius.circular(MasiRadii.large),
-        border: Border.all(color: colors.separator),
-      ),
+      decoration: framed
+          ? BoxDecoration(
+              color: colors.chrome,
+              borderRadius: BorderRadius.circular(MasiRadii.large),
+              border: Border.all(color: colors.separator),
+            )
+          : null,
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -196,8 +124,12 @@ class _Dots extends StatelessWidget {
   }
 }
 
-class _Minimap extends StatelessWidget {
-  const _Minimap({
+/// The plan view: the baseline seen from above, with a dot per face.
+class FaceMinimap extends StatelessWidget {
+  const FaceMinimap({
+    this.planSize = const Size(184, 100),
+    this.framed = true,
+    super.key,
     required this.layout,
     required this.photos,
     required this.activePhotoId,
@@ -213,29 +145,37 @@ class _Minimap extends StatelessWidget {
   final VoidCallback? onEditLayout;
   final MasiColors colors;
 
-  /// The plan box. The design draws a 320x180 plan space at 132px on a
-  /// phone; a little larger here, because the caption and the Edit button
-  /// share its width and 132px cannot hold both.
-  static const Size _size = Size(184, 100);
+  /// How big to draw the plan itself, excluding the caption row below it.
+  ///
+  /// A parameter rather than a constant because the dock gives it the full
+  /// width of the sheet, while a standalone use (tests, and any future
+  /// caller) wants the compact card.
+  final Size planSize;
+
+  /// Whether to draw the card around the plan — false inside `TopoDock`, for
+  /// the same reason as [FaceDots.framed].
+  final bool framed;
 
   @override
   Widget build(BuildContext context) {
-    final fit = LayoutPlaneFit.forBaseline(layout.baseline, _size, padding: 12);
+    final fit = LayoutPlaneFit.forBaseline(layout.baseline, planSize, padding: 12);
 
     return Container(
       key: const Key('face-pager-minimap'),
       padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(
-        color: colors.chrome,
-        borderRadius: BorderRadius.circular(MasiRadii.large),
-        border: Border.all(color: colors.separator),
-      ),
+      decoration: framed
+          ? BoxDecoration(
+              color: colors.chrome,
+              borderRadius: BorderRadius.circular(MasiRadii.large),
+              border: Border.all(color: colors.separator),
+            )
+          : null,
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           SizedBox(
-            width: _size.width,
-            height: _size.height,
+            width: planSize.width,
+            height: planSize.height,
             child: Stack(
               children: [
                 Positioned.fill(
@@ -265,7 +205,7 @@ class _Minimap extends StatelessWidget {
           // the whole screen to offer — which stretched a 184px minimap into
           // a full-bleed band across the topo.
           SizedBox(
-            width: _size.width,
+            width: planSize.width,
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [

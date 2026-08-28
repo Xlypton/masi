@@ -32,7 +32,8 @@ import 'package:masi/features/topo/data/photo_write_exception.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/canvas_chrome.dart';
 import '../application/face_layout_providers.dart';
-import 'face_pager.dart';
+import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
+import 'face_lane.dart';
 import 'package:masi/features/topo/presentation/photo_source_sheet.dart';
 import 'package:masi/features/topo/presentation/route_legend.dart';
 import 'package:masi/features/topo/presentation/route_metadata_sheet.dart';
@@ -1658,7 +1659,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                   // The title row sits in a GlassChrome card. It used to
                   // share that card with the 52px PhotoStrip; navigating
                   // between a rock's photos now happens at the BOTTOM, in
-                  // FacePager's dots and minimap, because six thumbnails in
+                  // the dock's face lane, because six thumbnails in
                   // upload order told a reader how MANY photos there were and
                   // never where any of them was taken from. The (draw-mode-
                   // only) symbol palette remains a separate floating sibling below,
@@ -1743,27 +1744,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // Where the reader moves between this rock's faces. Above
-                    // everything else in the bottom cluster because it is
-                    // navigation rather than an action on what is on screen,
-                    // and hidden entirely in draw mode: a contributor drawing
-                    // a line is working on ONE photo, and offering to walk
-                    // round the rock mid-stroke is an invitation to lose it.
-                    if (drawState.mode == DrawMode.view)
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: MasiSpacing.sm),
-                        child: FacePager(
-                          wallId: widget.wallId,
-                          activePhotoId: drawState.activePhotoId,
-                          onSelect: _switchToPhoto,
-                          onManage: widget.readOnly ? null : _showFaceMenu,
-                          onEditLayout: widget.readOnly
-                              ? null
-                              : () => context.push(
-                                  '/walls/${widget.wallId}/layout',
-                                ),
-                        ),
-                      ),
+                    // Where the reader moves between this rock's faces used
+                    // to be a third floating panel right here, above the
+                    // notices and below the route legend. It is the dock's
+                    // pinned lane now (see [TopoCanvasBody]'s dock): three
+                    // panels sharing one band meant each had to reserve
+                    // pixels for the next by hand-maintained constant, and
+                    // the constants drifted until the minimap was drawn on
+                    // top of the route list.
                     // UF-2: shares the bottom slot with the draw-mode chrome
                     // rather than needing its own, because the two are
                     // mutually exclusive by construction — a set load failure
@@ -2306,7 +2294,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // Adding a photo. It has moved twice: a bottom-right FAB, then the '+'
     // tile at the end of the 52px photo strip — the right place while that
     // strip existed, right beside the thumbnails it added to. Navigation
-    // moved to FacePager's dot row and the strip went with it, and a row of
+    // moved to the dock's face-lane dot row and the strip went with it, and a row of
     // 7px dots has nothing you can append a '+' to that still reads as "add
     // a photo".
     //
@@ -2909,40 +2897,39 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         ),
       );
     }
-    // Computed here, where both providers are already watched, rather than
-    // inside the body — see TopoCanvasBody.facePagerClearance.
+    // Read here, where both providers are already watched, and handed DOWN to
+    // the body — see TopoCanvasBody.facePhotos for why the body must not watch
+    // them itself.
     //
-    // Watched UNCONDITIONALLY, outside the mode check, even though the pager
-    // only renders in view mode. Both are autoDispose, so reading them inside
-    // the ternary would drop the last listener the moment a pen is picked up
-    // and tear the wall's layout subscription down — then rebuild it on the
+    // Watched UNCONDITIONALLY, outside any mode check, even though the face
+    // lane only renders in view mode. Both are autoDispose, so reading them
+    // inside a ternary would drop the last listener the moment a pen is picked
+    // up and tear the wall's layout subscription down — then rebuild it on the
     // way back out. That is a live drift query closing and reopening on every
     // draw/view toggle, and it closes ASYNCHRONOUSLY: the cancellation posts
     // a zero-duration timer that outlives the frame, which is why the canvas
     // widget tests that switch modes failed with a pending timer rather than
     // with anything that looked like a layout bug.
-    final photoCount =
-        ref.watch(wallOriginalsProvider(widget.wallId)).value?.length ?? 0;
-    final hasMinimap =
-        ref.watch(wallLayoutProvider(widget.wallId)).value?.baseline
-            .isDegenerate ==
-        false;
-    final pagerHeight = drawState.mode == DrawMode.view
-        ? FacePager.reservedHeight(
-            photoCount: photoCount,
-            hasMinimap: hasMinimap,
-          )
-        : 0.0;
+    final facePhotos =
+        ref.watch(wallOriginalsProvider(widget.wallId)).value ??
+        const <PhotoRef>[];
+    final faceLayout = ref.watch(wallLayoutProvider(widget.wallId)).value;
 
     return TopoCanvasBody(
       wallId: widget.wallId,
       imagePath: imagePath,
       imageSize: imageSize,
       drawState: drawState,
-      // The gap rides INSIDE the height: a wall with one photo renders no
-      // pager, and reserving a gap for a control that is not there moved the
-      // legend on every single-photo topo in the app.
-      facePagerClearance: pagerHeight == 0 ? 0 : pagerHeight + MasiSpacing.sm,
+      // The face lane's ingredients. They ride INSIDE the dock now rather
+      // than in a panel of their own below it, which is what removed the
+      // clearance arithmetic that kept drifting out of true.
+      facePhotos: facePhotos,
+      faceLayout: faceLayout,
+      onSelectFace: _switchToPhoto,
+      onManageFace: widget.readOnly ? null : _showFaceMenu,
+      onEditLayout: widget.readOnly
+          ? null
+          : () => context.push('/walls/${widget.wallId}/layout'),
       transformationController: _transformationController,
       canvasKey: _canvasKey,
       readOnly: widget.readOnly,
@@ -2998,7 +2985,11 @@ class TopoCanvasBody extends ConsumerWidget {
     this.onLogAscent,
     this.onEditRoute,
     this.onOpenCommunity,
-    this.facePagerClearance = 0,
+    this.facePhotos = const <PhotoRef>[],
+    this.faceLayout,
+    this.onSelectFace,
+    this.onManageFace,
+    this.onEditLayout,
   });
 
   /// FIX #6: family key for [drawControllerProvider]/[legendExpandedProvider]
@@ -3060,15 +3051,31 @@ class TopoCanvasBody extends ConsumerWidget {
   /// what makes the handle mean something at last. See [_LegendHeader].
   final VoidCallback? onOpenCommunity;
 
-  /// Bottom clearance the route legend must leave for [FacePager], which
-  /// shares the same floating band in view mode.
+  /// This rock's photos, for the dock's face lane. Empty (the default) means
+  /// no lane — which is also every pre-existing call site and widget test, so
+  /// they keep the plain floating route panel they always had.
   ///
-  /// Passed IN rather than watched here. Reading `wallOriginalsProvider` and
-  /// `wallLayoutProvider` from this widget opened a second drift subscription
-  /// per build, whose teardown left a pending timer at the end of every
-  /// widget test that pumped this body — a failure with nothing to do with
-  /// what those tests were about. The screen above already watches both.
-  final double facePagerClearance;
+  /// Passed IN rather than watched here, and this is not a style choice.
+  /// Reading `wallOriginalsProvider`/`wallLayoutProvider` from this widget
+  /// opened a second drift subscription per build, whose teardown left a
+  /// pending timer at the end of every widget test that pumped this body — a
+  /// failure with nothing to do with what those tests were about. The screen
+  /// above already watches both.
+  final List<PhotoRef> facePhotos;
+
+  /// The resolved layout behind the dock's map lane. Null while it loads, or
+  /// on a wall whose baseline is degenerate — the map toggle simply does not
+  /// appear then.
+  final LayoutResult? faceLayout;
+
+  /// Tapping a dot, or a face on the map.
+  final void Function(PhotoRef photo)? onSelectFace;
+
+  /// Long-pressing a dot: set cover, delete, add. Null when read-only.
+  final void Function(PhotoRef photo)? onManageFace;
+
+  /// Opens the layout editor from the map lane's caption. Null when read-only.
+  final VoidCallback? onEditLayout;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -3079,6 +3086,17 @@ class TopoCanvasBody extends ConsumerWidget {
     // comments and ascents to reach, and with the top-row glyph gone this is
     // the only way there.
     final community = embedded ? null : onOpenCommunity;
+
+    // The dock's pinned lane only exists where it means something: a rock with
+    // more than one photo, being READ. A contributor drawing a line is working
+    // on one photo, and offering to walk round the rock mid-stroke is an
+    // invitation to lose the stroke — so draw mode keeps the plain collapsed
+    // chip it always had. So does every wall with a single photo, and so does
+    // every pre-existing caller and widget test, which pass no photos at all.
+    final laneVisible =
+        !embedded &&
+        drawState.mode == DrawMode.view &&
+        facePhotos.length >= 2;
 
     // Bottom clearance reserved above the floating RouteLegend overlay, so
     // both the legend's Padding AND its maxHeight cap (below) can share the
@@ -3102,7 +3120,8 @@ class TopoCanvasBody extends ConsumerWidget {
     // 2026-08-15). The helper floors it at the same value the nav bar has
     // always used, and takes a `max` so nothing double-counts.
     final legendBottomPadding =
-        (hasRoutes || drawState.isSwitchingPhoto || community != null)
+        (hasRoutes || drawState.isSwitchingPhoto || community != null ||
+                laneVisible)
         ? masiBottomInset(context, ref) +
               MasiSpacing.md +
               (drawState.mode == DrawMode.draw
@@ -3114,16 +3133,14 @@ class TopoCanvasBody extends ConsumerWidget {
               (drawHintMessage(ref.watch(drawHintProvider)) == null
                   ? 0.0
                   : kDrawHintHeight) +
-              // FacePager shares this band in view mode. Without its height
-              // the legend sits on top of the dot row, and a tap meant for a
-              // dot lands on the legend instead — the same failure the draw
-              // hint above caused, found the same way.
-              //
-              // The gap is INSIDE the height, not added beside it: a wall with
-              // one photo renders no pager, and reserving a gap for a control
-              // that is not there moved the legend 8px on every single-photo
-              // topo in the app.
-              facePagerClearance
+              // There is deliberately no term here for the face lane or the
+              // map. Both used to be a separate floating panel below this
+              // one, each reserving space for the next by a hand-maintained
+              // constant — and those constants went stale three times, the
+              // last of which drew the minimap ON TOP of the route list. They
+              // are rows inside the dock now, so the dock's own height is
+              // whatever it renders and nothing has to predict it.
+              0.0
         : 0.0;
 
     return Column(
@@ -3193,6 +3210,56 @@ class TopoCanvasBody extends ConsumerWidget {
                   // finder for that key is a true "is the full card showing"
                   // signal — absent while only the collapsed chip
                   // (`topo-route-legend-chip`) is present.
+                  // ONE dock, two lanes: the faces are its pinned header,
+                  // the routes (or the map) its body. Three floating panels
+                  // used to share this band — the legend, the dot row and the
+                  // minimap — each reserving space for the next by a constant
+                  // somebody had to keep in step with the widget's real
+                  // height. Nobody did, three times running; the last of them
+                  // put the minimap on top of the route list on a real phone.
+                  // A dock cannot get that wrong because there is nothing
+                  // below it to clear.
+                  if (laneVisible)
+                    Positioned(
+                      left: MasiSpacing.md,
+                      right: MasiSpacing.md,
+                      bottom: effectiveLegendBottomPadding,
+                      child: _TopoDock(
+                        wallId: wallId,
+                        photos: facePhotos,
+                        layout: faceLayout,
+                        activePhotoId: drawState.activePhotoId,
+                        routeCount: drawState.routes.length,
+                        expanded: legendExpanded,
+                        mapOpen: ref.watch(dockMapOpenProvider(wallId)),
+                        legendMaxHeight: overlayLegendMaxHeight,
+                        readOnly: readOnly,
+                        isSwitchingPhoto: drawState.isSwitchingPhoto,
+                        onToggleExpanded: () => ref
+                            .read(legendExpandedProvider(wallId).notifier)
+                            .toggle(),
+                        onToggleMap: () {
+                          // Opening the map opens the dock with it: a toggle
+                          // that quietly changed the contents of a closed
+                          // panel would read as a dead button.
+                          ref.read(dockMapOpenProvider(wallId).notifier).toggle();
+                          if (!legendExpanded) {
+                            ref
+                                .read(legendExpandedProvider(wallId).notifier)
+                                .toggle();
+                          }
+                        },
+                        onSelectFace: onSelectFace,
+                        onManageFace: onManageFace,
+                        onEditLayout: onEditLayout,
+                        onOpenCommunity: community,
+                        onLogAscent:
+                            drawState.mode == DrawMode.draw ? null : onLogAscent,
+                        onEditRoute:
+                            drawState.mode == DrawMode.draw ? onEditRoute : null,
+                      ),
+                    )
+                  else ...[
                   if (!hasRoutes && community != null)
                     Positioned(
                       left: MasiSpacing.md,
@@ -3325,6 +3392,7 @@ class TopoCanvasBody extends ConsumerWidget {
                         ),
                       ),
                     ),
+                  ],
                 ],
               );
             },
@@ -3655,6 +3723,336 @@ class _LegendHeader extends StatelessWidget {
                   ),
                   icon: MasiIcon('chevron_down', size: 18, color: colors.ink),
                 ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The bottom dock: one surface carrying both of the things a reader needs
+/// down here, instead of three floating panels stacked on each other.
+///
+/// **Why one panel and not three.** The face lane, the face map and the route
+/// list all wanted the same band above the safe area. Each was a separate
+/// `Positioned`, so each had to be told how tall the ones below it were — a
+/// chain of hand-maintained constants (`kDrawHintHeight`,
+/// `kBottomChromeClusterHeight`, and a `FacePager.reservedHeight` built from
+/// two more) that only stayed true while nobody edited a padding. It went
+/// stale three times: the draw hint landed on the collapsed chip, the chip
+/// landed on the dot row, and finally the minimap was drawn straight over the
+/// route list on a real phone. The measured gap at that point was 17px —
+/// `reservedHeight` claimed 191 for a widget that rendered 208.
+///
+/// A dock ends that class of bug outright rather than correcting the latest
+/// instance of it: the lane, the map and the list are rows in one `Column`, so
+/// the surface is exactly as tall as what it draws and nothing downstream has
+/// to predict it. There is no clearance term left for the face lane at all.
+///
+/// **Two lanes, one at a time.** The pinned header is the faces — dots, and a
+/// toggle for the plan view. The body is the routes, or the map, never both:
+/// the map used to be permanently mounted above the legend at 153pt, which is
+/// most of what made this screen's bottom half unusable on a phone. It is a
+/// glance you ask for, so it is one tap away and costs nothing until asked.
+class _TopoDock extends StatelessWidget {
+  const _TopoDock({
+    required this.wallId,
+    required this.photos,
+    required this.layout,
+    required this.activePhotoId,
+    required this.routeCount,
+    required this.expanded,
+    required this.mapOpen,
+    required this.legendMaxHeight,
+    required this.readOnly,
+    required this.isSwitchingPhoto,
+    required this.onToggleExpanded,
+    required this.onToggleMap,
+    required this.onSelectFace,
+    required this.onManageFace,
+    required this.onEditLayout,
+    required this.onOpenCommunity,
+    required this.onLogAscent,
+    required this.onEditRoute,
+  });
+
+  final String wallId;
+  final List<PhotoRef> photos;
+  final LayoutResult? layout;
+  final String? activePhotoId;
+  final int routeCount;
+  final bool expanded;
+  final bool mapOpen;
+  final double legendMaxHeight;
+  final bool readOnly;
+  final bool isSwitchingPhoto;
+  final VoidCallback onToggleExpanded;
+  final VoidCallback onToggleMap;
+  final void Function(PhotoRef photo)? onSelectFace;
+  final void Function(PhotoRef photo)? onManageFace;
+  final VoidCallback? onEditLayout;
+  final VoidCallback? onOpenCommunity;
+  final void Function(int routeId)? onLogAscent;
+  final void Function(int routeId)? onEditRoute;
+
+  @override
+  Widget build(BuildContext context) {
+    final colors = MasiColors.of(context);
+    final plan = layout;
+    // No map toggle for a wall whose baseline is still loading or degenerate:
+    // a button that opens an empty box is worse than no button.
+    final mapAvailable = plan != null && !plan.baseline.isDegenerate;
+    final showMap = mapOpen && mapAvailable;
+    final select = onSelectFace ?? (_) {};
+
+    return GlassChrome(
+      key: const Key('topo-dock'),
+      strong: true,
+      blur: true,
+      // `Material(type: transparency)` — required so RouteLegend's ListTiles
+      // have a Material ancestor closer than the Scaffold's own. See the
+      // identical wrapper on the non-dock legend card for the assertion this
+      // avoids.
+      child: Material(
+        type: MaterialType.transparency,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            _DockLane(
+              photos: photos,
+              layout: plan,
+              activePhotoId: activePhotoId,
+              routeCount: routeCount,
+              expanded: expanded,
+              mapOpen: showMap,
+              mapAvailable: mapAvailable,
+              colors: colors,
+              onToggleExpanded: onToggleExpanded,
+              onToggleMap: onToggleMap,
+              onSelect: select,
+              onManage: onManageFace,
+              onOpenCommunity: onOpenCommunity,
+            ),
+            if (expanded) ...[
+              Divider(
+                key: const Key('topo-dock-body'),
+                height: 1,
+                thickness: 1,
+                color: colors.separator,
+              ),
+              if (showMap)
+                Padding(
+                  key: const Key('topo-dock-map'),
+                  padding: const EdgeInsets.fromLTRB(
+                    MasiSpacing.sm,
+                    MasiSpacing.sm,
+                    MasiSpacing.sm,
+                    0,
+                  ),
+                  child: LayoutBuilder(
+                    builder: (context, constraints) => FaceMinimap(
+                      framed: false,
+                      // Full dock width, where the old card had 184px to
+                      // work with. The plan is the whole point of this lane
+                      // while it is open, so it gets the room the card could
+                      // never have taken without covering the topo.
+                      planSize: Size(constraints.maxWidth - 16, 132),
+                      layout: plan,
+                      photos: photos,
+                      activePhotoId: activePhotoId,
+                      onSelect: select,
+                      onEditLayout: onEditLayout,
+                      colors: colors,
+                    ),
+                  ),
+                )
+              else if (routeCount > 0)
+                RouteLegend(
+                  key: const Key('topo-dock-routes'),
+                  wallId: wallId,
+                  maxHeight: legendMaxHeight,
+                  readOnly: readOnly,
+                  onLogAscent: onLogAscent,
+                  onEditRoute: onEditRoute,
+                )
+              else if (isSwitchingPhoto)
+                const Padding(
+                  padding: EdgeInsets.all(MasiSpacing.md),
+                  child: _RoutesLoadingChip(),
+                ),
+              if (onOpenCommunity case final open?) _CommunityRow(onTap: open),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// The dock's pinned header: which face you are on, and the two ways to open
+/// its body.
+///
+/// The dots are the same control they were in the panel this replaced, minus
+/// their own pill — the dock is the surface now, and a bordered pill sitting
+/// on a frosted sheet reads as a control that came loose. They scroll
+/// horizontally rather than shrinking, because a rock with a dozen photos is a
+/// real thing and dots that get closer together until they are one grey smear
+/// stop being a control at all.
+class _DockLane extends StatelessWidget {
+  const _DockLane({
+    required this.photos,
+    required this.layout,
+    required this.activePhotoId,
+    required this.routeCount,
+    required this.expanded,
+    required this.mapOpen,
+    required this.mapAvailable,
+    required this.colors,
+    required this.onToggleExpanded,
+    required this.onToggleMap,
+    required this.onSelect,
+    required this.onManage,
+    required this.onOpenCommunity,
+  });
+
+  final List<PhotoRef> photos;
+  final LayoutResult? layout;
+  final String? activePhotoId;
+  final int routeCount;
+  final bool expanded;
+  final bool mapOpen;
+  final bool mapAvailable;
+  final MasiColors colors;
+  final VoidCallback onToggleExpanded;
+  final VoidCallback onToggleMap;
+  final void Function(PhotoRef photo) onSelect;
+  final void Function(PhotoRef photo)? onManage;
+  final VoidCallback? onOpenCommunity;
+
+  @override
+  Widget build(BuildContext context) {
+    final community = onOpenCommunity;
+    final canExpand = routeCount > 0 || community != null;
+
+    return GestureDetector(
+      key: const Key('topo-dock-lane'),
+      behavior: HitTestBehavior.opaque,
+      // The same three-way flick the panel had before the lane existed, kept
+      // verbatim so the gesture means one thing across every state of this
+      // surface: down closes, up opens, up again reaches the community page.
+      onVerticalDragEnd: (details) {
+        final velocity = details.primaryVelocity;
+        if (velocity == null) return;
+        if (velocity > _kPanelFlickVelocity) {
+          if (expanded) onToggleExpanded();
+        } else if (velocity < -_kPanelFlickVelocity) {
+          if (!expanded) {
+            onToggleExpanded();
+          } else if (community != null) {
+            community();
+          }
+        }
+      },
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+          MasiSpacing.xs,
+          MasiSpacing.xs,
+          MasiSpacing.xs,
+          MasiSpacing.xs,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Center(
+              child: Container(
+                width: 32,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: colors.ink3,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: MasiSpacing.xs),
+            Row(
+              children: [
+                if (mapAvailable)
+                  IconButton(
+                    key: const Key('topo-dock-map-toggle'),
+                    tooltip: mapOpen
+                        ? 'Back to the route list'
+                        : 'Where each photo was taken',
+                    onPressed: onToggleMap,
+                    iconSize: 18,
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.all(4),
+                    constraints: const BoxConstraints(
+                      minWidth: 40,
+                      minHeight: 40,
+                    ),
+                    // Filled while the map lane is the one showing, so the
+                    // button says which of the two the body is on rather than
+                    // only what it would do next.
+                    style: mapOpen
+                        ? IconButton.styleFrom(
+                            backgroundColor: colors.accent.withValues(
+                              alpha: 0.16,
+                            ),
+                          )
+                        : null,
+                    icon: MasiIcon(
+                      'compass',
+                      size: 18,
+                      color: mapOpen ? colors.accent : colors.ink,
+                    ),
+                  ),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    reverse: true,
+                    child: FaceDots(
+                      framed: false,
+                      photos: photos,
+                      layout: layout,
+                      activePhotoId: activePhotoId,
+                      onSelect: onSelect,
+                      onManage: onManage,
+                      colors: colors,
+                    ),
+                  ),
+                ),
+                if (canExpand)
+                  GestureDetector(
+                    key: const Key('topo-dock-routes-toggle'),
+                    behavior: HitTestBehavior.opaque,
+                    onTap: onToggleExpanded,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: MasiSpacing.sm,
+                        vertical: MasiSpacing.sm,
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Text(
+                            _routeCountLabel(routeCount),
+                            style: Theme.of(context).textTheme.labelLarge
+                                ?.copyWith(color: colors.ink),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(width: MasiSpacing.xs),
+                          MasiIcon(
+                            expanded ? 'chevron_down' : 'chevron_up',
+                            size: 18,
+                            color: colors.ink,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
               ],
             ),
           ],
