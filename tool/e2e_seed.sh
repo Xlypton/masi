@@ -47,6 +47,7 @@ published $E2E_WALL_PUBLISHED
 pending   $E2E_WALL_PENDING
 draft     $E2E_WALL_DRAFT
 photos    $E2E_PHOTO_PUBLISHED $E2E_PHOTO_PENDING $E2E_PHOTO_DRAFT
+faces     $E2E_WALL_FACES (${E2E_PHOTO_FACES[*]})
 EOF
   exit 0
 fi
@@ -78,7 +79,21 @@ sql "INSERT INTO public.sectors (id, \"createdAt\", \"updatedAt\", \"ownerId\", 
 sql "INSERT INTO public.walls (id, \"createdAt\", \"updatedAt\", \"ownerId\", \"sectorId\", name, \"sortOrder\", visibility, latitude, longitude, dirty)
      VALUES ('$E2E_WALL_PUBLISHED', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Published Wall', 0, 'shared', 47.4979, 19.0402, false),
             ('$E2E_WALL_PENDING',   $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Pending Wall',   1, 'shared', 47.4985, 19.0410, false),
-            ('$E2E_WALL_DRAFT',     $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Draft Wall',     2, 'private', 47.4990, 19.0415, false);" >/dev/null
+            ('$E2E_WALL_DRAFT',     $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Draft Wall',     2, 'private', 47.4990, 19.0415, false),
+            ('$E2E_WALL_FACES',     $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_SECTOR_ID', 'E2E Faces Wall',     3, 'private', 47.4995, 19.0420, false);" >/dev/null
+
+# The four-face wall. No capture columns on ANY row, deliberately: that is the
+# state of every photo in the live database, so this is the layout the engine
+# really has to produce — a capture-order strip — and not a GPS best case that
+# no user has ever had.
+FACES_VALUES=""
+for i in "${!E2E_PHOTO_FACES[@]}"; do
+  pid="${E2E_PHOTO_FACES[$i]}"
+  [[ -n "$FACES_VALUES" ]] && FACES_VALUES+=","
+  FACES_VALUES+="('$pid', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_FACES', 'photos/$pid.png', 'original', 96, 144, $i, $([[ $i -eq 0 ]] && echo true || echo false), false)"
+done
+sql "INSERT INTO public.photos (id, \"createdAt\", \"updatedAt\", \"ownerId\", \"wallId\", \"localPath\", kind, width, height, \"sortOrder\", \"isPrimary\", dirty)
+     VALUES $FACES_VALUES;" >/dev/null
 
 sql "INSERT INTO public.photos (id, \"createdAt\", \"updatedAt\", \"ownerId\", \"wallId\", \"localPath\", kind, width, height, \"sortOrder\", \"isPrimary\", dirty)
      VALUES ('$E2E_PHOTO_PUBLISHED', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PUBLISHED', 'photos/$E2E_PHOTO_PUBLISHED.png', 'original', 96, 144, 0, true, false),
@@ -124,7 +139,8 @@ upload_object() {
 # Both conventions, because the app reads two different ones: `<uid>/<id>.<ext>`
 # for the owner's own pull, and `shared/<id>.<ext>` for everybody else's view of
 # a published topo (see `sharedPhotoPath` in `sync_remote.dart`).
-for pid in "$E2E_PHOTO_PUBLISHED" "$E2E_PHOTO_PENDING" "$E2E_PHOTO_DRAFT"; do
+for pid in "$E2E_PHOTO_PUBLISHED" "$E2E_PHOTO_PENDING" "$E2E_PHOTO_DRAFT" \
+           "${E2E_PHOTO_FACES[@]}"; do
   upload_object "${E2E_OWNER_UID}/${pid}.png"
 done
 # Only the PUBLISHED wall gets a `shared/` copy. The draft has none by

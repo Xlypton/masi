@@ -45,6 +45,18 @@ E2E_WALL_DRAFT="e2e-wall-draft-0001"
 E2E_PHOTO_PUBLISHED="e2e-photo-published-0001"
 E2E_PHOTO_PENDING="e2e-photo-pending-0001"
 E2E_PHOTO_DRAFT="e2e-photo-draft-0001"
+# A wall with FOUR faces, and no capture metadata on any of them — which is
+# what every photo in the real database actually looks like. The rest of the
+# fixture gives each wall a single photo, so the face pager (which renders
+# nothing below two) and the layout editor were structurally unreachable by
+# the suite: the whole feature shipped un-exercised behind a green run.
+E2E_WALL_FACES="e2e-wall-faces-0001"
+E2E_PHOTO_FACES=(
+  "e2e-photo-face-0001"
+  "e2e-photo-face-0002"
+  "e2e-photo-face-0003"
+  "e2e-photo-face-0004"
+)
 
 command -v jq >/dev/null 2>&1 || { echo "e2e: jq is required" >&2; exit 1; }
 if [[ -n "${SUPABASE_MGMT_TOKEN:-}" ]]; then

@@ -27,12 +27,14 @@ for arg in "$@"; do
     --fake)     FAKE=1 ;;
     signed-in)  TARGETS+=("integration_test/e2e_signed_in_test.dart") ;;
     community)  TARGETS+=("integration_test/e2e_community_test.dart") ;;
-    *) echo "usage: $0 [--fake] [signed-in|community]" >&2; exit 2 ;;
+    layout)     TARGETS+=("integration_test/e2e_layout_test.dart") ;;
+    *) echo "usage: $0 [--fake] [signed-in|community|layout]" >&2; exit 2 ;;
   esac
 done
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
   TARGETS=("integration_test/e2e_signed_in_test.dart" \
-           "integration_test/e2e_community_test.dart")
+           "integration_test/e2e_community_test.dart" \
+           "integration_test/e2e_layout_test.dart")
 fi
 
 DEFINES=()
