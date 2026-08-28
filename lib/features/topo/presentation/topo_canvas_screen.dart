@@ -2911,18 +2911,26 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
     // Computed here, where both providers are already watched, rather than
     // inside the body — see TopoCanvasBody.facePagerClearance.
+    //
+    // Watched UNCONDITIONALLY, outside the mode check, even though the pager
+    // only renders in view mode. Both are autoDispose, so reading them inside
+    // the ternary would drop the last listener the moment a pen is picked up
+    // and tear the wall's layout subscription down — then rebuild it on the
+    // way back out. That is a live drift query closing and reopening on every
+    // draw/view toggle, and it closes ASYNCHRONOUSLY: the cancellation posts
+    // a zero-duration timer that outlives the frame, which is why the canvas
+    // widget tests that switch modes failed with a pending timer rather than
+    // with anything that looked like a layout bug.
+    final photoCount =
+        ref.watch(wallOriginalsProvider(widget.wallId)).value?.length ?? 0;
+    final hasMinimap =
+        ref.watch(wallLayoutProvider(widget.wallId)).value?.baseline
+            .isDegenerate ==
+        false;
     final pagerHeight = drawState.mode == DrawMode.view
         ? FacePager.reservedHeight(
-            photoCount:
-                ref.watch(wallOriginalsProvider(widget.wallId)).value?.length ??
-                0,
-            hasMinimap:
-                ref
-                    .watch(wallLayoutProvider(widget.wallId))
-                    .value
-                    ?.baseline
-                    .isDegenerate ==
-                false,
+            photoCount: photoCount,
+            hasMinimap: hasMinimap,
           )
         : 0.0;
 
