@@ -23,6 +23,7 @@ import '../features/moderation/presentation/suggestions_inbox_screen.dart';
 import '../features/logbook/presentation/logbook_screen.dart';
 import '../features/notifications/presentation/notifications_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
+import '../features/topo/presentation/layout_editor_screen.dart';
 
 /// Where the legacy `/community` deep link (`?tab=`/`?focus=` query params —
 /// see `CommunityScreen`'s old `initialTab`/`focusWallId`, since replaced by
@@ -375,6 +376,15 @@ final appRouter = GoRouter(
         wallId: state.pathParameters['wallId']!,
         readOnly: state.uri.queryParameters['readonly'] == '1',
       ),
+    ),
+    // The face-layout editor: how this rock's photos are arranged around it.
+    // A separate route rather than a mode of the canvas because it edits the
+    // TOPO's shape rather than a photo's contents, and because it must stay
+    // reachable from the reader without disturbing whatever is drawn.
+    GoRoute(
+      path: '/walls/:wallId/layout',
+      builder: (context, state) =>
+          LayoutEditorScreen(wallId: state.pathParameters['wallId']!),
     ),
     // The AR alignment view for a wall — see ArScreen's class doc for the
     // native-camera-vs-overlay platform split.

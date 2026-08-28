@@ -82,13 +82,16 @@ void main() {
   // redundant, because the photo strip immediately below that row already
   // ends in a '+' tile (`photo-strip-add`) wired to the same `_pickImage`,
   // sitting right next to the thumbnails it adds to. The claim these tests
-  // defend is unchanged and still worth defending: there is no bottom-right
-  // FAB, and there is exactly ONE add-photo affordance on a canvas that has
-  // a photo. Only its identity moved.
+  // defend is unchanged and still worth defending: there is exactly ONE
+  // add-photo affordance on a canvas that has a photo. Only its identity has
+  // moved — twice now. It was a bottom-right FAB, then the photo strip's '+'
+  // tile, and since the strip was replaced by FacePager's dot row (design 4c)
+  // it is a bottom-right camera FAB again. A dot row has nothing you can
+  // append a '+' to and still have it read as "add a photo".
 
   testWidgets(
-    'A1: view mode renders no bottom-right add-photo affordance — the ONLY '
-    'add-photo control anywhere on screen is the photo strip\'s "+" tile',
+    'A1: view mode offers EXACTLY ONE add-photo affordance, in the top bar, '
+    'and no bottom-right FAB competing with the route legend',
     (tester) async {
       final seeded = await seedWallWithPhotoAndRoute(tester);
       addTearDown(seeded.db.close);
@@ -106,21 +109,20 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.view);
-      expect(find.byKey(const Key('photo-strip-add')), findsOneWidget);
+      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
       expect(
-        find.byKey(const Key('topo-add-photo-button')),
+        find.byType(FloatingActionButton),
         findsNothing,
-        reason:
-            'the top-bar image-plus glyph was removed as redundant with the '
-            'strip\'s own "+" tile — two controls for one action',
+        reason: 'a bottom-right FAB sits over the route legend and swallows '
+            'its per-route menu taps — painted, findable, unreachable',
       );
       expect(find.byTooltip('Pick a photo'), findsNothing);
     },
   );
 
   testWidgets(
-    'A2: the strip\'s "+" tile shows in view AND draw mode, and tapping it '
-    'invokes the same _pickImage handler the old FAB used (opens the '
+    'A2: the add-photo glyph shows in view mode, is withheld while drawing, '
+    'and tapping it invokes the same _pickImage handler (opens the '
     'photo-source action sheet)',
     (tester) async {
       final seeded = await seedWallWithPhotoAndRoute(tester);
@@ -139,32 +141,29 @@ void main() {
       await tester.pumpAndSettle();
 
       // View mode.
-      expect(find.byKey(const Key('photo-strip-add')), findsOneWidget);
+      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
 
-      // Draw mode.
+      // Draw mode: withheld. Mid-stroke is not the moment to open a photo
+      // picker, and the draw-mode bottom cluster owns that corner.
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pumpAndSettle();
       expect(seeded.container.read(drawControllerProvider(seeded.wallId)).mode, DrawMode.draw);
-      expect(
-        find.byKey(const Key('photo-strip-add')),
-        findsOneWidget,
-        reason: 'add-photo must still be reachable while drawing',
-      );
+      expect(find.byKey(const Key('topo-add-photo-button')), findsNothing);
 
       // Back to view (the bottom cluster's ✓ is the way out of draw mode
       // since 2026-08-12), then tap the tile and confirm it invokes
       // _pickImage.
       await tester.tap(find.byKey(const Key('topo-commit-button')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(const Key('photo-strip-add')));
+      await tester.tap(find.byKey(const Key('topo-add-photo-button')));
       await tester.pumpAndSettle();
 
       expect(
         find.byType(CupertinoActionSheet),
         findsOneWidget,
         reason:
-            'tapping photo-strip-add must invoke the same _pickImage handler '
-            'the old FAB used (showPhotoSourceSheet)',
+            'tapping the add-photo glyph must invoke the same _pickImage '
+            'handler (showPhotoSourceSheet)',
       );
 
       // Dismiss so the sheet doesn't leak into a later assertion/teardown.
@@ -250,8 +249,8 @@ void main() {
   );
 
   testWidgets(
-    'A4: draw mode still shows the undo/redo/clear/commit cluster, with no '
-    'bottom-right add-photo FAB alongside it',
+    'A4: draw mode still shows the undo/redo/clear/commit cluster, and the '
+    'add-photo glyph steps out of its way',
     (tester) async {
       final seeded = await seedWallWithPhotoAndRoute(tester);
       addTearDown(seeded.db.close);
@@ -277,19 +276,14 @@ void main() {
       expect(find.byKey(const Key('topo-clear-button')), findsOneWidget);
       expect(find.byKey(const Key('topo-commit-button')), findsOneWidget);
 
-      // The add-photo control lives in the photo strip (still reachable
-      // while drawing) — exactly one exists anywhere, never a second
-      // bottom-right floating FAB alongside the cluster.
-      expect(find.byKey(const Key('photo-strip-add')), findsOneWidget);
+      // Nothing competes with the cluster for the bottom of the screen.
       expect(find.byKey(const Key('topo-add-photo-button')), findsNothing);
+      expect(find.byType(FloatingActionButton), findsNothing);
     },
   );
 
   testWidgets('A5: with no photo yet, the empty state still offers a working '
-      'add-photo affordance — the user is never stranded. This is the case '
-      'the photo strip cannot cover: a wall with zero photos renders no '
-      'strip at all (see PhotoStrip\'s class doc), so the empty state\'s own '
-      'button is the sole entry point and must work.', (
+      'add-photo affordance — the user is never stranded.', (
     tester,
   ) async {
     final db = AppDatabase(NativeDatabase.memory());
@@ -411,7 +405,7 @@ void main() {
         findsNothing,
         reason: 'editing a route\'s details is an edit-mode action now',
       );
-      expect(find.byKey(const Key('topo-add-photo-button')), findsNothing);
+      expect(find.byKey(const Key('topo-add-photo-button')), findsOneWidget);
 
       // No RenderFlex overflow (or any other exception) from cramming the
       // back chevron + title + 5 icons into the top pill at the supported

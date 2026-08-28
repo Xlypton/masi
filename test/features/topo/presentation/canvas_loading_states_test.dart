@@ -33,7 +33,6 @@ import 'package:masi/features/topo/data/photo_files.dart' show PhotoWriteFailure
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/data/route_repository.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
-import 'package:masi/features/topo/presentation/photo_strip.dart';
 import 'package:masi/features/topo/presentation/topo_canvas_screen.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:masi/shared/presentation/masi_skeleton.dart';
@@ -247,66 +246,12 @@ void main() {
     },
   );
 
-  testWidgets(
-    'the photo strip renders a skeleton band, not an empty one, while the '
-    "wall's live photo list is still loading",
-    (tester) async {
-      final db = AppDatabase(NativeDatabase.memory());
-      final controller = StreamController<List<PhotoRef>>();
-      addTearDown(controller.close);
-      final container = ProviderContainer(
-        retry: (_, _) => null,
-        overrides: [
-          appDatabaseProvider.overrideWithValue(db),
-          nowMsProvider.overrideWithValue(() => 1000),
-          wallOriginalsProvider.overrideWith((ref, wallId) => controller.stream),
-        ],
-      );
-      addTearDown(db.close);
-      addTearDown(container.dispose);
-
-      await tester.pumpWidget(
-        wrap(
-          container,
-          Scaffold(
-            body: PhotoStrip(
-              wallId: 'wall-1',
-              activePhotoId: null,
-              onSelect: (_) {},
-            ),
-          ),
-        ),
-      );
-
-      await tester.pump(const Duration(milliseconds: 100));
-      expect(
-        find.byKey(const Key('photo-strip-loading')),
-        findsNothing,
-        reason: 'a fast list read must paint no loading state at all',
-      );
-
-      await tester.pump(const Duration(milliseconds: 150));
-      expect(
-        find.byKey(const Key('photo-strip-loading')),
-        findsOneWidget,
-        reason:
-            'a still-loading list is not an empty wall — it must not render as '
-            'an invisible band',
-      );
-      expect(find.byKey(const Key('photo-strip')), findsNothing);
-
-      // An EMPTY list, once it actually arrives, is the one state that may
-      // render nothing.
-      controller.add(const <PhotoRef>[]);
-      await tester.pump();
-      // Past MasiMotion.loadingMinVisible: the revealed skeleton is pinned for
-      // the hold even after the empty list lands (that hold is what stops it
-      // strobing), so this must wait it out rather than assert into it.
-      await tester.pump(const Duration(milliseconds: 500));
-      expect(find.byKey(const Key('photo-strip-loading')), findsNothing);
-      expect(find.byKey(const Key('photo-strip')), findsNothing);
-    },
-  );
+  // The two PhotoStrip loading tests that used to live here went with the
+  // widget. Navigating a rock's photos moved to FacePager's dots and minimap
+  // (design 4c), and the strip's skeleton band had no equivalent to port: a
+  // navigation control that is one frame late makes no false claim, whereas
+  // the strip's empty band claimed the wall had no photos. See
+  // `face_pager_test.dart` for the behaviour that did carry over.
 
   testWidgets(
     "the canvas title shows a placeholder while the wall's name loads, never "
@@ -533,69 +478,4 @@ void main() {
     },
   );
 
-  testWidgets(
-    'a manage action shows a busy cue on the tile it is about, for the whole '
-    'window between the confirm tap and its SnackBar',
-    (tester) async {
-      final seeded = await seedWallWithPhoto(tester);
-      addTearDown(seeded.db.close);
-      addTearDown(seeded.container.dispose);
-
-      // A second photo, so the tapped one is not already the cover (the manage
-      // sheet hides "Set as cover" for the primary photo).
-      late String photo2Id;
-      await tester.runAsync(() async {
-        photo2Id = await seeded.container
-            .read(libraryCrudRepositoryProvider)
-            .attachPhotoToWall(
-              seeded.wallId,
-              XFile('/tmp/canvas-loading-states-test-2.jpg'),
-              1000,
-              2000,
-            );
-      });
-
-      final coverGate = Completer<void>();
-      await tester.pumpWidget(
-        wrap(
-          seeded.container,
-          Scaffold(
-            body: PhotoStrip(
-              wallId: seeded.wallId,
-              activePhotoId: seeded.photoId,
-              onSelect: (_) {},
-              onSetCover: (_) => coverGate.future,
-            ),
-          ),
-        ),
-      );
-      await tester.pump(const Duration(milliseconds: 300));
-
-      await tester.longPress(find.byKey(Key('photo-strip-item-$photo2Id')));
-      await tester.pump(const Duration(milliseconds: 400));
-      await tester.tap(find.byKey(Key('photo-manage-setcover-$photo2Id')));
-      // The sheet pops itself, then the write runs.
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 100));
-      await tester.pump(const Duration(milliseconds: 400));
-
-      expect(
-        find.byKey(Key('photo-strip-item-busy-$photo2Id')),
-        findsOneWidget,
-        reason:
-            'the sheet is gone by now, so the tile is the only place left that '
-            'can say the write is still running',
-      );
-      expect(
-        find.byKey(Key('photo-strip-item-busy-${seeded.photoId}')),
-        findsNothing,
-        reason: 'only the photo being changed is busy',
-      );
-
-      coverGate.complete();
-      await tester.pump();
-      await tester.pump(const Duration(milliseconds: 500));
-      expect(find.byKey(Key('photo-strip-item-busy-$photo2Id')), findsNothing);
-    },
-  );
 }

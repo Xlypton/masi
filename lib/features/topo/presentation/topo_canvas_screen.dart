@@ -31,7 +31,8 @@ import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/data/photo_write_exception.dart';
 import 'package:masi/features/topo/domain/topo_route.dart';
 import 'package:masi/features/topo/presentation/canvas_chrome.dart';
-import 'package:masi/features/topo/presentation/photo_strip.dart';
+import '../application/face_layout_providers.dart';
+import 'face_pager.dart';
 import 'package:masi/features/topo/presentation/photo_source_sheet.dart';
 import 'package:masi/features/topo/presentation/route_legend.dart';
 import 'package:masi/features/topo/presentation/route_metadata_sheet.dart';
@@ -1046,6 +1047,64 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// [PhotoRepository.setPrimaryPhoto]'s doc); [wallOriginalsProvider]'s
   /// live stream re-emits on its own, so the strip's star badge moves to
   /// [photo] the moment this write lands.
+  /// Long-press on a face dot: the photo-management actions that used to
+  /// hang off each strip tile.
+  ///
+  /// Navigation moved to the dots and the minimap, but adding, re-covering
+  /// and deleting a photo still have to live somewhere, and the dot is the
+  /// only thing on screen that stands for exactly one photo. A sheet rather
+  /// than a popup menu because the dot is 7px wide and an anchored menu would
+  /// have nothing to anchor to.
+  Future<void> _showFaceMenu(PhotoRef photo) async {
+    if (widget.readOnly) return;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              key: const Key('face-menu-add'),
+              leading: const MasiIcon('image_add'),
+              title: const Text('Add a photo'),
+              onTap: () => Navigator.of(context).pop('add'),
+            ),
+            if (!photo.isPrimary)
+              ListTile(
+                key: const Key('face-menu-cover'),
+                leading: const MasiIcon('star'),
+                title: const Text('Set as cover'),
+                onTap: () => Navigator.of(context).pop('cover'),
+              ),
+            ListTile(
+              key: const Key('face-menu-layout'),
+              leading: const MasiIcon('topo_map'),
+              title: const Text('Edit layout'),
+              onTap: () => Navigator.of(context).pop('layout'),
+            ),
+            ListTile(
+              key: const Key('face-menu-delete'),
+              leading: const MasiIcon('delete'),
+              title: const Text('Delete photo'),
+              onTap: () => Navigator.of(context).pop('delete'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    switch (action) {
+      case 'add':
+        await _pickImage();
+      case 'cover':
+        await _handleSetCoverPhoto(photo);
+      case 'layout':
+        if (mounted) context.push('/walls/${widget.wallId}/layout');
+      case 'delete':
+        await _handleDeletePhoto(photo);
+    }
+  }
+
   Future<void> _handleSetCoverPhoto(PhotoRef photo) async {
     if (widget.readOnly) return;
     try {
@@ -1596,11 +1655,13 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                     MasiSpacing.lg,
                     0,
                   ),
-                  // The title row and the (multi-photo-only) PhotoStrip share
-                  // a SINGLE GlassChrome card (an inner Column keeps them
-                  // from overlapping — no transparent gap between them
-                  // exposes the full-bleed photo behind). The (draw-mode-only)
-                  // symbol palette remains a separate floating sibling below,
+                  // The title row sits in a GlassChrome card. It used to
+                  // share that card with the 52px PhotoStrip; navigating
+                  // between a rock's photos now happens at the BOTTOM, in
+                  // FacePager's dots and minimap, because six thumbnails in
+                  // upload order told a reader how MANY photos there were and
+                  // never where any of them was taken from. The (draw-mode-
+                  // only) symbol palette remains a separate floating sibling below,
                   // in this outer Column, so it still can never overlap the
                   // shared card: its position is always "directly below
                   // whatever's already rendered above it, plus a fixed gap",
@@ -1626,19 +1687,6 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                               drawNotifier,
                               currentTopo,
                               locationUnknown,
-                            ),
-                            PhotoStrip(
-                              wallId: widget.wallId,
-                              activePhotoId: drawState.activePhotoId,
-                              onSelect: _switchToPhoto,
-                              readOnly: widget.readOnly,
-                              onAdd: widget.readOnly ? null : _pickImage,
-                              onSetCover: widget.readOnly
-                                  ? null
-                                  : _handleSetCoverPhoto,
-                              onDelete: widget.readOnly
-                                  ? null
-                                  : _handleDeletePhoto,
                             ),
                           ],
                         ),
@@ -1695,6 +1743,27 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // Where the reader moves between this rock's faces. Above
+                    // everything else in the bottom cluster because it is
+                    // navigation rather than an action on what is on screen,
+                    // and hidden entirely in draw mode: a contributor drawing
+                    // a line is working on ONE photo, and offering to walk
+                    // round the rock mid-stroke is an invitation to lose it.
+                    if (drawState.mode == DrawMode.view)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: MasiSpacing.sm),
+                        child: FacePager(
+                          wallId: widget.wallId,
+                          activePhotoId: drawState.activePhotoId,
+                          onSelect: _switchToPhoto,
+                          onManage: widget.readOnly ? null : _showFaceMenu,
+                          onEditLayout: widget.readOnly
+                              ? null
+                              : () => context.push(
+                                  '/walls/${widget.wallId}/layout',
+                                ),
+                        ),
+                      ),
                     // UF-2: shares the bottom slot with the draw-mode chrome
                     // rather than needing its own, because the two are
                     // mutually exclusive by construction — a set load failure
@@ -2228,6 +2297,33 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           onPressed: arSupported
               ? () => context.push('/walls/${widget.wallId}/ar')
               : null,
+          color: colors.accent,
+          style: _topRowIconStyle(),
+        ),
+      );
+    }
+
+    // Adding a photo. It has moved twice: a bottom-right FAB, then the '+'
+    // tile at the end of the 52px photo strip — the right place while that
+    // strip existed, right beside the thumbnails it added to. Navigation
+    // moved to FacePager's dot row and the strip went with it, and a row of
+    // 7px dots has nothing you can append a '+' to that still reads as "add
+    // a photo".
+    //
+    // It is NOT a floating bottom-right button, which is where design 4c
+    // draws it and where this first put it back. That corner belongs to the
+    // route legend: a FAB there sits over the per-route menu buttons and
+    // silently swallows their taps — the control still painted, still found
+    // by a test, and simply not reachable. Up here it cannot overlap
+    // anything, and it sits with the other canvas-wide actions, which is
+    // what it is.
+    if (drawState.mode == DrawMode.view && !widget.readOnly) {
+      actions.add(
+        IconButton(
+          key: const Key('topo-add-photo-button'),
+          icon: MasiIcon('image_add'),
+          tooltip: 'Add a photo',
+          onPressed: _pickImage,
           color: colors.accent,
           style: _topRowIconStyle(),
         ),
@@ -2813,11 +2909,32 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         ),
       );
     }
+    // Computed here, where both providers are already watched, rather than
+    // inside the body — see TopoCanvasBody.facePagerClearance.
+    final pagerHeight = drawState.mode == DrawMode.view
+        ? FacePager.reservedHeight(
+            photoCount:
+                ref.watch(wallOriginalsProvider(widget.wallId)).value?.length ??
+                0,
+            hasMinimap:
+                ref
+                    .watch(wallLayoutProvider(widget.wallId))
+                    .value
+                    ?.baseline
+                    .isDegenerate ==
+                false,
+          )
+        : 0.0;
+
     return TopoCanvasBody(
       wallId: widget.wallId,
       imagePath: imagePath,
       imageSize: imageSize,
       drawState: drawState,
+      // The gap rides INSIDE the height: a wall with one photo renders no
+      // pager, and reserving a gap for a control that is not there moved the
+      // legend on every single-photo topo in the app.
+      facePagerClearance: pagerHeight == 0 ? 0 : pagerHeight + MasiSpacing.sm,
       transformationController: _transformationController,
       canvasKey: _canvasKey,
       readOnly: widget.readOnly,
@@ -2873,6 +2990,7 @@ class TopoCanvasBody extends ConsumerWidget {
     this.onLogAscent,
     this.onEditRoute,
     this.onOpenCommunity,
+    this.facePagerClearance = 0,
   });
 
   /// FIX #6: family key for [drawControllerProvider]/[legendExpandedProvider]
@@ -2934,6 +3052,16 @@ class TopoCanvasBody extends ConsumerWidget {
   /// what makes the handle mean something at last. See [_LegendHeader].
   final VoidCallback? onOpenCommunity;
 
+  /// Bottom clearance the route legend must leave for [FacePager], which
+  /// shares the same floating band in view mode.
+  ///
+  /// Passed IN rather than watched here. Reading `wallOriginalsProvider` and
+  /// `wallLayoutProvider` from this widget opened a second drift subscription
+  /// per build, whose teardown left a pending timer at the end of every
+  /// widget test that pumped this body — a failure with nothing to do with
+  /// what those tests were about. The screen above already watches both.
+  final double facePagerClearance;
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final hasRoutes = drawState.routes.isNotEmpty;
@@ -2977,7 +3105,17 @@ class TopoCanvasBody extends ConsumerWidget {
               // chip hits the hint instead, which is how this was found.
               (drawHintMessage(ref.watch(drawHintProvider)) == null
                   ? 0.0
-                  : kDrawHintHeight)
+                  : kDrawHintHeight) +
+              // FacePager shares this band in view mode. Without its height
+              // the legend sits on top of the dot row, and a tap meant for a
+              // dot lands on the legend instead — the same failure the draw
+              // hint above caused, found the same way.
+              //
+              // The gap is INSIDE the height, not added beside it: a wall with
+              // one photo renders no pager, and reserving a gap for a control
+              // that is not there moved the legend 8px on every single-photo
+              // topo in the app.
+              facePagerClearance
         : 0.0;
 
     return Column(
