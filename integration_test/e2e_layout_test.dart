@@ -9,6 +9,7 @@
 import 'package:flutter/material.dart' hide Baseline;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
+import 'package:masi/app/router.dart' show appRouter;
 import 'package:masi/main_e2e.dart' show e2eBoot;
 
 import 'e2e_support.dart';
@@ -23,6 +24,12 @@ void main() {
   Future<void> openFacesWall(WidgetTester tester) async {
     await e2eBoot();
     await settleNetwork(tester, budget: const Duration(seconds: 10));
+    // `appRouter` is module-level, so navigation SURVIVES a re-boot: the
+    // second test in this file starts wherever the first one finished, deep
+    // inside a topo, and every `find` for a Topos-root affordance then times
+    // out. Drive the router home first.
+    appRouter.go('/');
+    await settle(tester, frames: 30);
     expect(
       find.byKey(const Key('account-send-link')),
       findsNothing,

@@ -68,7 +68,7 @@ class FacePager extends ConsumerWidget {
   /// would spend that frame sitting on top of the dots — which is exactly the
   /// class of bug the draw-hint clearance beside it was added to fix.
   static const double dotsHeight = 35;
-  static const double minimapHeight = 122;
+  static const double minimapHeight = 146;
 
   /// Vertical space this widget will occupy, for callers that must clear it.
   static double reservedHeight({
@@ -209,7 +209,10 @@ class _Minimap extends StatelessWidget {
   final VoidCallback? onEditLayout;
   final MasiColors colors;
 
-  static const Size _size = Size(132, 74);
+  /// The plan box. The design draws a 320x180 plan space at 132px on a
+  /// phone; a little larger here, because the caption and the Edit button
+  /// share its width and 132px cannot hold both.
+  static const Size _size = Size(184, 100);
 
   @override
   Widget build(BuildContext context) {
@@ -252,9 +255,16 @@ class _Minimap extends StatelessWidget {
           // button. The whole line used to be tappable at 10px with the word
           // 'edit' appended — no affordance, no hit area worth the name, and
           // the only discoverable way into the editor.
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
+          //
+          // Width-limited to the plan box: an unbounded `spaceBetween` row
+          // takes every pixel offered, and this card sits in a `Column` with
+          // the whole screen to offer — which stretched a 184px minimap into
+          // a full-bleed band across the topo.
+          SizedBox(
+            width: _size.width,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
               Flexible(
                 child: Text(
                   'where each photo was taken',
@@ -297,9 +307,10 @@ class _Minimap extends StatelessWidget {
                         ),
                       ],
                     ),
+                    ),
                   ),
-                ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
