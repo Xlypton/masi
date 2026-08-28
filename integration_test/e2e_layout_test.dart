@@ -6,6 +6,8 @@
 // run without a single assertion touching it. `tool/e2e_seed.sh` now seeds a
 // four-face wall carrying NO capture metadata, which is what every photo in
 // the real database looks like.
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart' hide Baseline;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:integration_test/integration_test.dart';
@@ -172,5 +174,88 @@ void main() {
       timeout: const Duration(seconds: 15),
     );
     await binding.takeScreenshot('44-layout-reset');
+  });
+
+  testWidgets('layout: four faces on a RING never cover each other', (
+    tester,
+  ) async {
+    // The exact shape the user photographed: a boulder traced as a closed
+    // loop, with every thumbnail piled in the middle of it. Two things put it
+    // there — an inward normal on a counter-clockwise stroke and no collision
+    // handling — and both are only visible once a real ring exists, which is
+    // why this test draws one rather than asserting on the seeded strip.
+    await openFacesWall(tester);
+
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('face-pager-edit-layout')),
+      'the Edit button on the minimap',
+    );
+    await settle(tester, frames: 30);
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-redraw')),
+      'the Redraw line button',
+    );
+    await settle(tester, frames: 10);
+
+    final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final centre = canvas.center;
+    final radius = math.min(canvas.width, canvas.height) / 2 - 30;
+    Offset around(double turn) => centre +
+        Offset(math.cos(turn * 2 * math.pi), math.sin(turn * 2 * math.pi)) *
+            radius;
+
+    // Counter-clockwise on screen, and ending where it began so the stroke
+    // closes into a ring rather than staying a strip.
+    final gesture = await tester.startGesture(around(0));
+    for (var i = 1; i <= 32; i++) {
+      await gesture.moveTo(around(i / 32));
+      await tester.pump(const Duration(milliseconds: 16));
+    }
+    await gesture.up();
+    await settleNetwork(tester, budget: const Duration(seconds: 6));
+    await binding.takeScreenshot('45-layout-ring');
+
+    final rects = <Rect>[];
+    for (final element in find
+        .byWidgetPredicate(
+          (w) =>
+              w is Container &&
+              w.key is ValueKey<String> &&
+              (w.key! as ValueKey<String>).value.startsWith('layout-face-') &&
+              !(w.key! as ValueKey<String>).value.contains('pinned'),
+        )
+        .evaluate()) {
+      rects.add(tester.getRect(find.byWidget(element.widget)));
+    }
+    expect(
+      rects.length,
+      4,
+      reason: 'all four faces must still be drawn on the ring',
+    );
+    for (var i = 0; i < rects.length; i++) {
+      for (var j = i + 1; j < rects.length; j++) {
+        expect(
+          rects[i].overlaps(rects[j]),
+          isFalse,
+          reason: 'thumbnails ${rects[i]} and ${rects[j]} cover each other',
+        );
+      }
+    }
+
+    // And back, so the fixture is left as it was found.
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-reset')),
+      'the reset-to-automatic action',
+    );
+    await settleNetwork(tester, budget: const Duration(seconds: 6));
+    await waitFor(
+      tester,
+      find.byKey(const Key('layout-confidence-banner')),
+      'the guess notice after resetting to the automatic line',
+      timeout: const Duration(seconds: 15),
+    );
   });
 }
