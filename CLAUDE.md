@@ -448,6 +448,16 @@ The AR/camera path can ONLY be verified on the physical device, and the usual `f
   required before declaring done and before any deploy whenever the change touched app behaviour, UI,
   routing, the data layer, or anything server-gated; skip it only for pure refactors, docs, or
   tooling — and say which case you decided.
+- **Deploy at the end of every feature, without being asked** (standing instruction, 2026-08-29).
+  A finished feature is a DEPLOYED feature: run the `deploy-web` skill as the last step of any
+  change that reaches the user, immediately after gate 3 passes, and report the live URL and the
+  verified `SHELL_VERSION` alongside the work. Do not stop at "pushed" and ask whether to ship.
+  The three gates above are the gate on that, not a reason to defer it — deploy is what happens
+  when they pass, and a red gate is a reason to FIX, not to ship or to ask.
+  Three things still stop a deploy, and each is reported rather than worked around: a failing
+  gate, a change whose blast radius the user has not seen yet (a schema migration is already live
+  the moment it is applied — say so), and an explicit "don't deploy". Docs-only, tooling-only and
+  test-only changes are not features and need no deploy; say that is why you skipped it.
 - **A skipped test is not a passed test.** `flutter test` reports skips as `~N`, and several exist by
   design (goldens off-macOS, the POSIX-only `drive_web.sh` cases off-Linux/macOS). When reporting a
   green run, say what was skipped and why — "tests green" means something weaker on Windows than on
