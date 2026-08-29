@@ -87,6 +87,12 @@ void main() {
           'panels that have to clear each other',
     );
     expect(
+      find.byKey(const Key('topo-dock-body')),
+      findsNothing,
+      reason: 'the dock opens as ONE LINE — the photo is what the reader came '
+          'for, and the panel over it used to take most of the phone',
+    );
+    expect(
       find.byKey(const Key('face-pager-minimap')),
       findsNothing,
       reason: 'the map is a glance you ask for — mounting it permanently is '

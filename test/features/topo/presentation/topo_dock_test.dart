@@ -104,9 +104,39 @@ void main() {
     await tester.pump();
   }
 
+  /// Opens the dock's body. Closed is the DEFAULT now — one line, so the photo
+  /// keeps the screen — which is why every assertion about the route list has
+  /// to ask for it first.
+  Future<void> openBody(WidgetTester tester) async {
+    await tester.tap(find.byKey(const Key('topo-dock-routes-toggle')));
+    await tester.pumpAndSettle();
+  }
+
+  testWidgets('the dock is ONE LINE until you ask for more', (tester) async {
+    await pumpDock(tester);
+
+    expect(find.byKey(const Key('topo-dock')), findsOneWidget);
+    expect(
+      find.byKey(const Key('face-pager-dots')),
+      findsOneWidget,
+      reason: 'which face you are on is the one thing worth a permanent line',
+    );
+    expect(find.byKey(const Key('topo-dock-routes')), findsNothing);
+    expect(find.byKey(const Key('face-pager-minimap')), findsNothing);
+
+    // A bar, not a panel: the photo is what the reader opened the screen for.
+    final dock = tester.getRect(find.byKey(const Key('topo-dock')));
+    expect(
+      dock.height,
+      lessThan(96),
+      reason: 'closed, the dock must not read as a panel',
+    );
+  });
+
   testWidgets('the faces and the routes are ONE panel, not two that have to '
       'clear each other', (tester) async {
     await pumpDock(tester);
+    await openBody(tester);
 
     expect(find.byKey(const Key('topo-dock')), findsOneWidget);
     // The dots ride inside it, not in a panel of their own below it.
@@ -128,6 +158,7 @@ void main() {
   testWidgets('the map is a lane you ask for, not a card mounted above the '
       'route list', (tester) async {
     await pumpDock(tester);
+    await openBody(tester);
 
     // Closed by default. This is the 153pt of permanently-mounted card that
     // pushed the route list into the middle of the screen.
@@ -152,10 +183,22 @@ void main() {
     expect(find.byKey(const Key('topo-dock-routes')), findsOneWidget);
   });
 
+  testWidgets('the map toggle opens the dock with it — a button that changed '
+      'a closed panel would read as dead', (tester) async {
+    await pumpDock(tester);
+
+    expect(find.byKey(const Key('topo-dock-body')), findsNothing);
+    await tester.tap(find.byKey(const Key('topo-dock-map-toggle')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('face-pager-minimap')), findsOneWidget);
+  });
+
   testWidgets('nothing in the bottom band overlaps anything else', (
     tester,
   ) async {
     await pumpDock(tester);
+    await openBody(tester);
 
     final dock = tester.getRect(find.byKey(const Key('topo-dock')));
     // The dock is the only floating panel down here now, so the check that
@@ -174,6 +217,7 @@ void main() {
   testWidgets('collapsing leaves the face lane behind — navigation is not '
       'part of the route list', (tester) async {
     await pumpDock(tester);
+    await openBody(tester);
 
     await tester.tap(find.byKey(const Key('topo-dock-routes-toggle')));
     await tester.pumpAndSettle();

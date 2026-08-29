@@ -82,6 +82,33 @@ final legendExpandedProvider =
   LegendExpandedController.new,
 );
 
+/// Whether the DOCK's body is open at all.
+///
+/// A separate flag from [legendExpandedProvider], which still opens the plain
+/// floating legend card by default for the callers that get one (draw mode,
+/// single-photo walls). The dock's default is **closed**, and that is the
+/// whole point of it: what a reader opened the screen for is the photo, and
+/// the panel over it used to take ~40% of a phone before the face lane and the
+/// map were even counted. Closed, the dock is one line — which face you are
+/// on, and how many routes there are to open.
+class DockExpandedController extends Notifier<bool> {
+  DockExpandedController(this.wallId);
+
+  final String wallId;
+
+  @override
+  bool build() => false;
+
+  void toggle() => state = !state;
+}
+
+/// Keyed by wallId and autoDispose, exactly as [legendExpandedProvider] is and
+/// for the same reasons — see that provider's doc.
+final dockExpandedProvider =
+    NotifierProvider.autoDispose.family<DockExpandedController, bool, String>(
+  DockExpandedController.new,
+);
+
 /// Whether the dock's body is showing the face MAP rather than the route list.
 ///
 /// A separate flag from [legendExpandedProvider] rather than a three-way enum

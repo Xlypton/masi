@@ -3230,22 +3230,26 @@ class TopoCanvasBody extends ConsumerWidget {
                         layout: faceLayout,
                         activePhotoId: drawState.activePhotoId,
                         routeCount: drawState.routes.length,
-                        expanded: legendExpanded,
+                        // The dock's OWN open flag, not the legend's: the
+                        // plain floating card still opens by default for the
+                        // callers that get one, and the dock deliberately does
+                        // not.
+                        expanded: ref.watch(dockExpandedProvider(wallId)),
                         mapOpen: ref.watch(dockMapOpenProvider(wallId)),
                         legendMaxHeight: overlayLegendMaxHeight,
                         readOnly: readOnly,
                         isSwitchingPhoto: drawState.isSwitchingPhoto,
                         onToggleExpanded: () => ref
-                            .read(legendExpandedProvider(wallId).notifier)
+                            .read(dockExpandedProvider(wallId).notifier)
                             .toggle(),
                         onToggleMap: () {
                           // Opening the map opens the dock with it: a toggle
                           // that quietly changed the contents of a closed
                           // panel would read as a dead button.
                           ref.read(dockMapOpenProvider(wallId).notifier).toggle();
-                          if (!legendExpanded) {
+                          if (!ref.read(dockExpandedProvider(wallId))) {
                             ref
-                                .read(legendExpandedProvider(wallId).notifier)
+                                .read(dockExpandedProvider(wallId).notifier)
                                 .toggle();
                           }
                         },
