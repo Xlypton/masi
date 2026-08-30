@@ -23,6 +23,7 @@ import '../features/moderation/presentation/suggestions_inbox_screen.dart';
 import '../features/logbook/presentation/logbook_screen.dart';
 import '../features/notifications/presentation/notifications_screen.dart';
 import '../features/topo/presentation/topo_canvas_screen.dart';
+import '../features/topo/presentation/face_map_screen.dart';
 import '../features/topo/presentation/layout_editor_screen.dart';
 
 /// Where the legacy `/community` deep link (`?tab=`/`?focus=` query params —
@@ -385,6 +386,18 @@ final appRouter = GoRouter(
       path: '/walls/:wallId/layout',
       builder: (context, state) =>
           LayoutEditorScreen(wallId: state.pathParameters['wallId']!),
+    ),
+    // The plan view: this rock from above, with every photo standing where
+    // it was taken from. A full screen rather than a card inside the reading
+    // dock — see FaceMapScreen's own doc for why that card had to go. Pops
+    // the chosen photo's id back to the canvas that pushed it.
+    GoRoute(
+      path: '/walls/:wallId/faces',
+      builder: (context, state) => FaceMapScreen(
+        wallId: state.pathParameters['wallId']!,
+        initialPhotoId: state.uri.queryParameters['photo'],
+        readOnly: state.uri.queryParameters['readonly'] == '1',
+      ),
     ),
     // The AR alignment view for a wall — see ArScreen's class doc for the
     // native-camera-vs-overlay platform split.

@@ -66,6 +66,8 @@ void main() {
     List<TopoRoute> routes = const [route],
     DrawMode mode = DrawMode.view,
     LayoutResult? layout,
+    Map<String, int> routeCounts = const {},
+    VoidCallback? onOpenFaceMap,
   }) async {
     tester.view.physicalSize = const Size(390, 844);
     tester.view.devicePixelRatio = 1;
@@ -94,8 +96,9 @@ void main() {
               transformationController: controller,
               facePhotos: photos(faces),
               faceLayout: layout ?? ringLayout(faces),
+              faceRouteCounts: routeCounts,
               onSelectFace: (_) {},
-              onEditLayout: () {},
+              onOpenFaceMap: onOpenFaceMap ?? () {},
             ),
           ),
         ),
@@ -117,18 +120,21 @@ void main() {
 
     expect(find.byKey(const Key('topo-dock')), findsOneWidget);
     expect(
-      find.byKey(const Key('face-pager-dots')),
+      find.byKey(const Key('face-rail')),
       findsOneWidget,
       reason: 'which face you are on is the one thing worth a permanent line',
     );
     expect(find.byKey(const Key('topo-dock-routes')), findsNothing);
-    expect(find.byKey(const Key('face-pager-minimap')), findsNothing);
 
     // A bar, not a panel: the photo is what the reader opened the screen for.
+    // Measured at 95pt with four faces — the same band the row of 7px dots
+    // occupied, because the dots carried a caption-height gap and their own
+    // padding anyway. The pictures are free; what the reader got back is the
+    // 153pt map card this dock no longer mounts.
     final dock = tester.getRect(find.byKey(const Key('topo-dock')));
     expect(
       dock.height,
-      lessThan(96),
+      lessThan(104),
       reason: 'closed, the dock must not read as a panel',
     );
   });
@@ -141,9 +147,9 @@ void main() {
     expect(find.byKey(const Key('topo-dock')), findsOneWidget);
     // The dots ride inside it, not in a panel of their own below it.
     final dock = tester.getRect(find.byKey(const Key('topo-dock')));
-    final dots = tester.getRect(find.byKey(const Key('face-pager-dots')));
+    final rail = tester.getRect(find.byKey(const Key('face-rail')));
     expect(
-      dock.contains(dots.topLeft) && dock.contains(dots.bottomRight),
+      dock.contains(rail.topLeft) && dock.contains(rail.bottomRight),
       isTrue,
       reason: 'the face lane must be a row of the dock, not a sibling of it',
     );
@@ -152,46 +158,51 @@ void main() {
     // old layout could not hold without a clearance constant.
     final legend = tester.getRect(find.byKey(const Key('topo-dock-routes')));
     expect(dock.contains(legend.topLeft), isTrue);
-    expect(legend.top, greaterThanOrEqualTo(dots.bottom));
+    expect(legend.top, greaterThanOrEqualTo(rail.bottom));
   });
 
-  testWidgets('the map is a lane you ask for, not a card mounted above the '
+  testWidgets('the map is a screen you ask for, not a card mounted above the '
       'route list', (tester) async {
-    await pumpDock(tester);
+    var opened = 0;
+    await pumpDock(tester, onOpenFaceMap: () => opened++);
     await openBody(tester);
 
-    // Closed by default. This is the 153pt of permanently-mounted card that
-    // pushed the route list into the middle of the screen.
-    expect(find.byKey(const Key('face-pager-minimap')), findsNothing);
+    // Nothing of the plan is mounted here at all any more. This is the 153pt
+    // of permanently-mounted card that pushed the route list into the middle
+    // of the screen — the dock's body is the routes and only the routes.
     expect(find.byKey(const Key('topo-dock-routes')), findsOneWidget);
 
-    await tester.tap(find.byKey(const Key('topo-dock-map-toggle')));
+    await tester.tap(find.byKey(const Key('face-rail-map')));
     await tester.pumpAndSettle();
 
-    // One lane at a time: opening the map puts the routes away rather than
-    // stacking on them.
-    expect(find.byKey(const Key('face-pager-minimap')), findsOneWidget);
-    expect(find.byKey(const Key('topo-dock-routes')), findsNothing);
+    expect(opened, 1, reason: 'the plan tile opens the full-screen map');
     expect(
-      find.byKey(const Key('face-pager-dots')),
+      find.byKey(const Key('topo-dock-routes')),
+      findsOneWidget,
+      reason: 'asking for the map must not put the route list away',
+    );
+    expect(
+      find.byKey(const Key('face-rail')),
       findsOneWidget,
       reason: 'the lane is pinned — which face you are on never goes away',
     );
-
-    await tester.tap(find.byKey(const Key('topo-dock-map-toggle')));
-    await tester.pumpAndSettle();
-    expect(find.byKey(const Key('topo-dock-routes')), findsOneWidget);
   });
 
-  testWidgets('the map toggle opens the dock with it — a button that changed '
-      'a closed panel would read as dead', (tester) async {
-    await pumpDock(tester);
+  testWidgets('the plan tile works while the dock is CLOSED — the rail is '
+      'pinned, so everything on it is reachable at one line', (tester) async {
+    var opened = 0;
+    await pumpDock(tester, onOpenFaceMap: () => opened++);
 
     expect(find.byKey(const Key('topo-dock-body')), findsNothing);
-    await tester.tap(find.byKey(const Key('topo-dock-map-toggle')));
+    await tester.tap(find.byKey(const Key('face-rail-map')));
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('face-pager-minimap')), findsOneWidget);
+    expect(opened, 1);
+    expect(
+      find.byKey(const Key('topo-dock-body')),
+      findsNothing,
+      reason: 'opening a screen must not also expand the panel behind it',
+    );
   });
 
   testWidgets('nothing in the bottom band overlaps anything else', (
@@ -204,9 +215,9 @@ void main() {
     // The dock is the only floating panel down here now, so the check that
     // matters is that the two things that used to be separate panels are
     // stacked inside it without touching.
-    final dots = tester.getRect(find.byKey(const Key('face-pager-dots')));
+    final rail = tester.getRect(find.byKey(const Key('face-rail')));
     final legend = tester.getRect(find.byKey(const Key('topo-dock-routes')));
-    expect(dots.overlaps(legend), isFalse);
+    expect(rail.overlaps(legend), isFalse);
 
     // And it stays on screen: a panel taller than the viewport is the other
     // way this band has broken.
@@ -224,7 +235,7 @@ void main() {
 
     expect(find.byKey(const Key('topo-dock-routes')), findsNothing);
     expect(
-      find.byKey(const Key('face-pager-dots')),
+      find.byKey(const Key('face-rail')),
       findsOneWidget,
       reason: 'putting the routes away must not take the faces with them',
     );
@@ -244,7 +255,7 @@ void main() {
     await pumpDock(tester, mode: DrawMode.draw);
 
     expect(find.byKey(const Key('topo-dock')), findsNothing);
-    expect(find.byKey(const Key('face-pager-dots')), findsNothing);
+    expect(find.byKey(const Key('face-rail')), findsNothing);
   });
 
   testWidgets('a degenerate baseline offers no map button rather than an '
@@ -259,7 +270,7 @@ void main() {
     );
 
     expect(find.byKey(const Key('topo-dock')), findsOneWidget);
-    expect(find.byKey(const Key('face-pager-dots')), findsOneWidget);
-    expect(find.byKey(const Key('topo-dock-map-toggle')), findsNothing);
+    expect(find.byKey(const Key('face-rail')), findsOneWidget);
+    expect(find.byKey(const Key('face-rail-map')), findsNothing);
   });
 }

@@ -12,15 +12,17 @@ import 'package:masi/features/topo/application/face_layout_providers.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/face_lane.dart';
 
-/// [FaceDots] and [FaceMinimap] are what replaced the 52px photo strip: the
-/// reader's way round a rock with several photos. They live in the dock's
-/// pinned lane now (see `topo_dock_test.dart` for that composition); here they
-/// are exercised on their own, which is what they are built for — both take
-/// their data and read no provider.
+/// [FaceRail] is the reader's way round a rock with several photos, and
+/// [FaceMapPlan] is the plan view it opens. The rail lives in the dock's
+/// pinned lane (see `topo_dock_test.dart` for that composition); here both are
+/// exercised on their own, which is what they are built for — each takes its
+/// data and reads no provider.
 ///
-/// The behaviour worth pinning is what the strip could not do — say WHERE each
-/// photo was taken — and what it must not lose: switching photos, and the
-/// management actions that used to hang off each tile.
+/// What is worth pinning is the difference from the row of 7px dots this
+/// replaced. A dot said there was a fourth face; a tile says what is on it,
+/// which side has the climbing, and — through the plan tile — where it stands
+/// on the rock. So the assertions here are about the tiles being real,
+/// distinguishable and countable, not merely present.
 void main() {
   late AppDatabase db;
 
@@ -114,7 +116,7 @@ void main() {
     },
   );
 
-  testWidgets('one dot per photo, and tapping one switches to it', (
+  testWidgets('one tile per photo, and tapping one switches to it', (
     tester,
   ) async {
     await seedWall(photos: 3);
@@ -126,12 +128,15 @@ void main() {
       wrap(
         container,
         laneProbe(
-          (context, photos, layout) => FaceDots(
+          (context, photos, layout) => FaceRail(
             photos: photos,
             layout: layout,
             activePhotoId: 'photo-0',
+            routeCounts: const {},
             onSelect: (photo) => selected = photo,
             onManage: null,
+            onOpenMap: null,
+            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -139,17 +144,86 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('face-pager-dots')), findsOneWidget);
+    expect(find.byKey(const Key('face-rail')), findsOneWidget);
     for (var i = 0; i < 3; i++) {
-      expect(find.byKey(Key('face-dot-photo-$i')), findsOneWidget);
+      expect(find.byKey(Key('face-rail-tile-photo-$i')), findsOneWidget);
     }
 
-    await tester.tap(find.byKey(const Key('face-dot-photo-2')));
+    await tester.tap(find.byKey(const Key('face-rail-tile-photo-2')));
     await tester.pumpAndSettle();
     expect(selected?.id, 'photo-2');
   });
 
-  testWidgets('with every sensor absent the lane still navigates — an '
+  testWidgets('the tile you are on is WIDER, not merely ringed', (
+    tester,
+  ) async {
+    // A 2px accent ring is one thin line of colour to find, and it is drawn
+    // on top of a photograph that may itself be purple rock. Shape survives
+    // that; colour alone does not.
+    await seedWall(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => FaceRail(
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-1',
+            routeCounts: const {},
+            onSelect: (_) {},
+            onManage: null,
+            onOpenMap: null,
+            onAddPhoto: null,
+            colors: MasiColors.of(context),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final active = tester.getRect(find.byKey(const Key('face-rail-tile-photo-1')));
+    final other = tester.getRect(find.byKey(const Key('face-rail-tile-photo-0')));
+    expect(active.width, greaterThan(other.width));
+  });
+
+  testWidgets('the badge says which side the climbing is on, and a face with '
+      'none carries no badge at all', (tester) async {
+    await seedWall(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => FaceRail(
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-0',
+            routeCounts: const {'photo-0': 7, 'photo-2': 1},
+            onSelect: (_) {},
+            onManage: null,
+            onOpenMap: null,
+            onAddPhoto: null,
+            colors: MasiColors.of(context),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('face-rail-count-photo-0')), findsOneWidget);
+    expect(find.text('7'), findsOneWidget);
+    expect(find.byKey(const Key('face-rail-count-photo-2')), findsOneWidget);
+    // Absent, not a zero: a zero is a number a reader has to read and then
+    // discard, and it invites the question of what an unlabelled tile means.
+    expect(find.byKey(const Key('face-rail-count-photo-1')), findsNothing);
+  });
+
+  testWidgets('with every sensor absent the rail still navigates — an '
       'ordered filmstrip is the product, not a degraded state', (tester) async {
     await seedWall(photos: 3);
     final container = makeContainer();
@@ -159,12 +233,15 @@ void main() {
       wrap(
         container,
         laneProbe(
-          (context, photos, layout) => FaceDots(
+          (context, photos, layout) => FaceRail(
             photos: photos,
             layout: layout,
             activePhotoId: 'photo-0',
+            routeCounts: const {},
             onSelect: (_) {},
             onManage: null,
+            onOpenMap: null,
+            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -172,13 +249,13 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('face-dot-photo-1')), findsOneWidget);
+    expect(find.byKey(const Key('face-rail-tile-photo-1')), findsOneWidget);
 
-    // A minimap still has something to draw, because a synthesised
-    // capture-order strip is a real baseline. What must NOT appear is a view
-    // cone: a cone claims a direction, and with no heading anywhere there is
-    // no direction to claim — only an order. Asserted through the placements
-    // the engine reports, since the cones are painted rather than composed.
+    // A plan still has something to draw, because a synthesised capture-order
+    // strip is a real baseline. What must NOT appear is a view cone: a cone
+    // claims a direction, and with no heading anywhere there is no direction
+    // to claim — only an order. Asserted through the placements the engine
+    // reports, since the cones are painted rather than composed.
     expect(
       container
           .read(wallLayoutProvider(wallId))
@@ -190,8 +267,44 @@ void main() {
     );
   });
 
-  testWidgets('the dots carry no pill of their own when the dock frames them',
-      (tester) async {
+  testWidgets('the plan tile and the + tile appear only when there is '
+      'something behind them', (tester) async {
+    await seedWall(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    var mapOpened = 0;
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => FaceRail(
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-0',
+            routeCounts: const {},
+            onSelect: (_) {},
+            onManage: null,
+            onOpenMap: () => mapOpened++,
+            onAddPhoto: null,
+            colors: MasiColors.of(context),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('face-rail-map')), findsOneWidget);
+    // Read-only: no way to add a photo, so no tile offering to.
+    expect(find.byKey(const Key('face-rail-add')), findsNothing);
+
+    await tester.tap(find.byKey(const Key('face-rail-map')));
+    await tester.pumpAndSettle();
+    expect(mapOpened, 1);
+  });
+
+  testWidgets('no plan to open means no plan tile — a tile that opens an '
+      'empty screen is worse than none', (tester) async {
     await seedWall(photos: 3);
     final container = makeContainer();
     addTearDown(container.dispose);
@@ -200,13 +313,15 @@ void main() {
       wrap(
         container,
         laneProbe(
-          (context, photos, layout) => FaceDots(
-            framed: false,
+          (context, photos, layout) => FaceRail(
             photos: photos,
             layout: layout,
             activePhotoId: 'photo-0',
+            routeCounts: const {},
             onSelect: (_) {},
             onManage: null,
+            onOpenMap: null,
+            onAddPhoto: () {},
             colors: MasiColors.of(context),
           ),
         ),
@@ -214,117 +329,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    final box = tester.widget<Container>(
-      find.byKey(const Key('face-pager-dots')),
-    );
-    expect(
-      box.decoration,
-      isNull,
-      reason: 'a bordered pill on top of the dock reads as a loose control',
-    );
+    expect(find.byKey(const Key('face-rail-map')), findsNothing);
+    expect(find.byKey(const Key('face-rail-add')), findsOneWidget);
   });
 
-  testWidgets('with real fixes the minimap renders and its marks select', (
-    tester,
-  ) async {
-    await seedWall(photos: 4, withGps: true);
-    final container = makeContainer();
-    addTearDown(container.dispose);
-
-    PhotoRef? selected;
-    await tester.pumpWidget(
-      wrap(
-        container,
-        laneProbe(
-          (context, photos, layout) => FaceMinimap(
-            layout: layout,
-            photos: photos,
-            activePhotoId: 'photo-0',
-            onSelect: (photo) => selected = photo,
-            onEditLayout: null,
-            colors: MasiColors.of(context),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.byKey(const Key('face-pager-minimap')), findsOneWidget);
-    expect(find.text('where each photo was taken'), findsOneWidget);
-
-    await tester.tap(
-      find.byKey(const Key('minimap-face-photo-2')),
-      warnIfMissed: false,
-    );
-    await tester.pumpAndSettle();
-    expect(selected?.id, 'photo-2');
-  });
-
-  testWidgets('the minimap carries a LABELLED button into the editor — the '
-      'thing that shows a wrong arrangement is the thing that fixes it', (
-    tester,
-  ) async {
-    await seedWall(photos: 4, withGps: true);
-    final container = makeContainer();
-    addTearDown(container.dispose);
-
-    var opened = 0;
-    await tester.pumpWidget(
-      wrap(
-        container,
-        laneProbe(
-          (context, photos, layout) => FaceMinimap(
-            layout: layout,
-            photos: photos,
-            activePhotoId: 'photo-0',
-            onSelect: (_) {},
-            onEditLayout: () => opened++,
-            colors: MasiColors.of(context),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    // A button with a word on it, not a 10px caption that is secretly
-    // tappable: the caption stays a caption and the control says 'Edit'.
-    expect(find.text('where each photo was taken'), findsOneWidget);
-    expect(find.text('Edit'), findsOneWidget);
-    await tester.tap(find.byKey(const Key('face-pager-edit-layout')));
-    await tester.pumpAndSettle();
-    expect(opened, 1);
-  });
-
-  testWidgets('without an editor to open, no button is offered at all', (
-    tester,
-  ) async {
-    await seedWall(photos: 4, withGps: true);
-    final container = makeContainer();
-    addTearDown(container.dispose);
-
-    await tester.pumpWidget(
-      wrap(
-        container,
-        laneProbe(
-          (context, photos, layout) => FaceMinimap(
-            layout: layout,
-            photos: photos,
-            activePhotoId: 'photo-0',
-            onSelect: (_) {},
-            onEditLayout: null,
-            colors: MasiColors.of(context),
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(find.text('where each photo was taken'), findsOneWidget);
-    expect(find.text('Edit'), findsNothing);
-    expect(find.byKey(const Key('face-pager-edit-layout')), findsNothing);
-  });
-
-  testWidgets('long-pressing a dot raises the manage actions the strip tiles '
+  testWidgets('long-pressing a tile raises the manage actions the strip tiles '
       'used to carry', (tester) async {
     await seedWall(photos: 2);
     final container = makeContainer();
@@ -335,12 +344,15 @@ void main() {
       wrap(
         container,
         laneProbe(
-          (context, photos, layout) => FaceDots(
+          (context, photos, layout) => FaceRail(
             photos: photos,
             layout: layout,
             activePhotoId: 'photo-0',
+            routeCounts: const {},
             onSelect: (_) {},
             onManage: (photo) => managed = photo,
+            onOpenMap: null,
+            onAddPhoto: null,
             colors: MasiColors.of(context),
           ),
         ),
@@ -348,8 +360,63 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    await tester.longPress(find.byKey(const Key('face-dot-photo-1')));
+    await tester.longPress(find.byKey(const Key('face-rail-tile-photo-1')));
     await tester.pumpAndSettle();
     expect(managed?.id, 'photo-1');
+  });
+
+  testWidgets('the plan draws one real thumbnail per face, none covering '
+      'another, and tapping one selects it', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    await seedWall(photos: 4, withGps: true);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    PhotoRef? selected;
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => SizedBox(
+            width: 374,
+            height: 520,
+            child: FaceMapPlan(
+              layout: layout,
+              photos: photos,
+              activePhotoId: 'photo-0',
+              routeCounts: const {'photo-1': 3},
+              onSelect: (photo) => selected = photo,
+              colors: MasiColors.of(context),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('face-map-plan')), findsOneWidget);
+    final boxes = <Rect>[];
+    for (var i = 0; i < 4; i++) {
+      final finder = find.byKey(Key('face-map-face-photo-$i'));
+      expect(finder, findsOneWidget);
+      boxes.add(tester.getRect(finder));
+    }
+    for (var i = 0; i < boxes.length; i++) {
+      for (var j = i + 1; j < boxes.length; j++) {
+        expect(
+          boxes[i].overlaps(boxes[j]),
+          isFalse,
+          reason: 'a face hidden under another is a face the reader lost',
+        );
+      }
+    }
+
+    await tester.tap(find.byKey(const Key('face-map-face-photo-2')));
+    await tester.pumpAndSettle();
+    expect(selected?.id, 'photo-2');
   });
 }

@@ -247,11 +247,11 @@ void main() {
   );
 
   // The two PhotoStrip loading tests that used to live here went with the
-  // widget. Navigating a rock's photos moved to FacePager's dots and minimap
-  // (design 4c), and the strip's skeleton band had no equivalent to port: a
-  // navigation control that is one frame late makes no false claim, whereas
-  // the strip's empty band claimed the wall had no photos. See
-  // `face_pager_test.dart` for the behaviour that did carry over.
+  // widget. Navigating a rock's photos moved into the dock's face rail, and
+  // the strip's skeleton band had no equivalent to port: a navigation control
+  // that is one frame late makes no false claim, whereas the strip's empty
+  // band claimed the wall had no photos. See `face_lane_test.dart` for the
+  // behaviour that did carry over.
 
   testWidgets(
     "the canvas title shows a placeholder while the wall's name loads, never "

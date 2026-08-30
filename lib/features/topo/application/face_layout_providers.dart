@@ -30,6 +30,18 @@ List<FaceInput> faceInputsFrom(List<PhotoRef> photos) => [
     ),
 ];
 
+/// How many climbs each of a wall's photos shows, live.
+///
+/// The face rail badges every thumbnail with this, which is the one thing a
+/// plain dot never said: not just that there are four sides, but which of them
+/// has the climbing on it. Absent from the map means none — see
+/// `RouteRepository.watchRouteCountsByPhoto`.
+final wallRouteCountsProvider =
+    StreamProvider.autoDispose.family<Map<String, int>, String>(
+  (ref, wallId) =>
+      ref.watch(routeRepositoryProvider).watchRouteCountsByPhoto(wallId),
+);
+
 /// The wall columns the engine needs, live.
 final wallLayoutAnchorProvider =
     StreamProvider.autoDispose.family<WallLayoutAnchor?, String>(

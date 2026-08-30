@@ -292,6 +292,52 @@ class RouteRepository {
     ];
   }
 
+  /// How many climbs are visible on each photo of [wallId], live.
+  ///
+  /// The face rail puts this number on every thumbnail, so a reader can see
+  /// which side of the rock the climbing is on before opening it. Counted the
+  /// same way [loadRoutes] reads a photo: the climbs whose HOME photo it is,
+  /// plus the ones merely DRAWN on it. Those two sets are disjoint by
+  /// construction — `route_lines` never holds a row for a climb's own home
+  /// photo (see [RouteLines.photoId] and the partial unique index that
+  /// enforces it) — so adding the two counts double-counts nothing.
+  ///
+  /// Photos with no climbs are simply absent from the map rather than present
+  /// with a zero: the caller renders no badge at all for them, and an explicit
+  /// zero would only invite one.
+  ///
+  /// Raw [customSelect] with an explicit `readsFrom`, in this repository's
+  /// map-facing style, and mapped SYNCHRONOUSLY — an async mapper on a Drift
+  /// stream wedges under `flutter_test`'s fake clock.
+  Stream<Map<String, int>> watchRouteCountsByPhoto(String wallId) {
+    const sql = '''
+      SELECT photo_id, COUNT(*) AS n FROM (
+        SELECT r.photo_id AS photo_id
+          FROM routes r
+         WHERE r.wall_id = ?1 AND r.deleted_at IS NULL
+        UNION ALL
+        SELECT l.photo_id AS photo_id
+          FROM route_lines l
+          JOIN routes lr ON lr.id = l.route_id
+         WHERE lr.wall_id = ?1
+           AND l.deleted_at IS NULL
+           AND lr.deleted_at IS NULL
+      )
+      GROUP BY photo_id
+    ''';
+    return _db
+        .customSelect(
+          sql,
+          variables: [Variable<String>(wallId)],
+          readsFrom: {_db.routes, _db.routeLines},
+        )
+        .watch()
+        .map((rows) => {
+          for (final row in rows)
+            row.read<String>('photo_id'): row.read<int>('n'),
+        });
+  }
+
   /// Maps each live climb's stable [TopoRoute.number] to its underlying DB row
   /// `id` (a UUID) for [wallId] — optionally narrowed to the climbs VISIBLE on
   /// a single [photoId] (home drawings plus lines).

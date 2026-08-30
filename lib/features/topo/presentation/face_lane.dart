@@ -5,32 +5,37 @@ import 'package:flutter/material.dart' hide Baseline;
 import 'package:masi/app/theme.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
+import 'package:masi/features/topo/presentation/layout_baseline_painter.dart';
 import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
+import 'package:masi/features/topo/presentation/photo_image.dart';
+import 'package:masi/features/topo/presentation/thumbnail_arrangement.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 
-/// The two parts of the reader's way round a rock with several photos: a dot
-/// per face ([FaceDots]), and a plan saying where each shot was taken from
-/// ([FaceMinimap]).
+/// The reader's way round a rock with several photos: **the photos
+/// themselves**, in a rail across the top of the dock.
 ///
-/// Replaces the 52px thumbnail strip that used to sit in the top chrome. Six
-/// thumbnails in upload order carried no spatial meaning — a reader could not
-/// tell the north face from the right-hand half of the south face — and the
-/// answer is not a better thumbnail, it is putting the photos somewhere. The
-/// dots say how many and which one; the minimap says where.
+/// This replaced a row of 7px dots plus a compass button plus a permanently
+/// mounted plan view. The dots said how many faces there were and which one
+/// you were on, and nothing else — a reader could not tell the north face
+/// from the right-hand half of the south face without opening each in turn,
+/// which is the exact question the screen exists to answer. A thumbnail is
+/// already a picture of a side, so four of them say "there is a back and a
+/// left side" better than any diagram, and the badge says which of them has
+/// the climbing on it.
 ///
-/// Both are **dumb widgets**: they take their data and hand back taps, and
-/// they read no provider. That is what lets `TopoDock` compose them into one
-/// surface with the route list. The `FacePager` that used to own them was a
-/// third floating panel in the bottom band, and every panel down there had to
-/// reserve pixels for the next one by hand-maintained constant — a scheme that
-/// drifted out of true three times (the draw hint, the dot row, and finally
-/// the minimap, which ended up drawn ON TOP of the route legend). There is no
-/// clearance arithmetic left to get wrong because there is nothing left to
-/// clear.
+/// The abstract plan is not gone, it has moved to where it is worth its
+/// space: the leading tile opens the full-screen map ([FaceMapScreen]), and
+/// the layout editor is where it is manipulated. It used to sit permanently
+/// above the route list at 153pt — most of what made this screen's bottom
+/// half unusable on a phone — for a glance most readers take once.
+///
+/// A **dumb widget**: it takes its data and hands back taps, and reads no
+/// provider. That is what lets `TopoDock` compose it into one surface with
+/// the route list, with no clearance arithmetic between them.
 ///
 /// Everything sensor-derived degrades silently. With no GPS and no headings
-/// no view cone is drawn and the dots remain an ordered filmstrip, which is
-/// the product rather than a fallback.
+/// the rail is an ordered filmstrip in capture order, which is the product
+/// rather than a fallback.
 ///
 /// **Not built:** the design's "probably this one" chip, which highlights the
 /// face a reader is standing in front of by comparing a LIVE compass heading
@@ -39,33 +44,46 @@ import 'package:masi/shared/presentation/masi_icon.dart';
 /// the orientation classifier — but the live side needs a magnetometer feed,
 /// and this app has no compass dependency (`geolocator` gives position, not
 /// heading). Adding one is a real decision, not an oversight to fill in
-/// quietly: it is a new runtime permission surface on both platforms. The
-/// screen is complete without it, which is the point of the hint being a hint.
-/// The dot row: one tap target per face, in the order you walk past the rock.
-class FaceDots extends StatelessWidget {
-  const FaceDots({
-    this.framed = true,
+/// quietly: it is a new runtime permission surface on both platforms.
+class FaceRail extends StatelessWidget {
+  const FaceRail({
     super.key,
     required this.photos,
     required this.layout,
     required this.activePhotoId,
+    required this.routeCounts,
     required this.onSelect,
     required this.onManage,
+    required this.onOpenMap,
+    required this.onAddPhoto,
     required this.colors,
   });
-
-  /// Whether to draw the pill around the dots.
-  ///
-  /// False inside `TopoDock`, where the dock itself is the surface and a
-  /// second bordered pill on top of it reads as a control that came loose.
-  final bool framed;
 
   final List<PhotoRef> photos;
   final LayoutResult? layout;
   final String? activePhotoId;
+
+  /// How many climbs each photo shows, keyed by photo id. A photo missing
+  /// from the map has none and gets no badge — see `wallRouteCountsProvider`.
+  final Map<String, int> routeCounts;
+
   final void Function(PhotoRef photo) onSelect;
   final void Function(PhotoRef photo)? onManage;
+
+  /// Opens the plan view. Null when there is no usable baseline to draw —
+  /// a tile that opens an empty box is worse than no tile.
+  final VoidCallback? onOpenMap;
+
+  /// Adds another photo of this rock. Null when read-only.
+  final VoidCallback? onAddPhoto;
+
   final MasiColors colors;
+
+  /// The tile a reader is on. Wider than the rest, so the rail says which one
+  /// it is by shape as well as by ring — a ring alone is one thin line of
+  /// colour to find on a photo that may itself be purple rock.
+  static const Size activeTile = Size(62, 44);
+  static const Size tile = Size(48, 44);
 
   @override
   Widget build(BuildContext context) {
@@ -79,41 +97,111 @@ class FaceDots extends StatelessWidget {
     }
     ordered.addAll(byId.values);
 
-    return Container(
-      key: const Key('face-pager-dots'),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: framed
-          ? BoxDecoration(
-              color: colors.chrome,
-              borderRadius: BorderRadius.circular(MasiRadii.large),
-              border: Border.all(color: colors.separator),
-            )
-          : null,
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+
+    return SingleChildScrollView(
+      key: const Key('face-rail'),
+      scrollDirection: Axis.horizontal,
+      padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.sm),
       child: Row(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          for (final photo in ordered)
-            GestureDetector(
-              key: Key('face-dot-${photo.id}'),
-              onTap: () => onSelect(photo),
-              onLongPress:
-                  onManage == null ? null : () => onManage!(photo),
-              behavior: HitTestBehavior.opaque,
-              child: Padding(
-                // Padding, not margin: it is the tap target, and a 6px dot
-                // with a 6px margin is a control nobody can hit.
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 5,
-                  vertical: 8,
+          if (onOpenMap case final open?) ...[
+            _RailTile(
+              key: const Key('face-rail-map'),
+              caption: 'Map',
+              size: tile,
+              onTap: open,
+              colors: colors,
+              child: CustomPaint(
+                painter: _PlanTilePainter(
+                  layout: layout!,
+                  stroke: colors.amethyst400,
+                  dot: colors.accent,
+                  activePhotoId: activePhotoId,
                 ),
-                child: Container(
-                  width: photo.id == activePhotoId ? 22 : 7,
-                  height: 7,
-                  decoration: BoxDecoration(
-                    color: photo.id == activePhotoId
-                        ? colors.accent
-                        : colors.ink3,
-                    borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            // Hairline, thumb-height: the map is a different kind of thing
+            // from the photos beside it, and without the rule it reads as a
+            // fifth face nobody can place.
+            Container(
+              width: 1,
+              height: tile.height,
+              margin: const EdgeInsets.fromLTRB(
+                MasiSpacing.xs,
+                0,
+                MasiSpacing.xs,
+                0,
+              ),
+              color: colors.separator,
+            ),
+          ],
+          for (var i = 0; i < ordered.length; i++)
+            _faceTile(ordered[i], i, dpr),
+          if (onAddPhoto case final add?)
+            _RailTile(
+              key: const Key('face-rail-add'),
+              caption: 'Add',
+              size: tile,
+              onTap: add,
+              colors: colors,
+              accentOutline: true,
+              child: Center(
+                child: MasiIcon('add', size: 20, color: colors.accent),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _faceTile(PhotoRef photo, int index, double dpr) {
+    final active = photo.id == activePhotoId;
+    final size = active ? activeTile : tile;
+    final count = routeCounts[photo.id] ?? 0;
+
+    return _RailTile(
+      key: Key('face-rail-tile-${photo.id}'),
+      caption: '${index + 1}',
+      captionStrong: active,
+      size: size,
+      selected: active,
+      onTap: () => onSelect(photo),
+      onLongPress: onManage == null ? null : () => onManage!(photo),
+      colors: colors,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          PhotoImage(
+            photo.localPath,
+            fit: BoxFit.cover,
+            // Width alone, never both: `ResizeImage`'s exact policy would
+            // squash a portrait photo into the tile in the decoder, where
+            // `BoxFit.cover` can no longer undo it. See [PhotoImage]'s doc.
+            cacheWidth: (size.width * dpr).round(),
+          ),
+          if (count > 0)
+            Positioned(
+              right: 2,
+              bottom: 2,
+              child: Container(
+                key: Key('face-rail-count-${photo.id}'),
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                // Black-on-white regardless of theme: this rides on a
+                // photograph, not on a surface, so a themed colour pair would
+                // be legible in the editor and invisible on a snowy slab.
+                decoration: BoxDecoration(
+                  color: const Color(0xB3000000),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$count',
+                  style: const TextStyle(
+                    fontSize: 9,
+                    height: 1.4,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFFFFFFF),
                   ),
                 ),
               ),
@@ -124,190 +212,113 @@ class FaceDots extends StatelessWidget {
   }
 }
 
-/// The plan view: the baseline seen from above, with a dot per face.
-class FaceMinimap extends StatelessWidget {
-  const FaceMinimap({
-    this.planSize = const Size(184, 100),
-    this.framed = true,
+/// One tile of the rail: a picture, a caption under it, and one tap target
+/// covering both.
+class _RailTile extends StatelessWidget {
+  const _RailTile({
     super.key,
-    required this.layout,
-    required this.photos,
-    required this.activePhotoId,
-    required this.onSelect,
-    required this.onEditLayout,
+    required this.caption,
+    required this.size,
+    required this.onTap,
     required this.colors,
+    required this.child,
+    this.onLongPress,
+    this.selected = false,
+    this.captionStrong = false,
+    this.accentOutline = false,
   });
 
-  final LayoutResult layout;
-  final List<PhotoRef> photos;
-  final String? activePhotoId;
-  final void Function(PhotoRef photo) onSelect;
-  final VoidCallback? onEditLayout;
+  final String caption;
+  final Size size;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
   final MasiColors colors;
-
-  /// How big to draw the plan itself, excluding the caption row below it.
-  ///
-  /// A parameter rather than a constant because the dock gives it the full
-  /// width of the sheet, while a standalone use (tests, and any future
-  /// caller) wants the compact card.
-  final Size planSize;
-
-  /// Whether to draw the card around the plan — false inside `TopoDock`, for
-  /// the same reason as [FaceDots.framed].
-  final bool framed;
+  final Widget child;
+  final bool selected;
+  final bool captionStrong;
+  final bool accentOutline;
 
   @override
   Widget build(BuildContext context) {
-    final fit = LayoutPlaneFit.forBaseline(layout.baseline, planSize, padding: 12);
-
-    return Container(
-      key: const Key('face-pager-minimap'),
-      padding: const EdgeInsets.all(8),
-      decoration: framed
-          ? BoxDecoration(
-              color: colors.chrome,
-              borderRadius: BorderRadius.circular(MasiRadii.large),
-              border: Border.all(color: colors.separator),
-            )
-          : null,
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox(
-            width: planSize.width,
-            height: planSize.height,
-            child: Stack(
-              children: [
-                Positioned.fill(
-                  child: CustomPaint(
-                    painter: _MinimapPainter(
-                      layout: layout,
-                      fit: fit,
-                      stroke: colors.amethyst400,
-                      cone: colors.accent,
-                      activePhotoId: activePhotoId,
-                    ),
-                  ),
-                ),
-                for (final face in layout.faces)
-                  _hitTarget(face, fit),
-              ],
-            ),
-          ),
-          const SizedBox(height: 4),
-          // A caption and a real button, not a caption that is secretly a
-          // button. The whole line used to be tappable at 10px with the word
-          // 'edit' appended — no affordance, no hit area worth the name, and
-          // the only discoverable way into the editor.
-          //
-          // Width-limited to the plan box: an unbounded `spaceBetween` row
-          // takes every pixel offered, and this card sits in a `Column` with
-          // the whole screen to offer — which stretched a 184px minimap into
-          // a full-bleed band across the topo.
-          SizedBox(
-            width: planSize.width,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-              Flexible(
-                child: Text(
-                  'where each photo was taken',
-                  // One line, always. Wrapped to two it pushed the Edit
-                  // button into a corner and made the card look broken.
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 10,
-                    letterSpacing: 0.4,
-                    color: colors.ink2,
-                  ),
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onTap,
+      onLongPress: onLongPress,
+      child: Padding(
+        // Padding rather than margin: the whole column including the caption
+        // is the tap target, and a 44px tile with a 5px gap beside it is a
+        // control people miss on a cold morning with gloves on.
+        padding: const EdgeInsets.symmetric(
+          horizontal: MasiSpacing.xs,
+          vertical: MasiSpacing.xs,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: size.width,
+              height: size.height,
+              decoration: BoxDecoration(
+                color: colors.surface2,
+                borderRadius: BorderRadius.circular(MasiRadii.control),
+                border: Border.all(
+                  color: selected
+                      ? colors.accent
+                      : (accentOutline
+                            ? colors.accent.withValues(alpha: 0.5)
+                            : colors.separator),
+                  width: selected ? 2 : 1,
                 ),
               ),
-              if (onEditLayout != null)
-                GestureDetector(
-                  key: const Key('face-pager-edit-layout'),
-                  behavior: HitTestBehavior.opaque,
-                  onTap: onEditLayout,
-                  child: Container(
-                    // 32px tall with the padding: small for a control, but
-                    // this rides above the canvas and a 44px pill here eats
-                    // the topo. The label carries the affordance.
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 7,
-                    ),
-                    decoration: BoxDecoration(
-                      color: colors.accent.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(MasiRadii.control),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        MasiIcon('edit', size: 12, color: colors.accent),
-                        const SizedBox(width: 5),
-                        Text(
-                          'Edit',
-                          style: TextStyle(
-                            fontSize: 12,
-                            fontWeight: FontWeight.w600,
-                            color: colors.accent,
-                          ),
-                        ),
-                      ],
-                    ),
-                    ),
-                  ),
-              ],
+              clipBehavior: Clip.antiAlias,
+              child: child,
             ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _hitTarget(FacePosition face, LayoutPlaneFit fit) {
-    final at = fit.toCanvas(layout.baseline.pointAt(face.t));
-    return Positioned(
-      left: at.dx - 14,
-      top: at.dy - 14,
-      width: 28,
-      height: 28,
-      child: GestureDetector(
-        key: Key('minimap-face-${face.id}'),
-        behavior: HitTestBehavior.opaque,
-        onTap: () {
-          for (final photo in photos) {
-            if (photo.id == face.id) {
-              onSelect(photo);
-              return;
-            }
-          }
-        },
+            const SizedBox(height: 5),
+            SizedBox(
+              width: size.width + 8,
+              child: Text(
+                caption,
+                textAlign: TextAlign.center,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  height: 1.1,
+                  fontWeight: captionStrong
+                      ? FontWeight.w600
+                      : FontWeight.w500,
+                  color: captionStrong ? colors.ink : colors.ink2,
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 }
 
-class _MinimapPainter extends CustomPainter {
-  const _MinimapPainter({
+/// The rail's leading tile: this rock seen from above, small enough to read as
+/// an icon and true enough to be the same shape as the full-screen map it
+/// opens.
+class _PlanTilePainter extends CustomPainter {
+  const _PlanTilePainter({
     required this.layout,
-    required this.fit,
     required this.stroke,
-    required this.cone,
+    required this.dot,
     required this.activePhotoId,
   });
 
   final LayoutResult layout;
-  final LayoutPlaneFit fit;
   final Color stroke;
-  final Color cone;
+  final Color dot;
   final String? activePhotoId;
 
   @override
   void paint(Canvas canvas, Size size) {
     final line = layout.baseline;
     if (line.points.length < 2) return;
+    final fit = LayoutPlaneFit.forBaseline(line, size, padding: 8);
 
     final path = Path()
       ..moveTo(fit.toCanvas(line.points.first).dx,
@@ -322,7 +333,7 @@ class _MinimapPainter extends CustomPainter {
       path,
       Paint()
         ..style = PaintingStyle.stroke
-        ..strokeWidth = 5
+        ..strokeWidth = 2.5
         ..strokeCap = StrokeCap.round
         ..strokeJoin = StrokeJoin.round
         ..color = stroke,
@@ -331,44 +342,179 @@ class _MinimapPainter extends CustomPainter {
     for (final face in layout.faces) {
       final at = fit.toCanvas(line.pointAt(face.t));
       final active = face.id == activePhotoId;
-
-      // The cone is what each photo COVERS, drawn only where a real heading
-      // put the face there. Drawing one from a capture-order guess would
-      // invent a direction the data never claimed.
-      if (face.placement == FacePlacement.bearingRefined ||
-          face.placement == FacePlacement.gpsProjected) {
-        final normal = line.normalAt(face.t);
-        if (normal != null) {
-          final direction =
-              fit.directionToCanvas(normal * layout.thumbnailNormalSign);
-          final length = math.sqrt(
-            direction.dx * direction.dx + direction.dy * direction.dy,
-          );
-          if (length > 0) {
-            final unit = direction / length;
-            final tip = at + unit * 18;
-            final side = Offset(-unit.dy, unit.dx) * 7;
-            canvas.drawPath(
-              Path()
-                ..moveTo(at.dx, at.dy)
-                ..lineTo(tip.dx + side.dx, tip.dy + side.dy)
-                ..lineTo(tip.dx - side.dx, tip.dy - side.dy)
-                ..close(),
-              Paint()..color = cone.withValues(alpha: active ? 0.35 : 0.16),
-            );
-          }
-        }
-      }
-
       canvas.drawCircle(
         at,
-        active ? 5 : 3.5,
-        Paint()..color = active ? cone : cone.withValues(alpha: 0.55),
+        active ? 3 : 1.8,
+        Paint()..color = active ? dot : dot.withValues(alpha: 0.5),
       );
     }
   }
 
   @override
-  bool shouldRepaint(_MinimapPainter old) =>
+  bool shouldRepaint(_PlanTilePainter old) =>
       old.layout != layout || old.activePhotoId != activePhotoId;
+}
+
+/// The plan view, full screen: where every photo of this rock was taken from.
+///
+/// Two things a 48px tile in the rail cannot do, and the reason this is a
+/// screen rather than a lane inside the dock: every camera is a real
+/// thumbnail big enough to recognise the side from the picture alone, and the
+/// outline is drawn at a size where the shape of the rock is legible. It used
+/// to be a 153pt card mounted permanently above the route list, which was too
+/// small to answer the question and too big to keep on screen.
+///
+/// Read-only by design. Every correction is a drag, and dragging happens in
+/// the layout editor, one tap away behind `Edit`.
+class FaceMapPlan extends StatelessWidget {
+  const FaceMapPlan({
+    super.key,
+    required this.layout,
+    required this.photos,
+    required this.activePhotoId,
+    required this.routeCounts,
+    required this.onSelect,
+    required this.colors,
+  });
+
+  final LayoutResult layout;
+  final List<PhotoRef> photos;
+  final String? activePhotoId;
+  final Map<String, int> routeCounts;
+  final void Function(PhotoRef photo) onSelect;
+  final MasiColors colors;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final size = Size(
+        constraints.maxWidth,
+        math.max(240, constraints.maxHeight),
+      );
+      final fit = LayoutPlaneFit.forBaseline(
+        layout.baseline,
+        size,
+        padding: 76,
+      );
+      final slots = arrangeThumbnails(
+        anchors: LayoutBaselinePainter.anchorsFor(layout, fit),
+        canvas: size,
+        thumbnail: const Size(76, 58),
+        stem: 58,
+      );
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      final byId = {for (final photo in photos) photo.id: photo};
+
+      return SizedBox(
+        width: size.width,
+        height: size.height,
+        child: Stack(
+          children: [
+            Positioned.fill(
+              child: CustomPaint(
+                key: const Key('face-map-plan'),
+                painter: LayoutBaselinePainter(
+                  layout: layout,
+                  fit: fit,
+                  stroke: colors.amethyst400,
+                  provisionalStroke: colors.amethyst300,
+                  dotColor: colors.accent,
+                  pinnedColor: colors.accent,
+                  handleColor: colors.amethyst400,
+                  selectedFaceId: activePhotoId,
+                  slots: slots,
+                ),
+              ),
+            ),
+            for (final slot in slots)
+              if (byId[slot.id] case final photo?)
+                Positioned(
+                  left: slot.topLeft.dx,
+                  top: slot.topLeft.dy,
+                  child: _MapThumbnail(
+                    photo: photo,
+                    size: slot.size,
+                    active: photo.id == activePhotoId,
+                    routeCount: routeCounts[photo.id] ?? 0,
+                    dpr: dpr,
+                    colors: colors,
+                    onTap: () => onSelect(photo),
+                  ),
+                ),
+          ],
+        ),
+      );
+    },
+  );
+}
+
+class _MapThumbnail extends StatelessWidget {
+  const _MapThumbnail({
+    required this.photo,
+    required this.size,
+    required this.active,
+    required this.routeCount,
+    required this.dpr,
+    required this.colors,
+    required this.onTap,
+  });
+
+  final PhotoRef photo;
+  final Size size;
+  final bool active;
+  final int routeCount;
+  final double dpr;
+  final MasiColors colors;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    key: Key('face-map-face-${photo.id}'),
+    behavior: HitTestBehavior.opaque,
+    onTap: onTap,
+    child: Container(
+      width: size.width,
+      height: size.height,
+      decoration: BoxDecoration(
+        color: colors.surface2,
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        border: Border.all(
+          color: active ? colors.accent : colors.separator,
+          width: active ? 2.5 : 1,
+        ),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          PhotoImage(
+            photo.localPath,
+            fit: BoxFit.cover,
+            cacheWidth: (size.width * dpr).round(),
+          ),
+          if (routeCount > 0)
+            Positioned(
+              right: 3,
+              bottom: 3,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: const Color(0xB3000000),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  '$routeCount',
+                  style: const TextStyle(
+                    fontSize: 10,
+                    height: 1.3,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFFFFFFF),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    ),
+  );
 }

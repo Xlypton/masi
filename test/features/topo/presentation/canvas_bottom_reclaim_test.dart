@@ -84,10 +84,14 @@ void main() {
   // sitting right next to the thumbnails it adds to. The claim these tests
   // defend is unchanged and still worth defending: there is exactly ONE
   // add-photo affordance on a canvas that has a photo. Only its identity has
-  // moved — twice now. It was a bottom-right FAB, then the photo strip's '+'
-  // tile, and since the strip was replaced by FacePager's dot row (design 4c)
-  // it is a bottom-right camera FAB again. A dot row has nothing you can
-  // append a '+' to and still have it read as "add a photo".
+  // moved — three times now. It was a bottom-right FAB, then the photo
+  // strip's '+' tile, then a top-row glyph while the strip was a row of 7px
+  // dots (a dot row has nothing you can append a '+' to and still have it
+  // read as "add a photo"), and now the dock's face rail carries it again —
+  // beside the thumbnails it adds to. The top-row glyph is what a wall with
+  // ONE photo gets, since the rail needs two faces to exist: the two are
+  // mutually exclusive, which is what keeps the ONE-affordance claim true.
+  // These tests pump a single-photo canvas, so the glyph is the one they see.
 
   testWidgets(
     'A1: view mode offers EXACTLY ONE add-photo affordance, in the top bar, '

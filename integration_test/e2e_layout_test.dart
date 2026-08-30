@@ -1,9 +1,9 @@
 // The face layout, exercised on a wall that actually has several faces.
 //
-// The rest of the suite gives every fixture wall ONE photo, and `FacePager`
-// renders nothing below two — so the pager, the minimap and the layout editor
-// were unreachable by any test, and the whole feature shipped behind a green
-// run without a single assertion touching it. `tool/e2e_seed.sh` now seeds a
+// The rest of the suite gives every fixture wall ONE photo, and the dock's
+// face lane renders nothing below two — so the rail, the plan view and the
+// layout editor were unreachable by any test, and the whole feature shipped
+// behind a green run without a single assertion touching it. `tool/e2e_seed.sh` now seeds a
 // four-face wall carrying NO capture metadata, which is what every photo in
 // the real database looks like.
 import 'dart:math' as math;
@@ -69,15 +69,15 @@ void main() {
     await settleNetwork(tester, budget: const Duration(seconds: 8));
   }
 
-  testWidgets('layout: four faces get a dock lane, a map behind one tap, and '
-      'a way into the editor', (tester) async {
+  testWidgets('layout: four faces get a rail of real thumbnails, a plan '
+      'behind one tap, and a way into the editor', (tester) async {
     await openFacesWall(tester);
     await binding.takeScreenshot('40-faces-canvas');
 
     await waitFor(
       tester,
-      find.byKey(const Key('face-pager-dots')),
-      'the dock face lane on a four-photo wall',
+      find.byKey(const Key('face-rail')),
+      'the dock face rail on a four-photo wall',
       timeout: const Duration(seconds: 20),
     );
     expect(
@@ -93,28 +93,47 @@ void main() {
           'for, and the panel over it used to take most of the phone',
     );
     expect(
-      find.byKey(const Key('face-pager-minimap')),
+      find.byKey(const Key('face-map-plan')),
       findsNothing,
-      reason: 'the map is a glance you ask for — mounting it permanently is '
+      reason: 'the plan is a glance you ask for — mounting it permanently is '
           'what put 153pt of card between the reader and the photo',
     );
+    // Real pictures, not dots: one tile per photo, and the plan tile beside
+    // them.
+    expect(find.byKey(const Key('face-rail-map')), findsOneWidget);
 
     await tapOrFail(
       tester,
-      find.byKey(const Key('topo-dock-map-toggle')),
-      'the dock map toggle',
+      find.byKey(const Key('face-rail-map')),
+      'the rail plan tile',
     );
-    await settle(tester, frames: 20);
-    await binding.takeScreenshot('46-dock-map');
+    await settle(tester, frames: 25);
+    await binding.takeScreenshot('46-face-map');
 
     expect(
-      find.byKey(const Key('face-pager-minimap')),
+      find.byKey(const Key('face-map-plan')),
       findsOneWidget,
       reason: 'four faces resolve to a capture-order strip, which is a real '
-          'line — the map lane must draw it',
+          'line — the plan screen must draw it',
     );
-    // The entry point is a labelled button, not a tappable caption.
+    expect(
+      find.byKey(const Key('face-map-current')),
+      findsOneWidget,
+      reason: 'the bar naming the photo you are on is how Open knows what it '
+          'is opening',
+    );
+    // The way into the editor is a labelled button, not a tappable caption.
+    expect(find.byKey(const Key('face-map-edit')), findsOneWidget);
     expect(find.text('Edit'), findsOneWidget);
+
+    // And back out the way we came, so the next test starts on the canvas.
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('face-map-open')),
+      'the plan screen Open button',
+    );
+    await settle(tester, frames: 20);
+    expect(find.byKey(const Key('face-rail')), findsOneWidget);
   });
 
   testWidgets('layout: the editor opens, shows every face, and a diagonal '
@@ -123,14 +142,14 @@ void main() {
 
     await tapOrFail(
       tester,
-      find.byKey(const Key('topo-dock-map-toggle')),
-      'the dock map toggle',
+      find.byKey(const Key('face-rail-map')),
+      'the rail plan tile',
     );
-    await settle(tester, frames: 20);
+    await settle(tester, frames: 25);
     await tapOrFail(
       tester,
-      find.byKey(const Key('face-pager-edit-layout')),
-      'the Edit button on the map lane',
+      find.byKey(const Key('face-map-edit')),
+      'the Edit button on the plan screen',
     );
     await settle(tester, frames: 30);
     await binding.takeScreenshot('41-layout-editor');
@@ -221,14 +240,14 @@ void main() {
 
     await tapOrFail(
       tester,
-      find.byKey(const Key('topo-dock-map-toggle')),
-      'the dock map toggle',
+      find.byKey(const Key('face-rail-map')),
+      'the rail plan tile',
     );
-    await settle(tester, frames: 20);
+    await settle(tester, frames: 25);
     await tapOrFail(
       tester,
-      find.byKey(const Key('face-pager-edit-layout')),
-      'the Edit button on the map lane',
+      find.byKey(const Key('face-map-edit')),
+      'the Edit button on the plan screen',
     );
     await settle(tester, frames: 30);
     await tapOrFail(

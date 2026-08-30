@@ -855,4 +855,85 @@ void main() {
       },
     );
   });
+
+  /// The face rail's badges: how many climbs each photo shows.
+  ///
+  /// It is the one thing the row of dots it replaced could never say. A dot
+  /// told a reader there was a fourth face; the badge tells them whether the
+  /// climbing is on it, which is what decides whether they walk round.
+  group('watchRouteCountsByPhoto', () {
+    const photoIdB = 'photo-2';
+
+    setUp(() async {
+      await db
+          .into(db.photos)
+          .insert(
+            PhotosCompanion.insert(
+              id: photoIdB,
+              createdAt: 1000,
+              updatedAt: 1000,
+              wallId: wallId,
+              localPath: '/tmp/photo-b.jpg',
+              kind: 'original',
+              width: 100,
+              height: 200,
+            ),
+          );
+    });
+
+    test('counts a climb on every photo it is DRAWN on, and once on each',
+        () async {
+      // One climb, two drawings — the v16 split. It has to appear on both
+      // photos (or the arete's badge lies about the south face) and exactly
+      // once on each (or its home photo reads as having two climbs).
+      await repo.upsertRoute(
+        wallId,
+        photoId,
+        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)], name: 'Arete'),
+      );
+      await repo.upsertRoute(
+        wallId,
+        photoIdB,
+        TopoRoute(id: 1, number: 1, points: const [Offset(9, 9)], name: 'Arete'),
+      );
+      // A second climb, on the second photo only.
+      await repo.upsertRoute(
+        wallId,
+        photoIdB,
+        TopoRoute(id: 2, number: 2, points: const [Offset(4, 4)]),
+      );
+
+      final counts = await repo.watchRouteCountsByPhoto(wallId).first;
+      expect(counts, {photoId: 1, photoIdB: 2});
+    });
+
+    test('a photo with nothing drawn on it is ABSENT, not zero', () async {
+      await repo.upsertRoute(
+        wallId,
+        photoId,
+        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+      );
+
+      final counts = await repo.watchRouteCountsByPhoto(wallId).first;
+      expect(counts.containsKey(photoIdB), isFalse);
+      expect(counts[photoId], 1);
+    });
+
+    test('a deleted climb stops being counted', () async {
+      await repo.upsertRoute(
+        wallId,
+        photoId,
+        TopoRoute(id: 1, number: 1, points: const [Offset(0, 0)]),
+      );
+      await repo.upsertRoute(
+        wallId,
+        photoId,
+        TopoRoute(id: 2, number: 2, points: const [Offset(1, 1)]),
+      );
+      await repo.softDeleteRoute(wallId, photoId, 2);
+
+      final counts = await repo.watchRouteCountsByPhoto(wallId).first;
+      expect(counts[photoId], 1);
+    });
+  });
 }

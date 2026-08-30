@@ -109,34 +109,6 @@ final dockExpandedProvider =
   DockExpandedController.new,
 );
 
-/// Whether the dock's body is showing the face MAP rather than the route list.
-///
-/// A separate flag from [legendExpandedProvider] rather than a three-way enum
-/// so the two questions stay independent: closing the dock and coming back
-/// returns you to whichever lane you were reading, and opening the map never
-/// has to remember whether the dock was open when you asked for it.
-///
-/// Defaults to false — the routes are why the panel is open, and the map is a
-/// glance you ask for. It used to be a permanently-mounted 153pt card above
-/// the legend, which is most of what made the bottom of this screen unusable.
-class DockMapOpenController extends Notifier<bool> {
-  DockMapOpenController(this.wallId);
-
-  final String wallId;
-
-  @override
-  bool build() => false;
-
-  void toggle() => state = !state;
-}
-
-/// Keyed by wallId and autoDispose, exactly as [legendExpandedProvider] is and
-/// for the same reasons — see that provider's doc.
-final dockMapOpenProvider =
-    NotifierProvider.autoDispose.family<DockMapOpenController, bool, String>(
-  DockMapOpenController.new,
-);
-
 /// Fraction of the screen height the [RouteLegend] panel is capped at once
 /// it has enough routes to need it. Below this cap the panel just shrink-
 /// wraps to its own content (see [RouteLegend.build]) — a single route

@@ -1042,6 +1042,32 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
   }
 
+  /// Opens the plan view, and switches to whatever face the reader chose
+  /// there.
+  ///
+  /// The map screen writes nothing — it pops the id back (or `null` if they
+  /// backed out) and this switches the canvas, which keeps every path that
+  /// changes the shown photo running through [_switchToPhoto].
+  Future<void> _openFaceMap(List<PhotoRef> photos) async {
+    final active = ref.read(drawControllerProvider(widget.wallId)).activePhotoId;
+    final chosen = await context.push<String>(
+      Uri(
+        path: '/walls/${widget.wallId}/faces',
+        queryParameters: <String, String>{
+          'photo': ?active,
+          if (widget.readOnly) 'readonly': '1',
+        },
+      ).toString(),
+    );
+    if (!mounted || chosen == null) return;
+    for (final photo in photos) {
+      if (photo.id == chosen) {
+        await _switchToPhoto(photo);
+        return;
+      }
+    }
+  }
+
   /// U4 (manage menu): promotes [photo] to [TopoCanvasScreen.wallId]'s
   /// cover/primary photo. Purely a bookkeeping flag — it does NOT switch
   /// which photo is currently shown on the canvas (see
@@ -2291,21 +2317,31 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       );
     }
 
-    // Adding a photo. It has moved twice: a bottom-right FAB, then the '+'
-    // tile at the end of the 52px photo strip — the right place while that
-    // strip existed, right beside the thumbnails it added to. Navigation
-    // moved to the dock's face-lane dot row and the strip went with it, and a row of
-    // 7px dots has nothing you can append a '+' to that still reads as "add
-    // a photo".
+    // Adding a photo. It has moved three times, and this is the one rule that
+    // survived every move: there is EXACTLY ONE add-photo affordance on a
+    // canvas that has a photo (see `canvas_bottom_reclaim_test.dart`). It was
+    // a bottom-right FAB, then the '+' tile at the end of the 52px photo
+    // strip — right beside the thumbnails it added to — then up here, because
+    // the strip had become a row of 7px dots and a dot row has nothing you
+    // can append a '+' to that still reads as "add a photo".
+    //
+    // The rail put real thumbnails back, so the '+' belongs beside them again
+    // and lives in the rail on any wall that HAS one. This button is what a
+    // single-photo wall gets instead — the rail needs two faces to appear at
+    // all, so the two are mutually exclusive rather than competing.
     //
     // It is NOT a floating bottom-right button, which is where design 4c
     // draws it and where this first put it back. That corner belongs to the
     // route legend: a FAB there sits over the per-route menu buttons and
     // silently swallows their taps — the control still painted, still found
-    // by a test, and simply not reachable. Up here it cannot overlap
-    // anything, and it sits with the other canvas-wide actions, which is
-    // what it is.
-    if (drawState.mode == DrawMode.view && !widget.readOnly) {
+    // by a test, and simply not reachable.
+    final railCarriesAdd =
+        !widget.embedded &&
+        (ref.watch(wallOriginalsProvider(widget.wallId)).value?.length ?? 0) >=
+            2;
+    if (drawState.mode == DrawMode.view &&
+        !widget.readOnly &&
+        !railCarriesAdd) {
       actions.add(
         IconButton(
           key: const Key('topo-add-photo-button'),
@@ -2914,6 +2950,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         ref.watch(wallOriginalsProvider(widget.wallId)).value ??
         const <PhotoRef>[];
     final faceLayout = ref.watch(wallLayoutProvider(widget.wallId)).value;
+    // The rail's badges. Same rule as the two above: watched here, where the
+    // screen already holds a build, and handed down.
+    final faceRouteCounts =
+        ref.watch(wallRouteCountsProvider(widget.wallId)).value ??
+        const <String, int>{};
 
     return TopoCanvasBody(
       wallId: widget.wallId,
@@ -2925,11 +2966,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // clearance arithmetic that kept drifting out of true.
       facePhotos: facePhotos,
       faceLayout: faceLayout,
+      faceRouteCounts: faceRouteCounts,
       onSelectFace: _switchToPhoto,
       onManageFace: widget.readOnly ? null : _showFaceMenu,
-      onEditLayout: widget.readOnly
-          ? null
-          : () => context.push('/walls/${widget.wallId}/layout'),
+      onOpenFaceMap: () => _openFaceMap(facePhotos),
+      onAddPhoto: widget.readOnly ? null : _pickImage,
       transformationController: _transformationController,
       canvasKey: _canvasKey,
       readOnly: widget.readOnly,
@@ -2987,9 +3028,11 @@ class TopoCanvasBody extends ConsumerWidget {
     this.onOpenCommunity,
     this.facePhotos = const <PhotoRef>[],
     this.faceLayout,
+    this.faceRouteCounts = const <String, int>{},
     this.onSelectFace,
     this.onManageFace,
-    this.onEditLayout,
+    this.onOpenFaceMap,
+    this.onAddPhoto,
   });
 
   /// FIX #6: family key for [drawControllerProvider]/[legendExpandedProvider]
@@ -3063,19 +3106,31 @@ class TopoCanvasBody extends ConsumerWidget {
   /// above already watches both.
   final List<PhotoRef> facePhotos;
 
-  /// The resolved layout behind the dock's map lane. Null while it loads, or
-  /// on a wall whose baseline is degenerate — the map toggle simply does not
-  /// appear then.
+  /// The resolved layout behind the rail's leading plan tile. Null while it
+  /// loads, or on a wall whose baseline is degenerate — the tile simply does
+  /// not appear then, rather than opening an empty box.
   final LayoutResult? faceLayout;
 
-  /// Tapping a dot, or a face on the map.
+  /// How many climbs each photo shows, keyed by photo id — the rail's badges.
+  /// Absent means none, and no badge is drawn.
+  final Map<String, int> faceRouteCounts;
+
+  /// Tapping a face in the rail.
   final void Function(PhotoRef photo)? onSelectFace;
 
-  /// Long-pressing a dot: set cover, delete, add. Null when read-only.
+  /// Long-pressing a face: set cover, delete, add. Null when read-only.
   final void Function(PhotoRef photo)? onManageFace;
 
-  /// Opens the layout editor from the map lane's caption. Null when read-only.
-  final VoidCallback? onEditLayout;
+  /// Opens the full-screen plan view. Null when there is no plan to open.
+  final VoidCallback? onOpenFaceMap;
+
+  /// The rail's trailing '+' tile. Null when read-only.
+  ///
+  /// It sat in the top row for as long as the lane was a row of 7px dots,
+  /// which has nothing you can append a '+' to that still reads as "add a
+  /// photo". With real thumbnails back in the rail it reads correctly again,
+  /// right beside the tiles it adds to.
+  final VoidCallback? onAddPhoto;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -3230,32 +3285,22 @@ class TopoCanvasBody extends ConsumerWidget {
                         layout: faceLayout,
                         activePhotoId: drawState.activePhotoId,
                         routeCount: drawState.routes.length,
+                        faceRouteCounts: faceRouteCounts,
                         // The dock's OWN open flag, not the legend's: the
                         // plain floating card still opens by default for the
                         // callers that get one, and the dock deliberately does
                         // not.
                         expanded: ref.watch(dockExpandedProvider(wallId)),
-                        mapOpen: ref.watch(dockMapOpenProvider(wallId)),
                         legendMaxHeight: overlayLegendMaxHeight,
                         readOnly: readOnly,
                         isSwitchingPhoto: drawState.isSwitchingPhoto,
                         onToggleExpanded: () => ref
                             .read(dockExpandedProvider(wallId).notifier)
                             .toggle(),
-                        onToggleMap: () {
-                          // Opening the map opens the dock with it: a toggle
-                          // that quietly changed the contents of a closed
-                          // panel would read as a dead button.
-                          ref.read(dockMapOpenProvider(wallId).notifier).toggle();
-                          if (!ref.read(dockExpandedProvider(wallId))) {
-                            ref
-                                .read(dockExpandedProvider(wallId).notifier)
-                                .toggle();
-                          }
-                        },
                         onSelectFace: onSelectFace,
                         onManageFace: onManageFace,
-                        onEditLayout: onEditLayout,
+                        onOpenFaceMap: onOpenFaceMap,
+                        onAddPhoto: onAddPhoto,
                         onOpenCommunity: community,
                         onLogAscent:
                             drawState.mode == DrawMode.draw ? null : onLogAscent,
@@ -3751,15 +3796,17 @@ class _LegendHeader extends StatelessWidget {
 /// `reservedHeight` claimed 191 for a widget that rendered 208.
 ///
 /// A dock ends that class of bug outright rather than correcting the latest
-/// instance of it: the lane, the map and the list are rows in one `Column`, so
-/// the surface is exactly as tall as what it draws and nothing downstream has
-/// to predict it. There is no clearance term left for the face lane at all.
+/// instance of it: the lane and the list are rows in one `Column`, so the
+/// surface is exactly as tall as what it draws and nothing downstream has to
+/// predict it. There is no clearance term left for the face lane at all.
 ///
-/// **Two lanes, one at a time.** The pinned header is the faces — dots, and a
-/// toggle for the plan view. The body is the routes, or the map, never both:
-/// the map used to be permanently mounted above the legend at 153pt, which is
-/// most of what made this screen's bottom half unusable on a phone. It is a
-/// glance you ask for, so it is one tap away and costs nothing until asked.
+/// **One lane and one body.** The pinned header is the rail — the photos
+/// themselves, one tile each ([FaceRail]). The body is the route list, and
+/// only ever the route list. The plan view used to be the other half of a
+/// two-lane body here, and before that a card mounted permanently above the
+/// legend at 153pt; it is a full screen now ([FaceMapScreen]), one tap away
+/// behind the rail's leading tile, and costs this panel nothing until asked
+/// for. What the reader gets back is the bottom half of their photo.
 class _TopoDock extends StatelessWidget {
   const _TopoDock({
     required this.wallId,
@@ -3767,16 +3814,16 @@ class _TopoDock extends StatelessWidget {
     required this.layout,
     required this.activePhotoId,
     required this.routeCount,
+    required this.faceRouteCounts,
     required this.expanded,
-    required this.mapOpen,
     required this.legendMaxHeight,
     required this.readOnly,
     required this.isSwitchingPhoto,
     required this.onToggleExpanded,
-    required this.onToggleMap,
     required this.onSelectFace,
     required this.onManageFace,
-    required this.onEditLayout,
+    required this.onOpenFaceMap,
+    required this.onAddPhoto,
     required this.onOpenCommunity,
     required this.onLogAscent,
     required this.onEditRoute,
@@ -3787,16 +3834,16 @@ class _TopoDock extends StatelessWidget {
   final LayoutResult? layout;
   final String? activePhotoId;
   final int routeCount;
+  final Map<String, int> faceRouteCounts;
   final bool expanded;
-  final bool mapOpen;
   final double legendMaxHeight;
   final bool readOnly;
   final bool isSwitchingPhoto;
   final VoidCallback onToggleExpanded;
-  final VoidCallback onToggleMap;
   final void Function(PhotoRef photo)? onSelectFace;
   final void Function(PhotoRef photo)? onManageFace;
-  final VoidCallback? onEditLayout;
+  final VoidCallback? onOpenFaceMap;
+  final VoidCallback? onAddPhoto;
   final VoidCallback? onOpenCommunity;
   final void Function(int routeId)? onLogAscent;
   final void Function(int routeId)? onEditRoute;
@@ -3805,10 +3852,9 @@ class _TopoDock extends StatelessWidget {
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final plan = layout;
-    // No map toggle for a wall whose baseline is still loading or degenerate:
-    // a button that opens an empty box is worse than no button.
-    final mapAvailable = plan != null && !plan.baseline.isDegenerate;
-    final showMap = mapOpen && mapAvailable;
+    // No plan tile for a wall whose baseline is still loading or degenerate:
+    // a tile that opens an empty screen is worse than no tile.
+    final planAvailable = plan != null && !plan.baseline.isDegenerate;
     final select = onSelectFace ?? (_) {};
 
     return GlassChrome(
@@ -3829,12 +3875,12 @@ class _TopoDock extends StatelessWidget {
               layout: plan,
               activePhotoId: activePhotoId,
               routeCount: routeCount,
+              faceRouteCounts: faceRouteCounts,
               expanded: expanded,
-              mapOpen: showMap,
-              mapAvailable: mapAvailable,
               colors: colors,
               onToggleExpanded: onToggleExpanded,
-              onToggleMap: onToggleMap,
+              onOpenMap: planAvailable ? onOpenFaceMap : null,
+              onAddPhoto: onAddPhoto,
               onSelect: select,
               onManage: onManageFace,
               onOpenCommunity: onOpenCommunity,
@@ -3846,33 +3892,7 @@ class _TopoDock extends StatelessWidget {
                 thickness: 1,
                 color: colors.separator,
               ),
-              if (showMap)
-                Padding(
-                  key: const Key('topo-dock-map'),
-                  padding: const EdgeInsets.fromLTRB(
-                    MasiSpacing.sm,
-                    MasiSpacing.sm,
-                    MasiSpacing.sm,
-                    0,
-                  ),
-                  child: LayoutBuilder(
-                    builder: (context, constraints) => FaceMinimap(
-                      framed: false,
-                      // Full dock width, where the old card had 184px to
-                      // work with. The plan is the whole point of this lane
-                      // while it is open, so it gets the room the card could
-                      // never have taken without covering the topo.
-                      planSize: Size(constraints.maxWidth - 16, 132),
-                      layout: plan,
-                      photos: photos,
-                      activePhotoId: activePhotoId,
-                      onSelect: select,
-                      onEditLayout: onEditLayout,
-                      colors: colors,
-                    ),
-                  ),
-                )
-              else if (routeCount > 0)
+              if (routeCount > 0)
                 RouteLegend(
                   key: const Key('topo-dock-routes'),
                   wallId: wallId,
@@ -3895,27 +3915,27 @@ class _TopoDock extends StatelessWidget {
   }
 }
 
-/// The dock's pinned header: which face you are on, and the two ways to open
-/// its body.
+/// The dock's pinned header: which face you are on, and the way into the rest.
 ///
-/// The dots are the same control they were in the panel this replaced, minus
-/// their own pill — the dock is the surface now, and a bordered pill sitting
-/// on a frosted sheet reads as a control that came loose. They scroll
-/// horizontally rather than shrinking, because a rock with a dozen photos is a
-/// real thing and dots that get closer together until they are one grey smear
-/// stop being a control at all.
+/// The rail is the whole of it — a tile per photo, plus the plan tile that
+/// opens the map and the '+' that adds another photo. It replaced a row of
+/// 7px dots, and the difference is not decoration: a dot says there is a
+/// fourth face, a thumbnail says what is on it. It scrolls horizontally
+/// rather than shrinking, because a rock with a dozen photos is a real thing
+/// and tiles that get smaller until they are one grey smear stop being a
+/// control at all.
 class _DockLane extends StatelessWidget {
   const _DockLane({
     required this.photos,
     required this.layout,
     required this.activePhotoId,
     required this.routeCount,
+    required this.faceRouteCounts,
     required this.expanded,
-    required this.mapOpen,
-    required this.mapAvailable,
     required this.colors,
     required this.onToggleExpanded,
-    required this.onToggleMap,
+    required this.onOpenMap,
+    required this.onAddPhoto,
     required this.onSelect,
     required this.onManage,
     required this.onOpenCommunity,
@@ -3925,12 +3945,12 @@ class _DockLane extends StatelessWidget {
   final LayoutResult? layout;
   final String? activePhotoId;
   final int routeCount;
+  final Map<String, int> faceRouteCounts;
   final bool expanded;
-  final bool mapOpen;
-  final bool mapAvailable;
   final MasiColors colors;
   final VoidCallback onToggleExpanded;
-  final VoidCallback onToggleMap;
+  final VoidCallback? onOpenMap;
+  final VoidCallback? onAddPhoto;
   final void Function(PhotoRef photo) onSelect;
   final void Function(PhotoRef photo)? onManage;
   final VoidCallback? onOpenCommunity;
@@ -3982,49 +4002,17 @@ class _DockLane extends StatelessWidget {
             const SizedBox(height: MasiSpacing.xs),
             Row(
               children: [
-                if (mapAvailable)
-                  IconButton(
-                    key: const Key('topo-dock-map-toggle'),
-                    tooltip: mapOpen
-                        ? 'Back to the route list'
-                        : 'Where each photo was taken',
-                    onPressed: onToggleMap,
-                    iconSize: 18,
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.all(4),
-                    constraints: const BoxConstraints(
-                      minWidth: 40,
-                      minHeight: 40,
-                    ),
-                    // Filled while the map lane is the one showing, so the
-                    // button says which of the two the body is on rather than
-                    // only what it would do next.
-                    style: mapOpen
-                        ? IconButton.styleFrom(
-                            backgroundColor: colors.accent.withValues(
-                              alpha: 0.16,
-                            ),
-                          )
-                        : null,
-                    icon: MasiIcon(
-                      'compass',
-                      size: 18,
-                      color: mapOpen ? colors.accent : colors.ink,
-                    ),
-                  ),
                 Expanded(
-                  child: SingleChildScrollView(
-                    scrollDirection: Axis.horizontal,
-                    reverse: true,
-                    child: FaceDots(
-                      framed: false,
-                      photos: photos,
-                      layout: layout,
-                      activePhotoId: activePhotoId,
-                      onSelect: onSelect,
-                      onManage: onManage,
-                      colors: colors,
-                    ),
+                  child: FaceRail(
+                    photos: photos,
+                    layout: layout,
+                    activePhotoId: activePhotoId,
+                    routeCounts: faceRouteCounts,
+                    onSelect: onSelect,
+                    onManage: onManage,
+                    onOpenMap: onOpenMap,
+                    onAddPhoto: onAddPhoto,
+                    colors: colors,
                   ),
                 ),
                 if (canExpand)
