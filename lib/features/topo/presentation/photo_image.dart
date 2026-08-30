@@ -20,6 +20,7 @@ import 'package:flutter/material.dart';
 
 import '../data/photo_files.dart';
 import 'photo_image_source.dart';
+import 'photo_loading_fill.dart';
 
 /// Renders the stored photo at [storedPath], on whatever platform this is
 /// running: `Image.file` on native, a cached browser blob URL via
@@ -133,6 +134,70 @@ class PhotoImage extends StatelessWidget {
       cacheHeight: cacheHeight,
     );
   }
+}
+
+/// A stored photo rendered at TILE size: the 512px-max-edge thumbnail written
+/// at import time, never the original.
+///
+/// Use this for every small, repeated rendering of a photo — a rail tile, a
+/// face on the plan, a thumbnail riding the layout line. Reaching for
+/// [PhotoImage] with the original's path and a `cacheWidth` looks equivalent
+/// and is not; it is how the face rail crashed the app on a real library:
+///
+///  - On WEB the browser decodes the frame at its NATIVE size and applies the
+///    resize afterwards, so `cacheWidth` bounds only what is retained, not
+///    what is decoded. A rail of four 12-megapixel originals is four
+///    full-resolution decodes in one frame, on top of the canvas's own copy of
+///    one of them — enough to take the tab out.
+///  - A `cacheWidth` that VARIES (a wider tile for the selected face) mints a
+///    fresh `imageCache` entry on every selection change, so tapping along the
+///    rail accumulates one full decode per tap.
+///  - And per [PhotoImage]'s own rule, a sized decode of a photo that is ALSO
+///    decoded unsized elsewhere — which is exactly the canvas — is a second
+///    cache key, not a replacement: both are decoded and both are retained.
+///
+/// The thumbnail sidesteps all three. It is a different, permanently small
+/// object, shared by every tile that shows this photo, and it needs no size
+/// hint to be bounded. Same derivation as
+/// `LibraryCrudRepository._resolveThumbnail` and the canvas's own progressive
+/// first layer: [thumbKeyFor] on the stored/resolved original, re-resolved
+/// through `PhotoFiles` by [PhotoImage] itself.
+///
+/// A photo with no thumbnail — imported before that tier, or whose
+/// best-effort write failed — shows [placeholder] rather than falling back to
+/// the original. Falling back would reintroduce the very decode this exists to
+/// avoid, on precisely the oldest and largest photos in a library.
+class PhotoThumbnail extends StatelessWidget {
+  const PhotoThumbnail(
+    this.storedPath, {
+    super.key,
+    this.fit = BoxFit.cover,
+    this.width,
+    this.height,
+    this.placeholder,
+  });
+
+  /// The ORIGINAL's stored/resolved path. The thumbnail key is derived from
+  /// it here, so callers never have to remember to.
+  final String storedPath;
+  final BoxFit fit;
+  final double? width;
+  final double? height;
+  final Widget Function()? placeholder;
+
+  @override
+  Widget build(BuildContext context) => PhotoImage(
+    thumbKeyFor(storedPath),
+    fit: fit,
+    width: width,
+    height: height,
+    placeholder: placeholder,
+    // [PhotoLoadingFill], not a bare [MasiShimmer]: it freezes after two
+    // seconds, so a tree holding one SETTLES. An unbounded sweep turns every
+    // `pumpAndSettle` that reaches a tile into a timeout — twenty-one tests
+    // at once, the one time it was tried here.
+    loadingPlaceholder: () => PhotoLoadingFill(width: width, height: height),
+  );
 }
 
 /// Dimension-only resolver for a stored photo: `.resolve(configuration)`

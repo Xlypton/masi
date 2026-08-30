@@ -11,6 +11,7 @@ import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/application/face_layout_providers.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/face_lane.dart';
+import 'package:masi/features/topo/presentation/photo_image.dart';
 
 /// [FaceRail] is the reader's way round a rock with several photos, and
 /// [FaceMapPlan] is the plan view it opens. The rail lives in the dock's
@@ -363,6 +364,58 @@ void main() {
     await tester.longPress(find.byKey(const Key('face-rail-tile-photo-1')));
     await tester.pumpAndSettle();
     expect(managed?.id, 'photo-1');
+  });
+
+  testWidgets('every tile renders the THUMBNAIL — an original decoded per '
+      'face is what took the tab out', (tester) async {
+    // The bug this replaces: the rail rendered `PhotoImage(photo.localPath)`
+    // with a `cacheWidth`, which reads as "decode it small" and is not that on
+    // web — the browser decodes at native size and resizes after. Four
+    // 12-megapixel originals in one frame, on top of the canvas's own copy of
+    // one of them, crashed the app on a real library while passing every test
+    // here, because the fixture photos are a few hundred bytes.
+    //
+    // So the assertion is structural rather than about pixels: no widget in
+    // this rail may be a bare `PhotoImage` pointed at an original. Size is not
+    // observable in a widget test; which path was asked for is.
+    await seedWall(photos: 4);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => FaceRail(
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-0',
+            routeCounts: const {},
+            onSelect: (_) {},
+            onManage: null,
+            onOpenMap: null,
+            onAddPhoto: null,
+            colors: MasiColors.of(context),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byType(PhotoThumbnail), findsNWidgets(4));
+    for (final image in tester.widgetList<PhotoImage>(find.byType(PhotoImage))) {
+      expect(
+        image.storedPath,
+        startsWith('thumbs/'),
+        reason: 'a tile asked for an original: ${image.storedPath}',
+      );
+      expect(
+        image.cacheWidth,
+        isNull,
+        reason: 'a cacheWidth that varies with the selected tile mints a new '
+            'imageCache entry on every tap',
+      );
+    }
   });
 
   testWidgets('the plan draws one real thumbnail per face, none covering '

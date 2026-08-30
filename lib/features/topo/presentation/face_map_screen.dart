@@ -189,7 +189,6 @@ class _FaceMapScreenState extends ConsumerState<FaceMapScreen> {
   ) {
     final index = photos.indexWhere((p) => p.id == photo.id);
     final count = counts[photo.id] ?? 0;
-    final dpr = MediaQuery.devicePixelRatioOf(context);
 
     return Container(
       key: const Key('face-map-current'),
@@ -216,11 +215,7 @@ class _FaceMapScreenState extends ConsumerState<FaceMapScreen> {
               border: Border.all(color: colors.accent, width: 2),
             ),
             clipBehavior: Clip.antiAlias,
-            child: PhotoImage(
-              photo.localPath,
-              fit: BoxFit.cover,
-              cacheWidth: (74 * dpr).round(),
-            ),
+            child: PhotoThumbnail(photo.localPath),
           ),
           const SizedBox(width: MasiSpacing.md),
           Expanded(

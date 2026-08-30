@@ -97,8 +97,6 @@ class FaceRail extends StatelessWidget {
     }
     ordered.addAll(byId.values);
 
-    final dpr = MediaQuery.devicePixelRatioOf(context);
-
     return SingleChildScrollView(
       key: const Key('face-rail'),
       scrollDirection: Axis.horizontal,
@@ -143,7 +141,7 @@ class FaceRail extends StatelessWidget {
               ),
             ],
           for (var i = 0; i < ordered.length; i++)
-            _faceTile(ordered[i], i, dpr),
+            _faceTile(ordered[i], i),
           if (onAddPhoto case final add?)
             _RailTile(
               key: const Key('face-rail-add'),
@@ -161,7 +159,7 @@ class FaceRail extends StatelessWidget {
     );
   }
 
-  Widget _faceTile(PhotoRef photo, int index, double dpr) {
+  Widget _faceTile(PhotoRef photo, int index) {
     final active = photo.id == activePhotoId;
     final size = active ? activeTile : tile;
     final count = routeCounts[photo.id] ?? 0;
@@ -178,19 +176,10 @@ class FaceRail extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          PhotoImage(
-            photo.localPath,
-            fit: BoxFit.cover,
-            // Width alone, never both: `ResizeImage`'s exact policy would
-            // squash a portrait photo into the tile in the decoder, where
-            // `BoxFit.cover` can no longer undo it. See [PhotoImage]'s doc.
-            cacheWidth: (size.width * dpr).round(),
-            // Deliberately NO `loadingPlaceholder: MasiShimmer()`, tempting
-            // as it is here: the shimmer animates forever, and every widget
-            // test that reaches this rail ends on `pumpAndSettle` — which
-            // then never returns. Twenty-one of them timed out the once this
-            // was tried. An unfilled tile for a frame is the cheaper cost.
-          ),
+          // The THUMBNAIL, never the original with a size hint — see
+          // [PhotoThumbnail]'s doc for the three separate ways that crashes a
+          // real library, one of which this rail shipped.
+          PhotoThumbnail(photo.localPath),
           if (count > 0)
             Positioned(
               right: 2,
@@ -413,7 +402,6 @@ class FaceMapPlan extends StatelessWidget {
         thumbnail: const Size(76, 58),
         stem: 58,
       );
-      final dpr = MediaQuery.devicePixelRatioOf(context);
       final byId = {for (final photo in photos) photo.id: photo};
 
       return SizedBox(
@@ -447,7 +435,6 @@ class FaceMapPlan extends StatelessWidget {
                     size: slot.size,
                     active: photo.id == activePhotoId,
                     routeCount: routeCounts[photo.id] ?? 0,
-                    dpr: dpr,
                     colors: colors,
                     onTap: () => onSelect(photo),
                   ),
@@ -465,7 +452,6 @@ class _MapThumbnail extends StatelessWidget {
     required this.size,
     required this.active,
     required this.routeCount,
-    required this.dpr,
     required this.colors,
     required this.onTap,
   });
@@ -474,7 +460,6 @@ class _MapThumbnail extends StatelessWidget {
   final Size size;
   final bool active;
   final int routeCount;
-  final double dpr;
   final MasiColors colors;
   final VoidCallback onTap;
 
@@ -498,11 +483,7 @@ class _MapThumbnail extends StatelessWidget {
       child: Stack(
         fit: StackFit.expand,
         children: [
-          PhotoImage(
-            photo.localPath,
-            fit: BoxFit.cover,
-            cacheWidth: (size.width * dpr).round(),
-          ),
+          PhotoThumbnail(photo.localPath),
           if (routeCount > 0)
             Positioned(
               right: 3,

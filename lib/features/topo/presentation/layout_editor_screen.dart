@@ -471,7 +471,10 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
           child: Stack(
             fit: StackFit.expand,
             children: [
-              if (photo != null) PhotoImage(photo.localPath),
+              // The thumbnail, not the original: this draws EVERY face of the
+              // wall at once, so the originals would be N full-resolution
+              // decodes in one frame. See [PhotoThumbnail].
+              if (photo != null) PhotoThumbnail(photo.localPath),
               if (face.isPinned)
                 Align(
                   alignment: Alignment.topRight,
@@ -536,7 +539,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                 clipBehavior: Clip.antiAlias,
                 child: photo == null
                     ? const SizedBox.shrink()
-                    : PhotoImage(photo.localPath),
+                    : PhotoThumbnail(photo.localPath),
               ),
             );
           },
