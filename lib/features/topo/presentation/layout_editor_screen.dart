@@ -579,7 +579,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
               borderRadius: BorderRadius.circular(MasiRadii.control),
               child: photo == null
                   ? const SizedBox.shrink()
-                  : PhotoImage(photo.localPath),
+                  : PhotoThumbnail(photo.localPath),
             ),
           ),
           const SizedBox(width: 12),
