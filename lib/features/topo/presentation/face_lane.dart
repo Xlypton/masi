@@ -106,37 +106,42 @@ class FaceRail extends StatelessWidget {
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (onOpenMap case final open?) ...[
-            _RailTile(
-              key: const Key('face-rail-map'),
-              caption: 'Map',
-              size: tile,
-              onTap: open,
-              colors: colors,
-              child: CustomPaint(
-                painter: _PlanTilePainter(
-                  layout: layout!,
-                  stroke: colors.amethyst400,
-                  dot: colors.accent,
-                  activePhotoId: activePhotoId,
+          // Both conditions, not just the callback: a caller that offers a
+          // way to open the map on a wall with no baseline would otherwise
+          // reach the `layout!` below. The dock already gates on the same
+          // thing; this makes the widget safe on its own terms.
+          if (layout case final plan?)
+            if (onOpenMap case final open?) ...[
+              _RailTile(
+                key: const Key('face-rail-map'),
+                caption: 'Map',
+                size: tile,
+                onTap: open,
+                colors: colors,
+                child: CustomPaint(
+                  painter: _PlanTilePainter(
+                    layout: plan,
+                    stroke: colors.amethyst400,
+                    dot: colors.accent,
+                    activePhotoId: activePhotoId,
+                  ),
                 ),
               ),
-            ),
-            // Hairline, thumb-height: the map is a different kind of thing
-            // from the photos beside it, and without the rule it reads as a
-            // fifth face nobody can place.
-            Container(
-              width: 1,
-              height: tile.height,
-              margin: const EdgeInsets.fromLTRB(
-                MasiSpacing.xs,
-                0,
-                MasiSpacing.xs,
-                0,
+              // Hairline, thumb-height: the map is a different kind of thing
+              // from the photos beside it, and without the rule it reads as a
+              // fifth face nobody can place.
+              Container(
+                width: 1,
+                height: tile.height,
+                margin: const EdgeInsets.fromLTRB(
+                  MasiSpacing.xs,
+                  0,
+                  MasiSpacing.xs,
+                  0,
+                ),
+                color: colors.separator,
               ),
-              color: colors.separator,
-            ),
-          ],
+            ],
           for (var i = 0; i < ordered.length; i++)
             _faceTile(ordered[i], i, dpr),
           if (onAddPhoto case final add?)
@@ -180,6 +185,11 @@ class FaceRail extends StatelessWidget {
             // squash a portrait photo into the tile in the decoder, where
             // `BoxFit.cover` can no longer undo it. See [PhotoImage]'s doc.
             cacheWidth: (size.width * dpr).round(),
+            // Deliberately NO `loadingPlaceholder: MasiShimmer()`, tempting
+            // as it is here: the shimmer animates forever, and every widget
+            // test that reaches this rail ends on `pumpAndSettle` — which
+            // then never returns. Twenty-one of them timed out the once this
+            // was tried. An unfilled tile for a frame is the cheaper cost.
           ),
           if (count > 0)
             Positioned(
@@ -188,9 +198,10 @@ class FaceRail extends StatelessWidget {
               child: Container(
                 key: Key('face-rail-count-${photo.id}'),
                 padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-                // Black-on-white regardless of theme: this rides on a
-                // photograph, not on a surface, so a themed colour pair would
-                // be legible in the editor and invisible on a snowy slab.
+                // White on a black scrim regardless of theme: this rides on
+                // a photograph, not on a surface, so a themed colour pair
+                // would be legible in the editor and invisible on a snowy
+                // slab.
                 decoration: BoxDecoration(
                   color: const Color(0xB3000000),
                   borderRadius: BorderRadius.circular(999),
@@ -284,9 +295,7 @@ class _RailTile extends StatelessWidget {
                 style: TextStyle(
                   fontSize: 11,
                   height: 1.1,
-                  fontWeight: captionStrong
-                      ? FontWeight.w600
-                      : FontWeight.w500,
+                  fontWeight: captionStrong ? FontWeight.w600 : FontWeight.w500,
                   color: captionStrong ? colors.ink : colors.ink2,
                 ),
               ),
@@ -321,8 +330,10 @@ class _PlanTilePainter extends CustomPainter {
     final fit = LayoutPlaneFit.forBaseline(line, size, padding: 8);
 
     final path = Path()
-      ..moveTo(fit.toCanvas(line.points.first).dx,
-          fit.toCanvas(line.points.first).dy);
+      ..moveTo(
+        fit.toCanvas(line.points.first).dx,
+        fit.toCanvas(line.points.first).dy,
+      );
     for (final point in line.points.skip(1)) {
       final at = fit.toCanvas(point);
       path.lineTo(at.dx, at.dy);
