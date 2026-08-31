@@ -1,6 +1,6 @@
 import 'dart:ui';
 
-import 'package:flutter/foundation.dart' show listEquals, visibleForTesting;
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/rendering.dart' show CustomPainter, TextPainter, TextSpan, TextStyle;
 
 import 'package:masi/core/coordinates/coordinate_transformer.dart';
@@ -628,11 +628,13 @@ class TopoPainter extends CustomPainter {
   /// segment between [p1] and [p2], given the neighboring points [p0] and
   /// [p3] used to derive the tangents at each end.
   ///
-  /// Exposed as `@visibleForTesting` so the spline math can be verified
-  /// numerically in tests without needing to reverse-engineer it from a
-  /// rendered [Path]. [_catmullRomPath] calls this helper directly, so the
-  /// tested formula is guaranteed to be the same one used at paint time.
-  @visibleForTesting
+  /// Public so the spline math can be verified numerically in tests without
+  /// reverse-engineering it from a rendered [Path], and so the ONE curve
+  /// formula in this app has one home: `LayoutBaselinePainter` draws a rock's
+  /// outline through this too, because an outline and a climb's line are
+  /// tapped out with the same gesture and should come out the same shape.
+  /// [_catmullRomPath] calls it directly, so the tested formula is guaranteed
+  /// to be the one used at paint time.
   static (Offset, Offset) catmullRomControlPoints(
     Offset p0,
     Offset p1,

@@ -8,12 +8,14 @@ import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/topo/application/face_layout_providers.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/domain/face_layout/baseline.dart';
+import 'package:masi/features/topo/domain/face_layout/baseline_set.dart';
 import 'package:masi/features/topo/domain/face_layout/baseline_synthesis.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/layout_baseline_painter.dart';
 import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
 import 'package:masi/features/topo/presentation/thumbnail_arrangement.dart';
 import 'package:masi/features/topo/presentation/photo_image.dart';
+import 'package:masi/features/topo/presentation/photo_preview.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 
 /// The layout editor: one line, and the wall's photos riding it.
@@ -119,6 +121,16 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   String? _draggingFaceId;
   double? _draggingT;
 
+  /// Whether the drag in progress has actually MOVED anything.
+  ///
+  /// A press that never moves still opens and closes a drag — a long-press
+  /// on a face runs `_panStart` too, because the recognizer that guards this
+  /// canvas takes the pointer back when the arena rejects it. Without this,
+  /// merely holding a photo to look at it pinned it: a write, a sync-dirty
+  /// row, and a face permanently reported as "you placed this one" by a
+  /// gesture that placed nothing.
+  bool _dragMoved = false;
+
   /// The draft point being dragged right now, while redrawing.
   ///
   /// A point placed by tap is a point you can move, exactly as a route's
@@ -132,7 +144,27 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// handles reshape it' — and its absence is what left redrawing the entire
   /// line as the only way to fix one that was slightly wrong.
   int? _draggingHandle;
+
+  /// Which rock the dragged vertex belongs to.
+  int? _draggingHandleStroke;
+
   List<LayoutPoint>? _handlePoints;
+
+  /// Which rock the face being dragged has reached. A drag can carry a photo
+  /// from one boulder to another — that is how a wall's photos get sorted
+  /// between its rocks, and with no GPS it is the only way.
+  int? _draggingFaceStroke;
+
+  /// The rock the contributor has picked out by tapping it, if any. Only
+  /// meaningful with more than one; it is what "remove this rock" removes.
+  int? _selectedStroke;
+
+  /// Whether the stroke being drawn ADDS a rock or replaces the drawing.
+  ///
+  /// The same draft machinery serves both, and the difference is one line at
+  /// commit time — but it is the whole difference between "this crag bay has
+  /// a second boulder" and "that was wrong, here it is again".
+  bool _draftAppends = false;
 
   /// Whether the stroke being reshaped is a ring. Reshaping never changes
   /// that — only redrawing does — so it is carried across the drag rather
@@ -229,6 +261,17 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
               color: colors.ink2,
             ),
           ),
+          if (layout.strokes.length > 1) ...[
+            const SizedBox(height: 6),
+            Text(
+              _selectedStroke == null
+                  ? '${layout.strokes.length} rocks. Tap one to pick it out; '
+                        'drag a photo across to move it between them.'
+                  : 'Rock ${_selectedStroke! + 1} picked out.',
+              key: const Key('layout-rock-count'),
+              style: TextStyle(fontSize: 13, height: 1.35, color: colors.ink2),
+            ),
+          ],
           const SizedBox(height: 18),
           _captureOrderRail(colors, layout, photos),
           const SizedBox(height: 18),
@@ -236,7 +279,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
             _selectedCard(colors, layout, photos, _selectedFaceId!),
           const SizedBox(height: 18),
         ],
-        _actions(colors, layout),
+        _actions(colors, layout, photos),
       ],
     );
   }
@@ -368,9 +411,6 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
         canvas: size,
         thumbnail: _thumbnailSize,
         stem: LayoutBaselinePainter.stemLength,
-        // The same spread the plan screen gets: a taller canvas is only
-        // worth having if the photos use it.
-        maxStem: LayoutBaselinePainter.stemLength * 2,
       );
       // What the finger can hit, as of THIS build — see the recognizer's
       // constructor below for why it cannot read these from a closure.
@@ -391,6 +431,24 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                         preview,
                         fit,
                         slots,
+                      );
+                },
+              ),
+          // The faces on the canvas are drawn INSIDE an `IgnorePointer` —
+          // every touch on this surface is resolved here, against the
+          // arrangement, rather than by the boxes themselves. So the
+          // long-press has to live here too.
+          LongPressGestureRecognizer:
+              GestureRecognizerFactoryWithHandlers<LongPressGestureRecognizer>(
+                LongPressGestureRecognizer.new,
+                (instance) {
+                  instance.onLongPressStart = (LongPressStartDetails details) =>
+                      _previewFaceAt(
+                        _toLocal(details.globalPosition),
+                        preview,
+                        fit,
+                        slots,
+                        photos,
                       );
                 },
               ),
@@ -457,6 +515,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                     dotColor: colors.accent,
                     pinnedColor: colors.accent,
                     handleColor: colors.amethyst400,
+                    handleRingColor: colors.surface,
                     selectedFaceId: _selectedFaceId,
                     slots: slots,
                     // Handles on the DRAFT as well: the points you have
@@ -464,6 +523,9 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                     // by tapping has to show where its taps landed.
                     showHandles: true,
                     draft: draft,
+                    selectedStroke: preview.strokes.length > 1
+                        ? _selectedStroke
+                        : null,
                   ),
                 ),
               ),
@@ -485,22 +547,31 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// unrecoverable. So the pin is applied locally for the duration and
   /// committed once, on release.
   LayoutResult _previewLayout(LayoutResult layout, List<PhotoRef> photos) {
-    // A handle drag reshapes the LINE, so the faces have to be re-resolved
-    // against it rather than carried over: they ride the stroke, and a stroke
-    // that moved without them would show every photo hanging off it.
+    // A handle drag reshapes ONE rock, so that rock's faces have to be
+    // re-resolved against it rather than carried over: they ride the stroke,
+    // and a stroke that moved without them would show every photo hanging
+    // off it.
     final edited = _handlePoints;
-    if (edited != null && edited.length >= 2) {
-      return resolveLayout(
-        faces: faceInputsFrom(photos),
-        baseline: Baseline(edited, closed: layout.baseline.closed),
-        origin: BaselineOrigin.authored,
-      );
+    final editedStroke = _draggingHandleStroke;
+    if (edited != null && editedStroke != null && edited.length >= 2) {
+      final strokes = [...layout.strokes];
+      if (editedStroke < strokes.length) {
+        strokes[editedStroke] = Baseline(edited, closed: _handleClosed);
+        return resolveLayoutSet(
+          faces: faceInputsFrom(photos),
+          strokes: BaselineSet(strokes),
+          origin: BaselineOrigin.authored,
+        );
+      }
     }
     final draggingId = _draggingFaceId;
     final draggingT = _draggingT;
     if (draggingId == null || draggingT == null) return layout;
+    final draggingStroke = _draggingFaceStroke ?? 0;
     return LayoutResult(
       baseline: layout.baseline,
+      strokes: layout.strokes,
+      normalSigns: layout.normalSigns,
       origin: layout.origin,
       orientation: layout.orientation,
       thumbnailNormalSign: layout.thumbnailNormalSign,
@@ -512,6 +583,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
               captureOrder: face.captureOrder,
               t: draggingT,
               placement: FacePlacement.pinned,
+              stroke: draggingStroke,
             )
           else
             face,
@@ -547,6 +619,12 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
           height: slot.size.height,
           decoration: BoxDecoration(
             color: colors.surface,
+            borderRadius: BorderRadius.circular(MasiRadii.control),
+          ),
+          // The frame paints ON TOP of the photo. Underneath it, the clipped
+          // child covers its inner half and the rounded corners come out
+          // bitten off — the selected face's highlight is where it shows.
+          foregroundDecoration: BoxDecoration(
             borderRadius: BorderRadius.circular(MasiRadii.control),
             border: Border.all(
               color: selected ? colors.accent : colors.separator,
@@ -611,9 +689,21 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
             return GestureDetector(
               key: Key('layout-order-${face.id}'),
               onTap: () => setState(() => _selectedFaceId = face.id),
+              onLongPress: photo == null
+                  ? null
+                  : () => showPhotoPreview(
+                      context,
+                      storedPath: photo.localPath,
+                      title: 'Photo ${face.captureOrder + 1}',
+                      subtitle: _placementLabel(face.placement),
+                    ),
               child: Container(
                 width: 52,
                 decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(MasiRadii.control),
+                ),
+                // Over the photo, not under it — see `_thumbnail`.
+                foregroundDecoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(MasiRadii.control),
                   border: Border.all(
                     color: face.id == _selectedFaceId
@@ -702,10 +792,31 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     );
   }
 
-  Widget _actions(MasiColors colors, LayoutResult layout) => Column(
+  Widget _actions(
+    MasiColors colors,
+    LayoutResult layout,
+    List<PhotoRef> photos,
+  ) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       _actionRow(colors, layout),
+      if (!_redrawing) ...[
+        const SizedBox(height: 10),
+        // A crag bay is often not one rock. Without this the contributor
+        // either draws one line around two boulders — claiming the gap
+        // between them is climbable — or leaves the guess alone.
+        FilledButton.tonal(
+          key: const Key('layout-add-rock'),
+          onPressed: () => _startAddRock(layout),
+          child: const Text('Add another rock'),
+        ),
+        if (layout.strokes.length > 1 && _selectedStroke != null)
+          TextButton(
+            key: const Key('layout-remove-rock'),
+            onPressed: () => _removeStroke(layout, photos, _selectedStroke!),
+            child: Text('Remove rock ${_selectedStroke! + 1}'),
+          ),
+      ],
       // The way back. A stored line that came out wrong used to be
       // unrecoverable without drawing an acceptable one first — and the
       // reason to reach for this is usually that drawing went badly.
@@ -807,6 +918,31 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     return null;
   }
 
+  /// Long-press a face on the plan and it opens full size.
+  ///
+  /// A 64x48 tile says which SIDE of the rock this is; it cannot say which
+  /// slab. Checking that used to mean leaving the editor for the face and
+  /// coming back, which loses the arrangement being read.
+  void _previewFaceAt(
+    Offset at,
+    LayoutResult layout,
+    LayoutPlaneFit fit,
+    List<ThumbnailSlot> slots,
+    List<PhotoRef> photos,
+  ) {
+    if (_redrawing) return;
+    final face = _faceNear(at, layout, fit, slots);
+    if (face == null) return;
+    final photo = _photoFor(photos, face.id);
+    if (photo == null) return;
+    showPhotoPreview(
+      context,
+      storedPath: photo.localPath,
+      title: 'Photo ${face.captureOrder + 1}',
+      subtitle: _placementLabel(face.placement),
+    );
+  }
+
   void _handleTap(
     Offset at,
     LayoutResult layout,
@@ -818,7 +954,20 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       return;
     }
     final hit = _faceNear(at, layout, fit, slots);
-    setState(() => _selectedFaceId = hit?.id);
+    if (hit != null) {
+      setState(() {
+        _selectedFaceId = hit.id;
+        _selectedStroke = hit.stroke;
+      });
+      return;
+    }
+    // Not a photo: the rock itself, if the finger is on one. That is what
+    // gives "remove this rock" something to name, and on a wall with one
+    // rock it changes nothing anybody can see.
+    setState(() {
+      _selectedFaceId = null;
+      _selectedStroke = _strokeNear(at, layout, fit);
+    });
   }
 
   /// One tap, one point — the same gesture that draws a route.
@@ -885,7 +1034,10 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       // a scroll trap on a phone.
       final index = _draftPointNear(at);
       if (index == null) return;
-      setState(() => _draggingDraftIndex = index);
+      setState(() {
+        _draggingDraftIndex = index;
+        _dragMoved = false;
+      });
       return;
     }
     // Handles win over faces: a handle sits ON the line and a thumbnail sits
@@ -893,11 +1045,15 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     // at the line it is touching.
     final handle = _handleNear(at, layout, fit);
     if (handle != null) {
+      final stroke = layout.strokes[handle.stroke];
       setState(() {
         _selectedFaceId = null;
-        _draggingHandle = handle;
-        _handleClosed = layout.baseline.closed;
-        _handlePoints = [...layout.baseline.points];
+        _selectedStroke = handle.stroke;
+        _draggingHandle = handle.index;
+        _draggingHandleStroke = handle.stroke;
+        _handleClosed = stroke.closed;
+        _handlePoints = [...stroke.points];
+        _dragMoved = false;
       });
       return;
     }
@@ -907,6 +1063,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       _selectedFaceId = hit.id;
       _draggingFaceId = hit.id;
       _draggingT = hit.t;
+      _draggingFaceStroke = hit.stroke;
+      _dragMoved = false;
     });
   }
 
@@ -915,7 +1073,10 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       final index = _draggingDraftIndex;
       final points = _draftPoints;
       if (index == null || points == null || index >= points.length) return;
-      setState(() => _draftPoints = [...points]..[index] = fit.toPlane(at));
+      setState(() {
+        _draftPoints = [...points]..[index] = fit.toPlane(at);
+        _dragMoved = true;
+      });
       return;
     }
     final handle = _draggingHandle;
@@ -923,6 +1084,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     if (handle != null && points != null && handle < points.length) {
       setState(() {
         _handlePoints = [...points]..[handle] = fit.toPlane(at);
+        _dragMoved = true;
       });
       return;
     }
@@ -930,7 +1092,27 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     // Snapped onto the line rather than following the finger freely: a face
     // is a position ALONG the rock, and a thumbnail sitting off the stroke
     // would be claiming a second dimension the model does not have.
-    setState(() => _draggingT = layout.baseline.project(fit.toPlane(at)).t);
+    //
+    // Onto the NEAREST rock, not a fixed one: carrying a photo across to the
+    // other boulder is the same gesture as sliding it along this one, and
+    // with no GPS it is the only way to say which rock a photo is of.
+    final plane = fit.toPlane(at);
+    var bestStroke = _draggingFaceStroke ?? 0;
+    var bestT = _draggingT ?? 0;
+    var bestDistance = double.infinity;
+    for (var i = 0; i < layout.strokes.length; i++) {
+      final projection = layout.strokes[i].project(plane);
+      if (projection.distance < bestDistance) {
+        bestDistance = projection.distance;
+        bestStroke = i;
+        bestT = projection.t;
+      }
+    }
+    setState(() {
+      _draggingFaceStroke = bestStroke;
+      _draggingT = bestT;
+      _dragMoved = true;
+    });
   }
 
   Future<void> _panEnd() async {
@@ -941,25 +1123,46 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       setState(() => _draggingDraftIndex = null);
       return;
     }
+    final moved = _dragMoved;
     final reshaped = _handlePoints;
+    final reshapedStroke = _draggingHandleStroke;
+    final layout = _hitLayout;
     if (_draggingHandle != null) {
       setState(() {
         _draggingHandle = null;
+        _draggingHandleStroke = null;
         _handlePoints = null;
       });
-      if (reshaped != null && reshaped.length >= 2) {
-        await _storeBaseline(Baseline(reshaped, closed: _handleClosed));
+      if (moved &&
+          reshaped != null &&
+          reshapedStroke != null &&
+          layout != null &&
+          reshaped.length >= 2) {
+        final strokes = [...layout.strokes];
+        if (reshapedStroke < strokes.length) {
+          strokes[reshapedStroke] = Baseline(reshaped, closed: _handleClosed);
+          await _storeBaseline(BaselineSet(strokes));
+        }
       }
       return;
     }
     final faceId = _draggingFaceId;
     final t = _draggingT;
+    final faceStroke = _draggingFaceStroke ?? 0;
     setState(() {
       _draggingFaceId = null;
       _draggingT = null;
+      _draggingFaceStroke = null;
     });
-    if (faceId == null || t == null) return;
-    await ref.read(photoRepositoryProvider).setFacePin(faceId, t);
+    // A press that never moved is a look, not a placement — see [_dragMoved].
+    if (!moved || faceId == null || t == null) return;
+    // On a one-rock wall the pin is written exactly as it always was — see
+    // [BaselineSet.pack] for why that matters.
+    final count = layout?.strokes.length ?? 1;
+    await ref.read(photoRepositoryProvider).setFacePin(
+      faceId,
+      count > 1 ? BaselineSet.pack(faceStroke, t) : t,
+    );
   }
 
   FacePosition? _faceNear(
@@ -993,17 +1196,23 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     return bestDistance <= 34 ? best : null;
   }
 
-  /// The baseline vertex under the finger, if any.
-  int? _handleNear(Offset at, LayoutResult layout, LayoutPlaneFit fit) {
-    final points = layout.baseline.points;
-    if (points.length < 2) return null;
-    int? best;
+  /// The baseline vertex under the finger, on any of the rocks.
+  ({int stroke, int index})? _handleNear(
+    Offset at,
+    LayoutResult layout,
+    LayoutPlaneFit fit,
+  ) {
+    ({int stroke, int index})? best;
     var bestDistance = double.infinity;
-    for (var i = 0; i < points.length; i++) {
-      final distance = (fit.toCanvas(points[i]) - at).distance;
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        best = i;
+    for (var s = 0; s < layout.strokes.length; s++) {
+      final points = layout.strokes[s].points;
+      if (points.length < 2) continue;
+      for (var i = 0; i < points.length; i++) {
+        final distance = (fit.toCanvas(points[i]) - at).distance;
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = (stroke: s, index: i);
+        }
       }
     }
     // Tighter than the face radius: handles can sit close together on a
@@ -1011,13 +1220,57 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     return bestDistance <= 22 ? best : null;
   }
 
-  Future<void> _storeBaseline(Baseline baseline) => ref
-      .read(libraryCrudRepositoryProvider)
-      .setWallBaseline(widget.wallId, baseline.encode());
+  /// The rock the finger is on, if any — a tap on the line itself rather
+  /// than on one of its handles or photos. Selecting one is what gives
+  /// "remove this rock" something to name.
+  int? _strokeNear(Offset at, LayoutResult layout, LayoutPlaneFit fit) {
+    int? best;
+    var bestDistance = double.infinity;
+    for (var s = 0; s < layout.strokes.length; s++) {
+      final stroke = layout.strokes[s];
+      if (stroke.isDegenerate) continue;
+      final projection = stroke.project(fit.toPlane(at));
+      final distance =
+          (fit.toCanvas(stroke.pointAt(projection.t)) - at).distance;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = s;
+      }
+    }
+    return bestDistance <= 26 ? best : null;
+  }
 
-  void _startRedraw(LayoutResult layout) => setState(() {
+  /// Writes the whole drawing — every rock — back to the wall.
+  ///
+  /// An empty set stores NULL rather than an empty string, which is the same
+  /// state as never having drawn: the engine re-synthesises a guess. Removing
+  /// your only rock therefore hands you the automatic line back rather than a
+  /// blank editor with nothing to grab.
+  Future<void> _storeBaseline(BaselineSet strokes) => ref
+      .read(libraryCrudRepositoryProvider)
+      .setWallBaseline(
+        widget.wallId,
+        strokes.isEmpty ? null : strokes.encode(),
+      );
+
+  /// Starts a stroke that REPLACES the drawing.
+  void _startRedraw(LayoutResult layout) => _startDraft(layout, appends: false);
+
+  /// Starts a stroke that ADDS a rock to it.
+  ///
+  /// The crag bay with two boulders in it is the case this exists for: the
+  /// alternative was one line drawn around both, which claims the gap between
+  /// them is climbable rock.
+  void _startAddRock(LayoutResult layout) => _startDraft(layout, appends: true);
+
+  void _startDraft(
+    LayoutResult layout, {
+    required bool appends,
+  }) => setState(() {
     _draftPoints = const [];
+    _draftAppends = appends;
     _selectedFaceId = null;
+    _selectedStroke = null;
     // Pinned BEFORE the first point, so the whole stroke is recorded through
     // one mapping. Falls back to a fixed crag-sized span when there is no
     // line to inherit a scale from.
@@ -1035,12 +1288,18 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       thumbnail: _thumbnailSize,
       stem: LayoutBaselinePainter.stemLength,
     );
-    _redrawFit = layout.baseline.isDegenerate
+    // Pinned against EVERY rock, not just the first: a second boulder has to
+    // be drawn in the same coordinates as the one already there, or it lands
+    // somewhere else entirely the moment it is committed.
+    final existing = layout.strokes.isEmpty
+        ? [layout.baseline]
+        : layout.strokes;
+    _redrawFit = existing.every((stroke) => stroke.isDegenerate)
         ? LayoutPlaneFit.forSpan(size, _blankSpanMetres)
         // The same padding the canvas is drawn with, or the outgoing line
         // would jump to a different scale the moment redrawing starts.
-        : LayoutPlaneFit.forBaseline(
-            layout.baseline,
+        : LayoutPlaneFit.forStrokes(
+            existing,
             size,
             padLeft: insets.left,
             padTop: insets.top,
@@ -1053,6 +1312,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     _draftPoints = null;
     _redrawFit = null;
     _draggingDraftIndex = null;
+    _draftAppends = false;
   });
 
   /// Stores the tapped stroke. [closed] is the ring gesture's whole effect on
@@ -1075,17 +1335,63 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       return;
     }
 
+    final existing = _hitLayout?.strokes ?? const <Baseline>[];
+    final appends = _draftAppends;
     setState(() {
       _draftPoints = null;
       _redrawFit = null;
       _draggingDraftIndex = null;
+      _draftAppends = false;
     });
+    final drawn = Baseline(points, closed: closed && points.length >= 3);
     await _storeBaseline(
-      Baseline(points, closed: closed && points.length >= 3),
+      BaselineSet(appends ? [...existing, drawn] : [drawn]),
     );
   }
 
-  Future<void> _accept(LayoutResult layout) => ref
-      .read(libraryCrudRepositoryProvider)
-      .setWallBaseline(widget.wallId, layout.baseline.encode());
+  /// Drops one rock from the drawing, and repairs every pin that named it.
+  ///
+  /// A pin carries its rock's INDEX (see [BaselineSet.pack]), so removing a
+  /// rock silently re-points every pin above it at the wrong one. The photos
+  /// of the removed rock lose their pin entirely — they have nowhere to be —
+  /// and fall back to the placement the engine computes, which is the honest
+  /// answer to "we no longer know where this was".
+  Future<void> _removeStroke(
+    LayoutResult layout,
+    List<PhotoRef> photos,
+    int index,
+  ) async {
+    final strokes = [...layout.strokes];
+    if (index < 0 || index >= strokes.length) return;
+    strokes.removeAt(index);
+    setState(() => _selectedStroke = null);
+
+    final photoRepository = ref.read(photoRepositoryProvider);
+    final before = layout.strokes.length;
+    for (final photo in photos) {
+      final pin = photo.layoutPinnedT;
+      if (pin == null) continue;
+      final unpacked = BaselineSet.unpack(pin, before);
+      if (unpacked.stroke == index) {
+        await photoRepository.setFacePin(photo.id, null);
+      } else if (unpacked.stroke > index) {
+        final moved = unpacked.stroke - 1;
+        await photoRepository.setFacePin(
+          photo.id,
+          strokes.length > 1 ? BaselineSet.pack(moved, unpacked.t) : unpacked.t,
+        );
+      } else if (strokes.length <= 1) {
+        // Down to one rock, so pins go back to being a plain position.
+        await photoRepository.setFacePin(photo.id, unpacked.t);
+      }
+    }
+
+    await _storeBaseline(BaselineSet(strokes));
+  }
+
+  Future<void> _accept(LayoutResult layout) => _storeBaseline(
+    BaselineSet(
+      layout.strokes.isEmpty ? [layout.baseline] : layout.strokes,
+    ),
+  );
 }

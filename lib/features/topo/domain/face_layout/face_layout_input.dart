@@ -59,6 +59,22 @@ class FaceInput {
 
   bool get isPinned => pinnedT != null;
 
+  /// A copy with a different pin.
+  ///
+  /// Used where a wall holds several rocks: the pin stored on the row names
+  /// a rock AND a place on it (see `BaselineSet.pack`), and the engine is
+  /// handed one rock at a time — so the place has to be re-expressed in that
+  /// rock's own coordinates before it goes in.
+  FaceInput withPinnedT(double? t) => FaceInput(
+    id: id,
+    captureOrder: captureOrder,
+    latitude: latitude,
+    longitude: longitude,
+    gpsAccuracyMeters: gpsAccuracyMeters,
+    bearingDegrees: bearingDegrees,
+    pinnedT: t,
+  );
+
   /// Whether this face's GPS is good enough to position it ALONG the rock.
   ///
   /// Note the asymmetry with the wall's own map pin: a fix far too coarse to

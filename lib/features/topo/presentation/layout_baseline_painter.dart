@@ -7,6 +7,7 @@ import 'package:flutter/material.dart' hide Baseline;
 import 'package:masi/features/topo/domain/face_layout/baseline.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
+import 'package:masi/features/topo/presentation/topo_painter.dart';
 import 'package:masi/features/topo/presentation/thumbnail_arrangement.dart';
 
 /// Draws the semantic baseline and the faces riding it.
@@ -25,10 +26,12 @@ class LayoutBaselinePainter extends CustomPainter {
     required this.dotColor,
     required this.pinnedColor,
     required this.handleColor,
+    required this.handleRingColor,
     required this.selectedFaceId,
     this.slots = const <ThumbnailSlot>[],
     this.showHandles = false,
     this.draft,
+    this.selectedStroke,
   });
 
   final LayoutResult layout;
@@ -38,6 +41,12 @@ class LayoutBaselinePainter extends CustomPainter {
   final Color dotColor;
   final Color pinnedColor;
   final Color handleColor;
+
+  /// The pale ring drawn around each handle's core — a surface colour, so the
+  /// handle is legible on the stroke, on a thumbnail, and on the empty canvas
+  /// alike.
+  final Color handleRingColor;
+
   final String? selectedFaceId;
 
   /// Where each face's thumbnail actually sits, from `arrangeThumbnails`.
@@ -50,64 +59,96 @@ class LayoutBaselinePainter extends CustomPainter {
   /// Whether to draw the diamond reshape handles at each vertex.
   final bool showHandles;
 
-  /// A stroke being drawn right now, in plane coordinates. Drawn instead of
-  /// [layout]'s baseline so the contributor sees their own line rather than
-  /// the one they are replacing.
+  /// A stroke being drawn right now, in plane coordinates. Drawn ALONGSIDE
+  /// the rocks that already exist when it is a new one being added, and
+  /// instead of them when it replaces the drawing.
   final Baseline? draft;
 
+  /// The rock the contributor has picked out, drawn heavier so "remove this
+  /// one" can name something they can see.
+  final int? selectedStroke;
+
   static const double _dotRadius = 5;
-  static const double _handleRadius = 5;
+
+  /// Handles are drawn as a filled core inside a light ring, and both radii
+  /// are bigger than the 5px diamond they replace. A corner of a traced rock
+  /// is the thing a contributor reaches for to fix the shape, and a small
+  /// accent-coloured diamond sitting on an accent-coloured line is nearly
+  /// invisible — which is most of what made reshaping feel unavailable.
+  static const double _handleRadius = 6.5;
+  static const double _handleRingWidth = 2.5;
 
   /// How far a thumbnail floats off the line, in pixels.
-  static const double stemLength = 52;
+  ///
+  /// Short on purpose. This is the whole distance between a photo and the dot
+  /// it belongs to, and every pixel of it is a pixel the reader has to trace.
+  static const double stemLength = 42;
 
   /// Radius of the close-the-ring target drawn on a draft's first point.
   /// Deliberately larger than a handle: it is a place to aim at, not a thing
   /// to grab.
   static const double _closeTargetRadius = 12;
 
+  /// Every rock this painter is being asked to draw.
+  ///
+  /// A wall can hold more than one stroke now, and a draft is one MORE rock
+  /// being added — not a replacement for the ones already there. Drawing only
+  /// the draft while a second boulder is being traced would blank the first,
+  /// which reads as having destroyed it.
+  List<Baseline> get _lines => [
+    if (layout.strokes.isEmpty) layout.baseline else ...layout.strokes,
+    ?draft,
+  ];
+
   @override
   void paint(Canvas canvas, Size size) {
-    final line = draft ?? layout.baseline;
-    // Not `< 2`: a line being TAPPED out starts as one point, and a first
-    // point that paints nothing reads as a tap that did not register.
-    if (line.points.isEmpty) return;
+    final lines = _lines;
+    final drafting = draft != null;
 
-    final provisional = draft != null || layout.isProvisional;
-    if (line.points.length >= 2) {
-      final path = Path()..moveTo(
-        fit.toCanvas(line.points.first).dx,
-        fit.toCanvas(line.points.first).dy,
-      );
-      for (final point in line.points.skip(1)) {
-        final at = fit.toCanvas(point);
-        path.lineTo(at.dx, at.dy);
+    for (var i = 0; i < lines.length; i++) {
+      final line = lines[i];
+      // Not `< 2`: a line being TAPPED out starts as one point, and a first
+      // point that paints nothing reads as a tap that did not register.
+      if (line.points.isEmpty) continue;
+
+      final isDraft = drafting && i == lines.length - 1;
+      final provisional = isDraft || layout.isProvisional;
+      final selected = !drafting && i == selectedStroke;
+
+      if (line.points.length >= 2) {
+        final path = _smoothPath(
+          [for (final point in line.points) fit.toCanvas(point)],
+          closed: line.closed,
+        );
+
+        final paint = Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = selected ? 10 : 7
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..color = provisional ? provisionalStroke : stroke;
+
+        canvas.drawPath(provisional ? _dashed(path) : path, paint);
       }
-      if (line.closed) path.close();
 
-      final paint = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 7
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..color = provisional ? provisionalStroke : stroke;
-
-      canvas.drawPath(provisional ? _dashed(path) : path, paint);
+      // While a new rock is being drawn, only ITS points are grabbable, so
+      // only its points wear handles — handles on the settled rocks would
+      // offer an edit the canvas is not listening for.
+      if (showHandles && (!drafting || isDraft)) {
+        for (final point in line.points) {
+          _handle(canvas, fit.toCanvas(point));
+        }
+      }
     }
 
-    if (showHandles) {
-      for (final point in line.points) {
-        _diamond(canvas, fit.toCanvas(point), _handleRadius, handleColor);
-      }
-    }
-
-    if (draft != null) {
-      _closeTarget(canvas, line);
+    if (drafting) {
+      _closeTarget(canvas, draft!);
       return;
     }
-    if (line.points.length < 2) return;
 
     for (final face in layout.faces) {
+      final line = layout.strokeFor(face);
+      if (line.points.length < 2) continue;
       final at = fit.toCanvas(line.pointAt(face.t));
       // A leader to wherever the arrangement pass ACTUALLY put this
       // thumbnail, which is not in general the end of its own normal — see
@@ -195,7 +236,12 @@ class LayoutBaselinePainter extends CustomPainter {
   }) {
     final halfX = thumbnail.width / 2 + margin;
     final halfY = thumbnail.height / 2 + margin;
-    if (layout.baseline.closed) {
+    // ANY ring means the band is needed all round: a wall holding a boulder
+    // and a slab has photos leaving in every direction somewhere.
+    final anyClosed = layout.strokes.isEmpty
+        ? layout.baseline.closed
+        : layout.strokes.any((stroke) => stroke.closed);
+    if (anyClosed) {
       return (
         left: halfX + stem,
         top: halfY + stem,
@@ -209,9 +255,9 @@ class LayoutBaselinePainter extends CustomPainter {
     // the SIDE they are on does not.
     var bias = Offset.zero;
     for (final face in layout.faces) {
-      final normal = layout.baseline.normalAt(face.t);
+      final normal = layout.strokeFor(face).normalAt(face.t);
       if (normal == null) continue;
-      final unit = (normal * layout.thumbnailNormalSign).normalized;
+      final unit = (normal * layout.normalSignFor(face)).normalized;
       if (unit != null) bias += Offset(unit.x, -unit.y);
     }
     if (bias.distance > 0) bias = bias / bias.distance;
@@ -250,22 +296,23 @@ class LayoutBaselinePainter extends CustomPainter {
     LayoutResult layout,
     LayoutPlaneFit fit,
   ) {
-    final line = layout.baseline;
-    if (line.points.length < 2) return const <ThumbnailAnchor>[];
-
     // An amphitheatre is a ring photographed from the INSIDE, so its
     // thumbnails belong inside it. Everything else — including the ordinary
     // case of not knowing — is a boulder you walk around.
     final inside = layout.orientation == LayoutOrientation.outward;
-    final centre = line.closed ? fit.toCanvas(line.centroid) : null;
 
     final out = <ThumbnailAnchor>[];
     for (final face in layout.faces) {
+      // Each face floats off ITS OWN rock. A wall with two boulders has two
+      // centres, and measuring every photo's direction from one of them
+      // would send the second boulder's photos across the drawing.
+      final line = layout.strokeFor(face);
+      if (line.points.length < 2) continue;
       final at = fit.toCanvas(line.pointAt(face.t));
 
       var direction = Offset.zero;
-      if (centre != null) {
-        final radial = at - centre;
+      if (line.closed) {
+        final radial = at - fit.toCanvas(line.centroid);
         // A face sitting on the centre has no radius to speak of — one point
         // in a thousand, and dividing by it would be a NaN thumbnail. The
         // normal below is the fallback.
@@ -277,7 +324,7 @@ class LayoutBaselinePainter extends CustomPainter {
         final normal = line.normalAt(face.t);
         direction = normal == null
             ? Offset.zero
-            : fit.directionToCanvas(normal * layout.thumbnailNormalSign);
+            : fit.directionToCanvas(normal * layout.normalSignFor(face));
       }
 
       out.add(ThumbnailAnchor(id: face.id, base: at, direction: direction));
@@ -300,14 +347,61 @@ class LayoutBaselinePainter extends CustomPainter {
     return out;
   }
 
-  void _diamond(Canvas canvas, Offset centre, double radius, Color color) {
-    final path = Path()
-      ..moveTo(centre.dx, centre.dy - radius)
-      ..lineTo(centre.dx + radius, centre.dy)
-      ..lineTo(centre.dx, centre.dy + radius)
-      ..lineTo(centre.dx - radius, centre.dy)
-      ..close();
-    canvas.drawPath(path, Paint()..color = color);
+  /// A corner you can see and aim at: a pale ring around a solid core, so it
+  /// stands off the stroke it sits on whichever colour that stroke is.
+  void _handle(Canvas canvas, Offset centre) {
+    canvas.drawCircle(
+      centre,
+      _handleRadius,
+      Paint()..color = handleRingColor,
+    );
+    canvas.drawCircle(
+      centre,
+      _handleRadius - _handleRingWidth,
+      Paint()..color = handleColor,
+    );
+  }
+
+  /// The stroke as a rounded curve rather than a chain of straight segments.
+  ///
+  /// A rock traced in a dozen taps comes out as a polygon, and a polygon
+  /// reads as a diagram of a box rather than as the outline of a rock — the
+  /// user's word for it was "boxy". Catmull-Rom (converted to cubics) passes
+  /// exactly THROUGH every point that was placed, so the smoothing is purely
+  /// cosmetic: the handles still sit on the curve, the stored geometry is
+  /// untouched, and nothing that hit-tests against the polyline moves.
+  ///
+  /// The control points come from [TopoPainter.catmullRomControlPoints] — the
+  /// same function that curves every route line on every topo — rather than
+  /// from a second copy of the formula here. A rock's outline and a climb's
+  /// line are now drawn by one piece of maths, which is the point: they are
+  /// tapped out with the same gesture and should come out the same shape.
+  static Path _smoothPath(List<Offset> points, {required bool closed}) {
+    final path = Path();
+    if (points.isEmpty) return path;
+    path.moveTo(points.first.dx, points.first.dy);
+    if (points.length == 2) {
+      path.lineTo(points[1].dx, points[1].dy);
+      return path;
+    }
+
+    final n = points.length;
+    Offset at(int i) {
+      if (closed) return points[(i % n + n) % n];
+      return points[i.clamp(0, n - 1)];
+    }
+
+    final last = closed ? n : n - 1;
+    for (var i = 0; i < last; i++) {
+      final p0 = at(i - 1);
+      final p1 = at(i);
+      final p2 = at(i + 1);
+      final p3 = at(i + 2);
+      final (c1, c2) = TopoPainter.catmullRomControlPoints(p0, p1, p2, p3);
+      path.cubicTo(c1.dx, c1.dy, c2.dx, c2.dy, p2.dx, p2.dy);
+    }
+    if (closed) path.close();
+    return path;
   }
 
   @override
@@ -316,6 +410,8 @@ class LayoutBaselinePainter extends CustomPainter {
       old.draft != draft ||
       old.selectedFaceId != selectedFaceId ||
       old.showHandles != showHandles ||
+      old.handleRingColor != handleRingColor ||
+      old.selectedStroke != selectedStroke ||
       old.slots != slots ||
       old.stroke != stroke;
 }

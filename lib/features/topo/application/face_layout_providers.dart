@@ -4,7 +4,7 @@ import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/library/application/library_providers.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
-import 'package:masi/features/topo/domain/face_layout/baseline.dart';
+import 'package:masi/features/topo/domain/face_layout/baseline_set.dart';
 import 'package:masi/features/topo/domain/face_layout/baseline_synthesis.dart';
 import 'package:masi/features/topo/domain/face_layout/face_layout_input.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
@@ -75,10 +75,10 @@ final wallLayoutProvider =
   return photos.whenData((rows) {
     if (rows.isEmpty) return LayoutResult.empty;
     final wall = anchor.value;
-    final stored = Baseline.decode(wall?.baselineJson);
-    return resolveLayout(
+    final stored = BaselineSet.decode(wall?.baselineJson);
+    return resolveLayoutSet(
       faces: faceInputsFrom(rows),
-      baseline: stored,
+      strokes: stored,
       origin: stored == null
           ? BaselineOrigin.captureOrderStrip
           : BaselineOrigin.authored,

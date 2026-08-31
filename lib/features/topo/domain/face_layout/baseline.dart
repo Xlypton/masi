@@ -367,7 +367,18 @@ class Baseline {
   static Baseline? decode(String? source) {
     if (source == null || source.isEmpty) return null;
     try {
-      final decoded = jsonDecode(source);
+      return decodeJson(jsonDecode(source));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// [decode]'s inner half, over already-parsed JSON.
+  ///
+  /// Split out for [BaselineSet], which parses a wrapper holding several of
+  /// these and must not re-encode each one to a string just to read it back.
+  static Baseline? decodeJson(Object? decoded) {
+    try {
       if (decoded is! Map) return null;
       if (decoded['v'] != schemaVersion) return null;
       final raw = decoded['pts'];

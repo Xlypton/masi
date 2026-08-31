@@ -154,77 +154,80 @@ void main() {
       expect(xs, orderedEquals(<Object>[...xs]..sort()));
     });
 
-    /// Not-overlapping is not the same property as far-apart, and the second
-    /// one is what a reader actually reads. Four faces of a boulder on a
-    /// fixed stem sit on one small circle inside their own outline with the
-    /// rest of the screen empty; the cap lets each travel out to the edge of
-    /// the box it is allowed to reach.
-    test('maxStem spends the empty canvas on the gaps between thumbnails', () {
-      const centre = Offset(180, 120);
+    /// The property the user asked for in their own words: a photo should
+    /// "naturally appear closest to the point it refers to". Positions and
+    /// their OWNERS are two different problems — this pins the second. Four
+    /// dots close together settle into four positions, and whichever order
+    /// the spring happened to leave them in decides which photo goes where;
+    /// left alone it routinely hands a photo the slot two dots away and runs
+    /// a leader across somebody else's to say so.
+    test('each thumbnail takes the position nearest its OWN dot', () {
+      // Four dots in a tight cluster, listed in an order that guarantees the
+      // naive pairing is wrong: each one's ideal spot is nearer another's.
       final anchors = <ThumbnailAnchor>[
-        for (final direction in const [
-          Offset(-1, -1),
-          Offset(1, -1),
-          Offset(1, 1),
-          Offset(-1, 1),
-        ])
-          ThumbnailAnchor(
-            id: '${direction.dx},${direction.dy}',
-            base: centre + direction * 20,
-            direction: direction,
-          ),
-      ];
-
-      double closestPair(List<ThumbnailSlot> slots) {
-        var best = double.infinity;
-        for (var i = 0; i < slots.length; i++) {
-          for (var j = i + 1; j < slots.length; j++) {
-            final d = (slots[i].centre - slots[j].centre).distance;
-            if (d < best) best = d;
-          }
-        }
-        return best;
-      }
-
-      final tight = arrangeThumbnails(
-        anchors: anchors,
-        canvas: canvas,
-        thumbnail: thumbnail,
-        stem: 40,
-      );
-      final spread = arrangeThumbnails(
-        anchors: anchors,
-        canvas: canvas,
-        thumbnail: thumbnail,
-        stem: 40,
-        maxStem: 200,
-      );
-
-      expect(closestPair(spread), greaterThan(closestPair(tight)));
-      expectNoOverlap(spread);
-      // The cap can only ever move a thumbnail FURTHER along its own
-      // direction, never off the canvas — the same clamp still applies.
-      expectInBounds(spread);
-    });
-
-    test('maxStem below the stem changes nothing', () {
-      final anchors = [
-        for (var i = 0; i < 3; i++)
+        for (var i = 0; i < 4; i++)
           ThumbnailAnchor(
             id: '$i',
-            base: Offset(60.0 + i * 90, 200),
+            base: Offset(120.0 + i * 26, 170),
             direction: const Offset(0, -1),
           ),
       ];
-      final plain = arrangeThumbnails(anchors: anchors, canvas: canvas);
-      final capped = arrangeThumbnails(
+
+      final slots = arrangeThumbnails(
         anchors: anchors,
         canvas: canvas,
-        maxStem: 10,
+        thumbnail: thumbnail,
       );
-      expect([for (final s in capped) s.centre], [
-        for (final s in plain) s.centre,
-      ]);
+
+      for (final slot in slots) {
+        for (final other in slots) {
+          if (identical(slot, other)) continue;
+          expect(
+            (slot.centre - slot.base).distance,
+            lessThanOrEqualTo((slot.centre - other.base).distance + 0.001),
+            reason: 'the photo for ${slot.id} sits closer to ${other.id}\'s '
+                'dot than to its own',
+          );
+        }
+      }
+    });
+
+    /// The same thing said geometrically: crossing leaders ARE a mis-pairing,
+    /// and exchanging the two ends of any crossing pair always shortens both.
+    test('no two leaders cross', () {
+      final anchors = <ThumbnailAnchor>[
+        for (var i = 0; i < 5; i++)
+          ThumbnailAnchor(
+            id: '$i',
+            base: Offset(90.0 + i * 34, 180 + (i.isEven ? 0 : 18)),
+            direction: Offset(i.isEven ? 0.4 : -0.4, -1),
+          ),
+      ];
+      final slots = arrangeThumbnails(
+        anchors: anchors,
+        canvas: canvas,
+        thumbnail: thumbnail,
+      );
+
+      bool crosses(ThumbnailSlot a, ThumbnailSlot b) {
+        double side(Offset p, Offset q, Offset r) =>
+            (q.dx - p.dx) * (r.dy - p.dy) - (q.dy - p.dy) * (r.dx - p.dx);
+        final d1 = side(a.base, a.centre, b.base);
+        final d2 = side(a.base, a.centre, b.centre);
+        final d3 = side(b.base, b.centre, a.base);
+        final d4 = side(b.base, b.centre, a.centre);
+        return ((d1 > 0) != (d2 > 0)) && ((d3 > 0) != (d4 > 0));
+      }
+
+      for (var i = 0; i < slots.length; i++) {
+        for (var j = i + 1; j < slots.length; j++) {
+          expect(
+            crosses(slots[i], slots[j]),
+            isFalse,
+            reason: 'the leaders for ${slots[i].id} and ${slots[j].id} cross',
+          );
+        }
+      }
     });
 
     test('is deterministic', () {

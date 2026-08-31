@@ -574,4 +574,106 @@ void main() {
           'only thing on it',
     );
   });
+
+  /// "Longpress on an image should enlarge it for quick content check."
+  /// A 76x58 tile says which SIDE of the rock this is and cannot say which
+  /// slab — and the only way to check used to be to leave the plan for the
+  /// face and come back, losing the arrangement being read.
+  testWidgets('long-pressing a face on the plan opens the photo full size, '
+      'and a tap puts it back', (tester) async {
+    await seedWall(photos: 3, withGps: true);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => SizedBox(
+            width: 374,
+            height: 420,
+            child: FaceMapPlan(
+              layout: layout,
+              photos: photos,
+              activePhotoId: 'photo-0',
+              routeCounts: const {'photo-1': 3},
+              onSelect: (_) {},
+              colors: MasiColors.of(context),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('photo-preview')), findsNothing);
+
+    await tester.longPress(find.byKey(const Key('face-map-face-photo-1')));
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('photo-preview')), findsOneWidget);
+    expect(find.text('Photo 2'), findsOneWidget);
+    expect(
+      find.text('3 climbs on this side'),
+      findsOneWidget,
+      reason: 'the point of the look is to identify the face, so it says '
+          'which one it is and what is on it',
+    );
+
+    await tester.tapAt(const Offset(10, 10));
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const Key('photo-preview')),
+      findsNothing,
+      reason: 'the way out has to be as cheap as the way in',
+    );
+  });
+
+  /// The frame around the face you are on used to be a BACKGROUND decoration,
+  /// which paints before the child — so the clipped photo covered its inner
+  /// half and the rounded corners came out visibly bitten off.
+  testWidgets('the selected tile\'s frame is painted OVER the photo, not '
+      'under it', (tester) async {
+    await seedWall(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => FaceRail(
+            photos: photos,
+            layout: layout,
+            activePhotoId: 'photo-1',
+            routeCounts: const {},
+            onSelect: (_) {},
+            onManage: null,
+            onOpenMap: null,
+            onAddPhoto: null,
+            colors: MasiColors.of(context),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final tile = tester.widget<Container>(
+      find.descendant(
+        of: find.byKey(const Key('face-rail-tile-photo-1')),
+        matching: find.byType(Container),
+      ).first,
+    );
+    expect(
+      (tile.foregroundDecoration! as BoxDecoration).border,
+      isNotNull,
+      reason: 'the frame must paint after the child',
+    );
+    expect(
+      (tile.decoration! as BoxDecoration).border,
+      isNull,
+      reason: 'and must not ALSO paint before it — two frames double the '
+          'stroke and bring the corner artifact back with them',
+    );
+  });
 }

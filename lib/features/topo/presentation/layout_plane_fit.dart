@@ -40,6 +40,30 @@ class LayoutPlaneFit {
     double? padTop,
     double? padRight,
     double? padBottom,
+  }) => LayoutPlaneFit.forStrokes(
+    [baseline],
+    size,
+    padding: padding,
+    padLeft: padLeft,
+    padTop: padTop,
+    padRight: padRight,
+    padBottom: padBottom,
+  );
+
+  /// The same fit over SEVERAL rocks, framing all of them together.
+  ///
+  /// A wall can hold more than one stroke, and each has to be drawn at the
+  /// same scale in the same frame or the drawing stops being a map: two
+  /// boulders fitted independently would each fill the box and say nothing
+  /// about which is bigger or how far apart they are.
+  factory LayoutPlaneFit.forStrokes(
+    List<Baseline> strokes,
+    Size size, {
+    double padding = 56,
+    double? padLeft,
+    double? padTop,
+    double? padRight,
+    double? padBottom,
   }) {
     final left = padLeft ?? padding;
     final top = padTop ?? padding;
@@ -58,11 +82,24 @@ class LayoutPlaneFit {
       rawHeight > 0 ? top + rawHeight / 2 : size.height / 2,
     );
 
-    if (baseline.isDegenerate) {
+    final drawable = [
+      for (final stroke in strokes)
+        if (!stroke.isDegenerate) stroke,
+    ];
+    if (drawable.isEmpty) {
       return LayoutPlaneFit._(1, const LayoutPoint(0, 0), canvasCentre);
     }
 
-    final bounds = baseline.bounds;
+    var bounds = drawable.first.bounds;
+    for (final stroke in drawable.skip(1)) {
+      final b = stroke.bounds;
+      bounds = (
+        minX: math.min(bounds.minX, b.minX),
+        minY: math.min(bounds.minY, b.minY),
+        maxX: math.max(bounds.maxX, b.maxX),
+        maxY: math.max(bounds.maxY, b.maxY),
+      );
+    }
     final planeWidth = bounds.maxX - bounds.minX;
     final planeHeight = bounds.maxY - bounds.minY;
     // A perfectly straight strip has zero height. Dividing by it gives

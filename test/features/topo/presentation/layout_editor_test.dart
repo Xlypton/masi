@@ -10,6 +10,7 @@ import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/topo/domain/face_layout/baseline.dart';
+import 'package:masi/features/topo/domain/face_layout/baseline_set.dart';
 import 'package:masi/features/topo/presentation/layout_editor_screen.dart';
 
 /// The layout editor. What is worth pinning here is the contract the design
@@ -490,5 +491,205 @@ void main() {
     );
 
     await expectNoOverlappingThumbnails(tester, 'strip');
+  });
+
+  /// Long-press a face — on the plan or in the capture-order rail — and the
+  /// photo opens full size. Checking WHICH slab a 64x48 tile is used to mean
+  /// leaving the editor for the face and coming back, which loses the
+  /// arrangement you were in the middle of correcting.
+  testWidgets('long-pressing a face opens the photo, from the plan and from '
+      'the capture-order rail', (tester) async {
+    await seed(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    // On the plan. The faces are drawn inside an IgnorePointer, so this is
+    // resolved by the canvas's own long-press recognizer against the
+    // arrangement — the reason it is worth a test at all.
+    final face = tester.getRect(find.byKey(const Key('layout-face-photo-1')));
+    await tester.longPressAt(face.center);
+    await tester.pumpAndSettle();
+
+    expect(find.byKey(const Key('photo-preview')), findsOneWidget);
+    // Scoped to the preview: the editor's own selected-face card names the
+    // same photo, and this is an assertion about the preview.
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('photo-preview')),
+        matching: find.text('Photo 2'),
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('photo-preview')), findsNothing);
+
+    // And from the rail.
+    await tester.longPress(find.byKey(const Key('layout-order-photo-2')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('photo-preview')), findsOneWidget);
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('photo-preview')),
+        matching: find.text('Photo 3'),
+      ),
+      findsOneWidget,
+    );
+  });
+
+  testWidgets('a face\'s frame is painted OVER its photo', (tester) async {
+    await seed(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    final tile = tester.widget<Container>(
+      find.byKey(const Key('layout-face-photo-0')),
+    );
+    expect(
+      (tile.foregroundDecoration! as BoxDecoration).border,
+      isNotNull,
+      reason: 'a background frame is painted before the child, and the '
+          'clipped photo then eats its rounded corners',
+    );
+    expect((tile.decoration! as BoxDecoration).border, isNull);
+  });
+
+  /// Holding a photo to look at it is not placing it. The canvas takes the
+  /// pointer back when the gesture arena rejects its pan, so a long-press
+  /// runs a whole drag — and a drag that ends where it began used to write a
+  /// pin: a sync-dirty row and a face that reports "you placed this one"
+  /// from a gesture that placed nothing.
+  testWidgets('a press that never moves places nothing', (tester) async {
+    await seed(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    final face = tester.getRect(find.byKey(const Key('layout-face-photo-1')));
+    await tester.longPressAt(face.center);
+    await tester.pumpAndSettle();
+    await tester.tapAt(const Offset(8, 8));
+    await tester.pumpAndSettle();
+
+    final photo = await (db.select(db.photos)
+          ..where((p) => p.id.equals('photo-1')))
+        .getSingle();
+    expect(
+      photo.layoutPinnedT,
+      isNull,
+      reason: 'nothing moved, so nothing may be pinned',
+    );
+  });
+
+  /// A crag bay is often not one rock. Before this the contributor either
+  /// drew one line around two boulders — claiming the gap between them is
+  /// climbable rock — or left the guess alone.
+  testWidgets('Add another rock APPENDS a second stroke instead of replacing '
+      'the first, and the first survives it', (tester) async {
+    await seed(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    // Draw the first rock, so there is something an append could destroy.
+    await startRedraw(tester);
+    var canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    for (var i = 0; i < 4; i++) {
+      await tester.tapAt(
+        Offset(canvas.left + 40 + (i % 2) * 60, canvas.top + 40 + (i ~/ 2) * 50),
+      );
+      await tester.pumpAndSettle();
+    }
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
+    await tester.pumpAndSettle();
+
+    var stored = BaselineSet.decode(
+      (await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
+              .getSingle())
+          .baselineJson,
+    );
+    expect(stored!.length, 1);
+    final firstRock = stored.strokes.first.points.length;
+
+    // Now a second one, somewhere else on the canvas.
+    await showActions(tester, const Key('layout-add-rock'));
+    await tester.tap(find.byKey(const Key('layout-add-rock')));
+    await tester.pumpAndSettle();
+
+    canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    for (var i = 0; i < 3; i++) {
+      await tester.tapAt(
+        Offset(
+          canvas.right - 90 + (i % 2) * 50,
+          canvas.bottom - 90 + (i ~/ 2) * 40,
+        ),
+      );
+      await tester.pumpAndSettle();
+    }
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
+    await tester.pumpAndSettle();
+
+    stored = BaselineSet.decode(
+      (await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
+              .getSingle())
+          .baselineJson,
+    );
+    expect(
+      stored!.length,
+      2,
+      reason: 'adding a rock must not replace the drawing',
+    );
+    expect(
+      stored.strokes.first.points.length,
+      firstRock,
+      reason: 'and the rock that was already there must come through '
+          'untouched',
+    );
+  });
+
+  testWidgets('a wall with one rock still stores the LEGACY shape, so an '
+      'older build can read the row it syncs', (tester) async {
+    await seed(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    await startRedraw(tester);
+    final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    for (var i = 0; i < 3; i++) {
+      await tester.tapAt(
+        Offset(canvas.left + 40 + i * 50, canvas.center.dy),
+      );
+      await tester.pumpAndSettle();
+    }
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
+    await tester.pumpAndSettle();
+
+    final json = (await (db.select(db.walls)
+              ..where((t) => t.id.equals(wallId)))
+            .getSingle())
+        .baselineJson;
+    expect(
+      Baseline.decode(json),
+      isNotNull,
+      reason: 'the single-rock row must still parse as a plain baseline — '
+          'the column syncs, and older builds read it',
+    );
   });
 }

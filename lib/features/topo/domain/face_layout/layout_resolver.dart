@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 
 import 'package:masi/features/topo/domain/face_layout/baseline.dart';
+import 'package:masi/features/topo/domain/face_layout/baseline_set.dart';
 import 'package:masi/features/topo/domain/face_layout/baseline_synthesis.dart';
 import 'package:masi/features/topo/domain/face_layout/face_layout_input.dart';
 
@@ -45,10 +46,15 @@ class FacePosition {
     required this.captureOrder,
     required this.t,
     required this.placement,
+    this.stroke = 0,
   });
 
   final String id;
   final int captureOrder;
+
+  /// Which of the wall's rocks this face rides. Always 0 on a wall with one
+  /// stroke, which is nearly all of them.
+  final int stroke;
 
   /// Arc-length fraction along the baseline. Cyclic when the baseline is
   /// closed.
@@ -59,8 +65,8 @@ class FacePosition {
   bool get isPinned => placement == FacePlacement.pinned;
 
   @override
-  String toString() => 'FacePosition($id, t: ${t.toStringAsFixed(3)}, '
-      '$placement)';
+  String toString() => 'FacePosition($id, stroke: $stroke, '
+      't: ${t.toStringAsFixed(3)}, $placement)';
 }
 
 /// The whole computed layout for one rock object.
@@ -76,9 +82,20 @@ class LayoutResult {
     required this.faces,
     required this.orientation,
     required this.thumbnailNormalSign,
+    this.strokes = const <Baseline>[],
+    this.normalSigns = const <double>[],
   });
 
+  /// The FIRST rock. Everything written before a wall could hold several
+  /// reads this, and on a single-rock wall it is the whole drawing.
   final Baseline baseline;
+
+  /// Every rock on this wall, in the order they were drawn. Empty only on
+  /// [empty]; otherwise it always contains at least [baseline].
+  final List<Baseline> strokes;
+
+  /// Per-rock [thumbnailNormalSign]. Parallel to [strokes].
+  final List<double> normalSigns;
   final BaselineOrigin origin;
 
   /// Faces in capture order — the order the reader pages through.
@@ -101,6 +118,20 @@ class LayoutResult {
   /// True while the line is still a guess: it earns a dashed stroke and
   /// design 4b's "drag anything that looks wrong" banner.
   bool get isProvisional => origin.isProvisional;
+
+  /// The rock a face rides, or [baseline] when the index has nothing behind
+  /// it — which is what a face whose pin names a rock that has since been
+  /// removed looks like.
+  Baseline strokeFor(FacePosition face) =>
+      face.stroke >= 0 && face.stroke < strokes.length
+          ? strokes[face.stroke]
+          : baseline;
+
+  /// The thumbnail-side sign for the rock a face rides.
+  double normalSignFor(FacePosition face) =>
+      face.stroke >= 0 && face.stroke < normalSigns.length
+          ? normalSigns[face.stroke]
+          : thumbnailNormalSign;
 
   FacePosition? positionOf(String id) {
     for (final f in faces) {
@@ -166,8 +197,10 @@ LayoutResult resolveLayout({
   final orientation = _classifyOrientation(ordered, resolvedOrigin);
   final positions = _resolvePositions(ordered, line, resolvedOrigin, orientation);
 
+  final sign = _thumbnailSign(ordered, line, positions);
   return LayoutResult(
     baseline: line,
+    strokes: [line],
     origin: lineOrigin,
     faces: [
       for (var i = 0; i < ordered.length; i++)
@@ -179,8 +212,146 @@ LayoutResult resolveLayout({
         ),
     ],
     orientation: orientation,
-    thumbnailNormalSign: _thumbnailSign(ordered, line, positions),
+    thumbnailNormalSign: sign,
+    normalSigns: [sign],
   );
+}
+
+/// The same resolve, over a wall that holds SEVERAL rocks.
+///
+/// The engine itself is untouched: each rock's faces are handed to
+/// [resolveLayout] with that rock as the only baseline, and the results are
+/// merged back into capture order. So cyclic `t` on a ring, GPS projection,
+/// bearing refinement and the capture-order fallback all behave per rock
+/// exactly as they always have, and a one-rock wall takes a path that is
+/// literally the old one.
+///
+/// Which rock a face belongs to is decided in the order §5 decides
+/// everything else — the strongest signal wins:
+///
+/// 1. a **pin**, which now names a rock as well as a place ([BaselineSet.pack]);
+/// 2. its own **GPS fix**, projected onto whichever rock it is nearest to;
+/// 3. otherwise the **first** rock.
+///
+/// Rule 3 is deliberately not a guess. With no fix and no pin there is
+/// nothing in the data that says which of two boulders a photo is of, and
+/// spreading photos over rocks by arc length would state something nobody
+/// told us. The contributor drags them across, which is the same gesture
+/// that moves a photo along one rock.
+LayoutResult resolveLayoutSet({
+  required List<FaceInput> faces,
+  required BaselineSet? strokes,
+  BaselineOrigin origin = BaselineOrigin.authored,
+  double? originLatitude,
+  double? originLongitude,
+}) {
+  if (strokes == null || strokes.length <= 1) {
+    return resolveLayout(
+      faces: faces,
+      baseline: strokes?.primary,
+      origin: origin,
+      originLatitude: originLatitude,
+      originLongitude: originLongitude,
+    );
+  }
+  if (faces.isEmpty) return LayoutResult.empty;
+
+  final planeOrigin = _planeOrigin(faces, originLatitude, originLongitude);
+  final buckets = <int, List<FaceInput>>{
+    for (var i = 0; i < strokes.length; i++) i: <FaceInput>[],
+  };
+
+  for (final face in faces) {
+    buckets[_strokeFor(face, strokes, planeOrigin)]!.add(face);
+  }
+
+  final merged = <FacePosition>[];
+  final resolvedStrokes = <Baseline>[];
+  final signs = <double>[];
+  LayoutOrientation? primaryOrientation;
+
+  for (var i = 0; i < strokes.length; i++) {
+    final stroke = strokes.strokes[i];
+    resolvedStrokes.add(stroke);
+
+    final bucket = buckets[i]!;
+    if (bucket.isEmpty) {
+      // A rock nobody has photographed yet is still a rock: it is drawn, it
+      // can be dragged onto, and dropping it from the result would make it
+      // vanish the moment its last photo moved away.
+      signs.add(1);
+      continue;
+    }
+
+    final resolved = resolveLayout(
+      faces: [
+        // The pin is re-expressed in the rock's OWN coordinates before the
+        // engine sees it — it has no idea rocks are plural.
+        for (final face in bucket)
+          face.pinnedT == null
+              ? face
+              : face.withPinnedT(
+                  BaselineSet.unpack(face.pinnedT!, strokes.length).t,
+                ),
+      ],
+      baseline: stroke,
+      origin: origin,
+      originLatitude: originLatitude,
+      originLongitude: originLongitude,
+    );
+
+    primaryOrientation ??= resolved.orientation;
+    signs.add(resolved.thumbnailNormalSign);
+    for (final face in resolved.faces) {
+      merged.add(
+        FacePosition(
+          id: face.id,
+          captureOrder: face.captureOrder,
+          t: face.t,
+          placement: face.placement,
+          stroke: i,
+        ),
+      );
+    }
+  }
+
+  merged.sort((a, b) {
+    final byOrder = a.captureOrder.compareTo(b.captureOrder);
+    return byOrder != 0 ? byOrder : a.id.compareTo(b.id);
+  });
+
+  return LayoutResult(
+    baseline: resolvedStrokes.first,
+    strokes: resolvedStrokes,
+    origin: origin,
+    faces: merged,
+    orientation: primaryOrientation ?? LayoutOrientation.unknown,
+    thumbnailNormalSign: signs.first,
+    normalSigns: signs,
+  );
+}
+
+/// Which rock one face belongs to — pin, then GPS, then the first.
+int _strokeFor(
+  FaceInput face,
+  BaselineSet strokes,
+  ({double lat, double lon})? planeOrigin,
+) {
+  final pin = face.pinnedT;
+  if (pin != null && pin.isFinite) {
+    return BaselineSet.unpack(pin, strokes.length).stroke;
+  }
+  if (planeOrigin != null && face.hasUsableGps()) {
+    final at = projectToPlane(
+      latitude: face.latitude!,
+      longitude: face.longitude!,
+      originLatitude: planeOrigin.lat,
+      originLongitude: planeOrigin.lon,
+    );
+    final nearest = strokes.nearestStrokeTo(at);
+    if (nearest >= 0) return nearest;
+  }
+  return 0;
 }
 
 typedef _Placed = ({double t, FacePlacement placement});

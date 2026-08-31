@@ -8,6 +8,7 @@ import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/layout_baseline_painter.dart';
 import 'package:masi/features/topo/presentation/layout_plane_fit.dart';
 import 'package:masi/features/topo/presentation/photo_image.dart';
+import 'package:masi/features/topo/presentation/photo_preview.dart';
 import 'package:masi/features/topo/presentation/thumbnail_arrangement.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
 
@@ -261,6 +262,15 @@ class _RailTile extends StatelessWidget {
               decoration: BoxDecoration(
                 color: colors.surface2,
                 borderRadius: BorderRadius.circular(MasiRadii.control),
+              ),
+              // The frame is a FOREGROUND decoration, so it paints ON TOP
+              // of the photo. As a background one it paints first and the
+              // clipped child covers its inner half — worst exactly at the
+              // rounded corners, where the child's antialiased edge eats the
+              // stroke and the frame reads as four straight sides with the
+              // corners bitten out.
+              foregroundDecoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(MasiRadii.control),
                 border: Border.all(
                   color: selected
                       ? colors.accent
@@ -314,32 +324,41 @@ class _PlanTilePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final line = layout.baseline;
-    if (line.points.length < 2) return;
-    final fit = LayoutPlaneFit.forBaseline(line, size, padding: 8);
+    final lines = layout.strokes.isEmpty
+        ? [layout.baseline]
+        : layout.strokes;
+    if (lines.every((line) => line.points.length < 2)) return;
+    // Framed over ALL the rocks, so a wall holding two boulders shows two on
+    // the tile rather than one and a lie about the scale.
+    final fit = LayoutPlaneFit.forStrokes(lines, size, padding: 8);
 
-    final path = Path()
-      ..moveTo(
-        fit.toCanvas(line.points.first).dx,
-        fit.toCanvas(line.points.first).dy,
+    for (final line in lines) {
+      if (line.points.length < 2) continue;
+      final path = Path()
+        ..moveTo(
+          fit.toCanvas(line.points.first).dx,
+          fit.toCanvas(line.points.first).dy,
+        );
+      for (final point in line.points.skip(1)) {
+        final at = fit.toCanvas(point);
+        path.lineTo(at.dx, at.dy);
+      }
+      if (line.closed) path.close();
+
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.5
+          ..strokeCap = StrokeCap.round
+          ..strokeJoin = StrokeJoin.round
+          ..color = stroke,
       );
-    for (final point in line.points.skip(1)) {
-      final at = fit.toCanvas(point);
-      path.lineTo(at.dx, at.dy);
     }
-    if (line.closed) path.close();
-
-    canvas.drawPath(
-      path,
-      Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5
-        ..strokeCap = StrokeCap.round
-        ..strokeJoin = StrokeJoin.round
-        ..color = stroke,
-    );
 
     for (final face in layout.faces) {
+      final line = layout.strokeFor(face);
+      if (line.points.length < 2) continue;
       final at = fit.toCanvas(line.pointAt(face.t));
       final active = face.id == activePhotoId;
       canvas.drawCircle(
@@ -384,6 +403,15 @@ class FaceMapPlan extends StatelessWidget {
   final void Function(PhotoRef photo) onSelect;
   final MasiColors colors;
 
+  /// Where this face comes in the walk round the rock — the number the
+  /// screen's own bar calls it by.
+  int _orderOf(String id) {
+    for (var i = 0; i < photos.length; i++) {
+      if (photos[i].id == id) return i;
+    }
+    return 0;
+  }
+
   @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
@@ -397,14 +425,14 @@ class FaceMapPlan extends StatelessWidget {
       // thumbnail) the outline grows into the band and the photos land on top
       // of the rock they are photographs of.
       const thumbnail = Size(76, 58);
-      const stem = 58.0;
+      const stem = 46.0;
       final insets = LayoutBaselinePainter.planInsets(
         layout: layout,
         thumbnail: thumbnail,
         stem: stem,
       );
-      final fit = LayoutPlaneFit.forBaseline(
-        layout.baseline,
+      final fit = LayoutPlaneFit.forStrokes(
+        layout.strokes.isEmpty ? [layout.baseline] : layout.strokes,
         size,
         padLeft: insets.left,
         padTop: insets.top,
@@ -416,12 +444,6 @@ class FaceMapPlan extends StatelessWidget {
         canvas: size,
         thumbnail: thumbnail,
         stem: stem,
-        // Spend the screen on the gaps between the photos: each one floats
-        // out to the edge of the canvas it is allowed to reach, so four faces
-        // of a boulder fan around the outline instead of huddling one stem
-        // away from it. Capped rather than unbounded — past about this far
-        // the leader is longer than the thing it connects.
-        maxStem: stem * 2.2,
       );
       final byId = {for (final photo in photos) photo.id: photo};
 
@@ -441,6 +463,7 @@ class FaceMapPlan extends StatelessWidget {
                   dotColor: colors.accent,
                   pinnedColor: colors.accent,
                   handleColor: colors.amethyst400,
+                  handleRingColor: colors.surface,
                   selectedFaceId: activePhotoId,
                   slots: slots,
                 ),
@@ -458,6 +481,18 @@ class FaceMapPlan extends StatelessWidget {
                     routeCount: routeCounts[photo.id] ?? 0,
                     colors: colors,
                     onTap: () => onSelect(photo),
+                    // A look, not a navigation: checking WHICH slab this is
+                    // should not cost leaving the arrangement you are reading.
+                    onLongPress: () => showPhotoPreview(
+                      context,
+                      storedPath: photo.localPath,
+                      title: 'Photo ${_orderOf(photo.id) + 1}',
+                      subtitle: switch (routeCounts[photo.id] ?? 0) {
+                        0 => 'No climbs on this side yet',
+                        1 => '1 climb on this side',
+                        final n => '$n climbs on this side',
+                      },
+                    ),
                   ),
                 ),
           ],
@@ -475,6 +510,7 @@ class _MapThumbnail extends StatelessWidget {
     required this.routeCount,
     required this.colors,
     required this.onTap,
+    required this.onLongPress,
   });
 
   final PhotoRef photo;
@@ -483,17 +519,24 @@ class _MapThumbnail extends StatelessWidget {
   final int routeCount;
   final MasiColors colors;
   final VoidCallback onTap;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) => GestureDetector(
     key: Key('face-map-face-${photo.id}'),
     behavior: HitTestBehavior.opaque,
     onTap: onTap,
+    onLongPress: onLongPress,
     child: Container(
       width: size.width,
       height: size.height,
       decoration: BoxDecoration(
         color: colors.surface2,
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+      ),
+      // Painted over the photo — see [_RailTile] for what a background frame
+      // does to the corners.
+      foregroundDecoration: BoxDecoration(
         borderRadius: BorderRadius.circular(MasiRadii.card),
         border: Border.all(
           color: active ? colors.accent : colors.separator,

@@ -23,6 +23,22 @@ const String kSeededSectorName = 'E2E Test Sector';
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
+  /// Scrolls the editor to one of its action buttons.
+  ///
+  /// The plan is a share of the screen now, so on a phone the buttons can sit
+  /// past what the `ListView` has BUILT — and a finder for an unbuilt child
+  /// finds nothing at all, which reads as a missing button rather than as a
+  /// scroll position.
+  Future<void> showEditorAction(WidgetTester tester, Key key) async {
+    if (find.byKey(key).evaluate().isNotEmpty) return;
+    await tester.scrollUntilVisible(
+      find.byKey(key),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await settle(tester, frames: 6);
+  }
+
   Future<void> openFacesWall(WidgetTester tester) async {
     // Phone-shaped, always. See usePhoneViewport: a desktop-width window is
     // not the product and hides exactly the layout faults that matter.
@@ -166,6 +182,7 @@ void main() {
           'has to say so',
     );
 
+    await showEditorAction(tester, const Key('layout-redraw'));
     await tapOrFail(
       tester,
       find.byKey(const Key('layout-redraw')),
@@ -206,6 +223,7 @@ void main() {
       reason: 'dragging a point must not finish the line',
     );
 
+    await showEditorAction(tester, const Key('layout-redraw-done'));
     await tapOrFail(
       tester,
       find.byKey(const Key('layout-redraw-done')),
@@ -228,6 +246,7 @@ void main() {
     );
 
     // And back, so the fixture is left as it was found.
+    await showEditorAction(tester, const Key('layout-reset'));
     await tapOrFail(
       tester,
       find.byKey(const Key('layout-reset')),
@@ -241,6 +260,93 @@ void main() {
       timeout: const Duration(seconds: 15),
     );
     await binding.takeScreenshot('44-layout-reset');
+  });
+
+  testWidgets('layout: a second rock can be added without destroying the '
+      'first', (tester) async {
+    // A crag bay is often not one rock, and one line drawn around two
+    // boulders claims the gap between them is climbable.
+    await openFacesWall(tester);
+
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('face-rail-map')),
+      'the rail plan tile',
+    );
+    await settle(tester, frames: 25);
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('face-map-edit')),
+      'the Edit button on the plan screen',
+    );
+    await settle(tester, frames: 30);
+
+    // One rock first, so there is something an append could destroy.
+    await showEditorAction(tester, const Key('layout-redraw'));
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-redraw')),
+      'the Redraw line button',
+    );
+    await settle(tester, frames: 10);
+    var canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    for (var i = 0; i < 4; i++) {
+      await tester.tapAt(
+        Offset(
+          canvas.left + 40 + (i % 2) * 70,
+          canvas.top + 40 + (i ~/ 2) * 60,
+        ),
+      );
+      await settle(tester, frames: 4);
+    }
+    await showEditorAction(tester, const Key('layout-redraw-done'));
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-redraw-done')),
+      'the Finish button',
+    );
+    await settleNetwork(tester, budget: const Duration(seconds: 6));
+
+    // Then a second one, elsewhere on the canvas.
+    await showEditorAction(tester, const Key('layout-add-rock'));
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-add-rock')),
+      'the Add another rock button',
+    );
+    await settle(tester, frames: 10);
+    canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final corner = Offset(canvas.right - 110, canvas.bottom - 110);
+    for (final offset in const [Offset(0, 0), Offset(70, 10), Offset(35, 60)]) {
+      await tester.tapAt(corner + offset);
+      await settle(tester, frames: 4);
+    }
+    // Back onto the first point: closing IS finishing.
+    await tester.tapAt(corner);
+    await settleNetwork(tester, budget: const Duration(seconds: 6));
+    await binding.takeScreenshot('47-layout-two-rocks');
+
+    expect(
+      find.byKey(const Key('layout-rock-count')),
+      findsOneWidget,
+      reason: 'with two rocks the editor has to say so — and say how to move '
+          'a photo between them',
+    );
+
+    // And back, so the fixture is left as it was found.
+    await showEditorAction(tester, const Key('layout-reset'));
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-reset')),
+      'the reset-to-automatic action',
+    );
+    await settleNetwork(tester, budget: const Duration(seconds: 6));
+    await waitFor(
+      tester,
+      find.byKey(const Key('layout-confidence-banner')),
+      'the guess notice after resetting to the automatic line',
+      timeout: const Duration(seconds: 15),
+    );
   });
 
   testWidgets('layout: four faces on a RING never cover each other', (
@@ -265,6 +371,7 @@ void main() {
       'the Edit button on the plan screen',
     );
     await settle(tester, frames: 30);
+    await showEditorAction(tester, const Key('layout-redraw'));
     await tapOrFail(
       tester,
       find.byKey(const Key('layout-redraw')),
@@ -318,6 +425,7 @@ void main() {
     }
 
     // And back, so the fixture is left as it was found.
+    await showEditorAction(tester, const Key('layout-reset'));
     await tapOrFail(
       tester,
       find.byKey(const Key('layout-reset')),
