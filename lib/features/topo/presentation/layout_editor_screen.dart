@@ -166,6 +166,14 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// a second boulder" and "that was wrong, here it is again".
   bool _draftAppends = false;
 
+  /// Which rock the stroke being drawn REPLACES, if it replaces one.
+  ///
+  /// Redrawing used to be all-or-nothing: the button wiped every rock on the
+  /// wall and started again, so a crag bay whose second boulder came out
+  /// wrong cost you the first one as well. A rock you can point at is a rock
+  /// you can redraw on its own.
+  int? _draftReplaces;
+
   /// Whether the stroke being reshaped is a ring. Reshaping never changes
   /// that — only redrawing does — so it is carried across the drag rather
   /// than re-derived from the moved points.
@@ -192,7 +200,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   Widget build(BuildContext context) {
     final colors = MasiColors.of(context);
     final layoutAsync = ref.watch(wallLayoutProvider(widget.wallId));
-    final photos = ref.watch(wallOriginalsProvider(widget.wallId)).value ??
+    final photos =
+        ref.watch(wallOriginalsProvider(widget.wallId)).value ??
         const <PhotoRef>[];
 
     return Scaffold(
@@ -250,6 +259,22 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
         // them to ride. Hiding it is what lets the canvas take the screen at
         // the moment the screen is entirely about the canvas.
         if (!_redrawing) ...[
+          // One chip per rock, so picking one out is a button rather than a
+          // secret. Tapping the line does it too — but nothing on a drawing
+          // says a drawing is touchable, and a repair nobody can find is a
+          // repair the app does not have.
+          if (layout.strokes.length > 1) ...[
+            _rockChips(colors, layout),
+            const SizedBox(height: 10),
+          ],
+          // The picked-out rock's own card, directly under the picture it
+          // refers to — every other control on this screen is about faces,
+          // and a rock action buried among them was never going to be read
+          // as being about the line.
+          if (_selectedStroke != null && _selectedFaceId == null) ...[
+            _rockCard(colors, layout, photos, _selectedStroke!),
+            const SizedBox(height: 12),
+          ],
           Text(
             _caption(layout, photos),
             key: const Key('layout-caption'),
@@ -261,17 +286,12 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
               color: colors.ink2,
             ),
           ),
-          if (layout.strokes.length > 1) ...[
-            const SizedBox(height: 6),
-            Text(
-              _selectedStroke == null
-                  ? '${layout.strokes.length} rocks. Tap one to pick it out; '
-                        'drag a photo across to move it between them.'
-                  : 'Rock ${_selectedStroke! + 1} picked out.',
-              key: const Key('layout-rock-count'),
-              style: TextStyle(fontSize: 13, height: 1.35, color: colors.ink2),
-            ),
-          ],
+          const SizedBox(height: 6),
+          Text(
+            _rockHint(layout),
+            key: const Key('layout-rock-count'),
+            style: TextStyle(fontSize: 13, height: 1.35, color: colors.ink2),
+          ),
           const SizedBox(height: 18),
           _captureOrderRail(colors, layout, photos),
           const SizedBox(height: 18),
@@ -279,7 +299,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
             _selectedCard(colors, layout, photos, _selectedFaceId!),
           const SizedBox(height: 18),
         ],
-        _actions(colors, layout, photos),
+        _actions(colors, layout),
       ],
     );
   }
@@ -393,7 +413,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
         thumbnail: _thumbnailSize,
         stem: LayoutBaselinePainter.stemLength,
       );
-      final fit = _redrawFit ??
+      final fit =
+          _redrawFit ??
           LayoutPlaneFit.forBaseline(
             layout.baseline,
             size,
@@ -425,13 +446,12 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
               GestureRecognizerFactoryWithHandlers<TapGestureRecognizer>(
                 TapGestureRecognizer.new,
                 (instance) {
-                  instance.onTapUp = (TapUpDetails details) =>
-                      _handleTap(
-                        _toLocal(details.globalPosition),
-                        preview,
-                        fit,
-                        slots,
-                      );
+                  instance.onTapUp = (TapUpDetails details) => _handleTap(
+                    _toLocal(details.globalPosition),
+                    preview,
+                    fit,
+                    slots,
+                  );
                 },
               ),
           // The faces on the canvas are drawn INSIDE an `IgnorePointer` —
@@ -481,15 +501,17 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
                   // centimetres, which matters most for the one comparison
                   // that decides ring-or-wall: did it end where it began.
                   instance.dragStartBehavior = DragStartBehavior.down;
-                  instance.onStart = (DragStartDetails details) =>
-                      _panStart(
-                        _toLocal(details.globalPosition),
-                        preview,
-                        fit,
-                        slots,
-                      );
-                  instance.onUpdate = (DragUpdateDetails details) =>
-                      _panUpdate(_toLocal(details.globalPosition), preview, fit);
+                  instance.onStart = (DragStartDetails details) => _panStart(
+                    _toLocal(details.globalPosition),
+                    preview,
+                    fit,
+                    slots,
+                  );
+                  instance.onUpdate = (DragUpdateDetails details) => _panUpdate(
+                    _toLocal(details.globalPosition),
+                    preview,
+                    fit,
+                  );
                   instance.onEnd = (DragEndDetails details) => _panEnd();
                 },
               ),
@@ -782,9 +804,8 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
           if (face.isPinned)
             TextButton(
               key: const Key('layout-unpin'),
-              onPressed: () => ref
-                  .read(photoRepositoryProvider)
-                  .setFacePin(faceId, null),
+              onPressed: () =>
+                  ref.read(photoRepositoryProvider).setFacePin(faceId, null),
               child: const Text('Unpin'),
             ),
         ],
@@ -792,11 +813,166 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     );
   }
 
-  Widget _actions(
+  /// What the line under the picture says about picking a rock out.
+  ///
+  /// It used to appear only on a wall that already had two rocks, so on the
+  /// ordinary one-rock wall nothing on screen ever said the line itself was
+  /// touchable — and every repair to it (reshape, redraw, remove) is reached
+  /// by touching it. 'I can draw a new line but I can't edit or delete the
+  /// old one' is precisely what a screen that keeps that secret produces.
+  String _rockHint(LayoutResult layout) {
+    final count = layout.strokes.length;
+    final selected = _selectedStroke;
+    if (selected != null) {
+      return count > 1 ? 'Rock ${selected + 1} picked out.' : 'Picked out.';
+    }
+    return count > 1
+        ? '$count rocks. Tap one to pick it out; drag a photo across to '
+              'move it between them.'
+        : 'Tap the line to pick it out, then reshape, redraw or remove it.';
+  }
+
+  /// One chip per rock on this wall.
+  Widget _rockChips(MasiColors colors, LayoutResult layout) => Wrap(
+    spacing: 8,
+    runSpacing: 8,
+    children: [
+      for (var i = 0; i < layout.strokes.length; i++)
+        GestureDetector(
+          key: Key('layout-rock-chip-$i'),
+          onTap: () => setState(() {
+            _selectedFaceId = null;
+            _selectedStroke = _selectedStroke == i ? null : i;
+          }),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: _selectedStroke == i ? colors.amethyst100 : colors.surface,
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(
+                color: _selectedStroke == i ? colors.accent : colors.separator,
+                width: _selectedStroke == i ? 2 : 1,
+              ),
+            ),
+            child: Text(
+              'Rock ${i + 1}',
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: _selectedStroke == i
+                    ? FontWeight.w600
+                    : FontWeight.w400,
+                color: _selectedStroke == i ? colors.accent : colors.ink,
+              ),
+            ),
+          ),
+        ),
+    ],
+  );
+
+  /// The picked-out rock, and the three things that can be done to it.
+  ///
+  /// All three existed before this card and none of them was findable. The
+  /// handles were there but nothing said the line was yours to grab; redraw
+  /// wiped every rock on the wall, so on a two-boulder crag it was not the
+  /// repair anybody wanted; and remove was a text button at the bottom of a
+  /// scrolling page, shown only on a wall that already had two rocks and only
+  /// after a tap nothing had suggested.
+  Widget _rockCard(
     MasiColors colors,
     LayoutResult layout,
     List<PhotoRef> photos,
-  ) => Column(
+    int index,
+  ) {
+    final stroke = index < layout.strokes.length
+        ? layout.strokes[index]
+        : layout.baseline;
+    final riding = layout.faces.where((face) => face.stroke == index).length;
+    final many = layout.strokes.length > 1;
+
+    return Container(
+      key: const Key('layout-rock-card'),
+      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
+      decoration: BoxDecoration(
+        color: colors.surface,
+        borderRadius: BorderRadius.circular(MasiRadii.card),
+        border: Border.all(color: colors.accent.withValues(alpha: 0.45)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      many ? 'Rock ${index + 1}' : 'This rock',
+                      style: const TextStyle(
+                        fontSize: 17,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      // The shape in the words the gesture uses: a stroke is
+                      // a boulder because it closed, and this is the only
+                      // place that fact is ever written down.
+                      '${stroke.points.length} points · '
+                      '${stroke.closed ? 'closed' : 'open'} · '
+                      '$riding ${riding == 1 ? 'photo' : 'photos'}',
+                      key: const Key('layout-rock-shape'),
+                      style: TextStyle(fontSize: 13, color: colors.ink2),
+                    ),
+                  ],
+                ),
+              ),
+              GestureDetector(
+                key: const Key('layout-rock-deselect'),
+                onTap: () => setState(() => _selectedStroke = null),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: MasiIcon('close', size: 16, color: colors.ink3),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Drag its dots to reshape it.',
+            style: TextStyle(fontSize: 13, height: 1.35, color: colors.ink2),
+          ),
+          const SizedBox(height: 10),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton.tonal(
+                  key: const Key('layout-redraw-rock'),
+                  onPressed: () => _startRedrawRock(layout, index),
+                  child: const Text('Redraw'),
+                ),
+              ),
+              // Nothing to remove while the line is still the app's own
+              // guess: storing no drawing is the state it is already in, so
+              // the button would report having done something it did not.
+              if (!layout.isProvisional) ...[
+                const SizedBox(width: 8),
+                Expanded(
+                  child: TextButton(
+                    key: const Key('layout-remove-rock'),
+                    onPressed: () => _removeStroke(layout, photos, index),
+                    child: const Text('Remove'),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _actions(MasiColors colors, LayoutResult layout) => Column(
     crossAxisAlignment: CrossAxisAlignment.stretch,
     children: [
       _actionRow(colors, layout),
@@ -810,12 +986,6 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
           onPressed: () => _startAddRock(layout),
           child: const Text('Add another rock'),
         ),
-        if (layout.strokes.length > 1 && _selectedStroke != null)
-          TextButton(
-            key: const Key('layout-remove-rock'),
-            onPressed: () => _removeStroke(layout, photos, _selectedStroke!),
-            child: Text('Remove rock ${_selectedStroke! + 1}'),
-          ),
       ],
       // The way back. A stored line that came out wrong used to be
       // unrecoverable without drawing an acceptable one first — and the
@@ -872,7 +1042,12 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
           child: FilledButton.tonal(
             key: const Key('layout-redraw'),
             onPressed: () => _startRedraw(layout),
-            child: const Text('Redraw line'),
+            // Named for what it costs. With one rock this is the only way
+            // back; with several it throws all of them away, and the repair
+            // somebody actually wants there is the one rock's own Redraw.
+            child: Text(
+              layout.strokes.length > 1 ? 'Redraw all' : 'Redraw line',
+            ),
           ),
         ),
         const SizedBox(width: 10),
@@ -1159,10 +1334,9 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     // On a one-rock wall the pin is written exactly as it always was — see
     // [BaselineSet.pack] for why that matters.
     final count = layout?.strokes.length ?? 1;
-    await ref.read(photoRepositoryProvider).setFacePin(
-      faceId,
-      count > 1 ? BaselineSet.pack(faceStroke, t) : t,
-    );
+    await ref
+        .read(photoRepositoryProvider)
+        .setFacePin(faceId, count > 1 ? BaselineSet.pack(faceStroke, t) : t);
   }
 
   FacePosition? _faceNear(
@@ -1184,8 +1358,13 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     FacePosition? best;
     var bestDistance = double.infinity;
     for (final face in layout.faces) {
+      // The face's OWN rock, not the first one. Asking `baseline` where a
+      // face on the second boulder sits answers with a point on the first,
+      // and a phantom dot 34px wide there swallows every tap meant for the
+      // rock actually under the finger — which is most of why the second
+      // rock could not be picked out, reshaped or removed at all.
       final distance =
-          (fit.toCanvas(layout.baseline.pointAt(face.t)) - at).distance;
+          (fit.toCanvas(layout.strokeFor(face).pointAt(face.t)) - at).distance;
       if (distance < bestDistance) {
         bestDistance = distance;
         best = face;
@@ -1263,12 +1442,18 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// them is climbable rock.
   void _startAddRock(LayoutResult layout) => _startDraft(layout, appends: true);
 
+  /// Starts a stroke that replaces ONE rock and leaves the others standing.
+  void _startRedrawRock(LayoutResult layout, int index) =>
+      _startDraft(layout, appends: false, replaces: index);
+
   void _startDraft(
     LayoutResult layout, {
     required bool appends,
+    int? replaces,
   }) => setState(() {
     _draftPoints = const [];
     _draftAppends = appends;
+    _draftReplaces = replaces;
     _selectedFaceId = null;
     _selectedStroke = null;
     // Pinned BEFORE the first point, so the whole stroke is recorded through
@@ -1313,6 +1498,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     _redrawFit = null;
     _draggingDraftIndex = null;
     _draftAppends = false;
+    _draftReplaces = null;
   });
 
   /// Stores the tapped stroke. [closed] is the ring gesture's whole effect on
@@ -1331,22 +1517,35 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
         _draftPoints = null;
         _redrawFit = null;
         _draggingDraftIndex = null;
+        _draftAppends = false;
+        _draftReplaces = null;
       });
       return;
     }
 
     final existing = _hitLayout?.strokes ?? const <Baseline>[];
     final appends = _draftAppends;
+    final replaces = _draftReplaces;
     setState(() {
       _draftPoints = null;
       _redrawFit = null;
       _draggingDraftIndex = null;
       _draftAppends = false;
+      _draftReplaces = null;
     });
     final drawn = Baseline(points, closed: closed && points.length >= 3);
-    await _storeBaseline(
-      BaselineSet(appends ? [...existing, drawn] : [drawn]),
-    );
+    // Three outcomes from one draft: it takes one rock's place, it joins the
+    // rocks already there, or it is the whole drawing. Only the last wipes
+    // anything, and it is the only one reached from a button that says so.
+    final List<Baseline> strokes;
+    if (replaces != null && replaces >= 0 && replaces < existing.length) {
+      strokes = [...existing]..[replaces] = drawn;
+    } else if (appends) {
+      strokes = [...existing, drawn];
+    } else {
+      strokes = [drawn];
+    }
+    await _storeBaseline(BaselineSet(strokes));
   }
 
   /// Drops one rock from the drawing, and repairs every pin that named it.
@@ -1390,8 +1589,6 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   }
 
   Future<void> _accept(LayoutResult layout) => _storeBaseline(
-    BaselineSet(
-      layout.strokes.isEmpty ? [layout.baseline] : layout.strokes,
-    ),
+    BaselineSet(layout.strokes.isEmpty ? [layout.baseline] : layout.strokes),
   );
 }

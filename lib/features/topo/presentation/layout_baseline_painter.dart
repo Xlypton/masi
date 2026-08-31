@@ -116,17 +116,22 @@ class LayoutBaselinePainter extends CustomPainter {
       final selected = !drafting && i == selectedStroke;
 
       if (line.points.length >= 2) {
-        final path = _smoothPath(
-          [for (final point in line.points) fit.toCanvas(point)],
-          closed: line.closed,
-        );
+        final path = _smoothPath([
+          for (final point in line.points) fit.toCanvas(point),
+        ], closed: line.closed);
 
+        final base = provisional ? provisionalStroke : stroke;
         final paint = Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = selected ? 10 : 7
           ..strokeCap = StrokeCap.round
           ..strokeJoin = StrokeJoin.round
-          ..color = provisional ? provisionalStroke : stroke;
+          // The rocks already standing fade back while a new one is being
+          // traced. They stay on screen because a boulder drawn without its
+          // neighbour in view lands in the wrong place, but nothing on them
+          // is grabbable at that moment — see the handles below — and a line
+          // that looks live while ignoring every touch reads as broken.
+          ..color = drafting && !isDraft ? base.withValues(alpha: 0.3) : base;
 
         canvas.drawPath(provisional ? _dashed(path) : path, paint);
       }
@@ -350,11 +355,7 @@ class LayoutBaselinePainter extends CustomPainter {
   /// A corner you can see and aim at: a pale ring around a solid core, so it
   /// stands off the stroke it sits on whichever colour that stroke is.
   void _handle(Canvas canvas, Offset centre) {
-    canvas.drawCircle(
-      centre,
-      _handleRadius,
-      Paint()..color = handleRingColor,
-    );
+    canvas.drawCircle(centre, _handleRadius, Paint()..color = handleRingColor);
     canvas.drawCircle(
       centre,
       _handleRadius - _handleRingWidth,

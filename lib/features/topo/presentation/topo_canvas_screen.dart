@@ -353,7 +353,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// [DrawController.beginPhotoSwitch], which deliberately preserves mode
   /// across an in-screen photo swap.
   void _resetToViewMode() {
-    ref.read(drawControllerProvider(widget.wallId).notifier).setMode(DrawMode.view);
+    ref
+        .read(drawControllerProvider(widget.wallId).notifier)
+        .setMode(DrawMode.view);
     // Bug fix (stale collapsed legend leaking across walls): legendExpandedProvider
     // is, like drawControllerProvider, a single app-lifetime global rather than
     // scoped per wall/screen. The `ref.listen` in build() only resets it via
@@ -364,7 +366,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // every subsequently opened wall. Unconditionally re-asserting the
     // view-mode default here, once per fresh mount, closes that the same way
     // setMode(DrawMode.view) above closes it for draw mode.
-    ref.read(legendExpandedProvider(widget.wallId).notifier).setForMode(DrawMode.view);
+    ref
+        .read(legendExpandedProvider(widget.wallId).notifier)
+        .setForMode(DrawMode.view);
   }
 
   /// Defensive re-entry point for [widget.wallId] changing on an EXISTING
@@ -430,7 +434,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   Future<void> _handleCommitRoute() async {
     if (widget.readOnly) return;
     final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
-    final countBefore = ref.read(drawControllerProvider(widget.wallId)).routes.length;
+    final countBefore = ref
+        .read(drawControllerProvider(widget.wallId))
+        .routes
+        .length;
     await notifier.commitRoute();
     if (!mounted) return;
 
@@ -654,7 +661,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // A page queued from the chat app takes priority over the paste flow: the
     // user already did the work elsewhere, so opening a "copy this prompt"
     // screen on top of a waiting import would be asking them to repeat it.
-    final pending = ref.read(pendingImportsProvider(widget.wallId)).asData?.value;
+    final pending = ref
+        .read(pendingImportsProvider(widget.wallId))
+        .asData
+        ?.value;
     final queued = (pending == null || pending.isEmpty) ? null : pending.first;
 
     final result = await showGuidebookImportSheet(
@@ -871,8 +881,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// [settleFailedPhotoAttach] call, which settles [generation] exactly like
   /// every other exit path in this method must.
   Future<void> _attachPhotoAndLoad(XFile xfile, int width, int height) async {
-    final generation =
-        ref.read(drawControllerProvider(widget.wallId)).switchGeneration;
+    final generation = ref
+        .read(drawControllerProvider(widget.wallId))
+        .switchGeneration;
     try {
       final libraryRepo = ref.read(libraryCrudRepositoryProvider);
       final photoId = await libraryRepo.attachPhotoToWall(
@@ -904,9 +915,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // Surfaces the outcome regardless of the latest-path guard below —
       // it's telling the user what just happened to THIS wall's location,
       // which is true no matter which photo they've since moved on to.
-      ScaffoldMessenger.of(context).showSnackBar(
-        gpsCaptureResultSnackBar(gpsResult),
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(gpsCaptureResultSnackBar(gpsResult));
       // Latest-path guard: if the user has already moved on to a different
       // photo since this call started (e.g. this is a stale/out-of-order
       // resolution for a photo the user swiped past), bail out instead of
@@ -1049,7 +1060,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// backed out) and this switches the canvas, which keeps every path that
   /// changes the shown photo running through [_switchToPhoto].
   Future<void> _openFaceMap(List<PhotoRef> photos) async {
-    final active = ref.read(drawControllerProvider(widget.wallId)).activePhotoId;
+    final active = ref
+        .read(drawControllerProvider(widget.wallId))
+        .activePhotoId;
     final chosen = await context.push<String>(
       Uri(
         path: '/walls/${widget.wallId}/faces',
@@ -1187,7 +1200,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   Future<void> _handleDeletePhoto(PhotoRef photo) async {
     if (widget.readOnly) return;
     final drawState = ref.read(drawControllerProvider(widget.wallId));
-    final wasActiveOrInFlight = drawState.activePhotoId == photo.id ||
+    final wasActiveOrInFlight =
+        drawState.activePhotoId == photo.id ||
         drawState.switchTargetPhotoId == photo.id;
     try {
       final storedPaths = await ref
@@ -1255,7 +1269,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // previous photo's wall.
     ref.listen<String?>(selectedImageProvider, (previous, next) {
       if (next != null && next != previous) {
-        ref.read(drawControllerProvider(widget.wallId).notifier).beginPhotoSwitch();
+        ref
+            .read(drawControllerProvider(widget.wallId).notifier)
+            .beginPhotoSwitch();
         // Fix 1 (M5 hardening): also reset the shared
         // transformationController synchronously, right alongside
         // beginPhotoSwitch above. Without this, a fresh TopoCanvas for the
@@ -1289,7 +1305,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       drawControllerProvider(widget.wallId).select((s) => s.mode),
       (previous, next) {
         if (previous != next) {
-          ref.read(legendExpandedProvider(widget.wallId).notifier).setForMode(next);
+          ref
+              .read(legendExpandedProvider(widget.wallId).notifier)
+              .setForMode(next);
         }
       },
     );
@@ -1483,7 +1501,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     // rebuilds, so this always reflects the current state exactly when this
     // method runs.
     final drawState = ref.read(drawControllerProvider(widget.wallId));
-    final drawNotifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+    final drawNotifier = ref.read(
+      drawControllerProvider(widget.wallId).notifier,
+    );
     // See `bottom_safe_inset.dart`: an installed iOS PWA reports a zero bottom
     // inset, so every SafeArea on this screen was contributing nothing.
     final standaloneBottomFloor = standaloneBottomFloorOf(ref);
@@ -2066,10 +2086,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     Object? failure;
 
     try {
-      final dbIds = await repository.routeDbIdsByNumber(
-        widget.wallId,
-        photoId,
-      );
+      final dbIds = await repository.routeDbIdsByNumber(widget.wallId, photoId);
       for (final entry in proposals.entries) {
         final route = drawState.routes.firstWhere((r) => r.id == entry.key);
         final dbId = dbIds[route.number];
@@ -2155,9 +2172,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         ),
         Expanded(
           child: Padding(
-            padding: const EdgeInsets.symmetric(
-              horizontal: MasiSpacing.xs,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.xs),
             child: _buildTitle(context, colors, title, titlePending),
           ),
         ),
@@ -2189,9 +2204,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     String title,
     bool titlePending,
   ) {
-    final style = Theme.of(context).textTheme.titleMedium?.copyWith(
-      color: colors.ink,
-    );
+    final style = Theme.of(
+      context,
+    ).textTheme.titleMedium?.copyWith(color: colors.ink);
     final fontSize = style?.fontSize ?? 17;
 
     return MasiLoadingGate(
@@ -2476,7 +2491,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // and finds a screen that looks exactly as it did before.
       final waiting =
           ref.watch(pendingImportsProvider(widget.wallId)).asData?.value ??
-              const [];
+          const [];
       actions.add(
         IconButton(
           key: const Key('topo-import-guidebook-button'),
@@ -2695,9 +2710,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             // Two jobs, one glyph — see [_handleCancelEditing] for why the
             // split is deliberate. The tooltip has to track it, or the
             // control lies about what a tap will do.
-            tooltip: hasCurrentLine
-                ? 'Discard current route'
-                : 'Stop editing',
+            tooltip: hasCurrentLine ? 'Discard current route' : 'Stop editing',
             onPressed: _handleCancelEditing,
             color: colors.accent,
             style: IconButton.styleFrom(shape: const CircleBorder()),
@@ -2760,11 +2773,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           key: const Key('topo-empty-state'),
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            MasiIcon(
-              'image',
-              size: 72,
-              color: colors.ink3,
-            ),
+            MasiIcon('image', size: 72, color: colors.ink3),
             const SizedBox(height: MasiSpacing.lg),
             Padding(
               padding: const EdgeInsets.symmetric(horizontal: MasiSpacing.lg),
@@ -2772,9 +2781,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                 storageBlocked ?? 'No photo yet — pick one to start',
                 key: const Key('topo-empty-state-message'),
                 textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                  color: colors.ink2,
-                ),
+                style: Theme.of(
+                  context,
+                ).textTheme.bodyLarge?.copyWith(color: colors.ink2),
               ),
             ),
             // readOnly: no add affordance — there is no photo a read-only
@@ -2927,9 +2936,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           onRetry: () => ref.invalidate(wallOriginalsProvider(widget.wallId)),
           errorMessage: "Couldn't load this wall's photos",
           skeleton: (context) => const MasiSkeleton.box(radius: 0),
-          data: (context, _) => const MasiLoadingIndicator.standalone(
-            label: 'Preparing photo…',
-          ),
+          data: (context, _) =>
+              const MasiLoadingIndicator.standalone(label: 'Preparing photo…'),
         ),
       );
     }
@@ -3149,9 +3157,7 @@ class TopoCanvasBody extends ConsumerWidget {
     // chip it always had. So does every wall with a single photo, and so does
     // every pre-existing caller and widget test, which pass no photos at all.
     final laneVisible =
-        !embedded &&
-        drawState.mode == DrawMode.view &&
-        facePhotos.length >= 2;
+        !embedded && drawState.mode == DrawMode.view && facePhotos.length >= 2;
 
     // Bottom clearance reserved above the floating RouteLegend overlay, so
     // both the legend's Padding AND its maxHeight cap (below) can share the
@@ -3175,8 +3181,10 @@ class TopoCanvasBody extends ConsumerWidget {
     // 2026-08-15). The helper floors it at the same value the nav bar has
     // always used, and takes a `max` so nothing double-counts.
     final legendBottomPadding =
-        (hasRoutes || drawState.isSwitchingPhoto || community != null ||
-                laneVisible)
+        (hasRoutes ||
+            drawState.isSwitchingPhoto ||
+            community != null ||
+            laneVisible)
         ? masiBottomInset(context, ref) +
               MasiSpacing.md +
               (drawState.mode == DrawMode.draw
@@ -3302,145 +3310,154 @@ class TopoCanvasBody extends ConsumerWidget {
                         onOpenFaceMap: onOpenFaceMap,
                         onAddPhoto: onAddPhoto,
                         onOpenCommunity: community,
-                        onLogAscent:
-                            drawState.mode == DrawMode.draw ? null : onLogAscent,
-                        onEditRoute:
-                            drawState.mode == DrawMode.draw ? onEditRoute : null,
+                        onLogAscent: drawState.mode == DrawMode.draw
+                            ? null
+                            : onLogAscent,
+                        onEditRoute: drawState.mode == DrawMode.draw
+                            ? onEditRoute
+                            : null,
                       ),
                     )
                   else ...[
-                  if (!hasRoutes && community != null)
-                    Positioned(
-                      left: MasiSpacing.md,
-                      right: MasiSpacing.md,
-                      bottom: effectiveLegendBottomPadding,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: _CommunityChip(onTap: community),
-                      ),
-                    ),
-                  if (hasRoutes && !embedded)
-                    Positioned(
-                      left: MasiSpacing.md,
-                      right: MasiSpacing.md,
-                      bottom: effectiveLegendBottomPadding,
-                      child: legendExpanded
-                          ? GlassChrome(
-                              key: const Key('topo-route-legend-overlay'),
-                              strong: true,
-                              // #80: was solid-on-web (`!kIsWeb`) to cap
-                              // simultaneous `BackdropFilter`s, leaving the
-                              // legend flat next to the frosted title pill —
-                              // now blurs on web too, to match the header.
-                              blur: true, // #80: frost the legend on web too, to match the header pill
-                              // `Material(type: transparency)` — required so
-                              // RouteLegend's ListTiles have a Material
-                              // ANCESTOR closer than the Scaffold's own:
-                              // without it, GlassChrome's own colored/
-                              // blurred Container sits BETWEEN each ListTile
-                              // and the nearest Material (the Scaffold's),
-                              // which Flutter flags as a debug assertion
-                              // ("ListTile background color or ink splashes
-                              // may be invisible") since that opaque layer
-                              // would paint over — and hide — the
-                              // ListTile's own background/ink-splash
-                              // effects.
-                              child: Material(
-                                type: MaterialType.transparency,
-                                child: Column(
-                                  mainAxisSize: MainAxisSize.min,
-                                  children: [
-                                    _LegendHeader(
-                                      routeCount: drawState.routes.length,
-                                      onCollapse: () => ref
-                                          .read(legendExpandedProvider(wallId).notifier)
-                                          .toggle(),
-                                      onOpenCommunity: community,
-                                    ),
-                                    RouteLegend(
-                                      wallId: wallId,
-                                      maxHeight: overlayLegendMaxHeight,
-                                      readOnly: readOnly,
-                                      // No logging an ascent while editing
-                                      // (user request, 2026-08-11): draw mode
-                                      // is for the drawing, and a per-row
-                                      // "send" button beside the hide/delete
-                                      // pair belongs to reading a topo, not
-                                      // building one.
-                                      onLogAscent:
-                                          drawState.mode == DrawMode.draw
-                                          ? null
-                                          : onLogAscent,
-                                      // The mirror image of the line above:
-                                      // editing a route is an EDIT-mode
-                                      // action, logging an ascent is a
-                                      // VIEW-mode one, so the two swap over
-                                      // at the same boundary and the row
-                                      // never carries both.
-                                      onEditRoute:
-                                          drawState.mode == DrawMode.draw
-                                          ? onEditRoute
-                                          : null,
-                                    ),
-                                    if (community != null)
-                                      _CommunityRow(onTap: community),
-                                  ],
-                                ),
-                              ),
-                            )
-                          : Align(
-                              alignment: Alignment.centerLeft,
-                              child: _LegendChip(
-                                key: const Key('topo-route-legend-chip'),
-                                routeCount: drawState.routes.length,
-                                onExpand: () => ref
-                                    .read(legendExpandedProvider(wallId).notifier)
-                                    .toggle(),
-                              ),
-                            ),
-                    ),
-                  // The photo-switch cue. [DrawState.isSwitchingPhoto] is true
-                  // from the instant a new photo is selected until its routes
-                  // have been read (see DrawController.beginPhotoSwitch), and
-                  // for that whole window `routes` is deliberately empty — so
-                  // tapping a strip thumbnail swapped the image instantly and
-                  // then showed a topo with NO routes on it, indistinguishable
-                  // from a photo nobody has drawn on, until they popped in.
-                  // Nothing in the tree read the flag at all before this. Shown
-                  // only when the legend is not (an existing route set means the
-                  // switch is already over, or is a mid-switch commit carrying
-                  // forward) and never in the embedded preview, which paints no
-                  // floating chrome by contract.
-                  //
-                  // The `isLoading: true` below is HARDCODED on purpose, and
-                  // reads like a stuck skeleton, so: the flag it is gated on is
-                  // the resolution mechanism, not the gate's own argument. What
-                  // makes that terminal is that DrawController settles
-                  // `isSwitchingPhoto` on EVERY exit path — `loadForWall`'s
-                  // success, `loadForWall`'s catch (see its UF-2 doc: a stuck
-                  // `true` there once carried stray routes into an unrelated
-                  // photo and PERSISTED them), and `cancelPhotoSwitch` when a
-                  // switch turns out to have nothing to load. Pinned by
-                  // `canvas_loading_states_test.dart`'s "and it clears on EVERY
-                  // way a switch can end". Widen this condition to something a
-                  // settle does not clear (a recorded failure, say) and the pill
-                  // becomes a "Loading routes…" that never resolves — the exact
-                  // lie it was added to prevent.
-                  if (drawState.isSwitchingPhoto && !hasRoutes && !embedded)
-                    Positioned(
-                      left: MasiSpacing.md,
-                      right: MasiSpacing.md,
-                      bottom: effectiveLegendBottomPadding,
-                      child: Align(
-                        alignment: Alignment.centerLeft,
-                        child: MasiLoadingGate(
-                          isLoading: true,
-                          builder: (context, showLoading) => showLoading
-                              ? const _RoutesLoadingChip()
-                              : const SizedBox.shrink(),
+                    if (!hasRoutes && community != null)
+                      Positioned(
+                        left: MasiSpacing.md,
+                        right: MasiSpacing.md,
+                        bottom: effectiveLegendBottomPadding,
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: _CommunityChip(onTap: community),
                         ),
                       ),
-                    ),
+                    if (hasRoutes && !embedded)
+                      Positioned(
+                        left: MasiSpacing.md,
+                        right: MasiSpacing.md,
+                        bottom: effectiveLegendBottomPadding,
+                        child: legendExpanded
+                            ? GlassChrome(
+                                key: const Key('topo-route-legend-overlay'),
+                                strong: true,
+                                // #80: was solid-on-web (`!kIsWeb`) to cap
+                                // simultaneous `BackdropFilter`s, leaving the
+                                // legend flat next to the frosted title pill —
+                                // now blurs on web too, to match the header.
+                                blur:
+                                    true, // #80: frost the legend on web too, to match the header pill
+                                // `Material(type: transparency)` — required so
+                                // RouteLegend's ListTiles have a Material
+                                // ANCESTOR closer than the Scaffold's own:
+                                // without it, GlassChrome's own colored/
+                                // blurred Container sits BETWEEN each ListTile
+                                // and the nearest Material (the Scaffold's),
+                                // which Flutter flags as a debug assertion
+                                // ("ListTile background color or ink splashes
+                                // may be invisible") since that opaque layer
+                                // would paint over — and hide — the
+                                // ListTile's own background/ink-splash
+                                // effects.
+                                child: Material(
+                                  type: MaterialType.transparency,
+                                  child: Column(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      _LegendHeader(
+                                        routeCount: drawState.routes.length,
+                                        onCollapse: () => ref
+                                            .read(
+                                              legendExpandedProvider(
+                                                wallId,
+                                              ).notifier,
+                                            )
+                                            .toggle(),
+                                        onOpenCommunity: community,
+                                      ),
+                                      RouteLegend(
+                                        wallId: wallId,
+                                        maxHeight: overlayLegendMaxHeight,
+                                        readOnly: readOnly,
+                                        // No logging an ascent while editing
+                                        // (user request, 2026-08-11): draw mode
+                                        // is for the drawing, and a per-row
+                                        // "send" button beside the hide/delete
+                                        // pair belongs to reading a topo, not
+                                        // building one.
+                                        onLogAscent:
+                                            drawState.mode == DrawMode.draw
+                                            ? null
+                                            : onLogAscent,
+                                        // The mirror image of the line above:
+                                        // editing a route is an EDIT-mode
+                                        // action, logging an ascent is a
+                                        // VIEW-mode one, so the two swap over
+                                        // at the same boundary and the row
+                                        // never carries both.
+                                        onEditRoute:
+                                            drawState.mode == DrawMode.draw
+                                            ? onEditRoute
+                                            : null,
+                                      ),
+                                      if (community != null)
+                                        _CommunityRow(onTap: community),
+                                    ],
+                                  ),
+                                ),
+                              )
+                            : Align(
+                                alignment: Alignment.centerLeft,
+                                child: _LegendChip(
+                                  key: const Key('topo-route-legend-chip'),
+                                  routeCount: drawState.routes.length,
+                                  onExpand: () => ref
+                                      .read(
+                                        legendExpandedProvider(wallId).notifier,
+                                      )
+                                      .toggle(),
+                                ),
+                              ),
+                      ),
+                    // The photo-switch cue. [DrawState.isSwitchingPhoto] is true
+                    // from the instant a new photo is selected until its routes
+                    // have been read (see DrawController.beginPhotoSwitch), and
+                    // for that whole window `routes` is deliberately empty — so
+                    // tapping a strip thumbnail swapped the image instantly and
+                    // then showed a topo with NO routes on it, indistinguishable
+                    // from a photo nobody has drawn on, until they popped in.
+                    // Nothing in the tree read the flag at all before this. Shown
+                    // only when the legend is not (an existing route set means the
+                    // switch is already over, or is a mid-switch commit carrying
+                    // forward) and never in the embedded preview, which paints no
+                    // floating chrome by contract.
+                    //
+                    // The `isLoading: true` below is HARDCODED on purpose, and
+                    // reads like a stuck skeleton, so: the flag it is gated on is
+                    // the resolution mechanism, not the gate's own argument. What
+                    // makes that terminal is that DrawController settles
+                    // `isSwitchingPhoto` on EVERY exit path — `loadForWall`'s
+                    // success, `loadForWall`'s catch (see its UF-2 doc: a stuck
+                    // `true` there once carried stray routes into an unrelated
+                    // photo and PERSISTED them), and `cancelPhotoSwitch` when a
+                    // switch turns out to have nothing to load. Pinned by
+                    // `canvas_loading_states_test.dart`'s "and it clears on EVERY
+                    // way a switch can end". Widen this condition to something a
+                    // settle does not clear (a recorded failure, say) and the pill
+                    // becomes a "Loading routes…" that never resolves — the exact
+                    // lie it was added to prevent.
+                    if (drawState.isSwitchingPhoto && !hasRoutes && !embedded)
+                      Positioned(
+                        left: MasiSpacing.md,
+                        right: MasiSpacing.md,
+                        bottom: effectiveLegendBottomPadding,
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: MasiLoadingGate(
+                            isLoading: true,
+                            builder: (context, showLoading) => showLoading
+                                ? const _RoutesLoadingChip()
+                                : const SizedBox.shrink(),
+                          ),
+                        ),
+                      ),
                   ],
                 ],
               );
@@ -3594,7 +3611,11 @@ class _CommunityRow extends StatelessWidget {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Divider(height: 1, thickness: 0.5, color: colors.ink3.withValues(alpha: 0.4)),
+        Divider(
+          height: 1,
+          thickness: 0.5,
+          color: colors.ink3.withValues(alpha: 0.4),
+        ),
         InkWell(
           key: const Key('topo-open-community'),
           onTap: onTap,
@@ -4021,27 +4042,45 @@ class _DockLane extends StatelessWidget {
                     behavior: HitTestBehavior.opaque,
                     onTap: onToggleExpanded,
                     child: Padding(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: MasiSpacing.sm,
-                        vertical: MasiSpacing.sm,
+                      padding: const EdgeInsets.fromLTRB(
+                        MasiSpacing.xs,
+                        MasiSpacing.sm,
+                        MasiSpacing.sm,
+                        MasiSpacing.sm,
                       ),
-                      child: Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            _routeCountLabel(routeCount),
-                            style: Theme.of(context).textTheme.labelLarge
-                                ?.copyWith(color: colors.ink),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          const SizedBox(width: MasiSpacing.xs),
-                          MasiIcon(
-                            expanded ? 'chevron_down' : 'chevron_up',
-                            size: 18,
-                            color: colors.ink,
-                          ),
-                        ],
+                      child: Semantics(
+                        button: true,
+                        label:
+                            '${_routeCountLabel(routeCount)}, '
+                            '${expanded ? 'close the list' : 'open the list'}',
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            // Spelled out, this said '0 routes' in most of
+                            // a thumbnail's width, to name a list that names
+                            // itself the moment it opens — and it took that
+                            // width from the photos, which are what the rail
+                            // is for. What survives is the count and the
+                            // chevron that opens the list; the count is set
+                            // in the quieter ink so it reads as a tally
+                            // against the chevron rather than as another of
+                            // the rail's numbered tiles.
+                            if (routeCount > 0) ...[
+                              Text(
+                                '$routeCount',
+                                style: Theme.of(context).textTheme.labelMedium
+                                    ?.copyWith(color: colors.ink2),
+                                maxLines: 1,
+                              ),
+                              const SizedBox(width: 3),
+                            ],
+                            MasiIcon(
+                              expanded ? 'chevron_down' : 'chevron_up',
+                              size: 18,
+                              color: colors.ink,
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

@@ -25,51 +25,59 @@ void main() {
   const wallId = 'wall-1';
 
   Future<void> seed({int photos = 3, bool withGps = false}) async {
-    await db.into(db.areas).insert(
-      AreasCompanion.insert(
-        id: 'area-1',
-        createdAt: 1000,
-        updatedAt: 1000,
-        name: 'Area',
-      ),
-    );
-    await db.into(db.sectors).insert(
-      SectorsCompanion.insert(
-        id: 'sector-1',
-        createdAt: 1000,
-        updatedAt: 1000,
-        areaId: 'area-1',
-        name: 'Sector',
-        sortOrder: 0,
-      ),
-    );
-    await db.into(db.walls).insert(
-      WallsCompanion.insert(
-        id: wallId,
-        createdAt: 1000,
-        updatedAt: 1000,
-        sectorId: 'sector-1',
-        name: 'Kirchl Wall',
-        sortOrder: 0,
-      ),
-    );
+    await db
+        .into(db.areas)
+        .insert(
+          AreasCompanion.insert(
+            id: 'area-1',
+            createdAt: 1000,
+            updatedAt: 1000,
+            name: 'Area',
+          ),
+        );
+    await db
+        .into(db.sectors)
+        .insert(
+          SectorsCompanion.insert(
+            id: 'sector-1',
+            createdAt: 1000,
+            updatedAt: 1000,
+            areaId: 'area-1',
+            name: 'Sector',
+            sortOrder: 0,
+          ),
+        );
+    await db
+        .into(db.walls)
+        .insert(
+          WallsCompanion.insert(
+            id: wallId,
+            createdAt: 1000,
+            updatedAt: 1000,
+            sectorId: 'sector-1',
+            name: 'Kirchl Wall',
+            sortOrder: 0,
+          ),
+        );
     for (var i = 0; i < photos; i++) {
-      await db.into(db.photos).insert(
-        PhotosCompanion.insert(
-          id: 'photo-$i',
-          createdAt: 1000 + i,
-          updatedAt: 1000 + i,
-          wallId: wallId,
-          localPath: '/tmp/photo-$i.jpg',
-          kind: 'original',
-          width: 100,
-          height: 200,
-          sortOrder: Value(i),
-          captureLatitude: Value(withGps ? 47.0 + i * 0.0005 : null),
-          captureLongitude: Value(withGps ? 12.0 + i * 0.0005 : null),
-          captureAccuracyMeters: Value(withGps ? 4 : null),
-        ),
-      );
+      await db
+          .into(db.photos)
+          .insert(
+            PhotosCompanion.insert(
+              id: 'photo-$i',
+              createdAt: 1000 + i,
+              updatedAt: 1000 + i,
+              wallId: wallId,
+              localPath: '/tmp/photo-$i.jpg',
+              kind: 'original',
+              width: 100,
+              height: 200,
+              sortOrder: Value(i),
+              captureLatitude: Value(withGps ? 47.0 + i * 0.0005 : null),
+              captureLongitude: Value(withGps ? 12.0 + i * 0.0005 : null),
+              captureAccuracyMeters: Value(withGps ? 4 : null),
+            ),
+          );
     }
   }
 
@@ -147,12 +155,14 @@ void main() {
       await tester.pumpAndSettle();
     }
 
-    var wall = await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
-        .getSingle();
+    var wall = await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle();
     expect(
       wall.baselineJson,
       isNull,
-      reason: 'a half-tapped line is not a line yet — storing on every tap '
+      reason:
+          'a half-tapped line is not a line yet — storing on every tap '
           'would put an unfinished rock through the sync engine',
     );
 
@@ -160,8 +170,9 @@ void main() {
     await tester.tap(find.byKey(const Key('layout-redraw-done')));
     await tester.pumpAndSettle();
 
-    wall = await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
-        .getSingle();
+    wall = await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle();
     final stored = Baseline.decode(wall.baselineJson);
     expect(stored, isNotNull);
     expect(
@@ -179,7 +190,8 @@ void main() {
     expect(
       bounds.maxY - bounds.minY,
       lessThan(0.5),
-      reason: 'the taps never moved in y, so the stored line must not either '
+      reason:
+          'the taps never moved in y, so the stored line must not either '
           '— any thickness here is the mapping shifting mid-stroke',
     );
     expect(
@@ -214,7 +226,8 @@ void main() {
     expect(
       find.byKey(const Key('layout-redraw-hint')),
       findsOneWidget,
-      reason: 'lifting a finger used to commit the whole stroke, so a drag '
+      reason:
+          'lifting a finger used to commit the whole stroke, so a drag '
           'meant to fix one point finished the line instead',
     );
 
@@ -222,8 +235,9 @@ void main() {
     await tester.tap(find.byKey(const Key('layout-redraw-done')));
     await tester.pumpAndSettle();
 
-    final wall = await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
-        .getSingle();
+    final wall = await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle();
     final stored = Baseline.decode(wall.baselineJson)!;
     expect(stored.points.length, 2);
     expect(
@@ -264,8 +278,9 @@ void main() {
     await tester.tap(find.byKey(const Key('layout-redraw-done')));
     await tester.pumpAndSettle();
 
-    final wall = await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
-        .getSingle();
+    final wall = await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle();
     expect(Baseline.decode(wall.baselineJson)!.points.length, 2);
   });
 
@@ -282,9 +297,12 @@ void main() {
     final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
     final centre = canvas.center;
     const radius = 60.0;
-    Offset at(double turns) => centre +
-        Offset(radius * math.cos(turns * 2 * math.pi),
-            radius * math.sin(turns * 2 * math.pi));
+    Offset at(double turns) =>
+        centre +
+        Offset(
+          radius * math.cos(turns * 2 * math.pi),
+          radius * math.sin(turns * 2 * math.pi),
+        );
 
     for (var i = 0; i < 5; i++) {
       await tester.tapAt(at(i / 5));
@@ -294,15 +312,16 @@ void main() {
     await tester.tapAt(at(0));
     await tester.pumpAndSettle();
 
-    final wall = await (db.select(db.walls)
-          ..where((t) => t.id.equals(wallId)))
-        .getSingle();
+    final wall = await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle();
     final stored = Baseline.decode(wall.baselineJson)!;
     expect(stored.closed, isTrue);
     expect(
       stored.points.length,
       5,
-      reason: 'the closing tap closes the ring, it does not add a sixth '
+      reason:
+          'the closing tap closes the ring, it does not add a sixth '
           'point on top of the first',
     );
     expect(
@@ -352,13 +371,14 @@ void main() {
     await tester.tap(find.byKey(const Key('layout-accept')));
     await tester.pumpAndSettle();
 
-    final wall = await (db.select(db.walls)
-          ..where((t) => t.id.equals(wallId)))
-        .getSingle();
+    final wall = await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle();
     expect(
       wall.baselineJson,
       isNotNull,
-      reason: 'accepting is an edit — it stops the line being re-guessed, and '
+      reason:
+          'accepting is an edit — it stops the line being re-guessed, and '
           'silently changing, the next time a photo is added',
     );
     expect(Baseline.decode(wall.baselineJson), isNotNull);
@@ -397,10 +417,10 @@ void main() {
     await tester.tap(find.byKey(const Key('layout-order-photo-1')));
     await tester.pumpAndSettle();
 
-    expect(
-      find.byKey(const Key('layout-selected-placement')),
-      findsOneWidget,
-    );
+    // Below the fold on the test surface, like the action row — see
+    // [showActions] for why a finder alone is not enough here.
+    await showActions(tester, const Key('layout-selected-placement'));
+    expect(find.byKey(const Key('layout-selected-placement')), findsOneWidget);
     expect(find.text('Placed in capture order'), findsOneWidget);
     expect(
       find.byKey(const Key('layout-unpin')),
@@ -440,7 +460,8 @@ void main() {
           !(w.key! as ValueKey<String>).value.contains('pinned'),
     );
     final rects = [
-      for (final element in finder.evaluate()) tester.getRect(find.byWidget(element.widget)),
+      for (final element in finder.evaluate())
+        tester.getRect(find.byWidget(element.widget)),
     ];
     expect(rects, isNotEmpty, reason: '$label rendered no thumbnails');
 
@@ -482,10 +503,7 @@ void main() {
     await (db.update(db.walls)..where((w) => w.id.equals(wallId))).write(
       WallsCompanion(
         baselineJson: Value(
-          Baseline(const [
-            LayoutPoint(0, 0),
-            LayoutPoint(30, 0),
-          ]).encode(),
+          Baseline(const [LayoutPoint(0, 0), LayoutPoint(30, 0)]).encode(),
         ),
       ),
     );
@@ -555,7 +573,8 @@ void main() {
     expect(
       (tile.foregroundDecoration! as BoxDecoration).border,
       isNotNull,
-      reason: 'a background frame is painted before the child, and the '
+      reason:
+          'a background frame is painted before the child, and the '
           'clipped photo then eats its rounded corners',
     );
     expect((tile.decoration! as BoxDecoration).border, isNull);
@@ -580,9 +599,9 @@ void main() {
     await tester.tapAt(const Offset(8, 8));
     await tester.pumpAndSettle();
 
-    final photo = await (db.select(db.photos)
-          ..where((p) => p.id.equals('photo-1')))
-        .getSingle();
+    final photo = await (db.select(
+      db.photos,
+    )..where((p) => p.id.equals('photo-1'))).getSingle();
     expect(
       photo.layoutPinnedT,
       isNull,
@@ -607,7 +626,10 @@ void main() {
     var canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
     for (var i = 0; i < 4; i++) {
       await tester.tapAt(
-        Offset(canvas.left + 40 + (i % 2) * 60, canvas.top + 40 + (i ~/ 2) * 50),
+        Offset(
+          canvas.left + 40 + (i % 2) * 60,
+          canvas.top + 40 + (i ~/ 2) * 50,
+        ),
       );
       await tester.pumpAndSettle();
     }
@@ -616,9 +638,9 @@ void main() {
     await tester.pumpAndSettle();
 
     var stored = BaselineSet.decode(
-      (await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
-              .getSingle())
-          .baselineJson,
+      (await (db.select(
+        db.walls,
+      )..where((t) => t.id.equals(wallId))).getSingle()).baselineJson,
     );
     expect(stored!.length, 1);
     final firstRock = stored.strokes.first.points.length;
@@ -643,9 +665,9 @@ void main() {
     await tester.pumpAndSettle();
 
     stored = BaselineSet.decode(
-      (await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
-              .getSingle())
-          .baselineJson,
+      (await (db.select(
+        db.walls,
+      )..where((t) => t.id.equals(wallId))).getSingle()).baselineJson,
     );
     expect(
       stored!.length,
@@ -655,7 +677,8 @@ void main() {
     expect(
       stored.strokes.first.points.length,
       firstRock,
-      reason: 'and the rock that was already there must come through '
+      reason:
+          'and the rock that was already there must come through '
           'untouched',
     );
   });
@@ -672,24 +695,169 @@ void main() {
     await startRedraw(tester);
     final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
     for (var i = 0; i < 3; i++) {
-      await tester.tapAt(
-        Offset(canvas.left + 40 + i * 50, canvas.center.dy),
-      );
+      await tester.tapAt(Offset(canvas.left + 40 + i * 50, canvas.center.dy));
       await tester.pumpAndSettle();
     }
     await showActions(tester, const Key('layout-redraw-done'));
     await tester.tap(find.byKey(const Key('layout-redraw-done')));
     await tester.pumpAndSettle();
 
-    final json = (await (db.select(db.walls)
-              ..where((t) => t.id.equals(wallId)))
-            .getSingle())
-        .baselineJson;
+    final json = (await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle()).baselineJson;
     expect(
       Baseline.decode(json),
       isNotNull,
-      reason: 'the single-rock row must still parse as a plain baseline — '
+      reason:
+          'the single-rock row must still parse as a plain baseline — '
           'the column syncs, and older builds read it',
+    );
+  });
+
+  /// The complaint this pins: 'I can draw a new line but I can't edit or
+  /// delete the old one.' Every one of those repairs existed — reshape by
+  /// handle, redraw, remove — and not one of them could be reached without
+  /// first guessing that the drawing was tappable, and then finding a text
+  /// button at the bottom of a scrolling page.
+  testWidgets('a rock can be picked out, redrawn ON ITS OWN, and removed — '
+      'and the other rock survives all three', (tester) async {
+    await seed(photos: 3);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    Future<void> drawStroke(Key start, List<Offset> at) async {
+      await showActions(tester, start);
+      await tester.tap(find.byKey(start));
+      await tester.pumpAndSettle();
+      final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+      for (final point in at) {
+        await tester.tapAt(canvas.topLeft + point);
+        await tester.pumpAndSettle();
+      }
+      await showActions(tester, const Key('layout-redraw-done'));
+      await tester.tap(find.byKey(const Key('layout-redraw-done')));
+      await tester.pumpAndSettle();
+    }
+
+    Future<BaselineSet> stored() async => BaselineSet.decode(
+      (await (db.select(
+        db.walls,
+      )..where((t) => t.id.equals(wallId))).getSingle()).baselineJson,
+    )!;
+
+    await drawStroke(const Key('layout-redraw'), const [
+      Offset(40, 40),
+      Offset(110, 40),
+      Offset(110, 100),
+      Offset(40, 100),
+    ]);
+    await drawStroke(const Key('layout-add-rock'), const [
+      Offset(230, 190),
+      Offset(300, 190),
+      Offset(300, 240),
+    ]);
+
+    var set = await stored();
+    expect(set.length, 2);
+    final firstRock = set.strokes.first.points.length;
+
+    // Picked out by name, not by guessing that the drawing is touchable.
+    await showActions(tester, const Key('layout-rock-chip-1'));
+    await tester.tap(find.byKey(const Key('layout-rock-chip-1')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('layout-rock-card')),
+      findsOneWidget,
+      reason: 'picking a rock out has to produce somewhere to act on it',
+    );
+    expect(find.text('Rock 2'), findsWidgets);
+
+    // Redraw ONE rock. The button at the bottom of the page replaces the
+    // whole drawing, which on a two-boulder crag costs the rock that was
+    // fine to fix the one that was not.
+    await drawStroke(const Key('layout-redraw-rock'), const [
+      Offset(230, 190),
+      Offset(310, 190),
+      Offset(310, 250),
+      Offset(230, 250),
+    ]);
+
+    set = await stored();
+    expect(set.length, 2, reason: 'redrawing one rock must not drop the other');
+    expect(
+      set.strokes.first.points.length,
+      firstRock,
+      reason: 'and must leave it exactly as it was',
+    );
+    expect(
+      set.strokes[1].points.length,
+      4,
+      reason: 'the rock that was redrawn takes the new stroke',
+    );
+
+    // And removed.
+    await showActions(tester, const Key('layout-rock-chip-1'));
+    await tester.tap(find.byKey(const Key('layout-rock-chip-1')));
+    await tester.pumpAndSettle();
+    await showActions(tester, const Key('layout-remove-rock'));
+    await tester.tap(find.byKey(const Key('layout-remove-rock')));
+    await tester.pumpAndSettle();
+
+    set = await stored();
+    expect(set.length, 1, reason: 'remove has to actually remove one');
+    expect(
+      set.strokes.first.points.length,
+      firstRock,
+      reason: 'and it has to be the one that was picked out',
+    );
+  });
+
+  testWidgets('removing the last rock hands back the automatic line rather '
+      'than a blank editor', (tester) async {
+    await seed(photos: 1);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    await startRedraw(tester);
+    var canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    for (var i = 0; i < 3; i++) {
+      await tester.tapAt(Offset(canvas.left + 40 + i * 90, canvas.top + 60));
+      await tester.pumpAndSettle();
+    }
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
+    await tester.pumpAndSettle();
+
+    // On a one-rock wall there are no chips — the drawing IS the line — so
+    // this is the path that has to work: touch the line itself.
+    canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    await tester.tapAt(Offset(canvas.left + 30, canvas.center.dy));
+    await tester.pumpAndSettle();
+    await showActions(tester, const Key('layout-remove-rock'));
+    await tester.tap(find.byKey(const Key('layout-remove-rock')));
+    await tester.pumpAndSettle();
+
+    final json = (await (db.select(
+      db.walls,
+    )..where((t) => t.id.equals(wallId))).getSingle()).baselineJson;
+    expect(
+      json,
+      isNull,
+      reason:
+          'no drawing is the same state as never having drawn — the '
+          'engine synthesises a guess again rather than leaving a blank page',
+    );
+    expect(
+      find.byKey(const Key('layout-canvas')),
+      findsOneWidget,
+      reason: 'and the editor still has a line to show',
     );
   });
 }

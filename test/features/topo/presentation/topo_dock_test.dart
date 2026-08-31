@@ -273,4 +273,44 @@ void main() {
     expect(find.byKey(const Key('face-rail')), findsOneWidget);
     expect(find.byKey(const Key('face-rail-map')), findsNothing);
   });
+
+  /// The rail is what the dock's width is for: it is the photos. Spelling the
+  /// route count out as a phrase spent about a thumbnail's worth of a phone on
+  /// saying '0 routes' — a fact the list says again the moment it opens.
+  testWidgets('the route toggle spends a chevron and a numeral, not a phrase', (
+    tester,
+  ) async {
+    await pumpDock(tester);
+
+    expect(
+      find.text('1 route'),
+      findsNothing,
+      reason: 'the phrase is what cost the rail its width',
+    );
+    expect(
+      find.descendant(
+        of: find.byKey(const Key('topo-dock-routes-toggle')),
+        matching: find.text('1'),
+      ),
+      findsOneWidget,
+      reason: 'the count still has to be there — just not spelled out',
+    );
+
+    final toggle = tester.getRect(
+      find.byKey(const Key('topo-dock-routes-toggle')),
+    );
+    final rail = tester.getRect(find.byKey(const Key('face-rail')));
+    expect(
+      toggle.width,
+      lessThan(56),
+      reason:
+          'a phrase-sized toggle is what pushed the third photo off the '
+          'edge of a 390pt phone',
+    );
+    expect(
+      rail.width,
+      greaterThan(285),
+      reason: 'and the width it gives up has to land on the photos',
+    );
+  });
 }
