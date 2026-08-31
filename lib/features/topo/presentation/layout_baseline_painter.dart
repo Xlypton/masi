@@ -176,6 +176,54 @@ class LayoutBaselinePainter extends CustomPainter {
     return null;
   }
 
+  /// The room a plan needs on each edge for the photos that float off the
+  /// line, given the tile size and stem the caller is going to draw with.
+  ///
+  /// Not a constant, and not the same on all four sides. A ring's thumbnails
+  /// leave in every direction, so a ring needs the whole band all round or
+  /// the photos land on the rock they are pictures of. A strip's leave on ONE
+  /// side, so reserving the band on the other three costs the line 40% of its
+  /// width and buys nothing — and it is the line's length that the photos are
+  /// spread along.
+  ///
+  /// Feed the result to [LayoutPlaneFit.forBaseline]'s per-edge padding.
+  static ({double left, double top, double right, double bottom}) planInsets({
+    required LayoutResult layout,
+    required Size thumbnail,
+    required double stem,
+    double margin = 10,
+  }) {
+    final halfX = thumbnail.width / 2 + margin;
+    final halfY = thumbnail.height / 2 + margin;
+    if (layout.baseline.closed) {
+      return (
+        left: halfX + stem,
+        top: halfY + stem,
+        right: halfX + stem,
+        bottom: halfY + stem,
+      );
+    }
+
+    // Which way an open line's thumbnails go, in canvas terms. Averaged over
+    // the faces because a wiggly strip's normals differ face to face while
+    // the SIDE they are on does not.
+    var bias = Offset.zero;
+    for (final face in layout.faces) {
+      final normal = layout.baseline.normalAt(face.t);
+      if (normal == null) continue;
+      final unit = (normal * layout.thumbnailNormalSign).normalized;
+      if (unit != null) bias += Offset(unit.x, -unit.y);
+    }
+    if (bias.distance > 0) bias = bias / bias.distance;
+
+    return (
+      left: halfX + stem * math.max(0, -bias.dx),
+      top: halfY + stem * math.max(0, -bias.dy),
+      right: halfX + stem * math.max(0, bias.dx),
+      bottom: halfY + stem * math.max(0, bias.dy),
+    );
+  }
+
   /// Where each face WANTS its thumbnail, before collision resolution.
   ///
   /// Shared with the widget layer rather than duplicated there: a thumbnail

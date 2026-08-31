@@ -22,14 +22,41 @@ class LayoutPlaneFit {
   /// Aspect ratio is preserved: a single scale for both axes. Stretching to
   /// fill would make a boulder's ring an ellipse whose long side is whichever
   /// way the canvas happens to be shaped.
+  ///
+  /// The four per-edge overrides exist because the band the thumbnails need
+  /// is **not** the same on every edge. Thumbnails leave a ring in every
+  /// direction, so a ring needs the band all round; they leave a strip on one
+  /// side only, so reserving the band on the other three shrinks the line for
+  /// nothing — a wall drawn at 60% of the width it could have had, with its
+  /// photos crammed together above it and half the canvas empty below. The
+  /// line is centred in what is left after the padding, so an uneven padding
+  /// also moves the drawing off the geometric centre, which is what balances
+  /// a one-sided composition.
   factory LayoutPlaneFit.forBaseline(
     Baseline baseline,
     Size size, {
     double padding = 56,
+    double? padLeft,
+    double? padTop,
+    double? padRight,
+    double? padBottom,
   }) {
-    final usableWidth = math.max(size.width - padding * 2, 1.0);
-    final usableHeight = math.max(size.height - padding * 2, 1.0);
-    final canvasCentre = Offset(size.width / 2, size.height / 2);
+    final left = padLeft ?? padding;
+    final top = padTop ?? padding;
+    final right = padRight ?? padding;
+    final bottom = padBottom ?? padding;
+    final rawWidth = size.width - left - right;
+    final rawHeight = size.height - top - bottom;
+    final usableWidth = math.max(rawWidth, 1.0);
+    final usableHeight = math.max(rawHeight, 1.0);
+    // Off-centre only while the padding actually FITS. A box too small to
+    // hold its own padding has no usable rect to be off-centre in, and
+    // biasing towards one edge there would push the drawing out of a canvas
+    // that is already too small for it.
+    final canvasCentre = Offset(
+      rawWidth > 0 ? left + rawWidth / 2 : size.width / 2,
+      rawHeight > 0 ? top + rawHeight / 2 : size.height / 2,
+    );
 
     if (baseline.isDegenerate) {
       return LayoutPlaneFit._(1, const LayoutPoint(0, 0), canvasCentre);

@@ -146,6 +146,10 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// enough that a wall does not run off the edge.
   static const double _blankSpanMetres = 40;
 
+  /// The tile every face is drawn at — the default `arrangeThumbnails` has
+  /// always used, named here because the fit's padding is derived from it.
+  static const Size _thumbnailSize = Size(64, 48);
+
   /// How close, IN PIXELS, a stroke's end must come to its start to be a ring.
   /// Pixels rather than a fraction of the stroke's own size: proportional
   /// thresholds grow with a messy stroke, which is how a wall drawn as a
@@ -341,8 +345,20 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       // Never fitted to the draft: see _redrawFit. While redrawing, the
       // pinned fit is the one the stroke is being recorded through, so what
       // is painted and what is stored agree.
+      final insets = LayoutBaselinePainter.planInsets(
+        layout: layout,
+        thumbnail: _thumbnailSize,
+        stem: LayoutBaselinePainter.stemLength,
+      );
       final fit = _redrawFit ??
-          LayoutPlaneFit.forBaseline(layout.baseline, size);
+          LayoutPlaneFit.forBaseline(
+            layout.baseline,
+            size,
+            padLeft: insets.left,
+            padTop: insets.top,
+            padRight: insets.right,
+            padBottom: insets.bottom,
+          );
       final preview = _previewLayout(layout, photos);
       // Resolved ONCE per build and shared by the painter (leaders) and the
       // widgets (the boxes themselves) — two independent placements of the
@@ -350,6 +366,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       final slots = arrangeThumbnails(
         anchors: LayoutBaselinePainter.anchorsFor(preview, fit),
         canvas: size,
+        thumbnail: _thumbnailSize,
         stem: LayoutBaselinePainter.stemLength,
         // The same spread the plan screen gets: a taller canvas is only
         // worth having if the photos use it.
@@ -1013,9 +1030,23 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
       _canvasSize?.width ?? 360,
       _canvasHeightFor(redrawing: true),
     );
+    final insets = LayoutBaselinePainter.planInsets(
+      layout: layout,
+      thumbnail: _thumbnailSize,
+      stem: LayoutBaselinePainter.stemLength,
+    );
     _redrawFit = layout.baseline.isDegenerate
         ? LayoutPlaneFit.forSpan(size, _blankSpanMetres)
-        : LayoutPlaneFit.forBaseline(layout.baseline, size);
+        // The same padding the canvas is drawn with, or the outgoing line
+        // would jump to a different scale the moment redrawing starts.
+        : LayoutPlaneFit.forBaseline(
+            layout.baseline,
+            size,
+            padLeft: insets.left,
+            padTop: insets.top,
+            padRight: insets.right,
+            padBottom: insets.bottom,
+          );
   });
 
   void _cancelRedraw() => setState(() {

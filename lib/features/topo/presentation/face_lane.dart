@@ -392,16 +392,24 @@ class FaceMapPlan extends StatelessWidget {
         math.max(240, constraints.maxHeight),
       );
       // The padding is DERIVED, not chosen: it is the band the photos
-      // themselves occupy outside the outline. Picked independently (it was
-      // 76, against a 58px stem and a 76px-wide thumbnail) the outline grows
-      // into the band and the photos land on top of the rock they are
-      // photographs of.
+      // themselves occupy outside the outline, edge by edge. Picked
+      // independently (it was 76, against a 58px stem and a 76px-wide
+      // thumbnail) the outline grows into the band and the photos land on top
+      // of the rock they are photographs of.
       const thumbnail = Size(76, 58);
       const stem = 58.0;
+      final insets = LayoutBaselinePainter.planInsets(
+        layout: layout,
+        thumbnail: thumbnail,
+        stem: stem,
+      );
       final fit = LayoutPlaneFit.forBaseline(
         layout.baseline,
         size,
-        padding: stem + thumbnail.width / 2 + 10,
+        padLeft: insets.left,
+        padTop: insets.top,
+        padRight: insets.right,
+        padBottom: insets.bottom,
       );
       final slots = arrangeThumbnails(
         anchors: LayoutBaselinePainter.anchorsFor(layout, fit),
