@@ -115,7 +115,16 @@ sql "INSERT INTO public.routes (id, \"createdAt\", \"updatedAt\", \"ownerId\", \
             ('e2e-route-pend-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_PENDING', '$E2E_PHOTO_PENDING', 1, 'E2E Pending Line', 'french', '5c', 540, 0,
              '[{\"x\":0.50,\"y\":0.90},{\"x\":0.50,\"y\":0.20}]', '[]', 0, true, false),
             ('e2e-route-draft-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_DRAFT', '$E2E_PHOTO_DRAFT', 1, 'E2E Draft Line', 'french', '6b', 620, 0,
-             '[{\"x\":0.45,\"y\":0.88},{\"x\":0.55,\"y\":0.25}]', '[]', 0, true, false);" >/dev/null
+             '[{\"x\":0.45,\"y\":0.88},{\"x\":0.55,\"y\":0.25}]', '[]', 0, true, false),
+            -- An UNPLACED route: name, grade and number, and an empty
+            -- pointsJson. This is exactly what a guidebook import leaves when
+            -- it cannot read a polyline ('this route is yours to draw'), and
+            -- it is what the signed-in suite's draw-into-a-selected-route test
+            -- needs to exist before it can draw one. On the DRAFT wall on
+            -- purpose: that wall is never submitted or published, so nothing
+            -- else in the suite is disturbed by its routes changing.
+            ('e2e-route-draft-02', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_DRAFT', '$E2E_PHOTO_DRAFT', 2, 'E2E Unplaced Line', 'french', '6a+', 610, 1,
+             '[]', '[]', 1, true, false);" >/dev/null
 
 echo "==> uploading fixture photo bytes to Storage"
 SERVICE_KEY="$(service_role_key)"

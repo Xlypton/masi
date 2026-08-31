@@ -49,6 +49,16 @@ import 'e2e_support.dart';
 const String kE2eSeededWallName = 'E2E Published Wall';
 const String kE2eSeededAreaName = 'E2E Test Area';
 
+/// The never-submitted, never-published fixture wall. Used by the
+/// draw-into-a-selected-route test below because its routes may change freely
+/// without disturbing anything else in the suite (nothing may ever submit or
+/// publish this wall — see the skill's §6).
+const String kE2eDraftWallId = 'e2e-wall-draft-0001';
+
+/// The seeded route with a name, a grade, a number and NO line — what a
+/// guidebook import leaves when it cannot read a polyline.
+const String kE2eUnplacedRouteName = 'E2E Unplaced Line';
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -358,6 +368,123 @@ void main() {
         findsNothing,
         reason: 'topo_version_list errored for a real session — the history '
             'RPC is not answering under live RLS',
+      );
+    },
+    skip: !e2eRealSessionRequested,
+  );
+
+  testWidgets(
+    'real session: a selected UNPLACED route takes the line that is drawn, '
+    'instead of a new route appearing beside it',
+    (tester) async {
+      // The bug this guards: a guidebook import creates routes it could not
+      // place (name, grade, number, empty points — "this route is yours to
+      // draw"). Selecting one and drawing used to produce a SECOND,
+      // separately-numbered route beside it, leaving the imported one empty
+      // forever with no way at all to draw it.
+      await e2eBoot();
+      await settleNetwork(tester, budget: const Duration(seconds: 8));
+
+      // The fixture is server-side until a pull imports it, and the canvas
+      // reads its routes from the LOCAL database. Force the pull first.
+      appRouter.go('/feed');
+      await settle(tester, frames: 30);
+      await pullToRefresh(
+        tester,
+        find.byKey(const Key('community-feed-refresh')),
+        'the community feed refresh button',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 12));
+
+      // Straight to the wall by id rather than tapping down
+      // Areas -> Sectors -> Walls: this test is about the canvas, and should
+      // not be able to fail for a reason that belongs to those lists.
+      appRouter.go('/walls/$kE2eDraftWallId');
+      await settle(tester, frames: 30);
+      await settleNetwork(tester, budget: const Duration(seconds: 12));
+      await binding.takeScreenshot('13-draft-wall-canvas');
+
+      // The unplaced route announces itself in the legend — it has no line on
+      // the photo, so this row is the ONLY way to reach it.
+      await waitFor(
+        tester,
+        find.textContaining(kE2eUnplacedRouteName),
+        'the seeded unplaced route in the topo legend — the canvas did not '
+        'render its routes (did the pull import the draft wall and photo?)',
+        timeout: const Duration(seconds: 60),
+      );
+      expect(
+        find.textContaining('No line yet'),
+        findsWidgets,
+        reason: 'the legend must say which routes still need drawing, or an '
+            'imported route cannot be found at all',
+      );
+
+      await tapOrFail(
+        tester,
+        find.textContaining(kE2eUnplacedRouteName),
+        'the unplaced route row in the legend',
+      );
+      await binding.takeScreenshot('14-unplaced-route-selected');
+
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-mode-toggle')),
+        'the draw-mode toggle',
+      );
+
+      await settle(tester, frames: 10);
+
+      // Two taps on the photo make a line. The draw-mode gesture surface is
+      // the thing that actually receives them, so its own box is what the
+      // coordinates come from — no viewport size is assumed — and both points
+      // sit well inside it, clear of the floating chrome.
+      await waitFor(
+        tester,
+        find.byKey(const Key('topo-draw-gesture-detector')),
+        'the draw-mode gesture surface — the mode toggle did not enter draw '
+        'mode',
+      );
+      final canvas = tester.getRect(
+        find.byKey(const Key('topo-draw-gesture-detector')),
+      );
+      await tester.tapAt(
+        Offset(canvas.center.dx, canvas.top + canvas.height * 0.35),
+      );
+      await settle(tester, frames: 5);
+      await tester.tapAt(
+        Offset(canvas.center.dx, canvas.top + canvas.height * 0.55),
+      );
+      await settle(tester, frames: 5);
+      await binding.takeScreenshot('15-line-drawn-for-selected-route');
+
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-commit-button')),
+        'the commit (save) button',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 10));
+      await binding.takeScreenshot('16-line-saved-to-selected-route');
+
+      // The whole claim, in three assertions:
+      expect(
+        find.textContaining('Route 3'),
+        findsNothing,
+        reason: 'a third, separately-numbered route appeared — the line was '
+            'committed as a NEW route instead of onto the selected one, '
+            'which is exactly the reported bug',
+      );
+      expect(
+        find.textContaining(kE2eUnplacedRouteName),
+        findsWidgets,
+        reason: 'the imported route lost its name — drawing its line must '
+            'keep its identity, not replace it',
+      );
+      expect(
+        find.textContaining('No line yet'),
+        findsNothing,
+        reason: 'the route still reports no line, so the draft never landed '
+            'on it',
       );
     },
     skip: !e2eRealSessionRequested,
