@@ -271,8 +271,9 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
           // refers to — every other control on this screen is about faces,
           // and a rock action buried among them was never going to be read
           // as being about the line.
-          if (_selectedStroke != null && _selectedFaceId == null) ...[
-            _rockCard(colors, layout, photos, _selectedStroke!),
+          if (_pickedStroke(layout) case final picked?
+              when _selectedFaceId == null) ...[
+            _rockCard(colors, layout, photos, picked),
             const SizedBox(height: 12),
           ],
           Text(
@@ -822,7 +823,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
   /// old one' is precisely what a screen that keeps that secret produces.
   String _rockHint(LayoutResult layout) {
     final count = layout.strokes.length;
-    final selected = _selectedStroke;
+    final selected = _pickedStroke(layout);
     if (selected != null) {
       return count > 1 ? 'Rock ${selected + 1} picked out.' : 'Picked out.';
     }
@@ -830,6 +831,21 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
         ? '$count rocks. Tap one to pick it out; drag a photo across to '
               'move it between them.'
         : 'Tap the line to pick it out, then reshape, redraw or remove it.';
+  }
+
+  /// The rock that is picked out, if it still exists.
+  ///
+  /// The index outlives the rock: resetting to the automatic line, or
+  /// removing a rock, leaves the selection naming a stroke that is no longer
+  /// there. Unclamped, the card then acts on it — and a redraw whose target
+  /// index is out of range falls through to the branch that replaces the
+  /// WHOLE drawing, which is the one outcome nobody asked for.
+  int? _pickedStroke(LayoutResult layout) {
+    final index = _selectedStroke;
+    if (index == null || index < 0 || index >= layout.strokes.length) {
+      return null;
+    }
+    return index;
   }
 
   /// One chip per rock on this wall.
@@ -883,9 +899,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     List<PhotoRef> photos,
     int index,
   ) {
-    final stroke = index < layout.strokes.length
-        ? layout.strokes[index]
-        : layout.baseline;
+    final stroke = layout.strokes[index];
     final riding = layout.faces.where((face) => face.stroke == index).length;
     final many = layout.strokes.length > 1;
 

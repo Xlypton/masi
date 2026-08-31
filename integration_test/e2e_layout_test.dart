@@ -39,6 +39,21 @@ void main() {
     await settle(tester, frames: 6);
   }
 
+  /// Scrolls the editor back to its top.
+  ///
+  /// The notice about a guessed line sits ABOVE the plan, and this page is a
+  /// `ListView` that mounts only what is on screen — so a finder for it after
+  /// a tap on something at the bottom of the page finds nothing, however long
+  /// it waits, and reads as the notice never appearing.
+  Future<void> showEditorTop(WidgetTester tester) async {
+    await tester.drag(
+      find.byType(Scrollable).first,
+      const Offset(0, 1200),
+      warnIfMissed: false,
+    );
+    await settle(tester, frames: 6);
+  }
+
   Future<void> openFacesWall(WidgetTester tester) async {
     // Phone-shaped, always. See usePhoneViewport: a desktop-width window is
     // not the product and hides exactly the layout faults that matter.
@@ -54,7 +69,8 @@ void main() {
     expect(
       find.byKey(const Key('account-send-link')),
       findsNothing,
-      reason: 'the auth wall bounced us to sign-in — see the console for '
+      reason:
+          'the auth wall bounced us to sign-in — see the console for '
           '"masi/e2e: REAL sign-in FAILED"',
     );
 
@@ -99,19 +115,22 @@ void main() {
     expect(
       find.byKey(const Key('topo-dock')),
       findsOneWidget,
-      reason: 'the faces and the routes are one panel now, not two stacked '
+      reason:
+          'the faces and the routes are one panel now, not two stacked '
           'panels that have to clear each other',
     );
     expect(
       find.byKey(const Key('topo-dock-body')),
       findsNothing,
-      reason: 'the dock opens as ONE LINE — the photo is what the reader came '
+      reason:
+          'the dock opens as ONE LINE — the photo is what the reader came '
           'for, and the panel over it used to take most of the phone',
     );
     expect(
       find.byKey(const Key('face-map-plan')),
       findsNothing,
-      reason: 'the plan is a glance you ask for — mounting it permanently is '
+      reason:
+          'the plan is a glance you ask for — mounting it permanently is '
           'what put 153pt of card between the reader and the photo',
     );
     // Real pictures, not dots: one tile per photo, and the plan tile beside
@@ -129,13 +148,15 @@ void main() {
     expect(
       find.byKey(const Key('face-map-plan')),
       findsOneWidget,
-      reason: 'four faces resolve to a capture-order strip, which is a real '
+      reason:
+          'four faces resolve to a capture-order strip, which is a real '
           'line — the plan screen must draw it',
     );
     expect(
       find.byKey(const Key('face-map-current')),
       findsOneWidget,
-      reason: 'the bar naming the photo you are on is how Open knows what it '
+      reason:
+          'the bar naming the photo you are on is how Open knows what it '
           'is opening',
     );
     // The way into the editor is a labelled button, not a tappable caption.
@@ -178,7 +199,8 @@ void main() {
     expect(
       find.byKey(const Key('layout-confidence-banner')),
       findsOneWidget,
-      reason: 'with no GPS and no headings anywhere, this line is a guess and '
+      reason:
+          'with no GPS and no headings anywhere, this line is a guess and '
           'has to say so',
     );
 
@@ -192,7 +214,8 @@ void main() {
     expect(
       find.byKey(const Key('layout-redraw-hint')),
       findsOneWidget,
-      reason: 'redrawing must say what to do — the canvas is a blank box '
+      reason:
+          'redrawing must say what to do — the canvas is a blank box '
           'otherwise',
     );
     await binding.takeScreenshot('42-layout-redrawing');
@@ -235,7 +258,8 @@ void main() {
     expect(
       find.byKey(const Key('layout-confidence-banner')),
       findsNothing,
-      reason: 'a line the contributor drew is authored, not a guess — if the '
+      reason:
+          'a line the contributor drew is authored, not a guess — if the '
           'banner is still up, the stroke never reached the wall and the '
           'taps went nowhere',
     );
@@ -329,8 +353,50 @@ void main() {
     expect(
       find.byKey(const Key('layout-rock-count')),
       findsOneWidget,
-      reason: 'with two rocks the editor has to say so — and say how to move '
+      reason:
+          'with two rocks the editor has to say so — and say how to move '
           'a photo between them',
+    );
+
+    // And each rock has to be repairable ON ITS OWN. This is the whole of
+    // 'I can draw a new line but I can't edit or delete the old one': every
+    // repair existed, none of them could be reached without first guessing
+    // that the drawing was touchable.
+    await showEditorAction(tester, const Key('layout-rock-chip-1'));
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-rock-chip-1')),
+      "the second rock's chip",
+    );
+    await settle(tester, frames: 6);
+    await showEditorAction(tester, const Key('layout-rock-card'));
+    await binding.takeScreenshot('48-layout-rock-card');
+    expect(
+      find.byKey(const Key('layout-redraw-rock')),
+      findsOneWidget,
+      reason: 'a picked-out rock has to offer its own redraw',
+    );
+    expect(
+      find.byKey(const Key('layout-remove-rock')),
+      findsOneWidget,
+      reason:
+          'and its own removal — the button that used to sit at the '
+          'bottom of the page, on a wall that already had two rocks, after a '
+          'tap nothing suggested',
+    );
+
+    // Putting the card away is its own affordance, and it has to work or the
+    // card is a one-way door.
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-rock-deselect')),
+      'the rock card\'s close control',
+    );
+    await settle(tester, frames: 6);
+    expect(
+      find.byKey(const Key('layout-rock-card')),
+      findsNothing,
+      reason: 'closing the card has to close it',
     );
 
     // And back, so the fixture is left as it was found.
@@ -341,6 +407,7 @@ void main() {
       'the reset-to-automatic action',
     );
     await settleNetwork(tester, budget: const Duration(seconds: 6));
+    await showEditorTop(tester);
     await waitFor(
       tester,
       find.byKey(const Key('layout-confidence-banner')),
@@ -382,7 +449,8 @@ void main() {
     final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
     final centre = canvas.center;
     final radius = math.min(canvas.width, canvas.height) / 2 - 40;
-    Offset around(double turn) => centre +
+    Offset around(double turn) =>
+        centre +
         Offset(math.cos(turn * 2 * math.pi), math.sin(turn * 2 * math.pi)) *
             radius;
 
@@ -398,15 +466,18 @@ void main() {
     await binding.takeScreenshot('45-layout-ring');
 
     final rects = <Rect>[];
-    for (final element in find
-        .byWidgetPredicate(
-          (w) =>
-              w is Container &&
-              w.key is ValueKey<String> &&
-              (w.key! as ValueKey<String>).value.startsWith('layout-face-') &&
-              !(w.key! as ValueKey<String>).value.contains('pinned'),
-        )
-        .evaluate()) {
+    for (final element
+        in find
+            .byWidgetPredicate(
+              (w) =>
+                  w is Container &&
+                  w.key is ValueKey<String> &&
+                  (w.key! as ValueKey<String>).value.startsWith(
+                    'layout-face-',
+                  ) &&
+                  !(w.key! as ValueKey<String>).value.contains('pinned'),
+            )
+            .evaluate()) {
       rects.add(tester.getRect(find.byWidget(element.widget)));
     }
     expect(

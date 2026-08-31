@@ -860,4 +860,59 @@ void main() {
       reason: 'and the editor still has a line to show',
     );
   });
+
+  testWidgets('a picked-out rock that stops existing stops being picked out', (
+    tester,
+  ) async {
+    await seed(photos: 2);
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+
+    Future<void> drawStroke(Key start, List<Offset> at) async {
+      await showActions(tester, start);
+      await tester.tap(find.byKey(start));
+      await tester.pumpAndSettle();
+      final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+      for (final point in at) {
+        await tester.tapAt(canvas.topLeft + point);
+        await tester.pumpAndSettle();
+      }
+      await showActions(tester, const Key('layout-redraw-done'));
+      await tester.tap(find.byKey(const Key('layout-redraw-done')));
+      await tester.pumpAndSettle();
+    }
+
+    await drawStroke(const Key('layout-redraw'), const [
+      Offset(40, 40),
+      Offset(120, 40),
+      Offset(120, 100),
+    ]);
+    await drawStroke(const Key('layout-add-rock'), const [
+      Offset(240, 190),
+      Offset(310, 190),
+      Offset(310, 250),
+    ]);
+
+    await showActions(tester, const Key('layout-rock-chip-1'));
+    await tester.tap(find.byKey(const Key('layout-rock-chip-1')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const Key('layout-rock-card')), findsOneWidget);
+
+    // Back to the automatic line: rock 2 no longer exists.
+    await showActions(tester, const Key('layout-reset'));
+    await tester.tap(find.byKey(const Key('layout-reset')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('layout-rock-card')),
+      findsNothing,
+      reason:
+          'a card acting on a rock that is gone would redraw or remove '
+          'something nobody pointed at — an out-of-range redraw falls through '
+          'to replacing the WHOLE drawing',
+    );
+  });
 }
