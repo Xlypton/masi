@@ -79,6 +79,30 @@ void main() {
     ],
   );
 
+  /// Scrolls the editor down to its action row.
+  ///
+  /// `ensureVisible` is not enough any more: the plan is now a share of the
+  /// screen rather than a fixed 240px, so on the 800x600 test surface the
+  /// buttons sit past the end of what the ListView has BUILT, and a finder
+  /// for an unbuilt child finds nothing at all.
+  Future<void> showActions(WidgetTester tester, Key key) async {
+    await tester.scrollUntilVisible(
+      find.byKey(key),
+      120,
+      scrollable: find.byType(Scrollable).first,
+    );
+    await tester.pumpAndSettle();
+  }
+
+  /// Enters redraw mode. Redrawing hides everything below the plan, so the
+  /// list springs back and the canvas is fully on screen for the taps that
+  /// follow.
+  Future<void> startRedraw(WidgetTester tester) async {
+    await showActions(tester, const Key('layout-redraw'));
+    await tester.tap(find.byKey(const Key('layout-redraw')));
+    await tester.pumpAndSettle();
+  }
+
   Widget wrap(ProviderContainer container) => UncontrolledProviderScope(
     container: container,
     child: MaterialApp(
@@ -87,12 +111,18 @@ void main() {
     ),
   );
 
-  /// The bug that shipped: the plane fit was derived from the DRAFT, so every
-  /// new point grew the draft's bounds, rescaled the mapping, and moved where
-  /// the earlier points had landed. A straight drag came out as a curve
-  /// accelerating away from its start, and a wall drawn end-to-end was stored
-  /// as a 135 m scribble that then tripped the ring test.
-  testWidgets('a straight drag records a STRAIGHT line', (tester) async {
+  /// A line is TAPPED out here, exactly as a route is drawn on a topo — the
+  /// gesture every climber using this app already knows. It used to be a
+  /// freehand drag, which was both a second gesture for the same job and
+  /// uncorrectable: one wobble and the only recourse was to start the rock
+  /// again.
+  ///
+  /// The older bug this still pins: the plane fit was derived from the DRAFT,
+  /// so every new point grew the draft's bounds, rescaled the mapping, and
+  /// moved where the earlier points had landed. Points tapped along one
+  /// horizontal came out as a curve accelerating away from the first.
+  testWidgets('tapped points record the line that was tapped, and nothing is '
+      'stored until Finish', (tester) async {
     await seed();
     final container = makeContainer();
     addTearDown(container.dispose);
@@ -100,10 +130,7 @@ void main() {
     await tester.pumpWidget(wrap(container));
     await tester.pumpAndSettle();
 
-    await tester.ensureVisible(find.byKey(const Key('layout-redraw')));
-    await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('layout-redraw')));
-    await tester.pumpAndSettle();
+    await startRedraw(tester);
 
     expect(
       find.byKey(const Key('layout-redraw-hint')),
@@ -111,33 +138,47 @@ void main() {
       reason: 'redrawing must say what to do — it is a blank box otherwise',
     );
 
-    // Drag horizontally across the canvas, dead level.
+    // Four taps along one horizontal, dead level.
     final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
     final y = canvas.center.dy;
-    final gesture = await tester.startGesture(Offset(canvas.left + 30, y));
-    for (var x = canvas.left + 30; x <= canvas.right - 30; x += 12) {
-      await gesture.moveTo(Offset(x, y));
-      await tester.pump();
+    for (var i = 0; i < 4; i++) {
+      await tester.tapAt(Offset(canvas.left + 40 + i * 60, y));
+      await tester.pumpAndSettle();
     }
-    await gesture.up();
+
+    var wall = await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
+        .getSingle();
+    expect(
+      wall.baselineJson,
+      isNull,
+      reason: 'a half-tapped line is not a line yet — storing on every tap '
+          'would put an unfinished rock through the sync engine',
+    );
+
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
     await tester.pumpAndSettle();
 
-    final wall = await (db.select(db.walls)
-          ..where((t) => t.id.equals(wallId)))
+    wall = await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
         .getSingle();
     final stored = Baseline.decode(wall.baselineJson);
     expect(stored, isNotNull);
     expect(
       stored!.closed,
       isFalse,
-      reason: 'a line drawn end to end is a wall, not a boulder',
+      reason: 'a line finished away from its start is a wall, not a boulder',
+    );
+    expect(
+      stored.points.length,
+      4,
+      reason: 'every tap is a decision — nothing may drop one',
     );
 
     final bounds = stored.bounds;
     expect(
       bounds.maxY - bounds.minY,
       lessThan(0.5),
-      reason: 'the drag never moved in y, so the stored line must not either '
+      reason: 'the taps never moved in y, so the stored line must not either '
           '— any thickness here is the mapping shifting mid-stroke',
     );
     expect(
@@ -147,38 +188,127 @@ void main() {
     );
   });
 
-  testWidgets('a stroke that ends where it began IS a ring', (tester) async {
+  testWidgets('a placed point can be dragged, and dragging one does NOT end '
+      'the line', (tester) async {
     await seed();
     final container = makeContainer();
     addTearDown(container.dispose);
 
     await tester.pumpWidget(wrap(container));
     await tester.pumpAndSettle();
+    await startRedraw(tester);
 
-    await tester.ensureVisible(find.byKey(const Key('layout-redraw')));
+    final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final y = canvas.center.dy;
+    final first = Offset(canvas.left + 40, y);
+    await tester.tapAt(first);
     await tester.pumpAndSettle();
-    await tester.tap(find.byKey(const Key('layout-redraw')));
+    await tester.tapAt(Offset(canvas.left + 120, y));
     await tester.pumpAndSettle();
+
+    // Drag the FIRST point straight down.
+    await tester.dragFrom(first, const Offset(0, 40));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const Key('layout-redraw-hint')),
+      findsOneWidget,
+      reason: 'lifting a finger used to commit the whole stroke, so a drag '
+          'meant to fix one point finished the line instead',
+    );
+
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
+    await tester.pumpAndSettle();
+
+    final wall = await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
+        .getSingle();
+    final stored = Baseline.decode(wall.baselineJson)!;
+    expect(stored.points.length, 2);
+    expect(
+      (stored.points.first.y - stored.points.last.y).abs(),
+      greaterThan(0.5),
+      reason: 'the dragged point has to have actually moved off the line',
+    );
+  });
+
+  testWidgets('Undo takes back the last point', (tester) async {
+    await seed();
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+    await startRedraw(tester);
+
+    final undo = find.byKey(const Key('layout-redraw-undo'));
+    expect(
+      tester.widget<ButtonStyleButton>(undo).onPressed,
+      isNull,
+      reason: 'there is nothing to take back before the first tap',
+    );
+
+    final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
+    final y = canvas.center.dy;
+    for (var i = 0; i < 3; i++) {
+      await tester.tapAt(Offset(canvas.left + 40 + i * 60, y));
+      await tester.pumpAndSettle();
+    }
+
+    await showActions(tester, const Key('layout-redraw-undo'));
+    await tester.tap(undo);
+    await tester.pumpAndSettle();
+
+    await showActions(tester, const Key('layout-redraw-done'));
+    await tester.tap(find.byKey(const Key('layout-redraw-done')));
+    await tester.pumpAndSettle();
+
+    final wall = await (db.select(db.walls)..where((t) => t.id.equals(wallId)))
+        .getSingle();
+    expect(Baseline.decode(wall.baselineJson)!.points.length, 2);
+  });
+
+  testWidgets('tapping the first point again closes the ring — and that is '
+      'the only way this app is told something is a boulder', (tester) async {
+    await seed();
+    final container = makeContainer();
+    addTearDown(container.dispose);
+
+    await tester.pumpWidget(wrap(container));
+    await tester.pumpAndSettle();
+    await startRedraw(tester);
 
     final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
     final centre = canvas.center;
-    const radius = 50.0;
+    const radius = 60.0;
     Offset at(double turns) => centre +
         Offset(radius * math.cos(turns * 2 * math.pi),
             radius * math.sin(turns * 2 * math.pi));
 
-    final gesture = await tester.startGesture(at(0));
-    for (var i = 1; i <= 24; i++) {
-      await gesture.moveTo(at(i / 24));
-      await tester.pump();
+    for (var i = 0; i < 5; i++) {
+      await tester.tapAt(at(i / 5));
+      await tester.pumpAndSettle();
     }
-    await gesture.up();
+    // Back onto the first point. No button is pressed: closing IS finishing.
+    await tester.tapAt(at(0));
     await tester.pumpAndSettle();
 
     final wall = await (db.select(db.walls)
           ..where((t) => t.id.equals(wallId)))
         .getSingle();
-    expect(Baseline.decode(wall.baselineJson)!.closed, isTrue);
+    final stored = Baseline.decode(wall.baselineJson)!;
+    expect(stored.closed, isTrue);
+    expect(
+      stored.points.length,
+      5,
+      reason: 'the closing tap closes the ring, it does not add a sixth '
+          'point on top of the first',
+    );
+    expect(
+      find.byKey(const Key('layout-redraw-hint')),
+      findsNothing,
+      reason: 'closing the ring finishes the stroke',
+    );
   });
 
   testWidgets('a guessed line says so, and the notice can be dismissed '
@@ -217,8 +347,7 @@ void main() {
 
     // The editor is a scrolling column; on the default test surface the
     // action row sits below the fold.
-    await tester.ensureVisible(find.byKey(const Key('layout-accept')));
-    await tester.pumpAndSettle();
+    await showActions(tester, const Key('layout-accept'));
     await tester.tap(find.byKey(const Key('layout-accept')));
     await tester.pumpAndSettle();
 

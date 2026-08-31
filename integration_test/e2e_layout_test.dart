@@ -136,8 +136,8 @@ void main() {
     expect(find.byKey(const Key('face-rail')), findsOneWidget);
   });
 
-  testWidgets('layout: the editor opens, shows every face, and a diagonal '
-      'drag DRAWS instead of scrolling the page', (tester) async {
+  testWidgets('layout: the editor opens, shows every face, and a line is '
+      'TAPPED out the way a route is', (tester) async {
     await openFacesWall(tester);
 
     await tapOrFail(
@@ -180,22 +180,37 @@ void main() {
     );
     await binding.takeScreenshot('42-layout-redrawing');
 
-    // A DIAGONAL drag. The canvas lives in a ListView, which used to claim
-    // every drag with a vertical component and scroll the page instead of
-    // drawing — so this exact gesture is the regression.
+    // TAPS, one point each — the gesture every route on every topo in this
+    // app is drawn with.
     final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
     final start = Offset(canvas.left + 34, canvas.top + 40);
-    final gesture = await tester.startGesture(start);
-    for (var i = 1; i <= 20; i++) {
-      await gesture.moveTo(
+    for (var i = 0; i < 4; i++) {
+      await tester.tapAt(
         Offset(
-          start.dx + (canvas.width - 68) * i / 20,
-          start.dy + (canvas.height - 80) * i / 20,
+          start.dx + (canvas.width - 68) * i / 3,
+          start.dy + (canvas.height - 80) * i / 3,
         ),
       );
-      await tester.pump(const Duration(milliseconds: 16));
+      await settle(tester, frames: 4);
     }
-    await gesture.up();
+    await binding.takeScreenshot('43-layout-tapped');
+
+    // A DIAGONAL drag on a placed point. The canvas lives in a ListView,
+    // which used to claim every drag with a vertical component and scroll the
+    // page instead — so moving a point is still the regression this exercises.
+    await tester.dragFrom(start, const Offset(20, 30));
+    await settle(tester, frames: 6);
+    expect(
+      find.byKey(const Key('layout-redraw-hint')),
+      findsOneWidget,
+      reason: 'dragging a point must not finish the line',
+    );
+
+    await tapOrFail(
+      tester,
+      find.byKey(const Key('layout-redraw-done')),
+      'the Finish button',
+    );
     await settleNetwork(tester, budget: const Duration(seconds: 6));
     await binding.takeScreenshot('43-layout-redrawn');
 
@@ -204,7 +219,7 @@ void main() {
       findsNothing,
       reason: 'a line the contributor drew is authored, not a guess — if the '
           'banner is still up, the stroke never reached the wall and the '
-          'drag was swallowed by the scroll',
+          'taps went nowhere',
     );
     expect(
       find.byKey(const Key('layout-reset')),
@@ -259,19 +274,19 @@ void main() {
 
     final canvas = tester.getRect(find.byKey(const Key('layout-canvas')));
     final centre = canvas.center;
-    final radius = math.min(canvas.width, canvas.height) / 2 - 30;
+    final radius = math.min(canvas.width, canvas.height) / 2 - 40;
     Offset around(double turn) => centre +
         Offset(math.cos(turn * 2 * math.pi), math.sin(turn * 2 * math.pi)) *
             radius;
 
-    // Counter-clockwise on screen, and ending where it began so the stroke
-    // closes into a ring rather than staying a strip.
-    final gesture = await tester.startGesture(around(0));
-    for (var i = 1; i <= 32; i++) {
-      await gesture.moveTo(around(i / 32));
-      await tester.pump(const Duration(milliseconds: 16));
+    // Six taps round the rock, then one more back on the first point: that
+    // last tap is the closure gesture, and the only thing that makes this a
+    // boulder rather than a wall.
+    for (var i = 0; i < 6; i++) {
+      await tester.tapAt(around(i / 6));
+      await settle(tester, frames: 4);
     }
-    await gesture.up();
+    await tester.tapAt(around(0));
     await settleNetwork(tester, budget: const Duration(seconds: 6));
     await binding.takeScreenshot('45-layout-ring');
 

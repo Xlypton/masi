@@ -154,6 +154,79 @@ void main() {
       expect(xs, orderedEquals(<Object>[...xs]..sort()));
     });
 
+    /// Not-overlapping is not the same property as far-apart, and the second
+    /// one is what a reader actually reads. Four faces of a boulder on a
+    /// fixed stem sit on one small circle inside their own outline with the
+    /// rest of the screen empty; the cap lets each travel out to the edge of
+    /// the box it is allowed to reach.
+    test('maxStem spends the empty canvas on the gaps between thumbnails', () {
+      const centre = Offset(180, 120);
+      final anchors = <ThumbnailAnchor>[
+        for (final direction in const [
+          Offset(-1, -1),
+          Offset(1, -1),
+          Offset(1, 1),
+          Offset(-1, 1),
+        ])
+          ThumbnailAnchor(
+            id: '${direction.dx},${direction.dy}',
+            base: centre + direction * 20,
+            direction: direction,
+          ),
+      ];
+
+      double closestPair(List<ThumbnailSlot> slots) {
+        var best = double.infinity;
+        for (var i = 0; i < slots.length; i++) {
+          for (var j = i + 1; j < slots.length; j++) {
+            final d = (slots[i].centre - slots[j].centre).distance;
+            if (d < best) best = d;
+          }
+        }
+        return best;
+      }
+
+      final tight = arrangeThumbnails(
+        anchors: anchors,
+        canvas: canvas,
+        thumbnail: thumbnail,
+        stem: 40,
+      );
+      final spread = arrangeThumbnails(
+        anchors: anchors,
+        canvas: canvas,
+        thumbnail: thumbnail,
+        stem: 40,
+        maxStem: 200,
+      );
+
+      expect(closestPair(spread), greaterThan(closestPair(tight)));
+      expectNoOverlap(spread);
+      // The cap can only ever move a thumbnail FURTHER along its own
+      // direction, never off the canvas — the same clamp still applies.
+      expectInBounds(spread);
+    });
+
+    test('maxStem below the stem changes nothing', () {
+      final anchors = [
+        for (var i = 0; i < 3; i++)
+          ThumbnailAnchor(
+            id: '$i',
+            base: Offset(60.0 + i * 90, 200),
+            direction: const Offset(0, -1),
+          ),
+      ];
+      final plain = arrangeThumbnails(anchors: anchors, canvas: canvas);
+      final capped = arrangeThumbnails(
+        anchors: anchors,
+        canvas: canvas,
+        maxStem: 10,
+      );
+      expect([for (final s in capped) s.centre], [
+        for (final s in plain) s.centre,
+      ]);
+    });
+
     test('is deterministic', () {
       List<ThumbnailSlot> run() => arrangeThumbnails(
         anchors: <ThumbnailAnchor>[

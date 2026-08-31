@@ -68,11 +68,24 @@ class ThumbnailSlot {
 /// thumbnails without overlap, it returns the least-bad arrangement rather
 /// than throwing or dropping any. A drawing that is slightly crowded is
 /// recoverable; a face that silently vanished is not.
+///
+/// [stem] is how far a thumbnail floats off its dot; [maxStem], when given,
+/// lets it float FURTHER — as far along its own direction as the canvas
+/// allows, up to that cap. Separation is what this buys: not-overlapping and
+/// far-apart are different properties, and only the second one is legible.
+/// Four faces of a boulder on a fixed stem sit on a circle of the ring's
+/// radius plus one stem, so they crowd into the middle of a phone screen with
+/// the whole outside of the canvas empty, and every relaxation pass can do
+/// about it is shuffle the pile. Pushing each one out to the edge of the box
+/// it is allowed to occupy spends that empty space on the gaps between them,
+/// which is the thing a reader actually reads. Leaving it null keeps the
+/// fixed stem, so a caller that wants a tight diagram still gets one.
 List<ThumbnailSlot> arrangeThumbnails({
   required List<ThumbnailAnchor> anchors,
   required Size canvas,
   Size thumbnail = const Size(64, 48),
   double stem = 52,
+  double? maxStem,
   double gap = 8,
   double margin = 6,
   int iterations = 90,
@@ -80,17 +93,6 @@ List<ThumbnailSlot> arrangeThumbnails({
   if (anchors.isEmpty) return const <ThumbnailSlot>[];
 
   final n = anchors.length;
-  final ideal = <Offset>[];
-  for (var i = 0; i < n; i++) {
-    final d = anchors[i].direction;
-    final length = d.distance;
-    final unit = length > 0
-        ? d / length
-        // No usable normal (a degenerate segment). Up is the one direction
-        // that never reads as "attached to the wrong part of the line".
-        : const Offset(0, -1);
-    ideal.add(anchors[i].base + unit * stem);
-  }
 
   // Half-extents including the gap: two thumbnails are clear of each other
   // exactly when their centres differ by more than this on either axis.
@@ -101,6 +103,32 @@ List<ThumbnailSlot> arrangeThumbnails({
   final maxX = math.max(minX, canvas.width - margin - thumbnail.width / 2);
   final minY = margin + thumbnail.height / 2;
   final maxY = math.max(minY, canvas.height - margin - thumbnail.height / 2);
+
+  final reach = math.max(stem, maxStem ?? stem);
+  final ideal = <Offset>[];
+  for (var i = 0; i < n; i++) {
+    final d = anchors[i].direction;
+    final length = d.distance;
+    final unit = length > 0
+        ? d / length
+        // No usable normal (a degenerate segment). Up is the one direction
+        // that never reads as "attached to the wrong part of the line".
+        : const Offset(0, -1);
+    ideal.add(
+      anchors[i].base +
+          unit *
+              _reachAlong(
+                base: anchors[i].base,
+                unit: unit,
+                stem: stem,
+                maxStem: reach,
+                minX: minX,
+                maxX: maxX,
+                minY: minY,
+                maxY: maxY,
+              ),
+    );
+  }
 
   Offset clamp(Offset p) => Offset(
     p.dx.clamp(minX, maxX).toDouble(),
@@ -172,6 +200,42 @@ List<ThumbnailSlot> arrangeThumbnails({
         size: thumbnail,
       ),
   ];
+}
+
+/// How far along [unit] a thumbnail centred on that ray can travel before its
+/// box leaves the canvas — clamped to `[stem, maxStem]`.
+///
+/// The box is already expressed as the min/max the CENTRE may take, so this
+/// is a plain ray-vs-slab intersection and never has to know about the
+/// thumbnail's size. A ray that runs parallel to both slabs (or a cap equal
+/// to the stem) has nothing to solve and returns the stem — the caller's
+/// `clamp` still pulls anything outside back in, so this can only ever make
+/// a thumbnail travel further, never put one off screen.
+double _reachAlong({
+  required Offset base,
+  required Offset unit,
+  required double stem,
+  required double maxStem,
+  required double minX,
+  required double maxX,
+  required double minY,
+  required double maxY,
+}) {
+  if (maxStem <= stem) return stem;
+  var limit = maxStem;
+  if (unit.dx > 0) {
+    limit = math.min(limit, (maxX - base.dx) / unit.dx);
+  } else if (unit.dx < 0) {
+    limit = math.min(limit, (minX - base.dx) / unit.dx);
+  }
+  if (unit.dy > 0) {
+    limit = math.min(limit, (maxY - base.dy) / unit.dy);
+  } else if (unit.dy < 0) {
+    limit = math.min(limit, (minY - base.dy) / unit.dy);
+  }
+  // A base already outside the box gives a negative limit; the stem floor is
+  // what stops that from folding the thumbnail back through its own dot.
+  return limit.isFinite ? math.max(stem, limit) : maxStem;
 }
 
 /// Where the leader line from [base] should stop: the point where it meets

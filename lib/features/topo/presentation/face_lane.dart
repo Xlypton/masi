@@ -391,16 +391,29 @@ class FaceMapPlan extends StatelessWidget {
         constraints.maxWidth,
         math.max(240, constraints.maxHeight),
       );
+      // The padding is DERIVED, not chosen: it is the band the photos
+      // themselves occupy outside the outline. Picked independently (it was
+      // 76, against a 58px stem and a 76px-wide thumbnail) the outline grows
+      // into the band and the photos land on top of the rock they are
+      // photographs of.
+      const thumbnail = Size(76, 58);
+      const stem = 58.0;
       final fit = LayoutPlaneFit.forBaseline(
         layout.baseline,
         size,
-        padding: 76,
+        padding: stem + thumbnail.width / 2 + 10,
       );
       final slots = arrangeThumbnails(
         anchors: LayoutBaselinePainter.anchorsFor(layout, fit),
         canvas: size,
-        thumbnail: const Size(76, 58),
-        stem: 58,
+        thumbnail: thumbnail,
+        stem: stem,
+        // Spend the screen on the gaps between the photos: each one floats
+        // out to the edge of the canvas it is allowed to reach, so four faces
+        // of a boulder fan around the outline instead of huddling one stem
+        // away from it. Capped rather than unbounded — past about this far
+        // the leader is longer than the thing it connects.
+        maxStem: stem * 2.2,
       );
       final byId = {for (final photo in photos) photo.id: photo};
 

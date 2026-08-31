@@ -1,6 +1,6 @@
 import 'package:drift/drift.dart' show Value;
 import 'package:drift/native.dart';
-import 'package:flutter/material.dart';
+import 'package:flutter/material.dart' hide Baseline;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -9,6 +9,7 @@ import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/application/face_layout_providers.dart';
+import 'package:masi/features/topo/domain/face_layout/baseline.dart';
 import 'package:masi/features/topo/domain/face_layout/layout_resolver.dart';
 import 'package:masi/features/topo/presentation/face_lane.dart';
 import 'package:masi/features/topo/presentation/photo_image.dart';
@@ -32,7 +33,11 @@ void main() {
 
   const wallId = 'wall-1';
 
-  Future<void> seedWall({required int photos, bool withGps = false}) async {
+  Future<void> seedWall({
+    required int photos,
+    bool withGps = false,
+    List<double>? bearings,
+  }) async {
     await db.into(db.areas).insert(
       AreasCompanion.insert(
         id: 'area-1',
@@ -79,7 +84,9 @@ void main() {
           captureLatitude: Value(withGps ? 47.0 + i * 0.0005 : null),
           captureLongitude: Value(withGps ? 12.0 + i * 0.0005 : null),
           captureAccuracyMeters: Value(withGps ? 4 : null),
-          captureBearingDegrees: Value(withGps ? i * 90.0 : null),
+          captureBearingDegrees: Value(
+            bearings != null ? bearings[i] : (withGps ? i * 90.0 : null),
+          ),
         ),
       );
     }
@@ -471,5 +478,100 @@ void main() {
     await tester.tap(find.byKey(const Key('face-map-face-photo-2')));
     await tester.pumpAndSettle();
     expect(selected?.id, 'photo-2');
+  });
+
+  /// The pile-up the user photographed a second time, and the reason the
+  /// first fix did not catch it: four photos of a boulder, every one of them
+  /// INSIDE its own outline and huddled around the middle of the screen with
+  /// the whole outside empty.
+  ///
+  /// It needs camera BEARINGS to reproduce. Without them a ring falls to a
+  /// geometric tie-break that already sent thumbnails outward, which is why
+  /// the ring test above passed on the broken build. With them, the old rule
+  /// followed the cameras' gaze — and a camera photographing a boulder looks
+  /// AT it, so every thumbnail was sent to the centre of the rock it is a
+  /// picture of. The numbers below are measured: on that build the four sat
+  /// 95px from the centre, 134px apart, spanning 62% of the plan.
+  testWidgets('four faces of a boulder fan AROUND the outline instead of '
+      'huddling inside it', (tester) async {
+    tester.view.physicalSize = const Size(390, 844);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    // Each camera stands at one corner of the ring and looks at the middle —
+    // which is what photographing a boulder IS.
+    await seedWall(photos: 4, bearings: const [45, 315, 225, 135]);
+    await (db.update(db.walls)..where((w) => w.id.equals(wallId))).write(
+      WallsCompanion(
+        baselineJson: Value(
+          Baseline(const [
+            LayoutPoint(-6, -6),
+            LayoutPoint(6, -6),
+            LayoutPoint(6, 6),
+            LayoutPoint(-6, 6),
+          ], closed: true).encode(),
+        ),
+      ),
+    );
+
+    final container = makeContainer();
+    addTearDown(container.dispose);
+    await tester.pumpWidget(
+      wrap(
+        container,
+        laneProbe(
+          (context, photos, layout) => SizedBox(
+            width: 374,
+            height: 520,
+            child: FaceMapPlan(
+              layout: layout,
+              photos: photos,
+              activePhotoId: 'photo-0',
+              routeCounts: const {},
+              onSelect: (_) {},
+              colors: MasiColors.of(context),
+            ),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final plan = tester.getRect(find.byKey(const Key('face-map-plan')));
+    final boxes = [
+      for (var i = 0; i < 4; i++)
+        tester.getRect(find.byKey(Key('face-map-face-photo-$i'))),
+    ];
+
+    var union = boxes.first;
+    for (final box in boxes) {
+      union = union.expandToInclude(box);
+
+      expect(
+        (box.center - plan.center).distance,
+        greaterThan(140),
+        reason: 'a photo sitting on the middle of the plan is a photo on top '
+            'of the rock it is a picture of',
+      );
+    }
+
+    for (var i = 0; i < boxes.length; i++) {
+      for (var j = i + 1; j < boxes.length; j++) {
+        expect(
+          (boxes[i].center - boxes[j].center).distance,
+          greaterThan(200),
+          reason: 'not-overlapping and far-apart are different properties, '
+              'and only the second one reads as four sides of a rock',
+        );
+      }
+    }
+
+    expect(
+      union.width,
+      greaterThan(plan.width * 0.85),
+      reason: 'the photos have a whole screen to spread across and are the '
+          'only thing on it',
+    );
   });
 }
