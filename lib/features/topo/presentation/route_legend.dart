@@ -333,7 +333,7 @@ class RouteLegend extends ConsumerWidget {
             // the panel into a wall of text. Everything here is display-only,
             // so it renders in read-only mode too — this is the surface a
             // climber reads a topo from.
-            subtitle: _buildRouteSubtitle(context, route, isSelected),
+            subtitle: _buildRouteSubtitle(context, route, isSelected, readOnly),
             // ONE control, not a row of them (user request, 2026-08-12: "the
             // route quick actions like hide and delete log ascent should be
             // in a longpress menu like the 3dot menu of the topos").
@@ -480,6 +480,7 @@ Widget? _buildRouteSubtitle(
   BuildContext context,
   TopoRoute route,
   bool isSelected,
+  bool readOnly,
 ) {
   final colors = MasiColors.of(context);
   final description = route.description?.trim();
@@ -489,8 +490,21 @@ Widget? _buildRouteSubtitle(
   final showStyle = isSelected && style != null && style.isNotEmpty;
   final hasChips = route.styleTags.isNotEmpty;
   final hasStars = (route.stars ?? 0) > 0;
+  // A route with no line of its own — what a guidebook import leaves when it
+  // could not read a polyline (`ImportWarningKind.unplacedGeometry`). It is
+  // invisible on the photo, so the legend is the ONLY place it can announce
+  // itself, and without that a climber sees an import "succeed" and then
+  // cannot find half of what it added. Shown on every such row, not just the
+  // selected one: the point is to spot them.
+  final isUnplaced = route.points.length < 2;
 
-  if (!hasChips && !hasStars && !showDescription && !showStyle) return null;
+  if (!hasChips &&
+      !hasStars &&
+      !showDescription &&
+      !showStyle &&
+      !isUnplaced) {
+    return null;
+  }
 
   final detailStyle = Theme.of(
     context,
@@ -502,6 +516,17 @@ Widget? _buildRouteSubtitle(
       crossAxisAlignment: CrossAxisAlignment.start,
       mainAxisSize: MainAxisSize.min,
       children: [
+        if (isUnplaced)
+          Text(
+            // An editor gets the instruction, because for them this is a
+            // to-do with a next step. A read-only viewer cannot draw it, so
+            // telling them to would be a dead end — they just get the fact.
+            readOnly ? 'No line drawn' : 'No line yet — select it, then draw',
+            key: Key('route-unplaced-${route.id}'),
+            style: detailStyle?.copyWith(fontStyle: FontStyle.italic),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         if (hasChips)
           Wrap(
             spacing: 4,

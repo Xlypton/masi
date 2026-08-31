@@ -92,6 +92,22 @@ SnackBar routeLoadFailureSnackBar(RouteLoadException error) {
 // theme-derived token the empty-state placeholder ([_buildEmptyState]) has
 // always used — so the canvas follows the theme like every other screen.
 
+/// Where the line currently on the canvas should be saved, when a route is
+/// selected that ALREADY has one and the two readings genuinely differ.
+///
+/// Only reachable from that one ambiguous case: with nothing selected, or
+/// with an unplaced route selected, there is exactly one sensible answer and
+/// `_handleCommitRoute` takes it without asking.
+enum _DraftTarget {
+  /// Replace the selected route's geometry, keeping its identity and
+  /// metadata.
+  selectedRoute,
+
+  /// Ignore the selection and commit a new, separately-numbered route — the
+  /// behaviour every commit had before a selection could claim the draft.
+  newRoute,
+}
+
 class TopoCanvasScreen extends ConsumerStatefulWidget {
   const TopoCanvasScreen({
     super.key,
@@ -434,14 +450,82 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   Future<void> _handleCommitRoute() async {
     if (widget.readOnly) return;
     final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+
+    // A SELECTED route can claim the line instead of a new one being made —
+    // see [DrawController.commitRoute]. Which of the two happens is settled
+    // here, because only one of the cases is ambiguous:
+    //
+    //  * Nothing selected -> a new route, as always.
+    //  * An UNPLACED route selected (the guidebook-import case this exists
+    //    for) -> it gets the line, with no prompt. Nothing is destroyed and
+    //    there is no second reading to choose between.
+    //  * A selected route that already HAS a line -> genuinely ambiguous, and
+    //    one of the answers overwrites work. Ask.
+    final target = notifier.pendingDraftTarget;
+    var replaceSelectedLine = false;
+    if (target != null && target.overwritesLine) {
+      final choice = await showMasiActionSheet<_DraftTarget>(
+        context,
+        title: 'Save this line to which route?',
+        message:
+            '${routeDisplayLabel(target.route)} already has a line. Saving to '
+            'it replaces that line; its name, grade and number stay.',
+        actions: [
+          MasiSheetAction(
+            key: const Key('topo-draft-target-replace'),
+            label: 'Replace ${routeDisplayLabel(target.route)}',
+            value: _DraftTarget.selectedRoute,
+            isDestructive: true,
+          ),
+          const MasiSheetAction(
+            key: Key('topo-draft-target-new'),
+            label: 'Add as a new route',
+            value: _DraftTarget.newRoute,
+          ),
+        ],
+      );
+      // Dismissing the sheet cancels the save outright rather than silently
+      // picking one of the two — the line stays on the canvas, undamaged, and
+      // the climber can press save again once they have decided.
+      if (!mounted || choice == null) return;
+      replaceSelectedLine = choice == _DraftTarget.selectedRoute;
+    }
+
+    // Which route (if any) the line is about to land on, resolved BEFORE the
+    // commit empties the draft that `pendingDraftTarget` depends on.
+    final targetId = (target != null && (replaceSelectedLine || !target.overwritesLine))
+        ? target.route.id
+        : null;
     final countBefore = ref
         .read(drawControllerProvider(widget.wallId))
         .routes
         .length;
-    await notifier.commitRoute();
+    await notifier.commitRoute(replaceSelectedLine: replaceSelectedLine);
     if (!mounted) return;
 
     final routes = ref.read(drawControllerProvider(widget.wallId)).routes;
+
+    if (targetId != null) {
+      // The line went onto a route that already existed, so there is no new
+      // route to name: it keeps the name, grade and number it already had,
+      // which is the entire reason it was there waiting to be drawn. No
+      // metadata sheet, just confirmation of where the line landed.
+      notifier.setMode(DrawMode.view);
+      for (final route in routes) {
+        if (route.id != targetId) continue;
+        // Only when the write actually landed. A refused one already reverts
+        // the geometry and raises its own message (UF-1), and two snackbars
+        // for one action is one message too many.
+        if (route.points.length >= 2) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Line saved to ${routeDisplayLabel(route)}')),
+          );
+        }
+        break;
+      }
+      return;
+    }
+
     if (routes.length <= countBefore) return;
 
     notifier.setMode(DrawMode.view);
@@ -1848,6 +1932,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                       // rebuilds whenever anything in the record changes,
                       // which includes entering and leaving draw mode.
                       hasCurrentLine: drawState.currentPoints.isNotEmpty,
+                      // Same one-shot read, same reason. Set ONLY for the
+                      // case that needs no prompt — an unplaced selected
+                      // route, which the ✓ will silently draw. With a placed
+                      // route selected the ✓ asks first, so promising a
+                      // destination here would be a lie.
+                      draftTargetLabel: drawState.selectedRouteIsUnplaced
+                          ? routeDisplayLabel(drawState.selectedRoute!)
+                          : null,
                     ),
                   ],
                 ),
@@ -2672,6 +2764,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     DrawController drawNotifier,
     DrawMode mode, {
     required bool hasCurrentLine,
+    String? draftTargetLabel,
   }) {
     // readOnly: no bottom chrome at all — the draw cluster is already
     // unreachable, since draw mode itself is unreachable (see
@@ -2726,7 +2819,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           // has no tooltip slot of its own) with the Key still on the button
           // itself, so `find.byKey`/`find.byTooltip` both keep working.
           Tooltip(
-            message: hasCurrentLine ? 'Save route' : 'Done editing',
+            // Names the DESTINATION when a selected route is about to claim
+            // the line, so "why did my line join route 5?" is answered before
+            // it happens rather than after.
+            message: !hasCurrentLine
+                ? 'Done editing'
+                : (draftTargetLabel == null
+                      ? 'Save route'
+                      : 'Save line to $draftTargetLabel'),
             child: MasiPendingButton.text(
               key: const Key('topo-commit-button'),
               onPressed: _handleFinishEditing,

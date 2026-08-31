@@ -602,6 +602,29 @@ class DrawState {
   /// The number to assign to the next committed route.
   final int nextNumber;
 
+  /// The currently selected route, or null when nothing is selected (or the
+  /// selection names a route that is no longer in [routes] — which
+  /// [DrawController.selectRoute] prevents, but which a caller reading a
+  /// stale snapshot could still see).
+  TopoRoute? get selectedRoute {
+    final id = selectedRouteId;
+    if (id == null) return null;
+    for (final route in routes) {
+      if (route.id == id) return route;
+    }
+    return null;
+  }
+
+  /// Whether [selectedRoute] is a route with no line of its own yet — the
+  /// state a guidebook import leaves behind when it could not read a polyline
+  /// ("this route is yours to draw", see `ImportWarningKind.unplacedGeometry`).
+  /// A commit against one of these PLACES it rather than replacing anything,
+  /// which is why the canvas may do it without asking.
+  bool get selectedRouteIsUnplaced {
+    final route = selectedRoute;
+    return route != null && route.points.length < 2;
+  }
+
   DrawState copyWith({
     DrawMode? mode,
     List<Offset>? currentPoints,
@@ -1307,8 +1330,32 @@ class DrawController extends Notifier<DrawState> {
   /// repository. The in-memory mutation above happens synchronously, before
   /// any `await`, so callers that don't await this method still observe the
   /// state change immediately (preserving pre-M3 unit test behavior).
-  Future<void> commitRoute() async {
+  ///
+  /// ## The selected route can claim the draft instead
+  ///
+  /// When [DrawState.selectedRoute] is a route with no line of its own — what
+  /// a guidebook import leaves behind when it could not read a polyline — the
+  /// draft is saved AS that route's line rather than as a new route. See
+  /// [_commitDraftIntoRouteAt] for why that is the only sensible reading, and
+  /// [pendingDraftTarget] for how a caller can tell in advance.
+  ///
+  /// A selected route that ALREADY has a line does NOT claim the draft unless
+  /// [replaceSelectedLine] is passed. Selecting a route is how markers, the
+  /// eraser and handle-dragging all pick their target, so a selection lingers
+  /// long after the climber stopped thinking about it — quietly overwriting a
+  /// drawn line on the strength of it would destroy work nobody asked to
+  /// touch. The canvas asks first and passes the answer here.
+  Future<void> commitRoute({bool replaceSelectedLine = false}) async {
     if (state.currentPoints.length < 2) return;
+
+    final targetIndex = state.routes.indexWhere(
+      (r) => r.id == state.selectedRouteId,
+    );
+    if (targetIndex != -1 &&
+        (replaceSelectedLine || state.routes[targetIndex].points.length < 2)) {
+      await _commitDraftIntoRouteAt(targetIndex);
+      return;
+    }
 
     final beforeCommit = state;
     final route = TopoRoute(
@@ -1344,6 +1391,139 @@ class DrawController extends Notifier<DrawState> {
       write: () => ref
           .read(routeRepositoryProvider)
           .upsertRoute(wallId, photoId, route),
+    );
+  }
+
+  /// The selected route a [commitRoute] right now could put the draft on, and
+  /// whether doing so would overwrite a line that route already has.
+  ///
+  /// Null when there is no draft worth committing or nothing is selected — in
+  /// both of those the commit makes a new route and there is nothing to ask.
+  ///
+  /// `overwritesLine: false` is the guidebook-import case and happens with no
+  /// prompt: an unplaced route gaining its line destroys nothing.
+  /// `overwritesLine: true` is the ambiguous one, and [commitRoute] REFUSES it
+  /// unless told otherwise — the canvas reads this, asks, and passes the
+  /// answer back as `replaceSelectedLine`.
+  ({TopoRoute route, bool overwritesLine})? get pendingDraftTarget {
+    if (state.currentPoints.length < 2) return null;
+    final route = state.selectedRoute;
+    if (route == null) return null;
+    return (route: route, overwritesLine: route.points.length >= 2);
+  }
+
+  /// Moves the draft ([DrawState.currentPoints]/[DrawState.currentSymbols])
+  /// onto the already-committed route at [index] instead of creating a new
+  /// one — the "draw the line for THIS route" path.
+  ///
+  /// ## Why a selection redirects the commit at all
+  ///
+  /// A guidebook import creates routes it could not place: the payload
+  /// carried a name and a grade but no readable polyline, so the route exists
+  /// with an empty `points` list and the review sheet says "this route is
+  /// yours to draw" (`ImportWarningKind.unplacedGeometry`). Until this path
+  /// existed there was no way to actually draw it: selecting the route and
+  /// drawing produced a SECOND, numbered-and-coloured route beside it, and
+  /// the imported one stayed empty forever. The selection is the only
+  /// statement of intent the climber can make here, so it is the one this
+  /// honours.
+  ///
+  /// ## Identity survives, exactly as it does for a handle drag
+  ///
+  /// [TopoRoute.id], [TopoRoute.number], [TopoRoute.colorIndex] and every
+  /// metadata field (name, grade, description, style, beta video) are
+  /// untouched — only the geometry changes — so an ascent already logged
+  /// against this route still resolves to it, and `RouteRepository
+  /// .upsertRoute` keys on `(photoId, number)` and UPDATES the existing row.
+  /// That is the whole point: the imported route keeps everything the import
+  /// gave it and gains the line.
+  ///
+  /// Existing markers are KEPT and the draft's are appended, rather than
+  /// replaced. A [TopoSymbol] is positioned in the photo's own percent space,
+  /// not relative to the line, so an anchor stays on the bolt it was put on
+  /// even when the line beneath it is redrawn. Dropping them would be a
+  /// silent delete of work this gesture never mentioned.
+  ///
+  /// Undo is one [EditRouteGeometryOp], the same op a handle drag pushes, so
+  /// one undo puts the route back the way it was — an unplaced route becomes
+  /// unplaced again rather than half-drawn.
+  Future<void> _commitDraftIntoRouteAt(int index) async {
+    final target = state.routes[index];
+
+    // A geometry-edit gesture still open on this route would otherwise flush
+    // LATER, diffing against a baseline that predates this commit and pushing
+    // a second, overlapping undo entry. Close it first so this call is the
+    // only thing describing the change.
+    if (_geometryEditRouteId == target.id) {
+      await endRouteGeometryEdit(target.id);
+      // The flush can fail its write and roll the route back, and the widget
+      // may be gone entirely. Re-resolve rather than trusting `index`.
+      if (!ref.mounted) return;
+      final reIndex = state.routes.indexWhere((r) => r.id == target.id);
+      if (reIndex == -1) return;
+      if (state.currentPoints.length < 2) return;
+      return _commitDraftIntoRouteAt(reIndex);
+    }
+
+    final beforeCommit = state;
+    final before = RouteGeometry.of(target);
+    final updated = target.copyWith(
+      points: [...state.currentPoints],
+      symbols: [...target.symbols, ...state.currentSymbols],
+    );
+    final after = RouteGeometry.of(updated);
+    if (after.sameAs(before)) return;
+
+    final routes = [...state.routes]..[index] = updated;
+    // FIX #9's filter, for the same reason [commitRoute] applies it: the
+    // draft's own AddPointOp/AddCurrentSymbolOp entries are consumed by this
+    // commit and would dangle against a now-empty draft. A committed-symbol
+    // op on some other route is unrelated and survives.
+    state = state.copyWith(
+      routes: routes,
+      currentPoints: const [],
+      currentSymbols: const [],
+      undoStack: [
+        ...state.undoStack.where((op) => !_isInProgressDraftOp(op)),
+        EditRouteGeometryOp(routeId: target.id, before: before, after: after),
+      ],
+      redoStack: state.redoStack.where((op) => !_isInProgressDraftOp(op)).toList(),
+    );
+
+    if (state.proposalOnlyGeometryEdits) {
+      // Someone else's topo (§3.2 of `ROUTE_EDITING_PLAN.md`). Drawing the
+      // line for one of their routes is a geometry SUGGESTION like any other:
+      // it stays in memory so it can be seen and refined, and never reaches
+      // disk. Baseline recorded once, so a second pass does not overwrite the
+      // owner's real geometry with this visit's intermediate state.
+      if (!state.pendingProposalBaselines.containsKey(target.id)) {
+        state = state.copyWith(
+          pendingProposalBaselines: {
+            ...state.pendingProposalBaselines,
+            target.id: before,
+          },
+        );
+      }
+      return;
+    }
+
+    final wallId = state.activeWallId;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
+    await _writeThrough(
+      // Reported as a commit rather than an edit because that is what the
+      // climber just did: they drew a line and pressed save. The copy for a
+      // refused commit is the one that fits.
+      operation: RouteWriteOperation.commitRoute,
+      optimistic: state,
+      // UF-1: the whole pre-commit snapshot, so a refused write hands the line
+      // back as a live draft (points, mid-draw markers and undo history
+      // included) AND puts the target route back to the geometry the database
+      // still holds. Nothing the climber drew is lost; only the save was.
+      rollbackTo: beforeCommit,
+      write: () => ref
+          .read(routeRepositoryProvider)
+          .upsertRoute(wallId, photoId, updated),
     );
   }
 
