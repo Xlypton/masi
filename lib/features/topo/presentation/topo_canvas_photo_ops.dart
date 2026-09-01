@@ -5,7 +5,7 @@ import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/topo/application/draw_controller.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
 import 'package:masi/features/topo/data/photo_write_exception.dart';
-import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_toast.dart';
 
 /// Holds the path of the currently selected image, or null if none.
 class SelectedImageNotifier extends Notifier<String?> {
@@ -152,16 +152,7 @@ Future<String> resolveAttachedPhotoPath(
 /// (`topos_screen.dart`'s `_handleNewTopo`) and the canvas add/replace-photo
 /// flow (`topo_canvas_screen.dart`'s `_attachPhotoAndLoad`).
 SnackBar photoWriteFailureSnackBar(PhotoWriteException error) {
-  return SnackBar(
-    content: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        MasiIcon('warning', size: 18),
-        const SizedBox(width: 8),
-        Flexible(child: Text(error.userMessage)),
-      ],
-    ),
-  );
+  return masiToast(error.userMessage, kind: MasiToastKind.error);
 }
 
 /// A [SnackBar] presenting [error]'s [RouteWriteException.userMessage] behind a
@@ -182,16 +173,7 @@ SnackBar photoWriteFailureSnackBar(PhotoWriteException error) {
 /// change. Follow `topo_canvas_screen.dart`'s existing `DrawState.mode`
 /// listener for the no-`fireImmediately` pattern.
 SnackBar routeWriteFailureSnackBar(RouteWriteException error) {
-  return SnackBar(
-    content: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        MasiIcon('warning', size: 18),
-        const SizedBox(width: 8),
-        Flexible(child: Text(error.userMessage)),
-      ],
-    ),
-  );
+  return masiToast(error.userMessage, kind: MasiToastKind.error);
 }
 
 /// Settles the canvas after a photo attach failed on its BYTE WRITE, and

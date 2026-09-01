@@ -11,6 +11,7 @@ import '../../../core/grades/grade_system.dart';
 import '../../../core/routes/route_styles.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_pending_icon_button.dart';
@@ -239,10 +240,9 @@ class _CommunityTopoDetailScreenState
       _likeInFlight = false;
       if (!mounted) return;
       setState(() => _likeOverride = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't save your like — please try again"),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't save your like — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
@@ -420,12 +420,14 @@ class _CommunityTopoDetailScreenState
       await ref
           .read(communityFactsServiceProvider)
           .stateGrade(routeId: entry.dbId, system: system, raw: picked);
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Noted — you think it is $picked.')),
+      messenger?.showMasiToast(
+        'Noted — you think it is $picked.',
+        kind: MasiToastKind.success,
       );
     } catch (error) {
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Could not record that. $error')),
+      messenger?.showMasiToast(
+        'Could not record that. $error',
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -445,16 +447,18 @@ class _CommunityTopoDetailScreenState
             severity: draft.severity,
             body: draft.body,
           );
-      messenger?.showSnackBar(
-        const SnackBar(content: Text('Reported. Thanks — that helps.')),
+      messenger?.showMasiToast(
+        'Reported. Thanks — that helps.',
+        kind: MasiToastKind.success,
       );
     } catch (error) {
       // Loud, not silent. There is no outbox behind this (decision D-4), so a
       // failure means nothing was recorded anywhere. A hazard report that sat
       // quietly on the device while somebody climbed past the loose block
       // would be far worse than an error message.
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Could not file that report. $error')),
+      messenger?.showMasiToast(
+        'Could not file that report. $error',
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -591,23 +595,24 @@ class _CommunityTopoDetailScreenState
       // record but left world-readable photo bytes behind is the exact W-2
       // failure, and a bare "Deleted" is how that stayed invisible.
       final missed = result.photoObjects - result.photoBytesRemoved;
-      messenger?.showSnackBar(
-        SnackBar(
-          content: Text(
-            missed == 0
-                ? 'Deleted — ${result.photoBytesRemoved} image(s) removed'
-                : 'Deleted, but $missed of ${result.photoObjects} image(s) '
-                      'could not be removed',
-          ),
-        ),
+      messenger?.showMasiToast(
+        missed == 0
+            ? 'Deleted — ${result.photoBytesRemoved} image(s) removed'
+            : 'Deleted, but $missed of ${result.photoObjects} image(s) '
+                  'could not be removed',
+        // A partial delete is not a success: the record is gone but
+        // world-readable bytes are still up there, which is the W-2 failure a
+        // green tick would hide.
+        kind: missed == 0 ? MasiToastKind.success : MasiToastKind.warning,
       );
       navigator.maybePop();
     } catch (error) {
       // Loud, not silent — an admin who believes a delete went through when
       // it did not is worse off than one who was told it failed (the same
       // stance `_reportTopo`/`_reportHazard` take on this same screen).
-      messenger?.showSnackBar(
-        SnackBar(content: Text("Couldn't delete that topo. $error")),
+      messenger?.showMasiToast(
+        "Couldn't delete that topo. $error",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -645,12 +650,14 @@ class _CommunityTopoDetailScreenState
             note: draft.note,
             routeId: draft.routeId,
           );
-      messenger?.showSnackBar(
-        const SnackBar(content: Text('Sent to the owner. Thanks.')),
+      messenger?.showMasiToast(
+        'Sent to the owner. Thanks.',
+        kind: MasiToastKind.success,
       );
     } catch (error) {
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Could not send that suggestion. $error')),
+      messenger?.showMasiToast(
+        'Could not send that suggestion. $error',
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -702,15 +709,17 @@ class _CommunityTopoDetailScreenState
             body: draft.body,
             duplicateOfId: draft.duplicateOfId,
           );
-      messenger?.showSnackBar(
-        const SnackBar(content: Text('Sent to a moderator. Thanks.')),
+      messenger?.showMasiToast(
+        'Sent to a moderator. Thanks.',
+        kind: MasiToastKind.success,
       );
     } catch (error) {
       // Loud. No outbox (decision D-4), so a failure means nothing was
       // recorded — and a reporter who believes they raised an alarm that never
       // left the device is worse off than one who was told it failed.
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Could not send that report. $error')),
+      messenger?.showMasiToast(
+        'Could not send that report. $error',
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -1221,12 +1230,9 @@ class _CommunityTopoDetailScreenState
                               ),
                               onPressed: canSubmit ? _submitComment : null,
                               onError: (error, stackTrace) =>
-                                  ScaffoldMessenger.of(context).showSnackBar(
-                                    const SnackBar(
-                                      content: Text(
-                                        "Couldn't post your comment — please try again",
-                                      ),
-                                    ),
+                                  ScaffoldMessenger.of(context).showMasiToast(
+                                    "Couldn't post your comment — please try again",
+                                    kind: MasiToastKind.error,
                                   ),
                             );
                           },

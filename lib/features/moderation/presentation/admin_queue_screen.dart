@@ -7,6 +7,7 @@ import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../application/duplicate_providers.dart';
 import '../../../core/db/database_provider.dart';
@@ -393,13 +394,15 @@ class _ChangeRowState extends ConsumerState<_ChangeRow> {
           .read(materialChangeServiceProvider)
           .resolve(widget.change.id);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Cleared')),
+      ScaffoldMessenger.of(context).showMasiToast(
+        'Cleared',
+        kind: MasiToastKind.success,
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't clear that")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't clear that",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -617,19 +620,17 @@ class _DeletionRowState extends ConsumerState<_DeletionRow> {
             note: note,
           );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            approve
+      ScaffoldMessenger.of(context).showMasiToast(
+        approve
                 ? '"${widget.request.wallName}" can now be deleted by its owner'
                 : 'Declined — "${widget.request.wallName}" stays',
-          ),
-        ),
+        kind: MasiToastKind.success,
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't record that decision")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't record that decision",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -882,22 +883,20 @@ class _QueueRowState extends ConsumerState<_QueueRow> {
           );
       if (!mounted) return;
       ref.invalidate(moderationQueueProvider);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            approve
+      ScaffoldMessenger.of(context).showMasiToast(
+        approve
                 ? '"${widget.entry.wallName}" is now public'
                 : '"${widget.entry.wallName}" was rejected',
-          ),
-        ),
+        kind: MasiToastKind.success,
       );
     } catch (_) {
       if (!mounted) return;
       // The RPC re-checks admin status server-side, so this is also what a
       // stale session looks like — say what happened rather than leaving the
       // row looking as if the tap did nothing.
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't record that decision")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't record that decision",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -1049,18 +1048,16 @@ class _ReportRowState extends ConsumerState<_ReportRow> {
           .read(reportServiceProvider)
           .resolve(reportId: report.id, uphold: true);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Linked to ${report.duplicateOfName ?? 'the other topo'} — '
+      ScaffoldMessenger.of(context).showMasiToast(
+        'Linked to ${report.duplicateOfName ?? 'the other topo'} — '
             'both are still published',
-          ),
-        ),
+        kind: MasiToastKind.success,
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't link those two")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't link those two",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -1104,20 +1101,18 @@ class _ReportRowState extends ConsumerState<_ReportRow> {
       // changed the state but removed none of the bytes is exactly W-2, and an
       // unqualified "Taken down" is what let that hide.
       final missed = result.photoObjects - result.photoBytesRemoved;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            missed == 0
-                ? 'Taken down — ${result.photoBytesRemoved} image(s) removed'
-                : 'Taken down, but $missed of ${result.photoObjects} image(s) '
-                      'could not be removed',
-          ),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        missed == 0
+            ? 'Taken down — ${result.photoBytesRemoved} image(s) removed'
+            : 'Taken down, but $missed of ${result.photoObjects} image(s) '
+                  'could not be removed',
+        kind: missed == 0 ? MasiToastKind.success : MasiToastKind.warning,
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't take that down")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't take that down",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -1128,15 +1123,15 @@ class _ReportRowState extends ConsumerState<_ReportRow> {
           .read(reportServiceProvider)
           .resolve(reportId: widget.report.id, uphold: uphold);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(uphold ? 'Report upheld' : 'Report dismissed'),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        uphold ? 'Report upheld' : 'Report dismissed',
+        kind: MasiToastKind.success,
       );
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't record that decision")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't record that decision",
+        kind: MasiToastKind.error,
       );
     }
   }

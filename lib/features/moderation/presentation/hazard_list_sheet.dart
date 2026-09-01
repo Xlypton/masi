@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../account/application/auth_providers.dart';
 import '../application/community_facts_providers.dart';
 import '../domain/community_facts.dart';
@@ -157,8 +158,9 @@ class HazardListSheet extends ConsumerWidget {
     } catch (error) {
       // Loud, not silent. There is no outbox behind this (decision D-4), so a
       // failure means nothing was recorded — saying so is the honest outcome.
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Could not update that hazard. $error')),
+      messenger?.showMasiToast(
+        'Could not update that hazard. $error',
+        kind: MasiToastKind.error,
       );
     }
   }

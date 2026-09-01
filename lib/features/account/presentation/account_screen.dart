@@ -20,6 +20,7 @@ import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_avatar.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
@@ -236,8 +237,9 @@ class _AccountScreenState extends ConsumerState<AccountScreen> {
       // didn't happen leaves the user signed in, which they need to be told.
       debugPrint('Sign out failed: $e\n$st');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't sign out — please try again")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't sign out — please try again",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -800,17 +802,19 @@ class _EditableAvatarState extends ConsumerState<_EditableAvatar> {
       await ref.read(profileRepositoryProvider).setMyAvatarUrl(next);
     } on AvatarPickException catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text(e.message)));
+        ScaffoldMessenger.of(context).showMasiToast(
+          e.message,
+          kind: MasiToastKind.error,
+        );
       }
     } catch (_) {
       // A picker that throws (permission denied, an unreadable file, a
       // platform channel hiccup) must not take the Account screen down with
       // it — the avatar simply stays what it was.
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("Couldn't update your photo.")),
+        ScaffoldMessenger.of(context).showMasiToast(
+          "Couldn't update your photo.",
+          kind: MasiToastKind.error,
         );
       }
     } finally {
@@ -906,13 +910,15 @@ class _SignedInBodyState extends ConsumerState<_SignedInBody> {
     try {
       await ref.read(profileRepositoryProvider).setMyDisplayName(name);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Display name saved.')),
+      ScaffoldMessenger.of(context).showMasiToast(
+        'Display name saved.',
+        kind: MasiToastKind.success,
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not save display name: $e')),
+      ScaffoldMessenger.of(context).showMasiToast(
+        'Could not save display name: $e',
+        kind: MasiToastKind.error,
       );
     } finally {
       if (mounted) {
@@ -1321,7 +1327,7 @@ class _InstallSection extends ConsumerWidget {
     final messenger = ScaffoldMessenger.of(context);
     final accepted = await pwaPromptInstall();
     if (accepted) {
-      messenger.showSnackBar(const SnackBar(content: Text('Installing…')));
+      messenger.showMasiToast('Installing…', kind: MasiToastKind.info);
     }
   }
 
@@ -1556,19 +1562,14 @@ class _StorageDiagnosticsSection extends ConsumerWidget {
         ),
       );
     } catch (e) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            "Couldn't copy diagnostics — select the values above to copy "
-            'them by hand ($e).',
-          ),
-        ),
+      messenger.showMasiToast(
+        "Couldn't copy diagnostics — select the values above to copy "
+        'them by hand ($e).',
+        kind: MasiToastKind.error,
       );
       return;
     }
-    messenger.showSnackBar(
-      const SnackBar(content: Text('Diagnostics copied.')),
-    );
+    messenger.showMasiToast('Diagnostics copied.', kind: MasiToastKind.success);
   }
 }
 

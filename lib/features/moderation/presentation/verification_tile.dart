@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../application/community_facts_providers.dart';
 
 /// "Does this topo match the rock?" — the community's confidence in a topo,
@@ -106,14 +107,16 @@ class VerificationTile extends ConsumerWidget {
       await ref
           .read(communityFactsServiceProvider)
           .verify(wallId: wallId, accurate: accurate);
-      messenger?.showSnackBar(
-        const SnackBar(content: Text('Thanks — that helps.')),
+      messenger?.showMasiToast(
+        'Thanks — that helps.',
+        kind: MasiToastKind.success,
       );
     } catch (error) {
       // Loud, not silent: there is no outbox behind this (D-4), so a failure
       // means nothing was recorded.
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Could not record that. $error')),
+      messenger?.showMasiToast(
+        'Could not record that. $error',
+        kind: MasiToastKind.error,
       );
     }
   }

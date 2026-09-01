@@ -7,6 +7,7 @@ import '../../../core/db/database_provider.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../topo/data/photo_path_resolution.dart';
 import '../application/geometry_providers.dart';
@@ -237,10 +238,9 @@ class _SuggestionRowState extends ConsumerState<_SuggestionRow> {
     try {
       await ref.read(suggestionServiceProvider).accept(widget.suggestion);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Applied — ${widget.suggestion.authorLabel} credited'),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        'Applied — ${widget.suggestion.authorLabel} credited',
+        kind: MasiToastKind.success,
       );
     } catch (_) {
       if (!mounted) return;
@@ -248,10 +248,9 @@ class _SuggestionRowState extends ConsumerState<_SuggestionRow> {
       // a failure here can mean the edit landed and only the bookkeeping did
       // not. Saying "couldn't apply" would be a guess; saying what to do next
       // is not.
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't finish that — try again in a moment"),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't finish that — try again in a moment",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -260,13 +259,12 @@ class _SuggestionRowState extends ConsumerState<_SuggestionRow> {
     try {
       await ref.read(suggestionServiceProvider).reject(widget.suggestion);
       if (!mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('Declined')));
+      ScaffoldMessenger.of(context).showMasiToast('Declined', kind: MasiToastKind.success);
     } catch (_) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't record that decision")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't record that decision",
+        kind: MasiToastKind.error,
       );
     }
   }

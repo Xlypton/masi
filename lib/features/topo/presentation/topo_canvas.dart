@@ -21,6 +21,7 @@ import 'package:masi/features/topo/presentation/photo_image.dart';
 import 'package:masi/features/topo/presentation/photo_loading_fill.dart';
 import 'package:masi/features/topo/presentation/route_palette.dart';
 import 'package:masi/features/topo/presentation/topo_painter.dart';
+import 'package:masi/shared/presentation/masi_toast.dart';
 
 /// Maps each [SymbolType] that has a dedicated masi brand glyph to its SVG
 /// asset name suffix (`assets/icons/masi/masi_<name>.svg`) — the SAME
@@ -1147,11 +1148,10 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // a legend row. Refusing SILENTLY is the part worth avoiding: the
       // climber taps a handle with the eraser, watches nothing happen, and has
       // no way to tell a floor from a broken tool.
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('A route needs at least two points. Delete the route '
-              'instead to remove it.'),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        'A route needs at least two points. Delete the route '
+              'instead to remove it.',
+        kind: MasiToastKind.warning,
       );
       return;
     }
@@ -1267,10 +1267,9 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // have been unmounted while that await was in flight.
       if (!mounted) return;
       if (outcome == SymbolPlacementOutcome.noRouteAvailable) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Draw a route first to place symbols'),
-          ),
+        ScaffoldMessenger.of(context).showMasiToast(
+          'Draw a route first to place symbols',
+          kind: MasiToastKind.info,
         );
       }
       return;

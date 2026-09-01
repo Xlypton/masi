@@ -5,6 +5,7 @@ import '../../../app/theme.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../application/moderation_providers.dart';
 import '../application/topo_version_providers.dart';
@@ -199,16 +200,18 @@ class TopoHistorySheet extends ConsumerWidget {
       final routes = await ref
           .read(topoVersionServiceProvider)
           .revert(wallId: wallId, versionId: version.id);
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Restored — $routes route'
-            '${routes == 1 ? '' : 's'}')),
+      messenger?.showMasiToast(
+        'Restored — $routes route'
+            '${routes == 1 ? '' : 's'}',
+        kind: MasiToastKind.success,
       );
     } catch (error) {
       // Loud. An admin who believes a vandalised topo has been repaired when
       // it has not is the single worst outcome this whole phase exists to
       // prevent.
-      messenger?.showSnackBar(
-        SnackBar(content: Text('Could not restore that version. $error')),
+      messenger?.showMasiToast(
+        'Could not restore that version. $error',
+        kind: MasiToastKind.error,
       );
     }
   }

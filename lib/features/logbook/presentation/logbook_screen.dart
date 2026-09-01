@@ -14,6 +14,7 @@ import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../application/ascents_providers.dart';
@@ -459,10 +460,9 @@ class _LogbookRowState extends ConsumerState<_LogbookRow> {
       );
     } catch (error) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text("Couldn't delete this ascent — please try again"),
-          ),
+        ScaffoldMessenger.of(context).showMasiToast(
+          "Couldn't delete this ascent — please try again",
+          kind: MasiToastKind.error,
         );
       }
     } finally {

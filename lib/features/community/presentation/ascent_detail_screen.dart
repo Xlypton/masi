@@ -6,6 +6,7 @@ import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
 import '../../account/application/auth_providers.dart';
@@ -98,10 +99,9 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
       // Roll the glyph back to whatever the provider says, and say so — an
       // optimistic update that silently reverts is worse than no update.
       setState(() => _likeOverride = null);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't save your like — please try again"),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't save your like — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
@@ -236,13 +236,14 @@ class _AscentDetailScreenState extends ConsumerState<AscentDetailScreen> {
           .read(adminDeleteServiceProvider)
           .deleteAscent(ascentId: ascentId);
       if (!mounted) return;
-      messenger?.showSnackBar(const SnackBar(content: Text('Ascent deleted')));
+      messenger?.showMasiToast('Ascent deleted', kind: MasiToastKind.success);
       navigator.maybePop();
     } catch (error) {
       // Loud, not silent — an admin who believes a delete went through when
       // it did not is worse off than one who was told it failed.
-      messenger?.showSnackBar(
-        SnackBar(content: Text("Couldn't delete that ascent. $error")),
+      messenger?.showMasiToast(
+        "Couldn't delete that ascent. $error",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -555,12 +556,9 @@ class _AscentDetailBody extends ConsumerWidget {
                   ),
                   onPressed: canSubmit ? onSubmitComment : null,
                   onError: (error, stackTrace) =>
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(
-                          content: Text(
-                            "Couldn't post your comment — please try again",
-                          ),
-                        ),
+                      ScaffoldMessenger.of(context).showMasiToast(
+                        "Couldn't post your comment — please try again",
+                        kind: MasiToastKind.error,
                       ),
                 );
               },

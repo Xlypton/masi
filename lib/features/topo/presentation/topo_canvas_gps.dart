@@ -5,7 +5,7 @@ import 'package:masi/core/location/location_service.dart';
 import 'package:masi/core/location/photo_gps.dart';
 import 'package:masi/features/library/data/library_crud_repository.dart';
 import 'package:masi/features/topo/data/photo_repository.dart';
-import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_toast.dart';
 
 /// The outcome of a single [captureWallGpsFromPhoto] call, surfaced to the
 /// caller so it can tell the user whether (and how) a location was found
@@ -158,16 +158,11 @@ String gpsCaptureResultMessage(GpsCaptureResult result) => switch (result) {
 /// plainly rather than implying a location was set.
 SnackBar gpsCaptureResultSnackBar(GpsCaptureResult result) {
   final foundLocation = result != GpsCaptureResult.none;
-  return SnackBar(
-    content: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        if (foundLocation) ...[
-          MasiIcon('pin', size: 18),
-          const SizedBox(width: 8),
-        ],
-        Flexible(child: Text(gpsCaptureResultMessage(result))),
-      ],
-    ),
+  return masiToast(
+    gpsCaptureResultMessage(result),
+    // "No location found in photo" is not a failure — nothing was asked for
+    // and nothing was lost — so it stays neutral rather than borrowing the
+    // red the write failures use.
+    kind: foundLocation ? MasiToastKind.success : MasiToastKind.info,
   );
 }

@@ -9,6 +9,7 @@ import '../data/library_crud_repository.dart';
 import '../../../shared/presentation/masi_pending_button.dart' show MasiBusyReporter;
 import 'crud_list_scaffold.dart';
 import 'move_target_picker.dart';
+import '../../../shared/presentation/masi_toast.dart';
 
 /// Lists the non-deleted [SectorRef]s scoped to a single area, and lets the
 /// user create/rename/delete sectors and drill into a wall list.
@@ -116,16 +117,18 @@ class SectorsScreen extends ConsumerWidget {
     } catch (e, st) {
       debugPrint('Failed to move sector: $e\n$st');
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't move — please try again")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't move — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
     if (!context.mounted) return;
 
     final targetArea = candidates.firstWhere((a) => a.id == targetAreaId);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Moved to ${targetArea.name}')),
+    ScaffoldMessenger.of(context).showMasiToast(
+      'Moved to ${targetArea.name}',
+      kind: MasiToastKind.success,
     );
   }
 }

@@ -12,6 +12,7 @@ import '../data/guidebook_import_applier.dart';
 import '../data/guidebook_import_codec.dart';
 import '../domain/guidebook_import.dart';
 import '../domain/guidebook_import_prompt.dart';
+import '../../../shared/presentation/masi_toast.dart';
 
 /// Import a photographed guidebook page onto the topo the user is editing.
 ///
@@ -107,11 +108,10 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
   Future<void> _copyPrompt() async {
     await Clipboard.setData(const ClipboardData(text: kGuidebookImportPrompt));
     if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        key: Key('import-prompt-copied'),
-        content: Text('Prompt copied. Paste it in your chat app with both photos.'),
-      ),
+    ScaffoldMessenger.of(context).showMasiToast(
+      'Prompt copied. Paste it in your chat app with both photos.',
+      kind: MasiToastKind.success,
+      key: Key('import-prompt-copied'),
     );
   }
 
@@ -128,8 +128,9 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
       mode: LaunchMode.externalApplication,
     );
     if (!launched && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't open that app.")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't open that app.",
+        kind: MasiToastKind.error,
       );
     }
   }
@@ -174,11 +175,10 @@ class _GuidebookImportSheetState extends ConsumerState<_GuidebookImportSheet> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          key: Key('import-apply-failed'),
-          content: Text("Couldn't add those routes. Nothing was changed."),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't add those routes. Nothing was changed.",
+        kind: MasiToastKind.error,
+        key: Key('import-apply-failed'),
       );
     }
   }

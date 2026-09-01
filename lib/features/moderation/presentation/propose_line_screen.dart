@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../app/theme.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../topo/domain/topo_route.dart';
 import '../application/geometry_providers.dart';
@@ -92,7 +93,7 @@ class _ProposeLineScreenState extends ConsumerState<ProposeLineScreen> {
     // deleted the route, or a pull removed it. Sending anyway would file a
     // proposal against nothing.
     if (replacing != null && routeId == null) {
-      _say("That route isn't there any more");
+      _say("That route isn't there any more", kind: MasiToastKind.warning);
       return;
     }
 
@@ -110,21 +111,24 @@ class _ProposeLineScreenState extends ConsumerState<ProposeLineScreen> {
           );
       if (!mounted) return;
       Navigator.of(context).pop();
-      _say('Sent — the owner decides whether to use it');
+      _say('Sent — the owner decides whether to use it',
+          kind: MasiToastKind.success);
     } catch (error) {
       if (!mounted) return;
       // The server's refusals are written to be read by the person who drew
       // the line ("that line has too many points"), so show what it said
       // rather than a generic failure that hides an actionable reason.
-      _say(_reason(error));
+      _say(_reason(error), kind: MasiToastKind.error);
     }
   }
 
-  void _say(String message) {
+  /// Both outcomes of [_send] speak through here, so the kind is a required
+  /// argument rather than a default: the two call sites are a success and a
+  /// failure, and a helper that quietly picked one for them is how they would
+  /// end up looking identical again.
+  void _say(String message, {required MasiToastKind kind}) {
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showMasiToast(message, kind: kind);
   }
 
   static String _reason(Object error) {

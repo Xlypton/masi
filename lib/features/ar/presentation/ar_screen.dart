@@ -26,6 +26,7 @@ import 'package:masi/features/topo/presentation/canvas_chrome.dart';
 import 'package:masi/features/topo/presentation/grade_colors.dart';
 import 'package:masi/features/topo/presentation/route_palette.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_toast.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 
 /// The `PlatformView` type used for the native camera/AR surface on iOS.
@@ -888,11 +889,10 @@ class _ArAlignmentStageState extends ConsumerState<ArAlignmentStage> {
             _wasTracking = false;
             ref.read(arLockedProvider.notifier).toggle();
           } else {
-            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-              const SnackBar(
-                content: Text('Hold steady on the wall, then tap Lock again.'),
-                duration: Duration(seconds: 2),
-              ),
+            ScaffoldMessenger.maybeOf(context)?.showMasiToast(
+              'Hold steady on the wall, then tap Lock again.',
+              kind: MasiToastKind.warning,
+              duration: Duration(seconds: 2),
             );
           }
         }

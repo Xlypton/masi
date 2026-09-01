@@ -10,6 +10,7 @@ import '../../account/application/profile_providers.dart';
 import '../application/ascents_providers.dart';
 import '../data/ascents_repository.dart';
 import 'logbook_screen.dart' show styleLabel;
+import '../../../shared/presentation/masi_toast.dart';
 
 /// Modal sheet for logging an ascent of one route: an [AscentStyle] picker,
 /// an optional notes field, and a save action that stamps `climbedAt` to
@@ -173,12 +174,9 @@ class _LogAscentSheetState extends ConsumerState<LogAscentSheet> {
             key: Key('${widget.keyPrefix}-ascent-save'),
             expand: true,
             onPressed: _save,
-            onError: (error, stackTrace) => ScaffoldMessenger.of(
-              context,
-            ).showSnackBar(
-              const SnackBar(
-                content: Text("Couldn't log this ascent — please try again"),
-              ),
+            onError: (error, stackTrace) => ScaffoldMessenger.of(context).showMasiToast(
+              "Couldn't log this ascent — please try again",
+              kind: MasiToastKind.error,
             ),
             child: const Text('Save'),
           ),

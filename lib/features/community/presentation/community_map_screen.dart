@@ -15,6 +15,7 @@ import '../../../core/map/masi_tile_caching_provider.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../core/location/geocoding_service.dart';
@@ -672,8 +673,9 @@ class _MapViewState extends ConsumerState<_MapView> {
     final location = await ref.read(locationServiceProvider).currentLocation();
     if (!mounted) return;
     if (location == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location unavailable')),
+      ScaffoldMessenger.of(context).showMasiToast(
+        'Location unavailable',
+        kind: MasiToastKind.warning,
       );
       return;
     }

@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../features/topo/application/community_photo_clear_controller.dart';
 import '../shared/presentation/masi_dialogs.dart';
 import '../shared/presentation/masi_icon.dart';
+import '../shared/presentation/masi_toast.dart';
 import 'shell_notice_dismissal.dart';
 import 'theme.dart';
 
@@ -271,12 +272,23 @@ class _StoragePressureBannerState extends ConsumerState<StoragePressureBanner> {
 
     final status = ref.read(communityPhotoClearProvider);
     final outcome = controller.lastOutcome;
-    final message = status == CommunityPhotoClearStatus.failed || outcome == null
+    final failed = status == CommunityPhotoClearStatus.failed || outcome == null;
+    final nothingToClear = !failed && outcome.clearedKeys.isEmpty;
+    final message = failed
         ? "Couldn't clear cached photos — try again."
-        : outcome.clearedKeys.isEmpty
+        : nothingToClear
         ? 'Nothing to clear.'
         : 'Cleared ${outcome.clearedKeys.length} cached '
               '${outcome.clearedKeys.length == 1 ? 'photo' : 'photos'}.';
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+    ScaffoldMessenger.of(context).showMasiToast(
+      message,
+      // "Nothing to clear" is neither a win nor a fault — the user asked for
+      // space back and there was none to give, which is a plain fact.
+      kind: failed
+          ? MasiToastKind.error
+          : nothingToClear
+          ? MasiToastKind.info
+          : MasiToastKind.success,
+    );
   }
 }

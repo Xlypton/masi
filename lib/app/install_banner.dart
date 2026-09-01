@@ -9,6 +9,7 @@ import '../features/account/application/pwa_install_providers.dart';
 import '../features/account/application/pwa_install_types.dart';
 import '../features/topo/presentation/canvas_chrome.dart' show kMasiAmbientShadow;
 import '../shared/presentation/masi_icon.dart';
+import '../shared/presentation/masi_toast.dart';
 import 'theme.dart';
 
 /// A compact, dismissible "Add to Home Screen" banner mounted at the top of
@@ -192,7 +193,7 @@ class _InstallBannerState extends ConsumerState<InstallBanner> {
     final messenger = ScaffoldMessenger.of(context);
     final accepted = await pwaPromptInstall();
     if (accepted) {
-      messenger.showSnackBar(const SnackBar(content: Text('Installing…')));
+      messenger.showMasiToast('Installing…', kind: MasiToastKind.info);
     }
   }
 

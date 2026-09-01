@@ -13,6 +13,7 @@ import '../../../core/location/geocoding_service.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../backup/application/reachability_providers.dart';
 import '../../community/presentation/community_screen.dart'
@@ -460,8 +461,9 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     }
     if (!mounted) return;
     if (location == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Location unavailable')),
+      ScaffoldMessenger.of(context).showMasiToast(
+        'Location unavailable',
+        kind: MasiToastKind.warning,
       );
       return;
     }

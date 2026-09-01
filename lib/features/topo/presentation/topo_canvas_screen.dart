@@ -45,6 +45,7 @@ import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:masi/shared/presentation/bottom_safe_inset.dart';
 import 'package:masi/shared/presentation/masi_dialogs.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
+import 'package:masi/shared/presentation/masi_toast.dart';
 import 'package:masi/shared/presentation/masi_loading_gate.dart';
 import 'package:masi/shared/presentation/masi_loading_indicator.dart';
 import 'package:masi/shared/presentation/masi_pending_button.dart';
@@ -74,16 +75,7 @@ export 'topo_canvas_photo_ops.dart';
 /// routes, so hoisting this one would move it away from its only caller for
 /// no gain.
 SnackBar routeLoadFailureSnackBar(RouteLoadException error) {
-  return SnackBar(
-    content: Row(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        MasiIcon('warning', size: 18),
-        const SizedBox(width: 8),
-        Flexible(child: Text(error.userMessage)),
-      ],
-    ),
-  );
+  return masiToast(error.userMessage, kind: MasiToastKind.error);
 }
 
 // Theme-follow fix: the canvas backdrop used to be a hardcoded near-black
@@ -518,10 +510,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         // the geometry and raises its own message (UF-1), and two snackbars
         // for one action is one message too many.
         if (route.points.length >= 2) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Line saved to ${routeDisplayLabel(route)}'),
-            ),
+          ScaffoldMessenger.of(context).showMasiToast(
+            'Line saved to ${routeDisplayLabel(route)}',
+            kind: MasiToastKind.success,
           );
         }
         break;
@@ -608,11 +599,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         .where((r) => r.number == climb.number)
         .any((r) => r.points.length >= 2);
     if (!saved) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        key: const Key('topo-link-climb-saved'),
-        content: Text('${routeDisplayLabel(climb)} is on this photo too.'),
-      ),
+    ScaffoldMessenger.of(context).showMasiToast(
+      '${routeDisplayLabel(climb)} is on this photo too.',
+      kind: MasiToastKind.success,
+      key: const Key('topo-link-climb-saved'),
     );
   }
 
@@ -747,10 +737,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
     if (!mounted) return;
     if (dbId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Route is still saving — try again in a moment.'),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        'Route is still saving — try again in a moment.',
+        kind: MasiToastKind.warning,
       );
       return;
     }
@@ -843,13 +832,10 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     if (!mounted) return;
 
     final drawn = result.unplaced > 0 ? ' · ${result.unplaced} to draw' : '';
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        key: const Key('topo-import-applied'),
-        content: Text(
-          'Added ${result.added} route${result.added == 1 ? '' : 's'}$drawn',
-        ),
-      ),
+    ScaffoldMessenger.of(context).showMasiToast(
+      'Added ${result.added} route${result.added == 1 ? '' : 's'}$drawn',
+      kind: MasiToastKind.success,
+      key: const Key('topo-import-applied'),
     );
   }
 
@@ -876,18 +862,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     } catch (e, st) {
       debugPrint('Failed to set topo location: $e\n$st');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't save location — please try again"),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't save location — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
     if (!mounted) return;
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Location saved')));
+    ScaffoldMessenger.of(context).showMasiToast('Location saved', kind: MasiToastKind.success);
   }
 
   /// Lets the user choose Camera or Library (via [showPhotoSourceSheet]'s
@@ -1311,17 +1294,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     } catch (e, st) {
       debugPrint('Failed to set cover photo ${photo.id}: $e\n$st');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't update cover photo — please try again"),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't update cover photo — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Cover photo updated')));
+    ScaffoldMessenger.of(context).showMasiToast('Cover photo updated', kind: MasiToastKind.success);
   }
 
   /// U4 (manage menu): deletes [photo] (and, via
@@ -1376,17 +1356,14 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     } catch (e, st) {
       debugPrint('Failed to delete photo ${photo.id}: $e\n$st');
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't delete photo — please try again"),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't delete photo — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
     if (!mounted) return;
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Photo deleted')));
+    ScaffoldMessenger.of(context).showMasiToast('Photo deleted', kind: MasiToastKind.success);
     if (!wasActiveOrInFlight) return;
 
     final remaining = await ref
@@ -2305,24 +2282,20 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     }
     final messenger = ScaffoldMessenger.of(context);
     if (failure != null) {
-      messenger.showSnackBar(
-        SnackBar(
-          content: Text(
-            sent.isEmpty
+      messenger.showMasiToast(
+        sent.isEmpty
                 ? 'That could not be sent. Your changes are still here — try '
                       'again.'
                 : 'Sent ${sent.length}, but the rest could not be sent. Those '
                       'changes are still here — try again.',
-          ),
-        ),
+        kind: MasiToastKind.error,
       );
       return;
     }
-    messenger.showSnackBar(
-      const SnackBar(
-        key: Key('topo-proposal-sent'),
-        content: Text('Sent to the owner'),
-      ),
+    messenger.showMasiToast(
+      'Sent to the owner',
+      kind: MasiToastKind.success,
+      key: Key('topo-proposal-sent'),
     );
   }
 

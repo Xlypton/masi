@@ -674,9 +674,10 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     } catch (e, st) {
       debugPrint('Topo write failed: $e\n$st');
       if (!context.mounted) return null;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(failureMessage)));
+      ScaffoldMessenger.of(context).showMasiToast(
+        failureMessage,
+        kind: MasiToastKind.error,
+      );
       return null;
     }
   }
@@ -748,10 +749,9 @@ class _TopoRowState extends ConsumerState<_TopoRow>
       debugPrint('Failed to read move targets: $e\n$st');
       reportBusy(false);
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't load where to move this — please try again"),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't load where to move this — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
@@ -784,16 +784,18 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     } catch (e, st) {
       debugPrint('Failed to move topo: $e\n$st');
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't move — please try again")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't move — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
     if (!context.mounted) return;
 
     final targetSector = candidates.firstWhere((s) => s.id == targetSectorId);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Moved to ${targetSector.name}')),
+    ScaffoldMessenger.of(context).showMasiToast(
+      'Moved to ${targetSector.name}',
+      kind: MasiToastKind.success,
     );
   }
 
@@ -986,14 +988,11 @@ class _TopoRowState extends ConsumerState<_TopoRow>
       () => ref.read(withdrawalServiceProvider).cancel(topo.wallId),
     );
     if (state == null || !context.mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          state == 'pending'
+    ScaffoldMessenger.of(context).showMasiToast(
+      state == 'pending'
               ? 'Sent back for review'
               : 'Still public — withdrawal cancelled',
-        ),
-      ),
+      kind: MasiToastKind.success,
     );
   }
 
@@ -1065,16 +1064,15 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     } catch (e, st) {
       debugPrint('Failed to set topo location: $e\n$st');
       if (!context.mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Couldn't save location — please try again")),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't save location — please try again",
+        kind: MasiToastKind.error,
       );
       return;
     }
     if (!context.mounted) return;
 
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(const SnackBar(content: Text('Location saved')));
+    ScaffoldMessenger.of(context).showMasiToast('Location saved', kind: MasiToastKind.success);
   }
 
   /// Whether deletion is still gated on an admin, and says so — returning true
@@ -1125,10 +1123,9 @@ class _TopoRowState extends ConsumerState<_TopoRow>
     if (status == 'approved') return false; // cleared — carry on and delete
 
     if (readFailed) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text("Couldn't check whether deletion was approved"),
-        ),
+      ScaffoldMessenger.of(context).showMasiToast(
+        "Couldn't check whether deletion was approved",
+        kind: MasiToastKind.error,
       );
       return true;
     }
@@ -1166,8 +1163,9 @@ class _TopoRowState extends ConsumerState<_TopoRow>
       () => ref.read(moderationRemoteProvider).requestDeletion(topo.wallId),
     );
     if (!context.mounted) return true;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Asked a moderator to review it')),
+    ScaffoldMessenger.of(context).showMasiToast(
+      'Asked a moderator to review it',
+      kind: MasiToastKind.success,
     );
     return true;
   }
@@ -1407,21 +1405,19 @@ class _CommunityProximityRow extends ConsumerWidget {
       // delete that removed the record but left world-readable photo bytes
       // behind is exactly the failure a bare "Deleted" hides.
       final missed = result.photoObjects - result.photoBytesRemoved;
-      messenger?.showSnackBar(
-        SnackBar(
-          content: Text(
-            missed == 0
-                ? 'Deleted — ${result.photoBytesRemoved} image(s) removed'
-                : 'Deleted, but $missed of ${result.photoObjects} image(s) '
-                      'could not be removed',
-          ),
-        ),
+      messenger?.showMasiToast(
+        missed == 0
+            ? 'Deleted — ${result.photoBytesRemoved} image(s) removed'
+            : 'Deleted, but $missed of ${result.photoObjects} image(s) '
+                  'could not be removed',
+        kind: missed == 0 ? MasiToastKind.success : MasiToastKind.warning,
       );
     } catch (error) {
       // Loud, not silent — an admin who believes a delete went through when it
       // did not is worse off than one who was told it failed.
-      messenger?.showSnackBar(
-        SnackBar(content: Text("Couldn't delete that topo. $error")),
+      messenger?.showMasiToast(
+        "Couldn't delete that topo. $error",
+        kind: MasiToastKind.error,
       );
     }
   }

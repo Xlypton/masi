@@ -5,6 +5,7 @@ import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_avatar.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/profile_providers.dart';
 import '../../moderation/application/moderation_providers.dart';
@@ -171,13 +172,14 @@ class CommentRow extends ConsumerWidget {
           .read(adminDeleteServiceProvider)
           .deleteComment(commentId: commentId);
       if (!context.mounted) return;
-      messenger?.showSnackBar(const SnackBar(content: Text('Comment deleted')));
+      messenger?.showMasiToast('Comment deleted', kind: MasiToastKind.success);
     } catch (error) {
       // Loud, not silent — an admin who believes a delete went through when
       // it did not is worse off than one who was told it failed.
       if (!context.mounted) return;
-      messenger?.showSnackBar(
-        SnackBar(content: Text("Couldn't delete that comment. $error")),
+      messenger?.showMasiToast(
+        "Couldn't delete that comment. $error",
+        kind: MasiToastKind.error,
       );
     }
   }

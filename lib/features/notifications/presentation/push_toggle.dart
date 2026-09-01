@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../app/theme.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../account/application/auth_providers.dart';
 import '../../account/application/pwa_install_providers.dart';
 import '../../account/application/pwa_install_types.dart';
@@ -113,12 +114,9 @@ class PushToggle extends ConsumerWidget {
                         }
                         final ok = await notifier.enable();
                         if (!ok && context.mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(
-                              content: Text(
-                                "Couldn't turn on notifications for this device",
-                              ),
-                            ),
+                          ScaffoldMessenger.of(context).showMasiToast(
+                            "Couldn't turn on notifications for this device",
+                            kind: MasiToastKind.error,
                           );
                         }
                       },

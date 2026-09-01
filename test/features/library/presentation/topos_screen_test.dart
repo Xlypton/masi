@@ -3177,9 +3177,12 @@ void main() {
         // NOT take it away — a SnackBar's `duration` is a plain `Timer`, which
         // schedules no frame, so `pumpAndSettle` returns with the bar fully
         // shown (the same property `_drainNoSettle`'s doc relies on above).
-        // Advance past that 4s timer and settle the exit animation so the
-        // retry tap lands on the button rather than on the SnackBar.
-        await tester.pump(const Duration(seconds: 5));
+        // Advance past that timer and settle the exit animation so the retry
+        // tap lands on the button rather than on the SnackBar. Seven seconds,
+        // not five: this is a MASI error toast, which stays up for six
+        // (`masiToastDuration`) because a failure the user misses is work
+        // they will believe was saved.
+        await tester.pump(const Duration(seconds: 7));
         await tester.pumpAndSettle();
         expect(find.byType(SnackBar), findsNothing);
 
@@ -3308,7 +3311,7 @@ void main() {
 
         // Clear the SnackBar off the FAB before retrying (see the L3
         // re-entrancy test above for why a plain pumpAndSettle leaves it up).
-        await tester.pump(const Duration(seconds: 5));
+        await tester.pump(const Duration(seconds: 7));
         await tester.pumpAndSettle();
 
         await tester.tap(find.byKey(const Key('topos-new-topo')));

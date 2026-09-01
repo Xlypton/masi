@@ -8,6 +8,7 @@ import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
 import '../../../shared/presentation/masi_pending_icon_button.dart';
 import '../../../shared/presentation/masi_skeleton.dart';
@@ -329,9 +330,10 @@ class CrudListScaffold<T> extends ConsumerWidget {
     } catch (e, st) {
       debugPrint('$entityKey write failed: $e\n$st');
       if (!context.mounted) return;
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(SnackBar(content: Text(failureMessage)));
+      ScaffoldMessenger.of(context).showMasiToast(
+        failureMessage,
+        kind: MasiToastKind.error,
+      );
     }
   }
 

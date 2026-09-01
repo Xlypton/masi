@@ -47,6 +47,7 @@ import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_avatar.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
 import '../../../shared/presentation/masi_icon.dart';
+import '../../../shared/presentation/masi_toast.dart';
 import '../../../shared/presentation/masi_loading_gate.dart';
 import '../../../shared/presentation/masi_loading_indicator.dart';
 import '../../../shared/presentation/masi_pending_button.dart';
@@ -1133,7 +1134,7 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           attachError is PhotoWriteException
               ? photoWriteFailureSnackBar(attachError)
-              : const SnackBar(content: Text(_createFailedMessage)),
+              : masiToast(_createFailedMessage, kind: MasiToastKind.error),
         );
         return;
       }
@@ -1184,9 +1185,10 @@ class _ToposScreenState extends ConsumerState<ToposScreen> {
       // saying "couldn't create the topo" there would be a plain lie about a
       // topo that exists and is visible. Those keep the debugPrint alone.
       if (mounted && !topoCommitted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text(_createFailedMessage)));
+        ScaffoldMessenger.of(context).showMasiToast(
+          _createFailedMessage,
+          kind: MasiToastKind.error,
+        );
       }
     } finally {
       if (mounted) {
