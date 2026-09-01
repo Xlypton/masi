@@ -493,7 +493,8 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
 
     // Which route (if any) the line is about to land on, resolved BEFORE the
     // commit empties the draft that `pendingDraftTarget` depends on.
-    final targetId = (target != null && (replaceSelectedLine || !target.overwritesLine))
+    final targetId =
+        (target != null && (replaceSelectedLine || !target.overwritesLine))
         ? target.route.id
         : null;
     final countBefore = ref
@@ -518,7 +519,9 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
         // for one action is one message too many.
         if (route.points.length >= 2) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Line saved to ${routeDisplayLabel(route)}')),
+            SnackBar(
+              content: Text('Line saved to ${routeDisplayLabel(route)}'),
+            ),
           );
         }
         break;
@@ -543,6 +546,76 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// thing said twice), so neither may be inert in any state. The mode is
   /// re-asserted unconditionally; it is idempotent when the commit already
   /// did it.
+  /// Saves the drawn line as another face's view of a climb the wall already
+  /// has — the answer to "this is climb 3, drawn here".
+  ///
+  /// The data model has carried this since v16: a climb's home drawing lives
+  /// on its own row and every other face's drawing of it lives in
+  /// `route_lines`. Nothing in the UI could ever ASK for it. The only way to
+  /// reach the second-face write was to draw a line whose number happened to
+  /// collide with an existing climb's — which the per-photo number seed made
+  /// happen by accident, on an unrelated climb, wiping that climb's name and
+  /// grade with the blank draft's (see [RouteRepository.maxRouteNumber]).
+  /// Fixing the seed closes the accident; this opens the door the accident
+  /// was coming through.
+  ///
+  /// The picked climb is passed whole to the controller so its name, grade
+  /// and colour come back unchanged — the shared-field fold in `upsertRoute`
+  /// writes what it is given.
+  Future<void> _handleLinkToExistingClimb(List<TopoRoute> candidates) async {
+    if (widget.readOnly || candidates.isEmpty) return;
+    final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
+    final photoId = ref
+        .read(drawControllerProvider(widget.wallId))
+        .activePhotoId;
+    if (photoId == null) return;
+
+    final choice = await showMasiActionSheet<int>(
+      context,
+      sheetKey: const Key('topo-link-climb-sheet'),
+      title: 'Which climb is this?',
+      message:
+          'The line stays on this photo. Its number, name and grade come '
+          'from the climb you pick — this is that climb, seen from here.',
+      actions: [
+        for (final climb in candidates)
+          MasiSheetAction(
+            key: Key('topo-link-climb-${climb.number}'),
+            label: routeDisplayLabel(climb),
+            value: climb.number,
+          ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+
+    final climb = candidates.firstWhere((c) => c.number == choice);
+    await notifier.commitDraftAsClimb(climb);
+    if (!mounted) return;
+
+    // The climb is on this photo now, so it is no longer a candidate for the
+    // next line drawn here.
+    ref.invalidate(
+      climbsElsewhereProvider((wallId: widget.wallId, photoId: photoId)),
+    );
+    notifier.setMode(DrawMode.view);
+
+    // Only when the write actually landed — a refused one reverts the
+    // geometry and raises its own message (UF-1), and two messages for one
+    // action is one too many.
+    final saved = ref
+        .read(drawControllerProvider(widget.wallId))
+        .routes
+        .where((r) => r.number == climb.number)
+        .any((r) => r.points.length >= 2);
+    if (!saved) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        key: const Key('topo-link-climb-saved'),
+        content: Text('${routeDisplayLabel(climb)} is on this photo too.'),
+      ),
+    );
+  }
+
   Future<void> _handleFinishEditing() async {
     if (widget.readOnly) return;
     final hint = ref.read(drawHintProvider.notifier);
@@ -1574,6 +1647,15 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
           // ownership answer changes. Without it the bar would linger over a
           // topo with nothing left to suggest.
           pendingProposalBaselines: s.pendingProposalBaselines,
+          // A BOOL, deliberately — not `currentPoints`. It flips exactly
+          // twice per line (at the second point, and when the draft is
+          // consumed or discarded), so it costs two rebuilds rather than the
+          // one-per-point storm this record exists to avoid. It has to be
+          // here at all because the "this line is a climb I already have"
+          // control appears only while there IS a line: gated on a value
+          // nothing rebuilt for, it appeared a frame late at best, and in a
+          // test that only draws, never at all.
+          hasLine: s.currentPoints.length >= 2,
         ),
       ),
     );
@@ -1927,11 +2009,26 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
                       // `currentPoints` to that record would rebuild this
                       // whole screen's chrome on every single `addPoint`
                       // during a drag — the exact rebuild storm that watch
-                      // exists to prevent. The two tooltips this drives are
-                      // worth a frame's staleness; the cluster itself
-                      // rebuilds whenever anything in the record changes,
-                      // which includes entering and leaving draw mode.
+                      // exists to prevent. What the record carries instead is
+                      // the BOOL `hasLine`, which flips twice a line: that is
+                      // what makes this read fresh at the two moments the
+                      // cluster's shape depends on it.
                       hasCurrentLine: drawState.currentPoints.isNotEmpty,
+                      // The wall's climbs that are not on this photo. Read
+                      // here rather than inside the cluster so the whole of
+                      // this screen's chrome keeps its single build-time read
+                      // of the draw state.
+                      linkCandidates: drawState.activePhotoId == null
+                          ? const <TopoRoute>[]
+                          : ref
+                                    .watch(
+                                      climbsElsewhereProvider((
+                                        wallId: widget.wallId,
+                                        photoId: drawState.activePhotoId!,
+                                      )),
+                                    )
+                                    .value ??
+                                const <TopoRoute>[],
                       // Same one-shot read, same reason. Set ONLY for the
                       // case that needs no prompt — an unplaced selected
                       // route, which the ✓ will silently draw. With a placed
@@ -2764,6 +2861,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     DrawController drawNotifier,
     DrawMode mode, {
     required bool hasCurrentLine,
+    required List<TopoRoute> linkCandidates,
     String? draftTargetLabel,
   }) {
     // readOnly: no bottom chrome at all — the draw cluster is already
@@ -2808,6 +2906,21 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
             color: colors.accent,
             style: IconButton.styleFrom(shape: const CircleBorder()),
           ),
+          // "That is climb 3, seen from here." Shown only while there is a
+          // line to say it about AND the wall has a climb that is not on
+          // this photo — which is exactly when the question can arise, and
+          // never otherwise. The alternative reading of the same draft, "a
+          // new climb", is the ✓ beside it; both are one tap, and neither is
+          // reachable by accident.
+          if (hasCurrentLine && linkCandidates.isNotEmpty)
+            IconButton(
+              key: const Key('topo-link-climb-button'),
+              icon: MasiIcon('route'),
+              tooltip: 'This line is a climb I already have',
+              onPressed: () => _handleLinkToExistingClimb(linkCandidates),
+              color: colors.accent,
+              style: IconButton.styleFrom(shape: const CircleBorder()),
+            ),
           // The drawing tool's primary action, and the only control in this
           // cluster that awaits a database write ([DrawController.commitRoute]
           // upserts the new route). It used to stay enabled throughout, so an

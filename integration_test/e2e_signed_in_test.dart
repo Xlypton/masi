@@ -59,6 +59,13 @@ const String kE2eDraftWallId = 'e2e-wall-draft-0001';
 /// guidebook import leaves when it cannot read a polyline.
 const String kE2eUnplacedRouteName = 'E2E Unplaced Line';
 
+/// The four-photo fixture wall, and its first two faces. The only wall in the
+/// fixture with more than one photo, so the only one on which "the same climb,
+/// seen from over here" is a thing that can be said at all.
+const String kE2eFacesWallId = 'e2e-wall-faces-0001';
+const String kE2eFaceOnePhotoId = 'e2e-photo-face-0001';
+const String kE2eFaceTwoPhotoId = 'e2e-photo-face-0002';
+
 void main() {
   final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
 
@@ -84,7 +91,8 @@ void main() {
     expect(
       find.byKey(const Key('account-send-link')),
       findsNothing,
-      reason: 'the auth wall redirected to the sign-in view — in REAL mode '
+      reason:
+          'the auth wall redirected to the sign-in view — in REAL mode '
           'that means signInWithPassword failed (check the console for '
           '"masi/e2e: REAL sign-in FAILED"); in FAKE mode it means the '
           'webAuthGateEnabledProvider override broke',
@@ -174,7 +182,8 @@ void main() {
     expect(
       find.text(areaName),
       findsWidgets,
-      reason: 'the Area vanished from the list after navigating back — the '
+      reason:
+          'the Area vanished from the list after navigating back — the '
           'write did not survive a re-read from drift',
     );
     await binding.takeScreenshot('06-round-trip');
@@ -250,7 +259,8 @@ void main() {
     expect(
       find.byKey(const Key('community-sync-error-empty')),
       findsNothing,
-      reason: 'the feed reported a sync error after pullNow — check the '
+      reason:
+          'the feed reported a sync error after pullNow — check the '
           'console for the SyncOrchestrator message',
     );
   });
@@ -366,7 +376,8 @@ void main() {
       expect(
         find.byKey(const Key('topo-history-error')),
         findsNothing,
-        reason: 'topo_version_list errored for a real session — the history '
+        reason:
+            'topo_version_list errored for a real session — the history '
             'RPC is not answering under live RLS',
       );
     },
@@ -416,7 +427,8 @@ void main() {
       expect(
         find.textContaining('No line yet'),
         findsWidgets,
-        reason: 'the legend must say which routes still need drawing, or an '
+        reason:
+            'the legend must say which routes still need drawing, or an '
             'imported route cannot be found at all',
       );
 
@@ -470,21 +482,164 @@ void main() {
       expect(
         find.textContaining('Route 3'),
         findsNothing,
-        reason: 'a third, separately-numbered route appeared — the line was '
+        reason:
+            'a third, separately-numbered route appeared — the line was '
             'committed as a NEW route instead of onto the selected one, '
             'which is exactly the reported bug',
       );
       expect(
         find.textContaining(kE2eUnplacedRouteName),
         findsWidgets,
-        reason: 'the imported route lost its name — drawing its line must '
+        reason:
+            'the imported route lost its name — drawing its line must '
             'keep its identity, not replace it',
       );
       expect(
         find.textContaining('No line yet'),
         findsNothing,
-        reason: 'the route still reports no line, so the draft never landed '
+        reason:
+            'the route still reports no line, so the draft never landed '
             'on it',
+      );
+    },
+    skip: !e2eRealSessionRequested,
+  );
+
+  testWidgets(
+    'real session: a line drawn on a second face can be given to the climb '
+    'that already lives on the first',
+    (tester) async {
+      // Two bugs in one flow, and they were each other's mirror image.
+      //
+      // A new line on a second face used to take the number of a climb on the
+      // first — the next-number seed read the climbs visible on THIS photo —
+      // so an unrelated climb silently became a second drawing of climb 1,
+      // and the blank draft's null name and grade were folded onto it.
+      //
+      // And the thing that collision imitated could not be asked for. A climb
+      // drawn on another face is not in this face's legend, so nothing could
+      // select it, and there was no way to say "that is climb 1, seen from
+      // here" at all.
+      await e2eBoot();
+      await settleNetwork(tester, budget: const Duration(seconds: 8));
+
+      appRouter.go('/feed');
+      await settle(tester, frames: 30);
+      await pullToRefresh(
+        tester,
+        find.byKey(const Key('community-feed-refresh')),
+        'the community feed refresh button',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 12));
+
+      appRouter.go('/walls/$kE2eFacesWallId');
+      await settle(tester, frames: 30);
+      await settleNetwork(tester, budget: const Duration(seconds: 12));
+
+      /// Enters draw mode and taps out a two-point line at [at] (a fraction
+      /// down the gesture surface), leaving the draft on the canvas.
+      Future<void> drawLine(double at) async {
+        await tapOrFail(
+          tester,
+          find.byKey(const Key('topo-mode-toggle')),
+          'the draw-mode toggle',
+        );
+        await settle(tester, frames: 10);
+        await waitFor(
+          tester,
+          find.byKey(const Key('topo-draw-gesture-detector')),
+          'the draw-mode gesture surface',
+        );
+        final canvas = tester.getRect(
+          find.byKey(const Key('topo-draw-gesture-detector')),
+        );
+        await tester.tapAt(
+          Offset(
+            canvas.left + canvas.width * at,
+            canvas.top + canvas.height * 0.35,
+          ),
+        );
+        await settle(tester, frames: 5);
+        await tester.tapAt(
+          Offset(
+            canvas.left + canvas.width * at,
+            canvas.top + canvas.height * 0.6,
+          ),
+        );
+        await settle(tester, frames: 5);
+      }
+
+      // ── The first face gets a climb, named so its identity is checkable.
+      await drawLine(0.35);
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-commit-button')),
+        'the commit (save) button',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 10));
+      await waitFor(
+        tester,
+        find.byKey(const Key('topo-meta-name')),
+        'the metadata sheet a newly drawn climb opens',
+        timeout: const Duration(seconds: 20),
+      );
+      await tester.enterText(
+        find.byKey(const Key('topo-meta-name')),
+        'E2E Arete',
+      );
+      await settle(tester, frames: 4);
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-meta-save')),
+        'the metadata sheet save button',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 10));
+      await binding.takeScreenshot('17-climb-on-first-face');
+
+      // ── Over to the second face, which has nothing on it.
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('face-rail-tile-$kE2eFaceTwoPhotoId')),
+        'the second face in the dock rail',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 10));
+      expect(
+        find.textContaining('E2E Arete'),
+        findsNothing,
+        reason:
+            'the climb is drawn on the OTHER face — if it is listed here '
+            'already, this test is not testing what it thinks it is',
+      );
+
+      await drawLine(0.6);
+      await binding.takeScreenshot('18-line-on-second-face');
+
+      // ── And it is that climb, seen from here.
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-link-climb-button')),
+        'the "this line is a climb I already have" control',
+      );
+      await settle(tester, frames: 10);
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-link-climb-1')),
+        'climb 1 in the picker',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 12));
+      await binding.takeScreenshot('19-second-face-linked');
+
+      expect(
+        find.textContaining('E2E Arete'),
+        findsWidgets,
+        reason:
+            'the line landed as some other climb — the whole point is '
+            'that this face now shows the SAME climb, with its own drawing',
+      );
+      expect(
+        find.textContaining('Route 2'),
+        findsNothing,
+        reason: 'a second climb was invented — linking must spend no number',
       );
     },
     skip: !e2eRealSessionRequested,

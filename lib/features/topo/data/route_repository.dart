@@ -80,13 +80,14 @@ class RouteRepository {
     String photoId,
     TopoRoute route,
   ) async {
-    final existing = await (_db.select(_db.routes)..where(
-          (t) =>
-              t.wallId.equals(wallId) &
-              t.number.equals(route.number) &
-              t.deletedAt.isNull(),
-        ))
-        .getSingleOrNull();
+    final existing =
+        await (_db.select(_db.routes)..where(
+              (t) =>
+                  t.wallId.equals(wallId) &
+                  t.number.equals(route.number) &
+                  t.deletedAt.isNull(),
+            ))
+            .getSingleOrNull();
 
     if (existing != null && existing.photoId != photoId) {
       await _upsertRouteLine(existing, photoId, route);
@@ -99,8 +100,9 @@ class RouteRepository {
     // `null` (not the encoded `'[]'`) for an empty tag list, so a route
     // with no style tags stays indistinguishable from one that predates
     // this column — mirrors `styleTagsJson`'s own doc.
-    final styleTagsJson =
-        route.styleTags.isEmpty ? null : encodeStyleTags(route.styleTags);
+    final styleTagsJson = route.styleTags.isEmpty
+        ? null
+        : encodeStyleTags(route.styleTags);
 
     if (existing == null) {
       await _db
@@ -178,17 +180,19 @@ class RouteRepository {
     TopoRoute route,
   ) async {
     final now = nowMs();
-    final styleTagsJson =
-        route.styleTags.isEmpty ? null : encodeStyleTags(route.styleTags);
+    final styleTagsJson = route.styleTags.isEmpty
+        ? null
+        : encodeStyleTags(route.styleTags);
 
     await _db.transaction(() async {
-      final line = await (_db.select(_db.routeLines)..where(
-            (t) =>
-                t.routeId.equals(existing.id) &
-                t.photoId.equals(photoId) &
-                t.deletedAt.isNull(),
-          ))
-          .getSingleOrNull();
+      final line =
+          await (_db.select(_db.routeLines)..where(
+                (t) =>
+                    t.routeId.equals(existing.id) &
+                    t.photoId.equals(photoId) &
+                    t.deletedAt.isNull(),
+              ))
+              .getSingleOrNull();
 
       final pointsJson = encodePoints(route.points);
       final symbolsJson = encodeSymbols(route.symbols);
@@ -258,37 +262,104 @@ class RouteRepository {
   /// invisible on the south face if only home rows are read, and every climb
   /// disappears from its own home photo if only lines are.
   Future<List<TopoRoute>> loadRoutes(String wallId, String photoId) async {
-    final homeRows = await (_db.select(_db.routes)
-          ..where(
-            (t) =>
-                t.wallId.equals(wallId) &
-                t.photoId.equals(photoId) &
-                t.deletedAt.isNull(),
-          ))
-        .get();
+    final homeRows =
+        await (_db.select(_db.routes)..where(
+              (t) =>
+                  t.wallId.equals(wallId) &
+                  t.photoId.equals(photoId) &
+                  t.deletedAt.isNull(),
+            ))
+            .get();
 
-    final lineQuery = _db.select(_db.routeLines).join([
-      innerJoin(_db.routes, _db.routes.id.equalsExp(_db.routeLines.routeId)),
-    ])..where(
-        _db.routeLines.photoId.equals(photoId) &
-            _db.routeLines.deletedAt.isNull() &
-            _db.routes.wallId.equals(wallId) &
-            _db.routes.deletedAt.isNull(),
-      );
+    final lineQuery =
+        _db.select(_db.routeLines).join([
+          innerJoin(
+            _db.routes,
+            _db.routes.id.equalsExp(_db.routeLines.routeId),
+          ),
+        ])..where(
+          _db.routeLines.photoId.equals(photoId) &
+              _db.routeLines.deletedAt.isNull() &
+              _db.routes.wallId.equals(wallId) &
+              _db.routes.deletedAt.isNull(),
+        );
     final lineRows = await lineQuery.get();
 
     final combined = <({db.Route route, db.RouteLine? line})>[
       for (final row in homeRows) (route: row, line: null),
       for (final row in lineRows)
-        (
-          route: row.readTable(_db.routes),
-          line: row.readTable(_db.routeLines),
-        ),
+        (route: row.readTable(_db.routes), line: row.readTable(_db.routeLines)),
     ]..sort((a, b) => a.route.number.compareTo(b.route.number));
 
     return [
       for (var i = 0; i < combined.length; i++)
         rowToDomain(combined[i].route, i + 1, lineOverride: combined[i].line),
+    ];
+  }
+
+  /// The highest climb number live on [wallId], or 0 when it has none.
+  ///
+  /// Numbering is WALL-wide, not per-photo: since v16 a number identifies a
+  /// climb across the whole rock, and [upsertRoute] keys on `(wallId,
+  /// number)`. A caller that seeds its "next number" from the climbs it can
+  /// SEE — i.e. from one photo — hands the next new line a number that
+  /// already belongs to a climb on another face, and [upsertRoute] then
+  /// correctly reads that as "the same climb, drawn from over here". The
+  /// guidebook importer already numbers this way
+  /// (`guidebook_import_applier.dart`); the interactive draw path did not,
+  /// which is what turned an unrelated second climb into a second line of
+  /// the first, and nulled the first one's name and grade on the way.
+  Future<int> maxRouteNumber(String wallId) async {
+    final highest = _db.routes.number.max();
+    final row =
+        await (_db.selectOnly(_db.routes)
+              ..addColumns([highest])
+              ..where(
+                _db.routes.wallId.equals(wallId) &
+                    _db.routes.deletedAt.isNull(),
+              ))
+            .getSingleOrNull();
+    return row?.read(highest) ?? 0;
+  }
+
+  /// The wall's climbs that are NOT on [photoId] — neither at home there nor
+  /// drawn there — ordered by number.
+  ///
+  /// This is the candidate list for "the line I just drew is that climb, seen
+  /// from here". It is exactly the complement of [loadRoutes]: a climb
+  /// already visible on this photo cannot be drawn on it again (the partial
+  /// unique index on `route_lines` forbids a second line for one photo, and
+  /// its home drawing is the first), so offering one would be offering a
+  /// write the database is about to refuse.
+  ///
+  /// The in-memory ids are 1..n over THIS list and mean nothing outside it —
+  /// they are a different numbering from the one [loadRoutes] hands the
+  /// canvas, so a caller must re-id anything it carries across.
+  Future<List<TopoRoute>> loadClimbsElsewhere(
+    String wallId,
+    String photoId,
+  ) async {
+    final rows =
+        await (_db.select(_db.routes)..where(
+              (t) =>
+                  t.wallId.equals(wallId) &
+                  t.deletedAt.isNull() &
+                  t.photoId.equals(photoId).not(),
+            ))
+            .get();
+    final lines = await (_db.select(
+      _db.routeLines,
+    )..where((t) => t.photoId.equals(photoId) & t.deletedAt.isNull())).get();
+    final drawnHere = {for (final line in lines) line.routeId};
+
+    final elsewhere = [
+      for (final row in rows)
+        if (!drawnHere.contains(row.id)) row,
+    ]..sort((a, b) => a.number.compareTo(b.number));
+
+    return [
+      for (var i = 0; i < elsewhere.length; i++)
+        rowToDomain(elsewhere[i], i + 1),
     ];
   }
 
@@ -332,10 +403,12 @@ class RouteRepository {
           readsFrom: {_db.routes, _db.routeLines},
         )
         .watch()
-        .map((rows) => {
-          for (final row in rows)
-            row.read<String>('photo_id'): row.read<int>('n'),
-        });
+        .map(
+          (rows) => {
+            for (final row in rows)
+              row.read<String>('photo_id'): row.read<int>('n'),
+          },
+        );
   }
 
   /// Maps each live climb's stable [TopoRoute.number] to its underlying DB row
@@ -362,9 +435,9 @@ class RouteRepository {
     String? photoId,
   ]) async {
     if (photoId == null) {
-      final rows = await (_db.select(_db.routes)
-            ..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull()))
-          .get();
+      final rows = await (_db.select(
+        _db.routes,
+      )..where((t) => t.wallId.equals(wallId) & t.deletedAt.isNull())).get();
       return {for (final row in rows) row.number: row.id};
     }
 
@@ -372,14 +445,14 @@ class RouteRepository {
     if (visible.isEmpty) return const {};
 
     final numbers = visible.map((r) => r.number).toSet();
-    final rows = await (_db.select(_db.routes)
-          ..where(
-            (t) =>
-                t.wallId.equals(wallId) &
-                t.number.isIn(numbers) &
-                t.deletedAt.isNull(),
-          ))
-        .get();
+    final rows =
+        await (_db.select(_db.routes)..where(
+              (t) =>
+                  t.wallId.equals(wallId) &
+                  t.number.isIn(numbers) &
+                  t.deletedAt.isNull(),
+            ))
+            .get();
     return {for (final row in rows) row.number: row.id};
   }
 
@@ -404,13 +477,14 @@ class RouteRepository {
   ) async {
     final now = nowMs();
     await _db.transaction(() async {
-      final route = await (_db.select(_db.routes)..where(
-            (t) =>
-                t.wallId.equals(wallId) &
-                t.number.equals(number) &
-                t.deletedAt.isNull(),
-          ))
-          .getSingleOrNull();
+      final route =
+          await (_db.select(_db.routes)..where(
+                (t) =>
+                    t.wallId.equals(wallId) &
+                    t.number.equals(number) &
+                    t.deletedAt.isNull(),
+              ))
+              .getSingleOrNull();
       if (route == null) return;
 
       if (route.photoId != photoId) {
@@ -430,19 +504,16 @@ class RouteRepository {
         return;
       }
 
-      await (_db.update(_db.routeLines)..where(
-            (t) => t.routeId.equals(route.id) & t.deletedAt.isNull(),
-          ))
-          .write(
-            db.RouteLinesCompanion(
-              deletedAt: Value(now),
-              updatedAt: Value(now),
-              dirty: const Value(true),
-            ),
-          );
       await (_db.update(
-        _db.routes,
-      )..where((t) => t.id.equals(route.id))).write(
+        _db.routeLines,
+      )..where((t) => t.routeId.equals(route.id) & t.deletedAt.isNull())).write(
+        db.RouteLinesCompanion(
+          deletedAt: Value(now),
+          updatedAt: Value(now),
+          dirty: const Value(true),
+        ),
+      );
+      await (_db.update(_db.routes)..where((t) => t.id.equals(route.id))).write(
         db.RoutesCompanion(
           deletedAt: Value(now),
           updatedAt: Value(now),

@@ -1241,7 +1241,7 @@ class DrawController extends Notifier<DrawState> {
   ///
   /// Route identity is untouched throughout. [id][TopoRoute.id],
   /// [number][TopoRoute.number] and [colorIndex][TopoRoute.colorIndex] all
-  /// survive, and `RouteRepository.upsertRoute` keys on `(photoId, number)` so
+  /// survive, and `RouteRepository.upsertRoute` keys on `(wallId, number)` so
   /// the existing database row is UPDATED rather than replaced. That is the
   /// property the rejected "re-open the route into the draft" model would have
   /// broken, and it is why an ascent logged against this route still resolves
@@ -1302,9 +1302,8 @@ class DrawController extends Notifier<DrawState> {
       // Puts the line back where the database still has it, rather than
       // leaving the canvas showing a shape that was refused.
       rollbackTo: rollbackTo,
-      write: () => ref
-          .read(routeRepositoryProvider)
-          .upsertRoute(wallId, photoId, route),
+      write: () =>
+          ref.read(routeRepositoryProvider).upsertRoute(wallId, photoId, route),
     );
   }
 
@@ -1370,8 +1369,12 @@ class DrawController extends Notifier<DrawState> {
       routes: [...state.routes, route],
       currentPoints: const [],
       currentSymbols: const [],
-      undoStack: state.undoStack.where((op) => !_isInProgressDraftOp(op)).toList(),
-      redoStack: state.redoStack.where((op) => !_isInProgressDraftOp(op)).toList(),
+      undoStack: state.undoStack
+          .where((op) => !_isInProgressDraftOp(op))
+          .toList(),
+      redoStack: state.redoStack
+          .where((op) => !_isInProgressDraftOp(op))
+          .toList(),
       nextId: state.nextId + 1,
       nextNumber: state.nextNumber + 1,
     );
@@ -1388,9 +1391,65 @@ class DrawController extends Notifier<DrawState> {
       // from under them. Their work survives the failure; only the (refused)
       // save did not.
       rollbackTo: beforeCommit,
+      write: () =>
+          ref.read(routeRepositoryProvider).upsertRoute(wallId, photoId, route),
+    );
+  }
+
+  /// Saves the draft as [climb]'s line on THIS photo — "that is climb 3, seen
+  /// from here".
+  ///
+  /// The same rock from 90 degrees round is a different shape and still the
+  /// same climb, and until this existed there was no way to say so. The only
+  /// route that could claim a draft was one already visible on this photo
+  /// (see [commitRoute]), and a climb drawn on another face is by definition
+  /// not visible here — so the two readings a contributor has, "a new climb"
+  /// and "the one I already logged, from over here", collapsed into the
+  /// first. Worse, they used to collapse into the SECOND by accident,
+  /// through the per-photo number seed [loadForWall] no longer uses.
+  ///
+  /// [climb] must be one the repository reported as elsewhere on this wall
+  /// ([RouteRepository.loadClimbsElsewhere]) — it carries the climb's own
+  /// name, grade, stars and colour, and passing it whole is what keeps
+  /// `upsertRoute`'s shared-field fold from writing a blank draft's nulls
+  /// over them.
+  Future<void> commitDraftAsClimb(TopoRoute climb) async {
+    if (state.currentPoints.length < 2) return;
+
+    final beforeCommit = state;
+    // Its own fields, this photo's geometry, and an id in the canvas's
+    // numbering rather than the one the candidate list handed it.
+    final placed = climb.copyWith(
+      id: state.nextId,
+      points: [...state.currentPoints],
+      symbols: [...state.currentSymbols],
+    );
+
+    state = state.copyWith(
+      routes: [...state.routes, placed],
+      currentPoints: const [],
+      currentSymbols: const [],
+      undoStack: state.undoStack
+          .where((op) => !_isInProgressDraftOp(op))
+          .toList(),
+      redoStack: state.redoStack
+          .where((op) => !_isInProgressDraftOp(op))
+          .toList(),
+      nextId: state.nextId + 1,
+      // NOT nextNumber: no new number was spent. This climb already had one,
+      // on the face it was drawn on first.
+    );
+
+    final wallId = state.activeWallId;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
+    await _writeThrough(
+      operation: RouteWriteOperation.commitRoute,
+      optimistic: state,
+      rollbackTo: beforeCommit,
       write: () => ref
           .read(routeRepositoryProvider)
-          .upsertRoute(wallId, photoId, route),
+          .upsertRoute(wallId, photoId, placed),
     );
   }
 
@@ -1434,7 +1493,7 @@ class DrawController extends Notifier<DrawState> {
   /// metadata field (name, grade, description, style, beta video) are
   /// untouched — only the geometry changes — so an ascent already logged
   /// against this route still resolves to it, and `RouteRepository
-  /// .upsertRoute` keys on `(photoId, number)` and UPDATES the existing row.
+  /// .upsertRoute` keys on `(wallId, number)` and UPDATES the existing row.
   /// That is the whole point: the imported route keeps everything the import
   /// gave it and gains the line.
   ///
@@ -1487,7 +1546,9 @@ class DrawController extends Notifier<DrawState> {
         ...state.undoStack.where((op) => !_isInProgressDraftOp(op)),
         EditRouteGeometryOp(routeId: target.id, before: before, after: after),
       ],
-      redoStack: state.redoStack.where((op) => !_isInProgressDraftOp(op)).toList(),
+      redoStack: state.redoStack
+          .where((op) => !_isInProgressDraftOp(op))
+          .toList(),
     );
 
     if (state.proposalOnlyGeometryEdits) {
@@ -1713,8 +1774,12 @@ class DrawController extends Notifier<DrawState> {
       routes: routes,
       selectedRouteIdSet: clearSelection,
       selectedRouteId: clearSelection ? null : state.selectedRouteId,
-      undoStack: state.undoStack.where((op) => !referencesRemovedRoute(op)).toList(),
-      redoStack: state.redoStack.where((op) => !referencesRemovedRoute(op)).toList(),
+      undoStack: state.undoStack
+          .where((op) => !referencesRemovedRoute(op))
+          .toList(),
+      redoStack: state.redoStack
+          .where((op) => !referencesRemovedRoute(op))
+          .toList(),
     );
 
     final wallId = state.activeWallId;
@@ -1894,7 +1959,8 @@ class DrawController extends Notifier<DrawState> {
     routes[index] = updatedRoute;
     state = state.copyWith(
       routes: routes,
-      selectedRouteIdSet: outcome == SymbolPlacementOutcome.autoSelectedAndPlaced,
+      selectedRouteIdSet:
+          outcome == SymbolPlacementOutcome.autoSelectedAndPlaced,
       selectedRouteId: targetRouteId,
       undoStack: [
         ...state.undoStack,
@@ -1965,7 +2031,8 @@ class DrawController extends Notifier<DrawState> {
 
     final beforeMetadata = state;
     final gradeProvided = gradeSystem != null && gradeRaw != null;
-    final newGradeSortKey = (gradeProvided && isValidGrade(gradeSystem, gradeRaw))
+    final newGradeSortKey =
+        (gradeProvided && isValidGrade(gradeSystem, gradeRaw))
         ? gradeSortKey(gradeSystem, gradeRaw)
         : null;
 
@@ -2268,10 +2335,17 @@ class DrawController extends Notifier<DrawState> {
     );
 
     final List<TopoRoute> loaded;
+    // The whole ROCK's highest number, not this photo's. A number identifies
+    // a climb across the wall (see [RouteRepository.maxRouteNumber]), so
+    // seeding the next one from the climbs visible here is what let a brand
+    // new line on a second face take a number that already belonged to a
+    // climb on the first — and be filed as that climb's second drawing,
+    // wiping its name and grade with the blank draft's.
+    final int wallMaxNumber;
     try {
-      loaded = await ref
-          .read(routeRepositoryProvider)
-          .loadRoutes(wallId, photoId);
+      final repository = ref.read(routeRepositoryProvider);
+      loaded = await repository.loadRoutes(wallId, photoId);
+      wallMaxNumber = await repository.maxRouteNumber(wallId);
     } catch (error, stackTrace) {
       debugPrint(
         'loadForWall($wallId, $photoId): route load failed: '
@@ -2331,22 +2405,24 @@ class DrawController extends Notifier<DrawState> {
     final loadedMaxId = loaded.isEmpty
         ? 0
         : loaded.map((r) => r.id).reduce((a, b) => a > b ? a : b);
-    final loadedMaxNumber = loaded.isEmpty
-        ? 0
-        : loaded.map((r) => r.number).reduce((a, b) => a > b ? a : b);
-
+    // Wall-wide here too: a route committed during the switch is about to be
+    // persisted against this photo, and a number borrowed from the photo it
+    // was drawn on is the same collision by a different route.
     final preserved = <TopoRoute>[
       for (var i = 0; i < pending.length; i++)
         pending[i].copyWith(
           id: loadedMaxId + 1 + i,
-          number: loadedMaxNumber + 1 + i,
+          number: wallMaxNumber + 1 + i,
         ),
     ];
 
     final routes = [...loaded, ...preserved];
-    final maxNumber = routes.isEmpty
+    final visibleMaxNumber = routes.isEmpty
         ? 0
         : routes.map((r) => r.number).reduce((a, b) => a > b ? a : b);
+    final maxNumber = visibleMaxNumber > wallMaxNumber
+        ? visibleMaxNumber
+        : wallMaxNumber;
     // loadRoutes assigns sequential ids 1..loaded.length, and `preserved`
     // continues immediately after (loadedMaxId + 1, + 2, ...), so the
     // combined list's ids are still exactly 1..routes.length.
@@ -2411,7 +2487,19 @@ class DrawController extends Notifier<DrawState> {
 /// popped) and a fresh one is built the next time that wall (or any wall)
 /// is opened — preserving the pre-family "opens in a clean state" behavior
 /// instead of leaking state across re-opens forever.
-final drawControllerProvider =
-    NotifierProvider.autoDispose.family<DrawController, DrawState, String>(
-  DrawController.new,
-);
+final drawControllerProvider = NotifierProvider.autoDispose
+    .family<DrawController, DrawState, String>(DrawController.new);
+
+/// The wall's climbs that are not on this photo — the candidates for "the
+/// line I just drew is that climb, seen from here".
+///
+/// Read on demand rather than watched: it is only ever consulted while a
+/// draft is on the canvas, and it changes only when this same screen commits
+/// something, which is why the canvas invalidates it after a link rather than
+/// subscribing to the table.
+final climbsElsewhereProvider = FutureProvider.autoDispose
+    .family<List<TopoRoute>, ({String wallId, String photoId})>(
+      (ref, key) => ref
+          .read(routeRepositoryProvider)
+          .loadClimbsElsewhere(key.wallId, key.photoId),
+    );
