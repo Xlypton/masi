@@ -124,7 +124,16 @@ sql "INSERT INTO public.routes (id, \"createdAt\", \"updatedAt\", \"ownerId\", \
             -- purpose: that wall is never submitted or published, so nothing
             -- else in the suite is disturbed by its routes changing.
             ('e2e-route-draft-02', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_DRAFT', '$E2E_PHOTO_DRAFT', 2, 'E2E Unplaced Line', 'french', '6a+', 610, 1,
-             '[]', '[]', 1, true, false);" >/dev/null
+             '[]', '[]', 1, true, false),
+            -- One climb on the FIRST face of the four-photo wall, and
+            -- nothing on the others. That asymmetry is the fixture for the
+            -- claim that a line drawn on one face is a climb living on
+            -- another: a climb drawn elsewhere is not in this face's legend,
+            -- so nothing here can select it, and until the link control
+            -- existed there was no way to say the line just drawn was that
+            -- same climb.
+            ('e2e-route-face-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_FACES', '${E2E_PHOTO_FACES[0]}', 1, 'E2E Face One Line', 'french', '6a', 600, 0,
+             '[{\"x\":0.35,\"y\":0.85},{\"x\":0.35,\"y\":0.20}]', '[]', 0, true, false);" >/dev/null
 
 echo "==> uploading fixture photo bytes to Storage"
 SERVICE_KEY="$(service_role_key)"
