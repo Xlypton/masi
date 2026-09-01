@@ -239,3 +239,93 @@ String notificationAge(int createdAtMs, {required DateTime now}) {
   if (age.inMinutes >= 1) return '${age.inMinutes}m';
   return 'just now';
 }
+
+/// How old an entry is, coarsely — the inbox's section headings.
+///
+/// Three buckets and not five: a notification centre is scanned top-down and
+/// the only question a heading has to answer is "is this still current?".
+/// Finer buckets ("Yesterday", "Last month") would split a short list into
+/// sections of one, which reads as clutter rather than as structure.
+enum NotificationAgeBucket {
+  /// The same CALENDAR day as now — not "within 24 hours". Something that
+  /// happened at 23:50 yesterday is not "today" to the person reading this
+  /// at 08:00, whatever the elapsed hours say.
+  today,
+
+  /// Within the last seven days, and not [today].
+  thisWeek,
+
+  /// Everything else.
+  earlier;
+
+  /// The section heading, as rendered.
+  String get label => switch (this) {
+    NotificationAgeBucket.today => 'Today',
+    NotificationAgeBucket.thisWeek => 'This week',
+    NotificationAgeBucket.earlier => 'Earlier',
+  };
+}
+
+/// Which section [createdAtMs] belongs to.
+///
+/// Takes [now] rather than reading the clock, for the same reason
+/// [notificationAge] does: a bucket boundary that cannot be pinned to a fixed
+/// instant cannot be tested at one.
+NotificationAgeBucket notificationBucket(int createdAtMs, {required DateTime now}) {
+  final at = DateTime.fromMillisecondsSinceEpoch(createdAtMs);
+  final startOfToday = DateTime(now.year, now.month, now.day);
+  if (!at.isBefore(startOfToday)) return NotificationAgeBucket.today;
+  if (!at.isBefore(startOfToday.subtract(const Duration(days: 6)))) {
+    return NotificationAgeBucket.thisWeek;
+  }
+  return NotificationAgeBucket.earlier;
+}
+
+/// One rendered section of the inbox: a heading and the entries under it.
+typedef NotificationSection = ({
+  NotificationAgeBucket bucket,
+  List<AppNotification> items,
+});
+
+/// Splits a newest-first [list] into its age sections, preserving order and
+/// dropping empty sections.
+///
+/// A pure function over the list the screen already has, rather than a
+/// second query: the mirror is the only source, and grouping in SQL would put
+/// the section boundaries somewhere no test could reach without a database.
+///
+/// Assumes [list] is already newest-first (which is what
+/// `NotificationsRepository.watchAll` guarantees) and does NOT re-sort — a
+/// list that arrived out of order would produce interleaved sections here,
+/// which is a visible, debuggable wrong rather than a silently reordered
+/// inbox.
+List<NotificationSection> groupNotificationsByAge(
+  List<AppNotification> list, {
+  required DateTime now,
+}) {
+  final sections = <NotificationSection>[];
+  for (final n in list) {
+    final bucket = notificationBucket(n.createdAt, now: now);
+    if (sections.isNotEmpty && sections.last.bucket == bucket) {
+      sections.last.items.add(n);
+    } else {
+      sections.add((bucket: bucket, items: [n]));
+    }
+  }
+  return sections;
+}
+
+/// The glyph that says WHAT happened, from `assets/icons/masi/`.
+///
+/// Every kind gets its own, because the whole point of a badge next to the
+/// actor is that the row is legible before it is read. [NotificationKind.
+/// unknown] falls back to `flash` — the same "something happened" glyph the
+/// bell itself uses, which is exactly as much as an old client meeting a new
+/// verb can honestly claim.
+String notificationKindGlyph(NotificationKind kind) => switch (kind) {
+  NotificationKind.comment => 'comment',
+  NotificationKind.mention => 'person',
+  NotificationKind.like => 'heart_fill',
+  NotificationKind.suggestion => 'edit',
+  NotificationKind.unknown => 'flash',
+};

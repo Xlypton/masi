@@ -41,7 +41,11 @@ class NotificationBell extends ConsumerWidget {
       icon: Stack(
         clipBehavior: Clip.none,
         children: [
-          MasiIcon('flash', color: colors.ink),
+          // `accent`, not `ink`: this is a trailing bar action, and DESIGN.md
+          // ("Navigation — large title") gives those accent glyphs. It used
+          // to be `ink`, which made the one interactive thing in the bar the
+          // only glyph that did not look interactive.
+          MasiIcon('flash', color: colors.accent),
           if (unread > 0)
             Positioned(
               // Up and to the right of the glyph's own box, so the badge does
@@ -50,12 +54,20 @@ class NotificationBell extends ConsumerWidget {
               right: -6,
               child: Container(
                 key: const Key('notifications-badge'),
+                // 18, up from 16: the legibility ring below eats 1.5px a
+                // side, and "9+" at the Caption size does not fit what is
+                // left of a 16px pill.
                 padding: const EdgeInsets.symmetric(horizontal: 4),
-                constraints: const BoxConstraints(minWidth: 16),
-                height: 16,
+                constraints: const BoxConstraints(minWidth: 18),
+                height: 18,
                 decoration: BoxDecoration(
                   color: colors.accent,
                   borderRadius: BorderRadius.circular(8),
+                  // A ring in the bar's own ground so the badge reads as a
+                  // badge wherever it lands on the glyph beneath it — the
+                  // same treatment `NavShell`'s unseen dot uses, and for the
+                  // same reason.
+                  border: Border.all(color: colors.ground, width: 1.5),
                 ),
                 child: Center(
                   child: Text(

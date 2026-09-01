@@ -32,6 +32,7 @@ import 'package:masi/features/notifications/data/notifications_remote.dart';
 import 'package:masi/features/notifications/domain/app_notification.dart';
 import 'package:masi/features/notifications/presentation/notification_bell.dart';
 import 'package:masi/features/notifications/presentation/notifications_screen.dart';
+import 'package:masi/shared/presentation/masi_avatar.dart';
 
 const _me = 'u-me';
 
@@ -255,6 +256,42 @@ void main() {
       expect(find.byKey(const Key('notification-unread-a')), findsOne);
       expect(find.byKey(const Key('notification-unread-b')), findsNothing);
     });
+  });
+
+  group('the sections', () {
+    testWidgets(
+      'entries sit under an age heading. An inbox is scanned for "is this '
+      'still current?" before it is read, and an unheaded run of rows makes '
+      'that unanswerable without doing the arithmetic on every row',
+      (tester) async {
+        await _pump(tester, list: [_n('a')]);
+        expect(find.text('TODAY'), findsOne);
+      },
+    );
+
+    testWidgets('only the sections that have something in them get a heading', (
+      tester,
+    ) async {
+      await _pump(tester, list: [_n('a')]);
+      expect(find.text('THIS WEEK'), findsNothing);
+      expect(find.text('EARLIER'), findsNothing);
+    });
+
+    testWidgets(
+      'every row leads with the actor, badged with what they did — a '
+      'notification is a thing a PERSON did, and the leading column is too '
+      'valuable to spend on a status dot',
+      (tester) async {
+        await _pump(tester, list: [_n('a')]);
+        expect(
+          find.descendant(
+            of: find.byKey(const Key('notification-row-a')),
+            matching: find.byType(MasiAvatar),
+          ),
+          findsOne,
+        );
+      },
+    );
   });
 
   group('tapping through', () {
