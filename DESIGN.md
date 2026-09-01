@@ -119,6 +119,28 @@ Use `showCupertinoModalPopup` → `CupertinoActionSheet`:
 - Cancel action.
 Reuse from both the Topos-home "New topo" flow and the canvas "replace photo". Requires `NSCameraUsageDescription` + `NSPhotoLibraryUsageDescription` in `ios/Runner/Info.plist`.
 
+### Toast — the one transient message (`MasiToast`)
+Every transient message in the app is a **`masiToast`**, shown through the ordinary
+`ScaffoldMessenger` (`messenger.showMasiToast(...)` / `.showMasiSuccess` / `.showMasiError` /
+`.showMasiWarning`). **Never construct a bare `SnackBar`** — that is what the app had before, ~95
+unstyled Material bars where the words carried the entire distinction between "Cover photo updated"
+and "Couldn't save your like".
+
+- **Transport vs. appearance.** The `SnackBar` is kept only as the transport (it already solves
+  queuing, swipe-to-dismiss, route changes, and the home-indicator safe-area fix in
+  `MasiTheme.withSnackBarSafeArea`) and is stripped bare — transparent, elevation 0, zero padding.
+  Everything visible is `MasiToastCard`: `surface` fill, `MasiRadii.card`, a hairline `separator`
+  border, and the shared `kMasiAmbientShadow` — the same material as the account cards and the
+  install banner.
+- **Four kinds, one component.** `success` (`check`, `gradeBeginner`) · `error` (`warning`,
+  `gradeHard`) · `warning` (`warning`, `gradeAdvanced`) · `info` (`info`, `ink2`, the default). The
+  kind sets the leading chip's glyph and tint and nothing else, so a toast still reads as one
+  component rather than four. Grade-band hues INFORM; `accent` stays reserved for action, which is
+  why the optional action button is the only accent-coloured thing in the card.
+- **Duration follows the kind**: error 6s, warning 5s, everything else 4s. An error is the only kind
+  that asks something of the reader.
+- **At most one action**, and it dismisses the toast before it runs.
+
 ### Segmented control
 `CupertinoSlidingSegmentedControl` for grade system (French / UIAA) and similar binary/short choices.
 

@@ -79,6 +79,21 @@ class MasiColors extends ThemeExtension<MasiColors> {
   static MasiColors of(BuildContext context) =>
       Theme.of(context).extension<MasiColors>()!;
 
+  /// [of], but never throws: falls back to the [light]/[dark] constants when
+  /// the ambient theme carries no [MasiColors] extension.
+  ///
+  /// For the handful of surfaces that must render under a theme they do not
+  /// control — chiefly `MasiToastCard`, which is the app's way of REPORTING
+  /// failures and so is the last widget that may be allowed to become one.
+  /// Every ordinary screen keeps using [of]: a missing extension there is a
+  /// wiring mistake, and a hard `!` is how it gets found on the first pump
+  /// instead of shipping as a subtly wrong palette.
+  static MasiColors resolve(BuildContext context) {
+    final theme = Theme.of(context);
+    return theme.extension<MasiColors>() ??
+        (theme.brightness == Brightness.dark ? dark : light);
+  }
+
   static const light = MasiColors(
     ground: Color(0xFFF3F1F9),
     surface: Color(0xFFFFFFFF),
