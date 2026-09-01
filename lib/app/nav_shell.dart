@@ -7,6 +7,7 @@ import '../features/account/application/pwa_install_providers.dart';
 import '../features/backup/application/sync_orchestrator.dart';
 import '../features/community/application/feed_freshness_providers.dart';
 import '../features/notifications/application/notification_realtime.dart';
+import '../features/notifications/presentation/notification_heads_up.dart';
 import '../features/topo/presentation/canvas_chrome.dart';
 import '../shared/presentation/masi_icon.dart';
 import 'install_banner.dart';
@@ -131,6 +132,11 @@ class _NavShellState extends ConsumerState<NavShell> {
       // `navigationShell` in an `Expanded`, exactly as before.
       body: Column(
         children: [
+          // Zero-height; mounted here for the same reason
+          // `notificationRealtimeProvider` is watched here — this shell is the
+          // one widget alive for the whole signed-in session, and a heads-up
+          // tied to whichever tab happens to be built is not a heads-up.
+          const NotificationHeadsUp(),
           const ShellNotices(),
           Expanded(child: navigationShell),
         ],
