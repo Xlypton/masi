@@ -2509,8 +2509,21 @@ class DrawController extends Notifier<DrawState> {
       // load it is still whatever the last wall left behind. Reading the
       // permission directly is the only answer that is right on the first
       // frame, which is the frame this runs on.
-      if (await _mayRenumber(wallId)) {
-        await repository.renumberByPosition(wallId);
+      //
+      // Its own try/catch, INSIDE the outer one: a renumber that fails is
+      // housekeeping that did not happen, and must not be reported to the
+      // climber as "this topo's routes could not be read" — which is what
+      // falling through to the catch below would do, blanking a canvas whose
+      // routes are perfectly readable.
+      try {
+        if (await _mayRenumber(wallId)) {
+          await repository.renumberByPosition(wallId);
+        }
+      } catch (error, stackTrace) {
+        debugPrint(
+          'loadForWall($wallId, $photoId): renumber skipped: '
+          '$error\n$stackTrace',
+        );
       }
       loaded = await repository.loadRoutes(wallId, photoId);
       wallMaxNumber = await repository.maxRouteNumber(wallId);
