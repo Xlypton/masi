@@ -877,7 +877,7 @@ class _LayoutEditorScreenState extends ConsumerState<LayoutEditorScreen> {
     return count > 1
         ? '$count rocks. Tap one to pick it out; drag a photo across to '
               'move it between them.'
-        : 'Tap the line to pick it out, then reshape, redraw or remove it.';
+        : 'Tap the line to pick it out, then edit or remove it.';
   }
 
   /// The rock that is picked out, if it still exists.
