@@ -16,7 +16,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 
 /// Absolute path to the scanner, resolved from the repo the test runs in.
-String get _scanner => p.join(Directory.current.path, 'tool', 'scan_secrets.dart');
+String get _scanner =>
+    p.join(Directory.current.path, 'tool', 'scan_secrets.dart');
 
 /// Runs the scanner over a scratch repo containing exactly [files].
 ///
@@ -62,8 +63,12 @@ Future<Map<String, dynamic>> _scan(Map<String, String> files) async {
   );
   final out = result.stdout.toString();
   final start = out.indexOf('{');
-  expect(start, isNonNegative,
-      reason: 'scanner produced no JSON.\nstdout:\n$out\nstderr:\n${result.stderr}');
+  expect(
+    start,
+    isNonNegative,
+    reason:
+        'scanner produced no JSON.\nstdout:\n$out\nstderr:\n${result.stderr}',
+  );
   return jsonDecode(out.substring(start)) as Map<String, dynamic>;
 }
 
@@ -81,9 +86,9 @@ Future<Map<String, dynamic>> _scan(Map<String, String> files) async {
 String _shaped(String prefix, String body) => '$prefix$body';
 
 List<String> _rules(Map<String, dynamic> report) => [
-      for (final f in report['findings'] as List<dynamic>)
-        (f as Map<String, dynamic>)['rule'] as String,
-    ];
+  for (final f in report['findings'] as List<dynamic>)
+    (f as Map<String, dynamic>)['rule'] as String,
+];
 
 void main() {
   group('tool/scan_secrets.dart', () {
@@ -102,13 +107,18 @@ void main() {
       // is the shape, and no real credential may ever be committed to this
       // repo, including into a test fixture.
       final report = await _scan({
-        'a.sh': 'TOKEN=${_shaped('sbp_', '0123456789abcdef0123456789abcdef01234567')}\n',
-        'b.dart': "const k = '${_shaped('sb_sec', 'ret_0123456789abcdefghij')}';\n",
-        'c.json': '{${_shaped('"role"', ': "service_role"')}, "iss": "supabase"}\n',
+        'a.sh':
+            'TOKEN=${_shaped('sbp_', '0123456789abcdef0123456789abcdef01234567')}\n',
+        'b.dart':
+            "const k = '${_shaped('sb_sec', 'ret_0123456789abcdefghij')}';\n",
+        'c.json':
+            '{${_shaped('"role"', ': "service_role"')}, "iss": "supabase"}\n',
         'd.pem': '${_shaped('-----BEGIN RSA ', 'PRIVATE KEY-----')}\nAAAA\n',
-        'e.yml': 'token: ${_shaped('ghp_', '0123456789abcdef0123456789abcdef0123')}\n',
+        'e.yml':
+            'token: ${_shaped('ghp_', '0123456789abcdef0123456789abcdef0123')}\n',
         'f.tf': 'access_key = "${_shaped('AKIA', 'IOSFODNN7EXAMPLE')}"\n',
-        'g.sh': 'export ${_shaped('CLOUDFLARE_API_TOKEN=', '0123456789abcdef0123456789abcdef01234567')}\n',
+        'g.sh':
+            'export ${_shaped('CLOUDFLARE_API_TOKEN=', '0123456789abcdef0123456789abcdef01234567')}\n',
       });
 
       expect(report['ok'], isFalse);
@@ -123,7 +133,8 @@ void main() {
           'aws-access-key',
           'cloudflare-api-token',
         ]),
-        reason: 'a rule that no longer fires is a rule that has silently '
+        reason:
+            'a rule that no longer fires is a rule that has silently '
             'stopped protecting anything',
       );
     });
@@ -145,12 +156,43 @@ const String vapidPublicKey = String.fromEnvironment(
 ''',
       });
 
-      expect(report['ok'], isTrue,
-          reason: 'the publishable anon key and the VAPID PUBLIC key are safe '
-              'to embed and are committed deliberately — see '
-              'lib/core/config/supabase_config.dart. Findings: '
-              '${report['findings']}');
+      expect(
+        report['ok'],
+        isTrue,
+        reason:
+            'the publishable anon key and the VAPID PUBLIC key are safe '
+            'to embed and are committed deliberately — see '
+            'lib/core/config/supabase_config.dart. Findings: '
+            '${report['findings']}',
+      );
     });
+
+    test(
+      'does NOT flag the CARTO basemap key, committed for the same reason',
+      () async {
+        // Same class as the anon key: a web app cannot hide a key it puts in a
+        // tile URL, which is why CARTO issues these per-domain with no account
+        // and a one-minute rotation. If the scanner rejected `basemap.dart` the
+        // map could not ship at all.
+        final report = await _scan({
+          'lib/core/map/basemap.dart': '''
+const String cartoBasemapKey = String.fromEnvironment(
+  'MASI_CARTO_KEY',
+  defaultValue: 'cb1_2tdk_1_f62f62c1d553920476bbdeeb',
+);
+''',
+        });
+
+        expect(
+          report['ok'],
+          isTrue,
+          reason:
+              'the CARTO basemap key is a public client credential and is '
+              'committed deliberately — see lib/core/map/basemap.dart. '
+              'Findings: ${report['findings']}',
+        );
+      },
+    );
 
     test('refuses a credential FILE by name, whatever is inside it', () async {
       final report = await _scan({
@@ -171,25 +213,37 @@ const String vapidPublicKey = String.fromEnvironment(
       ];
       expect(excerpts, isNotEmpty);
       for (final e in excerpts) {
-        expect(e, isNot(contains(planted)),
-            reason: 'the excerpt reproduced the secret verbatim. A gate that '
-                'echoes what it caught has published it a second way — into '
-                'the CI log, which is often more widely readable than the '
-                'branch would have been.');
-        expect(e, contains('sbp_'.substring(0, 4)),
-            reason: 'a fully-opaque excerpt is not actionable; the first four '
-                'characters are what let a reader tell WHICH credential this '
-                'is without exposing it');
+        expect(
+          e,
+          isNot(contains(planted)),
+          reason:
+              'the excerpt reproduced the secret verbatim. A gate that '
+              'echoes what it caught has published it a second way — into '
+              'the CI log, which is often more widely readable than the '
+              'branch would have been.',
+        );
+        expect(
+          e,
+          contains('sbp_'.substring(0, 4)),
+          reason:
+              'a fully-opaque excerpt is not actionable; the first four '
+              'characters are what let a reader tell WHICH credential this '
+              'is without exposing it',
+        );
       }
     });
 
-    test('reports machine-readably, so a hook or CI step can consume it',
-        () async {
-      final report = await _scan({'x.sh': 'ok=1\n'});
+    test(
+      'reports machine-readably, so a hook or CI step can consume it',
+      () async {
+        final report = await _scan({'x.sh': 'ok=1\n'});
 
-      expect(report.keys,
-          containsAll(<String>['mode', 'filesScanned', 'findings', 'ok']));
-      expect(report['filesScanned'], greaterThan(0));
-    });
+        expect(
+          report.keys,
+          containsAll(<String>['mode', 'filesScanned', 'findings', 'ok']),
+        );
+        expect(report['filesScanned'], greaterThan(0));
+      },
+    );
   });
 }

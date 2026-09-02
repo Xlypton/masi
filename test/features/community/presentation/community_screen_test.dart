@@ -2440,8 +2440,8 @@ void main() {
   });
 
   group('Subtask A: map polish — nicer tiles, attribution, logo markers', () {
-    testWidgets('Map tab uses a keyless tile URL, keeps the '
-        'injectable tileProvider seam, and shows the OSM credit TEXT '
+    testWidgets('Map tab uses the keyed CARTO tile URL, keeps the '
+        'injectable tileProvider seam, and shows the OSM/CARTO credit TEXT '
         'visibly at a realistic viewport WITHOUT any tap (regression: a '
         'collapsed RichAttributionWidget info-icon popup does not satisfy '
         'the "attribution must be visible without interaction" requirement)', (
@@ -2470,12 +2470,11 @@ void main() {
 
       final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
       expect(tileLayer.urlTemplate, basemapUrlTemplate);
-      // The point of the constant is that the app never ships a basemap
-      // that needs a key: CARTO's endpoint kept answering 200 with a valid
-      // PNG after it went key-only, and stamped 'API KEY REQUIRED' across
-      // every tile instead — which no HTTP-level assertion would catch.
-      expect(tileLayer.urlTemplate, isNot(contains('cartocdn')));
-      expect(tileLayer.urlTemplate, isNot(contains('key=')));
+      // A key in the URL is the only thing that separates a served tile from
+      // a watermarked one: CARTO answers 200 with a valid PNG either way,
+      // which is exactly why nothing else here caught it going key-only.
+      // `basemap_test.dart` owns that check in full.
+      expect(tileLayer.urlTemplate, contains('key='));
       // Still the injected fake, never a real NetworkTileProvider — this
       // test must perform no real network I/O.
       expect(tileLayer.tileProvider, isA<_NoopTileProvider>());
@@ -2787,6 +2786,7 @@ void main() {
         // C2: capped at the basemap's deepest real zoom, so flutter_map
         // upscales the last real tile rather than requesting 404s.
         expect(tileLayer.maxNativeZoom, basemapMaxNativeZoom);
+        expect(tileLayer.maxNativeZoom, 20);
         // C3 regression guard: urlTemplate is unchanged, and keepBuffer is
         // bumped from the default of 2 to 3.
         expect(tileLayer.urlTemplate, basemapUrlTemplate);
@@ -3871,12 +3871,10 @@ void main() {
 
           final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
           expect(tileLayer.urlTemplate, basemapUrlTemplate);
-          // The point of the constant is that the app never ships a basemap
-          // that needs a key: CARTO's endpoint kept answering 200 with a valid
-          // PNG after it went key-only, and stamped 'API KEY REQUIRED' across
-          // every tile instead — which no HTTP-level assertion would catch.
-          expect(tileLayer.urlTemplate, isNot(contains('cartocdn')));
-          expect(tileLayer.urlTemplate, isNot(contains('key=')));
+          // A key in the URL is the only thing that distinguishes a served
+          // tile from a watermarked one — CARTO answers 200 with a valid PNG
+          // either way. `basemap_test.dart` owns that check in full.
+          expect(tileLayer.urlTemplate, contains('key='));
           expect(
             tileLayer.evictErrorTileStrategy,
             EvictErrorTileStrategy.notVisibleRespectMargin,
