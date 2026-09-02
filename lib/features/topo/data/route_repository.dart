@@ -1,3 +1,5 @@
+import 'dart:ui' show Offset;
+
 import 'package:drift/drift.dart';
 import 'package:uuid/uuid.dart';
 
@@ -504,6 +506,51 @@ class RouteRepository {
         return;
       }
 
+      // The home photo, and the climb is drawn somewhere else too: this is
+      // still "remove this line from this picture", not "delete the climb".
+      // The home drawing is the only one that lives on the `routes` row, so
+      // removing it means PROMOTING another photo's line into its place —
+      // the row keeps its id, number, name, grade, stars, tags and every
+      // ascent logged against it, and simply now calls a different photo
+      // home. Deleting the row instead would take a climb's whole history
+      // with a drawing the contributor only meant to redo.
+      final successor =
+          await (_db.select(_db.routeLines)
+                ..where(
+                  (t) => t.routeId.equals(route.id) & t.deletedAt.isNull(),
+                )
+                ..orderBy([(t) => OrderingTerm(expression: t.createdAt)])
+                ..limit(1))
+              .getSingleOrNull();
+      if (successor != null) {
+        await (_db.update(
+          _db.routes,
+        )..where((t) => t.id.equals(route.id))).write(
+          db.RoutesCompanion(
+            photoId: Value(successor.photoId),
+            pointsJson: Value(successor.pointsJson),
+            symbolsJson: Value(successor.symbolsJson),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+          ),
+        );
+        // The promoted line must not also survive as a `route_lines` row:
+        // the partial unique index forbids a line on the climb's own home
+        // photo, and a duplicate would render the same drawing twice.
+        await (_db.update(
+          _db.routeLines,
+        )..where((t) => t.id.equals(successor.id))).write(
+          db.RouteLinesCompanion(
+            deletedAt: Value(now),
+            updatedAt: Value(now),
+            dirty: const Value(true),
+          ),
+        );
+        return;
+      }
+
+      // The last picture this climb was on. Only now does deleting the
+      // drawing delete the climb, together with any (already absent) lines.
       await (_db.update(
         _db.routeLines,
       )..where((t) => t.routeId.equals(route.id) & t.deletedAt.isNull())).write(

@@ -77,10 +77,10 @@ class LegendExpandedController extends Notifier<bool> {
 /// must not share one collapsed/expanded flag; a fresh mount of the same
 /// wall should reset to the mode-appropriate default rather than keep
 /// whatever a long-gone previous mount left behind).
-final legendExpandedProvider =
-    NotifierProvider.autoDispose.family<LegendExpandedController, bool, String>(
-  LegendExpandedController.new,
-);
+final legendExpandedProvider = NotifierProvider.autoDispose
+    .family<LegendExpandedController, bool, String>(
+      LegendExpandedController.new,
+    );
 
 /// Whether the DOCK's body is open at all.
 ///
@@ -104,10 +104,8 @@ class DockExpandedController extends Notifier<bool> {
 
 /// Keyed by wallId and autoDispose, exactly as [legendExpandedProvider] is and
 /// for the same reasons — see that provider's doc.
-final dockExpandedProvider =
-    NotifierProvider.autoDispose.family<DockExpandedController, bool, String>(
-  DockExpandedController.new,
-);
+final dockExpandedProvider = NotifierProvider.autoDispose
+    .family<DockExpandedController, bool, String>(DockExpandedController.new);
 
 /// Fraction of the screen height the [RouteLegend] panel is capped at once
 /// it has enough routes to need it. Below this cap the panel just shrink-
@@ -216,9 +214,9 @@ class RouteLegend extends ConsumerWidget {
     // record's structural `==` and only rebuilds when one of them actually
     // changes — never for per-point/undo-redo churn.
     final legendState = ref.watch(
-      drawControllerProvider(wallId).select(
-        (s) => (routes: s.routes, selectedRouteId: s.selectedRouteId),
-      ),
+      drawControllerProvider(
+        wallId,
+      ).select((s) => (routes: s.routes, selectedRouteId: s.selectedRouteId)),
     );
     final notifier = ref.read(drawControllerProvider(wallId).notifier);
 
@@ -482,7 +480,16 @@ Future<void> _showRouteActions(
       final confirmed = await showMasiConfirm(
         context,
         title: 'Delete ${routeDisplayLabel(route)}?',
-        message: 'The line and its markers are removed from this photo.',
+        // Says the rule rather than guessing which half of it applies: the
+        // legend would need a per-route query to know whether this climb is
+        // drawn on another photo, and the answer is only interesting at the
+        // moment it decides what Delete does. Stating both cases costs one
+        // line and is never wrong.
+        message:
+            'The line and its markers are removed from this photo. '
+            'If it is drawn on another photo of this rock, the climb '
+            'stays there with its grade and ascents; if this was the last '
+            'one, the climb goes too.',
         confirmLabel: 'Delete',
         confirmKey: Key('topo-route-delete-confirm-${route.id}'),
       );
@@ -521,11 +528,7 @@ Widget? _buildRouteSubtitle(
   // selected one: the point is to spot them.
   final isUnplaced = route.points.length < 2;
 
-  if (!hasChips &&
-      !hasStars &&
-      !showDescription &&
-      !showStyle &&
-      !isUnplaced) {
+  if (!hasChips && !hasStars && !showDescription && !showStyle && !isUnplaced) {
     return null;
   }
 
@@ -624,7 +627,11 @@ class _RouteStyleTagChip extends StatelessWidget {
       ),
       child: Text(
         resolved.displayLabel,
-        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w500, color: colors.ink2),
+        style: TextStyle(
+          fontSize: 10,
+          fontWeight: FontWeight.w500,
+          color: colors.ink2,
+        ),
       ),
     );
   }
