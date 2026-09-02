@@ -646,7 +646,7 @@ void main() {
       // happen BEFORE the save, so the row was simply stuck.
       await tapOrFail(
         tester,
-        find.byKey(const Key('face-rail-tile-\$kE2eFaceThreePhotoId')),
+        find.byKey(const Key('face-rail-tile-$kE2eFaceThreePhotoId')),
         'the third face in the dock rail',
       );
       await settleNetwork(tester, budget: const Duration(seconds: 10));
