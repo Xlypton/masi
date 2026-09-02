@@ -90,6 +90,10 @@ SnackBar routeLoadFailureSnackBar(RouteLoadException error) {
 /// Only reachable from that one ambiguous case: with nothing selected, or
 /// with an unplaced route selected, there is exactly one sensible answer and
 /// `_handleCommitRoute` takes it without asking.
+/// The two readings of a freshly drawn line on a rock that already has
+/// climbs on its other faces.
+enum _NewOrExisting { newClimb, existingClimb }
+
 enum _DraftTarget {
   /// Replace the selected route's geometry, keeping its identity and
   /// metadata.
@@ -439,6 +443,11 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
   /// follows is deliberately NOT awaited here: it is a modal the climber drives,
   /// and folding it into the pending future would keep the button disabled and
   /// spinning for as long as they were typing a route name.
+  /// The photos on which the climber has already said "a new climb" — see
+  /// [_handleCommitRoute]. Per visit to this screen, deliberately: it is a
+  /// question about what they are doing right now, not a preference.
+  final Set<String> _askedWhichClimbFor = <String>{};
+
   Future<void> _handleCommitRoute() async {
     if (widget.readOnly) return;
     final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
@@ -453,6 +462,63 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     //    there is no second reading to choose between.
     //  * A selected route that already HAS a line -> genuinely ambiguous, and
     //    one of the answers overwrites work. Ask.
+    // And a fourth reading, which nothing on this screen used to ASK about:
+    // the line just drawn is a climb that already exists on another face of
+    // this same rock. The control for it sits above the tools while drawing,
+    // and twice now it has gone unfound — so on a wall where the question is
+    // live, the save itself puts it. Once per photo: answer "a new climb"
+    // and the ✓ goes straight through for the rest of this visit, because
+    // somebody drawing ten new lines on the second face should be asked
+    // once, not ten times.
+    final photoId = ref
+        .read(drawControllerProvider(widget.wallId))
+        .activePhotoId;
+    final elsewhere = photoId == null
+        ? const <TopoRoute>[]
+        : ref
+                  .read(
+                    climbsElsewhereProvider((
+                      wallId: widget.wallId,
+                      photoId: photoId,
+                    )),
+                  )
+                  .value ??
+              const <TopoRoute>[];
+    if (notifier.pendingDraftTarget == null &&
+        elsewhere.isNotEmpty &&
+        photoId != null &&
+        !_askedWhichClimbFor.contains(photoId)) {
+      final choice = await showMasiActionSheet<_NewOrExisting>(
+        context,
+        sheetKey: const Key('topo-new-or-existing-sheet'),
+        title: 'Is this a new climb?',
+        message:
+            'This rock has climbs drawn on its other photos. A line here can '
+            'be one of them, seen from this side — same number, same name, '
+            'same grade — or a climb of its own.',
+        actions: const [
+          MasiSheetAction(
+            key: Key('topo-new-or-existing-new'),
+            label: 'A new climb',
+            value: _NewOrExisting.newClimb,
+          ),
+          MasiSheetAction(
+            key: Key('topo-new-or-existing-same'),
+            label: 'A climb I already have…',
+            value: _NewOrExisting.existingClimb,
+          ),
+        ],
+      );
+      // Dismissed: the line stays on the canvas, undamaged, and nothing is
+      // written — same rule as the prompt below.
+      if (!mounted || choice == null) return;
+      if (choice == _NewOrExisting.existingClimb) {
+        await _handleLinkToExistingClimb(elsewhere);
+        return;
+      }
+      _askedWhichClimbFor.add(photoId);
+    }
+
     final target = notifier.pendingDraftTarget;
     var replaceSelectedLine = false;
     if (target != null && target.overwritesLine) {

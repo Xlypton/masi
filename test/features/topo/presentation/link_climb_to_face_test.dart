@@ -221,4 +221,101 @@ void main() {
       reason: 'the ordinary save is still there — this line is a new climb',
     );
   });
+
+  /// Twice now the control above the tools has gone unfound, so the SAVE asks
+  /// as well — on a rock that has climbs on its other photos, which is the
+  /// only place the question means anything.
+  testWidgets('saving a line on a face of a rock that has climbs elsewhere '
+      'asks which it is, once', (tester) async {
+    final seeded = await seedWall();
+    addTearDown(seeded.db.close);
+    addTearDown(seeded.container.dispose);
+    await seedPhoto(seeded.db, seeded.wallId, 'photo-1');
+    await seedPhoto(seeded.db, seeded.wallId, 'photo-2');
+
+    await seeded.container
+        .read(routeRepositoryProvider)
+        .upsertRoute(
+          seeded.wallId,
+          'photo-1',
+          const TopoRoute(
+            id: 1,
+            number: 1,
+            points: [Offset(0.1, 0.1), Offset(0.2, 0.9)],
+            name: 'Arete',
+            gradeRaw: '6a',
+          ),
+        );
+
+    final notifier = seeded.container.read(
+      drawControllerProvider(seeded.wallId).notifier,
+    );
+    await pumpCanvas(tester, seeded.container, seeded.wallId);
+    await notifier.loadForWall(seeded.wallId, 'photo-2');
+    await tester.pumpAndSettle();
+
+    Future<void> drawLine() async {
+      if (seeded.container.read(drawControllerProvider(seeded.wallId)).mode !=
+          DrawMode.draw) {
+        await tester.tap(find.byKey(const Key('topo-mode-toggle')));
+        await tester.pumpAndSettle();
+      }
+      notifier.addPoint(const Offset(0.5, 0.1));
+      notifier.addPoint(const Offset(0.6, 0.9));
+      await tester.pumpAndSettle();
+    }
+
+    await drawLine();
+    // Pumped by hand, not settled: the ✓ is a pending button whose future is
+    // this very save, so while the sheet is open its spinner is animating and
+    // `pumpAndSettle` waits for a frame that cannot come until the question
+    // is answered.
+    await tester.tap(find.byKey(const Key('topo-commit-button')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+
+    expect(
+      find.byKey(const Key('topo-new-or-existing-same')),
+      findsOneWidget,
+      reason:
+          'the save is the one moment every contributor reaches, so it '
+          'is where the question has to be asked',
+    );
+
+    // "A new climb" saves as one, and does not ask again for this photo.
+    await tester.tap(find.byKey(const Key('topo-new-or-existing-new')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+    expect(
+      find.byKey(const Key('topo-new-or-existing-same')),
+      findsNothing,
+      reason: 'the answer was given',
+    );
+    expect(
+      seeded.container.read(drawControllerProvider(seeded.wallId)).routes,
+      hasLength(1),
+      reason: 'a new climb on this face',
+    );
+
+    // Close the metadata sheet the new climb opened. Popped rather than
+    // tapped: it is scroll-controlled, so on a phone it fills the screen and
+    // has neither a scrim to tap nor its own buttons above the fold.
+    tester.state<NavigatorState>(find.byType(Navigator).first).pop();
+    await tester.pumpAndSettle();
+    await drawLine();
+    await tester.tap(find.byKey(const Key('topo-commit-button')));
+    for (var i = 0; i < 10; i++) {
+      await tester.pump(const Duration(milliseconds: 120));
+    }
+
+    expect(
+      find.byKey(const Key('topo-new-or-existing-same')),
+      findsNothing,
+      reason:
+          'somebody drawing ten new lines on the second face is asked '
+          'once, not ten times',
+    );
+  });
 }
