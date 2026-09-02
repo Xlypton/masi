@@ -1,3 +1,4 @@
+import 'package:drift/drift.dart' show Value;
 import 'package:flutter/foundation.dart' show debugPrint, immutable;
 
 import '../../../core/db/app_database.dart' as db;
@@ -467,7 +468,9 @@ class BackupRepository {
   /// The first FK in [checks] whose non-null parent id is absent from its
   /// presence set, or `null` when every FK resolves. A `null` parent id (an
   /// optional FK, e.g. `Comments.wallId` since Feature #12) always resolves.
-  (String, String)? _firstMissingFk(List<(String, String?, Set<String>)> checks) {
+  (String, String)? _firstMissingFk(
+    List<(String, String?, Set<String>)> checks,
+  ) {
     for (final (column, parentId, presentIds) in checks) {
       if (parentId != null && !presentIds.contains(parentId)) {
         return (column, parentId);
@@ -519,7 +522,10 @@ class BackupRepository {
     ConflictMode mode,
   ) async {
     final existing = mode == ConflictMode.lww
-        ? {for (final r in await _db.select(_db.profiles).get()) r.id: r.updatedAt}
+        ? {
+            for (final r in await _db.select(_db.profiles).get())
+              r.id: r.updatedAt,
+          }
         : const <String, int>{};
 
     for (final json in rows) {
@@ -562,7 +568,10 @@ class BackupRepository {
     _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
-        ? {for (final r in await _db.select(_db.sectors).get()) r.id: r.updatedAt}
+        ? {
+            for (final r in await _db.select(_db.sectors).get())
+              r.id: r.updatedAt,
+          }
         : const <String, int>{};
     final areaIds = await _existingIds('areas');
 
@@ -639,7 +648,10 @@ class BackupRepository {
     _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
-        ? {for (final r in await _db.select(_db.photos).get()) r.id: r.updatedAt}
+        ? {
+            for (final r in await _db.select(_db.photos).get())
+              r.id: r.updatedAt,
+          }
         : const <String, int>{};
     final wallIds = await _existingIds('walls');
     // GROWS as rows land: a slice's `parentPhotoId` may point at an original
@@ -700,7 +712,10 @@ class BackupRepository {
     _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
-        ? {for (final r in await _db.select(_db.routes).get()) r.id: r.updatedAt}
+        ? {
+            for (final r in await _db.select(_db.routes).get())
+              r.id: r.updatedAt,
+          }
         : const <String, int>{};
     final wallIds = await _existingIds('walls');
     final photoIds = await _existingIds('photos');
@@ -728,8 +743,55 @@ class BackupRepository {
         );
         continue;
       }
+      await _parkCollidingRouteNumber(route);
       await _db.into(_db.routes).insertOnConflictUpdate(route);
     }
+  }
+
+  /// Moves a DIFFERENT local climb off the number [incoming] is arriving with,
+  /// so the write below cannot trip `idx_routes_wall_number_live`.
+  ///
+  /// `insertOnConflictUpdate` resolves conflicts on the PRIMARY KEY only, so
+  /// the local partial unique index on `(wallId, number)` is a hard failure
+  /// rather than an upsert — and one throw here fails the whole pull. The
+  /// window is real and gets wider the more numbers move: another device
+  /// renumbers a wall left to right ([RouteRepository.renumberByPosition]),
+  /// pushes both halves of a swap, and this loop applies them ONE AT A TIME,
+  /// so the first arrival lands on a number the second row still holds.
+  ///
+  /// Parking the other row at the wall's next free number rather than at a
+  /// negative one keeps it a state the app can render — the pull is very
+  /// likely carrying that row too, moments later, with its real number; if it
+  /// is not, the owner's next open renumbers the wall and tidies it. A
+  /// negative would show up in the legend as "Route -2" until then.
+  ///
+  /// Server-side there is no such constraint (verified 2026-09-02: `routes`
+  /// carries only its primary key and two non-unique indexes), so nothing
+  /// here needs to hold on the way out.
+  Future<void> _parkCollidingRouteNumber(db.Route incoming) async {
+    // Written with a plain fetch-and-filter rather than drift's expression
+    // builders: this file deliberately imports only `Value` from drift (see
+    // the import), and a wall's live routes are a handful of rows.
+    final live = await _db.select(_db.routes).get();
+    final onWall = [
+      for (final r in live)
+        if (r.wallId == incoming.wallId && r.deletedAt == null) r,
+    ];
+    final clash = onWall
+        .where((r) => r.number == incoming.number && r.id != incoming.id)
+        .firstOrNull;
+    if (clash == null) return;
+
+    var free = clash.number;
+    for (final r in onWall) {
+      if (r.number > free) free = r.number;
+    }
+    free += 1;
+    await (_db.update(_db.routes)..where((t) => t.id.equals(clash.id))).write(
+      // NOT marked dirty: this is a local shuffle to make somebody else's
+      // write land, not an edit of ours to push back at them.
+      db.RoutesCompanion(number: Value(free)),
+    );
   }
 
   Future<void> _importRouteLines(
@@ -779,7 +841,10 @@ class BackupRepository {
     _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
-        ? {for (final r in await _db.select(_db.comments).get()) r.id: r.updatedAt}
+        ? {
+            for (final r in await _db.select(_db.comments).get())
+              r.id: r.updatedAt,
+          }
         : const <String, int>{};
     final wallIds = await _existingIds('walls');
     final ascentIds = await _existingIds('ascents');
@@ -867,7 +932,10 @@ class BackupRepository {
     _DeferralSink sink,
   ) async {
     final existing = mode == ConflictMode.lww
-        ? {for (final r in await _db.select(_db.ascents).get()) r.id: r.updatedAt}
+        ? {
+            for (final r in await _db.select(_db.ascents).get())
+              r.id: r.updatedAt,
+          }
         : const <String, int>{};
     // The pair that produced the live failure: an ascent the signed-in user
     // logged on ANOTHER owner's shared route. `fetchOwnRows` can only see rows

@@ -26,82 +26,96 @@ void main() {
   /// so exports/imports are exercised against a non-trivial, realistic
   /// hierarchy.
   Future<void> seed(AppDatabase db) async {
-    await db.into(db.areas).insert(
-      AreasCompanion.insert(
-        id: 'area-1',
-        createdAt: 100,
-        updatedAt: 100,
-        name: 'Area One',
-      ),
-    );
-    await db.into(db.areas).insert(
-      AreasCompanion.insert(
-        id: 'area-2-deleted',
-        createdAt: 100,
-        updatedAt: 150,
-        deletedAt: const Value(200),
-        name: 'Deleted Area',
-      ),
-    );
-    await db.into(db.sectors).insert(
-      SectorsCompanion.insert(
-        id: 'sector-1',
-        createdAt: 100,
-        updatedAt: 100,
-        areaId: 'area-1',
-        name: 'Sector One',
-        sortOrder: 0,
-      ),
-    );
-    await db.into(db.walls).insert(
-      WallsCompanion.insert(
-        id: 'wall-1',
-        createdAt: 100,
-        updatedAt: 100,
-        sectorId: 'sector-1',
-        name: 'Wall One',
-        sortOrder: 0,
-      ),
-    );
-    await db.into(db.photos).insert(
-      PhotosCompanion.insert(
-        id: 'photo-original',
-        createdAt: 100,
-        updatedAt: 100,
-        wallId: 'wall-1',
-        localPath: '/tmp/original.jpg',
-        kind: 'original',
-        width: 800,
-        height: 600,
-      ),
-    );
-    await db.into(db.photos).insert(
-      PhotosCompanion.insert(
-        id: 'photo-slice',
-        createdAt: 100,
-        updatedAt: 100,
-        wallId: 'wall-1',
-        localPath: '/tmp/original.jpg',
-        kind: 'slice',
-        width: 400,
-        height: 300,
-        parentPhotoId: const Value('photo-original'),
-      ),
-    );
-    await db.into(db.routes).insert(
-      RoutesCompanion.insert(
-        id: 'route-1',
-        createdAt: 100,
-        updatedAt: 100,
-        wallId: 'wall-1',
-        photoId: 'photo-original',
-        number: 1,
-        colorIndex: 0,
-        pointsJson: '[]',
-        symbolsJson: '[]',
-        sortOrder: 0,
-      ),
-    );
+    await db
+        .into(db.areas)
+        .insert(
+          AreasCompanion.insert(
+            id: 'area-1',
+            createdAt: 100,
+            updatedAt: 100,
+            name: 'Area One',
+          ),
+        );
+    await db
+        .into(db.areas)
+        .insert(
+          AreasCompanion.insert(
+            id: 'area-2-deleted',
+            createdAt: 100,
+            updatedAt: 150,
+            deletedAt: const Value(200),
+            name: 'Deleted Area',
+          ),
+        );
+    await db
+        .into(db.sectors)
+        .insert(
+          SectorsCompanion.insert(
+            id: 'sector-1',
+            createdAt: 100,
+            updatedAt: 100,
+            areaId: 'area-1',
+            name: 'Sector One',
+            sortOrder: 0,
+          ),
+        );
+    await db
+        .into(db.walls)
+        .insert(
+          WallsCompanion.insert(
+            id: 'wall-1',
+            createdAt: 100,
+            updatedAt: 100,
+            sectorId: 'sector-1',
+            name: 'Wall One',
+            sortOrder: 0,
+          ),
+        );
+    await db
+        .into(db.photos)
+        .insert(
+          PhotosCompanion.insert(
+            id: 'photo-original',
+            createdAt: 100,
+            updatedAt: 100,
+            wallId: 'wall-1',
+            localPath: '/tmp/original.jpg',
+            kind: 'original',
+            width: 800,
+            height: 600,
+          ),
+        );
+    await db
+        .into(db.photos)
+        .insert(
+          PhotosCompanion.insert(
+            id: 'photo-slice',
+            createdAt: 100,
+            updatedAt: 100,
+            wallId: 'wall-1',
+            localPath: '/tmp/original.jpg',
+            kind: 'slice',
+            width: 400,
+            height: 300,
+            parentPhotoId: const Value('photo-original'),
+          ),
+        );
+    await db
+        .into(db.routes)
+        .insert(
+          RoutesCompanion.insert(
+            id: 'route-1',
+            createdAt: 100,
+            updatedAt: 100,
+            wallId: 'wall-1',
+            photoId: 'photo-original',
+            number: 1,
+            colorIndex: 0,
+            pointsJson: '[]',
+            symbolsJson: '[]',
+            sortOrder: 0,
+          ),
+        );
   }
 
   /// Deletes every row from every table, in reverse-FK order, so the DB is
@@ -114,59 +128,125 @@ void main() {
     await db.delete(db.areas).go();
   }
 
-  test(
-    'S3-a: export -> wipe -> replace-import reproduces every row '
-    'byte-for-byte, including the soft-deleted tombstone',
-    () async {
-      await seed(db);
+  test('a pull carrying a renumbered wall applies row by row without tripping '
+      'the local unique (wallId, number) index — the swap another device just '
+      'pushed arrives one half at a time', () async {
+    await seed(db);
+    await db
+        .into(db.routes)
+        .insert(
+          RoutesCompanion.insert(
+            id: 'route-2',
+            createdAt: 100,
+            updatedAt: 100,
+            wallId: 'wall-1',
+            photoId: 'photo-original',
+            number: 2,
+            colorIndex: 1,
+            pointsJson: '[]',
+            symbolsJson: '[]',
+            sortOrder: 1,
+          ),
+        );
 
-      final originalAreas = await db.select(db.areas).get();
-      final originalSectors = await db.select(db.sectors).get();
-      final originalWalls = await db.select(db.walls).get();
-      final originalPhotos = await db.select(db.photos).get();
-      final originalRoutes = await db.select(db.routes).get();
+    // What the other device pushed after renumbering left to right: the two
+    // climbs have traded numbers. `insertOnConflictUpdate` resolves on the
+    // PRIMARY KEY, so nothing here upserts the collision away — before the
+    // parking step this threw on the first row and failed the whole pull.
+    final snapshot = {
+      'tables': {
+        'routes': [
+          {
+            'id': 'route-1',
+            'createdAt': 100,
+            'updatedAt': 300,
+            'wallId': 'wall-1',
+            'photoId': 'photo-original',
+            'number': 2,
+            'colorIndex': 1,
+            'pointsJson': '[]',
+            'symbolsJson': '[]',
+            'sortOrder': 2,
+            'visible': true,
+            'dirty': false,
+          },
+          {
+            'id': 'route-2',
+            'createdAt': 100,
+            'updatedAt': 300,
+            'wallId': 'wall-1',
+            'photoId': 'photo-original',
+            'number': 1,
+            'colorIndex': 0,
+            'pointsJson': '[]',
+            'symbolsJson': '[]',
+            'sortOrder': 1,
+            'visible': true,
+            'dirty': false,
+          },
+        ],
+      },
+    };
 
-      final snapshot = await repo.exportSnapshot();
+    await repo.importSnapshot(snapshot, mode: ConflictMode.lww);
 
-      await wipe(db);
-      expect(await db.select(db.areas).get(), isEmpty);
+    final byId = {
+      for (final r in await db.select(db.routes).get()) r.id: r.number,
+    };
+    expect(byId['route-1'], 2);
+    expect(byId['route-2'], 1);
+  });
 
-      await repo.importSnapshot(snapshot, mode: ConflictMode.replace);
+  test('S3-a: export -> wipe -> replace-import reproduces every row '
+      'byte-for-byte, including the soft-deleted tombstone', () async {
+    await seed(db);
 
-      final restoredAreas = await db.select(db.areas).get();
-      final restoredSectors = await db.select(db.sectors).get();
-      final restoredWalls = await db.select(db.walls).get();
-      final restoredPhotos = await db.select(db.photos).get();
-      final restoredRoutes = await db.select(db.routes).get();
+    final originalAreas = await db.select(db.areas).get();
+    final originalSectors = await db.select(db.sectors).get();
+    final originalWalls = await db.select(db.walls).get();
+    final originalPhotos = await db.select(db.photos).get();
+    final originalRoutes = await db.select(db.routes).get();
 
-      expect(
-        {for (final a in restoredAreas) a.id: a},
-        {for (final a in originalAreas) a.id: a},
-      );
-      expect(
-        {for (final s in restoredSectors) s.id: s},
-        {for (final s in originalSectors) s.id: s},
-      );
-      expect(
-        {for (final w in restoredWalls) w.id: w},
-        {for (final w in originalWalls) w.id: w},
-      );
-      expect(
-        {for (final p in restoredPhotos) p.id: p},
-        {for (final p in originalPhotos) p.id: p},
-      );
-      expect(
-        {for (final r in restoredRoutes) r.id: r},
-        {for (final r in originalRoutes) r.id: r},
-      );
+    final snapshot = await repo.exportSnapshot();
 
-      // Explicitly assert the tombstone survived the round trip.
-      final restoredDeletedArea = restoredAreas.firstWhere(
-        (a) => a.id == 'area-2-deleted',
-      );
-      expect(restoredDeletedArea.deletedAt, 200);
-    },
-  );
+    await wipe(db);
+    expect(await db.select(db.areas).get(), isEmpty);
+
+    await repo.importSnapshot(snapshot, mode: ConflictMode.replace);
+
+    final restoredAreas = await db.select(db.areas).get();
+    final restoredSectors = await db.select(db.sectors).get();
+    final restoredWalls = await db.select(db.walls).get();
+    final restoredPhotos = await db.select(db.photos).get();
+    final restoredRoutes = await db.select(db.routes).get();
+
+    expect(
+      {for (final a in restoredAreas) a.id: a},
+      {for (final a in originalAreas) a.id: a},
+    );
+    expect(
+      {for (final s in restoredSectors) s.id: s},
+      {for (final s in originalSectors) s.id: s},
+    );
+    expect(
+      {for (final w in restoredWalls) w.id: w},
+      {for (final w in originalWalls) w.id: w},
+    );
+    expect(
+      {for (final p in restoredPhotos) p.id: p},
+      {for (final p in originalPhotos) p.id: p},
+    );
+    expect(
+      {for (final r in restoredRoutes) r.id: r},
+      {for (final r in originalRoutes) r.id: r},
+    );
+
+    // Explicitly assert the tombstone survived the round trip.
+    final restoredDeletedArea = restoredAreas.firstWhere(
+      (a) => a.id == 'area-2-deleted',
+    );
+    expect(restoredDeletedArea.deletedAt, 200);
+  });
 
   test('S3-b: importing the same snapshot twice is idempotent', () async {
     await seed(db);
@@ -187,213 +267,210 @@ void main() {
     expect(photos, hasLength(2));
   });
 
-  test(
-    'S3-c: import succeeds under FK enforcement even when a slice Photo '
-    'appears BEFORE its original in the snapshot array',
-    () async {
-      final snapshot = {
+  test('S3-c: import succeeds under FK enforcement even when a slice Photo '
+      'appears BEFORE its original in the snapshot array', () async {
+    final snapshot = {
+      'schemaVersion': 1,
+      'tables': {
+        'areas': [
+          {
+            'id': 'area-1',
+            'createdAt': 100,
+            'updatedAt': 100,
+            'deletedAt': null,
+            'remoteId': null,
+            'dirty': false,
+            'name': 'Area One',
+            'description': null,
+            'latitude': null,
+            'longitude': null,
+          },
+        ],
+        'sectors': [
+          {
+            'id': 'sector-1',
+            'createdAt': 100,
+            'updatedAt': 100,
+            'deletedAt': null,
+            'remoteId': null,
+            'dirty': false,
+            'areaId': 'area-1',
+            'name': 'Sector One',
+            'sortOrder': 0,
+          },
+        ],
+        'walls': [
+          {
+            'id': 'wall-1',
+            'createdAt': 100,
+            'updatedAt': 100,
+            'deletedAt': null,
+            'remoteId': null,
+            'dirty': false,
+            'sectorId': 'sector-1',
+            'name': 'Wall One',
+            'sortOrder': 0,
+          },
+        ],
+        // Deliberately reversed: slice (has parentPhotoId) listed first,
+        // original second. A naive in-order import would violate the
+        // Photos self-FK under `PRAGMA foreign_keys = ON`.
+        'photos': [
+          {
+            'id': 'photo-slice',
+            'createdAt': 100,
+            'updatedAt': 100,
+            'deletedAt': null,
+            'remoteId': null,
+            'dirty': false,
+            'wallId': 'wall-1',
+            'localPath': '/tmp/original.jpg',
+            'kind': 'slice',
+            'width': 400,
+            'height': 300,
+            'parentPhotoId': 'photo-original',
+            'cropXpct': null,
+            'cropWidthPct': null,
+          },
+          {
+            'id': 'photo-original',
+            'createdAt': 100,
+            'updatedAt': 100,
+            'deletedAt': null,
+            'remoteId': null,
+            'dirty': false,
+            'wallId': 'wall-1',
+            'localPath': '/tmp/original.jpg',
+            'kind': 'original',
+            'width': 800,
+            'height': 600,
+            'parentPhotoId': null,
+            'cropXpct': null,
+            'cropWidthPct': null,
+          },
+        ],
+        'routes': <Map<String, dynamic>>[],
+      },
+    };
+
+    // Must not throw an SqliteException (FK violation).
+    await repo.importSnapshot(snapshot, mode: ConflictMode.replace);
+
+    final photos = await db.select(db.photos).get();
+    expect(photos, hasLength(2));
+    final slice = photos.firstWhere((p) => p.id == 'photo-slice');
+    expect(slice.parentPhotoId, 'photo-original');
+  });
+
+  group('S5: profiles (#18, editable synced display name)', () {
+    test('export -> wipe -> replace-import round-trips a profiles row '
+        'byte-for-byte, alongside the rest of the hierarchy', () async {
+      await seed(db);
+      await db
+          .into(db.profiles)
+          .insert(
+            ProfilesCompanion.insert(
+              id: 'user-1',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('user-1'),
+              displayName: const Value('Alex'),
+            ),
+          );
+
+      final snapshot = await repo.exportSnapshot();
+      expect(
+        (snapshot['tables'] as Map)['profiles'],
+        isNotNull,
+        reason: 'exportSnapshot must include a profiles key',
+      );
+
+      await wipe(db);
+      await db.delete(db.profiles).go();
+      expect(await db.select(db.profiles).get(), isEmpty);
+
+      await repo.importSnapshot(snapshot, mode: ConflictMode.replace);
+
+      final profile = await (db.select(
+        db.profiles,
+      )..where((t) => t.id.equals('user-1'))).getSingle();
+      expect(profile.displayName, 'Alex');
+      expect(profile.ownerId, 'user-1');
+    });
+
+    test('lww: a local profile row with a NEWER updatedAt survives an older '
+        'incoming import; an incoming row with no local counterpart is '
+        'inserted', () async {
+      await db
+          .into(db.profiles)
+          .insert(
+            ProfilesCompanion.insert(
+              id: 'user-1',
+              createdAt: 100,
+              updatedAt: 500,
+              displayName: const Value('Local (newer)'),
+            ),
+          );
+
+      final incoming = {
         'schemaVersion': 1,
         'tables': {
-          'areas': [
+          'profiles': [
             {
-              'id': 'area-1',
+              'id': 'user-1',
+              'createdAt': 100,
+              'updatedAt': 100, // older than local's 500
+              'deletedAt': null,
+              'remoteId': null,
+              'dirty': false,
+              'ownerId': 'user-1',
+              'displayName': 'Incoming (older)',
+            },
+            {
+              'id': 'user-2',
               'createdAt': 100,
               'updatedAt': 100,
               'deletedAt': null,
               'remoteId': null,
               'dirty': false,
-              'name': 'Area One',
-              'description': null,
-              'latitude': null,
-              'longitude': null,
+              'ownerId': 'user-2',
+              'displayName': 'Brand new',
             },
           ],
-          'sectors': [
-            {
-              'id': 'sector-1',
-              'createdAt': 100,
-              'updatedAt': 100,
-              'deletedAt': null,
-              'remoteId': null,
-              'dirty': false,
-              'areaId': 'area-1',
-              'name': 'Sector One',
-              'sortOrder': 0,
-            },
-          ],
-          'walls': [
-            {
-              'id': 'wall-1',
-              'createdAt': 100,
-              'updatedAt': 100,
-              'deletedAt': null,
-              'remoteId': null,
-              'dirty': false,
-              'sectorId': 'sector-1',
-              'name': 'Wall One',
-              'sortOrder': 0,
-            },
-          ],
-          // Deliberately reversed: slice (has parentPhotoId) listed first,
-          // original second. A naive in-order import would violate the
-          // Photos self-FK under `PRAGMA foreign_keys = ON`.
-          'photos': [
-            {
-              'id': 'photo-slice',
-              'createdAt': 100,
-              'updatedAt': 100,
-              'deletedAt': null,
-              'remoteId': null,
-              'dirty': false,
-              'wallId': 'wall-1',
-              'localPath': '/tmp/original.jpg',
-              'kind': 'slice',
-              'width': 400,
-              'height': 300,
-              'parentPhotoId': 'photo-original',
-              'cropXpct': null,
-              'cropWidthPct': null,
-            },
-            {
-              'id': 'photo-original',
-              'createdAt': 100,
-              'updatedAt': 100,
-              'deletedAt': null,
-              'remoteId': null,
-              'dirty': false,
-              'wallId': 'wall-1',
-              'localPath': '/tmp/original.jpg',
-              'kind': 'original',
-              'width': 800,
-              'height': 600,
-              'parentPhotoId': null,
-              'cropXpct': null,
-              'cropWidthPct': null,
-            },
-          ],
+          'areas': <Map<String, dynamic>>[],
+          'sectors': <Map<String, dynamic>>[],
+          'walls': <Map<String, dynamic>>[],
+          'photos': <Map<String, dynamic>>[],
           'routes': <Map<String, dynamic>>[],
         },
       };
 
-      // Must not throw an SqliteException (FK violation).
-      await repo.importSnapshot(snapshot, mode: ConflictMode.replace);
+      await repo.importSnapshot(incoming, mode: ConflictMode.lww);
 
-      final photos = await db.select(db.photos).get();
-      expect(photos, hasLength(2));
-      final slice = photos.firstWhere((p) => p.id == 'photo-slice');
-      expect(slice.parentPhotoId, 'photo-original');
-    },
-  );
+      final user1 = await (db.select(
+        db.profiles,
+      )..where((t) => t.id.equals('user-1'))).getSingle();
+      expect(user1.displayName, 'Local (newer)');
 
-  group('S5: profiles (#18, editable synced display name)', () {
-    test(
-      'export -> wipe -> replace-import round-trips a profiles row '
-      'byte-for-byte, alongside the rest of the hierarchy',
-      () async {
-        await seed(db);
-        await db.into(db.profiles).insert(
-          ProfilesCompanion.insert(
-            id: 'user-1',
-            createdAt: 100,
-            updatedAt: 100,
-            ownerId: const Value('user-1'),
-            displayName: const Value('Alex'),
-          ),
-        );
-
-        final snapshot = await repo.exportSnapshot();
-        expect(
-          (snapshot['tables'] as Map)['profiles'],
-          isNotNull,
-          reason: 'exportSnapshot must include a profiles key',
-        );
-
-        await wipe(db);
-        await db.delete(db.profiles).go();
-        expect(await db.select(db.profiles).get(), isEmpty);
-
-        await repo.importSnapshot(snapshot, mode: ConflictMode.replace);
-
-        final profile = await (db.select(
-          db.profiles,
-        )..where((t) => t.id.equals('user-1'))).getSingle();
-        expect(profile.displayName, 'Alex');
-        expect(profile.ownerId, 'user-1');
-      },
-    );
-
-    test(
-      'lww: a local profile row with a NEWER updatedAt survives an older '
-      'incoming import; an incoming row with no local counterpart is '
-      'inserted',
-      () async {
-        await db.into(db.profiles).insert(
-          ProfilesCompanion.insert(
-            id: 'user-1',
-            createdAt: 100,
-            updatedAt: 500,
-            displayName: const Value('Local (newer)'),
-          ),
-        );
-
-        final incoming = {
-          'schemaVersion': 1,
-          'tables': {
-            'profiles': [
-              {
-                'id': 'user-1',
-                'createdAt': 100,
-                'updatedAt': 100, // older than local's 500
-                'deletedAt': null,
-                'remoteId': null,
-                'dirty': false,
-                'ownerId': 'user-1',
-                'displayName': 'Incoming (older)',
-              },
-              {
-                'id': 'user-2',
-                'createdAt': 100,
-                'updatedAt': 100,
-                'deletedAt': null,
-                'remoteId': null,
-                'dirty': false,
-                'ownerId': 'user-2',
-                'displayName': 'Brand new',
-              },
-            ],
-            'areas': <Map<String, dynamic>>[],
-            'sectors': <Map<String, dynamic>>[],
-            'walls': <Map<String, dynamic>>[],
-            'photos': <Map<String, dynamic>>[],
-            'routes': <Map<String, dynamic>>[],
-          },
-        };
-
-        await repo.importSnapshot(incoming, mode: ConflictMode.lww);
-
-        final user1 = await (db.select(
-          db.profiles,
-        )..where((t) => t.id.equals('user-1'))).getSingle();
-        expect(user1.displayName, 'Local (newer)');
-
-        final user2 = await (db.select(
-          db.profiles,
-        )..where((t) => t.id.equals('user-2'))).getSingle();
-        expect(user2.displayName, 'Brand new');
-      },
-    );
+      final user2 = await (db.select(
+        db.profiles,
+      )..where((t) => t.id.equals('user-2'))).getSingle();
+      expect(user2.displayName, 'Brand new');
+    });
   });
 
   group('S3-d: lww conflict mode', () {
     test('a local row with a NEWER updatedAt is preserved', () async {
-      await db.into(db.areas).insert(
-        AreasCompanion.insert(
-          id: 'area-1',
-          createdAt: 100,
-          updatedAt: 500,
-          name: 'Local (newer)',
-        ),
-      );
+      await db
+          .into(db.areas)
+          .insert(
+            AreasCompanion.insert(
+              id: 'area-1',
+              createdAt: 100,
+              updatedAt: 500,
+              name: 'Local (newer)',
+            ),
+          );
 
       final incoming = {
         'schemaVersion': 1,
@@ -429,14 +506,16 @@ void main() {
     });
 
     test('a local row with an OLDER updatedAt is overwritten', () async {
-      await db.into(db.areas).insert(
-        AreasCompanion.insert(
-          id: 'area-1',
-          createdAt: 100,
-          updatedAt: 100,
-          name: 'Local (older)',
-        ),
-      );
+      await db
+          .into(db.areas)
+          .insert(
+            AreasCompanion.insert(
+              id: 'area-1',
+              createdAt: 100,
+              updatedAt: 100,
+              name: 'Local (older)',
+            ),
+          );
 
       final incoming = {
         'schemaVersion': 1,
@@ -587,74 +666,85 @@ void main() {
     /// owner's shared topo — the rows `fetchOwnRows` structurally cannot
     /// return.
     Future<void> seedForeign(AppDatabase db) async {
-      await db.into(db.areas).insert(
-        AreasCompanion.insert(
-          id: 'area-f',
-          createdAt: 100,
-          updatedAt: 100,
-          ownerId: const Value('other-owner'),
-          name: 'Foreign Area',
-        ),
-      );
-      await db.into(db.sectors).insert(
-        SectorsCompanion.insert(
-          id: 'sector-f',
-          createdAt: 100,
-          updatedAt: 100,
-          ownerId: const Value('other-owner'),
-          areaId: 'area-f',
-          name: 'Foreign Sector',
-          sortOrder: 0,
-        ),
-      );
-      await db.into(db.walls).insert(
-        WallsCompanion.insert(
-          id: 'wall-f',
-          createdAt: 100,
-          updatedAt: 100,
-          ownerId: const Value('other-owner'),
-          sectorId: 'sector-f',
-          name: 'Foreign Wall',
-          sortOrder: 0,
-          visibility: const Value('shared'),
-        ),
-      );
-      await db.into(db.photos).insert(
-        PhotosCompanion.insert(
-          id: 'photo-f',
-          createdAt: 100,
-          updatedAt: 100,
-          ownerId: const Value('other-owner'),
-          wallId: 'wall-f',
-          localPath: '/tmp/foreign.jpg',
-          kind: 'original',
-          width: 800,
-          height: 600,
-        ),
-      );
-      await db.into(db.routes).insert(
-        RoutesCompanion.insert(
-          id: 'route-f',
-          createdAt: 100,
-          updatedAt: 100,
-          ownerId: const Value('other-owner'),
-          wallId: 'wall-f',
-          photoId: 'photo-f',
-          number: 1,
-          colorIndex: 0,
-          pointsJson: '[]',
-          symbolsJson: '[]',
-          sortOrder: 0,
-        ),
-      );
+      await db
+          .into(db.areas)
+          .insert(
+            AreasCompanion.insert(
+              id: 'area-f',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('other-owner'),
+              name: 'Foreign Area',
+            ),
+          );
+      await db
+          .into(db.sectors)
+          .insert(
+            SectorsCompanion.insert(
+              id: 'sector-f',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('other-owner'),
+              areaId: 'area-f',
+              name: 'Foreign Sector',
+              sortOrder: 0,
+            ),
+          );
+      await db
+          .into(db.walls)
+          .insert(
+            WallsCompanion.insert(
+              id: 'wall-f',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('other-owner'),
+              sectorId: 'sector-f',
+              name: 'Foreign Wall',
+              sortOrder: 0,
+              visibility: const Value('shared'),
+            ),
+          );
+      await db
+          .into(db.photos)
+          .insert(
+            PhotosCompanion.insert(
+              id: 'photo-f',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('other-owner'),
+              wallId: 'wall-f',
+              localPath: '/tmp/foreign.jpg',
+              kind: 'original',
+              width: 800,
+              height: 600,
+            ),
+          );
+      await db
+          .into(db.routes)
+          .insert(
+            RoutesCompanion.insert(
+              id: 'route-f',
+              createdAt: 100,
+              updatedAt: 100,
+              ownerId: const Value('other-owner'),
+              wallId: 'wall-f',
+              photoId: 'photo-f',
+              number: 1,
+              colorIndex: 0,
+              pointsJson: '[]',
+              symbolsJson: '[]',
+              sortOrder: 0,
+            ),
+          );
     }
 
     /// The signed-in user's own community rows: one of each on their OWN topo
     /// (must always come back) and one of each on the FOREIGN topo (the rows
     /// that used to detonate the table).
     Future<void> seedOwnChildren(AppDatabase db) async {
-      Future<void> ascent(String id, String routeId, String wallId) =>
-          db.into(db.ascents).insert(
+      Future<void> ascent(String id, String routeId, String wallId) => db
+          .into(db.ascents)
+          .insert(
             AscentsCompanion.insert(
               id: id,
               createdAt: 100,
@@ -669,8 +759,9 @@ void main() {
       await ascent('ascent-own', 'route-1', 'wall-1');
       await ascent('ascent-foreign', 'route-f', 'wall-f');
 
-      Future<void> comment(String id, {String? wallId, String? ascentId}) =>
-          db.into(db.comments).insert(
+      Future<void> comment(String id, {String? wallId, String? ascentId}) => db
+          .into(db.comments)
+          .insert(
             CommentsCompanion.insert(
               id: id,
               createdAt: 100,
@@ -685,8 +776,9 @@ void main() {
       await comment('comment-on-own-ascent', ascentId: 'ascent-own');
       await comment('comment-foreign', wallId: 'wall-f');
 
-      Future<void> like(String id, {String? wallId, String? ascentId}) =>
-          db.into(db.likes).insert(
+      Future<void> like(String id, {String? wallId, String? ascentId}) => db
+          .into(db.likes)
+          .insert(
             LikesCompanion.insert(
               id: id,
               createdAt: 100,
@@ -719,9 +811,16 @@ void main() {
     /// topo's parent rows.
     Map<String, dynamic> ownOnly(Map<String, dynamic> snapshot) {
       final tables = (snapshot['tables'] as Map).cast<String, dynamic>();
-      for (final table in const ['areas', 'sectors', 'walls', 'photos', 'routes']) {
+      for (final table in const [
+        'areas',
+        'sectors',
+        'walls',
+        'photos',
+        'routes',
+      ]) {
         tables[table] = [
-          for (final row in (tables[table] as List).cast<Map<String, dynamic>>())
+          for (final row
+              in (tables[table] as List).cast<Map<String, dynamic>>())
             if (!(row['id'] as String).endsWith('-f')) row,
         ];
       }
@@ -758,20 +857,23 @@ void main() {
           reason: 'all THREE live-failing tables must be covered',
         );
         expect(
-          report.deferred.singleWhere((d) => d.table == 'ascents').missingParentId,
+          report.deferred
+              .singleWhere((d) => d.table == 'ascents')
+              .missingParentId,
           'route-f',
         );
 
         // The whole point: the rows on the user's OWN topo survived.
-        expect(
-          (await db.select(db.ascents).get()).map((a) => a.id),
-          ['ascent-own'],
-        );
+        expect((await db.select(db.ascents).get()).map((a) => a.id), [
+          'ascent-own',
+        ]);
         expect(
           (await db.select(db.comments).get()).map((c) => c.id),
           unorderedEquals(['comment-own', 'comment-on-own-ascent']),
         );
-        expect((await db.select(db.likes).get()).map((l) => l.id), ['like-own']);
+        expect((await db.select(db.likes).get()).map((l) => l.id), [
+          'like-own',
+        ]);
       },
     );
 
@@ -785,10 +887,9 @@ void main() {
         await seedForeign(db);
 
         // ...and the SAME rows, re-imported through the same door, land.
-        final retry = await repo.importSnapshot(
-          {'tables': report.deferredRows},
-          mode: ConflictMode.lww,
-        );
+        final retry = await repo.importSnapshot({
+          'tables': report.deferredRows,
+        }, mode: ConflictMode.lww);
 
         expect(retry.hasDeferrals, isFalse, reason: retry.summary);
         expect(
@@ -928,7 +1029,10 @@ void main() {
         await seed(db);
         // Soft-delete the wall the way the app does (tombstone, row stays).
         await (db.update(db.walls)..where((t) => t.id.equals('wall-1'))).write(
-          WallsCompanion(deletedAt: const Value(999), updatedAt: const Value(999)),
+          WallsCompanion(
+            deletedAt: const Value(999),
+            updatedAt: const Value(999),
+          ),
         );
 
         final report = await repo.importSnapshot({
@@ -1043,44 +1147,43 @@ void main() {
       },
     );
 
-    test(
-      'the exception reports both versions and keeps the local-database '
-      "guard's wording, so one hazard has one explanation",
-      () async {
-        final tooNew = db.schemaVersion + 3;
+    test('the exception reports both versions and keeps the local-database '
+        "guard's wording, so one hazard has one explanation", () async {
+      final tooNew = db.schemaVersion + 3;
 
-        Object? thrown;
-        try {
-          await repo.importSnapshot({
-            'schemaVersion': tooNew,
-            'tables': <String, dynamic>{},
-          });
-        } catch (e) {
-          thrown = e;
-        }
+      Object? thrown;
+      try {
+        await repo.importSnapshot({
+          'schemaVersion': tooNew,
+          'tables': <String, dynamic>{},
+        });
+      } catch (e) {
+        thrown = e;
+      }
 
-        expect(thrown, isA<SnapshotSchemaDowngradeException>());
-        final e = thrown! as SnapshotSchemaDowngradeException;
-        expect(e.snapshotVersion, tooNew);
-        expect(e.appVersion, db.schemaVersion);
+      expect(thrown, isA<SnapshotSchemaDowngradeException>());
+      final e = thrown! as SnapshotSchemaDowngradeException;
+      expect(e.snapshotVersion, tooNew);
+      expect(e.appVersion, db.schemaVersion);
 
-        final message = e.toString();
-        expect(
-          message,
-          contains('older than'),
-          reason: 'same framing as SchemaDowngradeException: the APP is '
-              'behind the DATA, not the other way round',
-        );
-        expect(
-          message,
-          contains('Nothing has been changed or deleted'),
-          reason: 'the refusal is non-destructive and must say so, in the '
-              'same words the local-database guard uses',
-        );
-        expect(message, contains('$tooNew'));
-        expect(message, contains('${db.schemaVersion}'));
-      },
-    );
+      final message = e.toString();
+      expect(
+        message,
+        contains('older than'),
+        reason:
+            'same framing as SchemaDowngradeException: the APP is '
+            'behind the DATA, not the other way round',
+      );
+      expect(
+        message,
+        contains('Nothing has been changed or deleted'),
+        reason:
+            'the refusal is non-destructive and must say so, in the '
+            'same words the local-database guard uses',
+      );
+      expect(message, contains('$tooNew'));
+      expect(message, contains('${db.schemaVersion}'));
+    });
 
     test(
       'a snapshot stamped OLDER than this build imports normally -- forward '
@@ -1114,35 +1217,29 @@ void main() {
       },
     );
 
-    test(
-      'a snapshot with NO schemaVersion key imports normally -- absent is '
-      'not incompatible, and SyncService hands importSnapshot exactly this '
-      "shape ({'tables': ...}) on every pull",
-      () async {
-        await repo.importSnapshot({
-          'tables': {
-            'areas': [areaRow('area-unversioned')],
-          },
-        }, mode: ConflictMode.replace);
+    test('a snapshot with NO schemaVersion key imports normally -- absent is '
+        'not incompatible, and SyncService hands importSnapshot exactly this '
+        "shape ({'tables': ...}) on every pull", () async {
+      await repo.importSnapshot({
+        'tables': {
+          'areas': [areaRow('area-unversioned')],
+        },
+      }, mode: ConflictMode.replace);
 
-        expect(await db.select(db.areas).get(), hasLength(1));
-      },
-    );
+      expect(await db.select(db.areas).get(), hasLength(1));
+    });
 
-    test(
-      'a snapshot whose schemaVersion is not an int is treated as absent, '
-      'not as fatal -- an unreadable stamp must not lock a user out of an '
-      'otherwise importable backup',
-      () async {
-        await repo.importSnapshot({
-          'schemaVersion': 'nine',
-          'tables': {
-            'areas': [areaRow('area-garbled-stamp')],
-          },
-        }, mode: ConflictMode.replace);
+    test('a snapshot whose schemaVersion is not an int is treated as absent, '
+        'not as fatal -- an unreadable stamp must not lock a user out of an '
+        'otherwise importable backup', () async {
+      await repo.importSnapshot({
+        'schemaVersion': 'nine',
+        'tables': {
+          'areas': [areaRow('area-garbled-stamp')],
+        },
+      }, mode: ConflictMode.replace);
 
-        expect(await db.select(db.areas).get(), hasLength(1));
-      },
-    );
+      expect(await db.select(db.areas).get(), hasLength(1));
+    });
   });
 }
