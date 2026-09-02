@@ -573,6 +573,44 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// [_endViewTap]'s tap semantics in view mode.
   Offset? _pendingTapDownPosition;
 
+  /// What the pending tap in [_pendingTapDownPosition] will do if it survives
+  /// to pointer-up: place a symbol of the active type rather than add a point
+  /// to the line.
+  ///
+  /// Symbol placement used to fire on pointer-DOWN, which is the bug this
+  /// splits out (user report, 2026-09-02: "in edit mode when I move around
+  /// the image or zoom in and out I always add an anchor"). With an anchor
+  /// tool selected, the FIRST finger of a two-finger pinch placed a symbol
+  /// the instant it landed — before the second finger had arrived for
+  /// [_beginInteraction]'s abort branch to have anything left to cancel. So
+  /// the one gesture that pans and zooms in draw mode also stamped an anchor
+  /// on the rock every time, and the anchor was already written by the time
+  /// the zoom began.
+  ///
+  /// Deferring to pointer-up puts symbols under exactly the same two rules
+  /// that already protect tap-to-add: past the movement slop it is a drag and
+  /// adds nothing, and a second finger cancels it outright.
+  bool _pendingTapPlacesSymbol = false;
+
+  /// The view transform as it stood when the pending tap went down.
+  ///
+  /// The backstop for the same report. Counting fingers catches the pinch
+  /// whose two contacts overlap, which is most of them — but not the sloppy
+  /// one where the first finger lifts a moment before the second lands, and
+  /// not a fling that is still settling when the next touch arrives. Both
+  /// look exactly like a tap to a pointer-count guard, and both add a point
+  /// the climber did not ask for.
+  ///
+  /// What separates them is not the fingers, it is the view: a deliberate tap
+  /// in draw mode CANNOT move the canvas — `panEnabled` is false there and one
+  /// finger cannot scale — so a transform that changed between down and up is
+  /// proof the gesture was a zoom or a pan, whatever the pointers did. The
+  /// comparison fails closed on purpose: a reframe that lands mid-gesture (a
+  /// photo finishing its load, say) drops one tap, and a dropped tap costs a
+  /// second tap while a stray one costs an unwanted anchor and a hunt for the
+  /// undo button.
+  Matrix4? _pendingTapDownTransform;
+
   /// Whether [_reframeIfNeeded] has framed the viewport at least once.
   /// Reframing (fit-to-viewport) is meant to run once PER distinct image —
   /// see [_framedImageSize] — never stomping the user's subsequent manual
@@ -1150,7 +1188,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // no way to tell a floor from a broken tool.
       ScaffoldMessenger.of(context).showMasiToast(
         'A route needs at least two points. Delete the route '
-              'instead to remove it.',
+        'instead to remove it.',
         kind: MasiToastKind.warning,
       );
       return;
@@ -1213,6 +1251,8 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       // `_pendingTapDownPosition` here is what actually neutralizes it.
       _draggingIndex = null;
       _pendingTapDownPosition = null;
+      _pendingTapPlacesSymbol = false;
+      _pendingTapDownTransform = null;
       // A second finger means a pinch/pan, not a failed attempt to draw. The
       // pending tap is cancelled either way, so without this the zoom gesture
       // would be answered with "dragging does not draw".
@@ -1226,6 +1266,8 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     }
     _activePointer = pointerId;
     _tapCancelledByDrag = false;
+    _pendingTapPlacesSymbol = false;
+    _pendingTapDownTransform = widget.transformationController.value.clone();
     final scene = widget.transformationController.toScene(
       viewportLocalPosition,
     );
@@ -1245,33 +1287,19 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     }
 
     if (drawState.activeSymbol != null) {
-      // Symbol-placement mode: a tap places a symbol of the active type
-      // onto the selected route (auto-selecting `routes.last` if none is
-      // selected yet — see [DrawController.placeSymbol]'s doc) rather than
-      // adding/dragging a route point. Still fires on pointer-down (NOT
-      // deferred to up like the tap-to-add-a-point path below) so a plain
-      // tap (down immediately followed by up with no movement, as
-      // `tester.tapAt` simulates) places exactly one symbol; dragging isn't
-      // a supported symbol-placement gesture.
+      // Symbol-placement mode: a tap places a symbol of the active type onto
+      // the selected route (auto-selecting `routes.last` if none is selected
+      // yet — see [DrawController.placeSymbol]'s doc) rather than
+      // adding/dragging a route point. Deferred to pointer-up exactly like
+      // the tap-to-add path below, and for the reason spelled out on
+      // [_pendingTapPlacesSymbol]: on pointer-down it fired for the opening
+      // finger of every pinch. A plain tap (down immediately followed by up
+      // with no movement, as `tester.tapAt` simulates) still places exactly
+      // one symbol; dragging still isn't a symbol-placement gesture, and now
+      // says so by placing nothing.
       _draggingIndex = null;
-      _pendingTapDownPosition = null;
-      final percent = CoordinateTransformer.sceneToPercent(
-        scene,
-        _effectiveImageSize,
-      );
-      final outcome = await ref
-          .read(drawControllerProvider(widget.wallId).notifier)
-          .placeSymbol(percent);
-      // This method is now async (awaiting placeSymbol above), so `mounted`
-      // must be re-checked before touching `context` below — the widget may
-      // have been unmounted while that await was in flight.
-      if (!mounted) return;
-      if (outcome == SymbolPlacementOutcome.noRouteAvailable) {
-        ScaffoldMessenger.of(context).showMasiToast(
-          'Draw a route first to place symbols',
-          kind: MasiToastKind.info,
-        );
-      }
+      _pendingTapDownPosition = viewportLocalPosition;
+      _pendingTapPlacesSymbol = true;
       return;
     }
 
@@ -1376,9 +1404,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
         scene,
         _effectiveImageSize,
       );
-      final notifier = ref.read(
-        drawControllerProvider(widget.wallId).notifier,
-      );
+      final notifier = ref.read(drawControllerProvider(widget.wallId).notifier);
       final symbolIndex = _draggingRouteSymbolIndex;
       if (symbolIndex != null) {
         notifier.moveRouteSymbol(draggingRouteId, symbolIndex, percent);
@@ -1396,6 +1422,8 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     final movement = (viewportLocalPosition - downPosition).distance;
     if (movement > _tapMovementSlopPx) {
       _pendingTapDownPosition = null;
+      _pendingTapPlacesSymbol = false;
+      _pendingTapDownTransform = null;
       // Remember WHY the tap was cancelled. This is the gesture that does
       // nothing at all — draw mode disables panning, so a single-finger drag
       // across the photo neither draws nor moves the view — and it is the
@@ -1414,13 +1442,20 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
   /// commits the new point here, at [viewportLocalPosition] (the release
   /// point, mirroring [_endViewTap]'s use of the release position rather
   /// than the down position).
-  void _endInteraction(int pointerId, Offset viewportLocalPosition) {
+  Future<void> _endInteraction(
+    int pointerId,
+    Offset viewportLocalPosition,
+  ) async {
     if (pointerId != _activePointer) return;
     _activePointer = null;
     final draggingIndex = _draggingIndex;
     _draggingIndex = null;
     final pendingTapDownPosition = _pendingTapDownPosition;
     _pendingTapDownPosition = null;
+    final placesSymbol = _pendingTapPlacesSymbol;
+    _pendingTapPlacesSymbol = false;
+    final downTransform = _pendingTapDownTransform;
+    _pendingTapDownTransform = null;
     final wasEditingRoute = _draggingRouteId != null;
     // Persists the whole drag as one change and one undo entry.
     _endRouteGeometryDrag();
@@ -1434,6 +1469,14 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       return;
     }
 
+    if (downTransform != null &&
+        downTransform != widget.transformationController.value) {
+      // The view moved under the finger: a zoom or a pan, not a tap. Adds
+      // nothing, and says nothing either — the "tap, don't drag" hint would
+      // be answering a question the climber did not ask.
+      return;
+    }
+
     final scene = widget.transformationController.toScene(
       viewportLocalPosition,
     );
@@ -1442,6 +1485,22 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
       _effectiveImageSize,
     );
     unawaited(HapticFeedback.selectionClick());
+    if (placesSymbol) {
+      final outcome = await ref
+          .read(drawControllerProvider(widget.wallId).notifier)
+          .placeSymbol(percent);
+      // `placeSymbol` is awaited above, so `mounted` must be re-checked
+      // before touching `context` — the widget may have been unmounted while
+      // that await was in flight.
+      if (!mounted) return;
+      if (outcome == SymbolPlacementOutcome.noRouteAvailable) {
+        ScaffoldMessenger.of(context).showMasiToast(
+          'Draw a route first to place symbols',
+          kind: MasiToastKind.info,
+        );
+      }
+      return;
+    }
     ref.read(drawControllerProvider(widget.wallId).notifier).addPoint(percent);
     // A point landed, so whatever the hint was saying has been answered.
     ref.read(drawHintProvider.notifier).dismiss();
@@ -1471,6 +1530,8 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
     _activePointer = null;
     _draggingIndex = null;
     _pendingTapDownPosition = null;
+    _pendingTapPlacesSymbol = false;
+    _pendingTapDownTransform = null;
     // A pointer-cancel after a fruitless drag is the same confusion as a
     // pointer-up after one — the finger left the glass either way, and nothing
     // was drawn.
@@ -1925,7 +1986,7 @@ class _TopoCanvasState extends ConsumerState<TopoCanvas> {
             onPointerMove: (event) =>
                 _updateInteraction(event.pointer, event.localPosition),
             onPointerUp: (event) =>
-                _endInteraction(event.pointer, event.localPosition),
+                unawaited(_endInteraction(event.pointer, event.localPosition)),
             onPointerCancel: (event) => _cancelInteraction(event.pointer),
             child: viewer,
           );

@@ -55,46 +55,45 @@ Future<void> _drain(WidgetTester tester) async {
 }
 
 void main() {
-  testWidgets(
-    'App boots to AreasScreen (root route) showing its empty state',
-    (WidgetTester tester) async {
-      // The router's default `/` route is now ToposScreen (the flat
-      // photo-first home) rather than AreasScreen — navigate to `/areas`
-      // explicitly before exercising the library CRUD root's empty state,
-      // which is what this test actually covers. TopoCanvasScreen itself is
-      // still covered directly by the draw-mode-controls group below.
-      final db = AppDatabase(NativeDatabase.memory());
-      addTearDown(db.close);
+  testWidgets('App boots to AreasScreen (root route) showing its empty state', (
+    WidgetTester tester,
+  ) async {
+    // The router's default `/` route is now ToposScreen (the flat
+    // photo-first home) rather than AreasScreen — navigate to `/areas`
+    // explicitly before exercising the library CRUD root's empty state,
+    // which is what this test actually covers. TopoCanvasScreen itself is
+    // still covered directly by the draw-mode-controls group below.
+    final db = AppDatabase(NativeDatabase.memory());
+    addTearDown(db.close);
 
-      await tester.pumpWidget(
-        ProviderScope(
-          overrides: [
-            appDatabaseProvider.overrideWithValue(db),
-            nowMsProvider.overrideWithValue(() => 1000),
-          ],
-          child: const MasiApp(),
-        ),
-      );
-      // Let GoRouter/MaterialApp.router settle AND the Drift-backed
-      // areasProvider watch stream emit its first (empty) value, so the
-      // AreasScreen leaves its loading spinner and renders the empty state.
-      await _drain(tester);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+        ],
+        child: const MasiApp(),
+      ),
+    );
+    // Let GoRouter/MaterialApp.router settle AND the Drift-backed
+    // areasProvider watch stream emit its first (empty) value, so the
+    // AreasScreen leaves its loading spinner and renders the empty state.
+    await _drain(tester);
 
-      appRouter.go('/areas');
-      await _drain(tester);
+    appRouter.go('/areas');
+    await _drain(tester);
 
-      expect(find.text('Areas'), findsOneWidget);
-      expect(find.text('No areas yet — tap + to add one'), findsOneWidget);
+    expect(find.text('Areas'), findsOneWidget);
+    expect(find.text('No areas yet — tap + to add one'), findsOneWidget);
 
-      // Unmount the (owning) ProviderScope inside the test so Riverpod
-      // disposes the StreamProvider and cancels its live Drift watch
-      // subscription now, draining Drift's stream-close cleanup timer instead
-      // of leaving it pending — and so the addTearDown `db.close` later closes
-      // the DB with no watch still attached (which would otherwise hang).
-      await tester.pumpWidget(const SizedBox());
-      await _drain(tester);
-    },
-  );
+    // Unmount the (owning) ProviderScope inside the test so Riverpod
+    // disposes the StreamProvider and cancels its live Drift watch
+    // subscription now, draining Drift's stream-close cleanup timer instead
+    // of leaving it pending — and so the addTearDown `db.close` later closes
+    // the DB with no watch still attached (which would otherwise hang).
+    await tester.pumpWidget(const SizedBox());
+    await _drain(tester);
+  });
 
   group('TopoCanvasScreen draw-mode controls', () {
     // These controls (the toggle and the toolbar) live in the app bar /
@@ -126,11 +125,17 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
+      expect(
+        container.read(drawControllerProvider(_testWallId)).mode,
+        DrawMode.view,
+      );
 
       await tester.tap(find.byKey(const Key('topo-mode-toggle')));
       await tester.pump();
-      expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.draw);
+      expect(
+        container.read(drawControllerProvider(_testWallId)).mode,
+        DrawMode.draw,
+      );
 
       // Leaving draw mode is the bottom cluster's ✓ now, not a second tap on
       // a toggle: `topo-mode-toggle` is view mode's pencil only, and draw
@@ -138,7 +143,10 @@ void main() {
       expect(find.byKey(const Key('topo-mode-toggle')), findsNothing);
       await tester.tap(find.byKey(const Key('topo-commit-button')));
       await tester.pumpAndSettle();
-      expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
+      expect(
+        container.read(drawControllerProvider(_testWallId)).mode,
+        DrawMode.view,
+      );
     });
 
     testWidgets(
@@ -240,9 +248,9 @@ void main() {
           UncontrolledProviderScope(
             container: container,
             child: MaterialApp(
-            theme: MasiTheme.light,
-            home: const TopoCanvasScreen(wallId: 'test-wall'),
-          ),
+              theme: MasiTheme.light,
+              home: const TopoCanvasScreen(wallId: 'test-wall'),
+            ),
           ),
         );
         await tester.pumpAndSettle();
@@ -252,35 +260,70 @@ void main() {
         // is what let it cover RouteLegend even in view mode — see
         // TopoCanvasScreen._buildBottomChrome's doc). The screen opens in
         // view mode by default, so none of the cluster's buttons exist yet.
-        expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).mode,
+          DrawMode.view,
+        );
         expect(find.byKey(const Key('topo-undo-button')), findsNothing);
         expect(find.byKey(const Key('topo-commit-button')), findsNothing);
 
         await tester.tap(find.byKey(const Key('topo-mode-toggle')));
         await tester.pumpAndSettle();
-        expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.draw);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).mode,
+          DrawMode.draw,
+        );
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
-        expect(container.read(drawControllerProvider(_testWallId)).currentPoints.length, 2);
+        expect(
+          container
+              .read(drawControllerProvider(_testWallId))
+              .currentPoints
+              .length,
+          2,
+        );
 
         await tester.tap(find.byKey(const Key('topo-undo-button')));
         await tester.pump();
-        expect(container.read(drawControllerProvider(_testWallId)).currentPoints.length, 1);
+        expect(
+          container
+              .read(drawControllerProvider(_testWallId))
+              .currentPoints
+              .length,
+          1,
+        );
 
         await tester.tap(find.byKey(const Key('topo-redo-button')));
         await tester.pump();
-        expect(container.read(drawControllerProvider(_testWallId)).currentPoints.length, 2);
+        expect(
+          container
+              .read(drawControllerProvider(_testWallId))
+              .currentPoints
+              .length,
+          2,
+        );
 
         await tester.tap(find.byKey(const Key('topo-commit-button')));
         await tester.pumpAndSettle();
-        expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
-        expect(container.read(drawControllerProvider(_testWallId)).routes.length, 1);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).currentPoints,
+          isEmpty,
+        );
+        expect(
+          container.read(drawControllerProvider(_testWallId)).routes.length,
+          1,
+        );
         // Bug fix: committing returns the canvas to view mode (previously
         // it stayed in draw mode, leaving the cluster on screen over
         // RouteLegend even after the user was done editing).
-        expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).mode,
+          DrawMode.view,
+        );
 
         // A real commit opens the route-metadata sheet for the just
         // -committed route; dismiss it (Cancel) before continuing so the
@@ -309,7 +352,10 @@ void main() {
         notifier.addPoint(const Offset(0.3, 0.3));
         await tester.tap(find.byKey(const Key('topo-clear-button')));
         await tester.pump();
-        expect(container.read(drawControllerProvider(_testWallId)).currentPoints, isEmpty);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).currentPoints,
+          isEmpty,
+        );
       },
     );
 
@@ -340,7 +386,9 @@ void main() {
         final area = await crud.createArea('Area');
         final sector = await crud.createSector(area.id, 'Sector');
         final wall = await crud.createWall(sector.id, 'Wall');
-        await db.into(db.photos).insert(
+        await db
+            .into(db.photos)
+            .insert(
               PhotosCompanion.insert(
                 id: 'row-menu-photo',
                 createdAt: 1000,
@@ -353,7 +401,9 @@ void main() {
               ),
             );
 
-        final notifier = container.read(drawControllerProvider(wall.id).notifier);
+        final notifier = container.read(
+          drawControllerProvider(wall.id).notifier,
+        );
 
         await tester.pumpWidget(
           UncontrolledProviderScope(
@@ -377,7 +427,11 @@ void main() {
         notifier.addPoint(const Offset(0.2, 0.2));
         await notifier.commitRoute();
         await tester.pumpAndSettle();
-        final routeId = container.read(drawControllerProvider(wall.id)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(wall.id))
+            .routes
+            .single
+            .id;
 
         // VIEW mode: the row's menu offers Log ascent, never Edit — editing
         // a route is an edit-mode action.
@@ -502,7 +556,9 @@ void main() {
         expect(viewer().panEnabled, isTrue);
         expect(viewer().scaleEnabled, isTrue);
 
-        container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
+        container
+            .read(drawControllerProvider(_testWallId).notifier)
+            .setMode(DrawMode.draw);
         await tester.pump();
 
         expect(
@@ -520,7 +576,9 @@ void main() {
               'only single-finger pan is reserved for drawing',
         );
 
-        container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.view);
+        container
+            .read(drawControllerProvider(_testWallId).notifier)
+            .setMode(DrawMode.view);
         await tester.pump();
 
         expect(viewer().panEnabled, isTrue);
@@ -539,7 +597,9 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
+        container
+            .read(drawControllerProvider(_testWallId).notifier)
+            .setMode(DrawMode.draw);
 
         await tester.pumpWidget(
           buildCanvas(container: container, controller: controller),
@@ -552,7 +612,9 @@ void main() {
         await tester.tapAt(const Offset(200, 150));
         await tester.pump();
 
-        final points = container.read(drawControllerProvider(_testWallId)).currentPoints;
+        final points = container
+            .read(drawControllerProvider(_testWallId))
+            .currentPoints;
         expect(points.length, 1);
         expect(points.first.dx, inInclusiveRange(0.0, 1.0));
         expect(points.first.dy, inInclusiveRange(0.0, 1.0));
@@ -577,7 +639,9 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
+        container
+            .read(drawControllerProvider(_testWallId).notifier)
+            .setMode(DrawMode.draw);
 
         await tester.pumpWidget(
           buildCanvas(container: container, controller: controller),
@@ -595,7 +659,9 @@ void main() {
         await tester.tapAt(const Offset(2, 2));
         await tester.pump();
 
-        final points = container.read(drawControllerProvider(_testWallId)).currentPoints;
+        final points = container
+            .read(drawControllerProvider(_testWallId))
+            .currentPoints;
         expect(
           points.length,
           1,
@@ -617,7 +683,9 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.setMode(DrawMode.draw);
         // Percent (0.5, 0.5) of a 400x300 image is scene/local (200, 150).
         notifier.addPoint(const Offset(0.5, 0.5));
@@ -630,7 +698,9 @@ void main() {
         await tester.dragFrom(const Offset(200, 150), const Offset(40, 0));
         await tester.pump();
 
-        final points = container.read(drawControllerProvider(_testWallId)).currentPoints;
+        final points = container
+            .read(drawControllerProvider(_testWallId))
+            .currentPoints;
         expect(points.length, 1);
         expect(points.first.dx, closeTo(0.6, 0.01));
         expect(points.first.dy, closeTo(0.5, 0.01));
@@ -649,7 +719,9 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
+        container
+            .read(drawControllerProvider(_testWallId).notifier)
+            .setMode(DrawMode.draw);
 
         await tester.pumpWidget(
           buildCanvas(container: container, controller: controller),
@@ -684,7 +756,9 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        container.read(drawControllerProvider(_testWallId).notifier).setMode(DrawMode.draw);
+        container
+            .read(drawControllerProvider(_testWallId).notifier)
+            .setMode(DrawMode.draw);
 
         await tester.pumpWidget(
           buildCanvas(container: container, controller: controller),
@@ -812,31 +886,49 @@ void main() {
 
         // A vertical route straight down the middle of the image
         // (percent x=0.5): scene x=200 at any y between scene 30 and 270.
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.5, 0.1));
         notifier.addPoint(const Offset(0.5, 0.9));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
 
         await tester.pumpWidget(
           buildCanvas(container: container, controller: controller),
         );
         await tester.pump();
 
-        expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
-        expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).mode,
+          DrawMode.view,
+        );
+        expect(
+          container.read(drawControllerProvider(_testWallId)).selectedRouteId,
+          isNull,
+        );
 
         // Scene (200, 150) -> percent (0.5, 0.5): exactly on the route.
         await tester.tapAt(const Offset(200, 150));
         await tester.pump();
 
-        expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, routeId);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).selectedRouteId,
+          routeId,
+        );
 
         // Scene (390, 10) -> percent (0.975, 0.033): far from the route.
         await tester.tapAt(const Offset(390, 10));
         await tester.pump();
 
-        expect(container.read(drawControllerProvider(_testWallId)).selectedRouteId, isNull);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).selectedRouteId,
+          isNull,
+        );
       },
     );
 
@@ -851,14 +943,18 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         notifier.commitRoute();
         notifier.addPoint(const Offset(0.3, 0.3));
         notifier.addPoint(const Offset(0.4, 0.4));
         notifier.commitRoute();
-        final routes = container.read(drawControllerProvider(_testWallId)).routes;
+        final routes = container
+            .read(drawControllerProvider(_testWallId))
+            .routes;
         expect(routes, hasLength(2));
         notifier.selectRoute(routes.first.id);
 
@@ -881,7 +977,8 @@ void main() {
 
     testWidgets(
       'Fix 1: draw mode ignores a second finger touching down before the '
-      'first lifts (no extra symbol placed)',
+      'first lifts — and places NOTHING at all, because the first finger of '
+      'a pinch is not a tap',
       (tester) async {
         setViewportSize(tester, const Size(400, 300));
         final container = ProviderContainer();
@@ -890,11 +987,17 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.9, 0.9));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
         notifier.selectRoute(routeId);
         notifier.setMode(DrawMode.draw);
         notifier.setActiveSymbol(SymbolType.anchor);
@@ -904,39 +1007,52 @@ void main() {
         );
         await tester.pump();
 
-        // Pointer A goes down first and places a symbol (scene (200, 150)
-        // -> percent (0.5, 0.5)).
+        // Pointer A goes down. It used to place a symbol right here, on the
+        // down — which is the bug reported on 2026-09-02 ("in edit mode when
+        // I move around the image or zoom in and out I always add an
+        // anchor"): the opening finger of every pinch stamped one, before the
+        // second finger had arrived for the guard below to have anything left
+        // to cancel. Symbols are placed on pointer-UP now, under the same two
+        // rules that already protected tap-to-add.
         final gestureA = await tester.startGesture(
           const Offset(200, 150),
           pointer: 1,
         );
         await tester.pump();
 
+        expect(
+          container
+              .read(drawControllerProvider(_testWallId))
+              .routes
+              .single
+              .symbols,
+          isEmpty,
+          reason: 'nothing is written while a finger is merely down',
+        );
+
         // Pointer B (e.g. the second contact of a pinch) goes down at a
-        // different spot BEFORE A lifts: without the Fix 1 guard this would
-        // re-latch `_activePointer` and place a second symbol.
+        // different spot BEFORE A lifts. The Fix 1 guard keeps it from
+        // re-latching `_activePointer`, AND cancels A's pending tap.
         final gestureB = await tester.startGesture(
           const Offset(300, 100),
           pointer: 2,
         );
         await tester.pump();
 
-        final route = container.read(drawControllerProvider(_testWallId)).routes.single;
-        expect(
-          route.symbols,
-          hasLength(1),
-          reason:
-              'the second finger down must be ignored while the first '
-              'is still active',
-        );
-
         await gestureA.up();
         await gestureB.up();
         await tester.pump();
 
         expect(
-          container.read(drawControllerProvider(_testWallId)).routes.single.symbols,
-          hasLength(1),
+          container
+              .read(drawControllerProvider(_testWallId))
+              .routes
+              .single
+              .symbols,
+          isEmpty,
+          reason:
+              'a two-finger gesture is a zoom, and a zoom must not leave an '
+              'anchor on the rock behind it',
         );
       },
     );
@@ -952,18 +1068,27 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
         // French '7a' -> shared-scale sort key 13.0 -> GradeBand.hard -> red.
         await notifier.setRouteMetadata(
           routeId,
           gradeSystem: GradeSystem.french,
           gradeRaw: '7a',
         );
-        final gradedRoute = container.read(drawControllerProvider(_testWallId)).routes.single;
+        final gradedRoute = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single;
 
         await tester.pumpWidget(
           buildCanvas(container: container, controller: controller),
@@ -1005,18 +1130,27 @@ void main() {
 
         // A vertical route straight down the middle of the image, as in the
         // A2 view-mode selection test above.
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.5, 0.1));
         notifier.addPoint(const Offset(0.5, 0.9));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
 
         await tester.pumpWidget(
           buildCanvas(container: container, controller: controller),
         );
         await tester.pump();
 
-        expect(container.read(drawControllerProvider(_testWallId)).mode, DrawMode.view);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).mode,
+          DrawMode.view,
+        );
 
         // Pointer A goes down on the route (scene (200, 150) -> percent
         // (0.5, 0.5)).
@@ -1100,141 +1234,142 @@ void main() {
   // permanently-reserved band) by that same file's "A-f: canvas region is
   // taller in view mode" test.
 
-  group(
-    'TopoCanvasBody: stable canvas viewport across bar toggles (Fix 3 of '
-    'the canvas UI fixes)',
-    () {
-      // Bug fix ("not always centered" / "the photo jumps"): SymbolPaletteBar's
-      // slot used to be conditionally INCLUDED in this Column
-      // (`if (showSymbolBar) SymbolPaletteBar()`), so the Expanded canvas
-      // region below it resized every time `showSymbolBar` flipped — most
-      // commonly on every single draw<->view mode toggle (which
-      // `_handleCommitRoute` itself triggers after every committed route). A
-      // resized Expanded region gives TopoCanvas a different LayoutBuilder
-      // viewport, which makes `_reframeIfNeeded` recompute a fresh fit and
-      // visibly re-center/rescale the photo. TopoCanvasBody now reserves
-      // that slot's size UNCONDITIONALLY (via `Visibility(maintainSize:
-      // true, ...)`), toggling only its visibility — so the Expanded
-      // region, and therefore TopoCanvas's fit, must stay pixel-identical
-      // across the toggle. See TopoCanvasBody.build's doc for the full
-      // rationale.
-      void setViewportSize(WidgetTester tester, Size size) {
-        tester.view.physicalSize = size;
-        tester.view.devicePixelRatio = 1.0;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-      }
+  group('TopoCanvasBody: stable canvas viewport across bar toggles (Fix 3 of '
+      'the canvas UI fixes)', () {
+    // Bug fix ("not always centered" / "the photo jumps"): SymbolPaletteBar's
+    // slot used to be conditionally INCLUDED in this Column
+    // (`if (showSymbolBar) SymbolPaletteBar()`), so the Expanded canvas
+    // region below it resized every time `showSymbolBar` flipped — most
+    // commonly on every single draw<->view mode toggle (which
+    // `_handleCommitRoute` itself triggers after every committed route). A
+    // resized Expanded region gives TopoCanvas a different LayoutBuilder
+    // viewport, which makes `_reframeIfNeeded` recompute a fresh fit and
+    // visibly re-center/rescale the photo. TopoCanvasBody now reserves
+    // that slot's size UNCONDITIONALLY (via `Visibility(maintainSize:
+    // true, ...)`), toggling only its visibility — so the Expanded
+    // region, and therefore TopoCanvas's fit, must stay pixel-identical
+    // across the toggle. See TopoCanvasBody.build's doc for the full
+    // rationale.
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
 
-      Widget buildBody({
-        required ProviderContainer container,
-        required TransformationController controller,
-        Size imageSize = const Size(1600, 1200),
-      }) {
-        // FIX #6 (autoDispose pending-timer gotcha): keep both family
-        // members alive via permanent listeners -- see the 'TopoCanvas'
-        // group's `buildCanvas` above for the fuller explanation.
-        container.listen(drawControllerProvider(_testWallId), (_, _) {});
-        container.listen(legendExpandedProvider(_testWallId), (_, _) {});
-        return UncontrolledProviderScope(
-          container: container,
-          // Needs `theme: MasiTheme.light`: this renders a real TopoCanvas
-          // (via TopoCanvasBody), which reads MasiColors.of(context) (e.g.
-          // the Scaffold's own `ground` fill showing through any letterbox
-          // margins) on every build.
-          child: MaterialApp(
-            theme: MasiTheme.light,
-            home: Scaffold(
-              body: Consumer(
-                builder: (context, ref, _) {
-                  final drawState = ref.watch(drawControllerProvider(_testWallId));
-                  return TopoCanvasBody(
-                    wallId: _testWallId,
-                    imagePath: '/nonexistent/test-topo.jpg',
-                    imageSize: imageSize,
-                    drawState: drawState,
-                    transformationController: controller,
-                  );
-                },
-              ),
+    Widget buildBody({
+      required ProviderContainer container,
+      required TransformationController controller,
+      Size imageSize = const Size(1600, 1200),
+    }) {
+      // FIX #6 (autoDispose pending-timer gotcha): keep both family
+      // members alive via permanent listeners -- see the 'TopoCanvas'
+      // group's `buildCanvas` above for the fuller explanation.
+      container.listen(drawControllerProvider(_testWallId), (_, _) {});
+      container.listen(legendExpandedProvider(_testWallId), (_, _) {});
+      return UncontrolledProviderScope(
+        container: container,
+        // Needs `theme: MasiTheme.light`: this renders a real TopoCanvas
+        // (via TopoCanvasBody), which reads MasiColors.of(context) (e.g.
+        // the Scaffold's own `ground` fill showing through any letterbox
+        // margins) on every build.
+        child: MaterialApp(
+          theme: MasiTheme.light,
+          home: Scaffold(
+            body: Consumer(
+              builder: (context, ref, _) {
+                final drawState = ref.watch(
+                  drawControllerProvider(_testWallId),
+                );
+                return TopoCanvasBody(
+                  wallId: _testWallId,
+                  imagePath: '/nonexistent/test-topo.jpg',
+                  imageSize: imageSize,
+                  drawState: drawState,
+                  transformationController: controller,
+                );
+              },
             ),
           ),
+        ),
+      );
+    }
+
+    testWidgets(
+      'toggling draw/view mode does not resize the canvas viewport frame '
+      '(only the symbol bar toggles)',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 800));
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        container.listen(drawControllerProvider(_testWallId), (_, _) {});
+        container.listen(legendExpandedProvider(_testWallId), (_, _) {});
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
         );
-      }
 
-      testWidgets(
-        'toggling draw/view mode does not resize the canvas viewport frame '
-        '(only the symbol bar toggles)',
-        (tester) async {
-          setViewportSize(tester, const Size(400, 800));
-          final container = ProviderContainer();
-          addTearDown(container.dispose);
-          container.listen(drawControllerProvider(_testWallId), (_, _) {});
-          container.listen(legendExpandedProvider(_testWallId), (_, _) {});
-          final controller = TransformationController();
-          addTearDown(controller.dispose);
-          final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        await tester.pumpWidget(
+          buildBody(container: container, controller: controller),
+        );
+        await tester.pump();
 
-          await tester.pumpWidget(
-            buildBody(container: container, controller: controller),
-          );
-          await tester.pump();
+        final frameFinder = find.byKey(const Key('topo-interactive-viewer'));
+        final sizeBefore = tester.getSize(frameFinder);
 
-          final frameFinder = find.byKey(
-            const Key('topo-interactive-viewer'),
-          );
-          final sizeBefore = tester.getSize(frameFinder);
+        notifier.setMode(DrawMode.draw);
+        await tester.pump();
 
-          notifier.setMode(DrawMode.draw);
-          await tester.pump();
+        expect(
+          tester.getSize(frameFinder),
+          sizeBefore,
+          reason:
+              'entering draw mode (which shows the symbol bar) must not '
+              'change the canvas viewport size — its slot is always '
+              'reserved now, only its visibility toggles',
+        );
 
-          expect(
-            tester.getSize(frameFinder),
-            sizeBefore,
-            reason:
-                'entering draw mode (which shows the symbol bar) must not '
-                'change the canvas viewport size — its slot is always '
-                'reserved now, only its visibility toggles',
-          );
+        notifier.setMode(DrawMode.view);
+        await tester.pump();
 
-          notifier.setMode(DrawMode.view);
-          await tester.pump();
+        expect(tester.getSize(frameFinder), sizeBefore);
+      },
+    );
 
-          expect(tester.getSize(frameFinder), sizeBefore);
-        },
-      );
+    testWidgets(
+      "the image's fit transform (scale + translation) is byte-identical "
+      'across a draw/view toggle, proving the photo does not visibly '
+      'jump or re-center',
+      (tester) async {
+        setViewportSize(tester, const Size(400, 800));
+        final container = ProviderContainer();
+        addTearDown(container.dispose);
+        container.listen(drawControllerProvider(_testWallId), (_, _) {});
+        container.listen(legendExpandedProvider(_testWallId), (_, _) {});
+        final controller = TransformationController();
+        addTearDown(controller.dispose);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
 
-      testWidgets(
-        "the image's fit transform (scale + translation) is byte-identical "
-        'across a draw/view toggle, proving the photo does not visibly '
-        'jump or re-center',
-        (tester) async {
-          setViewportSize(tester, const Size(400, 800));
-          final container = ProviderContainer();
-          addTearDown(container.dispose);
-          container.listen(drawControllerProvider(_testWallId), (_, _) {});
-          container.listen(legendExpandedProvider(_testWallId), (_, _) {});
-          final controller = TransformationController();
-          addTearDown(controller.dispose);
-          final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        await tester.pumpWidget(
+          buildBody(container: container, controller: controller),
+        );
+        await tester.pump();
 
-          await tester.pumpWidget(
-            buildBody(container: container, controller: controller),
-          );
-          await tester.pump();
+        final matrixBefore = controller.value.clone();
 
-          final matrixBefore = controller.value.clone();
+        notifier.setMode(DrawMode.draw);
+        await tester.pump();
+        expect(controller.value, matrixBefore);
 
-          notifier.setMode(DrawMode.draw);
-          await tester.pump();
-          expect(controller.value, matrixBefore);
-
-          notifier.setMode(DrawMode.view);
-          await tester.pump();
-          expect(controller.value, matrixBefore);
-        },
-      );
-    },
-  );
+        notifier.setMode(DrawMode.view);
+        await tester.pump();
+        expect(controller.value, matrixBefore);
+      },
+    );
+  });
 
   group('TopoCanvasScreen AR entry (v2-ar-viewer)', () {
     // topo-ar-button is gated purely on drawControllerProvider state
@@ -1272,7 +1407,9 @@ void main() {
         final wall = await crud.createWall(sector.id, 'Wall');
 
         const placeholderPhotoId = 'placeholder-photo';
-        await db.into(db.photos).insert(
+        await db
+            .into(db.photos)
+            .insert(
               PhotosCompanion.insert(
                 id: placeholderPhotoId,
                 createdAt: 1000,
@@ -1300,9 +1437,8 @@ void main() {
           routes: [
             GoRoute(
               path: '/walls/:wallId',
-              builder: (context, state) => TopoCanvasScreen(
-                wallId: state.pathParameters['wallId']!,
-              ),
+              builder: (context, state) =>
+                  TopoCanvasScreen(wallId: state.pathParameters['wallId']!),
             ),
             GoRoute(
               path: '/walls/:wallId/ar',
@@ -1380,7 +1516,9 @@ void main() {
         final wall = await crud.createWall(sector.id, 'Wall');
 
         const placeholderPhotoId = 'placeholder-photo';
-        await db.into(db.photos).insert(
+        await db
+            .into(db.photos)
+            .insert(
               PhotosCompanion.insert(
                 id: placeholderPhotoId,
                 createdAt: 1000,
@@ -1420,8 +1558,11 @@ void main() {
             .loadForWall(wall.id, placeholderPhotoId);
         await tester.pump();
 
-        final routeId =
-            container.read(drawControllerProvider(wall.id)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(wall.id))
+            .routes
+            .single
+            .id;
         expect(
           container.read(drawControllerProvider(wall.id)).routes.single.visible,
           isFalse,
@@ -1457,11 +1598,16 @@ void main() {
       addTearDown(container.dispose);
       container.listen(drawControllerProvider(_testWallId), (_, _) {});
 
-      final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+      final notifier = container.read(
+        drawControllerProvider(_testWallId).notifier,
+      );
       notifier.addPoint(const Offset(0.1, 0.1));
       notifier.addPoint(const Offset(0.2, 0.2));
       notifier.commitRoute();
-      final route = container.read(drawControllerProvider(_testWallId)).routes.single;
+      final route = container
+          .read(drawControllerProvider(_testWallId))
+          .routes
+          .single;
 
       await tester.pumpWidget(
         UncontrolledProviderScope(
@@ -1480,7 +1626,11 @@ void main() {
       );
       expect(find.text('Route ${route.number}'), findsOneWidget);
       expect(
-        container.read(drawControllerProvider(_testWallId)).routes.single.visible,
+        container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .visible,
         isTrue,
       );
 
@@ -1492,7 +1642,11 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(
-        container.read(drawControllerProvider(_testWallId)).routes.single.visible,
+        container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .visible,
         isFalse,
       );
 
@@ -1502,10 +1656,15 @@ void main() {
       await tester.pumpAndSettle();
       await tester.tap(find.byKey(Key('topo-route-delete-${route.id}')));
       await tester.pumpAndSettle();
-      await tester.tap(find.byKey(Key('topo-route-delete-confirm-${route.id}')));
+      await tester.tap(
+        find.byKey(Key('topo-route-delete-confirm-${route.id}')),
+      );
       await tester.pumpAndSettle();
 
-      expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
+      expect(
+        container.read(drawControllerProvider(_testWallId)).routes,
+        isEmpty,
+      );
     });
 
     testWidgets('renders nothing when there are no routes', (tester) async {
@@ -1516,7 +1675,9 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(home: Scaffold(body: RouteLegend(wallId: _testWallId))),
+          child: const MaterialApp(
+            home: Scaffold(body: RouteLegend(wallId: _testWallId)),
+          ),
         ),
       );
       await tester.pump();
@@ -1532,11 +1693,16 @@ void main() {
         addTearDown(container.dispose);
         container.listen(drawControllerProvider(_testWallId), (_, _) {});
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         notifier.commitRoute();
-        final route = container.read(drawControllerProvider(_testWallId)).routes.single;
+        final route = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single;
 
         // French '7a' -> shared-scale sort key 13.0 -> GradeBand.hard.
         await notifier.setRouteMetadata(
@@ -1558,7 +1724,10 @@ void main() {
 
         expect(find.text('Route ${route.number} • 7a'), findsOneWidget);
 
-        final gradedRoute = container.read(drawControllerProvider(_testWallId)).routes.single;
+        final gradedRoute = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single;
         final avatar = tester.widget<CircleAvatar>(
           find.descendant(
             of: find.byKey(Key('topo-route-legend-item-${route.id}')),
@@ -1593,7 +1762,9 @@ void main() {
         final container = ProviderContainer();
         addTearDown(container.dispose);
         container.listen(drawControllerProvider(_testWallId), (_, _) {});
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         notifier.commitRoute();
@@ -1630,13 +1801,17 @@ void main() {
         final container = ProviderContainer();
         addTearDown(container.dispose);
         container.listen(drawControllerProvider(_testWallId), (_, _) {});
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         for (var i = 0; i < 10; i++) {
           notifier.addPoint(const Offset(0.1, 0.1));
           notifier.addPoint(const Offset(0.2, 0.2));
           notifier.commitRoute();
         }
-        final routes = container.read(drawControllerProvider(_testWallId)).routes;
+        final routes = container
+            .read(drawControllerProvider(_testWallId))
+            .routes;
         expect(routes, hasLength(10));
 
         await tester.pumpWidget(
@@ -1725,13 +1900,21 @@ void main() {
         final container = ProviderContainer();
         addTearDown(container.dispose);
         container.listen(drawControllerProvider(_testWallId), (_, _) {});
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
 
-        await tester.pumpWidget(buildSheet(container: container, routeId: routeId));
+        await tester.pumpWidget(
+          buildSheet(container: container, routeId: routeId),
+        );
         await tester.pump();
 
         expect(find.byKey(const Key('topo-meta-name')), findsOneWidget);
@@ -1764,13 +1947,21 @@ void main() {
         final container = ProviderContainer();
         addTearDown(container.dispose);
         container.listen(drawControllerProvider(_testWallId), (_, _) {});
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
 
-        await tester.pumpWidget(buildSheet(container: container, routeId: routeId));
+        await tester.pumpWidget(
+          buildSheet(container: container, routeId: routeId),
+        );
         await tester.pump();
 
         await tester.enterText(
@@ -1796,7 +1987,10 @@ void main() {
         await tester.tap(find.byKey(const Key('topo-meta-save')));
         await tester.pump();
 
-        final route = container.read(drawControllerProvider(_testWallId)).routes.single;
+        final route = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single;
         expect(route.name, 'Le Toit');
         expect(route.gradeSystem, GradeSystem.french);
         expect(route.gradeRaw, '6a+');
@@ -1812,13 +2006,21 @@ void main() {
         final container = ProviderContainer();
         addTearDown(container.dispose);
         container.listen(drawControllerProvider(_testWallId), (_, _) {});
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
 
-        await tester.pumpWidget(buildSheet(container: container, routeId: routeId));
+        await tester.pumpWidget(
+          buildSheet(container: container, routeId: routeId),
+        );
         await tester.pump();
 
         // Default system is French: opening the dropdown should offer '6a'.
@@ -1845,11 +2047,17 @@ void main() {
         final container = ProviderContainer();
         addTearDown(container.dispose);
         container.listen(drawControllerProvider(_testWallId), (_, _) {});
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.2, 0.2));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
         await notifier.setRouteMetadata(
           routeId,
           name: 'Existing Route',
@@ -1858,7 +2066,10 @@ void main() {
           style: 'trad',
           description: 'Crimpy start',
         );
-        final initial = container.read(drawControllerProvider(_testWallId)).routes.single;
+        final initial = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single;
 
         await tester.pumpWidget(
           buildSheet(container: container, routeId: routeId, initial: initial),
@@ -1937,11 +2148,17 @@ void main() {
         final controller = TransformationController();
         addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
+        final notifier = container.read(
+          drawControllerProvider(_testWallId).notifier,
+        );
         notifier.addPoint(const Offset(0.1, 0.1));
         notifier.addPoint(const Offset(0.9, 0.9));
         notifier.commitRoute();
-        final routeId = container.read(drawControllerProvider(_testWallId)).routes.single.id;
+        final routeId = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single
+            .id;
         notifier.selectRoute(routeId);
         notifier.setMode(DrawMode.draw);
 
@@ -1959,7 +2176,10 @@ void main() {
         setViewportSize(tester, Size(400, 300 + barHeight));
         await tester.pump();
 
-        expect(container.read(drawControllerProvider(_testWallId)).activeSymbol, isNull);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).activeSymbol,
+          isNull,
+        );
 
         await tester.tap(find.byKey(const Key('topo-symbol-anchor')));
         await tester.pump();
@@ -1977,7 +2197,10 @@ void main() {
         await tester.tapAt(Offset(200, 150 + barHeight));
         await tester.pump();
 
-        final route = container.read(drawControllerProvider(_testWallId)).routes.single;
+        final route = container
+            .read(drawControllerProvider(_testWallId))
+            .routes
+            .single;
         expect(route.symbols, hasLength(1));
         expect(route.symbols.single.type, SymbolType.anchor);
         expect(route.symbols.single.position.dx, closeTo(0.5, 0.01));
@@ -1987,7 +2210,10 @@ void main() {
         await tester.tap(find.byKey(const Key('topo-symbol-anchor')));
         await tester.pump();
 
-        expect(container.read(drawControllerProvider(_testWallId)).activeSymbol, isNull);
+        expect(
+          container.read(drawControllerProvider(_testWallId)).activeSymbol,
+          isNull,
+        );
 
         // With no active symbol, a further canvas tap goes back to normal
         // draw behavior (adds a route point) rather than placing another
@@ -2000,78 +2226,84 @@ void main() {
           hasLength(1),
         );
         expect(
-          container.read(drawControllerProvider(_testWallId)).routes.single.symbols,
+          container
+              .read(drawControllerProvider(_testWallId))
+              .routes
+              .single
+              .symbols,
           hasLength(1),
         );
       },
     );
 
-    testWidgets(
-      'U1/U6 (canvas render): placing a symbol on the in-progress '
-      '(uncommitted) route is handed to TopoPainter via currentSymbols, so '
-      'it renders before the route is ever committed',
-      (tester) async {
-        setViewportSize(
-          tester,
-          const Size(400, 300 + kSymbolPaletteBarHeight + 32),
-        );
-        final container = ProviderContainer();
-        addTearDown(container.dispose);
-        container.listen(drawControllerProvider(_testWallId), (_, _) {});
-        final controller = TransformationController();
-        addTearDown(controller.dispose);
+    testWidgets('U1/U6 (canvas render): placing a symbol on the in-progress '
+        '(uncommitted) route is handed to TopoPainter via currentSymbols, so '
+        'it renders before the route is ever committed', (tester) async {
+      setViewportSize(
+        tester,
+        const Size(400, 300 + kSymbolPaletteBarHeight + 32),
+      );
+      final container = ProviderContainer();
+      addTearDown(container.dispose);
+      container.listen(drawControllerProvider(_testWallId), (_, _) {});
+      final controller = TransformationController();
+      addTearDown(controller.dispose);
 
-        final notifier = container.read(drawControllerProvider(_testWallId).notifier);
-        notifier.setMode(DrawMode.draw);
-        // Two points drawn but NOT committed: routes stays empty, so
-        // placeSymbol below must land on currentSymbols (see draw_controller
-        // .dart's placeSymbol doc), not a committed route.
-        notifier.addPoint(const Offset(0.1, 0.1));
-        notifier.addPoint(const Offset(0.9, 0.9));
-        expect(container.read(drawControllerProvider(_testWallId)).routes, isEmpty);
+      final notifier = container.read(
+        drawControllerProvider(_testWallId).notifier,
+      );
+      notifier.setMode(DrawMode.draw);
+      // Two points drawn but NOT committed: routes stays empty, so
+      // placeSymbol below must land on currentSymbols (see draw_controller
+      // .dart's placeSymbol doc), not a committed route.
+      notifier.addPoint(const Offset(0.1, 0.1));
+      notifier.addPoint(const Offset(0.9, 0.9));
+      expect(
+        container.read(drawControllerProvider(_testWallId)).routes,
+        isEmpty,
+      );
 
-        await tester.pumpWidget(
-          buildPaletteAndCanvas(container: container, controller: controller),
-        );
-        await tester.pump();
+      await tester.pumpWidget(
+        buildPaletteAndCanvas(container: container, controller: controller),
+      );
+      await tester.pump();
 
-        final barHeight = tester.getSize(find.byType(SymbolPaletteBar)).height;
-        setViewportSize(tester, Size(400, 300 + barHeight));
-        await tester.pump();
+      final barHeight = tester.getSize(find.byType(SymbolPaletteBar)).height;
+      setViewportSize(tester, Size(400, 300 + barHeight));
+      await tester.pump();
 
-        await tester.tap(find.byKey(const Key('topo-symbol-crux')));
-        await tester.pump();
-        expect(
-          container.read(drawControllerProvider(_testWallId)).activeSymbol,
-          SymbolType.crux,
-        );
+      await tester.tap(find.byKey(const Key('topo-symbol-crux')));
+      await tester.pump();
+      expect(
+        container.read(drawControllerProvider(_testWallId)).activeSymbol,
+        SymbolType.crux,
+      );
 
-        // Global (200, 150 + barHeight) -> local (200, 150) -> scene
-        // (200, 150) -> percent (0.5, 0.5), same mapping as A3 above.
-        await tester.tapAt(Offset(200, 150 + barHeight));
-        await tester.pump();
+      // Global (200, 150 + barHeight) -> local (200, 150) -> scene
+      // (200, 150) -> percent (0.5, 0.5), same mapping as A3 above.
+      await tester.tapAt(Offset(200, 150 + barHeight));
+      await tester.pump();
 
-        final state = container.read(drawControllerProvider(_testWallId));
-        expect(state.routes, isEmpty); // still uncommitted
-        expect(state.currentSymbols, hasLength(1));
-        expect(state.currentSymbols.single.type, SymbolType.crux);
+      final state = container.read(drawControllerProvider(_testWallId));
+      expect(state.routes, isEmpty); // still uncommitted
+      expect(state.currentSymbols, hasLength(1));
+      expect(state.currentSymbols.single.type, SymbolType.crux);
 
-        final customPaint = tester.widget<CustomPaint>(
-          find.byWidgetPredicate(
-            (widget) => widget is CustomPaint && widget.painter is TopoPainter,
-          ),
-        );
-        final painter = customPaint.painter as TopoPainter;
+      final customPaint = tester.widget<CustomPaint>(
+        find.byWidgetPredicate(
+          (widget) => widget is CustomPaint && widget.painter is TopoPainter,
+        ),
+      );
+      final painter = customPaint.painter as TopoPainter;
 
-        // The painter must be handed the SAME in-progress symbols the
-        // controller holds, so TopoPainter.paint's currentSymbols loop
-        // actually renders it -- this is what makes the symbol visible on
-        // screen before commitRoute is ever called.
-        expect(painter.currentSymbols, state.currentSymbols);
-        expect(painter.currentSymbols.single.position.dx, closeTo(0.5, 0.01));
-        expect(painter.currentSymbols.single.position.dy, closeTo(0.5, 0.01));
-      },
-    );
+      // The painter must be handed the SAME in-progress symbols the
+      // controller holds, so TopoPainter.paint's currentSymbols loop
+      // actually renders it -- this is what makes the symbol visible on
+      // screen before commitRoute is ever called.
+      expect(painter.currentSymbols, state.currentSymbols);
+      expect(painter.currentSymbols.single.position.dx, closeTo(0.5, 0.01));
+      expect(painter.currentSymbols.single.position.dy, closeTo(0.5, 0.01));
+    });
 
     testWidgets(
       'switching between symbol controls only activates one at a time',
@@ -2201,109 +2433,103 @@ void main() {
     );
   });
 
-  group(
-    'M6 subtask 4: /walls/:wallId hosts TopoCanvasScreen bound to the '
-    'navigated wall',
-    () {
-      testWidgets(
-        'A3/A4: the full Areas -> Sectors -> Walls -> /walls/:wallId nav '
-        'chain is intact, and the wall-detail route renders '
-        "TopoCanvasScreen(wallId: <the tapped wall's id>), showing its "
-        'empty state since no photo is attached yet (decode-free, '
-        'deterministic)',
-        (tester) async {
-          // Owns the container directly (see the "A2: tapping an area
-          // navigates..." test in areas_screen_test.dart for why: disposal
-          // must happen in addTearDown/real-async, not inside the widget
-          // tree's fake-async finalizeTree).
-          final db = AppDatabase(NativeDatabase.memory());
-          final container = ProviderContainer(
-            overrides: [
-              appDatabaseProvider.overrideWithValue(db),
-              nowMsProvider.overrideWithValue(() => 1000),
-            ],
-          );
-          addTearDown(db.close);
-          addTearDown(container.dispose);
-          final repo = container.read(libraryCrudRepositoryProvider);
-          late AreaRef area;
-          late SectorRef sector;
-          late WallRef wall;
-          await tester.runAsync(() async {
-            area = await repo.createArea('Test Area');
-            sector = await repo.createSector(area.id, 'Test Sector');
-            wall = await repo.createWall(sector.id, 'Test Wall');
-          });
+  group('M6 subtask 4: /walls/:wallId hosts TopoCanvasScreen bound to the '
+      'navigated wall', () {
+    testWidgets(
+      'A3/A4: the full Areas -> Sectors -> Walls -> /walls/:wallId nav '
+      'chain is intact, and the wall-detail route renders '
+      "TopoCanvasScreen(wallId: <the tapped wall's id>), showing its "
+      'empty state since no photo is attached yet (decode-free, '
+      'deterministic)',
+      (tester) async {
+        // Owns the container directly (see the "A2: tapping an area
+        // navigates..." test in areas_screen_test.dart for why: disposal
+        // must happen in addTearDown/real-async, not inside the widget
+        // tree's fake-async finalizeTree).
+        final db = AppDatabase(NativeDatabase.memory());
+        final container = ProviderContainer(
+          overrides: [
+            appDatabaseProvider.overrideWithValue(db),
+            nowMsProvider.overrideWithValue(() => 1000),
+          ],
+        );
+        addTearDown(db.close);
+        addTearDown(container.dispose);
+        final repo = container.read(libraryCrudRepositoryProvider);
+        late AreaRef area;
+        late SectorRef sector;
+        late WallRef wall;
+        await tester.runAsync(() async {
+          area = await repo.createArea('Test Area');
+          sector = await repo.createSector(area.id, 'Test Sector');
+          wall = await repo.createWall(sector.id, 'Test Wall');
+        });
 
-          await tester.pumpWidget(
-            UncontrolledProviderScope(
-              container: container,
-              child: const MasiApp(),
-            ),
-          );
-          await _drain(tester);
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: const MasiApp(),
+          ),
+        );
+        await _drain(tester);
 
-          // `/` now renders ToposScreen, not AreasScreen — navigate to the
-          // Areas hierarchy explicitly before driving the nav chain below.
-          appRouter.go('/areas');
-          await _drain(tester);
+        // `/` now renders ToposScreen, not AreasScreen — navigate to the
+        // Areas hierarchy explicitly before driving the nav chain below.
+        appRouter.go('/areas');
+        await _drain(tester);
 
-          expect(find.text('Test Area'), findsOneWidget);
+        expect(find.text('Test Area'), findsOneWidget);
 
-          await tester.tap(find.byKey(Key('area-item-${area.id}')));
-          await _drain(tester);
-          expect(find.text('Test Sector'), findsOneWidget);
+        await tester.tap(find.byKey(Key('area-item-${area.id}')));
+        await _drain(tester);
+        expect(find.text('Test Sector'), findsOneWidget);
 
-          await tester.tap(find.byKey(Key('sector-item-${sector.id}')));
-          await _drain(tester);
-          expect(find.text('Test Wall'), findsOneWidget);
+        await tester.tap(find.byKey(Key('sector-item-${sector.id}')));
+        await _drain(tester);
+        expect(find.text('Test Wall'), findsOneWidget);
 
-          await tester.tap(find.byKey(Key('wall-item-${wall.id}')));
-          await _drain(tester);
+        await tester.tap(find.byKey(Key('wall-item-${wall.id}')));
+        await _drain(tester);
 
-          expect(find.byType(TopoCanvasScreen), findsOneWidget);
-          final screen = tester.widget<TopoCanvasScreen>(
-            find.byType(TopoCanvasScreen),
-          );
-          expect(screen.wallId, wall.id);
-          // No photo has been attached to this wall, so the empty state
-          // (decode-free — no FileImage/image codec involved) is shown
-          // rather than the canvas.
-          expect(find.byKey(const Key('topo-empty-state')), findsOneWidget);
-          expect(
-            find.text('No photo yet — pick one to start'),
-            findsOneWidget,
-          );
-          // The empty state must offer a tappable primary "Add a photo"
-          // button (not just the icon/caption) that opens the SAME
-          // Camera/Library source sheet the photo FAB uses — see
-          // `_buildEmptyState`'s doc.
-          final addPhotoButton = find.byKey(
-            const Key('topo-empty-state-add-photo'),
-          );
-          expect(addPhotoButton, findsOneWidget);
-          expect(find.text('Add a photo'), findsOneWidget);
+        expect(find.byType(TopoCanvasScreen), findsOneWidget);
+        final screen = tester.widget<TopoCanvasScreen>(
+          find.byType(TopoCanvasScreen),
+        );
+        expect(screen.wallId, wall.id);
+        // No photo has been attached to this wall, so the empty state
+        // (decode-free — no FileImage/image codec involved) is shown
+        // rather than the canvas.
+        expect(find.byKey(const Key('topo-empty-state')), findsOneWidget);
+        expect(find.text('No photo yet — pick one to start'), findsOneWidget);
+        // The empty state must offer a tappable primary "Add a photo"
+        // button (not just the icon/caption) that opens the SAME
+        // Camera/Library source sheet the photo FAB uses — see
+        // `_buildEmptyState`'s doc.
+        final addPhotoButton = find.byKey(
+          const Key('topo-empty-state-add-photo'),
+        );
+        expect(addPhotoButton, findsOneWidget);
+        expect(find.text('Add a photo'), findsOneWidget);
 
-          await tester.tap(addPhotoButton);
-          await _drain(tester);
-          expect(
-            find.byKey(const Key('photo-source-library')),
-            findsOneWidget,
-            reason:
-                'tapping the empty-state button must open the real photo '
-                'source action sheet, exactly like the photo FAB',
-          );
-          await tester.tap(find.byKey(const Key('photo-source-cancel')));
-          await _drain(tester);
+        await tester.tap(addPhotoButton);
+        await _drain(tester);
+        expect(
+          find.byKey(const Key('photo-source-library')),
+          findsOneWidget,
+          reason:
+              'tapping the empty-state button must open the real photo '
+              'source action sheet, exactly like the photo FAB',
+        );
+        await tester.tap(find.byKey(const Key('photo-source-cancel')));
+        await _drain(tester);
 
-          // Unmount so Riverpod cancels the live Drift watch subscriptions
-          // this real (owning) ProviderScope holds before db.close runs in
-          // addTearDown — see the "App boots to AreasScreen" test's teardown
-          // doc above for why this ordering matters.
-          await tester.pumpWidget(const SizedBox());
-          await _drain(tester);
-        },
-      );
-    },
-  );
+        // Unmount so Riverpod cancels the live Drift watch subscriptions
+        // this real (owning) ProviderScope holds before db.close runs in
+        // addTearDown — see the "App boots to AreasScreen" test's teardown
+        // doc above for why this ordering matters.
+        await tester.pumpWidget(const SizedBox());
+        await _drain(tester);
+      },
+    );
+  });
 }
