@@ -951,28 +951,32 @@ class _MapViewState extends ConsumerState<_MapView> {
         ),
       ),
       children: [
-        TileLayer(
-          urlTemplate: basemapUrlTemplate,
-          userAgentPackageName: 'com.xlypton.masi',
-          tileProvider: _tileProvider(),
-          // No `retinaMode`: OSM's standard tiles have no `@2x` variant, and
-          // flutter_map's *simulated* retina mode (what it falls back to when
-          // the template carries no `{r}`) fetches one zoom level out and
-          // scales it up, which is blurrier than just drawing the real tile.
-          // Without this, a tile that fails once (a transient throttle or
-          // network blip) is never evicted and therefore never re-requested,
-          // leaving a permanent gray rectangle even as the user zooms/pans
-          // past it. Evicting off-screen error tiles lets them be re-fetched
-          // next time they scroll into view.
-          evictErrorTileStrategy:
-              EvictErrorTileStrategy.notVisibleRespectMargin,
-          // Past the basemap's deepest real zoom flutter_map would keep
-          // requesting tiles that come back 404; capping makes it upscale the
-          // last real one instead.
-          maxNativeZoom: basemapMaxNativeZoom,
-          // Slightly larger than the default (2) ring of off-screen tiles
-          // kept pre-fetched, so panning shows fewer transient gray edges.
-          keepBuffer: 3,
+        // The tiles are OSM's; the LOOK is the app's — see `basemapTint`.
+        ColorFiltered(
+          colorFilter: basemapTint,
+          child: TileLayer(
+            urlTemplate: basemapUrlTemplate,
+            userAgentPackageName: 'com.xlypton.masi',
+            tileProvider: _tileProvider(),
+            // No `retinaMode`: OSM's standard tiles have no `@2x` variant, and
+            // flutter_map's *simulated* retina mode (what it falls back to when
+            // the template carries no `{r}`) fetches one zoom level out and
+            // scales it up, which is blurrier than just drawing the real tile.
+            // Without this, a tile that fails once (a transient throttle or
+            // network blip) is never evicted and therefore never re-requested,
+            // leaving a permanent gray rectangle even as the user zooms/pans
+            // past it. Evicting off-screen error tiles lets them be re-fetched
+            // next time they scroll into view.
+            evictErrorTileStrategy:
+                EvictErrorTileStrategy.notVisibleRespectMargin,
+            // Past the basemap's deepest real zoom flutter_map would keep
+            // requesting tiles that come back 404; capping makes it upscale the
+            // last real one instead.
+            maxNativeZoom: basemapMaxNativeZoom,
+            // Slightly larger than the default (2) ring of off-screen tiles
+            // kept pre-fetched, so panning shows fewer transient gray edges.
+            keepBuffer: 3,
+          ),
         ),
         MarkerLayer(
           markers: [

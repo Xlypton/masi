@@ -618,14 +618,18 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
               ),
             ),
             children: [
-              TileLayer(
-                urlTemplate: basemapUrlTemplate,
-                userAgentPackageName: 'com.xlypton.masi',
-                tileProvider: _tileProvider(),
-                evictErrorTileStrategy:
-                    EvictErrorTileStrategy.notVisibleRespectMargin,
-                maxNativeZoom: basemapMaxNativeZoom,
-                keepBuffer: 3,
+              // The tiles are OSM's; the LOOK is the app's — see `basemapTint`.
+              ColorFiltered(
+                colorFilter: basemapTint,
+                child: TileLayer(
+                  urlTemplate: basemapUrlTemplate,
+                  userAgentPackageName: 'com.xlypton.masi',
+                  tileProvider: _tileProvider(),
+                  evictErrorTileStrategy:
+                      EvictErrorTileStrategy.notVisibleRespectMargin,
+                  maxNativeZoom: basemapMaxNativeZoom,
+                  keepBuffer: 3,
+                ),
               ),
             ],
           ),
