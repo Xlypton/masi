@@ -139,13 +139,13 @@ class MasiTileCachingProvider implements MapCachingProvider {
   /// `!metadata.isStale`. Once stale it re-requests, and offline that request
   /// fails with a `ClientException` which flutter_map turns into an EVICTION
   /// and a transparent tile — it never falls back to the stale bytes already
-  /// in hand. So a cache that honoured CartoDB's `Cache-Control` would still
-  /// show a blank map the moment its tiles aged out, which is precisely the
-  /// failure this class exists to fix.
+  /// in hand. So a cache that honoured the tile server's `Cache-Control` would
+  /// still show a blank map the moment its tiles aged out, which is precisely
+  /// the failure this class exists to fix.
   ///
   /// A 30-day window is defensible for THIS payload specifically: the
-  /// `light_all` raster basemap is a slowly-changing global product where a
-  /// month-old tile is visually identical. It is not a general-purpose HTTP
+  /// raster basemap (see `basemap.dart`) is a slowly-changing global product
+  /// where a month-old tile is visually identical. It is not a general-purpose HTTP
   /// cache and must not be reused as one. If a longer window is ever offered
   /// by the server we keep the server's — the override only ever EXTENDS
   /// freshness, never shortens it.

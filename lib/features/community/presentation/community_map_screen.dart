@@ -11,6 +11,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/db/database_provider.dart';
+import '../../../core/map/basemap.dart';
 import '../../../core/map/masi_tile_caching_provider.dart';
 import '../../../shared/presentation/masi_async_view.dart';
 import '../../../shared/presentation/masi_dialogs.dart';
@@ -38,8 +39,8 @@ import '../domain/topo_group.dart';
 /// [NetworkTileProvider] wrapper built around it.
 ///
 /// [NetworkTileProvider]'s own default HTTP client only retries a bare `503`
-/// response — never `429` (exactly what CartoDB returns once a device's tile
-/// requests get throttled) nor a transient connection error/timeout. A tile
+/// response — never `429` (exactly what a tile server returns once a device's
+/// tile requests get throttled) nor a transient connection error/timeout. A tile
 /// that fails once under the default client is never retried, so it renders
 /// as flutter_map's flat gray error-tile placeholder forever, even long
 /// after the throttling/network blip has cleared. Retrying 429/5xx and
@@ -187,8 +188,7 @@ class CommunityMapScreen extends ConsumerStatefulWidget {
   final Client Function()? tileHttpClientFactory;
 
   @override
-  ConsumerState<CommunityMapScreen> createState() =>
-      _CommunityMapScreenState();
+  ConsumerState<CommunityMapScreen> createState() => _CommunityMapScreenState();
 }
 
 class _CommunityMapScreenState extends ConsumerState<CommunityMapScreen> {
@@ -656,8 +656,9 @@ class _MapViewState extends ConsumerState<_MapView> {
       // directory `flutter_test` never provides. Production
       // (`testFactory == null`) is completely unaffected and keeps the
       // default on-disk cache.
-      cachingProvider:
-          testFactory != null ? const DisabledMapCachingProvider() : null,
+      cachingProvider: testFactory != null
+          ? const DisabledMapCachingProvider()
+          : null,
     );
     _resilientTileProvider = provider;
     return provider;
@@ -673,10 +674,9 @@ class _MapViewState extends ConsumerState<_MapView> {
     final location = await ref.read(locationServiceProvider).currentLocation();
     if (!mounted) return;
     if (location == null) {
-      ScaffoldMessenger.of(context).showMasiToast(
-        'Location unavailable',
-        kind: MasiToastKind.warning,
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showMasiToast('Location unavailable', kind: MasiToastKind.warning);
       return;
     }
     _mapController.move(LatLng(location.latitude, location.longitude), 14);
@@ -915,17 +915,17 @@ class _MapViewState extends ConsumerState<_MapView> {
         (useMyLocation
             ? LatLng(myLocation.latitude, myLocation.longitude)
             : (combinedCoords.isEmpty
-                ? const LatLng(0, 0)
-                : LatLng(
-                    combinedCoords.map((p) => p.latitude).reduce(
-                          (a, b) => a + b,
-                        ) /
-                        combinedCoords.length,
-                    combinedCoords.map((p) => p.longitude).reduce(
-                          (a, b) => a + b,
-                        ) /
-                        combinedCoords.length,
-                  )));
+                  ? const LatLng(0, 0)
+                  : LatLng(
+                      combinedCoords
+                              .map((p) => p.latitude)
+                              .reduce((a, b) => a + b) /
+                          combinedCoords.length,
+                      combinedCoords
+                              .map((p) => p.longitude)
+                              .reduce((a, b) => a + b) /
+                          combinedCoords.length,
+                    )));
     final zoom = focusPoint != null
         ? 15.0
         : (useMyLocation ? 14.0 : (combinedCoords.isEmpty ? 1.5 : 11.0));
@@ -940,7 +940,8 @@ class _MapViewState extends ConsumerState<_MapView> {
         // enabled; only `InteractiveFlag.rotate` is omitted from the flags
         // that would otherwise default to `InteractiveFlag.all`.
         interactionOptions: const InteractionOptions(
-          flags: InteractiveFlag.drag |
+          flags:
+              InteractiveFlag.drag |
               InteractiveFlag.flingAnimation |
               InteractiveFlag.pinchMove |
               InteractiveFlag.pinchZoom |
@@ -951,21 +952,24 @@ class _MapViewState extends ConsumerState<_MapView> {
       ),
       children: [
         TileLayer(
-          urlTemplate:
-              'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+          urlTemplate: basemapUrlTemplate,
           userAgentPackageName: 'com.xlypton.masi',
           tileProvider: _tileProvider(),
-          retinaMode: RetinaMode.isHighDensity(context),
-          // Without this, a tile that fails once (transient CartoDB
-          // throttling/network blip) is never evicted and therefore never
-          // re-requested, leaving a permanent gray rectangle even as the
-          // user zooms/pans past it. Evicting off-screen error tiles lets
-          // them be re-fetched next time they scroll into view.
-          evictErrorTileStrategy: EvictErrorTileStrategy.notVisibleRespectMargin,
-          // CartoDB's light_all basemap serves real tiles through z20;
-          // without this flutter_map stops fetching past its default native
-          // zoom and upscales/blurs the last real tile instead.
-          maxNativeZoom: 20,
+          // No `retinaMode`: OSM's standard tiles have no `@2x` variant, and
+          // flutter_map's *simulated* retina mode (what it falls back to when
+          // the template carries no `{r}`) fetches one zoom level out and
+          // scales it up, which is blurrier than just drawing the real tile.
+          // Without this, a tile that fails once (a transient throttle or
+          // network blip) is never evicted and therefore never re-requested,
+          // leaving a permanent gray rectangle even as the user zooms/pans
+          // past it. Evicting off-screen error tiles lets them be re-fetched
+          // next time they scroll into view.
+          evictErrorTileStrategy:
+              EvictErrorTileStrategy.notVisibleRespectMargin,
+          // Past the basemap's deepest real zoom flutter_map would keep
+          // requesting tiles that come back 404; capping makes it upscale the
+          // last real one instead.
+          maxNativeZoom: basemapMaxNativeZoom,
           // Slightly larger than the default (2) ring of off-screen tiles
           // kept pre-fetched, so panning shows fewer transient gray edges.
           keepBuffer: 3,
@@ -978,40 +982,40 @@ class _MapViewState extends ConsumerState<_MapView> {
             for (final group in communityGroups)
               if (group.head case final topo)
                 Marker(
-                point: LatLng(topo.latitude!, topo.longitude!),
-                width: 40,
-                height: _BoulderMarker.totalHeight,
-                alignment: Alignment.topCenter,
-                child: GestureDetector(
-                  key: Key('community-map-marker-${topo.wallId}'),
-                  onTap: () {
-                    FocusManager.instance.primaryFocus?.unfocus();
-                    if (group.isGrouped) {
-                      // More than one topo of this boulder: ask which, rather
-                      // than silently opening the best-ranked one. Picking for
-                      // the reader is the thing §C-6 is at pains to avoid —
-                      // the second photo is often the better one, and only
-                      // they can tell.
-                      _showPlacePicker(context, group);
-                      return;
-                    }
-                    // Read-only topo canvas (wall photo + drawn routes), NOT
-                    // the social/likes-first CommunityTopoDetailScreen -- that
-                    // view stays reserved for the Feed (see the OWN marker
-                    // just below, which pushes the same route unadorned).
-                    context.push('/walls/${topo.wallId}?readonly=1');
-                  },
-                  // Community-feed topos are, by construction, always
-                  // shared/public (see `CommunityRepository.watchSharedTopos`
-                  // -- the feed only ever contains `visibility == 'shared'`
-                  // rows), so this marker always renders at full opacity
-                  // (the public look).
-                  child: _BoulderMarker(
-                    isPublic: true,
-                    placeCount: group.count,
+                  point: LatLng(topo.latitude!, topo.longitude!),
+                  width: 40,
+                  height: _BoulderMarker.totalHeight,
+                  alignment: Alignment.topCenter,
+                  child: GestureDetector(
+                    key: Key('community-map-marker-${topo.wallId}'),
+                    onTap: () {
+                      FocusManager.instance.primaryFocus?.unfocus();
+                      if (group.isGrouped) {
+                        // More than one topo of this boulder: ask which, rather
+                        // than silently opening the best-ranked one. Picking for
+                        // the reader is the thing §C-6 is at pains to avoid —
+                        // the second photo is often the better one, and only
+                        // they can tell.
+                        _showPlacePicker(context, group);
+                        return;
+                      }
+                      // Read-only topo canvas (wall photo + drawn routes), NOT
+                      // the social/likes-first CommunityTopoDetailScreen -- that
+                      // view stays reserved for the Feed (see the OWN marker
+                      // just below, which pushes the same route unadorned).
+                      context.push('/walls/${topo.wallId}?readonly=1');
+                    },
+                    // Community-feed topos are, by construction, always
+                    // shared/public (see `CommunityRepository.watchSharedTopos`
+                    // -- the feed only ever contains `visibility == 'shared'`
+                    // rows), so this marker always renders at full opacity
+                    // (the public look).
+                    child: _BoulderMarker(
+                      isPublic: true,
+                      placeCount: group.count,
+                    ),
                   ),
                 ),
-              ),
           ],
         ),
         // The signed-in user's own located topos -- see this class's `build`
@@ -1059,9 +1063,9 @@ class _MapViewState extends ConsumerState<_MapView> {
             ],
           ),
         // An always-visible custom credit pill — deliberately NOT a
-        // `RichAttributionWidget`, whose OSM/CARTO text is hidden behind a
+        // `RichAttributionWidget`, whose credit text is hidden behind a
         // collapsed info-icon popup until tapped, which does not satisfy
-        // OSM/CARTO's requirement that attribution be visible without
+        // OSM's requirement that attribution be visible without
         // interaction. `IgnorePointer` keeps the pill from stealing marker
         // taps, and bottom-right placement keeps it clear of the pins.
         IgnorePointer(
@@ -1080,13 +1084,13 @@ class _MapViewState extends ConsumerState<_MapView> {
                     vertical: 2,
                   ),
                   child: Text(
-                    '© OpenStreetMap contributors · CARTO',
+                    basemapAttribution,
                     key: const Key('community-map-attribution'),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                      color: colors.ink2,
-                    ),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelSmall?.copyWith(color: colors.ink2),
                   ),
                 ),
               ),
@@ -1307,7 +1311,8 @@ class _MapViewState extends ConsumerState<_MapView> {
                                   );
                                 }
                                 final place =
-                                    _placeResults[i - localSearchResults.length];
+                                    _placeResults[i -
+                                        localSearchResults.length];
                                 return ListTile(
                                   key: Key('community-map-search-result-$i'),
                                   dense: true,
@@ -1456,7 +1461,11 @@ class _MapLegend extends StatelessWidget {
               textStyle: textStyle,
             ),
             const SizedBox(height: 4),
-            _MapLegendRow(isPublic: true, label: 'Public', textStyle: textStyle),
+            _MapLegendRow(
+              isPublic: true,
+              label: 'Public',
+              textStyle: textStyle,
+            ),
           ],
         ),
       ),
@@ -1491,7 +1500,12 @@ class _MapLegendRow extends StatelessWidget {
                 ),
               ),
         const SizedBox(width: 6),
-        Text(label, style: textStyle, maxLines: 1, overflow: TextOverflow.ellipsis),
+        Text(
+          label,
+          style: textStyle,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
       ],
     );
   }
@@ -1528,11 +1542,7 @@ class _MyLocationMarker extends StatelessWidget {
         shape: BoxShape.circle,
         border: Border.fromBorderSide(BorderSide(color: _ringColor, width: 3)),
         boxShadow: [
-          BoxShadow(
-            color: _shadowColor,
-            blurRadius: 4,
-            offset: Offset(0, 1),
-          ),
+          BoxShadow(color: _shadowColor, blurRadius: 4, offset: Offset(0, 1)),
         ],
       ),
     );
@@ -1558,8 +1568,8 @@ class _SearchResultMarker extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // A white halo behind the glyph keeps it legible over the light CartoDB
-    // basemap regardless of the app's own light/dark theme, mirroring
+    // A white halo behind the glyph keeps it legible over the basemap
+    // regardless of the app's own light/dark theme, mirroring
     // `set_location_picker.dart`'s crosshair.
     return Align(
       alignment: Alignment.bottomCenter,
@@ -1707,10 +1717,26 @@ class _BoulderMarker extends StatelessWidget {
   /// [_MapLegendRow] so the legend's "Private" swatch always matches the
   /// marker exactly.
   static const ColorFilter greyscale = ColorFilter.matrix(<double>[
-    0.2126, 0.7152, 0.0722, 0, 0,
-    0.2126, 0.7152, 0.0722, 0, 0,
-    0.2126, 0.7152, 0.0722, 0, 0,
-    0, 0, 0, 1, 0,
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0.2126,
+    0.7152,
+    0.0722,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
   ]);
 
   /// Small secondary fade layered on top of [greyscale] for a PRIVATE

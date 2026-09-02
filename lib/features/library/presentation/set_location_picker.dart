@@ -10,6 +10,7 @@ import 'package:latlong2/latlong.dart';
 
 import '../../../app/theme.dart';
 import '../../../core/location/geocoding_service.dart';
+import '../../../core/map/basemap.dart';
 import '../../../core/location/location_service.dart';
 import '../../../shared/presentation/bottom_safe_inset.dart';
 import '../../../shared/presentation/masi_icon.dart';
@@ -90,8 +91,7 @@ class _SetLocationPicker extends ConsumerStatefulWidget {
   final GeocodingService? geocodingService;
 
   @override
-  ConsumerState<_SetLocationPicker> createState() =>
-      _SetLocationPickerState();
+  ConsumerState<_SetLocationPicker> createState() => _SetLocationPickerState();
 }
 
 class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
@@ -461,10 +461,9 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
     }
     if (!mounted) return;
     if (location == null) {
-      ScaffoldMessenger.of(context).showMasiToast(
-        'Location unavailable',
-        kind: MasiToastKind.warning,
-      );
+      ScaffoldMessenger.of(
+        context,
+      ).showMasiToast('Location unavailable', kind: MasiToastKind.warning);
       return;
     }
     _mapController.move(LatLng(location.latitude, location.longitude), 15);
@@ -608,7 +607,8 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
               // omitted from the flags that would otherwise default to
               // `InteractiveFlag.all`.
               interactionOptions: const InteractionOptions(
-                flags: InteractiveFlag.drag |
+                flags:
+                    InteractiveFlag.drag |
                     InteractiveFlag.flingAnimation |
                     InteractiveFlag.pinchMove |
                     InteractiveFlag.pinchZoom |
@@ -619,14 +619,12 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
             ),
             children: [
               TileLayer(
-                urlTemplate:
-                    'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+                urlTemplate: basemapUrlTemplate,
                 userAgentPackageName: 'com.xlypton.masi',
                 tileProvider: _tileProvider(),
-                retinaMode: RetinaMode.isHighDensity(context),
                 evictErrorTileStrategy:
                     EvictErrorTileStrategy.notVisibleRespectMargin,
-                maxNativeZoom: 20,
+                maxNativeZoom: basemapMaxNativeZoom,
                 keepBuffer: 3,
               ),
             ],
@@ -647,7 +645,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                 alignment: Alignment.center,
                 children: [
                   // White halo behind the crosshair so it stays legible
-                  // over the light CartoDB basemap tiles.
+                  // over the basemap tiles.
                   MasiIcon('my_location', size: 34, color: Colors.white),
                   MasiIcon(
                     'my_location',
@@ -726,7 +724,10 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(24),
-                        borderSide: BorderSide(color: colors.accent, width: 1.5),
+                        borderSide: BorderSide(
+                          color: colors.accent,
+                          width: 1.5,
+                        ),
                       ),
                     ),
                   ),
@@ -819,9 +820,7 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                     ),
                     decoration: BoxDecoration(
                       color: colors.surface,
-                      borderRadius: BorderRadius.circular(
-                        MasiRadii.control,
-                      ),
+                      borderRadius: BorderRadius.circular(MasiRadii.control),
                     ),
                     child: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -831,8 +830,9 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                         Flexible(
                           child: Text(
                             'Search needs a connection.',
-                            style: Theme.of(context).textTheme.bodySmall
-                                ?.copyWith(color: colors.ink2),
+                            style: Theme.of(
+                              context,
+                            ).textTheme.bodySmall?.copyWith(color: colors.ink2),
                           ),
                         ),
                       ],
@@ -882,6 +882,41 @@ class _SetLocationPickerState extends ConsumerState<_SetLocationPicker> {
                     ),
                   ),
               ],
+            ),
+          ),
+          // The basemap's credit line. OSM's tile policy requires it to be
+          // visible without interaction, so it is a plain always-on pill
+          // rather than flutter_map's tap-to-expand `RichAttributionWidget` —
+          // same reasoning, same shape as the Map tab's own pill. Bottom-LEFT
+          // here (the Map tab uses bottom-right) to stay clear of this
+          // screen's "Use this location" FAB.
+          IgnorePointer(
+            child: Align(
+              alignment: Alignment.bottomLeft,
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: colors.surface.withValues(alpha: 0.85),
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
+                    child: Text(
+                      basemapAttribution,
+                      key: const Key('set-location-attribution'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(
+                        context,
+                      ).textTheme.labelSmall?.copyWith(color: colors.ink2),
+                    ),
+                  ),
+                ),
+              ),
             ),
           ),
         ],

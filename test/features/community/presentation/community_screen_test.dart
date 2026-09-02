@@ -5,6 +5,7 @@ import 'package:masi/app/theme.dart';
 import 'package:masi/core/db/app_database.dart';
 import 'package:masi/core/db/database_provider.dart';
 import 'package:masi/core/location/location_service.dart';
+import 'package:masi/core/map/basemap.dart';
 import 'package:masi/core/map/masi_tile_caching_provider.dart';
 import 'package:masi/features/account/application/auth_providers.dart';
 import 'package:masi/features/account/data/auth_repository.dart';
@@ -20,7 +21,8 @@ import 'package:masi/features/backup/application/sync_orchestrator.dart';
 // assertion in this file.
 import 'package:masi/features/library/presentation/topos_screen.dart';
 import 'package:masi/features/backup/data/connectivity_service.dart';
-import 'package:masi/features/backup/data/sync_service.dart' show SharedPhotoBudgetReason;
+import 'package:masi/features/backup/data/sync_service.dart'
+    show SharedPhotoBudgetReason;
 import 'package:masi/features/community/presentation/community_screen.dart';
 import 'package:masi/shared/presentation/masi_async_view.dart';
 import 'package:masi/shared/presentation/masi_icon.dart';
@@ -367,7 +369,11 @@ Future<void> _seedWall(
       );
 }
 
-Future<void> _seedLike(AppDatabase db, {required String id, required String wallId}) {
+Future<void> _seedLike(
+  AppDatabase db, {
+  required String id,
+  required String wallId,
+}) {
   return db
       .into(db.likes)
       .insert(
@@ -509,7 +515,11 @@ Future<void> _seedFilterScenario(AppDatabase db) async {
     longitude: 7.0,
     ownerId: _otherOwnerId,
   );
-  final sportPhoto = await _seedPhoto(db, id: 'photo-sport', wallId: 'wall-sport');
+  final sportPhoto = await _seedPhoto(
+    db,
+    id: 'photo-sport',
+    wallId: 'wall-sport',
+  );
   await _seedRoute(
     db,
     id: 'route-sport',
@@ -713,20 +723,127 @@ Future<void> _seedStandardScenario(AppDatabase db) async {
 
 void main() {
   group('D2a: feed populated rows (private excluded), counts shown', () {
+    testWidgets('exactly one row per shared wall, private wall never rendered, '
+        'like/comment counts shown', (tester) async {
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedStandardScenario(db));
+
+      await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+      await _drain(tester);
+
+      expect(
+        find.byKey(const Key('community-topo-row-wall-shared-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('community-topo-row-wall-shared-2')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('community-topo-row-wall-private')),
+        findsNothing,
+      );
+      expect(_feedRowFinder(), findsNWidgets(2));
+
+      // wall-shared-1 has 2 likes, 1 comment.
+      const shared1Likes = Key('community-topo-row-wall-shared-1-likes');
+      expect(find.byKey(shared1Likes), findsOneWidget);
+      // The like counter is a MasiIcon + a bare count now, matching the
+      // comment counter beside it — no '♥' character, which iOS drew as a
+      // red emoji (2026-08-12).
+      expect(_heartGlyphFinder(shared1Likes), findsOneWidget);
+      expect(
+        find.descendant(of: find.byKey(shared1Likes), matching: find.text('2')),
+        findsOneWidget,
+      );
+      expect(find.textContaining('♥'), findsNothing);
+      // C1d: the comment glyph is now a `MasiIcon('comment')` + a bare
+      // count (no more emoji text) -- scoped to each row's
+      // `-comments` key so the two rows' counts (1 vs 0) can't collide.
+      const shared1Comments = Key('community-topo-row-wall-shared-1-comments');
+      expect(_commentGlyphFinder(shared1Comments), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(shared1Comments),
+          matching: find.text('1'),
+        ),
+        findsOneWidget,
+      );
+      // wall-shared-2 has 0 likes, 0 comments.
+      const shared2Likes = Key('community-topo-row-wall-shared-2-likes');
+      expect(_heartGlyphFinder(shared2Likes), findsOneWidget);
+      expect(
+        find.descendant(of: find.byKey(shared2Likes), matching: find.text('0')),
+        findsOneWidget,
+      );
+      const shared2Comments = Key('community-topo-row-wall-shared-2-comments');
+      expect(_commentGlyphFinder(shared2Comments), findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byKey(shared2Comments),
+          matching: find.text('0'),
+        ),
+        findsOneWidget,
+      );
+    });
+  });
+
+  group('C1e: boulder-logo map marker + comment icon (masi_boulder_logo/'
+      'masi_comment SVG asset swap)', () {
     testWidgets(
-      'exactly one row per shared wall, private wall never rendered, '
-      'like/comment counts shown',
+      'a shared topo with coordinates renders MasiIcon(\'boulder_logo\') '
+      'in its map marker, and its feed row (commentCount > 0) renders '
+      'MasiIcon(\'comment\') next to the count instead of the old emoji',
       (tester) async {
         final container = _makeContainer();
         final db = container.read(appDatabaseProvider);
+        // `_seedStandardScenario` gives wall-shared-1 coordinates (45.0,
+        // 7.0) AND one seeded comment (commentCount == 1) -- exactly the
+        // "coords + commentCount > 0" fixture C1e asks for, with no new
+        // seeding helper needed.
         await tester.runAsync(() => _seedStandardScenario(db));
 
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityFeedScreen(),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
+        await _drain(tester);
+
+        // Default tab is Map -- wall-shared-1 has coordinates, so it
+        // renders a marker whose glyph is the real `boulder_logo` SVG
+        // asset via `MasiIcon`, not the old hand-painted `CustomPaint`.
+        expect(tester.takeException(), isNull);
+        expect(
+          find.byKey(const Key('community-map-marker-wall-shared-1')),
+          findsOneWidget,
+        );
+        expect(
+          _boulderLogoFinder(const Key('community-map-marker-wall-shared-1')),
+          findsOneWidget,
+        );
+        // The logo is full-color/multi-tone (see `_BoulderMarker`'s doc in
+        // `community_screen.dart`), so it must render UN-TINTED --
+        // `MasiIcon('boulder_logo', tinted: false)` -- rather than
+        // flattened to one color via `MasiIcon`'s default `srcIn` filter.
+        expect(
+          (tester.widget(
+                    _boulderLogoFinder(
+                      const Key('community-map-marker-wall-shared-1'),
+                    ),
+                  )
+                  as MasiIcon)
+              .tinted,
+          isFalse,
+        );
+
+        // Feed is now a fully separate screen (no in-place toggle) --
+        // pump it fresh. wall-shared-1's row shows the comment glyph
+        // (MasiIcon) + bare count, replacing the old
+        // `'\u{1F4AC} $count'` emoji text.
+        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
         await _drain(tester);
 
         expect(
@@ -734,149 +851,23 @@ void main() {
           findsOneWidget,
         );
         expect(
-          find.byKey(const Key('community-topo-row-wall-shared-2')),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(const Key('community-topo-row-wall-private')),
-          findsNothing,
-        );
-        expect(_feedRowFinder(), findsNWidgets(2));
-
-        // wall-shared-1 has 2 likes, 1 comment.
-        const shared1Likes = Key('community-topo-row-wall-shared-1-likes');
-        expect(find.byKey(shared1Likes), findsOneWidget);
-        // The like counter is a MasiIcon + a bare count now, matching the
-        // comment counter beside it — no '♥' character, which iOS drew as a
-        // red emoji (2026-08-12).
-        expect(_heartGlyphFinder(shared1Likes), findsOneWidget);
-        expect(
-          find.descendant(of: find.byKey(shared1Likes), matching: find.text('2')),
-          findsOneWidget,
-        );
-        expect(find.textContaining('♥'), findsNothing);
-        // C1d: the comment glyph is now a `MasiIcon('comment')` + a bare
-        // count (no more emoji text) -- scoped to each row's
-        // `-comments` key so the two rows' counts (1 vs 0) can't collide.
-        const shared1Comments = Key(
-          'community-topo-row-wall-shared-1-comments',
-        );
-        expect(_commentGlyphFinder(shared1Comments), findsOneWidget);
-        expect(
-          find.descendant(
-            of: find.byKey(shared1Comments),
-            matching: find.text('1'),
+          _commentGlyphFinder(
+            const Key('community-topo-row-wall-shared-1-comments'),
           ),
           findsOneWidget,
         );
-        // wall-shared-2 has 0 likes, 0 comments.
-        const shared2Likes = Key('community-topo-row-wall-shared-2-likes');
-        expect(_heartGlyphFinder(shared2Likes), findsOneWidget);
-        expect(
-          find.descendant(of: find.byKey(shared2Likes), matching: find.text('0')),
-          findsOneWidget,
-        );
-        const shared2Comments = Key(
-          'community-topo-row-wall-shared-2-comments',
-        );
-        expect(_commentGlyphFinder(shared2Comments), findsOneWidget);
         expect(
           find.descendant(
-            of: find.byKey(shared2Comments),
-            matching: find.text('0'),
+            of: find.byKey(
+              const Key('community-topo-row-wall-shared-1-comments'),
+            ),
+            matching: find.text('1'),
           ),
           findsOneWidget,
         );
       },
     );
   });
-
-  group(
-    'C1e: boulder-logo map marker + comment icon (masi_boulder_logo/'
-    'masi_comment SVG asset swap)',
-    () {
-      testWidgets(
-        'a shared topo with coordinates renders MasiIcon(\'boulder_logo\') '
-        'in its map marker, and its feed row (commentCount > 0) renders '
-        'MasiIcon(\'comment\') next to the count instead of the old emoji',
-        (tester) async {
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          // `_seedStandardScenario` gives wall-shared-1 coordinates (45.0,
-          // 7.0) AND one seeded comment (commentCount == 1) -- exactly the
-          // "coords + commentCount > 0" fixture C1e asks for, with no new
-          // seeding helper needed.
-          await tester.runAsync(() => _seedStandardScenario(db));
-
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
-            ),
-          );
-          await _drain(tester);
-
-          // Default tab is Map -- wall-shared-1 has coordinates, so it
-          // renders a marker whose glyph is the real `boulder_logo` SVG
-          // asset via `MasiIcon`, not the old hand-painted `CustomPaint`.
-          expect(tester.takeException(), isNull);
-          expect(
-            find.byKey(const Key('community-map-marker-wall-shared-1')),
-            findsOneWidget,
-          );
-          expect(
-            _boulderLogoFinder(
-              const Key('community-map-marker-wall-shared-1'),
-            ),
-            findsOneWidget,
-          );
-          // The logo is full-color/multi-tone (see `_BoulderMarker`'s doc in
-          // `community_screen.dart`), so it must render UN-TINTED --
-          // `MasiIcon('boulder_logo', tinted: false)` -- rather than
-          // flattened to one color via `MasiIcon`'s default `srcIn` filter.
-          expect(
-            (tester.widget(
-                  _boulderLogoFinder(
-                    const Key('community-map-marker-wall-shared-1'),
-                  ),
-                )
-                as MasiIcon)
-                .tinted,
-            isFalse,
-          );
-
-          // Feed is now a fully separate screen (no in-place toggle) --
-          // pump it fresh. wall-shared-1's row shows the comment glyph
-          // (MasiIcon) + bare count, replacing the old
-          // `'\u{1F4AC} $count'` emoji text.
-          await tester.pumpWidget(
-            _wrap(container, const CommunityFeedScreen()),
-          );
-          await _drain(tester);
-
-          expect(
-            find.byKey(const Key('community-topo-row-wall-shared-1')),
-            findsOneWidget,
-          );
-          expect(
-            _commentGlyphFinder(
-              const Key('community-topo-row-wall-shared-1-comments'),
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.descendant(
-              of: find.byKey(
-                const Key('community-topo-row-wall-shared-1-comments'),
-              ),
-              matching: find.text('1'),
-            ),
-            findsOneWidget,
-          );
-        },
-      );
-    },
-  );
 
   group('D2b: search filters feed rows by name', () {
     testWidgets(
@@ -886,12 +877,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityFeedScreen(),
-          ),
-        );
+        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
         await _drain(tester);
 
         expect(_feedRowFinder(), findsNWidgets(2));
@@ -916,36 +902,30 @@ void main() {
   });
 
   group('D2c: empty state', () {
-    testWidgets(
-      'zero shared topos shows community-empty and no rows',
-      (tester) async {
-        final container = _makeContainer();
-        final db = container.read(appDatabaseProvider);
-        // Only a private wall — no shared topos at all.
-        await tester.runAsync(() async {
-          await _seedArea(db, id: 'area-1', name: 'Area One');
-          await _seedSector(db, id: 'sector-1', areaId: 'area-1', name: 'S1');
-          await _seedWall(
-            db,
-            id: 'wall-private-only',
-            sectorId: 'sector-1',
-            name: 'Private Only',
-          );
-        });
-
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityFeedScreen(),
-          ),
+    testWidgets('zero shared topos shows community-empty and no rows', (
+      tester,
+    ) async {
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      // Only a private wall — no shared topos at all.
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-1', name: 'Area One');
+        await _seedSector(db, id: 'sector-1', areaId: 'area-1', name: 'S1');
+        await _seedWall(
+          db,
+          id: 'wall-private-only',
+          sectorId: 'sector-1',
+          name: 'Private Only',
         );
-        await _drain(tester);
+      });
 
-        expect(find.byKey(const Key('community-empty')), findsOneWidget);
-        expect(find.text('No shared topos yet'), findsOneWidget);
-        expect(_feedRowFinder(), findsNothing);
-      },
-    );
+      await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+      await _drain(tester);
+
+      expect(find.byKey(const Key('community-empty')), findsOneWidget);
+      expect(find.text('No shared topos yet'), findsOneWidget);
+      expect(_feedRowFinder(), findsNothing);
+    });
   });
 
   group('T2: offline / sync banner on the Feed', () {
@@ -967,7 +947,8 @@ void main() {
         expect(
           find.byKey(const Key('community-topo-row-wall-shared-1')),
           findsOneWidget,
-          reason: 'the banner must sit above the cached rows, not replace '
+          reason:
+              'the banner must sit above the cached rows, not replace '
               'them',
         );
       },
@@ -1015,37 +996,33 @@ void main() {
       },
     );
 
-    testWidgets(
-      'NOTHING is claimed while the first probe is still in flight — '
-      'Reachability.unknown must not flash an offline banner on cold start',
-      (tester) async {
-        final gate = Completer<void>();
-        final connectivity = _ScriptedConnectivity(
-          reachable: false,
-          gate: gate,
-        );
-        final container = _makeContainer(connectivity: connectivity);
-        final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedStandardScenario(db));
+    testWidgets('NOTHING is claimed while the first probe is still in flight — '
+        'Reachability.unknown must not flash an offline banner on cold start', (
+      tester,
+    ) async {
+      final gate = Completer<void>();
+      final connectivity = _ScriptedConnectivity(reachable: false, gate: gate);
+      final container = _makeContainer(connectivity: connectivity);
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
-        await _drain(tester);
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+      await _drain(tester);
 
-        // Genuinely still open — without the gate this would pass even with
-        // the `isKnownOffline` guard deleted.
-        expect(connectivity.probeCount, 1);
-        expect(gate.isCompleted, isFalse);
-        expect(find.byKey(const Key('sync-banner')), findsNothing);
+      // Genuinely still open — without the gate this would pass even with
+      // the `isKnownOffline` guard deleted.
+      expect(connectivity.probeCount, 1);
+      expect(gate.isCompleted, isFalse);
+      expect(find.byKey(const Key('sync-banner')), findsNothing);
 
-        await tester.runAsync(() async {
-          gate.complete();
-          await gate.future;
-        });
-        await _drain(tester);
+      await tester.runAsync(() async {
+        gate.complete();
+        await gate.future;
+      });
+      await _drain(tester);
 
-        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
-      },
-    );
+      expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+    });
 
     testWidgets('mounting the Feed probes reachability exactly once', (
       tester,
@@ -1099,7 +1076,8 @@ void main() {
         final container = _makeContainer(
           syncOrchestrator: _FakeSyncOrchestrator(
             initialState: const SyncOrchestratorState(
-              lastSharedPhotoBudgetReason: SharedPhotoBudgetReason.storagePressure,
+              lastSharedPhotoBudgetReason:
+                  SharedPhotoBudgetReason.storagePressure,
             ),
           ),
         );
@@ -1238,7 +1216,8 @@ void main() {
         expect(
           find.byKey(const Key('sync-banner')),
           findsNothing,
-          reason: 'a per-widget dismissal flag would make the user close the '
+          reason:
+              'a per-widget dismissal flag would make the user close the '
               'same sentence again on every screen that shows it',
         );
         // One provider, not two flags that happen to agree. (The offline EMPTY
@@ -1286,7 +1265,8 @@ void main() {
         expect(
           find.byKey(const Key('sync-banner')),
           findsNothing,
-          reason: 'the user closed this sentence once and should not have to '
+          reason:
+              'the user closed this sentence once and should not have to '
               'close it again on the next tab',
         );
       },
@@ -1328,32 +1308,31 @@ void main() {
       },
     );
 
-    testWidgets(
-      'the Feed\'s withheld-shared-photos banner is closable too',
-      (tester) async {
-        final container = _makeContainer(
-          syncOrchestrator: _FakeSyncOrchestrator(
-            initialState: const SyncOrchestratorState(
-              lastSharedPhotoBudgetReason:
-                  SharedPhotoBudgetReason.storagePressure,
-            ),
+    testWidgets('the Feed\'s withheld-shared-photos banner is closable too', (
+      tester,
+    ) async {
+      final container = _makeContainer(
+        syncOrchestrator: _FakeSyncOrchestrator(
+          initialState: const SyncOrchestratorState(
+            lastSharedPhotoBudgetReason:
+                SharedPhotoBudgetReason.storagePressure,
           ),
-        );
-        final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedStandardScenario(db));
+        ),
+      );
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
-        await _drain(tester);
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+      await _drain(tester);
 
-        expect(find.byKey(const Key('sync-banner')), findsOneWidget);
-        expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
+      expect(find.byKey(const Key('sync-banner')), findsOneWidget);
+      expect(find.byKey(const Key('sync-banner-dismiss')), findsOneWidget);
 
-        await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
-        await _drain(tester);
+      await tester.tap(find.byKey(const Key('sync-banner-dismiss')));
+      await _drain(tester);
 
-        expect(find.byKey(const Key('sync-banner')), findsNothing);
-      },
-    );
+      expect(find.byKey(const Key('sync-banner')), findsNothing);
+    });
 
     testWidgets(
       'a dismissed sync failure RE-ARMS on the Feed when the underlying error '
@@ -1515,9 +1494,7 @@ void main() {
         final db = container2.read(appDatabaseProvider);
         await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(container2, const CommunityFeedScreen()),
-        );
+        await tester.pumpWidget(_wrap(container2, const CommunityFeedScreen()));
         await _drain(tester);
         await tester.enterText(
           find.byKey(const Key('community-search-field')),
@@ -1660,32 +1637,26 @@ void main() {
       },
     );
 
-    testWidgets(
-      'tapping Retry while STILL offline re-probes but does NOT call '
-      'pullNow() — retrying a request that would fail the same way again is '
-      'not useful work',
-      (tester) async {
-        final connectivity = _ScriptedConnectivity(reachable: false);
-        final fakeOrchestrator = _FakeSyncOrchestrator();
-        final container = _makeContainer(
-          connectivity: connectivity,
-          syncOrchestrator: fakeOrchestrator,
-        );
+    testWidgets('tapping Retry while STILL offline re-probes but does NOT call '
+        'pullNow() — retrying a request that would fail the same way again is '
+        'not useful work', (tester) async {
+      final connectivity = _ScriptedConnectivity(reachable: false);
+      final fakeOrchestrator = _FakeSyncOrchestrator();
+      final container = _makeContainer(
+        connectivity: connectivity,
+        syncOrchestrator: fakeOrchestrator,
+      );
 
-        await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
-        await _drain(tester);
+      await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
+      await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-offline-retry')));
-        await _drain(tester);
+      await tester.tap(find.byKey(const Key('community-offline-retry')));
+      await _drain(tester);
 
-        expect(connectivity.probeCount, 2);
-        expect(fakeOrchestrator.pullNowCallCount, 0);
-        expect(
-          find.byKey(const Key('community-offline-empty')),
-          findsOneWidget,
-        );
-      },
-    );
+      expect(connectivity.probeCount, 2);
+      expect(fakeOrchestrator.pullNowCallCount, 0);
+      expect(find.byKey(const Key('community-offline-empty')), findsOneWidget);
+    });
 
     testWidgets(
       'the offline empty state does not overflow when the offline banner '
@@ -1754,319 +1725,276 @@ void main() {
     );
   });
 
-  group(
-    'Own-topo map markers (GPS-on-map fix): a user\'s own located topos '
-    'must show on the map even while still private',
-    () {
-      testWidgets(
-        'M2: an own (local, private) topo with coords shows '
+  group('Own-topo map markers (GPS-on-map fix): a user\'s own located topos '
+      'must show on the map even while still private', () {
+    testWidgets('M2: an own (local, private) topo with coords shows '
         'community-map-own-marker-<id>; a shared topo owned by someone else '
-        'shows community-map-marker-<id> -- both present, distinct keys',
-        (tester) async {
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-own', name: 'Area Own');
-            await _seedSector(
-              db,
-              id: 'sector-own',
-              areaId: 'area-own',
-              name: 'S',
-            );
-            // Own: a private local wall with coordinates -- never shared,
-            // so it is NOT in the sharedToposProvider feed at all. Kept
-            // a hair away (not a full degree, like C1's my-location fixture)
-            // from wall-community-1's coordinates so BOTH stay inside
-            // flutter_map's on-screen culling bounds at the auto-computed
-            // averaged center/zoom -- flutter_test's tiny default surface
-            // only ever shows a small fraction of a degree at zoom 11.
-            await _seedWall(
-              db,
-              id: 'wall-own-1',
-              sectorId: 'sector-own',
-              name: 'My Secret Wall',
-              latitude: 45.0,
-              longitude: 7.0,
-            );
-            // Community: shared, owned by someone else.
-            await _seedWall(
-              db,
-              id: 'wall-community-1',
-              sectorId: 'sector-own',
-              name: 'Someone Else\'s Wall',
-              visibility: 'shared',
-              latitude: 45.001,
-              longitude: 7.001,
-              ownerId: _otherOwnerId,
-            );
-          });
+        'shows community-map-marker-<id> -- both present, distinct keys', (
+      tester,
+    ) async {
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-own', name: 'Area Own');
+        await _seedSector(db, id: 'sector-own', areaId: 'area-own', name: 'S');
+        // Own: a private local wall with coordinates -- never shared,
+        // so it is NOT in the sharedToposProvider feed at all. Kept
+        // a hair away (not a full degree, like C1's my-location fixture)
+        // from wall-community-1's coordinates so BOTH stay inside
+        // flutter_map's on-screen culling bounds at the auto-computed
+        // averaged center/zoom -- flutter_test's tiny default surface
+        // only ever shows a small fraction of a degree at zoom 11.
+        await _seedWall(
+          db,
+          id: 'wall-own-1',
+          sectorId: 'sector-own',
+          name: 'My Secret Wall',
+          latitude: 45.0,
+          longitude: 7.0,
+        );
+        // Community: shared, owned by someone else.
+        await _seedWall(
+          db,
+          id: 'wall-community-1',
+          sectorId: 'sector-own',
+          name: 'Someone Else\'s Wall',
+          visibility: 'shared',
+          latitude: 45.001,
+          longitude: 7.001,
+          ownerId: _otherOwnerId,
+        );
+      });
 
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
-            ),
-          );
-          await _drain(tester);
-
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          expect(
-            find.byKey(const Key('community-map-own-marker-wall-own-1')),
-            findsOneWidget,
-          );
-          expect(
-            find.byKey(const Key('community-map-marker-wall-own-1')),
-            findsNothing,
-          );
-          expect(
-            find.byKey(
-              const Key('community-map-marker-wall-community-1'),
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.byKey(
-              const Key('community-map-own-marker-wall-community-1'),
-            ),
-            findsNothing,
-          );
-        },
+      await tester.pumpWidget(
+        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
       );
+      await _drain(tester);
 
-      testWidgets(
-        'M3: a wall that is both own AND shared (a published own topo) '
+      await _drain(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(const Key('community-map-own-marker-wall-own-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('community-map-marker-wall-own-1')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('community-map-marker-wall-community-1')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('community-map-own-marker-wall-community-1')),
+        findsNothing,
+      );
+    });
+
+    testWidgets('M3: a wall that is both own AND shared (a published own topo) '
         'renders exactly once, as the OWN marker -- the community marker '
-        'for the same wallId is absent',
-        (tester) async {
-          final db = AppDatabase(NativeDatabase.memory());
-          addTearDown(db.close);
-          final container = ProviderContainer(
-            overrides: [
-              appDatabaseProvider.overrideWithValue(db),
-              nowMsProvider.overrideWithValue(() => 1000),
-              authStateProvider.overrideWith(
-                (ref) => Stream.value(
-                  const AuthSessionState.signedIn(
-                    'me@example.com',
-                    uid: 'me',
-                  ),
-                ),
-              ),
-              // §1c: `watchTopos`' own-or-unowned filter and the map/feed
-              // "is this mine" badges now BOTH resolve their uid through
-              // `effectiveUidProvider` (`currentUidProvider` delegates to it),
-              // so this ONE override drives the repository seam and the
-              // widgets alike — the pair of overrides this replaced existed
-              // only because the two doors used to be decoupled.
-              effectiveUidProvider.overrideWithValue('me'),
-            ],
-          );
-          addTearDown(container.dispose);
-
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-dedupe', name: 'Area Dedupe');
-            await _seedSector(
-              db,
-              id: 'sector-dedupe',
-              areaId: 'area-dedupe',
-              name: 'S',
-            );
-            await _seedWall(
-              db,
-              id: 'wall-mine-shared',
-              sectorId: 'sector-dedupe',
-              name: 'My Published Wall',
-              visibility: 'shared',
-              latitude: 50.0,
-              longitude: 60.0,
-              ownerId: 'me',
-            );
-          });
-
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+        'for the same wallId is absent', (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          authStateProvider.overrideWith(
+            (ref) => Stream.value(
+              const AuthSessionState.signedIn('me@example.com', uid: 'me'),
             ),
-          );
-          await _drain(tester);
-
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          expect(
-            find.byKey(
-              const Key('community-map-own-marker-wall-mine-shared'),
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.byKey(const Key('community-map-marker-wall-mine-shared')),
-            findsNothing,
-          );
-        },
+          ),
+          // §1c: `watchTopos`' own-or-unowned filter and the map/feed
+          // "is this mine" badges now BOTH resolve their uid through
+          // `effectiveUidProvider` (`currentUidProvider` delegates to it),
+          // so this ONE override drives the repository seam and the
+          // widgets alike — the pair of overrides this replaced existed
+          // only because the two doors used to be decoupled.
+          effectiveUidProvider.overrideWithValue('me'),
+        ],
       );
+      addTearDown(container.dispose);
 
-      testWidgets(
-        'M4: own located topos with ZERO shared topos still render on the '
-        'map (not empty) -- the map centers/zooms on the own markers',
-        (tester) async {
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-own-only', name: 'Area Own Only');
-            await _seedSector(
-              db,
-              id: 'sector-own-only',
-              areaId: 'area-own-only',
-              name: 'S',
-            );
-            await _seedWall(
-              db,
-              id: 'wall-own-only',
-              sectorId: 'sector-own-only',
-              name: 'Only Mine',
-              latitude: 12.0,
-              longitude: 34.0,
-            );
-          });
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-dedupe', name: 'Area Dedupe');
+        await _seedSector(
+          db,
+          id: 'sector-dedupe',
+          areaId: 'area-dedupe',
+          name: 'S',
+        );
+        await _seedWall(
+          db,
+          id: 'wall-mine-shared',
+          sectorId: 'sector-dedupe',
+          name: 'My Published Wall',
+          visibility: 'shared',
+          latitude: 50.0,
+          longitude: 60.0,
+          ownerId: 'me',
+        );
+      });
 
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
-            ),
-          );
-          await _drain(tester);
-
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          expect(find.byType(FlutterMap), findsOneWidget);
-          expect(
-            find.byKey(const Key('community-map-own-marker-wall-own-only')),
-            findsOneWidget,
-          );
-          // No shared topos were seeded at all -> zero community markers,
-          // yet the map is still zoomed in on the own marker(s) rather than
-          // falling back to the empty (0,0)/1.5 world view.
-          final flutterMap = tester.widget<FlutterMap>(
-            find.byType(FlutterMap),
-          );
-          expect(flutterMap.options.initialZoom, 11);
-          expect(flutterMap.options.initialCenter, const LatLng(12.0, 34.0));
-        },
+      await tester.pumpWidget(
+        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
       );
+      await _drain(tester);
 
-      testWidgets(
-        'M5: community-map-legend is shown, distinguishing Private from '
-        'Public',
-        (tester) async {
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() => _seedStandardScenario(db));
+      await _drain(tester);
 
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
-            ),
-          );
-          await _drain(tester);
-
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          final legendFinder = find.byKey(
-            const Key('community-map-legend'),
-          );
-          expect(legendFinder, findsOneWidget);
-          expect(
-            find.descendant(
-              of: legendFinder,
-              matching: find.textContaining('Private'),
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.descendant(
-              of: legendFinder,
-              matching: find.textContaining('Public'),
-            ),
-            findsOneWidget,
-          );
-        },
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(const Key('community-map-own-marker-wall-mine-shared')),
+        findsOneWidget,
       );
+      expect(
+        find.byKey(const Key('community-map-marker-wall-mine-shared')),
+        findsNothing,
+      );
+    });
 
-      testWidgets(
-        'F1 (safety regression): a shared topo with a null ownerId (a '
+    testWidgets(
+      'M4: own located topos with ZERO shared topos still render on the '
+      'map (not empty) -- the map centers/zooms on the own markers',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-own-only', name: 'Area Own Only');
+          await _seedSector(
+            db,
+            id: 'sector-own-only',
+            areaId: 'area-own-only',
+            name: 'S',
+          );
+          await _seedWall(
+            db,
+            id: 'wall-own-only',
+            sectorId: 'sector-own-only',
+            name: 'Only Mine',
+            latitude: 12.0,
+            longitude: 34.0,
+          );
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        expect(find.byType(FlutterMap), findsOneWidget);
+        expect(
+          find.byKey(const Key('community-map-own-marker-wall-own-only')),
+          findsOneWidget,
+        );
+        // No shared topos were seeded at all -> zero community markers,
+        // yet the map is still zoomed in on the own marker(s) rather than
+        // falling back to the empty (0,0)/1.5 world view.
+        final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
+        expect(flutterMap.options.initialZoom, 11);
+        expect(flutterMap.options.initialCenter, const LatLng(12.0, 34.0));
+      },
+    );
+
+    testWidgets(
+      'M5: community-map-legend is shown, distinguishing Private from '
+      'Public',
+      (tester) async {
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+          ),
+        );
+        await _drain(tester);
+
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final legendFinder = find.byKey(const Key('community-map-legend'));
+        expect(legendFinder, findsOneWidget);
+        expect(
+          find.descendant(
+            of: legendFinder,
+            matching: find.textContaining('Private'),
+          ),
+          findsOneWidget,
+        );
+        expect(
+          find.descendant(
+            of: legendFinder,
+            matching: find.textContaining('Public'),
+          ),
+          findsOneWidget,
+        );
+      },
+    );
+
+    testWidgets('F1 (safety regression): a shared topo with a null ownerId (a '
         'legacy/pre-ownership row with no owner stamp), viewed signed-out '
         '(myUid also null), must NOT be misclassified as own -- a '
         'null-owner must never be treated as equal to a null myUid. It '
         'renders as a COMMUNITY marker (read-only detail), never as the '
         'OWN marker, which would route into this device\'s wall editor '
-        'for a wall this device does not actually own',
-        (tester) async {
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedArea(
-              db,
-              id: 'area-foreign-null',
-              name: 'Area Foreign Null',
-            );
-            await _seedSector(
-              db,
-              id: 'sector-foreign-null',
-              areaId: 'area-foreign-null',
-              name: 'S',
-            );
-            // A shared topo (present in the sync/community feed) whose
-            // ownerId is null -- e.g. a legacy row synced before ownership
-            // stamping existed. `_makeContainer` never overrides
-            // `authStateProvider`, so `myUid` is also null here
-            // (signed-out) -- exactly the null-owner/null-myUid collision
-            // the safety fix guards against.
-            await _seedWall(
-              db,
-              id: 'wall-foreign-null-owner',
-              sectorId: 'sector-foreign-null',
-              name: 'Foreign Null-Owner Wall',
-              visibility: 'shared',
-              latitude: 45.0,
-              longitude: 7.0,
-            );
-          });
+        'for a wall this device does not actually own', (tester) async {
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-foreign-null', name: 'Area Foreign Null');
+        await _seedSector(
+          db,
+          id: 'sector-foreign-null',
+          areaId: 'area-foreign-null',
+          name: 'S',
+        );
+        // A shared topo (present in the sync/community feed) whose
+        // ownerId is null -- e.g. a legacy row synced before ownership
+        // stamping existed. `_makeContainer` never overrides
+        // `authStateProvider`, so `myUid` is also null here
+        // (signed-out) -- exactly the null-owner/null-myUid collision
+        // the safety fix guards against.
+        await _seedWall(
+          db,
+          id: 'wall-foreign-null-owner',
+          sectorId: 'sector-foreign-null',
+          name: 'Foreign Null-Owner Wall',
+          visibility: 'shared',
+          latitude: 45.0,
+          longitude: 7.0,
+        );
+      });
 
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(tileProvider: _NoopTileProvider()),
-            ),
-          );
-          await _drain(tester);
-
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          expect(
-            find.byKey(
-              const Key('community-map-marker-wall-foreign-null-owner'),
-            ),
-            findsOneWidget,
-          );
-          expect(
-            find.byKey(
-              const Key('community-map-own-marker-wall-foreign-null-owner'),
-            ),
-            findsNothing,
-          );
-        },
+      await tester.pumpWidget(
+        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
       );
-    },
-  );
+      await _drain(tester);
+
+      await _drain(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(const Key('community-map-marker-wall-foreign-null-owner')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(
+          const Key('community-map-own-marker-wall-foreign-null-owner'),
+        ),
+        findsNothing,
+      );
+    });
+  });
 
   group('C: "you are here" device-location marker', () {
     testWidgets(
@@ -2152,16 +2080,13 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityFeedScreen(),
-          ),
-        );
+        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
         await _drain(tester);
 
         expect(
-          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
+          find.byWidgetPredicate(
+            (w) => w is MasiIcon && w.name == 'filter_active',
+          ),
           findsNothing,
         );
 
@@ -2170,18 +2095,9 @@ void main() {
 
         expect(find.byKey(const Key('filter-grade-min')), findsOneWidget);
         expect(find.byKey(const Key('filter-grade-max')), findsOneWidget);
-        expect(
-          find.byKey(const Key('filter-style-sport')),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(const Key('filter-style-trad')),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(const Key('filter-style-boulder')),
-          findsOneWidget,
-        );
+        expect(find.byKey(const Key('filter-style-sport')), findsOneWidget);
+        expect(find.byKey(const Key('filter-style-trad')), findsOneWidget);
+        expect(find.byKey(const Key('filter-style-boulder')), findsOneWidget);
       },
     );
 
@@ -2193,12 +2109,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityFeedScreen(),
-          ),
-        );
+        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
         await _drain(tester);
 
         expect(_feedRowFinder(), findsNWidgets(2));
@@ -2219,7 +2130,9 @@ void main() {
         );
         expect(_feedRowFinder(), findsOneWidget);
         expect(
-          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
+          find.byWidgetPredicate(
+            (w) => w is MasiIcon && w.name == 'filter_active',
+          ),
           findsOneWidget,
         );
       },
@@ -2233,12 +2146,7 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityFeedScreen(),
-          ),
-        );
+        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
         await _drain(tester);
 
         // Drive the filter through the provider directly (GradeRangePicker's
@@ -2261,54 +2169,50 @@ void main() {
       },
     );
 
-    testWidgets(
-      'Clear resets both sub-filters and restores the full feed; the '
-      'active-dot disappears',
-      (tester) async {
-        final container = _makeContainer();
-        final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedFilterScenario(db));
+    testWidgets('Clear resets both sub-filters and restores the full feed; the '
+        'active-dot disappears', (tester) async {
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityFeedScreen(),
-          ),
-        );
-        await _drain(tester);
+      await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+      await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-filter-button')));
-        await tester.pumpAndSettle();
-        await tester.tap(find.byKey(const Key('filter-style-sport')));
-        await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('community-filter-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byKey(const Key('filter-style-sport')));
+      await tester.pumpAndSettle();
 
-        expect(_feedRowFinder(), findsOneWidget);
-        expect(
-          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
-          findsOneWidget,
-        );
+      expect(_feedRowFinder(), findsOneWidget);
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is MasiIcon && w.name == 'filter_active',
+        ),
+        findsOneWidget,
+      );
 
-        await tester.tap(find.byKey(const Key('community-filter-clear')));
-        // NOT `pumpAndSettle()`: clearing the filter re-reveals
-        // wall-trad's feed row, which was fully unmounted while filtered
-        // out -- its `PhotoImage` remounts FRESH and starts in the
-        // "loading" state, rendering a brand-new `MasiShimmer` whose
-        // `AnimationController..repeat()` never completes (see that
-        // class's doc). `pumpAndSettle()` only advances flutter_test's
-        // fake-async clock, which can't progress the real dart:io file
-        // open behind it either, so the shimmer never resolves and
-        // `pumpAndSettle()` spins until it times out. A bounded pump is
-        // plenty to flush the filter-clear rebuild this assertion cares
-        // about -- the shimmer's continued animation is incidental.
-        await tester.pump(const Duration(milliseconds: 300));
+      await tester.tap(find.byKey(const Key('community-filter-clear')));
+      // NOT `pumpAndSettle()`: clearing the filter re-reveals
+      // wall-trad's feed row, which was fully unmounted while filtered
+      // out -- its `PhotoImage` remounts FRESH and starts in the
+      // "loading" state, rendering a brand-new `MasiShimmer` whose
+      // `AnimationController..repeat()` never completes (see that
+      // class's doc). `pumpAndSettle()` only advances flutter_test's
+      // fake-async clock, which can't progress the real dart:io file
+      // open behind it either, so the shimmer never resolves and
+      // `pumpAndSettle()` spins until it times out. A bounded pump is
+      // plenty to flush the filter-clear rebuild this assertion cares
+      // about -- the shimmer's continued animation is incidental.
+      await tester.pump(const Duration(milliseconds: 300));
 
-        expect(_feedRowFinder(), findsNWidgets(2));
-        expect(
-          find.byWidgetPredicate((w) => w is MasiIcon && w.name == 'filter_active'),
-          findsNothing,
-        );
-      },
-    );
+      expect(_feedRowFinder(), findsNWidgets(2));
+      expect(
+        find.byWidgetPredicate(
+          (w) => w is MasiIcon && w.name == 'filter_active',
+        ),
+        findsNothing,
+      );
+    });
 
     testWidgets(
       'a filter matching nothing shows the "No topos match your filters" '
@@ -2318,17 +2222,10 @@ void main() {
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedFilterScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityFeedScreen(),
-          ),
-        );
+        await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
         await _drain(tester);
 
-        container
-            .read(communityFilterProvider.notifier)
-            .setStyles({'boulder'});
+        container.read(communityFilterProvider.notifier).setStyles({'boulder'});
         // `_drain` (not a bare `tester.pump()`): filtering every row out
         // disposes each now-gone `_FeedRow`'s `profileDisplayNameProvider`
         // (#18, `autoDispose`) subscription, and drift's own
@@ -2403,11 +2300,7 @@ void main() {
         final container = _makeContainer();
 
         await tester.pumpWidget(
-          wrapWithScale(
-            container,
-            CommunityFeedScreen(),
-            2.5,
-          ),
+          wrapWithScale(container, CommunityFeedScreen(), 2.5),
         );
         await _drain(tester);
         expect(tester.takeException(), isNull);
@@ -2428,11 +2321,7 @@ void main() {
         final container = _makeContainer();
 
         await tester.pumpWidget(
-          wrapWithScale(
-            container,
-            CommunityFeedScreen(),
-            3.0,
-          ),
+          wrapWithScale(container, CommunityFeedScreen(), 3.0),
         );
         await _drain(tester);
         expect(tester.takeException(), isNull);
@@ -2551,107 +2440,100 @@ void main() {
   });
 
   group('Subtask A: map polish — nicer tiles, attribution, logo markers', () {
-    testWidgets(
-      'Map tab uses the CartoDB Positron tile URL (no API key), keeps the '
-      'injectable tileProvider seam, and shows the OSM/CARTO credit TEXT '
-      'visibly at a realistic viewport WITHOUT any tap (regression: a '
-      'collapsed RichAttributionWidget info-icon popup does not satisfy '
-      'the "attribution must be visible without interaction" requirement)',
-      (tester) async {
-        // A realistic ≥360px-wide logical viewport (rather than
-        // flutter_test's tiny ~267-logical-px default surface), so the
-        // credit pill's overflow behaviour is exercised meaningfully.
-        tester.view.physicalSize = const Size(390, 844);
-        tester.view.devicePixelRatio = 1.0;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
+    testWidgets('Map tab uses a keyless tile URL, keeps the '
+        'injectable tileProvider seam, and shows the OSM credit TEXT '
+        'visibly at a realistic viewport WITHOUT any tap (regression: a '
+        'collapsed RichAttributionWidget info-icon popup does not satisfy '
+        'the "attribution must be visible without interaction" requirement)', (
+      tester,
+    ) async {
+      // A realistic ≥360px-wide logical viewport (rather than
+      // flutter_test's tiny ~267-logical-px default surface), so the
+      // credit pill's overflow behaviour is exercised meaningfully.
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
 
-        final container = _makeContainer();
-        final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedStandardScenario(db));
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
-          ),
+      await tester.pumpWidget(
+        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+      );
+      await _drain(tester);
+
+      await _drain(tester);
+
+      expect(tester.takeException(), isNull);
+
+      final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
+      expect(tileLayer.urlTemplate, basemapUrlTemplate);
+      // The point of the constant is that the app never ships a basemap
+      // that needs a key: CARTO's endpoint kept answering 200 with a valid
+      // PNG after it went key-only, and stamped 'API KEY REQUIRED' across
+      // every tile instead — which no HTTP-level assertion would catch.
+      expect(tileLayer.urlTemplate, isNot(contains('cartocdn')));
+      expect(tileLayer.urlTemplate, isNot(contains('key=')));
+      // Still the injected fake, never a real NetworkTileProvider — this
+      // test must perform no real network I/O.
+      expect(tileLayer.tileProvider, isA<_NoopTileProvider>());
+
+      // The credit text must be rendered and visible WITHOUT any tap —
+      // not merely present (opacity 0) somewhere in the tree, which is
+      // exactly how `RichAttributionWidget`'s collapsed popup renders its
+      // `TextSourceAttribution`s: still built, wrapped in an
+      // `AnimatedOpacity(opacity: 0)`, so a bare `find.textContaining`
+      // would pass even though nothing is visible on screen.
+      final osmFinder = find.textContaining('OpenStreetMap');
+      expect(osmFinder, findsOneWidget);
+
+      for (final finder in [osmFinder]) {
+        final zeroOpacityAncestors = find.ancestor(
+          of: finder,
+          matching: find.byWidgetPredicate((widget) {
+            if (widget is AnimatedOpacity) return widget.opacity == 0;
+            if (widget is Opacity) return widget.opacity == 0;
+            return false;
+          }),
         );
-        await _drain(tester);
-
-        await _drain(tester);
-
-        expect(tester.takeException(), isNull);
-
-        final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
         expect(
-          tileLayer.urlTemplate,
-          'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+          zeroOpacityAncestors,
+          findsNothing,
+          reason:
+              'credit text must not be hidden behind a zero-opacity '
+              'wrapper (i.e. must be visible without any tap)',
         );
-        // Still the injected fake, never a real NetworkTileProvider — this
-        // test must perform no real network I/O.
-        expect(tileLayer.tileProvider, isA<_NoopTileProvider>());
+      }
+      expect(tester.takeException(), isNull);
+    });
 
-        // The credit text must be rendered and visible WITHOUT any tap —
-        // not merely present (opacity 0) somewhere in the tree, which is
-        // exactly how `RichAttributionWidget`'s collapsed popup renders its
-        // `TextSourceAttribution`s: still built, wrapped in an
-        // `AnimatedOpacity(opacity: 0)`, so a bare `find.textContaining`
-        // would pass even though nothing is visible on screen.
-        final osmFinder = find.textContaining('OpenStreetMap');
-        final cartoFinder = find.textContaining('CARTO');
-        expect(osmFinder, findsOneWidget);
-        expect(cartoFinder, findsOneWidget);
+    testWidgets('marker box has no vertical slack: the box height equals '
+        '_BoulderMarker.totalHeight (40px) exactly, so '
+        "Alignment.topCenter's bottom-edge anchor (per flutter_map's "
+        'Marker.alignment doc) keeps the bottom-anchored boulder marker '
+        "sitting precisely on the coordinate rather than floating above it", (
+      tester,
+    ) async {
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedStandardScenario(db));
 
-        for (final finder in [osmFinder, cartoFinder]) {
-          final zeroOpacityAncestors = find.ancestor(
-            of: finder,
-            matching: find.byWidgetPredicate((widget) {
-              if (widget is AnimatedOpacity) return widget.opacity == 0;
-              if (widget is Opacity) return widget.opacity == 0;
-              return false;
-            }),
-          );
-          expect(
-            zeroOpacityAncestors,
-            findsNothing,
-            reason:
-                'credit text must not be hidden behind a zero-opacity '
-                'wrapper (i.e. must be visible without any tap)',
-          );
-        }
-        expect(tester.takeException(), isNull);
-      },
-    );
+      await tester.pumpWidget(
+        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+      );
+      await _drain(tester);
 
-    testWidgets(
-      'marker box has no vertical slack: the box height equals '
-      '_BoulderMarker.totalHeight (40px) exactly, so '
-      "Alignment.topCenter's bottom-edge anchor (per flutter_map's "
-      'Marker.alignment doc) keeps the bottom-anchored boulder marker '
-      "sitting precisely on the coordinate rather than floating above it",
-      (tester) async {
-        final container = _makeContainer();
-        final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedStandardScenario(db));
+      await _drain(tester);
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
-          ),
-        );
-        await _drain(tester);
+      expect(tester.takeException(), isNull);
 
-        await _drain(tester);
-
-        expect(tester.takeException(), isNull);
-
-        final markerBoxSize = tester.getSize(
-          find.byKey(const Key('community-map-marker-wall-shared-1')),
-        );
-        expect(markerBoxSize.height, 40.0);
-      },
-    );
+      final markerBoxSize = tester.getSize(
+        find.byKey(const Key('community-map-marker-wall-shared-1')),
+      );
+      expect(markerBoxSize.height, 40.0);
+    });
 
     testWidgets(
       'each topo marker renders the faceted boulder marker (replacing the '
@@ -2677,159 +2559,156 @@ void main() {
           findsOneWidget,
         );
         expect(
-          _boulderMarkerFinder(
-            const Key('community-map-marker-wall-shared-1'),
-          ),
+          _boulderMarkerFinder(const Key('community-map-marker-wall-shared-1')),
           findsOneWidget,
         );
       },
     );
 
-    testWidgets(
-      'boulder marker color encodes visibility: an own PRIVATE topo '
-      'renders isPublic == false plus a grayscale ColorFiltered wrapper '
-      '(#38), while an own PUBLIC (shared) topo and a community topo both '
-      'render isPublic == true with NO ColorFiltered wrapper -- the '
-      'public/private distinction is structural (color-vs-gray), not just '
-      'an opacity value',
-      (tester) async {
-        final db = AppDatabase(NativeDatabase.memory());
-        addTearDown(db.close);
-        final container = ProviderContainer(
-          overrides: [
-            appDatabaseProvider.overrideWithValue(db),
-            nowMsProvider.overrideWithValue(() => 1000),
-            authStateProvider.overrideWith(
-              (ref) => Stream.value(
-                const AuthSessionState.signedIn('me@example.com', uid: 'me'),
-              ),
+    testWidgets('boulder marker color encodes visibility: an own PRIVATE topo '
+        'renders isPublic == false plus a grayscale ColorFiltered wrapper '
+        '(#38), while an own PUBLIC (shared) topo and a community topo both '
+        'render isPublic == true with NO ColorFiltered wrapper -- the '
+        'public/private distinction is structural (color-vs-gray), not just '
+        'an opacity value', (tester) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          authStateProvider.overrideWith(
+            (ref) => Stream.value(
+              const AuthSessionState.signedIn('me@example.com', uid: 'me'),
             ),
-            // See the identical override in the M3 test above: §1c routes
-            // `watchTopos`' own-or-unowned filter and the marker badges
-            // through the one `effectiveUidProvider` door.
-            effectiveUidProvider.overrideWithValue('me'),
-          ],
-        );
-        addTearDown(container.dispose);
-
-        await tester.runAsync(() async {
-          await _seedArea(db, id: 'area-tint', name: 'Area Tint');
-          await _seedSector(db, id: 'sector-tint', areaId: 'area-tint', name: 'S');
-          // Own, private: never shared, so it's not in the community feed
-          // at all -- must render the FADED (private) boulder logo.
-          await _seedWall(
-            db,
-            id: 'wall-own-private',
-            sectorId: 'sector-tint',
-            name: 'Own Private',
-            latitude: 45.0,
-            longitude: 7.0,
-            ownerId: 'me',
-          );
-          // Own, public (shared): renders exactly once, as the own marker
-          // (see M3) -- must render the FULL-OPACITY (public) boulder logo.
-          await _seedWall(
-            db,
-            id: 'wall-own-public',
-            sectorId: 'sector-tint',
-            name: 'Own Public',
-            visibility: 'shared',
-            latitude: 45.001,
-            longitude: 7.001,
-            ownerId: 'me',
-          );
-          // Community: someone else's shared topo -- always renders the
-          // FULL-OPACITY (public) boulder logo, per
-          // `CommunityRepository.watchSharedTopos` only ever surfacing
-          // `visibility == 'shared'` rows.
-          await _seedWall(
-            db,
-            id: 'wall-community',
-            sectorId: 'sector-tint',
-            name: 'Community Topo',
-            visibility: 'shared',
-            latitude: 45.002,
-            longitude: 7.002,
-            ownerId: _otherOwnerId,
-          );
-        });
-
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
-        );
-        await _drain(tester);
+          // See the identical override in the M3 test above: §1c routes
+          // `watchTopos`' own-or-unowned filter and the marker badges
+          // through the one `effectiveUidProvider` door.
+          effectiveUidProvider.overrideWithValue('me'),
+        ],
+      );
+      addTearDown(container.dispose);
 
-        await _drain(tester);
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-tint', name: 'Area Tint');
+        await _seedSector(
+          db,
+          id: 'sector-tint',
+          areaId: 'area-tint',
+          name: 'S',
+        );
+        // Own, private: never shared, so it's not in the community feed
+        // at all -- must render the FADED (private) boulder logo.
+        await _seedWall(
+          db,
+          id: 'wall-own-private',
+          sectorId: 'sector-tint',
+          name: 'Own Private',
+          latitude: 45.0,
+          longitude: 7.0,
+          ownerId: 'me',
+        );
+        // Own, public (shared): renders exactly once, as the own marker
+        // (see M3) -- must render the FULL-OPACITY (public) boulder logo.
+        await _seedWall(
+          db,
+          id: 'wall-own-public',
+          sectorId: 'sector-tint',
+          name: 'Own Public',
+          visibility: 'shared',
+          latitude: 45.001,
+          longitude: 7.001,
+          ownerId: 'me',
+        );
+        // Community: someone else's shared topo -- always renders the
+        // FULL-OPACITY (public) boulder logo, per
+        // `CommunityRepository.watchSharedTopos` only ever surfacing
+        // `visibility == 'shared'` rows.
+        await _seedWall(
+          db,
+          id: 'wall-community',
+          sectorId: 'sector-tint',
+          name: 'Community Topo',
+          visibility: 'shared',
+          latitude: 45.002,
+          longitude: 7.002,
+          ownerId: _otherOwnerId,
+        );
+      });
 
-        expect(tester.takeException(), isNull);
+      await tester.pumpWidget(
+        _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+      );
+      await _drain(tester);
 
-        expect(
-          _boulderMarkerIsPublic(
-            tester,
-            const Key('community-map-own-marker-wall-own-private'),
-          ),
-          isFalse,
-        );
-        expect(
-          _boulderMarkerIsPublic(
-            tester,
-            const Key('community-map-own-marker-wall-own-public'),
-          ),
-          isTrue,
-        );
-        expect(
-          _boulderMarkerIsPublic(
-            tester,
-            const Key('community-map-marker-wall-community'),
-          ),
-          isTrue,
-        );
+      await _drain(tester);
 
-        // #38: the public/private cue must be structural (a grayscale
-        // ColorFiltered wrapper around the glyph), not merely a difference
-        // in opacity -- a verifier can't deterministically assert "looks
-        // less colorful" but CAN assert the ColorFiltered widget's
-        // presence/absence.
-        expect(
-          _boulderColorFilteredFinder(
-            const Key('community-map-own-marker-wall-own-private'),
-          ),
-          findsOneWidget,
-          reason: 'a PRIVATE marker must render a grayscale ColorFiltered',
-        );
-        expect(
-          _boulderColorFilteredFinder(
-            const Key('community-map-own-marker-wall-own-public'),
-          ),
-          findsNothing,
-          reason: 'a PUBLIC marker must render full-color, no ColorFiltered',
-        );
-        expect(
-          _boulderColorFilteredFinder(
-            const Key('community-map-marker-wall-community'),
-          ),
-          findsNothing,
-          reason: 'a PUBLIC marker must render full-color, no ColorFiltered',
-        );
+      expect(tester.takeException(), isNull);
 
-        // A1: the marker glyph shrank from 28 to 22 (user feedback: "the
-        // boulder icon on the map is a bit too big"), while the enclosing
-        // Marker box stays >= 40px so the tap target is unaffected.
-        expect(
-          (tester.widget(
-                _boulderLogoFinder(
-                  const Key('community-map-own-marker-wall-own-private'),
-                ),
-              )
-              as MasiIcon)
-              .size,
-          22.0,
-        );
-      },
-    );
+      expect(
+        _boulderMarkerIsPublic(
+          tester,
+          const Key('community-map-own-marker-wall-own-private'),
+        ),
+        isFalse,
+      );
+      expect(
+        _boulderMarkerIsPublic(
+          tester,
+          const Key('community-map-own-marker-wall-own-public'),
+        ),
+        isTrue,
+      );
+      expect(
+        _boulderMarkerIsPublic(
+          tester,
+          const Key('community-map-marker-wall-community'),
+        ),
+        isTrue,
+      );
+
+      // #38: the public/private cue must be structural (a grayscale
+      // ColorFiltered wrapper around the glyph), not merely a difference
+      // in opacity -- a verifier can't deterministically assert "looks
+      // less colorful" but CAN assert the ColorFiltered widget's
+      // presence/absence.
+      expect(
+        _boulderColorFilteredFinder(
+          const Key('community-map-own-marker-wall-own-private'),
+        ),
+        findsOneWidget,
+        reason: 'a PRIVATE marker must render a grayscale ColorFiltered',
+      );
+      expect(
+        _boulderColorFilteredFinder(
+          const Key('community-map-own-marker-wall-own-public'),
+        ),
+        findsNothing,
+        reason: 'a PUBLIC marker must render full-color, no ColorFiltered',
+      );
+      expect(
+        _boulderColorFilteredFinder(
+          const Key('community-map-marker-wall-community'),
+        ),
+        findsNothing,
+        reason: 'a PUBLIC marker must render full-color, no ColorFiltered',
+      );
+
+      // A1: the marker glyph shrank from 28 to 22 (user feedback: "the
+      // boulder icon on the map is a bit too big"), while the enclosing
+      // Marker box stays >= 40px so the tap target is unaffected.
+      expect(
+        (tester.widget(
+                  _boulderLogoFinder(
+                    const Key('community-map-own-marker-wall-own-private'),
+                  ),
+                )
+                as MasiIcon)
+            .size,
+        22.0,
+      );
+    });
 
     testWidgets(
       'tapping a community logo marker navigates to the read-only topo '
@@ -2871,19 +2750,16 @@ void main() {
           find.byKey(const Key('community-topo-detail-placeholder')),
           findsOneWidget,
         );
-        expect(
-          find.text('/walls/wall-shared-1?readonly=1'),
-          findsOneWidget,
-        );
+        expect(find.text('/walls/wall-shared-1?readonly=1'), findsOneWidget);
       },
     );
 
     testWidgets(
       'C1/C2/C3: TileLayer evicts off-screen error tiles (so a transient '
       'fetch failure is re-requested on zoom/pan instead of staying a '
-      'permanent gray rectangle), fetches real tiles up to native zoom 20, '
-      'and keeps a slightly larger keep-buffer -- while the urlTemplate '
-      'regression guard from the test above still holds',
+      'permanent gray rectangle), fetches real tiles to the deepest zoom the '
+      'basemap really renders, and keeps a slightly larger keep-buffer -- '
+      'while the urlTemplate regression guard from the test above still holds',
       (tester) async {
         final container = _makeContainer();
         final db = container.read(appDatabaseProvider);
@@ -2908,464 +2784,391 @@ void main() {
           tileLayer.evictErrorTileStrategy,
           EvictErrorTileStrategy.notVisibleRespectMargin,
         );
-        // C2: CartoDB light_all serves real tiles through z20.
-        expect(tileLayer.maxNativeZoom, 20);
+        // C2: capped at the basemap's deepest real zoom, so flutter_map
+        // upscales the last real tile rather than requesting 404s.
+        expect(tileLayer.maxNativeZoom, basemapMaxNativeZoom);
         // C3 regression guard: urlTemplate is unchanged, and keepBuffer is
         // bumped from the default of 2 to 3.
-        expect(
-          tileLayer.urlTemplate,
-          'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-        );
+        expect(tileLayer.urlTemplate, basemapUrlTemplate);
         expect(tileLayer.keepBuffer, 3);
       },
     );
   });
 
-  group(
-    'layout overflow regression: populated _FeedRow at phone width '
-    '(regression: the grade-pill+routes row and the likes/comments/owner '
-    'row must Wrap, not Row, at large text)',
-    () {
-      Widget wrapWithScale(
-        ProviderContainer container,
-        Widget screen,
-        double textScale,
-      ) {
-        final router = GoRouter(
-          initialLocation: '/',
-          routes: [
-            GoRoute(path: '/', builder: (context, state) => screen),
-            GoRoute(
-              path: '/community/topo/:wallId',
-              builder: (context, state) => const SizedBox(),
-            ),
-          ],
-        );
-        return UncontrolledProviderScope(
-          container: container,
-          child: MaterialApp.router(
-            theme: MasiTheme.light,
-            routerConfig: router,
-            builder: (context, child) => MediaQuery(
-              data: MediaQuery.of(
-                context,
-              ).copyWith(textScaler: TextScaler.linear(textScale)),
-              child: child!,
-            ),
+  group('layout overflow regression: populated _FeedRow at phone width '
+      '(regression: the grade-pill+routes row and the likes/comments/owner '
+      'row must Wrap, not Row, at large text)', () {
+    Widget wrapWithScale(
+      ProviderContainer container,
+      Widget screen,
+      double textScale,
+    ) {
+      final router = GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(path: '/', builder: (context, state) => screen),
+          GoRoute(
+            path: '/community/topo/:wallId',
+            builder: (context, state) => const SizedBox(),
           ),
-        );
-      }
+        ],
+      );
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(
+          theme: MasiTheme.light,
+          routerConfig: router,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
+        ),
+      );
+    }
 
-      void setViewportSize(WidgetTester tester, Size size) {
-        tester.view.physicalSize = size;
-        tester.view.devicePixelRatio = 1.0;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-      }
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
 
-      testWidgets(
-        'a populated shared-topo feed row (grade pill + routes, likes/'
+    testWidgets('a populated shared-topo feed row (grade pill + routes, likes/'
         'comments/owner) at 360x800 @ 3.0x text scale does not overflow '
         '(regression: the Filters-sheet group above deliberately seeds an '
-        'EMPTY feed to dodge this exact defect)',
-        (tester) async {
-          setViewportSize(tester, const Size(360, 800));
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedFilterScenario(db);
-            await _seedLike(db, id: 'like-stress-1', wallId: 'wall-sport');
-            await _seedLike(db, id: 'like-stress-2', wallId: 'wall-sport');
-            await _seedComment(
-              db,
-              id: 'comment-stress-1',
-              wallId: 'wall-sport',
-              body: 'Nice line!',
-            );
-          });
-
-          await tester.pumpWidget(
-            wrapWithScale(
-              container,
-              CommunityFeedScreen(),
-              3.0,
-            ),
-          );
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-        },
-      );
-    },
-  );
-
-  group(
-    'A: likes/comments/owner row — single line at normal scale, no '
-    'overflow at large scale with a real owner (regression: RenderWrap '
-    'gives every child the FULL available width, not the remaining space '
-    'on the current run, so the "by <owner>" text — a 36-char Supabase '
-    'auth uid, never shortened — reflows to a second line even at 1.0x)',
-    () {
-      Widget wrapWithScale(
-        ProviderContainer container,
-        Widget screen,
-        double textScale,
-      ) {
-        final router = GoRouter(
-          initialLocation: '/',
-          routes: [
-            GoRoute(path: '/', builder: (context, state) => screen),
-            GoRoute(
-              path: '/community/topo/:wallId',
-              builder: (context, state) => const SizedBox(),
-            ),
-          ],
+        'EMPTY feed to dodge this exact defect)', (tester) async {
+      setViewportSize(tester, const Size(360, 800));
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() async {
+        await _seedFilterScenario(db);
+        await _seedLike(db, id: 'like-stress-1', wallId: 'wall-sport');
+        await _seedLike(db, id: 'like-stress-2', wallId: 'wall-sport');
+        await _seedComment(
+          db,
+          id: 'comment-stress-1',
+          wallId: 'wall-sport',
+          body: 'Nice line!',
         );
-        return UncontrolledProviderScope(
-          container: container,
-          child: MaterialApp.router(
-            theme: MasiTheme.light,
-            routerConfig: router,
-            builder: (context, child) => MediaQuery(
-              data: MediaQuery.of(
-                context,
-              ).copyWith(textScaler: TextScaler.linear(textScale)),
-              child: child!,
-            ),
+      });
+
+      await tester.pumpWidget(
+        wrapWithScale(container, CommunityFeedScreen(), 3.0),
+      );
+      await _drain(tester);
+
+      expect(tester.takeException(), isNull);
+    });
+  });
+
+  group('A: likes/comments/owner row — single line at normal scale, no '
+      'overflow at large scale with a real owner (regression: RenderWrap '
+      'gives every child the FULL available width, not the remaining space '
+      'on the current run, so the "by <owner>" text — a 36-char Supabase '
+      'auth uid, never shortened — reflows to a second line even at 1.0x)', () {
+    Widget wrapWithScale(
+      ProviderContainer container,
+      Widget screen,
+      double textScale,
+    ) {
+      final router = GoRouter(
+        initialLocation: '/',
+        routes: [
+          GoRoute(path: '/', builder: (context, state) => screen),
+          GoRoute(
+            path: '/community/topo/:wallId',
+            builder: (context, state) => const SizedBox(),
           ),
-        );
-      }
-
-      void setViewportSize(WidgetTester tester, Size size) {
-        tester.view.physicalSize = size;
-        tester.view.devicePixelRatio = 1.0;
-        addTearDown(tester.view.resetPhysicalSize);
-        addTearDown(tester.view.resetDevicePixelRatio);
-      }
-
-      // A realistic 36-char Supabase Auth uid -- `SharedTopo.ownerId` is
-      // always the raw uid, but #18 resolves it to the owner's synced
-      // display name (`profileDisplayNameProvider`) rather than ever
-      // rendering the uid itself. Both tests below seed a `profiles` row
-      // with a realistically long display name for this uid, so the
-      // reflow-at-large-scale regression this group guards against is still
-      // exercised against realistic long text (see the dedicated
-      // no-profile-row test further down for the "Unknown climber"
-      // fallback).
-      const ownerUid = 'f1e2d3c4-b5a6-4c7d-8e9f-0a1b2c3d4e5f';
-      const ownerDisplayName = 'Alexandra Boulderfield-Watanabe';
-
-      testWidgets(
-        'A1: at 390x800 @ 1.0x text scale, the owner text sits on the SAME '
-        'line as the likes count',
-        (tester) async {
-          setViewportSize(tester, const Size(390, 800));
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-a1', name: 'Area A1');
-            await _seedSector(
-              db,
-              id: 'sector-a1',
-              areaId: 'area-a1',
-              name: 'S',
-            );
-            await _seedWall(
-              db,
-              id: 'wall-a1',
-              sectorId: 'sector-a1',
-              name: 'Wall A1',
-              visibility: 'shared',
-              ownerId: ownerUid,
-            );
-            await _seedProfile(
-              db,
-              id: ownerUid,
-              displayName: ownerDisplayName,
-            );
-            await _seedLike(db, id: 'like-a1', wallId: 'wall-a1');
-            await _seedComment(
-              db,
-              id: 'comment-a1',
-              wallId: 'wall-a1',
-              body: 'Nice!',
-            );
-          });
-
-          await tester.pumpWidget(
-            wrapWithScale(
-              container,
-              CommunityFeedScreen(),
-              1.0,
-            ),
-          );
-          await _drain(tester);
-
-          final ownerFinder = find.text('by $ownerDisplayName');
-          final likesFinder = find.byKey(
-            const Key('community-topo-row-wall-a1-likes'),
-          );
-          expect(ownerFinder, findsOneWidget);
-          expect(likesFinder, findsOneWidget);
-
-          final dyDiff =
-              (tester.getTopLeft(ownerFinder).dy -
-                      tester.getTopLeft(likesFinder).dy)
-                  .abs();
-          expect(
-            dyDiff,
-            lessThan(0.5),
-            reason:
-                'owner text must sit on the same line as the likes count '
-                'at normal text scale; observed dy diff was $dyDiff',
-          );
-        },
+        ],
       );
-
-      testWidgets(
-        'A2: at 360x800 @ 3.0x text scale with a real non-null owner, the '
-        'likes/comments/owner row does not overflow',
-        (tester) async {
-          setViewportSize(tester, const Size(360, 800));
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-a2', name: 'Area A2');
-            await _seedSector(
-              db,
-              id: 'sector-a2',
-              areaId: 'area-a2',
-              name: 'S',
-            );
-            await _seedWall(
-              db,
-              id: 'wall-a2',
-              sectorId: 'sector-a2',
-              name: 'Wall A2',
-              visibility: 'shared',
-              ownerId: ownerUid,
-            );
-            await _seedProfile(
-              db,
-              id: ownerUid,
-              displayName: ownerDisplayName,
-            );
-            await _seedLike(db, id: 'like-a2', wallId: 'wall-a2');
-            await _seedComment(
-              db,
-              id: 'comment-a2',
-              wallId: 'wall-a2',
-              body: 'Nice!',
-            );
-          });
-
-          await tester.pumpWidget(
-            wrapWithScale(
-              container,
-              CommunityFeedScreen(),
-              3.0,
-            ),
-          );
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-        },
+      return UncontrolledProviderScope(
+        container: container,
+        child: MaterialApp.router(
+          theme: MasiTheme.light,
+          routerConfig: router,
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(
+              context,
+            ).copyWith(textScaler: TextScaler.linear(textScale)),
+            child: child!,
+          ),
+        ),
       );
+    }
 
-      testWidgets(
-        'A3 (#18): an owner with no profiles row yet falls back to '
-        '"Unknown climber" — never the raw uid',
-        (tester) async {
-          setViewportSize(tester, const Size(390, 800));
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-a3', name: 'Area A3');
-            await _seedSector(
-              db,
-              id: 'sector-a3',
-              areaId: 'area-a3',
-              name: 'S',
-            );
-            await _seedWall(
-              db,
-              id: 'wall-a3',
-              sectorId: 'sector-a3',
-              name: 'Wall A3',
-              visibility: 'shared',
-              ownerId: ownerUid,
-            );
-            // Deliberately NOT seeding a `profiles` row for `ownerUid` here
-            // — this is exactly the "no display name set yet" case.
-          });
+    void setViewportSize(WidgetTester tester, Size size) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(tester.view.resetPhysicalSize);
+      addTearDown(tester.view.resetDevicePixelRatio);
+    }
 
-          await tester.pumpWidget(
-            wrapWithScale(
-              container,
-              CommunityFeedScreen(),
-              1.0,
-            ),
-          );
-          await _drain(tester);
+    // A realistic 36-char Supabase Auth uid -- `SharedTopo.ownerId` is
+    // always the raw uid, but #18 resolves it to the owner's synced
+    // display name (`profileDisplayNameProvider`) rather than ever
+    // rendering the uid itself. Both tests below seed a `profiles` row
+    // with a realistically long display name for this uid, so the
+    // reflow-at-large-scale regression this group guards against is still
+    // exercised against realistic long text (see the dedicated
+    // no-profile-row test further down for the "Unknown climber"
+    // fallback).
+    const ownerUid = 'f1e2d3c4-b5a6-4c7d-8e9f-0a1b2c3d4e5f';
+    const ownerDisplayName = 'Alexandra Boulderfield-Watanabe';
 
-          expect(find.text('Unknown climber'), findsOneWidget);
-          expect(find.text('by $ownerUid'), findsNothing);
-          expect(find.textContaining(ownerUid), findsNothing);
-        },
-      );
-    },
-  );
-
-  group(
-    'T2: own-topo badge — clear division between community and own topos '
-    '(feed side of the pairing with T1\'s visibility badge)',
-    () {
-      testWidgets(
-        'the signed-in uid\'s own shared topo shows the Yours badge; a '
-        'topo owned by someone else, and one with no owner at all, do not',
-        (tester) async {
-          final db = AppDatabase(NativeDatabase.memory());
-          addTearDown(db.close);
-          final container = ProviderContainer(
-            overrides: [
-              appDatabaseProvider.overrideWithValue(db),
-              nowMsProvider.overrideWithValue(() => 1000),
-              authStateProvider.overrideWith(
-                (ref) => Stream.value(
-                  const AuthSessionState.signedIn(
-                    'me@example.com',
-                    uid: 'me',
-                  ),
-                ),
-              ),
-              // §1c: `watchTopos`' own-or-unowned filter and the map/feed
-              // "is this mine" badges now BOTH resolve their uid through
-              // `effectiveUidProvider` (`currentUidProvider` delegates to it),
-              // so this ONE override drives the repository seam and the
-              // widgets alike — the pair of overrides this replaced existed
-              // only because the two doors used to be decoupled.
-              effectiveUidProvider.overrideWithValue('me'),
-            ],
-          );
-          addTearDown(container.dispose);
-
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-own', name: 'Area Own');
-            await _seedSector(
-              db,
-              id: 'sector-own',
-              areaId: 'area-own',
-              name: 'S',
-            );
-            await _seedWall(
-              db,
-              id: 'wall-mine',
-              sectorId: 'sector-own',
-              name: 'Mine',
-              visibility: 'shared',
-              ownerId: 'me',
-            );
-            await _seedWall(
-              db,
-              id: 'wall-other',
-              sectorId: 'sector-own',
-              name: 'Someone Else\'s',
-              visibility: 'shared',
-              ownerId: 'other',
-            );
-            await _seedWall(
-              db,
-              id: 'wall-no-owner',
-              sectorId: 'sector-own',
-              name: 'No Owner',
-              visibility: 'shared',
-            );
-          });
-
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityFeedScreen(),
-            ),
-          );
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          expect(
-            find.byKey(const Key('community-own-badge-wall-mine')),
-            findsOneWidget,
-          );
-          expect(
-            find.byKey(const Key('community-own-badge-wall-other')),
-            findsNothing,
-          );
-          expect(
-            find.byKey(const Key('community-own-badge-wall-no-owner')),
-            findsNothing,
-          );
-        },
-      );
-    },
-  );
-
-  group('Q2/Q3: initialTab + focusWallId deep link', () {
     testWidgets(
-      'CommunityMapScreen(focusWallId: X) opens '
-      'centered/zoomed on X\'s coordinates (not the '
-      'combined-set center)',
+      'A1: at 390x800 @ 1.0x text scale, the owner text sits on the SAME '
+      'line as the likes count',
       (tester) async {
+        setViewportSize(tester, const Size(390, 800));
         final container = _makeContainer();
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() async {
-          await _seedArea(db, id: 'area-focus', name: 'Area Focus');
-          await _seedSector(
-            db,
-            id: 'sector-focus',
-            areaId: 'area-focus',
-            name: 'S',
-          );
+          await _seedArea(db, id: 'area-a1', name: 'Area A1');
+          await _seedSector(db, id: 'sector-a1', areaId: 'area-a1', name: 'S');
           await _seedWall(
             db,
-            id: 'wall-focus',
-            sectorId: 'sector-focus',
-            name: 'Focus Wall',
-            latitude: 12.0,
-            longitude: 34.0,
+            id: 'wall-a1',
+            sectorId: 'sector-a1',
+            name: 'Wall A1',
+            visibility: 'shared',
+            ownerId: ownerUid,
           );
-          // A second, far-away located wall proves the map centers on the
-          // FOCUSED wall specifically, not the average of both.
-          await _seedWall(
+          await _seedProfile(db, id: ownerUid, displayName: ownerDisplayName);
+          await _seedLike(db, id: 'like-a1', wallId: 'wall-a1');
+          await _seedComment(
             db,
-            id: 'wall-other',
-            sectorId: 'sector-focus',
-            name: 'Other Wall',
-            latitude: -50.0,
-            longitude: 170.0,
+            id: 'comment-a1',
+            wallId: 'wall-a1',
+            body: 'Nice!',
           );
         });
 
         await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
-              focusWallId: 'wall-focus',
-            ),
-          ),
+          wrapWithScale(container, CommunityFeedScreen(), 1.0),
+        );
+        await _drain(tester);
+
+        final ownerFinder = find.text('by $ownerDisplayName');
+        final likesFinder = find.byKey(
+          const Key('community-topo-row-wall-a1-likes'),
+        );
+        expect(ownerFinder, findsOneWidget);
+        expect(likesFinder, findsOneWidget);
+
+        final dyDiff =
+            (tester.getTopLeft(ownerFinder).dy -
+                    tester.getTopLeft(likesFinder).dy)
+                .abs();
+        expect(
+          dyDiff,
+          lessThan(0.5),
+          reason:
+              'owner text must sit on the same line as the likes count '
+              'at normal text scale; observed dy diff was $dyDiff',
+        );
+      },
+    );
+
+    testWidgets(
+      'A2: at 360x800 @ 3.0x text scale with a real non-null owner, the '
+      'likes/comments/owner row does not overflow',
+      (tester) async {
+        setViewportSize(tester, const Size(360, 800));
+        final container = _makeContainer();
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-a2', name: 'Area A2');
+          await _seedSector(db, id: 'sector-a2', areaId: 'area-a2', name: 'S');
+          await _seedWall(
+            db,
+            id: 'wall-a2',
+            sectorId: 'sector-a2',
+            name: 'Wall A2',
+            visibility: 'shared',
+            ownerId: ownerUid,
+          );
+          await _seedProfile(db, id: ownerUid, displayName: ownerDisplayName);
+          await _seedLike(db, id: 'like-a2', wallId: 'wall-a2');
+          await _seedComment(
+            db,
+            id: 'comment-a2',
+            wallId: 'wall-a2',
+            body: 'Nice!',
+          );
+        });
+
+        await tester.pumpWidget(
+          wrapWithScale(container, CommunityFeedScreen(), 3.0),
         );
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
-        // CommunityMapScreen renders straight into the map: the Feed's
-        // search field is never shown, and exactly one FlutterMap is built.
-        expect(find.byKey(const Key('community-search-field')), findsNothing);
-        expect(find.byType(FlutterMap), findsOneWidget);
-
-        final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
-        expect(flutterMap.options.initialCenter, const LatLng(12.0, 34.0));
-        expect(flutterMap.options.initialZoom, 15);
       },
     );
+
+    testWidgets('A3 (#18): an owner with no profiles row yet falls back to '
+        '"Unknown climber" — never the raw uid', (tester) async {
+      setViewportSize(tester, const Size(390, 800));
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-a3', name: 'Area A3');
+        await _seedSector(db, id: 'sector-a3', areaId: 'area-a3', name: 'S');
+        await _seedWall(
+          db,
+          id: 'wall-a3',
+          sectorId: 'sector-a3',
+          name: 'Wall A3',
+          visibility: 'shared',
+          ownerId: ownerUid,
+        );
+        // Deliberately NOT seeding a `profiles` row for `ownerUid` here
+        // — this is exactly the "no display name set yet" case.
+      });
+
+      await tester.pumpWidget(
+        wrapWithScale(container, CommunityFeedScreen(), 1.0),
+      );
+      await _drain(tester);
+
+      expect(find.text('Unknown climber'), findsOneWidget);
+      expect(find.text('by $ownerUid'), findsNothing);
+      expect(find.textContaining(ownerUid), findsNothing);
+    });
+  });
+
+  group('T2: own-topo badge — clear division between community and own topos '
+      '(feed side of the pairing with T1\'s visibility badge)', () {
+    testWidgets('the signed-in uid\'s own shared topo shows the Yours badge; a '
+        'topo owned by someone else, and one with no owner at all, do not', (
+      tester,
+    ) async {
+      final db = AppDatabase(NativeDatabase.memory());
+      addTearDown(db.close);
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          nowMsProvider.overrideWithValue(() => 1000),
+          authStateProvider.overrideWith(
+            (ref) => Stream.value(
+              const AuthSessionState.signedIn('me@example.com', uid: 'me'),
+            ),
+          ),
+          // §1c: `watchTopos`' own-or-unowned filter and the map/feed
+          // "is this mine" badges now BOTH resolve their uid through
+          // `effectiveUidProvider` (`currentUidProvider` delegates to it),
+          // so this ONE override drives the repository seam and the
+          // widgets alike — the pair of overrides this replaced existed
+          // only because the two doors used to be decoupled.
+          effectiveUidProvider.overrideWithValue('me'),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-own', name: 'Area Own');
+        await _seedSector(db, id: 'sector-own', areaId: 'area-own', name: 'S');
+        await _seedWall(
+          db,
+          id: 'wall-mine',
+          sectorId: 'sector-own',
+          name: 'Mine',
+          visibility: 'shared',
+          ownerId: 'me',
+        );
+        await _seedWall(
+          db,
+          id: 'wall-other',
+          sectorId: 'sector-own',
+          name: 'Someone Else\'s',
+          visibility: 'shared',
+          ownerId: 'other',
+        );
+        await _seedWall(
+          db,
+          id: 'wall-no-owner',
+          sectorId: 'sector-own',
+          name: 'No Owner',
+          visibility: 'shared',
+        );
+      });
+
+      await tester.pumpWidget(_wrap(container, CommunityFeedScreen()));
+      await _drain(tester);
+
+      expect(tester.takeException(), isNull);
+      expect(
+        find.byKey(const Key('community-own-badge-wall-mine')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('community-own-badge-wall-other')),
+        findsNothing,
+      );
+      expect(
+        find.byKey(const Key('community-own-badge-wall-no-owner')),
+        findsNothing,
+      );
+    });
+  });
+
+  group('Q2/Q3: initialTab + focusWallId deep link', () {
+    testWidgets('CommunityMapScreen(focusWallId: X) opens '
+        'centered/zoomed on X\'s coordinates (not the '
+        'combined-set center)', (tester) async {
+      final container = _makeContainer();
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-focus', name: 'Area Focus');
+        await _seedSector(
+          db,
+          id: 'sector-focus',
+          areaId: 'area-focus',
+          name: 'S',
+        );
+        await _seedWall(
+          db,
+          id: 'wall-focus',
+          sectorId: 'sector-focus',
+          name: 'Focus Wall',
+          latitude: 12.0,
+          longitude: 34.0,
+        );
+        // A second, far-away located wall proves the map centers on the
+        // FOCUSED wall specifically, not the average of both.
+        await _seedWall(
+          db,
+          id: 'wall-other',
+          sectorId: 'sector-focus',
+          name: 'Other Wall',
+          latitude: -50.0,
+          longitude: 170.0,
+        );
+      });
+
+      await tester.pumpWidget(
+        _wrap(
+          container,
+          CommunityMapScreen(
+            tileProvider: _NoopTileProvider(),
+            focusWallId: 'wall-focus',
+          ),
+        ),
+      );
+      await _drain(tester);
+
+      expect(tester.takeException(), isNull);
+      // CommunityMapScreen renders straight into the map: the Feed's
+      // search field is never shown, and exactly one FlutterMap is built.
+      expect(find.byKey(const Key('community-search-field')), findsNothing);
+      expect(find.byType(FlutterMap), findsOneWidget);
+
+      final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
+      expect(flutterMap.options.initialCenter, const LatLng(12.0, 34.0));
+      expect(flutterMap.options.initialZoom, 15);
+    });
 
     testWidgets(
       'a focusWallId that matches no rendered topo (not found / no coords) '
@@ -3417,16 +3220,16 @@ void main() {
         final container = _makeContainer();
 
         await tester.pumpWidget(
-          _wrap(container, CommunityMapScreen(tileProvider: _NoopTileProvider())),
+          _wrap(
+            container,
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
+          ),
         );
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
         expect(find.byType(FlutterMap), findsOneWidget);
-        expect(
-          find.byKey(const Key('community-search-field')),
-          findsNothing,
-        );
+        expect(find.byKey(const Key('community-search-field')), findsNothing);
       },
     );
 
@@ -3441,10 +3244,7 @@ void main() {
 
         expect(tester.takeException(), isNull);
         expect(find.byType(FlutterMap), findsNothing);
-        expect(
-          find.byKey(const Key('community-search-field')),
-          findsOneWidget,
-        );
+        expect(find.byKey(const Key('community-search-field')), findsOneWidget);
       },
     );
 
@@ -3480,11 +3280,7 @@ void main() {
         // inset would always be 0 and this test couldn't tell the fold-in
         // from a no-op.
         await tester.pumpWidget(
-          _wrap(
-            container,
-            const CommunityFeedScreen(),
-            bottomChromeInset: 40,
-          ),
+          _wrap(container, const CommunityFeedScreen(), bottomChromeInset: 40),
         );
         await _drain(tester);
 
@@ -3573,9 +3369,7 @@ void main() {
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
-            ),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
@@ -3588,167 +3382,154 @@ void main() {
     );
   });
 
-  group(
-    'FX2: device-location auto-center is one-shot and (user request #39) '
-    'now WINS over a located-topos framing',
-    () {
-      testWidgets(
-        'FX2a: after the auto-center resolves, further map interaction '
-        '(rotate) does not re-trigger it -- the camera center stays put',
-        (tester) async {
-          final controller = MapController();
-          addTearDown(controller.dispose);
-          final container = _makeContainer(
-            locationService: const _FakeLocationService((
-              latitude: 51.5,
-              longitude: -0.1,
-            )),
-          );
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-empty3', name: 'Area Empty 3');
-          });
-
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
-                mapController: controller,
-              ),
-            ),
-          );
-          await _drain(tester);
-
-          expect(
-            (controller.camera.center.latitude - 51.5).abs(),
-            lessThan(0.01),
-          );
-
-          controller.rotate(30);
-          await tester.pump();
-
-          expect(tester.takeException(), isNull);
-          expect(controller.camera.rotation, 30);
-          expect(
-            (controller.camera.center.latitude - 51.5).abs(),
-            lessThan(0.01),
-          );
-          expect(
-            (controller.camera.center.longitude - (-0.1)).abs(),
-            lessThan(0.01),
-          );
-        },
+  group('FX2: device-location auto-center is one-shot and (user request #39) '
+      'now WINS over a located-topos framing', () {
+    testWidgets('FX2a: after the auto-center resolves, further map interaction '
+        '(rotate) does not re-trigger it -- the camera center stays put', (
+      tester,
+    ) async {
+      final controller = MapController();
+      addTearDown(controller.dispose);
+      final container = _makeContainer(
+        locationService: const _FakeLocationService((
+          latitude: 51.5,
+          longitude: -0.1,
+        )),
       );
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() async {
+        await _seedArea(db, id: 'area-empty3', name: 'Area Empty 3');
+      });
 
-      testWidgets(
-        'FX2b (user request #39): located topos are already present -> the '
-        "device-location auto-center STILL fires; the camera moves to the "
-        "user's own position (51.5, -0.1), never staying framed on the "
-        "(unrelated) topos' combined center -- this deliberately overturns "
-        "the old 'topos win' rule",
-        (tester) async {
-          final controller = MapController();
-          addTearDown(controller.dispose);
-          final container = _makeContainer(
-            locationService: const _FakeLocationService((
-              latitude: 51.5,
-              longitude: -0.1,
-            )),
-          );
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() => _seedStandardScenario(db));
-
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
-                mapController: controller,
-              ),
-            ),
-          );
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          final camera = controller.camera;
-          // wall-shared-1 is located at (45.0, 7.0), but the user's device
-          // fix (51.5, -0.1) must win -- the camera centers on the user,
-          // not the topos' combined center.
-          expect((camera.center.latitude - 51.5).abs(), lessThan(0.5));
-          expect((camera.center.longitude - (-0.1)).abs(), lessThan(0.5));
-          expect(camera.zoom, 14);
-        },
+      await tester.pumpWidget(
+        _wrap(
+          container,
+          CommunityMapScreen(
+            tileProvider: _NoopTileProvider(),
+            mapController: controller,
+          ),
+        ),
       );
+      await _drain(tester);
 
-      testWidgets(
-        'FX2c (user request #39): an OWN (local, unpublished) located topo '
-        "is present too -- the user's position still wins over that "
-        'centroid, proving the rule applies regardless of whether the '
-        'located topo is own or shared',
-        (tester) async {
-          final controller = MapController();
-          addTearDown(controller.dispose);
-          final container = _makeContainer(
-            locationService: const _FakeLocationService((
-              latitude: 40.0,
-              longitude: -105.0,
-            )),
-          );
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() async {
-            await _seedArea(db, id: 'area-own-coords', name: 'Own Area');
-            await _seedSector(
-              db,
-              id: 'sector-own-coords',
-              areaId: 'area-own-coords',
-              name: 'S1',
-            );
-            // No `ownerId`/non-shared `visibility` -- this wall is local-
-            // only, i.e. this device's OWN located topo (see `isMine`'s doc
-            // in `community_screen.dart`).
-            await _seedWall(
-              db,
-              id: 'wall-own-coords',
-              sectorId: 'sector-own-coords',
-              name: 'My Own Wall',
-              latitude: 39.7,
-              longitude: -104.9,
-            );
-          });
+      expect((controller.camera.center.latitude - 51.5).abs(), lessThan(0.01));
 
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
-                mapController: controller,
-              ),
-            ),
-          );
-          await _drain(tester);
+      controller.rotate(30);
+      await tester.pump();
 
-          expect(tester.takeException(), isNull);
-          final camera = controller.camera;
-          expect((camera.center.latitude - 40.0).abs(), lessThan(0.01));
-          expect((camera.center.longitude - (-105.0)).abs(), lessThan(0.01));
-          expect(camera.zoom, 14);
-        },
+      expect(tester.takeException(), isNull);
+      expect(controller.camera.rotation, 30);
+      expect((controller.camera.center.latitude - 51.5).abs(), lessThan(0.01));
+      expect(
+        (controller.camera.center.longitude - (-0.1)).abs(),
+        lessThan(0.01),
       );
-    },
-  );
+    });
 
-  group('MC2: resilient tile provider factory', () {
-    test(
-      'buildResilientTileProvider() returns a non-null NetworkTileProvider '
-      'without throwing (the retry behavior itself -- 429/5xx/connection- '
-      'error retries with backoff -- is on-device-only and not exercised '
-      'here)',
-      () {
-        final provider = buildResilientTileProvider();
-        expect(provider, isA<NetworkTileProvider>());
+    testWidgets(
+      'FX2b (user request #39): located topos are already present -> the '
+      "device-location auto-center STILL fires; the camera moves to the "
+      "user's own position (51.5, -0.1), never staying framed on the "
+      "(unrelated) topos' combined center -- this deliberately overturns "
+      "the old 'topos win' rule",
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final container = _makeContainer(
+          locationService: const _FakeLocationService((
+            latitude: 51.5,
+            longitude: -0.1,
+          )),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() => _seedStandardScenario(db));
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityMapScreen(
+              tileProvider: _NoopTileProvider(),
+              mapController: controller,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final camera = controller.camera;
+        // wall-shared-1 is located at (45.0, 7.0), but the user's device
+        // fix (51.5, -0.1) must win -- the camera centers on the user,
+        // not the topos' combined center.
+        expect((camera.center.latitude - 51.5).abs(), lessThan(0.5));
+        expect((camera.center.longitude - (-0.1)).abs(), lessThan(0.5));
+        expect(camera.zoom, 14);
       },
     );
+
+    testWidgets(
+      'FX2c (user request #39): an OWN (local, unpublished) located topo '
+      "is present too -- the user's position still wins over that "
+      'centroid, proving the rule applies regardless of whether the '
+      'located topo is own or shared',
+      (tester) async {
+        final controller = MapController();
+        addTearDown(controller.dispose);
+        final container = _makeContainer(
+          locationService: const _FakeLocationService((
+            latitude: 40.0,
+            longitude: -105.0,
+          )),
+        );
+        final db = container.read(appDatabaseProvider);
+        await tester.runAsync(() async {
+          await _seedArea(db, id: 'area-own-coords', name: 'Own Area');
+          await _seedSector(
+            db,
+            id: 'sector-own-coords',
+            areaId: 'area-own-coords',
+            name: 'S1',
+          );
+          // No `ownerId`/non-shared `visibility` -- this wall is local-
+          // only, i.e. this device's OWN located topo (see `isMine`'s doc
+          // in `community_screen.dart`).
+          await _seedWall(
+            db,
+            id: 'wall-own-coords',
+            sectorId: 'sector-own-coords',
+            name: 'My Own Wall',
+            latitude: 39.7,
+            longitude: -104.9,
+          );
+        });
+
+        await tester.pumpWidget(
+          _wrap(
+            container,
+            CommunityMapScreen(
+              tileProvider: _NoopTileProvider(),
+              mapController: controller,
+            ),
+          ),
+        );
+        await _drain(tester);
+
+        expect(tester.takeException(), isNull);
+        final camera = controller.camera;
+        expect((camera.center.latitude - 40.0).abs(), lessThan(0.01));
+        expect((camera.center.longitude - (-105.0)).abs(), lessThan(0.01));
+        expect(camera.zoom, 14);
+      },
+    );
+  });
+
+  group('MC2: resilient tile provider factory', () {
+    test('buildResilientTileProvider() returns a non-null NetworkTileProvider '
+        'without throwing (the retry behavior itself -- 429/5xx/connection- '
+        'error retries with backoff -- is on-device-only and not exercised '
+        'here)', () {
+      final provider = buildResilientTileProvider();
+      expect(provider, isA<NetworkTileProvider>());
+    });
 
     test(
       'buildResilientTileHttpClient(inner: ...) wraps the GIVEN client '
@@ -3767,58 +3548,47 @@ void main() {
       },
     );
 
-    test(
-      'buildResilientTileProvider(isWeb: true) now gets the REAL IndexedDB '
-      'tile cache instead of the no-op (web offline Stage 3, task 6) -- the '
-      'Map tab was blank offline because flutter_map\'s built-in cache is '
-      'documented as a noop on web, so this call site used to make that '
-      'no-op explicit rather than fill the hole',
-      () {
-        final provider = buildResilientTileProvider(isWeb: true);
-        expect(provider.cachingProvider, isA<MasiTileCachingProvider>());
-        expect(provider.cachingProvider!.isSupported, isTrue);
-      },
-    );
+    test('buildResilientTileProvider(isWeb: true) now gets the REAL IndexedDB '
+        'tile cache instead of the no-op (web offline Stage 3, task 6) -- the '
+        'Map tab was blank offline because flutter_map\'s built-in cache is '
+        'documented as a noop on web, so this call site used to make that '
+        'no-op explicit rather than fill the hole', () {
+      final provider = buildResilientTileProvider(isWeb: true);
+      expect(provider.cachingProvider, isA<MasiTileCachingProvider>());
+      expect(provider.cachingProvider!.isSupported, isTrue);
+    });
 
-    test(
-      'buildResilientTileProvider(isWeb: false) leaves cachingProvider null '
-      '-- native keeps flutter_map\'s default on-disk cache, unchanged',
-      () {
-        final provider = buildResilientTileProvider(isWeb: false);
-        expect(
-          provider.cachingProvider,
-          isNull,
-          reason: 'null is what selects BuiltInMapCachingProvider; passing '
-              'our IndexedDB cache on native would REPLACE a working 1 GB '
-              'on-disk cache with a worse one',
-        );
-      },
-    );
+    test('buildResilientTileProvider(isWeb: false) leaves cachingProvider null '
+        '-- native keeps flutter_map\'s default on-disk cache, unchanged', () {
+      final provider = buildResilientTileProvider(isWeb: false);
+      expect(
+        provider.cachingProvider,
+        isNull,
+        reason:
+            'null is what selects BuiltInMapCachingProvider; passing '
+            'our IndexedDB cache on native would REPLACE a working 1 GB '
+            'on-disk cache with a worse one',
+      );
+    });
 
-    test(
-      'both TileLayers share ONE cache instance, so the Community map and '
-      'the Set-location picker share one budget and one LRU ordering rather '
-      'than running competing caches over the same database',
-      () {
-        final a = buildResilientTileProvider(isWeb: true);
-        final b = buildResilientTileProvider(isWeb: true);
-        expect(identical(a.cachingProvider, b.cachingProvider), isTrue);
-      },
-    );
+    test('both TileLayers share ONE cache instance, so the Community map and '
+        'the Set-location picker share one budget and one LRU ordering rather '
+        'than running competing caches over the same database', () {
+      final a = buildResilientTileProvider(isWeb: true);
+      final b = buildResilientTileProvider(isWeb: true);
+      expect(identical(a.cachingProvider, b.cachingProvider), isTrue);
+    });
 
-    test(
-      'an explicit cachingProvider always wins over the isWeb default -- '
-      "the test-only DisabledMapCachingProvider _MapViewState._tileProvider "
-      'passes under a spy tileHttpClientFactory must not be clobbered by '
-      'the web branch',
-      () {
-        final provider = buildResilientTileProvider(
-          isWeb: true,
-          cachingProvider: const DisabledMapCachingProvider(),
-        );
-        expect(provider.cachingProvider, isA<DisabledMapCachingProvider>());
-      },
-    );
+    test('an explicit cachingProvider always wins over the isWeb default -- '
+        "the test-only DisabledMapCachingProvider _MapViewState._tileProvider "
+        'passes under a spy tileHttpClientFactory must not be clobbered by '
+        'the web branch', () {
+      final provider = buildResilientTileProvider(
+        isWeb: true,
+        cachingProvider: const DisabledMapCachingProvider(),
+      );
+      expect(provider.cachingProvider, isA<DisabledMapCachingProvider>());
+    });
   });
 
   group(
@@ -3916,9 +3686,7 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
-              ),
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
             ),
           );
           await _drain(tester);
@@ -3971,10 +3739,7 @@ void main() {
         controller.move(const LatLng(0, 0), 3);
         await tester.pump();
         expect((controller.camera.center.latitude - 0).abs(), lessThan(0.01));
-        expect(
-          (controller.camera.center.longitude - 0).abs(),
-          lessThan(0.01),
-        );
+        expect((controller.camera.center.longitude - 0).abs(), lessThan(0.01));
         expect(controller.camera.zoom, 3);
 
         await tester.tap(find.byKey(const Key('community-map-find-me')));
@@ -3988,36 +3753,33 @@ void main() {
       },
     );
 
-    testWidgets(
-      'when the location service resolves null, shows a "Location '
-      'unavailable" SnackBar instead of moving the map',
-      (tester) async {
-        final controller = MapController();
-        addTearDown(controller.dispose);
-        final container = _makeContainer(
-          locationService: const _FakeLocationService(null),
-        );
-        final db = container.read(appDatabaseProvider);
-        await tester.runAsync(() => _seedStandardScenario(db));
+    testWidgets('when the location service resolves null, shows a "Location '
+        'unavailable" SnackBar instead of moving the map', (tester) async {
+      final controller = MapController();
+      addTearDown(controller.dispose);
+      final container = _makeContainer(
+        locationService: const _FakeLocationService(null),
+      );
+      final db = container.read(appDatabaseProvider);
+      await tester.runAsync(() => _seedStandardScenario(db));
 
-        await tester.pumpWidget(
-          _wrap(
-            container,
-            CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
-              mapController: controller,
-            ),
+      await tester.pumpWidget(
+        _wrap(
+          container,
+          CommunityMapScreen(
+            tileProvider: _NoopTileProvider(),
+            mapController: controller,
           ),
-        );
-        await _drain(tester);
+        ),
+      );
+      await _drain(tester);
 
-        await tester.tap(find.byKey(const Key('community-map-find-me')));
-        await tester.pump();
+      await tester.tap(find.byKey(const Key('community-map-find-me')));
+      await tester.pump();
 
-        expect(tester.takeException(), isNull);
-        expect(find.text('Location unavailable'), findsOneWidget);
-      },
-    );
+      expect(tester.takeException(), isNull);
+      expect(find.text('Location unavailable'), findsOneWidget);
+    });
   });
 
   group(
@@ -4035,18 +3797,13 @@ void main() {
           await tester.pumpWidget(
             _wrap(
               container,
-              CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
-              ),
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
             ),
           );
           await _drain(tester);
 
           expect(tester.takeException(), isNull);
-          expect(
-            find.byKey(const Key('community-map-compass')),
-            findsNothing,
-          );
+          expect(find.byKey(const Key('community-map-compass')), findsNothing);
           // find-me must still be there — only rotation/its control changed.
           expect(
             find.byKey(const Key('community-map-find-me')),
@@ -4055,104 +3812,102 @@ void main() {
         },
       );
 
-      testWidgets(
-        "the FlutterMap's InteractionOptions.flags excludes "
-        'InteractiveFlag.rotate (an accidental two-finger twist must never '
-        'spin the map), while the usual pan/zoom flags stay enabled',
-        (tester) async {
-          final container = _makeContainer();
-          final db = container.read(appDatabaseProvider);
-          await tester.runAsync(() => _seedStandardScenario(db));
-
-          await tester.pumpWidget(
-            _wrap(
-              container,
-              CommunityMapScreen(
-                tileProvider: _NoopTileProvider(),
-              ),
-            ),
-          );
-          await _drain(tester);
-
-          expect(tester.takeException(), isNull);
-          final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
-          final flags = flutterMap.options.interactionOptions.flags;
-          expect(InteractiveFlag.hasRotate(flags), isFalse);
-          expect(InteractiveFlag.hasDrag(flags), isTrue);
-          expect(InteractiveFlag.hasPinchZoom(flags), isTrue);
-          expect(InteractiveFlag.hasPinchMove(flags), isTrue);
-          expect(InteractiveFlag.hasDoubleTapZoom(flags), isTrue);
-          expect(InteractiveFlag.hasScrollWheelZoom(flags), isTrue);
-        },
-      );
-    },
-  );
-
-  group('MC5: no regression — map controls do not disturb existing behavior', () {
-    testWidgets(
-      'tile config (urlTemplate/evictErrorTileStrategy/maxNativeZoom/'
-      'keepBuffer), attribution, legend, and my-location marker all still '
-      'render as before once the Stack/MapController restructuring lands',
-      (tester) async {
-        final container = _makeContainer(
-          locationService: const _FakeLocationService((
-            latitude: 45.001,
-            longitude: 7.001,
-          )),
-        );
+      testWidgets("the FlutterMap's InteractionOptions.flags excludes "
+          'InteractiveFlag.rotate (an accidental two-finger twist must never '
+          'spin the map), while the usual pan/zoom flags stay enabled', (
+        tester,
+      ) async {
+        final container = _makeContainer();
         final db = container.read(appDatabaseProvider);
         await tester.runAsync(() => _seedStandardScenario(db));
 
         await tester.pumpWidget(
           _wrap(
             container,
-            CommunityMapScreen(
-              tileProvider: _NoopTileProvider(),
-            ),
+            CommunityMapScreen(tileProvider: _NoopTileProvider()),
           ),
         );
         await _drain(tester);
 
         expect(tester.takeException(), isNull);
+        final flutterMap = tester.widget<FlutterMap>(find.byType(FlutterMap));
+        final flags = flutterMap.options.interactionOptions.flags;
+        expect(InteractiveFlag.hasRotate(flags), isFalse);
+        expect(InteractiveFlag.hasDrag(flags), isTrue);
+        expect(InteractiveFlag.hasPinchZoom(flags), isTrue);
+        expect(InteractiveFlag.hasPinchMove(flags), isTrue);
+        expect(InteractiveFlag.hasDoubleTapZoom(flags), isTrue);
+        expect(InteractiveFlag.hasScrollWheelZoom(flags), isTrue);
+      });
+    },
+  );
 
-        final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
-        expect(
-          tileLayer.urlTemplate,
-          'https://basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
-        );
-        expect(
-          tileLayer.evictErrorTileStrategy,
-          EvictErrorTileStrategy.notVisibleRespectMargin,
-        );
-        expect(tileLayer.maxNativeZoom, 20);
-        expect(tileLayer.keepBuffer, 3);
+  group(
+    'MC5: no regression — map controls do not disturb existing behavior',
+    () {
+      testWidgets(
+        'tile config (urlTemplate/evictErrorTileStrategy/maxNativeZoom/'
+        'keepBuffer), attribution, legend, and my-location marker all still '
+        'render as before once the Stack/MapController restructuring lands',
+        (tester) async {
+          final container = _makeContainer(
+            locationService: const _FakeLocationService((
+              latitude: 45.001,
+              longitude: 7.001,
+            )),
+          );
+          final db = container.read(appDatabaseProvider);
+          await tester.runAsync(() => _seedStandardScenario(db));
 
-        expect(
-          find.byKey(const Key('community-map-attribution')),
-          findsOneWidget,
-        );
-        expect(find.byKey(const Key('community-map-legend')), findsOneWidget);
-        expect(
-          find.byKey(const Key('community-map-marker-wall-shared-1')),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(const Key('community-map-my-location')),
-          findsOneWidget,
-        );
-        expect(
-          find.byKey(const Key('community-map-find-me')),
-          findsOneWidget,
-        );
-        // The compass/reset-north control was removed once rotation was
-        // disabled (MC4) — there's nothing left for it to reset.
-        expect(
-          find.byKey(const Key('community-map-compass')),
-          findsNothing,
-        );
-      },
-    );
-  });
+          await tester.pumpWidget(
+            _wrap(
+              container,
+              CommunityMapScreen(tileProvider: _NoopTileProvider()),
+            ),
+          );
+          await _drain(tester);
+
+          expect(tester.takeException(), isNull);
+
+          final tileLayer = tester.widget<TileLayer>(find.byType(TileLayer));
+          expect(tileLayer.urlTemplate, basemapUrlTemplate);
+          // The point of the constant is that the app never ships a basemap
+          // that needs a key: CARTO's endpoint kept answering 200 with a valid
+          // PNG after it went key-only, and stamped 'API KEY REQUIRED' across
+          // every tile instead — which no HTTP-level assertion would catch.
+          expect(tileLayer.urlTemplate, isNot(contains('cartocdn')));
+          expect(tileLayer.urlTemplate, isNot(contains('key=')));
+          expect(
+            tileLayer.evictErrorTileStrategy,
+            EvictErrorTileStrategy.notVisibleRespectMargin,
+          );
+          expect(tileLayer.maxNativeZoom, basemapMaxNativeZoom);
+          expect(tileLayer.keepBuffer, 3);
+
+          expect(
+            find.byKey(const Key('community-map-attribution')),
+            findsOneWidget,
+          );
+          expect(find.byKey(const Key('community-map-legend')), findsOneWidget);
+          expect(
+            find.byKey(const Key('community-map-marker-wall-shared-1')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('community-map-my-location')),
+            findsOneWidget,
+          );
+          expect(
+            find.byKey(const Key('community-map-find-me')),
+            findsOneWidget,
+          );
+          // The compass/reset-north control was removed once rotation was
+          // disabled (MC4) — there's nothing left for it to reset.
+          expect(find.byKey(const Key('community-map-compass')), findsNothing);
+        },
+      );
+    },
+  );
 
   group('UX: friendly themed error state (replaces raw exception text)', () {
     testWidgets(
@@ -4191,10 +3946,7 @@ void main() {
         );
         await _drain(tester);
 
-        expect(
-          find.byKey(MasiAsyncView.errorKey),
-          findsOneWidget,
-        );
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
         expect(find.text("Couldn't load the community map"), findsOneWidget);
         expect(find.textContaining('boom-network'), findsNothing);
         expect(find.text('Try again'), findsOneWidget);
@@ -4205,10 +3957,7 @@ void main() {
         await tester.tap(find.byKey(MasiAsyncView.retryKey));
         await _drain(tester);
         expect(tester.takeException(), isNull);
-        expect(
-          find.byKey(MasiAsyncView.errorKey),
-          findsOneWidget,
-        );
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
       },
     );
 
@@ -4243,10 +3992,7 @@ void main() {
         await tester.pumpWidget(_wrap(container, const CommunityFeedScreen()));
         await _drain(tester);
 
-        expect(
-          find.byKey(MasiAsyncView.errorKey),
-          findsOneWidget,
-        );
+        expect(find.byKey(MasiAsyncView.errorKey), findsOneWidget);
         expect(find.text("Couldn't load the community feed"), findsOneWidget);
         expect(find.textContaining('boom-network'), findsNothing);
         expect(find.text('Try again'), findsOneWidget);
