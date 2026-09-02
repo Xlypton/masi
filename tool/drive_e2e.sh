@@ -3,6 +3,7 @@
 #
 #   tool/drive_e2e.sh                 # both suites, real session, seeded first
 #   tool/drive_e2e.sh signed-in       # integration_test/e2e_signed_in_test.dart
+#   tool/drive_e2e.sh map             # integration_test/e2e_map_test.dart
 #   tool/drive_e2e.sh community       # integration_test/e2e_community_test.dart
 #   tool/drive_e2e.sh --fake signed-in  # no dart-defines: FAKE identity, no JWT
 #
@@ -28,7 +29,8 @@ for arg in "$@"; do
     signed-in)  TARGETS+=("integration_test/e2e_signed_in_test.dart") ;;
     community)  TARGETS+=("integration_test/e2e_community_test.dart") ;;
     layout)     TARGETS+=("integration_test/e2e_layout_test.dart") ;;
-    *) echo "usage: $0 [--fake] [signed-in|community|layout]" >&2; exit 2 ;;
+    map)        TARGETS+=("integration_test/e2e_map_test.dart") ;;
+    *) echo "usage: $0 [--fake] [signed-in|community|layout|map]" >&2; exit 2 ;;
   esac
 done
 if [[ ${#TARGETS[@]} -eq 0 ]]; then
