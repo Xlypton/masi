@@ -65,6 +65,7 @@ const String kE2eUnplacedRouteName = 'E2E Unplaced Line';
 const String kE2eFacesWallId = 'e2e-wall-faces-0001';
 const String kE2eFaceOnePhotoId = 'e2e-photo-face-0001';
 const String kE2eFaceTwoPhotoId = 'e2e-photo-face-0002';
+const String kE2eFaceThreePhotoId = 'e2e-photo-face-0003';
 
 /// The one climb the fixture puts on that wall, on its FIRST face only.
 const String kE2eFaceOneRouteName = 'E2E Face One Line';
@@ -635,6 +636,69 @@ void main() {
         find.textContaining('Route 2'),
         findsNothing,
         reason: 'a second climb was invented — linking must spend no number',
+      );
+
+      // ── And the way BACK, for a line already saved as its own climb.
+      //
+      // The fixture's third face carries exactly that: an unnamed climb of
+      // its own, which is what a contributor is left with when they answer
+      // the save wrong. Every way of saying 'that is really climb 1' used to
+      // happen BEFORE the save, so the row was simply stuck.
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('face-rail-tile-\$kE2eFaceThreePhotoId')),
+        'the third face in the dock rail',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 10));
+      await openDockBody();
+      await waitFor(
+        tester,
+        find.textContaining('Route 2'),
+        'the unnamed climb the fixture leaves on the third face',
+        timeout: const Duration(seconds: 30),
+      );
+      await binding.takeScreenshot('20-stuck-climb-on-third-face');
+
+      // Its row's menu is where somebody who has just READ the wrong name
+      // already is.
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-route-menu-1')),
+        "the unnamed climb's row menu",
+      );
+      await settle(tester, frames: 10);
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-route-same-climb-1')),
+        'the "Same climb as…" action',
+      );
+      await settle(tester, frames: 10);
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-same-climb-1')),
+        'climb 1 in the picker',
+      );
+      await settle(tester, frames: 10);
+      await tapOrFail(
+        tester,
+        find.byKey(const Key('topo-same-climb-confirm')),
+        'the merge confirmation',
+      );
+      await settleNetwork(tester, budget: const Duration(seconds: 12));
+      await openDockBody();
+      await binding.takeScreenshot('21-stuck-climb-merged');
+
+      expect(
+        find.textContaining(kE2eFaceOneRouteName),
+        findsWidgets,
+        reason:
+            'the third face has to show the climb it was merged into, '
+            'under its real name',
+      );
+      expect(
+        find.textContaining('Route 2'),
+        findsNothing,
+        reason: 'and the climb that was never its own stops being one',
       );
     },
     skip: !e2eRealSessionRequested,

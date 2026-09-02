@@ -672,6 +672,87 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
     );
   }
 
+  /// "That is not its own climb — it is one this rock already has."
+  ///
+  /// The way back from a line saved as a new climb when it was meant to be a
+  /// second view of an existing one. Until this existed the row was stuck:
+  /// an unnamed 'Route 9' on the second photo of a wall whose first photo
+  /// already carried that climb under its real name, and every way of saying
+  /// so happened BEFORE the save.
+  Future<void> _handleSameClimbAs(int routeId) async {
+    if (widget.readOnly) return;
+    final state = ref.read(drawControllerProvider(widget.wallId));
+    final photoId = state.activePhotoId;
+    if (photoId == null) return;
+    final mine = state.routes.where((r) => r.id == routeId).firstOrNull;
+    if (mine == null) return;
+
+    // Read fresh rather than off the cached provider: this runs long after
+    // the screen was built, and the climb the contributor is about to name
+    // may have been drawn on another face since.
+    final candidates = await ref
+        .read(routeRepositoryProvider)
+        .loadClimbsElsewhere(widget.wallId, photoId);
+    if (!mounted) return;
+    if (candidates.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          key: Key('topo-same-climb-none'),
+          content: Text('No climb on the other photos of this rock to be.'),
+        ),
+      );
+      return;
+    }
+
+    final choice = await showMasiActionSheet<int>(
+      context,
+      sheetKey: const Key('topo-same-climb-sheet'),
+      title: 'Which climb is this?',
+      message:
+          '${routeDisplayLabel(mine)} becomes that climb\'s line on this '
+          'photo. Its number, name and grade come from the climb you pick.',
+      actions: [
+        for (final climb in candidates)
+          MasiSheetAction(
+            key: Key('topo-same-climb-${climb.number}'),
+            label: routeDisplayLabel(climb),
+            value: climb.number,
+          ),
+      ],
+    );
+    if (!mounted || choice == null) return;
+
+    final climb = candidates.firstWhere((c) => c.number == choice);
+    // One climb becoming another is two writes, and the first one destroys
+    // something — anything logged against the old number goes with it. So
+    // this asks, in the words of what is actually lost.
+    final confirmed = await showMasiConfirm(
+      context,
+      title: 'Merge into ${routeDisplayLabel(climb)}?',
+      message:
+          '${routeDisplayLabel(mine)} stops being its own climb. Its line '
+          'stays on this photo as ${routeDisplayLabel(climb)}, and anything '
+          'logged against ${routeDisplayLabel(mine)} goes with it.',
+      confirmLabel: 'Merge',
+      confirmKey: const Key('topo-same-climb-confirm'),
+    );
+    if (!mounted || !confirmed) return;
+
+    await ref
+        .read(drawControllerProvider(widget.wallId).notifier)
+        .mergeRouteIntoClimb(routeId, climb);
+    if (!mounted) return;
+    ref.invalidate(
+      climbsElsewhereProvider((wallId: widget.wallId, photoId: photoId)),
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        key: const Key('topo-same-climb-merged'),
+        content: Text('${routeDisplayLabel(climb)} is on this photo too.'),
+      ),
+    );
+  }
+
   Future<void> _handleFinishEditing() async {
     if (widget.readOnly) return;
     final hint = ref.read(drawHintProvider.notifier);
@@ -3282,6 +3363,7 @@ class _TopoCanvasScreenState extends ConsumerState<TopoCanvasScreen> {
       // used to sit in the top chrome. `TopoCanvasBody` narrows this to draw
       // mode; `RouteLegend` narrows it further to the selected row.
       onEditRoute: widget.readOnly ? null : _openMetadataSheetForId,
+      onSameClimbAs: widget.readOnly ? null : _handleSameClimbAs,
       // The route panel's own way into the community/feed view of this same
       // wall, replacing the top row's removed speech-bubble glyph. Null when
       // the wall was never published — `hasCommunityPage` is
@@ -3318,6 +3400,7 @@ class TopoCanvasBody extends ConsumerWidget {
     this.embedded = false,
     this.onLogAscent,
     this.onEditRoute,
+    this.onSameClimbAs,
     this.onOpenCommunity,
     this.facePhotos = const <PhotoRef>[],
     this.faceLayout,
@@ -3372,6 +3455,11 @@ class TopoCanvasBody extends ConsumerWidget {
   /// [build]). Editing a route's details is an edit-mode action, and the
   /// legend is a read surface in view mode.
   final void Function(int routeId)? onEditRoute;
+
+  /// Passed to [RouteLegend.onSameClimbAs]: the way back from a line saved as
+  /// a new climb when it was meant to be one this rock already has, on
+  /// another of its photos.
+  final void Function(int routeId)? onSameClimbAs;
 
   /// Opens the community/feed view of this same wall
   /// (`/community/topo/:wallId`). Non-null only for a wall that actually has
@@ -3601,6 +3689,11 @@ class TopoCanvasBody extends ConsumerWidget {
                         onEditRoute: drawState.mode == DrawMode.draw
                             ? onEditRoute
                             : null,
+                        // NOT mode-gated. Noticing that a climb is the wrong
+                        // one happens while READING the legend, which is view
+                        // mode, and having to enter draw mode to correct it is
+                        // how it stayed uncorrected.
+                        onSameClimbAs: onSameClimbAs,
                       ),
                     )
                   else ...[
@@ -3681,6 +3774,7 @@ class TopoCanvasBody extends ConsumerWidget {
                                             drawState.mode == DrawMode.draw
                                             ? onEditRoute
                                             : null,
+                                        onSameClimbAs: onSameClimbAs,
                                       ),
                                       if (community != null)
                                         _CommunityRow(onTap: community),
@@ -4133,6 +4227,7 @@ class _TopoDock extends StatelessWidget {
     required this.onOpenCommunity,
     required this.onLogAscent,
     required this.onEditRoute,
+    required this.onSameClimbAs,
   });
 
   final String wallId;
@@ -4153,6 +4248,7 @@ class _TopoDock extends StatelessWidget {
   final VoidCallback? onOpenCommunity;
   final void Function(int routeId)? onLogAscent;
   final void Function(int routeId)? onEditRoute;
+  final void Function(int routeId)? onSameClimbAs;
 
   @override
   Widget build(BuildContext context) {
@@ -4206,6 +4302,7 @@ class _TopoDock extends StatelessWidget {
                   readOnly: readOnly,
                   onLogAscent: onLogAscent,
                   onEditRoute: onEditRoute,
+                  onSameClimbAs: onSameClimbAs,
                 )
               else if (isSwitchingPhoto)
                 const Padding(

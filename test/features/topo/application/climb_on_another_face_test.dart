@@ -295,4 +295,72 @@ void main() {
       );
     },
   );
+
+  test('a climb saved as its own can be merged into one from another face, '
+      'and takes that climb\'s number, name and grade', () async {
+    final container = makeContainer();
+    await seedClimbOne(container);
+
+    final notifier = container.read(drawControllerProvider(wallId).notifier);
+    await notifier.loadForWall(wallId, photoTwo);
+
+    // What the save produces when nobody says otherwise: a second climb, on
+    // this face, with no name. The row the contributor is then stuck with.
+    notifier.addPoint(const Offset(0.5, 0.1));
+    notifier.addPoint(const Offset(0.6, 0.9));
+    await notifier.commitRoute();
+
+    var state = container.read(drawControllerProvider(wallId));
+    expect(state.routes, hasLength(1));
+    expect(state.routes.single.number, 2);
+    expect(state.routes.single.name, isNull);
+
+    final candidates = await container
+        .read(routeRepositoryProvider)
+        .loadClimbsElsewhere(wallId, photoTwo);
+    expect(candidates.single.number, 1);
+
+    await notifier.mergeRouteIntoClimb(
+      state.routes.single.id,
+      candidates.single,
+    );
+
+    state = container.read(drawControllerProvider(wallId));
+    expect(state.routes, hasLength(1));
+    expect(state.routes.single.number, 1);
+    expect(state.routes.single.name, 'Arete');
+    expect(state.routes.single.gradeRaw, '6a');
+
+    final live = await (db.select(
+      db.routes,
+    )..where((t) => t.deletedAt.isNull())).get();
+    expect(
+      live,
+      hasLength(1),
+      reason: 'the climb that was never its own stops being one',
+    );
+    expect(live.single.number, 1);
+    expect(live.single.name, 'Arete', reason: 'and nothing was overwritten');
+    expect(
+      live.single.photoId,
+      photoOne,
+      reason: 'its home is still the face it was drawn on first',
+    );
+
+    final lines = await (db.select(
+      db.routeLines,
+    )..where((t) => t.deletedAt.isNull())).get();
+    expect(lines, hasLength(1));
+    expect(lines.single.photoId, photoTwo);
+    expect(lines.single.routeId, live.single.id);
+
+    final onTwo = await container
+        .read(routeRepositoryProvider)
+        .loadRoutes(wallId, photoTwo);
+    expect(onTwo.single.name, 'Arete');
+    expect(onTwo.single.points, [
+      const Offset(0.5, 0.1),
+      const Offset(0.6, 0.9),
+    ]);
+  });
 }

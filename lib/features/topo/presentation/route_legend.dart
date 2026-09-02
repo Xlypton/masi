@@ -147,6 +147,7 @@ class RouteLegend extends ConsumerWidget {
     this.readOnly = false,
     this.onLogAscent,
     this.onEditRoute,
+    this.onSameClimbAs,
   });
 
   /// FIX #6: family key for [drawControllerProvider] — see that provider's
@@ -198,6 +199,12 @@ class RouteLegend extends ConsumerWidget {
   /// edit button should be on the route in edit mode") — the control used to
   /// sit in the top chrome, a whole screen away from the thing it edits.
   final void Function(int routeId)? onEditRoute;
+
+  /// "This climb is one I already have, seen from here." Non-null only where
+  /// the wall HAS a climb on another photo that this one could be — see
+  /// `TopoCanvasScreen`, which decides that — so the row never offers a merge
+  /// with nothing to merge into.
+  final void Function(int routeId)? onSameClimbAs;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -302,6 +309,7 @@ class RouteLegend extends ConsumerWidget {
                     notifier: notifier,
                     readOnly: readOnly,
                     onEditRoute: onEditRoute,
+                    onSameClimbAs: onSameClimbAs,
                     onLogAscent: onLogAscent,
                   )
                 : null,
@@ -370,6 +378,7 @@ class RouteLegend extends ConsumerWidget {
                       notifier: notifier,
                       readOnly: readOnly,
                       onEditRoute: onEditRoute,
+                      onSameClimbAs: onSameClimbAs,
                       onLogAscent: onLogAscent,
                     ),
                   )
@@ -405,6 +414,7 @@ Future<void> _showRouteActions(
   required DrawController notifier,
   required bool readOnly,
   required void Function(int routeId)? onEditRoute,
+  required void Function(int routeId)? onSameClimbAs,
   required void Function(int routeId)? onLogAscent,
 }) async {
   final betaUrl = route.betaVideoUrl;
@@ -417,6 +427,17 @@ Future<void> _showRouteActions(
           key: Key('topo-route-edit-${route.id}'),
           label: 'Edit route details',
           value: 'edit',
+        ),
+      // The way back from a line saved as a new climb when it was meant to be
+      // one the rock already has. Before this the row was simply stuck:
+      // 'Route 9' on the second photo of a wall whose first photo already
+      // carried that climb under its real name, and nothing anywhere could
+      // say so.
+      if (onSameClimbAs != null)
+        MasiSheetAction(
+          key: Key('topo-route-same-climb-${route.id}'),
+          label: 'Same climb as…',
+          value: 'same-climb',
         ),
       if (onLogAscent != null)
         MasiSheetAction(
@@ -449,6 +470,8 @@ Future<void> _showRouteActions(
   switch (action) {
     case 'edit':
       onEditRoute?.call(route.id);
+    case 'same-climb':
+      onSameClimbAs?.call(route.id);
     case 'log-ascent':
       onLogAscent?.call(route.id);
     case 'beta':

@@ -133,7 +133,14 @@ sql "INSERT INTO public.routes (id, \"createdAt\", \"updatedAt\", \"ownerId\", \
             -- existed there was no way to say the line just drawn was that
             -- same climb.
             ('e2e-route-face-01', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_FACES', '${E2E_PHOTO_FACES[0]}', 1, 'E2E Face One Line', 'french', '6a', 600, 0,
-             '[{\"x\":0.35,\"y\":0.85},{\"x\":0.35,\"y\":0.20}]', '[]', 0, true, false);" >/dev/null
+             '[{\"x\":0.35,\"y\":0.85},{\"x\":0.35,\"y\":0.20}]', '[]', 0, true, false),
+            -- The stuck row: a line on the THIRD face saved as a climb of its
+            -- own, with no name, when it was meant to be a second view of the
+            -- climb on the first face. This is what a contributor is left
+            -- with when they answer the save wrong, and it is the fixture for
+            -- the way back.
+            ('e2e-route-face-02', $NOW, $NOW, '$E2E_OWNER_UID', '$E2E_WALL_FACES', '${E2E_PHOTO_FACES[2]}', 2, NULL, NULL, NULL, NULL, 1,
+             '[{\"x\":0.60,\"y\":0.80},{\"x\":0.60,\"y\":0.25}]', '[]', 1, true, false);" >/dev/null
 
 echo "==> uploading fixture photo bytes to Storage"
 SERVICE_KEY="$(service_role_key)"

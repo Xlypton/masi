@@ -1453,6 +1453,62 @@ class DrawController extends Notifier<DrawState> {
     );
   }
 
+  /// Turns a climb on THIS photo into [climb]'s drawing on this photo — "that
+  /// was never its own climb, it is the one I already have".
+  ///
+  /// The way back from a line saved as a new climb when it should have been a
+  /// second view of an existing one. Before this the row was simply stuck: an
+  /// unnamed 'Route 9' on the second photo of a wall whose first photo
+  /// already carried that climb under its real name, and nothing anywhere
+  /// could say so. The choice used to exist only BEFORE the save, and a
+  /// choice you can only make in advance is one people discover afterwards.
+  ///
+  /// The old climb is tombstoned and its geometry re-written as [climb]'s
+  /// line here, in that order: two writes, because one climb becoming another
+  /// is not something `upsertRoute` can express — a row keyed by its number
+  /// cannot change which number it is.
+  ///
+  /// Anything logged against the old climb goes with it. That is why the
+  /// caller confirms first.
+  Future<void> mergeRouteIntoClimb(int routeId, TopoRoute climb) async {
+    final index = state.routes.indexWhere((r) => r.id == routeId);
+    if (index == -1) return;
+    final mine = state.routes[index];
+    if (mine.points.length < 2 || mine.number == climb.number) return;
+
+    final wallId = state.activeWallId;
+    final photoId = state.activePhotoId;
+    if (wallId == null || photoId == null) return;
+
+    final beforeMerge = state;
+    // Its own fields, this photo's geometry — the same shape
+    // [commitDraftAsClimb] writes, so `upsertRoute`'s shared-field fold puts
+    // back the name and grade the climb already had.
+    final placed = climb.copyWith(
+      id: mine.id,
+      points: [...mine.points],
+      symbols: [...mine.symbols],
+    );
+    state = state.copyWith(
+      routes: [...state.routes]..[index] = placed,
+      selectedRouteIdSet: state.selectedRouteId == routeId,
+      selectedRouteId: state.selectedRouteId == routeId
+          ? null
+          : state.selectedRouteId,
+    );
+
+    await _writeThrough(
+      operation: RouteWriteOperation.commitRoute,
+      optimistic: state,
+      rollbackTo: beforeMerge,
+      write: () async {
+        final repository = ref.read(routeRepositoryProvider);
+        await repository.softDeleteRoute(wallId, photoId, mine.number);
+        await repository.upsertRoute(wallId, photoId, placed);
+      },
+    );
+  }
+
   /// The selected route a [commitRoute] right now could put the draft on, and
   /// whether doing so would overwrite a line that route already has.
   ///
